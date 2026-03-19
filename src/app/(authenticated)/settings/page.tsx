@@ -71,7 +71,7 @@ function getInitialSettingsTab(): SettingsTab {
 
 // ─── Tab navigation with scroll fade ───
 
-function SettingsTabNav({ activeTab, onTabChange }: { activeTab: SettingsTab; onTabChange: (tab: SettingsTab) => void }) {
+function SettingsTabNav({ activeTab, onTabChange, updateAvailable, latestVersion }: { activeTab: SettingsTab; onTabChange: (tab: SettingsTab) => void; updateAvailable?: boolean; latestVersion?: string | null }) {
   const navRef = useRef<HTMLElement>(null);
   const [canScrollRight, setCanScrollRight] = useState(false);
 
@@ -121,6 +121,12 @@ function SettingsTabNav({ activeTab, onTabChange }: { activeTab: SettingsTab; on
             >
               <Icon className="h-4 w-4" />
               {tab.label}
+              {tab.value === "system" && updateAvailable && (
+                <span
+                  className="h-2 w-2 rounded-full bg-emerald-400 shrink-0"
+                  title={latestVersion ? `Update available: v${latestVersion}` : "Update available"}
+                />
+              )}
             </button>
           );
         })}
@@ -1960,7 +1966,7 @@ export default function SettingsPage() {
       </div>
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as SettingsTab)} className="space-y-6">
-        <SettingsTabNav activeTab={activeTab} onTabChange={setActiveTab} />
+        <SettingsTabNav activeTab={activeTab} onTabChange={setActiveTab} updateAvailable={systemInfo?.updateInfo?.updateAvailable} latestVersion={systemInfo?.updateInfo?.latestVersion} />
 
         <TabsContent value="general">
           <GeneralTab

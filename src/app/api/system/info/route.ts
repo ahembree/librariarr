@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { checkForUpdate } from "@/lib/version/update-checker";
 
 export async function GET() {
   const session = await getSession();
@@ -36,11 +37,12 @@ export async function GET() {
   const databaseSize = dbSize[0]?.size ?? "Unknown";
 
   // Stats
-  const [mediaItems, enabledLibraries, totalLibraries, servers] = await Promise.all([
+  const [mediaItems, enabledLibraries, totalLibraries, servers, updateInfo] = await Promise.all([
     prisma.mediaItem.count(),
     prisma.library.count({ where: { enabled: true } }),
     prisma.library.count(),
     prisma.mediaServer.count(),
+    checkForUpdate(),
   ]);
 
   return NextResponse.json({
@@ -48,5 +50,6 @@ export async function GET() {
     latestMigration,
     databaseSize,
     stats: { mediaItems, enabledLibraries, totalLibraries, servers },
+    updateInfo,
   });
 }

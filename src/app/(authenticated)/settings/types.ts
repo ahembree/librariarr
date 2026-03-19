@@ -78,11 +78,20 @@ export interface AuthInfo {
   displayName: string;
 }
 
+export interface UpdateInfo {
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  releaseUrl: string | null;
+  releaseName: string | null;
+  checkedAt: string;
+}
+
 export interface SystemInfo {
   appVersion: string;
   latestMigration: string;
   databaseSize: string;
   stats: { mediaItems: number; enabledLibraries: number; totalLibraries: number; servers: number };
+  updateInfo?: UpdateInfo;
 }
 
 export interface ImageCacheStats {

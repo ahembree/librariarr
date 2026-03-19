@@ -43,12 +43,14 @@ interface NavItem {
   icon: typeof Film;
   badge?: number;
   warning?: boolean;
+  dot?: boolean;
+  dotTooltip?: string;
 }
 
 function buildNavigation(
   availableTypes: LibraryType[],
   allKnownTypes: LibraryType[],
-  badges?: { streams?: number },
+  badges?: { streams?: number; updateAvailable?: boolean; latestVersion?: string | null },
 ) {
   const hasMovies = availableTypes.includes("MOVIE");
   const hasSeries = availableTypes.includes("SERIES");
@@ -100,7 +102,7 @@ function buildNavigation(
     {
       label: "System",
       items: [
-        { name: "Settings", href: "/settings", icon: Settings },
+        { name: "Settings", href: "/settings", icon: Settings, dot: badges?.updateAvailable, dotTooltip: badges?.latestVersion ? `Update available: v${badges.latestVersion}` : undefined },
         { name: "Logs", href: "/system/logs", icon: ScrollText },
       ],
     },
@@ -123,6 +125,8 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
     return localStorage.getItem("sidebar-collapsed") === "true";
   });
   const [activeSessionCount, setActiveSessionCount] = useState(0);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [latestVersion, setLatestVersion] = useState<string | null>(null);
 
   useEffect(() => {
     localStorage.setItem("sidebar-collapsed", String(collapsed));
@@ -142,6 +146,19 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
       .catch(() => {
         // On error, show all types
       });
+  }, []);
+
+  // Check for application updates on mount
+  useEffect(() => {
+    fetch("/api/system/update-check")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.updateAvailable) {
+          setUpdateAvailable(true);
+          setLatestVersion(data.latestVersion);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // Auto-close mobile drawer on navigation
@@ -168,7 +185,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
   const navigation = buildNavigation(
     availableTypes,
     allKnownTypes,
-    { streams: activeSessionCount },
+    { streams: activeSessionCount, updateAvailable, latestVersion },
   );
 
   const handleLogout = async () => {
@@ -275,10 +292,13 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
                                 {item.badge}
                               </span>
                             )}
+                            {item.dot && (
+                              <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-400" />
+                            )}
                           </Link>
                         </TooltipTrigger>
                         <TooltipContent side="right">
-                          {item.name}{item.badge ? ` (${item.badge})` : ""}
+                          {item.name}{item.badge ? ` (${item.badge})` : ""}{item.dot ? ` — ${item.dotTooltip ?? "Update available"}` : ""}
                         </TooltipContent>
                       </Tooltip>
                     );
@@ -334,6 +354,12 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
                         )}>
                           {item.badge}
                         </span>
+                      )}
+                      {item.dot && (
+                        <span
+                          className="h-2 w-2 rounded-full bg-emerald-400 shrink-0"
+                          title={item.dotTooltip ?? "Update available"}
+                        />
                       )}
                     </Link>
                   );

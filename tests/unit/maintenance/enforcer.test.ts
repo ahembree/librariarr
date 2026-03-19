@@ -42,31 +42,20 @@ vi.mock("@/lib/media-server/factory", () => ({
 // ---------------------------------------------------------------------------
 // The enforcer uses module-level `let initialized = false` to guard
 // against double-init. We need a fresh module for each test that calls
-// initializeMaintenanceEnforcer. For the interval-based tests we manually
-// trigger the callback captured by our fake setInterval.
+// initializeMaintenanceEnforcer. We use vi.useFakeTimers() to control
+// the setInterval callback deterministically.
 // ---------------------------------------------------------------------------
 
 describe("initializeMaintenanceEnforcer", () => {
-  let intervalCallback: (() => Promise<void>) | null = null;
-  let realSetInterval: typeof globalThis.setInterval;
-
   beforeEach(() => {
     vi.restoreAllMocks();
-    intervalCallback = null;
-    realSetInterval = globalThis.setInterval;
-
-    // Capture the callback passed to setInterval
-    vi.stubGlobal("setInterval", (cb: () => Promise<void>, _ms: number) => {
-      intervalCallback = cb;
-      return 999 as unknown as ReturnType<typeof setInterval>;
-    });
-
+    vi.useFakeTimers();
     mockGetSessions.mockResolvedValue([]);
     mockTerminateSession.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
-    globalThis.setInterval = realSetInterval;
+    vi.useRealTimers();
   });
 
   it("terminates sessions immediately when maintenance is enabled and delay has elapsed", async () => {
@@ -136,10 +125,10 @@ describe("initializeMaintenanceEnforcer", () => {
     const { initializeMaintenanceEnforcer } = await import("@/lib/maintenance/enforcer");
 
     initializeMaintenanceEnforcer();
-    expect(intervalCallback).not.toBeNull();
 
-    // First call: session is first-seen, pending termination added
-    await intervalCallback!();
+    // Advance past the 30s interval to trigger the callback
+    await vi.advanceTimersByTimeAsync(30_000);
+
     // With delay 0, the session should be terminated on the first check
     // since firstSeen = now and now - firstSeen >= 0
     expect(localTerminate).toHaveBeenCalledWith("sess1", "Down for maintenance");
@@ -203,7 +192,7 @@ describe("initializeMaintenanceEnforcer", () => {
     const { initializeMaintenanceEnforcer } = await import("@/lib/maintenance/enforcer");
 
     initializeMaintenanceEnforcer();
-    await intervalCallback!();
+    await vi.advanceTimersByTimeAsync(30_000);
 
     expect(localTerminate).not.toHaveBeenCalled();
   });
@@ -234,7 +223,7 @@ describe("initializeMaintenanceEnforcer", () => {
     const { initializeMaintenanceEnforcer } = await import("@/lib/maintenance/enforcer");
 
     initializeMaintenanceEnforcer();
-    await intervalCallback!();
+    await vi.advanceTimersByTimeAsync(30_000);
 
     expect(createMediaServerClient).not.toHaveBeenCalled();
   });
@@ -245,20 +234,13 @@ describe("initializeMaintenanceEnforcer", () => {
 // ---------------------------------------------------------------------------
 
 describe("transcode manager criteria (via enforcer)", () => {
-  let intervalCallback: (() => Promise<void>) | null = null;
-  let realSetInterval: typeof globalThis.setInterval;
-
   beforeEach(() => {
-    intervalCallback = null;
-    realSetInterval = globalThis.setInterval;
-    vi.stubGlobal("setInterval", (cb: () => Promise<void>, _ms: number) => {
-      intervalCallback = cb;
-      return 999 as unknown as ReturnType<typeof setInterval>;
-    });
+    vi.restoreAllMocks();
+    vi.useFakeTimers();
   });
 
   afterEach(() => {
-    globalThis.setInterval = realSetInterval;
+    vi.useRealTimers();
   });
 
   it("terminates video transcoding session when videoTranscoding criteria is set", async () => {
@@ -325,7 +307,7 @@ describe("transcode manager criteria (via enforcer)", () => {
 
     const { initializeMaintenanceEnforcer } = await import("@/lib/maintenance/enforcer");
     initializeMaintenanceEnforcer();
-    await intervalCallback!();
+    await vi.advanceTimersByTimeAsync(30_000);
 
     expect(localTerminate).toHaveBeenCalledWith("sess-transcode", "No transcoding");
   });
@@ -394,7 +376,7 @@ describe("transcode manager criteria (via enforcer)", () => {
 
     const { initializeMaintenanceEnforcer } = await import("@/lib/maintenance/enforcer");
     initializeMaintenanceEnforcer();
-    await intervalCallback!();
+    await vi.advanceTimersByTimeAsync(30_000);
 
     expect(localTerminate).not.toHaveBeenCalled();
   });
