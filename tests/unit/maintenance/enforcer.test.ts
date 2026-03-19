@@ -1,28 +1,18 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { prisma } from "@/lib/db";
+import { createMediaServerClient } from "@/lib/media-server/factory";
+import { runEnforcerTick, _resetForTesting } from "@/lib/maintenance/enforcer";
 
 // ---------------------------------------------------------------------------
-// Mocks
+// Hoisted mocks — stable, no vi.resetModules / vi.doMock needed
 // ---------------------------------------------------------------------------
-
-const mockGetSessions = vi.fn().mockResolvedValue([]);
-const mockTerminateSession = vi.fn().mockResolvedValue(undefined);
-const mockSetPrerollPath = vi.fn().mockResolvedValue(undefined);
-const mockClearPreroll = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("@/lib/db", () => ({
   prisma: {
-    appSettings: {
-      findMany: vi.fn().mockResolvedValue([]),
-    },
-    blackoutSchedule: {
-      findMany: vi.fn().mockResolvedValue([]),
-    },
-    prerollSchedule: {
-      findMany: vi.fn().mockResolvedValue([]),
-    },
-    user: {
-      findUnique: vi.fn().mockResolvedValue(null),
-    },
+    appSettings: { findMany: vi.fn() },
+    blackoutSchedule: { findMany: vi.fn() },
+    prerollSchedule: { findMany: vi.fn() },
+    user: { findUnique: vi.fn() },
   },
 }));
 
@@ -31,199 +21,119 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 vi.mock("@/lib/media-server/factory", () => ({
-  createMediaServerClient: vi.fn(() => ({
-    getSessions: mockGetSessions,
-    terminateSession: mockTerminateSession,
-    setPrerollPath: mockSetPrerollPath,
-    clearPreroll: mockClearPreroll,
-  })),
+  createMediaServerClient: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
-// The enforcer uses module-level `let initialized = false` to guard
-// against double-init. We need a fresh module for each test that calls
-// initializeMaintenanceEnforcer. We use vi.useFakeTimers() to control
-// the setInterval callback deterministically.
+// Tests call runEnforcerTick() directly — no timer mocking needed.
+// _resetForTesting() clears module-level state between tests.
 // ---------------------------------------------------------------------------
 
 describe("initializeMaintenanceEnforcer", () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
-    vi.useFakeTimers();
-    mockGetSessions.mockResolvedValue([]);
-    mockTerminateSession.mockResolvedValue(undefined);
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
+    _resetForTesting();
+    vi.clearAllMocks();
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn().mockResolvedValue([]),
+      terminateSession: vi.fn().mockResolvedValue(undefined),
+      setPrerollPath: vi.fn().mockResolvedValue(undefined),
+      clearPreroll: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
   });
 
   it("terminates sessions immediately when maintenance is enabled and delay has elapsed", async () => {
-    // Need a fresh module to reset `initialized`
-    vi.resetModules();
-
-    // Re-apply mocks after resetModules
-    vi.doMock("@/lib/db", () => ({
-      prisma: {
-        appSettings: {
-          findMany: vi.fn().mockResolvedValue([
-            {
-              maintenanceMode: true,
-              maintenanceDelay: 0, // immediate
-              maintenanceMessage: "Down for maintenance",
-              maintenanceExcludedUsers: [],
-              transcodeManagerEnabled: false,
-              transcodeManagerDelay: 30,
-              transcodeManagerMessage: "",
-              transcodeManagerCriteria: null,
-              transcodeManagerExcludedUsers: [],
-              userId: "user1",
-              user: {
-                mediaServers: [
-                  { id: "server1", type: "PLEX", name: "Test", url: "http://plex:32400", accessToken: "tok", tlsSkipVerify: false },
-                ],
-              },
-            },
-          ]),
-        },
-        blackoutSchedule: {
-          findMany: vi.fn().mockResolvedValue([]),
-        },
-        prerollSchedule: {
-          findMany: vi.fn().mockResolvedValue([]),
-        },
-        user: {
-          findUnique: vi.fn().mockResolvedValue(null),
-        },
-      },
-    }));
-
-    const localGetSessions = vi.fn().mockResolvedValue([
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([
       {
-        sessionId: "sess1",
-        username: "bob",
-        title: "Movie A",
-        player: { local: true },
-        session: { bandwidth: 1000, location: "lan" },
+        maintenanceMode: true,
+        maintenanceDelay: 0,
+        maintenanceMessage: "Down for maintenance",
+        maintenanceExcludedUsers: [],
+        transcodeManagerEnabled: false,
+        transcodeManagerDelay: 30,
+        transcodeManagerMessage: "",
+        transcodeManagerCriteria: null,
+        transcodeManagerExcludedUsers: [],
+        userId: "user1",
+        user: {
+          mediaServers: [
+            { id: "server1", type: "PLEX", name: "Test", url: "http://plex:32400", accessToken: "tok", tlsSkipVerify: false },
+          ],
+        },
       },
-    ]);
+    ] as never);
+
     const localTerminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn().mockResolvedValue([
+        {
+          sessionId: "sess1",
+          username: "bob",
+          title: "Movie A",
+          player: { local: true },
+          session: { bandwidth: 1000, location: "lan" },
+        },
+      ]),
+      terminateSession: localTerminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
 
-    vi.doMock("@/lib/media-server/factory", () => ({
-      createMediaServerClient: vi.fn(() => ({
-        getSessions: localGetSessions,
-        terminateSession: localTerminate,
-        setPrerollPath: vi.fn(),
-        clearPreroll: vi.fn(),
-      })),
-    }));
+    await runEnforcerTick();
 
-    vi.doMock("@/lib/logger", () => ({
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    }));
-
-    const { initializeMaintenanceEnforcer } = await import("@/lib/maintenance/enforcer");
-
-    initializeMaintenanceEnforcer();
-
-    // Advance past the 30s interval to trigger the callback
-    await vi.advanceTimersByTimeAsync(30_000);
-
-    // With delay 0, the session should be terminated on the first check
-    // since firstSeen = now and now - firstSeen >= 0
     expect(localTerminate).toHaveBeenCalledWith("sess1", "Down for maintenance");
   });
 
   it("excludes users in maintenanceExcludedUsers", async () => {
-    vi.resetModules();
-
-    vi.doMock("@/lib/db", () => ({
-      prisma: {
-        appSettings: {
-          findMany: vi.fn().mockResolvedValue([
-            {
-              maintenanceMode: true,
-              maintenanceDelay: 0,
-              maintenanceMessage: "Down",
-              maintenanceExcludedUsers: ["admin"],
-              transcodeManagerEnabled: false,
-              transcodeManagerDelay: 30,
-              transcodeManagerMessage: "",
-              transcodeManagerCriteria: null,
-              transcodeManagerExcludedUsers: [],
-              userId: "user1",
-              user: {
-                mediaServers: [
-                  { id: "server1", type: "PLEX", name: "Test", url: "http://plex:32400", accessToken: "tok", tlsSkipVerify: false },
-                ],
-              },
-            },
-          ]),
-        },
-        blackoutSchedule: { findMany: vi.fn().mockResolvedValue([]) },
-        prerollSchedule: { findMany: vi.fn().mockResolvedValue([]) },
-        user: { findUnique: vi.fn().mockResolvedValue(null) },
-      },
-    }));
-
     const localTerminate = vi.fn();
 
-    vi.doMock("@/lib/media-server/factory", () => ({
-      createMediaServerClient: vi.fn(() => ({
-        getSessions: vi.fn().mockResolvedValue([
-          {
-            sessionId: "sess1",
-            username: "admin", // excluded
-            title: "Movie A",
-            player: { local: true },
-            session: { bandwidth: 1000, location: "lan" },
-          },
-        ]),
-        terminateSession: localTerminate,
-        setPrerollPath: vi.fn(),
-        clearPreroll: vi.fn(),
-      })),
-    }));
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([
+      {
+        maintenanceMode: true,
+        maintenanceDelay: 0,
+        maintenanceMessage: "Down",
+        maintenanceExcludedUsers: ["admin"],
+        transcodeManagerEnabled: false,
+        transcodeManagerDelay: 30,
+        transcodeManagerMessage: "",
+        transcodeManagerCriteria: null,
+        transcodeManagerExcludedUsers: [],
+        userId: "user1",
+        user: {
+          mediaServers: [
+            { id: "server1", type: "PLEX", name: "Test", url: "http://plex:32400", accessToken: "tok", tlsSkipVerify: false },
+          ],
+        },
+      },
+    ] as never);
 
-    vi.doMock("@/lib/logger", () => ({
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    }));
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn().mockResolvedValue([
+        {
+          sessionId: "sess1",
+          username: "admin",
+          title: "Movie A",
+          player: { local: true },
+          session: { bandwidth: 1000, location: "lan" },
+        },
+      ]),
+      terminateSession: localTerminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
 
-    const { initializeMaintenanceEnforcer } = await import("@/lib/maintenance/enforcer");
-
-    initializeMaintenanceEnforcer();
-    await vi.advanceTimersByTimeAsync(30_000);
+    await runEnforcerTick();
 
     expect(localTerminate).not.toHaveBeenCalled();
   });
 
   it("does nothing when no settings have maintenance or transcode enabled", async () => {
-    vi.resetModules();
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
 
-    vi.doMock("@/lib/db", () => ({
-      prisma: {
-        appSettings: {
-          findMany: vi.fn().mockResolvedValue([]),
-        },
-        blackoutSchedule: { findMany: vi.fn().mockResolvedValue([]) },
-        prerollSchedule: { findMany: vi.fn().mockResolvedValue([]) },
-        user: { findUnique: vi.fn().mockResolvedValue(null) },
-      },
-    }));
-
-    vi.doMock("@/lib/media-server/factory", () => ({
-      createMediaServerClient: vi.fn(),
-    }));
-
-    vi.doMock("@/lib/logger", () => ({
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    }));
-
-    const { createMediaServerClient } = await import("@/lib/media-server/factory");
-    const { initializeMaintenanceEnforcer } = await import("@/lib/maintenance/enforcer");
-
-    initializeMaintenanceEnforcer();
-    await vi.advanceTimersByTimeAsync(30_000);
+    await runEnforcerTick();
 
     expect(createMediaServerClient).not.toHaveBeenCalled();
   });
@@ -235,148 +145,108 @@ describe("initializeMaintenanceEnforcer", () => {
 
 describe("transcode manager criteria (via enforcer)", () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
+    _resetForTesting();
+    vi.clearAllMocks();
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
   });
 
   it("terminates video transcoding session when videoTranscoding criteria is set", async () => {
-    vi.resetModules();
-
-    vi.doMock("@/lib/db", () => ({
-      prisma: {
-        appSettings: {
-          findMany: vi.fn().mockResolvedValue([
-            {
-              maintenanceMode: false,
-              maintenanceDelay: 30,
-              maintenanceMessage: "",
-              maintenanceExcludedUsers: [],
-              transcodeManagerEnabled: true,
-              transcodeManagerDelay: 0,
-              transcodeManagerMessage: "No transcoding",
-              transcodeManagerCriteria: {
-                anyTranscoding: false,
-                videoTranscoding: true,
-                audioTranscoding: false,
-                fourKTranscoding: false,
-                remoteTranscoding: false,
-              },
-              transcodeManagerExcludedUsers: [],
-              userId: "user1",
-              user: {
-                mediaServers: [
-                  { id: "s1", type: "PLEX", name: "Test", url: "http://plex:32400", accessToken: "tok", tlsSkipVerify: false },
-                ],
-              },
-            },
-          ]),
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([
+      {
+        maintenanceMode: false,
+        maintenanceDelay: 30,
+        maintenanceMessage: "",
+        maintenanceExcludedUsers: [],
+        transcodeManagerEnabled: true,
+        transcodeManagerDelay: 0,
+        transcodeManagerMessage: "No transcoding",
+        transcodeManagerCriteria: {
+          anyTranscoding: false,
+          videoTranscoding: true,
+          audioTranscoding: false,
+          fourKTranscoding: false,
+          remoteTranscoding: false,
         },
-        blackoutSchedule: { findMany: vi.fn().mockResolvedValue([]) },
-        prerollSchedule: { findMany: vi.fn().mockResolvedValue([]) },
-        user: { findUnique: vi.fn().mockResolvedValue(null) },
+        transcodeManagerExcludedUsers: [],
+        userId: "user1",
+        user: {
+          mediaServers: [
+            { id: "s1", type: "PLEX", name: "Test", url: "http://plex:32400", accessToken: "tok", tlsSkipVerify: false },
+          ],
+        },
       },
-    }));
+    ] as never);
 
     const localTerminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn().mockResolvedValue([
+        {
+          sessionId: "sess-transcode",
+          username: "user",
+          title: "Movie",
+          player: { local: true },
+          session: { bandwidth: 1000, location: "lan" },
+          transcoding: { videoDecision: "transcode", audioDecision: "copy" },
+        },
+      ]),
+      terminateSession: localTerminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
 
-    vi.doMock("@/lib/media-server/factory", () => ({
-      createMediaServerClient: vi.fn(() => ({
-        getSessions: vi.fn().mockResolvedValue([
-          {
-            sessionId: "sess-transcode",
-            username: "user",
-            title: "Movie",
-            player: { local: true },
-            session: { bandwidth: 1000, location: "lan" },
-            transcoding: { videoDecision: "transcode", audioDecision: "copy" },
-          },
-        ]),
-        terminateSession: localTerminate,
-        setPrerollPath: vi.fn(),
-        clearPreroll: vi.fn(),
-      })),
-    }));
-
-    vi.doMock("@/lib/logger", () => ({
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    }));
-
-    const { initializeMaintenanceEnforcer } = await import("@/lib/maintenance/enforcer");
-    initializeMaintenanceEnforcer();
-    await vi.advanceTimersByTimeAsync(30_000);
+    await runEnforcerTick();
 
     expect(localTerminate).toHaveBeenCalledWith("sess-transcode", "No transcoding");
   });
 
   it("does NOT terminate direct play session when videoTranscoding criteria is set", async () => {
-    vi.resetModules();
-
-    vi.doMock("@/lib/db", () => ({
-      prisma: {
-        appSettings: {
-          findMany: vi.fn().mockResolvedValue([
-            {
-              maintenanceMode: false,
-              maintenanceDelay: 30,
-              maintenanceMessage: "",
-              maintenanceExcludedUsers: [],
-              transcodeManagerEnabled: true,
-              transcodeManagerDelay: 0,
-              transcodeManagerMessage: "No transcoding",
-              transcodeManagerCriteria: {
-                anyTranscoding: false,
-                videoTranscoding: true,
-                audioTranscoding: false,
-                fourKTranscoding: false,
-                remoteTranscoding: false,
-              },
-              transcodeManagerExcludedUsers: [],
-              userId: "user1",
-              user: {
-                mediaServers: [
-                  { id: "s1", type: "PLEX", name: "Test", url: "http://plex:32400", accessToken: "tok", tlsSkipVerify: false },
-                ],
-              },
-            },
-          ]),
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([
+      {
+        maintenanceMode: false,
+        maintenanceDelay: 30,
+        maintenanceMessage: "",
+        maintenanceExcludedUsers: [],
+        transcodeManagerEnabled: true,
+        transcodeManagerDelay: 0,
+        transcodeManagerMessage: "No transcoding",
+        transcodeManagerCriteria: {
+          anyTranscoding: false,
+          videoTranscoding: true,
+          audioTranscoding: false,
+          fourKTranscoding: false,
+          remoteTranscoding: false,
         },
-        blackoutSchedule: { findMany: vi.fn().mockResolvedValue([]) },
-        prerollSchedule: { findMany: vi.fn().mockResolvedValue([]) },
-        user: { findUnique: vi.fn().mockResolvedValue(null) },
+        transcodeManagerExcludedUsers: [],
+        userId: "user1",
+        user: {
+          mediaServers: [
+            { id: "s1", type: "PLEX", name: "Test", url: "http://plex:32400", accessToken: "tok", tlsSkipVerify: false },
+          ],
+        },
       },
-    }));
+    ] as never);
 
     const localTerminate = vi.fn();
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn().mockResolvedValue([
+        {
+          sessionId: "sess-direct",
+          username: "user",
+          title: "Movie",
+          player: { local: true },
+          session: { bandwidth: 1000, location: "lan" },
+          transcoding: { videoDecision: "copy", audioDecision: "copy" },
+        },
+      ]),
+      terminateSession: localTerminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
 
-    vi.doMock("@/lib/media-server/factory", () => ({
-      createMediaServerClient: vi.fn(() => ({
-        getSessions: vi.fn().mockResolvedValue([
-          {
-            sessionId: "sess-direct",
-            username: "user",
-            title: "Movie",
-            player: { local: true },
-            session: { bandwidth: 1000, location: "lan" },
-            transcoding: { videoDecision: "copy", audioDecision: "copy" },
-          },
-        ]),
-        terminateSession: localTerminate,
-        setPrerollPath: vi.fn(),
-        clearPreroll: vi.fn(),
-      })),
-    }));
-
-    vi.doMock("@/lib/logger", () => ({
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    }));
-
-    const { initializeMaintenanceEnforcer } = await import("@/lib/maintenance/enforcer");
-    initializeMaintenanceEnforcer();
-    await vi.advanceTimersByTimeAsync(30_000);
+    await runEnforcerTick();
 
     expect(localTerminate).not.toHaveBeenCalled();
   });
