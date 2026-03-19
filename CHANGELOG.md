@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/ahembree/librariarr/compare/v0.2.4...v0.3.0) (2026-03-19)
+
+
+### Features
+
+* add emby and jellyfin to onboard flow ([c777f53](https://github.com/ahembree/librariarr/commit/c777f53b194add2aea69eb07b7e7b42464b1e013))
+
 ## [0.2.4](https://github.com/ahembree/librariarr/compare/v0.2.3...v0.2.4) (2026-03-19)
 
 
