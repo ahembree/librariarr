@@ -1,6 +1,6 @@
 {
   "name": "librariarr",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Media library management for Plex, Jellyfin, and Emby",
   "repository": {
