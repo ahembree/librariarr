@@ -33,7 +33,7 @@ function getArrLabel(type: string | null, mediaType?: string): string {
   return "Arr";
 }
 
-function ArrInstanceCard({ match, plexRatingKey }: { match: ArrMatch; plexRatingKey: string }) {
+function ArrInstanceCard({ match, plexRatingKey, hideQualityProfile }: { match: ArrMatch; plexRatingKey: string; hideQualityProfile?: boolean }) {
   const label = ARR_LABELS[match.type] || match.type;
 
   return (
@@ -66,7 +66,7 @@ function ArrInstanceCard({ match, plexRatingKey }: { match: ArrMatch; plexRating
         </>
       )}
 
-      {match.qualityProfileName && (
+      {!hideQualityProfile && match.qualityProfileName && (
         <div className="space-y-1.5">
           <p className="text-xs text-muted-foreground">Quality Profile</p>
           <p className="text-sm">{match.qualityProfileName}</p>
@@ -85,7 +85,7 @@ function ArrInstanceCard({ match, plexRatingKey }: { match: ArrMatch; plexRating
   );
 }
 
-export function ArrSection({ itemId, mediaType }: { itemId: string; mediaType?: string }) {
+export function ArrSection({ itemId, mediaType, hideQualityProfile }: { itemId: string; mediaType?: string; hideQualityProfile?: boolean }) {
   const [arrData, setArrData] = useState<ArrInfoResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -135,6 +135,7 @@ export function ArrSection({ itemId, mediaType }: { itemId: string; mediaType?: 
             key={match.instanceId}
             match={match}
             plexRatingKey={arrData.plexRatingKey}
+            hideQualityProfile={hideQualityProfile}
           />
         ))}
       </div>
