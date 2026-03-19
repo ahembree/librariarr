@@ -234,6 +234,10 @@ export const prerollPathSchema = z.object({
   path: z.string(),
 });
 
+export const prerollValidatePathSchema = z.object({
+  path: z.string().min(1, "Path is required"),
+});
+
 export const prerollPresetCreateSchema = z.object({
   name: z.string().min(1, "Name is required"),
   path: z.string().min(1, "Path is required"),

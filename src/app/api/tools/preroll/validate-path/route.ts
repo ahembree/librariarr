@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { access, constants } from "fs/promises";
 import nodePath from "node:path";
+import { validateRequest, prerollValidatePathSchema } from "@/lib/validation";
 
 const ALLOWED_PREFIXES = process.env.PREROLL_ALLOWED_PATHS
   ? process.env.PREROLL_ALLOWED_PATHS.split(",").map((p) => p.trim())
@@ -13,10 +14,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { path } = await req.json();
-  if (!path || typeof path !== "string") {
-    return NextResponse.json({ error: "Path is required" }, { status: 400 });
-  }
+  const { data, error } = await validateRequest(req, prerollValidatePathSchema);
+  if (error) return error;
+  const { path } = data;
 
   const resolved = nodePath.resolve(path);
   const isAllowed = ALLOWED_PREFIXES.some((prefix) =>

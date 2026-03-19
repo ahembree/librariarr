@@ -60,7 +60,7 @@ describe("POST /api/tools/preroll/validate-path", () => {
       body: {},
     });
     const body = await expectJson<{ error: string }>(response, 400);
-    expect(body.error).toBe("Path is required");
+    expect(body.error).toBe("Validation failed");
   });
 
   it("returns exists:true for accessible path", async () => {

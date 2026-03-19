@@ -26,8 +26,8 @@ export async function PUT(
   const preset = await prisma.prerollPreset.update({
     where: { id },
     data: {
-      ...(name && { name: name.trim() }),
-      ...(path && { path: path.trim() }),
+      ...(name !== undefined && { name: name.trim() }),
+      ...(path !== undefined && { path: path.trim() }),
     },
   });
 

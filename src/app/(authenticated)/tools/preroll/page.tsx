@@ -49,6 +49,7 @@ import {
   Calendar,
   Clock,
   AlertTriangle,
+  CheckCircle,
   Combine,
   GripVertical,
   Shuffle,
@@ -330,6 +331,7 @@ export default function PrerollManagerPage() {
   const [scheduleForm, setScheduleForm] = useState<ScheduleFormState>(EMPTY_SCHEDULE_FORM);
   const [scheduleSaving, setScheduleSaving] = useState(false);
   const [scheduleError, setScheduleError] = useState("");
+  const [pageMessage, setPageMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   // --- Data fetching ---
 
@@ -360,22 +362,45 @@ export default function PrerollManagerPage() {
     return () => clearInterval(interval);
   }, [fetchData]);
 
+  // Auto-clear page messages
+  useEffect(() => {
+    if (!pageMessage) return;
+    const timer = setTimeout(() => setPageMessage(null), 5000);
+    return () => clearTimeout(timer);
+  }, [pageMessage]);
+
   // --- Actions ---
 
   const applyPreroll = async (path: string) => {
     setApplying(true);
+    setPageMessage(null);
     try {
       const res = await fetch("/api/tools/preroll", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path }),
       });
-      if (res.ok) {
-        setCurrentPreroll(path);
-        setQuickSetPath("");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setPageMessage({ type: "error", text: data.error || "Failed to apply preroll" });
+        return;
+      }
+      const data = await res.json();
+      setCurrentPreroll(path);
+      setQuickSetPath("");
+      if (data.errors && data.errors.length > 0) {
+        setPageMessage({
+          type: "error",
+          text: `Preroll applied with errors: ${data.errors.join("; ")}`,
+        });
+      } else {
+        setPageMessage({
+          type: "success",
+          text: path ? "Preroll applied successfully" : "Preroll cleared successfully",
+        });
       }
     } catch {
-      // Silent
+      setPageMessage({ type: "error", text: "Network error applying preroll" });
     } finally {
       setApplying(false);
     }
@@ -390,20 +415,25 @@ export default function PrerollManagerPage() {
   const savePreset = async () => {
     if (!presetName.trim() || !presetPath.trim()) return;
     setPresetSaving(true);
+    setPageMessage(null);
     try {
       const res = await fetch("/api/tools/preroll/presets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: presetName.trim(), path: presetPath.trim() }),
       });
-      if (res.ok) {
-        setPresetDialogOpen(false);
-        setPresetName("");
-        setPresetPath("");
-        await fetchData();
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setPageMessage({ type: "error", text: data.error || "Failed to save preset" });
+        return;
       }
+      setPresetDialogOpen(false);
+      setPresetName("");
+      setPresetPath("");
+      await fetchData();
+      setPageMessage({ type: "success", text: "Preset saved" });
     } catch {
-      // Silent
+      setPageMessage({ type: "error", text: "Network error saving preset" });
     } finally {
       setPresetSaving(false);
     }
@@ -411,11 +441,18 @@ export default function PrerollManagerPage() {
 
   const deletePreset = async (id: string) => {
     setDeleting(true);
+    setPageMessage(null);
     try {
-      await fetch(`/api/tools/preroll/presets/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/tools/preroll/presets/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setPageMessage({ type: "error", text: data.error || "Failed to delete preset" });
+        return;
+      }
       await fetchData();
+      setPageMessage({ type: "success", text: "Preset deleted" });
     } catch {
-      // Silent
+      setPageMessage({ type: "error", text: "Network error deleting preset" });
     } finally {
       setDeleting(false);
       setDeleteTarget(null);
@@ -504,29 +541,43 @@ export default function PrerollManagerPage() {
   };
 
   const toggleScheduleEnabled = async (schedule: PrerollSchedule, enabled: boolean) => {
+    setSchedules((prev) =>
+      prev.map((s) => (s.id === schedule.id ? { ...s, enabled } : s))
+    );
     try {
       const res = await fetch(`/api/tools/preroll/schedules/${schedule.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled }),
       });
-      if (res.ok) {
+      if (!res.ok) {
         setSchedules((prev) =>
-          prev.map((s) => (s.id === schedule.id ? { ...s, enabled } : s))
+          prev.map((s) => (s.id === schedule.id ? { ...s, enabled: !enabled } : s))
         );
+        setPageMessage({ type: "error", text: "Failed to update schedule" });
       }
     } catch {
-      // Silent
+      setSchedules((prev) =>
+        prev.map((s) => (s.id === schedule.id ? { ...s, enabled: !enabled } : s))
+      );
+      setPageMessage({ type: "error", text: "Network error updating schedule" });
     }
   };
 
   const deleteSchedule = async (id: string) => {
     setDeleting(true);
+    setPageMessage(null);
     try {
-      await fetch(`/api/tools/preroll/schedules/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/tools/preroll/schedules/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setPageMessage({ type: "error", text: data.error || "Failed to delete schedule" });
+        return;
+      }
       await fetchData();
+      setPageMessage({ type: "success", text: "Schedule deleted" });
     } catch {
-      // Silent
+      setPageMessage({ type: "error", text: "Network error deleting schedule" });
     } finally {
       setDeleting(false);
       setDeleteTarget(null);
@@ -635,6 +686,24 @@ export default function PrerollManagerPage() {
         </Card>
       )}
 
+      {pageMessage && (
+        <div
+          className={cn(
+            "flex items-center gap-2 rounded-md p-3 text-sm",
+            pageMessage.type === "error"
+              ? "bg-destructive/10 text-destructive"
+              : "bg-green-500/10 text-green-500"
+          )}
+        >
+          {pageMessage.type === "error" ? (
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+          ) : (
+            <CheckCircle className="h-4 w-4 shrink-0" />
+          )}
+          {pageMessage.text}
+        </div>
+      )}
+
       {/* Section 1: Current Preroll */}
       <Card>
         <CardHeader>
@@ -687,7 +756,7 @@ export default function PrerollManagerPage() {
             <div className="space-y-2">
               <Label>Select from Presets</Label>
               <Select
-                value=""
+                value={presets.some((p) => p.path === quickSetPath) ? quickSetPath : ""}
                 onValueChange={(value) => setQuickSetPath(value)}
               >
                 <SelectTrigger className="w-full">
