@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Loader2, Trash2 } from "lucide-react";
+import { ArrowUpCircle, CheckCircle2, Loader2, Trash2 } from "lucide-react";
 import type { SystemInfo, ImageCacheStats } from "../types";
 
 export interface SystemTabProps {
@@ -27,6 +27,23 @@ export function SystemTab({
             <div>
               <p className="text-sm text-muted-foreground">Application Version</p>
               <p className="font-medium">{systemInfo?.appVersion ?? "..."}</p>
+              {systemInfo?.updateInfo?.updateAvailable && systemInfo.updateInfo.latestVersion && (
+                <a
+                  href={systemInfo.updateInfo.releaseUrl ?? "#"}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1 inline-flex items-center gap-1.5 rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/25 transition-colors"
+                >
+                  <ArrowUpCircle className="h-3 w-3" />
+                  v{systemInfo.updateInfo.latestVersion} available
+                </a>
+              )}
+              {systemInfo?.updateInfo && !systemInfo.updateInfo.updateAvailable && systemInfo.updateInfo.latestVersion && (
+                <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <CheckCircle2 className="h-3 w-3" />
+                  Up to date
+                </p>
+              )}
             </div>
             <div>
               <p className="text-sm text-muted-foreground">Database Migration</p>

@@ -10,5 +10,10 @@ export async function register() {
     // Backfill dedupKeys for items synced before the dedup columns were added
     const { runBackfillIfNeeded } = await import("@/lib/dedup/recompute-canonical");
     runBackfillIfNeeded();
+
+    // Pre-warm version check cache and refresh every 6 hours
+    const { warmVersionCache } = await import("@/lib/version/update-checker");
+    warmVersionCache();
+    setInterval(() => { warmVersionCache(); }, 6 * 60 * 60 * 1000);
   }
 }
