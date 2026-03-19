@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2](https://github.com/ahembree/librariarr/compare/v0.2.1...v0.2.2) (2026-03-19)
+
+
+### Bug Fixes
+
+* split arm64 and amd64 builds ([e57ca98](https://github.com/ahembree/librariarr/commit/e57ca98e060c7491eb70e6238602e9e346eae138))
+* split arm64 and amd64 builds ([f4377f5](https://github.com/ahembree/librariarr/commit/f4377f58aec051dac74175a8f657a38677ff8ffb))
+
 ## [0.2.1](https://github.com/ahembree/librariarr/compare/v0.2.0...v0.2.1) (2026-03-19)
 
 
