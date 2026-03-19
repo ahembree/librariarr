@@ -1,0 +1,118 @@
+---
+title: Connecting a Server
+description: Add your Plex, Jellyfin, or Emby server and run your first sync.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+## Adding a Server
+
+<Steps>
+
+1. **Navigate to Settings → Servers**
+
+   Click the **Add Server** button to open the server setup dialog.
+
+2. **Choose server type**
+
+   Select **Plex**, **Jellyfin**, or **Emby**.
+
+3. **Enter connection details**
+
+   - **URL**: The base URL of your server (e.g., `http://192.168.1.100:32400` for Plex)
+   - **Access Token**: Your server's API token
+   - **Skip TLS Verification**: Enable if your server uses a self-signed or untrusted SSL certificate
+
+   For Plex, the app can auto-discover your servers from your Plex account and suggest connection URLs.
+
+4. **Test connection**
+
+   Click **Test Connection** to verify Librariarr can reach your server. Fix any issues before proceeding.
+
+5. **Select libraries**
+
+   After a successful connection test, choose which libraries to sync. Each library can be independently enabled or disabled.
+
+6. **Save and sync**
+
+   The server is saved and an initial sync begins automatically.
+
+</Steps>
+
+### Getting Your Access Token
+
+#### Plex
+
+If you signed in with Plex OAuth, Librariarr can auto-discover your servers. You can also provide a token manually:
+
+1. Open Plex Web and navigate to any media item
+2. Click **Get Info** → **View XML**
+3. Look for `X-Plex-Token` in the URL
+
+#### Jellyfin
+
+1. Go to **Dashboard → API Keys** in Jellyfin
+2. Create a new API key for Librariarr
+
+#### Emby
+
+1. Go to **Server → API Keys** in Emby
+2. Create a new API key for Librariarr
+
+## Onboarding Flow
+
+If this is your first time logging in and no servers are configured, Librariarr will guide you through an onboarding flow:
+
+1. **Plex server discovery** — If you signed in with Plex, all your accessible servers are listed automatically with their name, platform, version, and available connections
+2. **Connection customization** — Choose or edit the connection URL for each server
+3. **Library selection** — Pick which libraries to sync
+4. **Redirect to settings** — After completing onboarding, you're taken to Settings → Servers for further configuration
+
+## Library Management
+
+### Enabling and Disabling Libraries
+
+Each library can be toggled on or off in **Settings → Servers**. Only enabled libraries are synced.
+
+<Aside type="caution">
+  When disabling the last library of a given type (e.g., the only Movie library), you'll be prompted to either keep or delete all media data for that type from the database.
+</Aside>
+
+### Refreshing Libraries
+
+Click **Refresh Libraries** on a server to fetch the latest library list. New libraries are added automatically and can be enabled for syncing.
+
+## Sync Behavior
+
+### What Gets Synced
+
+For each media item, Librariarr syncs:
+
+- **Metadata**: title, year, rating, studio, genres, content rating, duration, play count, last played date
+- **Video details**: resolution, format, frame rate, HDR type, and more
+- **Audio details**: format, channels, quality, and languages
+- **Subtitles**: languages and settings
+- **File info**: size, format, and location
+- **External IDs**: TMDB, TVDB, and IMDB (used to match with Sonarr, Radarr, and Lidarr)
+
+### Multi-Server Deduplication
+
+When the same media exists on multiple servers, Librariarr:
+
+1. Identifies duplicates by comparing title, year, and season/episode info
+2. Picks one copy as the **preferred version** shown in the library
+3. Tracks which servers have each item and at what quality
+
+You can configure which server's title and artwork to prefer in **Settings → General**.
+
+### Sync Performance
+
+- Only one sync runs per server at a time
+- Progress is tracked and displayed in the Settings → Servers UI (% complete with item counts)
+- Syncs can be triggered manually or run on schedule
+
+## Next Steps
+
+- [Browse your library](/docs/features/library/) with filters and search
+- [Set up lifecycle rules](/docs/features/lifecycle-rules/) to automate media management
+- [Connect integrations](/docs/integrations/sonarr/) like Sonarr, Radarr, and Lidarr

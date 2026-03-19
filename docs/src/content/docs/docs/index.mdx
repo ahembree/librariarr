@@ -1,0 +1,49 @@
+---
+title: Librariarr Documentation
+description: Complete documentation for Librariarr — media library management for Plex, Jellyfin, and Emby.
+template: splash
+hero:
+  tagline: Self-hosted media library management for Plex, Jellyfin, and Emby servers. Browse your libraries, automate media management with rules, manage streams, and integrate with the *arr stack.
+  actions:
+    - text: Get Started
+      link: /docs/getting-started/installation/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/ahembree/librariarr
+      variant: minimal
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+<CardGrid stagger>
+  <Card title="Installation" icon="rocket">
+    Deploy with Docker Compose in minutes. One container, one database — that's
+    it.
+    <br />
+    [Get started →](/docs/getting-started/installation/)
+  </Card>
+
+  <Card title="Library Browsing" icon="open-book">
+    Browse movies, series, and music with powerful filters and smooth scrolling for
+    libraries of any size.
+    <br />
+    [Learn more →](/docs/features/library/)
+  </Card>
+
+  <Card title="Lifecycle Rules" icon="setting">
+    Build rules to automatically find and act on media, with Sonarr, Radarr, and Lidarr integration.
+    <br />
+    [Learn more →](/docs/features/lifecycle-rules/)
+  </Card>
+
+  <Card title="Integrations" icon="puzzle">
+    Connect Plex, Jellyfin, Emby, Sonarr, Radarr, Lidarr, and Seerr to unlock
+    the full feature set.
+    <br />
+    [Learn more →](/docs/integrations/plex/)
+  </Card>
+</CardGrid>
+
+:::caution[Disclaimer]
+This software is provided as-is with no warranty. The codebase is 99.999% AI-generated and maintained on a best-effort basis. [Read the full disclaimer →](/docs/disclaimer/)
+:::

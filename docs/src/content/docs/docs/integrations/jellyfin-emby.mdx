@@ -1,0 +1,84 @@
+---
+title: Jellyfin & Emby
+description: Connect Jellyfin or Emby as a media server.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+Librariarr supports Jellyfin and Emby as media server backends alongside Plex.
+
+## Setup
+
+<Steps>
+
+1. Go to **Settings → Servers**
+2. Click **Add Server**
+3. Select **Jellyfin** or **Emby** as the server type
+4. Enter connection details:
+   - **URL**: Your server's base URL (e.g., `http://192.168.1.100:8096`)
+   - **Access Token**: An API key from your server
+   - **Skip TLS Verification**: Enable for self-signed certificates
+5. Click **Test Connection**
+6. Select which libraries to sync
+7. Save
+
+</Steps>
+
+### Getting an API Key
+
+#### Jellyfin
+
+1. Open **Jellyfin Dashboard**
+2. Navigate to **API Keys** (under Advanced)
+3. Click **Add** and name it "Librariarr"
+4. Copy the generated key
+
+#### Emby
+
+1. Open **Emby Server Dashboard**
+2. Navigate to **API Keys**
+3. Create a new key named "Librariarr"
+4. Copy the generated key
+
+## Synced Data
+
+The same metadata is synced as with Plex:
+
+- Core metadata (title, year, ratings, genres, etc.)
+- Video, audio, and subtitle stream details
+- File information and external IDs
+- Play counts and history
+
+## Feature Parity Notes
+
+Most Librariarr features work identically with Jellyfin and Emby. However, some features have differences:
+
+| Feature | Plex | Jellyfin/Emby |
+|---------|------|---------------|
+| OAuth login | Yes | No (API key only) |
+| Server discovery | Automatic | Manual URL entry |
+| Active stream monitoring | Yes | Yes |
+| Maintenance mode | Yes | Yes |
+| Preroll support | Native (Plex Pass) | Varies by version/plugins |
+| Transcode management | Yes | Yes |
+
+<Aside>
+  Plex OAuth remains the primary authentication method for Librariarr itself. Even when using Jellyfin or Emby as your media server, you can use Plex OAuth to log in to Librariarr, or use local authentication as an alternative.
+</Aside>
+
+## Multi-Server Setup
+
+You can connect multiple servers of any type simultaneously:
+
+- Multiple Plex servers
+- Plex + Jellyfin
+- Plex + Emby
+- Any combination
+
+When the same media exists on multiple servers, Librariarr's [deduplication system](/docs/getting-started/connecting-a-server/#multi-server-deduplication) handles it automatically.
+
+## Limitations
+
+- No auto-discovery for Jellyfin/Emby — you must enter the URL manually
+- Some metadata fields may differ slightly between server types due to different APIs
+- Preroll functionality depends on server-side support, which varies for Jellyfin and Emby

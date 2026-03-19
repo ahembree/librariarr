@@ -1,0 +1,66 @@
+---
+title: System Logs
+description: View and manage application logs.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+The System Logs page provides a centralized view of application events stored in the database.
+
+## Log Levels
+
+| Level | Description |
+|-------|-------------|
+| **DEBUG** | Detailed diagnostic information (only written when `LOG_DEBUG=true`) |
+| **INFO** | General operational events (sync started, backup created, etc.) |
+| **WARN** | Potential issues that don't prevent operation |
+| **ERROR** | Failures that require attention |
+
+## Log Categories
+
+| Category | Description |
+|----------|-------------|
+| **BACKEND** | Core application logic events |
+| **API** | API route handling and request processing |
+| **DB** | Database operations and queries |
+
+## Viewing Logs
+
+The logs page displays:
+
+- **Timestamp** — when the event occurred
+- **Level** — severity (DEBUG, INFO, WARN, ERROR)
+- **Category** — source category (BACKEND, API, DB)
+- **Source** — specific component or function
+- **Message** — description of the event
+- **Meta** — additional contextual data (JSON)
+
+### Filtering
+
+Filter logs by:
+
+- **Level** — show only specific severity levels
+- **Category** — filter by source category
+- **Source** — filter by specific component
+- **Search** — free text search across log messages
+
+## Retention
+
+Configure log retention in **Settings → General → Log Retention**:
+
+- **Range**: 1 to 365 days (default: 7)
+- Logs older than the configured period are automatically deleted
+- **Hard limit**: 50,000 maximum entries regardless of retention days
+
+<Aside>
+  Debug logs can be very verbose. Enable `LOG_DEBUG=true` only when troubleshooting specific issues, and consider lowering retention during extended debug sessions to prevent the 50,000 entry limit from hiding newer logs.
+</Aside>
+
+## Output
+
+Logs are written to two destinations simultaneously:
+
+1. **Database** — the `LogEntry` table, accessible via the System Logs UI
+2. **Console** — visible via `docker logs` or your container runtime
+
+This means you can view recent logs in the web UI and full container output via Docker.

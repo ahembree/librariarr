@@ -1,0 +1,854 @@
+"use client";
+
+import { useState, useEffect, useCallback, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { usePanelResize } from "@/hooks/use-panel-resize";
+import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Loader2,
+  XCircle,
+  Play,
+  ChevronDown,
+  ChevronRight,
+  CheckCircle2,
+  AlertTriangle,
+  ShieldOff,
+} from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import type { MediaItemWithRelations } from "@/lib/types";
+import { useRealtime } from "@/hooks/use-realtime";
+
+interface ActionItem {
+  id: string;
+  actionType: string;
+  addImportExclusion: boolean;
+  addArrTags: string[];
+  removeArrTags: string[];
+  status: string;
+  scheduledFor: string;
+  executedAt: string | null;
+  error: string | null;
+  createdAt: string;
+  estimated: boolean;
+  mediaItem: {
+    id: string | null;
+    title: string;
+    parentTitle: string | null;
+    type: string;
+  };
+}
+
+interface RuleSetGroup {
+  ruleSet: {
+    id: string;
+    name: string;
+    type: string;
+    actionType: string | null;
+    actionDelayDays: number;
+    addImportExclusion: boolean;
+    searchAfterDelete: boolean;
+    addArrTags: string[];
+    removeArrTags: string[];
+    arrInstanceId: string | null;
+    deleted?: boolean;
+  };
+  items: ActionItem[];
+  count: number;
+}
+
+const STATUS_FILTERS = ["PENDING", "COMPLETED", "FAILED", "ALL"];
+
+const STATUS_LABELS: Record<string, string> = {
+  PENDING: "Pending",
+  COMPLETED: "Completed",
+  FAILED: "Failed",
+  ALL: "All",
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  PENDING: "bg-yellow-500 hover:bg-yellow-500",
+  COMPLETED: "bg-green-500 hover:bg-green-500",
+  FAILED: "bg-red-500 hover:bg-red-500",
+};
+
+function formatActionType(type: string): string {
+  const map: Record<string, string> = {
+    DO_NOTHING: "Monitor Only",
+    DELETE_RADARR: "Delete from Radarr",
+    DELETE_SONARR: "Delete from Sonarr",
+    DELETE_LIDARR: "Delete from Lidarr",
+    UNMONITOR_RADARR: "Unmonitor in Radarr",
+    UNMONITOR_SONARR: "Unmonitor in Sonarr",
+    UNMONITOR_LIDARR: "Unmonitor in Lidarr",
+    UNMONITOR_DELETE_FILES_RADARR: "Unmonitor & Delete Files (Radarr)",
+    UNMONITOR_DELETE_FILES_SONARR: "Unmonitor & Delete Files (Sonarr)",
+    UNMONITOR_DELETE_FILES_LIDARR: "Unmonitor & Delete Files (Lidarr)",
+    MONITOR_DELETE_FILES_RADARR: "Monitor & Delete Files (Radarr)",
+    MONITOR_DELETE_FILES_SONARR: "Monitor & Delete Files (Sonarr)",
+    MONITOR_DELETE_FILES_LIDARR: "Monitor & Delete Files (Lidarr)",
+    DELETE_FILES_RADARR: "Delete Files Only (Radarr)",
+    DELETE_FILES_SONARR: "Delete Files Only (Sonarr)",
+    DELETE_FILES_LIDARR: "Delete Files Only (Lidarr)",
+  };
+  return map[type] ?? type;
+}
+
+/* ---------- Virtualized action table for a single group ---------- */
+
+function VirtualizedActionTable({
+  items,
+  ruleSetId,
+  isPending,
+  executingItems,
+  retryingItems,
+  excludingItems,
+  exceptedItemIds,
+  onExecuteItem,
+  onRemoveAction,
+  onRetryAction,
+  onExclude,
+  onItemClick,
+  isDeletedRuleSet,
+}: {
+  items: ActionItem[];
+  ruleSetId: string;
+  isPending: boolean;
+  executingItems: Set<string>;
+  retryingItems: Set<string>;
+  excludingItems: Set<string>;
+  exceptedItemIds: Set<string>;
+  onExecuteItem: (ruleSetId: string, mediaItemId: string) => void;
+  onRemoveAction: (id: string) => void;
+  onRetryAction: (action: ActionItem) => void;
+  onExclude: (action: ActionItem) => void;
+  onItemClick: (action: ActionItem) => void;
+  isDeletedRuleSet?: boolean;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
+
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 52,
+    overscan: 10,
+    measureElement: (el) => el.getBoundingClientRect().height,
+  });
+
+  const virtualRows = virtualizer.getVirtualItems();
+  const paddingTop = virtualRows.length > 0 ? virtualRows[0].start : 0;
+  const paddingBottom =
+    virtualRows.length > 0
+      ? virtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
+      : 0;
+
+  return (
+    <div className="rounded-md border">
+      <div ref={scrollRef} className="md:max-h-[60vh] overflow-auto">
+        <table className="w-full caption-bottom text-sm">
+          <thead className="sticky top-0 z-10 bg-background [&_tr]:border-b">
+            <tr className="border-b transition-colors">
+              <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">Title</th>
+              <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">Action</th>
+              <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">{isPending ? "Scheduled" : "Date"}</th>
+              <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">Status</th>
+              {isPending && <th className="h-10 px-4 w-30 text-left align-middle font-medium text-muted-foreground" />}
+              {!isPending && items.some((a) => a.status === "FAILED") && (
+                <th className="h-10 px-4 w-12 text-left align-middle font-medium text-muted-foreground" />
+              )}
+            </tr>
+          </thead>
+          <tbody className="[&_tr:last-child]:border-0">
+            {paddingTop > 0 && (
+              <tr aria-hidden="true"><td style={{ height: paddingTop }} /></tr>
+            )}
+            {virtualRows.map((virtualRow) => {
+              const action = items[virtualRow.index];
+              const hasMediaItem = action.mediaItem.id !== null;
+              const itemKey = hasMediaItem ? `${ruleSetId}:${action.mediaItem.id}` : "";
+              const isItemExecuting = hasMediaItem && executingItems.has(itemKey);
+
+              return (
+                <tr
+                  key={action.id}
+                  ref={virtualizer.measureElement}
+                  data-index={virtualRow.index}
+                  className={`border-b transition-colors ${hasMediaItem ? "hover:bg-muted/50 cursor-pointer" : ""}`}
+                  onClick={hasMediaItem ? () => onItemClick(action) : undefined}
+                >
+                  <td className="p-4 align-middle">
+                    <div>
+                      <p className="font-medium inline-flex items-center gap-1.5">
+                        {hasMediaItem && exceptedItemIds.has(action.mediaItem.id!) && (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <ShieldOff className="h-3.5 w-3.5 text-orange-400 shrink-0" />
+                              </TooltipTrigger>
+                              <TooltipContent>Excluded from lifecycle actions</TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        )}
+                        {action.mediaItem.title}
+                      </p>
+                      {action.mediaItem.parentTitle && (
+                        <p className="text-xs text-muted-foreground">
+                          {action.mediaItem.parentTitle}
+                        </p>
+                      )}
+                    </div>
+                  </td>
+                  <td className="p-4 align-middle">
+                    <div className="space-y-1">
+                      <p className="text-sm">
+                        {formatActionType(action.actionType)}
+                      </p>
+                      {action.addImportExclusion && (
+                        <Badge variant="outline" className="text-[10px]">
+                          + List exclusion
+                        </Badge>
+                      )}
+                      {action.addArrTags?.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {action.addArrTags.map((tag) => (
+                            <Badge
+                              key={tag}
+                              className="text-[10px] bg-green-500/20 text-green-400 border-green-500/30"
+                            >
+                              +{tag}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                      {action.removeArrTags?.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {action.removeArrTags.map((tag) => (
+                            <Badge
+                              key={tag}
+                              className="text-[10px] bg-red-500/20 text-red-400 border-red-500/30"
+                            >
+                              -{tag}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </td>
+                  <td className="p-4 align-middle text-sm">
+                    {new Date(action.executedAt ?? action.scheduledFor).toLocaleDateString()}
+                    <br />
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(action.executedAt ?? action.scheduledFor).toLocaleTimeString()}
+                    </span>
+                    {action.estimated && (
+                      <p className="text-[10px] text-muted-foreground/60 mt-0.5">
+                        (estimated)
+                      </p>
+                    )}
+                  </td>
+                  <td className="p-4 align-middle">
+                    <Badge
+                      className={`text-white ${STATUS_COLORS[action.status] || "bg-gray-500"}`}
+                    >
+                      {STATUS_LABELS[action.status] ?? action.status}
+                    </Badge>
+                    {action.error && (
+                      <div className="mt-1 max-w-64">
+                        <p
+                          className={`text-xs text-red-400 ${expandedErrors.has(action.id) ? "whitespace-pre-wrap wrap-break-word" : "truncate"}`}
+                        >
+                          {action.error}
+                        </p>
+                        {action.error.length > 40 && (
+                          <button
+                            className="text-[10px] text-muted-foreground hover:text-foreground mt-0.5"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedErrors((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(action.id)) {
+                                  next.delete(action.id);
+                                } else {
+                                  next.add(action.id);
+                                }
+                                return next;
+                              });
+                            }}
+                          >
+                            {expandedErrors.has(action.id) ? "Show less" : "Show more"}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                  {isPending && (
+                    <td className="p-4 align-middle">
+                      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => hasMediaItem && onExecuteItem(ruleSetId, action.mediaItem.id!)}
+                          disabled={isItemExecuting || !hasMediaItem}
+                          title="Execute now"
+                        >
+                          {isItemExecuting ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Play className="h-4 w-4" />
+                          )}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => onExclude(action)}
+                          disabled={!hasMediaItem || excludingItems.has(action.mediaItem.id!)}
+                          title="Exclude from lifecycle actions"
+                        >
+                          {hasMediaItem && excludingItems.has(action.mediaItem.id!) ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <ShieldOff className="h-4 w-4 text-orange-400" />
+                          )}
+                        </Button>
+                      </div>
+                    </td>
+                  )}
+                  {!isPending && !action.estimated && action.status === "FAILED" && (
+                    <td className="p-4 align-middle">
+                      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                        {action.status === "FAILED" && !isDeletedRuleSet && hasMediaItem && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => onRetryAction(action)}
+                            disabled={retryingItems.has(action.id)}
+                            title="Force retry"
+                          >
+                            {retryingItems.has(action.id) ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Play className="h-4 w-4 text-yellow-500" />
+                            )}
+                          </Button>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => onRemoveAction(action.id)}
+                          title="Remove from list"
+                        >
+                          <XCircle className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+                        </Button>
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+            {paddingBottom > 0 && (
+              <tr aria-hidden="true"><td style={{ height: paddingBottom }} /></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Main page ---------- */
+
+export default function PendingActionsPage() {
+  const [groups, setGroups] = useState<RuleSetGroup[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [statusFilter, setStatusFilter] = useState("PENDING");
+  const [expandedRules, setExpandedRules] = useState<Set<string>>(new Set());
+  const [executingRules, setExecutingRules] = useState<Set<string>>(new Set());
+  const [executingItems, setExecutingItems] = useState<Set<string>>(new Set());
+  const [executeResults, setExecuteResults] = useState<Record<string, { executed: number; failed: number; errors: string[] }>>({});
+  const [confirmExecuteRuleSetId, setConfirmExecuteRuleSetId] = useState<string | null>(null);
+
+  // Media detail panel state
+  const [selectedItem, setSelectedItem] = useState<MediaItemWithRelations | null>(null);
+  const [selectedItemType, setSelectedItemType] = useState<"MOVIE" | "SERIES" | "MUSIC">("MOVIE");
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const { width: panelWidth, resizeHandleProps } = usePanelResize({
+    storageKey: "lifecycle-pending-panel-width",
+    defaultWidth: 480,
+    minWidth: 360,
+    maxWidth: 800,
+  });
+
+  const fetchActions = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ status: statusFilter });
+      const response = await fetch(`/api/lifecycle/actions?${params}`);
+      const data = await response.json();
+      setGroups(data.groups || []);
+    } catch (error) {
+      console.error("Failed to fetch actions:", error);
+    } finally {
+      setLoading(false);
+    }
+  }, [statusFilter]);
+
+  useRealtime("lifecycle:action-executed", fetchActions);
+
+  useEffect(() => {
+    fetchActions();
+  }, [fetchActions]);
+
+  const toggleExpand = (ruleSetId: string) => {
+    setExpandedRules((prev) => {
+      const next = new Set(prev);
+      if (next.has(ruleSetId)) {
+        next.delete(ruleSetId);
+      } else {
+        next.add(ruleSetId);
+      }
+      return next;
+    });
+  };
+
+  const removeAction = async (id: string) => {
+    try {
+      await fetch(`/api/lifecycle/actions/${id}`, { method: "DELETE" });
+      await fetchActions();
+    } catch (error) {
+      console.error("Failed to remove action:", error);
+    }
+  };
+
+  const [confirmRetryAction, setConfirmRetryAction] = useState<ActionItem | null>(null);
+  const [retrySkipTitle, setRetrySkipTitle] = useState(false);
+
+  const retryAction = async (action: ActionItem) => {
+    // If it's a title mismatch error, show confirmation dialog with skip option
+    setConfirmRetryAction(action);
+    setRetrySkipTitle(false);
+  };
+
+  const executeRetry = async () => {
+    const action = confirmRetryAction;
+    if (!action) return;
+    setConfirmRetryAction(null);
+
+    setRetryingItems((prev) => new Set(prev).add(action.id));
+    try {
+      const params = retrySkipTitle ? "?skipTitleValidation=true" : "";
+      await fetch(`/api/lifecycle/actions/${action.id}${params}`, { method: "POST" });
+      await fetchActions();
+    } catch (error) {
+      console.error("Failed to retry action:", error);
+    } finally {
+      setRetryingItems((prev) => {
+        const next = new Set(prev);
+        next.delete(action.id);
+        return next;
+      });
+    }
+  };
+
+  const executeAll = async (ruleSetId: string) => {
+    setConfirmExecuteRuleSetId(null);
+    setExecutingRules((prev) => new Set(prev).add(ruleSetId));
+    setExecuteResults((prev) => {
+      const next = { ...prev };
+      delete next[ruleSetId];
+      return next;
+    });
+    try {
+      const response = await fetch("/api/lifecycle/actions/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ruleSetId }),
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setExecuteResults((prev) => ({
+          ...prev,
+          [ruleSetId]: { executed: data.executed, failed: data.failed, errors: data.errors || [] },
+        }));
+      } else {
+        setExecuteResults((prev) => ({
+          ...prev,
+          [ruleSetId]: { executed: 0, failed: 0, errors: [data.error || "Unknown error"] },
+        }));
+      }
+      await fetchActions();
+    } catch (error) {
+      setExecuteResults((prev) => ({
+        ...prev,
+        [ruleSetId]: { executed: 0, failed: 0, errors: [String(error)] },
+      }));
+    } finally {
+      setExecutingRules((prev) => {
+        const next = new Set(prev);
+        next.delete(ruleSetId);
+        return next;
+      });
+    }
+  };
+
+  const executeItem = async (ruleSetId: string, mediaItemId: string) => {
+    const key = `${ruleSetId}:${mediaItemId}`;
+    setExecutingItems((prev) => new Set(prev).add(key));
+    try {
+      await fetch("/api/lifecycle/actions/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ruleSetId, mediaItemIds: [mediaItemId] }),
+      });
+      await fetchActions();
+    } catch (error) {
+      console.error("Failed to execute item:", error);
+    } finally {
+      setExecutingItems((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
+
+  // Track which items have lifecycle exceptions
+  const [exceptedItemIds, setExceptedItemIds] = useState<Set<string>>(new Set());
+
+  const fetchExceptions = useCallback(async () => {
+    try {
+      const response = await fetch("/api/lifecycle/exceptions");
+      if (response.ok) {
+        const data = await response.json();
+        setExceptedItemIds(new Set((data.exceptions || []).map((e: { mediaItem: { id: string } }) => e.mediaItem.id)));
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchExceptions();
+  }, [fetchExceptions]);
+
+  const [retryingItems, setRetryingItems] = useState<Set<string>>(new Set());
+  const [excludingItems, setExcludingItems] = useState<Set<string>>(new Set());
+
+  const excludeItem = async (action: ActionItem) => {
+    if (!action.mediaItem.id) return;
+    const mediaItemId = action.mediaItem.id;
+    setExcludingItems((prev) => new Set(prev).add(mediaItemId));
+    try {
+      const response = await fetch("/api/lifecycle/exceptions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mediaItemId }),
+      });
+      if (response.ok) {
+        setExceptedItemIds((prev) => new Set(prev).add(mediaItemId));
+        await fetchActions();
+      }
+    } catch (error) {
+      console.error("Failed to exclude item:", error);
+    } finally {
+      setExcludingItems((prev) => {
+        const next = new Set(prev);
+        next.delete(mediaItemId);
+        return next;
+      });
+    }
+  };
+
+  const openDetailPanel = async (action: ActionItem) => {
+    const mediaType = action.mediaItem.type as "MOVIE" | "SERIES" | "MUSIC";
+    setSelectedItemType(mediaType);
+    if (!action.mediaItem.id) return;
+    setLoadingDetail(true);
+    try {
+      const response = await fetch(`/api/media/${action.mediaItem.id}`);
+      if (response.ok) {
+        const data = await response.json();
+        setSelectedItem(data.item ?? data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch media item:", error);
+    } finally {
+      setLoadingDetail(false);
+    }
+  };
+
+  const isPending = statusFilter === "PENDING";
+
+  return (
+    <div className="flex md:h-full">
+      <div className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 md:overflow-auto">
+        <h1 className="text-2xl sm:text-3xl font-bold mb-6">Pending Actions</h1>
+
+        {/* Status filter */}
+        <div className="flex gap-2 mb-4">
+          {STATUS_FILTERS.map((status) => (
+            <Button
+              key={status}
+              variant={statusFilter === status ? "default" : "outline"}
+              size="sm"
+              onClick={() => setStatusFilter(status)}
+            >
+              {STATUS_LABELS[status] ?? status}
+            </Button>
+          ))}
+        </div>
+
+        {loading ? (
+          <div className="flex justify-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          </div>
+        ) : groups.length === 0 ? (
+          <p className="text-center py-12 text-muted-foreground">
+            No {(STATUS_LABELS[statusFilter] ?? statusFilter).toLowerCase()} actions found.
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {groups.map((group) => {
+              const isExpanded = expandedRules.has(group.ruleSet.id);
+              const isExecuting = executingRules.has(group.ruleSet.id);
+              const result = executeResults[group.ruleSet.id];
+
+              return (
+                <Card key={group.ruleSet.id}>
+                  <CardHeader
+                    className="cursor-pointer"
+                    onClick={() => toggleExpand(group.ruleSet.id)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        {isExpanded ? (
+                          <ChevronDown className="h-5 w-5 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="h-5 w-5 text-muted-foreground" />
+                        )}
+                        <div>
+                          <CardTitle className="text-lg">
+                            {group.ruleSet.name}
+                            {group.ruleSet.deleted && (
+                              <span className="ml-2 text-sm font-normal text-muted-foreground">(Deleted)</span>
+                            )}
+                          </CardTitle>
+                          <div className="flex items-center gap-2 mt-1">
+                            <Badge variant="outline">
+                              {group.ruleSet.type === "MOVIE" ? "Movie" : group.ruleSet.type === "MUSIC" ? "Music" : "Series"}
+                            </Badge>
+                            <Badge variant="secondary">
+                              {group.count} item{group.count !== 1 && "s"}
+                            </Badge>
+                            {group.ruleSet.actionType && (
+                              <span className="text-xs text-muted-foreground">
+                                Action: {formatActionType(group.ruleSet.actionType)}
+                              </span>
+                            )}
+                            {(group.ruleSet.addArrTags?.length > 0 || group.ruleSet.removeArrTags?.length > 0) && (
+                              <div className="flex flex-wrap gap-1">
+                                {group.ruleSet.addArrTags?.map((tag) => (
+                                  <Badge
+                                    key={`add-${tag}`}
+                                    className="text-[10px] bg-green-500/20 text-green-400 border-green-500/30"
+                                  >
+                                    +{tag}
+                                  </Badge>
+                                ))}
+                                {group.ruleSet.removeArrTags?.map((tag) => (
+                                  <Badge
+                                    key={`rm-${tag}`}
+                                    className="text-[10px] bg-red-500/20 text-red-400 border-red-500/30"
+                                  >
+                                    -{tag}
+                                  </Badge>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Execute All button (only for PENDING filter, not for deleted rule sets) */}
+                      {isPending && group.count > 0 && !group.ruleSet.deleted && (
+                        <div
+                          className="flex items-center gap-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {result && (
+                            <span className="text-xs">
+                              {result.failed === 0 ? (
+                                <span className="text-green-500 flex items-center gap-1">
+                                  <CheckCircle2 className="h-3.5 w-3.5" />
+                                  {result.executed} executed
+                                </span>
+                              ) : (
+                                <span className="text-yellow-500 flex items-center gap-1">
+                                  <AlertTriangle className="h-3.5 w-3.5" />
+                                  {result.executed} ok, {result.failed} failed
+                                </span>
+                              )}
+                            </span>
+                          )}
+                          <Button
+                            size="sm"
+                            variant="default"
+                            onClick={() => setConfirmExecuteRuleSetId(group.ruleSet.id)}
+                            disabled={isExecuting}
+                          >
+                            {isExecuting ? (
+                              <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                            ) : (
+                              <Play className="h-4 w-4 mr-1" />
+                            )}
+                            {isExecuting ? "Executing..." : "Execute All"}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  </CardHeader>
+
+                  {isExpanded && group.items.length > 0 && (
+                    <CardContent>
+                      <VirtualizedActionTable
+                        items={group.items}
+                        ruleSetId={group.ruleSet.id}
+                        isPending={isPending}
+                        executingItems={executingItems}
+                        retryingItems={retryingItems}
+                        excludingItems={excludingItems}
+                        exceptedItemIds={exceptedItemIds}
+                        onExecuteItem={executeItem}
+                        onRemoveAction={removeAction}
+                        onRetryAction={(action) => retryAction(action)}
+                        onExclude={excludeItem}
+                        onItemClick={openDetailPanel}
+                        isDeletedRuleSet={group.ruleSet.deleted}
+                      />
+                    </CardContent>
+                  )}
+
+                  {isExpanded && group.items.length === 0 && (
+                    <CardContent>
+                      <p className="text-center text-muted-foreground py-4">
+                        No items in this group.
+                      </p>
+                    </CardContent>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Execute All confirmation dialog */}
+        <AlertDialog
+          open={!!confirmExecuteRuleSetId}
+          onOpenChange={(open) => { if (!open) setConfirmExecuteRuleSetId(null); }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Execute All Actions</AlertDialogTitle>
+              <AlertDialogDescription>
+                {(() => {
+                  const group = groups.find((g) => g.ruleSet.id === confirmExecuteRuleSetId);
+                  if (!group) return "Are you sure?";
+                  return `This will immediately execute ${formatActionType(group.ruleSet.actionType ?? "DO_NOTHING")} on ${group.count} item${group.count !== 1 ? "s" : ""} for "${group.ruleSet.name}". This action cannot be undone.`;
+                })()}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  if (confirmExecuteRuleSetId) executeAll(confirmExecuteRuleSetId);
+                }}
+              >
+                Execute
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Force retry confirmation dialog */}
+        <AlertDialog
+          open={!!confirmRetryAction}
+          onOpenChange={(open) => { if (!open) setConfirmRetryAction(null); }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Force Retry Action</AlertDialogTitle>
+              <AlertDialogDescription asChild>
+                <div className="space-y-3">
+                  <p>
+                    Retry {formatActionType(confirmRetryAction?.actionType ?? "")} for &quot;{confirmRetryAction?.mediaItem.title}&quot;?
+                  </p>
+                  {confirmRetryAction?.error?.includes("title mismatch") && (() => {
+                    const arrTitleMatch = confirmRetryAction.error?.match(/Arr returned "([^"]+)"/);
+                    return (
+                      <div className="space-y-2">
+                        {arrTitleMatch && (
+                          <p className="text-sm text-yellow-500">
+                            Arr title: &quot;{arrTitleMatch[1]}&quot;
+                          </p>
+                        )}
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <Checkbox
+                            checked={retrySkipTitle}
+                            onCheckedChange={(checked) => setRetrySkipTitle(checked === true)}
+                          />
+                          <span className="text-sm">Skip title validation check</span>
+                        </label>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={executeRetry}>
+                Retry
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
+
+      {/* Detail panel loading indicator */}
+      {loadingDetail && !selectedItem && (
+        <div className="w-120 border-l flex items-center justify-center">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      )}
+
+      {selectedItem && (
+        <MediaDetailSidePanel
+          item={selectedItem}
+          mediaType={selectedItemType}
+          onClose={() => setSelectedItem(null)}
+          width={panelWidth}
+          resizeHandleProps={resizeHandleProps}
+        />
+      )}
+    </div>
+  );
+}

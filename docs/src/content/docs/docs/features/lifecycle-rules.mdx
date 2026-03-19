@@ -1,0 +1,221 @@
+---
+title: Lifecycle Rules
+description: Automate media management with the lifecycle rule engine.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+The lifecycle rule engine lets you define conditions to automatically identify and act on media in your library. It uses a flexible rule group structure with AND/OR logic.
+
+## Concepts
+
+### Rule Sets
+
+A **rule set** is a named collection of rules and actions. Each rule set targets a specific media type (movies, series, or music).
+
+### Rule Groups
+
+Rules are organized into **groups** that use either **AND** or **OR** logic:
+
+- **AND**: All rules in the group must match
+- **OR**: At least one rule in the group must match
+
+Groups can be **nested** to create complex conditions.
+
+### Rules
+
+Each individual rule consists of:
+
+1. **Field** — what property to evaluate (e.g., `playCount`, `resolution`, `addedAt`)
+2. **Operator** — how to compare (e.g., `equals`, `greaterThan`, `before`)
+3. **Value** — the target value
+
+Rules can be **negated** (NOT) to invert their logic.
+
+## Available Fields
+
+Over 50 fields are available for rule conditions.
+
+### Media Fields
+
+| Field | Description | Operators |
+|-------|-------------|-----------|
+| `playCount` | Number of times played | equals, greaterThan, lessThan, etc. |
+| `lastPlayedAt` | When last played | before, after, inLastDays |
+| `addedAt` | When added to library | before, after, inLastDays |
+| `title` | Media title | equals, contains, matchesWildcard |
+| `parentTitle` | Series name (for episodes) | equals, contains, matchesWildcard |
+| `year` | Release year | equals, greaterThan, lessThan, etc. |
+| `contentRating` | Content rating (PG, R, etc.) | equals, notEquals |
+| `rating` | Critic rating | greaterThan, lessThan, etc. |
+| `audienceRating` | Audience rating | greaterThan, lessThan, etc. |
+| `studio` | Production studio | equals, contains |
+| `genre` | Genre(s) | equals, contains |
+| `duration` | Duration in minutes | greaterThan, lessThan, etc. |
+
+### Video Fields
+
+| Field | Description |
+|-------|-------------|
+| `resolution` | 4K, 1080P, 720P, etc. |
+| `videoCodec` | H.264, H.265, AV1, etc. |
+| `videoBitrate` | Video bitrate |
+| `videoBitDepth` | 8-bit, 10-bit |
+| `videoProfile` | Baseline, Main, High |
+| `videoFrameRate` | Frame rate (23.976, 24, etc.) |
+| `aspectRatio` | 16:9, 4:3, 2.39:1, etc. |
+| `dynamicRange` | SDR, HDR10, HDR10+, Dolby Vision, HLG |
+| `scanType` | progressive, interlaced |
+
+### Audio Fields
+
+| Field | Description |
+|-------|-------------|
+| `audioCodec` | AAC, AC3, FLAC, etc. |
+| `audioChannels` | Channel count (2, 6, 8, etc.) |
+| `audioProfile` | Dolby Atmos, DTS-HD MA, etc. |
+| `audioSamplingRate` | Sampling rate (48000, etc.) |
+| `audioBitrate` | Audio bitrate |
+| `audioLanguage` | Audio track language |
+| `audioStreamCount` | Number of audio tracks |
+
+### File Fields
+
+| Field | Description |
+|-------|-------------|
+| `fileSize` | File size (in GB) |
+| `container` | File container (MKV, MP4, etc.) |
+| `subtitleLanguage` | Subtitle track language |
+| `subtitleStreamCount` | Number of subtitle tracks |
+
+### External / *arr Fields
+
+These fields require configured [Sonarr](/docs/integrations/sonarr/), [Radarr](/docs/integrations/radarr/), or [Lidarr](/docs/integrations/lidarr/) integrations.
+
+| Field | Description |
+|-------|-------------|
+| `arrTag` | Tags in *arr instance |
+| `arrQualityProfile` | Quality profile name |
+| `arrMonitored` | Whether monitored in *arr |
+| `arrRating` | Rating in *arr |
+
+### Seerr Fields
+
+These fields require a configured [Seerr](/docs/integrations/seerr/) integration.
+
+| Field | Description |
+|-------|-------------|
+| `seerrRequested` | Whether requested in Seerr |
+| `seerrRequestDate` | When the request was made |
+| `seerrRequestCount` | Number of requests |
+| `seerrRequestedBy` | Who requested it |
+| `seerrApprovalDate` | When approved |
+| `seerrDeclineDate` | When declined |
+
+## Operators
+
+| Operator | Applicable Types | Description |
+|----------|-----------------|-------------|
+| `equals` | text, number | Exact match |
+| `notEquals` | text, number | Not an exact match |
+| `greaterThan` | number | Greater than value |
+| `greaterThanOrEqual` | number | Greater than or equal |
+| `lessThan` | number | Less than value |
+| `lessThanOrEqual` | number | Less than or equal |
+| `contains` | text | Substring match (case-insensitive) |
+| `notContains` | text | Does not contain substring |
+| `matchesWildcard` | text | Wildcard match (`*` = any characters, `?` = single character) |
+| `notMatchesWildcard` | text | Does not match wildcard pattern |
+| `before` | date | Before a specific date |
+| `after` | date | After a specific date |
+| `inLastDays` | date | Within the last N days |
+
+## Building Rules
+
+### Using the Rule Builder
+
+1. **Create a Rule Set**: Give it a name and select the target media type
+2. **Add rules**: Select a field, operator, and value
+3. **Group rules**: Use AND/OR groups to combine conditions
+4. **Nest groups**: Create sub-groups for complex logic
+5. **Toggle rules**: Enable/disable individual rules or groups without deleting them
+6. **Negate rules**: Apply NOT to invert a rule's logic
+7. **Reorder**: Drag rules to change their position within a group
+
+### Example: Identify Old, Unwatched Movies
+
+Create a rule set with an AND group containing:
+
+- `playCount` equals `0` — Never watched
+- `addedAt` before `2023-01-01` — Added over a year ago
+- `resolution` notEquals `4K` — Not 4K quality
+
+### Example: Find Duplicate Quality
+
+Create a rule set with an OR group:
+
+- `resolution` equals `480P`
+- `resolution` equals `SD`
+- `videoCodec` equals `mpeg2video`
+
+## Previewing Matches
+
+Before executing any actions, use the **Preview** feature to see which media items match your rules:
+
+- Shows a count of matching items
+- Displays a paginated list (50 per page) with metadata
+- Updates in real time as you modify rules
+
+## Actions
+
+Actions determine what happens to matched media. Configure them in the **Actions** tab of a rule set.
+
+### Available Actions
+
+| Action | Description | Requires |
+|--------|-------------|----------|
+| **Delete** | Remove from *arr and optionally delete files | Sonarr/Radarr/Lidarr |
+| **Unmonitor** | Stop monitoring for upgrades in *arr | Sonarr/Radarr/Lidarr |
+| **Tag** | Add a custom tag in *arr | Sonarr/Radarr/Lidarr |
+| **Do Nothing** | Track matches without taking action | — |
+
+### Configuring Actions
+
+Each action links a rule set to an *arr instance:
+
+1. Select the *arr integration (e.g., "My Radarr")
+2. Choose the action type (delete, unmonitor, tag)
+3. Set action-specific options (e.g., tag name, delete files toggle)
+4. Set priority — actions execute top-to-bottom
+
+<Aside type="caution">
+  The **Delete** action permanently removes files from your *arr instance and, optionally, from disk. Preview your matches carefully before enabling deletion rules.
+</Aside>
+
+## How Rules Are Evaluated
+
+Rules are evaluated in two steps:
+
+1. **Step 1 — Local data**: Rules based on your media's own properties (resolution, play count, dates, file size, etc.) are evaluated first using your database — this is fast.
+
+2. **Step 2 — External data**: Rules based on Sonarr, Radarr, Lidarr, or Seerr data (tags, quality profiles, monitored status, requests) require live lookups to those services, so they run after Step 1 narrows down the results.
+
+<Aside>
+  Rules using external data (Step 2) are slower because they query your integrations. Use local-data rules to narrow your matches first for best performance.
+</Aside>
+
+## Scheduling
+
+Lifecycle processing runs on two independent schedules (configured in **Settings → Scheduling**):
+
+- **Detection**: Evaluates rules and identifies matching media
+- **Execution**: Performs configured actions on matched media
+
+Both can be run manually via the **Run Now** button at any time.
+
+## Limitations
+
+- *arr actions require the corresponding integration to be configured and reachable
+- Rules using integration data are slower and scale with the number of matches
+- File size rules accept input in GB but are stored and compared in bytes
+- Wildcard matching uses `*` (any characters) and `?` (single character), not regex

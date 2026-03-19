@@ -1,0 +1,28 @@
+node_modules
+.next
+.git
+.github
+
+# Environment
+.env*
+
+# IDE and tooling
+.vscode
+.claude
+.serena
+.mcp.json
+.DS_Store
+
+# Docker (don't send compose/dev files into production build context)
+docker-compose*.yml
+Dockerfile.dev
+
+# Tests and dev-only configs
+tests
+vitest.config.ts
+commitlint.config.ts
+.husky
+
+# Documentation
+*.md
+docs

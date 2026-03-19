@@ -1,0 +1,46 @@
+---
+title: Notifications
+description: Set up Discord webhook notifications.
+---
+
+import { Steps } from "@astrojs/starlight/components";
+
+Librariarr supports Discord webhook notifications. Configure them in **Settings → Notifications**.
+
+## Discord Webhooks
+
+Send notifications to a Discord channel via webhook.
+
+### Setup
+
+<Steps>
+
+1. In Discord, go to **Channel Settings → Integrations → Webhooks**
+2. Create a new webhook and copy the URL
+3. In Librariarr, go to **Settings → Notifications**
+4. Paste the webhook URL
+5. Optionally set a custom **username** (default: "Librariarr") and **avatar URL**
+6. Click **Test Webhook** to verify it works
+
+</Steps>
+
+### Events
+
+Discord notifications are sent for:
+
+- **Lifecycle actions**: When rules execute actions (delete, unmonitor, tag)
+- **Maintenance mode**: When maintenance mode is toggled on/off
+
+### Message Format
+
+Notifications are sent as Discord embeds with:
+
+- **Title**: Media title or event name
+- **Description**: Action details and status
+- **Color**: Green for success, red for failure
+- **Footer**: "Librariarr Lifecycle"
+- **Timestamp**: When the event occurred
+
+## Limitations
+
+- Discord webhooks require a valid Discord channel with webhook permissions

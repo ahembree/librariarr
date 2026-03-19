@@ -1,0 +1,117 @@
+---
+title: Configuration
+description: Configure authentication, schedules, appearance, and backups.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+After installation, configure Librariarr through the **Settings** page. Settings are organized into tabs.
+
+## Authentication
+
+Librariarr supports two authentication methods that can be used independently or together.
+
+### Plex OAuth
+
+The primary authentication method. Click **Sign in with Plex** on the login page to authenticate via your Plex account.
+
+- Automatically discovers your Plex servers
+- Tokens are stored securely in the database
+- Login sessions are encrypted and expire after 30 days
+
+### Local Authentication
+
+Optional username/password authentication, configured in **Settings → Authentication**.
+
+- **Username**: minimum 3 characters
+- **Password**: minimum 8 characters
+- Enable/disable via toggle — if enabling for the first time, you'll be prompted to create credentials
+- Can be used alongside Plex OAuth or as the sole authentication method
+
+<Aside type="caution">
+  If you disable both Plex OAuth and local authentication, you may lock yourself out. Restore from a backup to recover access.
+</Aside>
+
+## Scheduling
+
+Three independent schedules control automated tasks. Configure in **Settings → Scheduling**.
+
+### Timezone
+
+Scheduled jobs run according to the server's local time. In Docker, set the `TZ` environment variable to your [timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones):
+
+```yaml
+environment:
+  - TZ=America/New_York
+```
+
+If `TZ` is not set, the container defaults to **UTC**. The current server timezone is displayed in the scheduling settings. Daylight saving time transitions are handled automatically.
+
+### Daily Run Time
+
+The **Time of day for scheduled jobs** setting controls when preset schedules fire. All preset frequencies (Daily, Every 6h, Every 12h, Weekly) use this time as their anchor. For example, setting it to `02:00` with "Every 6 hours" runs at 2:00 AM, 8:00 AM, 2:00 PM, and 8:00 PM in the server's timezone. Custom schedule expressions are not affected by this setting.
+
+### Sync Schedule
+
+Controls how often Librariarr fetches metadata from your connected media servers.
+
+| Preset | Description |
+|-|-|
+| Every 6 hours | 4 times daily, anchored to Daily Run Time |
+| Every 12 hours | Twice daily, anchored to Daily Run Time |
+| Daily (default) | Once daily at the Daily Run Time |
+| Weekly | Weekly on Monday at the Daily Run Time |
+| Custom | A custom schedule expression |
+
+### Lifecycle Detection Schedule
+
+Controls when Librariarr evaluates lifecycle rules to find matching media. Default: every 6 hours.
+
+### Lifecycle Execution Schedule
+
+Controls when matched lifecycle actions are actually executed (delete, unmonitor, tag, etc.). Default: every 6 hours.
+
+<Aside>
+  Detection and execution are intentionally separate. This gives you time to review matches before actions are taken. You can always run either task manually via the **Run Now** button.
+</Aside>
+
+All schedules show their next run time and last run time in the Settings UI. If a scheduled task is overdue, it will be flagged.
+
+## General Settings
+
+### Appearance
+
+- **Accent Color**: Choose from preset color themes applied to buttons, active items, and links
+- **Badge & Chart Colors**: Customize colors for resolution, dynamic range, and audio profile badges displayed throughout the UI
+- **Reset to Defaults**: Restore original color scheme
+
+### Display
+
+- **Deduplicate stats across servers**: When enabled, media appearing on multiple servers is counted only once in dashboard statistics
+
+### Library Display (Multi-Server)
+
+When the same media exists on multiple connected servers:
+
+- **Preferred Title Source**: Choose which server's title to display
+- **Preferred Artwork Source**: Choose which server's poster/artwork to display
+
+These settings only appear when you have more than one server connected.
+
+### Log Retention
+
+- Configurable from 1 to 365 days (default: 7)
+- Logs older than the retention period are automatically deleted
+- Hard limit of 50,000 entries regardless of retention setting
+
+## Backup Settings
+
+Configure in **Settings → General** under the Backup section. See the [Backup & Restore](/docs/features/backup-restore/) guide for full details.
+
+- **Schedule**: Manual, Every 6H, Every 12H, Daily (default), or Weekly
+- **Retention**: Number of backups to keep (default: 7)
+- **Encryption Password**: Optional password-based encryption for all backups (minimum 8 characters)
+
+## Next Steps
+
+- [Connect a server](/docs/getting-started/connecting-a-server/) to start syncing your media library

@@ -1,0 +1,52 @@
+---
+title: Dashboard
+description: Understand and customize the Librariarr dashboard.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+The dashboard is the landing page after login, providing an at-a-glance overview of your media libraries.
+
+## Dashboard Tabs
+
+The dashboard is organized into tabs:
+
+- **Main** — Aggregate statistics across all media types
+- **Movies** — Quality breakdown for movies only
+- **Series** — Quality breakdown for series only
+- **Music** — Quality breakdown for music only
+
+## Cards
+
+The dashboard uses a card system that displays statistics, charts, and summaries.
+
+### Available Card Types
+
+| Card | Description |
+|------|-------------|
+| Total Counts | Number of movies, shows, episodes, music tracks |
+| File Size | Total storage used by media type |
+| Quality Charts | Breakdown by resolution, video codec, audio codec, dynamic range, content rating, audio channels, genres |
+| Top Plays | Most-played movies and series |
+| Recently Added | Latest additions to your library |
+
+### Customizing the Dashboard
+
+Enter **Edit Mode** to:
+
+- **Rearrange cards** by dragging them to a new position
+- **Hide cards** you don't need
+- **Show cards** that were previously hidden
+
+Your layout is saved automatically and persists across sessions.
+
+## Multi-Server Statistics
+
+When multiple servers are connected, the **Deduplicate stats across servers** setting in **Settings → General** controls how items are counted:
+
+- **On**: Media that exists on multiple servers is counted once
+- **Off**: Every copy on every server is counted separately
+
+<Aside>
+  This setting only affects dashboard counts. Library browsing always deduplicates by default.
+</Aside>

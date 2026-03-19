@@ -1,0 +1,46 @@
+services:
+  librariarr:
+    image: ahembree/librariarr:latest
+    container_name: librariarr
+    ports:
+      - "${LIBRARIARR_PORT:-3000}:3000"
+    environment:
+      - DATABASE_URL=postgresql://librariarr:librariarr@librariarr-db:5432/librariarr
+      - SESSION_SECRET=${SESSION_SECRET:?Set SESSION_SECRET in .env (random 32+ char string)}
+      - NEXT_TELEMETRY_DISABLED=1
+      - TZ=${TZ:-UTC}
+      # Optional: run the app process as a specific UID/GID (default: 1000)
+      # - PUID=1000
+      # - PGID=1000
+    volumes:
+      - ./config:/config
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    depends_on:
+      librariarr-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  librariarr-db:
+    image: postgres:18-alpine
+    container_name: librariarr-db
+    environment:
+      POSTGRES_USER: librariarr
+      POSTGRES_PASSWORD: librariarr
+      POSTGRES_DB: librariarr
+      #PGDATA: /var/lib/postgresql/data
+    volumes:
+      - librariarr-db:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U librariarr"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  librariarr-db:

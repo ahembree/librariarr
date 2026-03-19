@@ -1,0 +1,59 @@
+services:
+  librariarr-dev:
+    container_name: librariarr-dev
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://librariarr:librariarr@librariarr-dev-db:5432/librariarr
+      - SESSION_SECRET=dev-secret-must-be-at-least-32-characters-long!!
+      - NEXT_TELEMETRY_DISABLED=1
+      - TZ=${TZ:-UTC}
+      # Optional: run the app process as a specific UID/GID (default: 1000)
+      # - PUID=1000
+      # - PGID=1000
+    volumes:
+      - ./src:/app/src
+      - ./public:/app/public
+      - ./prisma:/app/prisma
+      - ./next.config.ts:/app/next.config.ts
+      - ./tsconfig.json:/app/tsconfig.json
+      - ./postcss.config.mjs:/app/postcss.config.mjs
+      - ./components.json:/app/components.json
+      - ./prisma.config.ts:/app/prisma.config.ts
+      - librariarr-dev-config:/config
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    depends_on:
+      librariarr-dev-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  librariarr-dev-db:
+    image: postgres:18-alpine
+    container_name: librariarr-dev-db
+    environment:
+      POSTGRES_USER: librariarr
+      POSTGRES_PASSWORD: librariarr
+      POSTGRES_DB: librariarr
+      #PGDATA: /var/lib/postgresql/data
+    volumes:
+      - librariarr-dev-db:/var/lib/postgresql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U librariarr"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  librariarr-dev-db:
+  librariarr-dev-config:

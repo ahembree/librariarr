@@ -1,0 +1,194 @@
+---
+title: Library Browsing
+description: Browse, filter, sort, and explore your media libraries.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Librariarr provides a rich browsing experience for movies, series, and music with extensive filtering, multiple view modes, and detailed metadata panels.
+
+## Library Views
+
+### Movies
+
+Browse all movies with poster artwork, metadata, and quality information.
+
+### Series
+
+Series are grouped by show title. Drill down into:
+
+- **Seasons** — View seasons within a series with episode counts
+- **Episodes** — Individual episodes with per-episode metadata and quality info
+
+### Music
+
+Music is organized by artist. Browse artists, albums, and individual tracks with audio format, quality, and duration details.
+
+## View Modes
+
+Toggle between two view modes:
+
+| Mode | Description |
+|------|-------------|
+| **Table** | Detailed rows with columns for title, year, resolution, codec, audio, file size, play count, and more. Columns are resizable via drag-to-resize. |
+| **Grid** | Poster cards in a responsive grid. Three size options: Small, Medium, Large . |
+
+Both views use smooth scrolling, so libraries of any size load and render without pagination.
+
+## Alphabet Navigation
+
+A clickable alphabet bar (A–Z plus `#` for non-alphabetic titles) lets you jump directly to a letter. The bar highlights which letters have matching items.
+
+## Filters
+
+Over 20 filters are available. Filters can be combined — multiple active filters apply with AND logic.
+
+### Video Filters
+
+| Filter | Type | Example |
+|--------|------|---------|
+| Resolution | Multi-select | 4K, 1080P, 720P, 480P, SD |
+| Video Codec | Multi-select (contains) | H.264, H.265, AV1 |
+| Dynamic Range | Multi-select (exact) | SDR, HDR10, HDR10+, Dolby Vision, HLG |
+| Video Bit Depth | Multi-select | 8-bit, 10-bit |
+| Video Frame Rate | Multi-select (exact) | 23.976fps, 24fps, 30fps, 60fps |
+| Aspect Ratio | Multi-select (exact) | 16:9, 4:3, 2.39:1 |
+| Scan Type | Multi-select (exact) | progressive, interlaced |
+| Video Profile | Multi-select (contains) | Baseline, Main, High |
+
+### Audio Filters
+
+| Filter | Type | Example |
+|--------|------|---------|
+| Audio Codec | Multi-select (contains) | AAC, AC3, EAC3, FLAC |
+| Audio Profile | Multi-select (exact) | Dolby Atmos, Dolby TrueHD, DTS-HD MA, DTS:X |
+| Audio Channels | Multi-select | 2.0, 5.1, 7.1 |
+| Audio Sampling Rate | Multi-select | 44100, 48000 |
+
+### File & Metadata Filters
+
+| Filter | Type | Example |
+|--------|------|---------|
+| Container | Multi-select (contains) | MP4, MKV, AVI |
+| File Size | Range (GB) | 1 GB – 50 GB |
+| Duration | Range (minutes) | 90 – 180 min |
+| Year | Conditions with AND/OR logic | ≥ 2020 AND ≤ 2024 |
+| Content Rating | Multi-select (exact) | G, PG, PG-13, R |
+| Studio | Multi-select (contains) | |
+| Genre | Multi-select (exact) | Must match all selected genres |
+
+### Activity Filters
+
+| Filter | Type | Example |
+|--------|------|---------|
+| Search | Text (title/summary) | Free text search |
+| Play Count | Range | 0 – 10 plays |
+| Last Played | Date range | Before/after specific dates |
+| Added Date | Date range | When item was added to library |
+
+### Multi-Select Behavior
+
+When multiple values are selected within a single filter (e.g., Resolution: 4K and 1080P), they're combined with **OR** logic — items matching either value are shown. When multiple different filters are active, they combine with **AND** logic.
+
+## Sorting
+
+Sort by any of these fields in ascending or descending order:
+
+- Title
+- Year
+- Rating
+- File Size
+- Play Count
+- Last Played
+- Date Added
+
+## Detail Panel
+
+Click any item to open a slide-out detail panel showing:
+
+- **Poster and artwork**
+- **Summary/description**
+- **Full metadata**: title, year, ratings (critic, audience, user), directors, writers, cast, studio, genres, countries
+- **Video details**: codec, resolution, bit depth, profile, frame rate, color info, aspect ratio, scan type
+- **Audio details**: codec, channels, profile, bit rate, sampling rate, languages (for each audio stream)
+- **Subtitle streams**: language, format, forced/default flags
+- **File info**: size, container, path, duration, optimized for streaming flag
+- **Stream list**: All video, audio, and subtitle streams with detailed info
+
+### Actions from Detail Panel
+
+Depending on configuration:
+
+- **Open in Plex/Jellyfin/Emby** — Direct link to the item on your server
+- **View in Radarr/Sonarr** — Link to the item in your *arr instance (requires integration)
+
+## Multi-Server Deduplication
+
+When browsing with multiple servers connected:
+
+- Items are **deduplicated** by default — only the preferred copy is shown
+- An indicator shows which servers have each item
+- Use the server dropdown in the navigation to filter by a specific server
+
+<Aside>
+  Duplicates are detected by comparing title, year, and season/episode info. In rare cases, different items with identical metadata may be incorrectly grouped.
+</Aside>
+
+## Watch History
+
+View detailed, per-play watch history across all your media servers. Each row represents an individual play event, showing who watched what, when, and on which device.
+
+### Syncing Watch History
+
+Watch history data is synced from your media servers in two ways:
+
+- **Automatic** — During each scheduled library sync, detailed play events are fetched and stored
+- **On-demand** — Click the **Refresh** button on the history page to sync immediately
+
+Each sync fully refreshes watch history for that server — existing records are replaced with the latest data from the server.
+
+### Data Sources by Server Type
+
+| Data | Plex | Jellyfin | Emby |
+|-|-|-|-|
+| Username | Yes | Yes | Yes |
+| Watched date | Yes (per play) | First play only | First play only |
+| Device name | Yes | No | No |
+| Platform | Yes | No | No |
+| Play count (per item) | Yes | Yes | Yes |
+
+<Aside type="note">
+  Plex provides the most detailed watch history, with individual timestamps and device information for each play event. Jellyfin and Emby only report which items have been played and the last played date — individual play timestamps beyond the first are not available.
+</Aside>
+
+### Play Count vs. Watch History
+
+The **Play Count** and **Last Played** fields shown on media items in the library views are separate from the Watch History table:
+
+- **Play Count / Last Played** on media items — synced from the media server's native item metadata during library sync. For Plex, this reflects the account's global watch history across all servers, so a brand-new Plex server may show play counts from plays that occurred on a different server under the same Plex account.
+- **Watch History** records — individual play events fetched from the server's session history. Only includes plays that actually occurred on that specific server.
+
+### Columns
+
+The history table supports column visibility controls with columns grouped into categories:
+
+| Category | Columns |
+|-|-|
+| Core | Title, Type, Year, Server |
+| Playback | User, Watched At |
+| Video | Resolution, HDR, Video Codec |
+| Audio | Audio Codec |
+| File | Duration, Size |
+| Device | Device Name, Platform (Plex only) |
+
+### Filters
+
+| Filter | Description |
+|-|-|
+| Search | Filter by media title |
+| Server | Filter by media server |
+| Type | Toggle Movie, Series, Music |
+| Users | Multi-select by username |
+| Platforms | Multi-select by platform (Plex only) |
+
+Click any row to open the detail side panel with full metadata for that media item.

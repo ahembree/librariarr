@@ -1,0 +1,26 @@
+FROM node:20-alpine
+
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# su-exec for dropping privileges to the host user's UID/GID
+RUN apk add --no-cache su-exec
+
+# Install dependencies first (cached layer)
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-fund --no-audit
+
+# Copy prisma schema + config and generate client
+# (will be regenerated at startup from mounted volume)
+COPY prisma ./prisma
+COPY prisma.config.ts ./prisma.config.ts
+RUN npx prisma generate
+
+# Copy entrypoint script
+COPY docker-entrypoint.dev.sh ./docker-entrypoint.dev.sh
+
+# Source code is mounted as a volume at runtime, not copied
+EXPOSE 3000
+
+CMD ["sh", "docker-entrypoint.dev.sh"]

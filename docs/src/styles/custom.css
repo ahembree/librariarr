@@ -1,0 +1,13 @@
+/* Librariarr docs theme - dark mode preferred, OKLCH accent colors */
+
+:root {
+  --sl-color-accent-low: oklch(0.25 0.08 250);
+  --sl-color-accent: oklch(0.6 0.15 250);
+  --sl-color-accent-high: oklch(0.85 0.08 250);
+}
+
+:root[data-theme="dark"] {
+  --sl-color-accent-low: oklch(0.25 0.08 250);
+  --sl-color-accent: oklch(0.6 0.15 250);
+  --sl-color-accent-high: oklch(0.85 0.08 250);
+}

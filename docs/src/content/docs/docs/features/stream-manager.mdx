@@ -1,0 +1,125 @@
+---
+title: Stream Manager
+description: Monitor active streams, manage maintenance mode, transcode policies, and blackout schedules.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+The Stream Manager provides real-time monitoring of active media streams and tools to manage server availability.
+
+## Active Sessions
+
+The sessions view shows all currently active streams across your connected servers, refreshing every 3–5 seconds.
+
+### Information Displayed
+
+For each active stream:
+
+| Field | Description |
+|-------|-------------|
+| Server | Which media server is streaming |
+| User | Username and avatar |
+| Title | Media title (movie, episode, or track) |
+| Type | Movie, Episode, or Track |
+| Quality | Resolution, codec, container, bitrate |
+| Player | App name, device, platform, playback state |
+| Connection | Local or remote |
+| Bandwidth | Network bandwidth consumed |
+| Progress | Current position / total duration |
+| Transcoding | Whether the stream is being converted, and hardware acceleration status |
+
+## Maintenance Mode
+
+Temporarily pause all streaming activity for server maintenance.
+
+### Configuration
+
+| Setting | Description |
+|---------|-------------|
+| **Custom Message** | Message displayed to users explaining the maintenance |
+| **Delay** | Seconds to wait before terminating active streams (default: 30) |
+| **Excluded Users** | Users who can continue streaming during maintenance |
+
+### Behavior
+
+When maintenance mode is **enabled**:
+
+1. A grace period countdown begins (configurable delay)
+2. Active streams receive a notification
+3. After the delay, sessions are terminated
+4. New connection attempts are rejected with the custom message
+5. Discord notification sent (if configured)
+
+When maintenance mode is **disabled**:
+
+1. Normal streaming resumes immediately
+2. Discord notification sent (if configured)
+
+<Aside>
+  The maintenance enforcer polls every 30 seconds to check compliance. Some players may not see the maintenance message immediately — there can be a brief delay before enforcement takes effect.
+</Aside>
+
+## Transcode Manager
+
+Control transcoding behavior across your servers.
+
+### Settings
+
+| Setting | Description |
+|---------|-------------|
+| **Default Video Transcode** | Allow, disallow, or throttle video transcoding |
+| **Default Audio Transcode** | Allow, disallow, or throttle audio transcoding |
+| **Bandwidth Throttle** | Maximum quality for converted streams (e.g., limit remote users to 1 Mbps) |
+| **Remote Only** | Only apply transcode limits to remote (non-local) connections |
+| **Excluded Users** | Users who bypass transcode restrictions |
+
+### Enforcement
+
+The enforcer checks active streams every 30 seconds. Streams that violate the policy (e.g., converting when not allowed) receive a warning and may be stopped after a configurable period.
+
+<Aside type="caution">
+  Enforcement depends on what your media server reports about each stream. Some player apps may not accurately report their status.
+</Aside>
+
+## Blackout Schedules
+
+Schedule recurring or one-time maintenance windows when streaming is automatically paused.
+
+### Schedule Types
+
+#### Recurring
+
+Set repeating windows on specific days and times.
+
+- **Days of week**: Select one or more days
+- **Start/End time**: 24-hour format
+- **Example**: Monday, Wednesday, Friday — 2:00 AM to 4:00 AM
+
+#### One-Time
+
+Set a single maintenance window with specific start and end dates/times.
+
+- **Example**: December 25, 2024 12:00 AM to December 26, 2024 11:59 PM
+
+#### Seasonal
+
+Use built-in holiday presets or custom date ranges that repeat annually.
+
+- **Presets**: New Year, Valentine's Day, Easter, and more
+- **Custom**: Define your own date range
+
+### Blackout Behavior
+
+During a blackout window, the same behavior as maintenance mode applies:
+
+- Custom message displayed to users
+- Configurable delay before stream termination
+- User exclusions supported
+- Notifications sent (Discord, push)
+
+## Limitations
+
+- Stream data accuracy depends on the media server's API reporting
+- Maintenance mode and blackout enforcement have up to a 30-second delay between checks
+- Some player apps may not immediately respond to a stop request
+- Stream conversion detection relies on what your media server reports, which varies by player app

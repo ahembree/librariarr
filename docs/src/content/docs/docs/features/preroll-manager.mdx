@@ -1,0 +1,84 @@
+---
+title: Preroll Manager
+description: Manage preroll videos with presets, schedules, and combine modes.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+The Preroll Manager lets you configure videos that play before your media content, with scheduling support for seasonal or event-based prerolls.
+
+## Preroll Presets
+
+Presets store references to preroll media files on your server.
+
+### Creating a Preset
+
+1. Navigate to **Tools → Preroll Manager**
+2. Click **Add Preset**
+3. Enter a **name** (e.g., "Holiday 2024", "Default Intro")
+4. Enter the **file path** to the preroll video on your server
+5. The path is validated server-side to confirm the file exists
+
+### Supported Formats
+
+Preroll files can be any video format supported by your media server (MP4, MKV, AVI, etc.).
+
+## Preroll Schedules
+
+Schedules control when specific preroll presets are active.
+
+### Schedule Types
+
+#### Recurring
+
+Set repeating schedules tied to specific days and times.
+
+- **Days of week**: Select which days the preroll should play
+- **Start/End time**: 24-hour format time window
+- **Example**: Play holiday prerolls on weekends from 6:00 PM to 11:00 PM
+
+#### One-Time
+
+Set a single window with specific start and end dates/times.
+
+- **Example**: Special event preroll from 2024-12-31 20:00 to 2025-01-01 03:00
+
+#### Seasonal
+
+Use built-in holiday presets or define custom date ranges.
+
+- **Holiday presets**: New Year, Valentine's Day, Easter, Halloween, Christmas, and more (dates auto-calculated)
+- **Custom**: Define your own annual date range
+
+### Combine Mode
+
+When multiple schedules are active simultaneously, the **combine mode** determines which prerolls play:
+
+| Mode | Behavior |
+|------|----------|
+| **Sequential** | Play all matching prerolls in order before the content |
+| **Random** | Pick one matching preroll at random |
+| **First** | Play only the highest-priority matching preroll |
+
+### Priority
+
+Each schedule has a priority value. Higher-priority schedules take precedence when using the **First** combine mode or when resolving conflicts.
+
+## How It Works
+
+When a user starts playing media:
+
+1. Librariarr checks which preroll schedules are currently active
+2. Based on the combine mode, selects the appropriate preroll file(s)
+3. The preroll path is set on the media server to prepend to playback
+
+## Limitations
+
+- **Plex**: Preroll support works by setting the preroll path via the Plex API. Requires Plex Pass for the preroll feature.
+- **Jellyfin/Emby**: Preroll support varies by server version and may require plugins or specific configuration.
+- Preroll files must be accessible by the media server at the specified path.
+- Changes to active prerolls take effect on the next playback start — currently playing content is not affected.
+
+<Aside type="caution">
+  Ensure the file paths in your presets are valid from the media server's perspective, not the Librariarr container's perspective. The paths must be reachable by the media server process.
+</Aside>

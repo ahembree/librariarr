@@ -1,0 +1,149 @@
+---
+title: Development
+description: Set up a local development environment and contribute to Librariarr.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+## Prerequisites
+
+- Docker and Docker Compose v2+
+- Node.js 20+
+- npm
+
+## Development Setup
+
+Librariarr uses Docker Compose for development to provide a PostgreSQL database and hot-reloading.
+
+<Steps>
+
+1. **Clone the repository**
+
+   ```bash
+   git clone https://github.com/ahembree/librariarr.git
+   cd librariarr
+   ```
+
+2. **Create a `.env` file**
+
+   Copy the example and fill in the required values:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+3. **Start the dev environment**
+
+   ```bash
+   npm run docker:dev
+   ```
+
+   This builds the dev container, starts PostgreSQL, runs migrations, and starts the Next.js dev server with Turbopack hot-reloading.
+
+4. **Open the app**
+
+   Navigate to `http://localhost:3000`
+
+</Steps>
+
+## Development Commands
+
+### Docker
+
+| Command | Description |
+|---------|-------------|
+| `npm run docker:dev` | Start dev environment (foreground) |
+| `npm run docker:dev:detach` | Start dev environment (background) |
+| `npm run docker:dev:down` | Stop dev environment |
+| `npm run docker:dev:rebuild` | Rebuild containers from scratch |
+| `npm run docker:dev:clean` | Stop containers and delete DB volume |
+| `npm run docker:dev:logs` | Tail dev container logs |
+
+### Database
+
+| Command | Description |
+|---------|-------------|
+| `npm run docker:dev:db:push` | Push schema changes (fast iteration, no migration files) |
+| `npm run docker:dev:db:migrate` | Run Prisma migrations |
+| `npm run docker:dev:db:studio` | Open Prisma Studio (DB browser) |
+| `npm run docker:dev:db:reset` | Reset DB completely |
+
+### Build & Lint
+
+| Command | Description |
+|---------|-------------|
+| `npm run build` | Next.js production build |
+| `npm run lint` | ESLint |
+| `npx prisma generate` | Regenerate Prisma client (needed after schema changes when DB isn't available) |
+
+## Testing
+
+Tests use **Vitest** with a real PostgreSQL test database (`librariarr_test`), auto-created by the global setup.
+
+<Aside>
+  The Docker dev database must be running for integration tests. Start it with `npm run docker:dev` or `npm run docker:dev:detach` before running tests.
+</Aside>
+
+### Test Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm test` | Run full test suite |
+| `npm run test:watch` | Watch mode |
+| `npm run test:unit` | Unit tests only (no DB needed) |
+| `npm run test:integration` | Integration tests only (requires DB) |
+| `npm run test:coverage` | Run with coverage report |
+| `npx vitest run tests/path/to/file.test.ts` | Run a single test file |
+
+### Test Structure
+
+- **`tests/unit/`** — Pure logic tests (rules engine, filters, sync detection, formatting, caching, validation schemas)
+- **`tests/integration/`** — API route handler tests against a real database with mocked external services
+
+## Tech Stack
+
+| Technology | Version | Purpose |
+|------------|---------|---------|
+| Next.js | 16 | App Router framework |
+| React | 19 | UI library |
+| TypeScript | 5 | Type safety |
+| PostgreSQL | 18 | Database |
+| Prisma | 7 | ORM |
+| Tailwind CSS | v4 | Styling (OKLCH color model) |
+| shadcn/ui | — | Component library (new-york style) |
+| Vitest | 4 | Testing framework |
+
+## Git Conventions
+
+- **Pre-commit hook**: Runs `npx next lint --quiet` via Husky
+- **Commit format**: [Conventional Commits](https://www.conventionalcommits.org/) enforced by commitlint
+  - `feat: add new feature`
+  - `fix(auth): handle expired tokens`
+  - `docs: update installation guide`
+  - `refactor: simplify rule evaluation`
+
+## Project Structure
+
+```
+src/
+├── app/                    # Next.js App Router
+│   ├── (authenticated)/    # Protected pages (auth enforced by layout)
+│   ├── api/                # API routes
+│   ├── login/              # Login page
+│   └── onboarding/         # First-time setup
+├── components/
+│   └── ui/                 # shadcn/ui primitives
+├── hooks/                  # Custom React hooks
+└── lib/
+    ├── auth/               # Session management
+    ├── arr/                # Sonarr/Radarr/Lidarr clients
+    ├── backup/             # Backup & restore service
+    ├── cache/              # In-memory cache
+    ├── dedup/              # Multi-server deduplication
+    ├── filters/            # Media filter utilities
+    ├── plex/               # Plex OAuth and API client
+    ├── rules/              # Lifecycle rule engine
+    ├── scheduler/          # Cron scheduler
+    ├── sync/               # Media sync engine
+    └── validation.ts       # Zod schemas for API validation
+```

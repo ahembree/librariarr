@@ -1,0 +1,68 @@
+---
+title: Radarr
+description: Connect Radarr for movie lifecycle management.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+Radarr integration enables lifecycle actions on movies managed by Radarr.
+
+## Setup
+
+<Steps>
+
+1. Go to **Settings → Integrations**
+2. Under the **Radarr** section, click **Add Instance**
+3. Enter:
+   - **Name**: A label for this instance (e.g., "Main Radarr")
+   - **URL**: Radarr's base URL (e.g., `http://192.168.1.100:7878`)
+   - **API Key**: Found in Radarr → Settings → General → API Key
+4. Click **Test Connection** to verify
+5. Save
+
+</Steps>
+
+You can add multiple Radarr instances.
+
+## How Matching Works
+
+Librariarr matches movies to Radarr using **TMDB IDs**:
+
+1. During media sync, external IDs (including TMDB) are fetched from your media server
+2. When lifecycle rules need Radarr data, Librariarr queries Radarr by TMDB ID
+3. If a TMDB ID is not available, Librariarr falls back to title + year matching
+
+<Aside>
+  Ensure your media server's metadata agent populates TMDB IDs for movies. This is the default behavior for most agents.
+</Aside>
+
+## Available Operations
+
+Once connected, these operations are available via [lifecycle rules](/docs/features/lifecycle-rules/):
+
+| Operation | Description |
+|-----------|-------------|
+| **Delete** | Remove the movie from Radarr (optionally delete files from disk) |
+| **Unmonitor** | Stop Radarr from monitoring for upgrades |
+| **Tag** | Add a custom tag to the movie in Radarr |
+
+## Data from Radarr
+
+The following Radarr metadata is available for lifecycle rule conditions:
+
+- **Quality profile**: The assigned quality profile name
+- **Monitored status**: Whether the movie is monitored
+- **Tags**: Current tags on the movie
+- **Ratings**: Radarr ratings data
+
+## Security
+
+- API keys are stored securely in the database and never exposed to the frontend
+- Connection testing uses server-side endpoints with stored credentials
+- API responses are sanitized to mask sensitive fields
+
+## Limitations
+
+- Matching requires TMDB IDs — movies without TMDB IDs fall back to title + year matching
+- Lifecycle actions call Radarr's API in real time — Radarr must be reachable
+- Bulk delete operations call the API once per movie — very large batches may take time

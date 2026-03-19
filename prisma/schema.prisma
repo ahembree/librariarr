@@ -1,0 +1,584 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id               String            @id @default(cuid())
+  plexId           String?           @unique
+  plexToken        String?
+  localUsername     String?           @unique
+  passwordHash     String?
+  email            String?
+  username         String
+  sessionVersion   Int               @default(0)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  mediaServers     MediaServer[]
+  ruleSets         RuleSet[]
+  appSettings      AppSettings?
+  sonarrInstances  SonarrInstance[]
+  radarrInstances  RadarrInstance[]
+  lidarrInstances  LidarrInstance[]
+  seerrInstances   SeerrInstance[]
+  lifecycleActions      LifecycleAction[]
+  lifecycleExceptions  LifecycleException[]
+  blackoutSchedules    BlackoutSchedule[]
+  prerollPresets      PrerollPreset[]
+  prerollSchedules   PrerollSchedule[]
+  savedQueries       SavedQuery[]
+}
+
+model AppSettings {
+  id                String    @id @default(cuid())
+  userId            String    @unique
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  syncSchedule      String    @default("DAILY")
+  lastScheduledSync DateTime?
+  accentColor       String    @default("default")
+  logRetentionDays  Int       @default(7)
+  lifecycleDetectionSchedule      String    @default("EVERY_6H")
+  lastScheduledLifecycleDetection DateTime?
+  lifecycleExecutionSchedule      String    @default("EVERY_6H")
+  lastScheduledLifecycleExecution DateTime?
+  dashboardLayout   Json?
+  columnPreferences       Json?
+  cardDisplayPreferences  Json?
+  chipColors              Json?
+  maintenanceMode              Boolean   @default(false)
+  maintenanceMessage           String    @default("")
+  maintenanceDelay             Int       @default(30)
+  transcodeManagerEnabled      Boolean   @default(false)
+  transcodeManagerMessage      String    @default("")
+  transcodeManagerDelay        Int       @default(30)
+  transcodeManagerCriteria     Json?
+  // Discord notifications
+  discordWebhookUrl            String?
+  discordWebhookUsername       String?
+  discordWebhookAvatarUrl      String?
+  discordNotifyMaintenance     Boolean   @default(false)
+  localAuthEnabled       Boolean @default(false)
+  preferredTitleServerId   String?
+  preferredArtworkServerId String?
+  // Backup
+  backupSchedule                String    @default("DAILY")
+  backupRetentionCount          Int       @default(7)
+  backupEncryptionPassword      String?
+  lastBackupAt                  DateTime?
+  // User exclusion lists
+  maintenanceExcludedUsers      String[]  @default([])
+  transcodeManagerExcludedUsers String[]  @default([])
+  // Scheduling
+  scheduledJobTime              String    @default("00:00")
+  // Display
+  dedupStats                    Boolean   @default(true)
+  // Retention
+  actionHistoryRetentionDays    Int       @default(30)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
+
+enum MediaServerType {
+  PLEX
+  JELLYFIN
+  EMBY
+}
+
+model MediaServer {
+  id            String          @id @default(cuid())
+  userId        String
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type          MediaServerType @default(PLEX)
+  name          String
+  url           String
+  accessToken   String
+  machineId     String?
+  tlsSkipVerify Boolean         @default(false)
+  enabled       Boolean         @default(true)
+  libraries     Library[]
+  syncJobs      SyncJob[]
+  watchHistory  WatchHistory[]
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+}
+
+model SonarrInstance {
+  id               String            @id @default(cuid())
+  userId           String
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name             String
+  url              String
+  apiKey           String
+  externalUrl      String?
+  enabled          Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([userId])
+}
+
+model RadarrInstance {
+  id               String            @id @default(cuid())
+  userId           String
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name             String
+  url              String
+  apiKey           String
+  externalUrl      String?
+  enabled          Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([userId])
+}
+
+model LidarrInstance {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  url         String
+  apiKey      String
+  externalUrl String?
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model SeerrInstance {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  url       String
+  apiKey    String
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+enum LibraryType {
+  MOVIE
+  SERIES
+  MUSIC
+}
+
+model Library {
+  id            String       @id @default(cuid())
+  mediaServerId String?
+  mediaServer   MediaServer? @relation(fields: [mediaServerId], references: [id], onDelete: SetNull)
+  key           String
+  title         String
+  type          LibraryType
+  enabled       Boolean      @default(true)
+  lastSyncedAt  DateTime?
+  mediaItems    MediaItem[]
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@unique([mediaServerId, key])
+}
+
+model MediaItem {
+  id               String                @id @default(cuid())
+  libraryId        String
+  library          Library               @relation(fields: [libraryId], references: [id], onDelete: Cascade)
+  ratingKey              String
+  parentRatingKey        String?
+  grandparentRatingKey   String?
+  title            String
+  year             Int?
+  type             LibraryType
+  summary          String?
+  thumbUrl         String?
+  artUrl           String?
+  parentThumbUrl   String?
+  seasonThumbUrl   String?
+  parentTitle      String?
+  albumTitle       String?
+  seasonNumber     Int?
+  episodeNumber    Int?
+  // Content metadata
+  contentRating    String?
+  rating           Float?
+  audienceRating   Float?
+  userRating       Float?
+  studio           String?
+  tagline          String?
+  originalTitle    String?
+  originallyAvailableAt DateTime?
+  viewOffset       Int?
+  // Genres, directors, etc. stored as JSON arrays of tag names
+  genres           Json?
+  directors        Json?
+  writers          Json?
+  roles            Json?
+  countries        Json?
+  // Video metadata
+  resolution       String?
+  videoWidth       Int?
+  videoHeight      Int?
+  videoCodec       String?
+  videoProfile     String?
+  videoFrameRate   String?
+  videoBitDepth    Int?
+  videoBitrate     Int?
+  videoColorPrimaries    String?
+  videoColorRange        String?
+  videoChromaSubsampling String?
+  aspectRatio      String?
+  scanType         String?
+  // Audio metadata
+  audioCodec       String?
+  audioChannels    Int?
+  audioProfile     String?
+  audioBitrate     Int?
+  audioSamplingRate Int?
+  // File metadata
+  container        String?
+  dynamicRange     String?
+  optimizedForStreaming Boolean?
+  fileSize         BigInt?
+  filePath         String?
+  duration         Int?
+  // Enriched metadata (from per-item endpoint)
+  titleSort            String?
+  ratingCount          Int?
+  ratingImage          String?
+  audienceRatingImage  String?
+  absoluteIndex        Int?
+  chapterSource        String?
+  labels               Json?
+  videoRangeType       String?
+  // Playback
+  playCount        Int                   @default(0)
+  lastPlayedAt     DateTime?
+  addedAt          DateTime?
+  serverUpdatedAt  DateTime?
+  // Dedup
+  dedupKey         String?
+  dedupCanonical   Boolean               @default(true)
+  isWatchlisted    Boolean               @default(false)
+  streams          MediaStream[]
+  externalIds      MediaItemExternalId[]
+  lifecycleActions    LifecycleAction[]
+  lifecycleExceptions LifecycleException[]
+  ruleMatches        RuleMatch[]
+  watchHistory       WatchHistory[]
+  createdAt          DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  @@unique([libraryId, ratingKey])
+  @@index([type])
+  @@index([type, title])
+  @@index([dedupKey])
+  @@index([type, dedupCanonical, title])
+  @@index([resolution])
+  @@index([playCount])
+  @@index([lastPlayedAt])
+  @@index([parentTitle])
+  @@index([albumTitle])
+  @@index([contentRating])
+  @@index([studio])
+  @@index([addedAt])
+}
+
+model MediaItemExternalId {
+  id          String    @id @default(cuid())
+  mediaItemId String
+  mediaItem   MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  source      String
+  externalId  String
+  createdAt   DateTime  @default(now())
+
+  @@unique([mediaItemId, source])
+  @@index([source, externalId])
+}
+
+model MediaStream {
+  id                    String    @id @default(cuid())
+  mediaItemId           String
+  mediaItem             MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  streamType            Int       // 1=video, 2=audio, 3=subtitle
+  index                 Int?
+  codec                 String?
+  profile               String?
+  bitrate               Int?
+  isDefault             Boolean   @default(false)
+  displayTitle          String?
+  extendedDisplayTitle  String?
+  language              String?
+  languageCode          String?
+  // Video
+  width                 Int?
+  height                Int?
+  frameRate             Float?
+  scanType              String?
+  colorPrimaries        String?
+  colorRange            String?
+  chromaSubsampling     String?
+  bitDepth              Int?
+  videoRangeType        String?
+  // Audio
+  channels              Int?
+  samplingRate          Int?
+  audioChannelLayout    String?
+  // Subtitle
+  forced                Boolean?
+  createdAt             DateTime  @default(now())
+
+  @@index([mediaItemId])
+  @@index([mediaItemId, streamType])
+}
+
+enum SyncJobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model SyncJob {
+  id             String        @id @default(cuid())
+  mediaServerId  String
+  mediaServer    MediaServer   @relation(fields: [mediaServerId], references: [id], onDelete: Cascade)
+  status          SyncJobStatus @default(PENDING)
+  cancelRequested Boolean       @default(false)
+  startedAt       DateTime      @default(now())
+  completedAt    DateTime?
+  error          String?
+  itemsProcessed Int           @default(0)
+  totalItems     Int           @default(0)
+  currentLibrary String?
+
+  @@index([mediaServerId, status])
+}
+
+model RuleSet {
+  id                    String            @id @default(cuid())
+  userId                String
+  user                  User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name                  String
+  type                  LibraryType
+  rules                 Json
+  enabled               Boolean           @default(true)
+  seriesScope           Boolean           @default(true)
+  actionEnabled         Boolean           @default(false)
+  actionType            String?
+  actionDelayDays       Int               @default(7)
+  arrInstanceId         String?
+  addImportExclusion    Boolean           @default(false)
+  searchAfterDelete     Boolean           @default(false)
+  addArrTags            String[]          @default([])
+  removeArrTags         String[]          @default([])
+  collectionEnabled     Boolean           @default(false)
+  collectionName        String?
+  collectionSortName    String?
+  collectionHomeScreen  Boolean           @default(false)
+  collectionRecommended Boolean           @default(false)
+  collectionSort        String            @default("ALPHABETICAL")
+  discordNotifyOnAction Boolean           @default(false)
+  discordNotifyOnMatch  Boolean           @default(false)
+  stickyMatches         Boolean           @default(false)
+  serverIds             String[]          @default([])
+  lifecycleActions      LifecycleAction[]
+  ruleMatches           RuleMatch[]
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+}
+
+enum LifecycleActionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+model LifecycleAction {
+  id              String                @id @default(cuid())
+  userId          String
+  user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaItemId          String?
+  mediaItem            MediaItem?            @relation(fields: [mediaItemId], references: [id], onDelete: SetNull)
+  mediaItemTitle       String?
+  mediaItemParentTitle String?
+  ruleSetId       String?
+  ruleSet         RuleSet?              @relation(fields: [ruleSetId], references: [id], onDelete: SetNull)
+  ruleSetName     String?
+  ruleSetType     String?
+  actionType      String
+  status          LifecycleActionStatus @default(PENDING)
+  scheduledFor    DateTime
+  executedAt      DateTime?
+  error           String?
+  arrInstanceId        String?
+  addImportExclusion   Boolean               @default(false)
+  searchAfterDelete    Boolean               @default(false)
+  matchedMediaItemIds  String[]              @default([])
+  addArrTags           String[]              @default([])
+  removeArrTags        String[]              @default([])
+  externalMediaId      Int?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@index([status, scheduledFor])
+}
+
+model RuleMatch {
+  id              String    @id @default(cuid())
+  ruleSetId       String
+  ruleSet         RuleSet   @relation(fields: [ruleSetId], references: [id], onDelete: Cascade)
+  mediaItemId     String
+  mediaItem       MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  itemData        Json
+  detectedAt      DateTime  @default(now())
+
+  @@unique([ruleSetId, mediaItemId])
+  @@index([ruleSetId])
+}
+
+model LifecycleException {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaItemId String
+  mediaItem   MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  reason      String?
+  createdAt   DateTime  @default(now())
+
+  @@unique([userId, mediaItemId])
+  @@index([userId])
+}
+
+model SystemConfig {
+  id             String   @id @default("singleton")
+  plexClientId   String
+  setupCompleted Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+enum LogLevel {
+  DEBUG
+  INFO
+  WARN
+  ERROR
+}
+
+enum LogCategory {
+  BACKEND
+  API
+  DB
+}
+
+model LogEntry {
+  id        String      @id @default(cuid())
+  level     LogLevel
+  category  LogCategory @default(BACKEND)
+  source    String
+  message   String
+  meta      Json?
+  createdAt DateTime    @default(now())
+
+  @@index([level])
+  @@index([category])
+  @@index([source])
+  @@index([createdAt])
+}
+
+model BlackoutSchedule {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name          String
+  enabled       Boolean   @default(true)
+  scheduleType  String    // "one_time" | "recurring"
+  startDate     DateTime?
+  endDate       DateTime?
+  daysOfWeek    Json?     // [0,1,2,3,4,5,6] where 0=Sunday
+  startTime     String?   // "HH:mm"
+  endTime       String?   // "HH:mm"
+  action        String    // "terminate_immediate" | "warn_then_terminate" | "block_new_only"
+  message        String    @default("Stream terminated due to scheduled blackout period.")
+  delay          Int       @default(30)
+  excludedUsers  String[]  @default([])
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([enabled])
+}
+
+model PrerollPreset {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  path      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model PrerollSchedule {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  enabled      Boolean   @default(true)
+  prerollPath  String
+  scheduleType String    // "one_time" | "recurring" | "seasonal"
+  startDate    DateTime?
+  endDate      DateTime?
+  daysOfWeek   Json?     // [0..6]
+  startTime    String?   // "HH:mm"
+  endTime      String?   // "HH:mm"
+  priority     Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([enabled])
+}
+
+model SavedQuery {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  query     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model WatchHistory {
+  id              String       @id @default(cuid())
+  mediaItemId     String
+  mediaItem       MediaItem    @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  mediaServerId   String
+  mediaServer     MediaServer  @relation(fields: [mediaServerId], references: [id], onDelete: Cascade)
+  serverUsername   String
+  watchedAt       DateTime?
+  deviceName      String?
+  platform        String?
+  createdAt       DateTime     @default(now())
+
+  @@index([mediaItemId])
+  @@index([mediaServerId])
+  @@index([serverUsername])
+  @@index([watchedAt])
+  @@index([deviceName])
+  @@index([platform])
+}
+

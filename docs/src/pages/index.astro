@@ -1,0 +1,592 @@
+---
+// Landing page — fully custom, outside Starlight's docs layout
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Librariarr — Media Library Management</title>
+    <meta
+      name="description"
+      content="Self-hosted media library management for Plex, Jellyfin, and Emby. Browse, filter, and automate your media with lifecycle rules, stream management, and more."
+    />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style>
+      /* Reset & base */
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      :root {
+        --bg: #09090b;
+        --bg-card: #18181b;
+        --bg-card-hover: #1f1f23;
+        --border: #27272a;
+        --text: #fafafa;
+        --text-muted: #a1a1aa;
+        --accent: oklch(0.6 0.15 250);
+        --accent-hover: oklch(0.55 0.18 250);
+        --accent-subtle: oklch(0.2 0.05 250);
+        --radius: 12px;
+        --max-width: 1100px;
+      }
+
+      html {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+          Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.6;
+        scroll-behavior: smooth;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* Nav */
+      .nav {
+        position: sticky;
+        top: 0;
+        z-index: 50;
+        background: oklch(0.05 0 0 / 0.8);
+        backdrop-filter: blur(12px);
+        border-bottom: 1px solid var(--border);
+      }
+
+      .nav-inner {
+        max-width: var(--max-width);
+        margin: 0 auto;
+        padding: 0.75rem 1.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .nav-brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: var(--text);
+        text-decoration: none;
+        letter-spacing: -0.02em;
+      }
+
+      .nav-links {
+        display: flex;
+        gap: 1.5rem;
+        align-items: center;
+      }
+
+      .nav-links a {
+        color: var(--text-muted);
+        text-decoration: none;
+        font-size: 0.9rem;
+        transition: color 0.15s;
+      }
+
+      .nav-links a:hover {
+        color: var(--text);
+      }
+
+      /* Hero */
+      .hero {
+        max-width: var(--max-width);
+        margin: 0 auto;
+        padding: 6rem 1.5rem 4rem;
+        text-align: center;
+      }
+
+      .hero-badge {
+        display: inline-block;
+        padding: 0.35rem 1rem;
+        border-radius: 999px;
+        background: var(--accent-subtle);
+        color: var(--accent);
+        font-size: 0.8rem;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        margin-bottom: 1.5rem;
+        border: 1px solid oklch(0.35 0.08 250);
+      }
+
+      .hero h1 {
+        font-size: clamp(2.5rem, 6vw, 4rem);
+        font-weight: 800;
+        letter-spacing: -0.03em;
+        line-height: 1.1;
+        margin-bottom: 1.25rem;
+      }
+
+      .hero h1 .accent {
+        color: var(--accent);
+      }
+
+      .hero p {
+        font-size: 1.15rem;
+        color: var(--text-muted);
+        max-width: 600px;
+        margin: 0 auto 2.5rem;
+        line-height: 1.7;
+      }
+
+      .hero-actions {
+        display: flex;
+        gap: 1rem;
+        justify-content: center;
+        flex-wrap: wrap;
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.75rem 1.75rem;
+        border-radius: 8px;
+        font-size: 0.95rem;
+        font-weight: 600;
+        text-decoration: none;
+        transition: all 0.15s;
+        cursor: pointer;
+        border: none;
+      }
+
+      .btn-primary {
+        background: var(--accent);
+        color: #fff;
+      }
+
+      .btn-primary:hover {
+        background: var(--accent-hover);
+      }
+
+      .btn-secondary {
+        background: var(--bg-card);
+        color: var(--text);
+        border: 1px solid var(--border);
+      }
+
+      .btn-secondary:hover {
+        background: var(--bg-card-hover);
+        border-color: var(--text-muted);
+      }
+
+      /* Features */
+      .features {
+        max-width: var(--max-width);
+        margin: 0 auto;
+        padding: 2rem 1.5rem 5rem;
+      }
+
+      .features-heading {
+        text-align: center;
+        margin-bottom: 3rem;
+      }
+
+      .features-heading h2 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        margin-bottom: 0.5rem;
+      }
+
+      .features-heading p {
+        color: var(--text-muted);
+        font-size: 1rem;
+      }
+
+      .features-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 1.25rem;
+      }
+
+      .feature-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 1.75rem;
+        transition: border-color 0.15s, background 0.15s;
+      }
+
+      .feature-card:hover {
+        border-color: var(--text-muted);
+        background: var(--bg-card-hover);
+      }
+
+      .feature-icon {
+        width: 2.25rem;
+        height: 2.25rem;
+        margin-bottom: 1rem;
+        color: var(--accent);
+      }
+
+      .feature-card h3 {
+        font-size: 1.1rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+      }
+
+      .feature-card p {
+        color: var(--text-muted);
+        font-size: 0.9rem;
+        line-height: 1.6;
+      }
+
+      /* Integrations bar */
+      .integrations {
+        max-width: var(--max-width);
+        margin: 0 auto;
+        padding: 0 1.5rem 5rem;
+        text-align: center;
+      }
+
+      .integrations h2 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        margin-bottom: 0.5rem;
+      }
+
+      .integrations > p {
+        color: var(--text-muted);
+        margin-bottom: 2.5rem;
+      }
+
+      .integration-logos {
+        display: flex;
+        gap: 2rem;
+        justify-content: center;
+        flex-wrap: wrap;
+      }
+
+      .integration-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.6rem 1.25rem;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        font-size: 0.9rem;
+        font-weight: 500;
+        color: var(--text-muted);
+        transition: border-color 0.15s;
+      }
+
+      .integration-chip:hover {
+        border-color: var(--text-muted);
+      }
+
+      /* CTA */
+      .cta {
+        max-width: var(--max-width);
+        margin: 0 auto;
+        padding: 0 1.5rem 6rem;
+        text-align: center;
+      }
+
+      .cta-box {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 3rem 2rem;
+      }
+
+      .cta-box h2 {
+        font-size: 1.5rem;
+        font-weight: 700;
+        margin-bottom: 0.75rem;
+      }
+
+      .cta-box p {
+        color: var(--text-muted);
+        margin-bottom: 2rem;
+      }
+
+      /* Footer */
+      .footer {
+        border-top: 1px solid var(--border);
+        padding: 2rem 1.5rem;
+        text-align: center;
+        color: var(--text-muted);
+        font-size: 0.85rem;
+      }
+
+      .footer a {
+        color: var(--text-muted);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+
+      .footer a:hover {
+        color: var(--text);
+      }
+
+      /* Responsive */
+      @media (max-width: 640px) {
+        .hero {
+          padding: 4rem 1rem 3rem;
+        }
+
+        .hero-actions {
+          flex-direction: column;
+          align-items: center;
+        }
+
+        .btn {
+          width: 100%;
+          max-width: 280px;
+          justify-content: center;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <nav class="nav">
+      <div class="nav-inner">
+        <a href="/" class="nav-brand">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none" width="24" height="24" aria-hidden="true">
+            <defs>
+              <linearGradient id="nav-logo-grad" x1="66" y1="44" x2="446" y2="452" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#818cf8"/>
+                <stop offset="1" stop-color="#3b82f6"/>
+              </linearGradient>
+            </defs>
+            <rect x="66" y="72" width="120" height="368" rx="14" fill="url(#nav-logo-grad)" opacity="0.2"/>
+            <rect x="66" y="72" width="18" height="368" rx="9" fill="url(#nav-logo-grad)" opacity="0.38"/>
+            <rect x="146" y="44" width="124" height="424" rx="14" fill="url(#nav-logo-grad)" opacity="0.5"/>
+            <rect x="146" y="44" width="18" height="424" rx="9" fill="url(#nav-logo-grad)" opacity="0.72"/>
+            <path d="M286 60 L440 248 Q448 256 440 264 L286 452 Z" fill="url(#nav-logo-grad)"/>
+          </svg>
+          Librariarr
+        </a>
+        <div class="nav-links">
+          <a href="/docs/getting-started/installation/">Docs</a>
+          <a href="https://github.com/ahembree/librariarr">GitHub</a>
+          <a href="https://hub.docker.com/r/ahembree/librariarr">Docker Hub</a>
+        </div>
+      </div>
+    </nav>
+
+    <section class="hero">
+      <span class="hero-badge">Self-Hosted &middot; Open Source</span>
+      <h1>
+        Manage your <span class="accent">media libraries</span> with confidence
+      </h1>
+      <p>
+        A self-hosted webapp for Plex, Jellyfin, and Emby. Browse and filter
+        your libraries, automate media lifecycle with rules, manage streams, and
+        integrate with the *arr stack.
+      </p>
+      <div class="hero-actions">
+        <a href="/docs/getting-started/installation/" class="btn btn-primary">
+          Get Started
+        </a>
+        <a
+          href="https://github.com/ahembree/librariarr"
+          class="btn btn-secondary"
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            ><path
+              d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"
+            ></path></svg
+          >
+          GitHub
+        </a>
+      </div>
+    </section>
+
+    <section class="features">
+      <div class="features-heading">
+        <h2>Everything you need to manage your media</h2>
+        <p>
+          A comprehensive toolkit for understanding and automating your media
+          library.
+        </p>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card">
+          <svg
+            class="feature-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <rect x="2" y="3" width="20" height="14" rx="2"></rect>
+            <line x1="8" y1="21" x2="16" y2="21"></line>
+            <line x1="12" y1="17" x2="12" y2="21"></line>
+          </svg>
+          <h3>Library Browsing</h3>
+          <p>
+            Browse movies, series, and music with powerful filters. Grid and
+            table views with fast scrolling, even for large libraries.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <svg
+            class="feature-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+          </svg>
+          <h3>Lifecycle Rules</h3>
+          <p>
+            Build rules to automatically find and act on media — delete,
+            unmonitor, tag, and more. Preview what matches before anything
+            runs.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <svg
+            class="feature-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <polygon
+              points="23 7 16 12 23 17 23 7"
+              fill="currentColor"
+              stroke="none"></polygon>
+            <rect x="1" y="5" width="15" height="14" rx="2"></rect>
+          </svg>
+          <h3>Stream Manager</h3>
+          <p>
+            See who's streaming in real time, pause access with maintenance
+            mode, control transcoding, and set blackout schedules.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <svg
+            class="feature-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 16 14"></polyline>
+          </svg>
+          <h3>Scheduling</h3>
+          <p>
+            Schedule syncs and lifecycle tasks independently. Choose from
+            presets or set a custom schedule. Run anything manually on demand.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <svg
+            class="feature-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path
+              d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"
+            ></path>
+          </svg>
+          <h3>Backup & Restore</h3>
+          <p>
+            Automatic or manual backups with optional encryption. Choose what
+            to include, set a retention policy, and schedule backups to run on
+            their own.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <svg
+            class="feature-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+            <path d="M13.73 21a2 2 0 01-3.46 0"></path>
+          </svg>
+          <h3>Notifications</h3>
+          <p>
+            Get Discord notifications for lifecycle actions, maintenance mode
+            changes, and more. Choose which events you want to hear about.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="integrations">
+      <h2>Built to integrate</h2>
+      <p>Connect your existing media stack.</p>
+      <div class="integration-logos">
+        <span class="integration-chip">Plex</span>
+        <span class="integration-chip">Jellyfin</span>
+        <span class="integration-chip">Emby</span>
+        <span class="integration-chip">Sonarr</span>
+        <span class="integration-chip">Radarr</span>
+        <span class="integration-chip">Lidarr</span>
+        <span class="integration-chip">Seerr</span>
+      </div>
+    </section>
+
+    <section class="cta">
+      <div class="cta-box">
+        <h2>Ready to get started?</h2>
+        <p>
+          Deploy with Docker in minutes. One container, one database, full
+          control.
+        </p>
+        <div class="hero-actions">
+          <a
+            href="/docs/getting-started/installation/"
+            class="btn btn-primary"
+          >
+            Read the Docs
+          </a>
+          <a
+            href="https://hub.docker.com/r/ahembree/librariarr"
+            class="btn btn-secondary"
+          >
+            Docker Hub
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <p>
+        Librariarr is open-source software.
+        <a href="https://github.com/ahembree/librariarr">View on GitHub</a>
+      </p>
+    </footer>
+  </body>
+</html>

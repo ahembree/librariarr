@@ -1,0 +1,136 @@
+---
+title: Plex
+description: Set up Plex authentication, server connections, and media syncing.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+Plex is Librariarr's primary integration, providing both authentication and media server connectivity.
+
+## Authentication
+
+### Plex OAuth
+
+Plex OAuth is the primary way to sign in to Librariarr.
+
+<Steps>
+
+1. Click **Sign in with Plex** on the login page
+2. Authorize Librariarr in the Plex popup
+3. Your Plex account is linked and your accessible servers are discovered automatically
+
+</Steps>
+
+After Plex OAuth sign-in, Librariarr stores your Plex token securely for API calls.
+
+### Re-Linking
+
+To change or re-authenticate your Plex account:
+
+1. Go to **Settings → Authentication**
+2. Click **Link Account** to re-initiate Plex OAuth
+
+## Server Connection
+
+### Auto-Discovery
+
+When signed in via Plex OAuth, Librariarr can automatically discover all Plex servers accessible to your account. For each server it shows:
+
+- Server name and version
+- Platform (Linux, Windows, macOS, etc.)
+- Available connections (local and remote URLs)
+
+### Manual Setup
+
+You can also manually add a Plex server in **Settings → Servers**:
+
+- **URL**: Base URL (e.g., `http://192.168.1.100:32400` or `https://plex.example.com`)
+- **Access Token**: Your Plex token (see below)
+- **Skip TLS Verification**: Enable for self-signed certificates
+
+### Getting Your Plex Token
+
+If you need to provide a token manually:
+
+1. Open Plex Web App and navigate to any media item
+2. Click **Get Info** → **View XML**
+3. In the browser URL, look for `X-Plex-Token=` — the value after this is your token
+
+Alternatively, the Plex token from OAuth sign-in is used automatically when discovering servers.
+
+## Media Sync
+
+### What Gets Synced
+
+Librariarr fetches comprehensive metadata for each media item:
+
+- **Core metadata**: title, year, rating, studio, genres, content rating, duration
+- **Play data**: play count, last played date, date added
+- **Video details**: resolution, format, frame rate, HDR type, and more
+- **Audio details**: format, channels, quality, and language
+- **Subtitles**: language and settings
+- **File info**: size, format, and location
+- **External IDs**: TMDB, TVDB, and IMDB (used to match with Sonarr/Radarr)
+
+### Dynamic Range Detection
+
+Dynamic range is detected from a combination of stream metadata and filename patterns:
+
+- **Dolby Vision**: Stream tags or filename patterns like `DV`, `DoVi`
+- **HDR10+**: Stream metadata or filename patterns like `HDR10+`, `HDR10Plus`
+- **HDR10**: Detected from video metadata
+- **HLG**: Detected from video metadata
+- **SDR**: Everything else
+
+### Audio Profile Detection
+
+Audio profiles are normalized from stream metadata and filenames:
+
+- **Dolby Atmos**: Detected from stream metadata or `Atmos` in filename
+- **Dolby TrueHD**: `truehd` codec
+- **DTS-HD MA**: `dts` codec with `MA` profile
+- **DTS:X**: Detected from stream metadata
+
+## Library Management
+
+### Library Types
+
+Plex libraries map to Librariarr's types:
+
+| Plex Library Type | Librariarr Type |
+|-------------------|----------------|
+| Movies | `MOVIE` |
+| TV Shows | `SERIES` |
+| Music | `MUSIC` |
+
+### Enabling/Disabling Libraries
+
+Each Plex library can be independently enabled or disabled for syncing in **Settings → Servers**.
+
+<Aside type="caution">
+  When disabling the last library of a given type, you'll be asked whether to keep or delete the associated media data from Librariarr's database.
+</Aside>
+
+## Stream Manager Integration
+
+With Plex, the [Stream Manager](/docs/features/stream-manager/) can:
+
+- View all active Plex streams in real time
+- See conversion details and hardware acceleration status
+- Terminate individual sessions
+- Enable maintenance mode to pause all streaming
+
+## Preroll Integration
+
+The [Preroll Manager](/docs/features/preroll-manager/) sets preroll paths via the Plex API.
+
+<Aside>
+  Plex's preroll feature requires **Plex Pass**. Without Plex Pass, preroll settings are ignored by the server.
+</Aside>
+
+## Limitations
+
+- Plex tokens can expire — re-authenticate if you encounter access issues
+- Large libraries (50,000+ items) may take significant time for the initial sync
+- Dynamic range and audio quality detection from filenames may not be 100% accurate for unusual naming conventions
+- External ID availability depends on Plex's own metadata agents — some items may not have TMDB/TVDB/IMDB IDs

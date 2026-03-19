@@ -1,0 +1,142 @@
+---
+title: Backup & Restore
+description: Back up your configuration and media data with optional encryption.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+Librariarr includes a full backup and restore system that can run on a schedule or be triggered manually.
+
+## Backup Types
+
+### Config-Only (Default)
+
+Backs up your configuration, servers, rules, integrations, and settings. Excludes large tables that are repopulated by syncing:
+
+- Media items
+- External IDs
+- Media streams
+- Sync jobs
+- Log entries
+
+**Use case**: Routine backups. After restoring, run a full sync to repopulate media data.
+
+### Full Backup
+
+Backs up everything, including all media metadata.
+
+**Use case**: Migrating to a new instance without wanting to re-sync, or when sync would take a very long time for large libraries.
+
+Enable full backups by checking **Include media data** when creating a manual backup.
+
+## Encryption
+
+Backups can be encrypted with a passphrase for security.
+
+- Minimum passphrase length: 8 characters
+- Uses strong encryption (AES-256-GCM) with brute-force-resistant key derivation
+
+Set the encryption password in **Settings → General → Backup & Restore**.
+
+<Aside type="danger">
+  If you lose the encryption passphrase, encrypted backups **cannot be recovered**. There is no passphrase reset or recovery mechanism. Store your passphrase securely.
+</Aside>
+
+## Scheduling
+
+Configure automatic backups in **Settings → General**:
+
+| Schedule | Frequency |
+|----------|-----------|
+| Manual | No automatic backups |
+| Every 6 hours | 4 times per day |
+| Every 12 hours | Twice per day |
+| Daily (default) | Once per day |
+| Weekly | Once per week |
+
+### Retention
+
+Set how many backups to keep. Older backups are automatically deleted when the limit is reached. Default: **7** backups.
+
+Scheduled backups are always **config-only** and use the saved encryption password (if set).
+
+## Creating a Manual Backup
+
+<Steps>
+
+1. Go to **Settings → General → Backup & Restore**
+2. Optionally check **Include media data** for a full backup
+3. Click **Create Backup**
+4. The backup is created and appears in the **Available Backups** list
+
+</Steps>
+
+## Restoring a Backup
+
+### From Settings (While Logged In)
+
+<Steps>
+
+1. Go to **Settings → General → Available Backups**
+2. Find the backup you want to restore
+3. Click **Restore**
+4. If encrypted, enter the passphrase
+5. Confirm the restore — this replaces **all current data**
+6. Monitor progress as each table is restored
+7. After completion, you are automatically logged out
+
+</Steps>
+
+### From Login Page (No Account)
+
+If no account exists (fresh install or after data loss):
+
+<Steps>
+
+1. Navigate to the login page
+2. Backups from `/config/backups/` are automatically listed
+3. Select a backup to restore
+4. Enter passphrase if encrypted
+5. After restore, log in with your restored credentials
+
+</Steps>
+
+<Aside>
+  After restoring a config-only backup, you should trigger a full sync from **Settings → Servers** to repopulate media metadata.
+</Aside>
+
+## Restore Process
+
+The restore process:
+
+<Steps>
+
+1. Clears all existing data from the database
+2. Restores data table by table (progress is shown in the UI)
+3. On completion, logs you out and redirects to the login page
+
+</Steps>
+
+## Storage
+
+| Path | Description |
+|------|-------------|
+| `/config/backups/` | Default backup directory |
+| `BACKUP_DIR` env var | Override the default backup directory |
+
+Backup files follow the naming pattern: `librariarr-backup-{timestamp}.json.gz[.enc]`
+
+## Managing Backups
+
+From the **Available Backups** section:
+
+- **Download** — Save a backup file locally
+- **Restore** — Restore this backup (replaces all data)
+- **Delete** — Remove a backup file
+
+## Limitations
+
+- Restoring replaces **all** data — there is no selective/partial restore
+- Encrypted backups require the exact passphrase used at creation time
+- The restore process logs out all sessions — plan accordingly
+- Full backups can be large for libraries with tens of thousands of items
