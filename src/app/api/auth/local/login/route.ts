@@ -34,11 +34,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Destroy first to clear any stale data (e.g. prior plexToken from a different session)
     const session = await getSession();
+    session.destroy();
     session.userId = user.id;
     session.isLoggedIn = true;
     session.sessionVersion = user.sessionVersion;
-    // No plexToken for local-only login
     if (user.plexToken) {
       session.plexToken = user.plexToken;
     }

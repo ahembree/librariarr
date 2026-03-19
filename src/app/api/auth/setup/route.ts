@@ -49,8 +49,9 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Set session
+    // Set session (destroy first to clear any stale data like a prior plexToken)
     const session = await getSession();
+    session.destroy();
     session.userId = user.id;
     session.isLoggedIn = true;
     session.sessionVersion = 0;

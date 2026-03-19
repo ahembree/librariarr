@@ -102,7 +102,7 @@ export default function LoginPage() {
   }, [router]);
 
 
-  const handleLocalLogin = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleLocalLogin = async (e: React.SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLocalError(null);
     setLocalLoading(true);
@@ -129,14 +129,14 @@ export default function LoginPage() {
           return;
         }
       } catch {}
-      router.push("/settings");
+      router.push("/onboarding");
     } catch {
       setLocalError("Login failed. Please try again.");
       setLocalLoading(false);
     }
   };
 
-  const handleSetup = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSetup = async (e: React.SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault();
     setSetupError(null);
 
@@ -171,7 +171,7 @@ export default function LoginPage() {
         return;
       }
 
-      router.push("/settings");
+      router.push("/onboarding");
     } catch {
       setSetupError("Setup failed. Please try again.");
       setSetupLoading(false);
