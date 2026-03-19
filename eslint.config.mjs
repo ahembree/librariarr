@@ -6,6 +6,13 @@ const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
   {
+    settings: {
+      react: {
+        // Explicit version avoids eslint-plugin-react calling the removed
+        // context.getFilename() API when set to "detect" (ESLint 10 compat).
+        version: "19",
+      },
+    },
     rules: {
       // TanStack Virtual's useVirtualizer returns unstable function refs.
       // The React Compiler already skips these components automatically.
