@@ -206,7 +206,7 @@ describe("syncMediaServer", () => {
     vi.clearAllMocks();
 
     // Default: sync job creation
-    mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string, ..._args: unknown[]) => {
+    mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string) => {
       if (sql.includes('INSERT INTO "SyncJob"')) {
         return [{ id: "sync-job-id" }];
       }
