@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0](https://github.com/ahembree/librariarr/compare/v0.1.1...v0.2.0) (2026-03-19)
+
+
+### Features
+
+* add update checker ([864cb55](https://github.com/ahembree/librariarr/commit/864cb55700288753186cc39c4c767d812534e097))
+
+
+### Bug Fixes
+
+* fix flaky enforcer test ([bc4f075](https://github.com/ahembree/librariarr/commit/bc4f075c94618023d3a08813e0d1e2b630354ab2))
+
 ## [0.1.1](https://github.com/ahembree/librariarr/compare/v0.1.0...v0.1.1) (2026-03-19)
 
 
