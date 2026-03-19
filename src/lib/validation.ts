@@ -231,6 +231,10 @@ export const blackoutCreateSchema = z.object({
 export const blackoutUpdateSchema = blackoutCreateSchema.partial();
 
 export const prerollPathSchema = z.object({
+  path: z.string(),
+});
+
+export const prerollValidatePathSchema = z.object({
   path: z.string().min(1, "Path is required"),
 });
 
