@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/ahembree/librariarr/compare/v0.2.0...v0.2.1) (2026-03-19)
+
+
+### Bug Fixes
+
+* fix enforcement tests ([8d9ef16](https://github.com/ahembree/librariarr/commit/8d9ef16522c8e57e415103fd177553a5588b8e63))
+* resolve docker image build and push when new tag comes from other action ([12aec83](https://github.com/ahembree/librariarr/commit/12aec83f17178e6e46de86891c9c2bc219e001e7))
+
 ## [0.2.0](https://github.com/ahembree/librariarr/compare/v0.1.1...v0.2.0) (2026-03-19)
 
 
