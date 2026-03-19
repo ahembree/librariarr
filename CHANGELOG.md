@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/ahembree/librariarr/compare/v0.2.2...v0.2.3) (2026-03-19)
+
+
+### Bug Fixes
+
+* **lint:** set explicit React version for ESLint 10 compatibility ([54fbf00](https://github.com/ahembree/librariarr/commit/54fbf005c6eae5d402b91726545e9439a9d61118))
+
 ## [0.2.2](https://github.com/ahembree/librariarr/compare/v0.2.1...v0.2.2) (2026-03-19)
 
 
