@@ -4,6 +4,9 @@
 [![Docker Hub](https://img.shields.io/docker/pulls/ahembree/librariarr)](https://hub.docker.com/r/ahembree/librariarr)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
+> [!WARNING]
+> **This software is currently in beta.** There is the potential for bugs, breaking changes, and data loss. Use at your own risk and ensure you have backups of your data.
+
 Media library management for Plex, Jellyfin, and Emby. Track your media metadata, monitor quality breakdowns, and build lifecycle rules to manage your libraries.
 
 **Documentation:** [librariarr.dev](https://librariarr.dev)

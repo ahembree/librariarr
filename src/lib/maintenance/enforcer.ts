@@ -192,15 +192,12 @@ async function processPrerollSchedules() {
   }
 }
 
-export function initializeMaintenanceEnforcer() {
-  if (initialized) return;
-  initialized = true;
+/** Single enforcement tick — exported for direct testing. */
+export async function runEnforcerTick() {
+  if (isRunning) return;
+  isRunning = true;
 
-  setInterval(async () => {
-    if (isRunning) return;
-    isRunning = true;
-
-    try {
+  try {
       const allSettings = await prisma.appSettings.findMany({
         where: {
           OR: [
@@ -473,7 +470,22 @@ export function initializeMaintenanceEnforcer() {
     } finally {
       isRunning = false;
     }
-  }, 30000);
+}
+
+export function initializeMaintenanceEnforcer() {
+  if (initialized) return;
+  initialized = true;
+
+  setInterval(runEnforcerTick, 30000);
 
   logger.info("Enforcer", "Initialized — polling every 30 seconds");
+}
+
+/** Reset module-level state between tests. */
+export function _resetForTesting() {
+  initialized = false;
+  isRunning = false;
+  pendingTerminations.clear();
+  knownBlackoutSessions.clear();
+  lastPrerollPath.clear();
 }
