@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.4](https://github.com/ahembree/librariarr/compare/v0.2.3...v0.2.4) (2026-03-19)
+
+
+### Bug Fixes
+
+* preroll clear button ([c85f89f](https://github.com/ahembree/librariarr/commit/c85f89f52e0a2606f803a3f7cd140b3e8b275e48))
+* various preroll bugs ([269ce96](https://github.com/ahembree/librariarr/commit/269ce96591bd6be5bd3cdcea59c44bee3130e35f))
+
 ## [0.2.3](https://github.com/ahembree/librariarr/compare/v0.2.2...v0.2.3) (2026-03-19)
 
 
