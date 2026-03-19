@@ -7,6 +7,9 @@ const BASE_URL =
   "postgresql://librariarr:librariarr@localhost:5432";
 
 export async function setup() {
+  // Skip DB setup when running unit tests (no database available)
+  if (process.env.VITEST_SKIP_DB_SETUP === "true") return;
+
   const adminUrl = `${BASE_URL}/postgres`;
   const testDbUrl = `${BASE_URL}/${TEST_DB_NAME}`;
 
@@ -32,6 +35,8 @@ export async function setup() {
 }
 
 export async function teardown() {
+  if (process.env.VITEST_SKIP_DB_SETUP === "true") return;
+
   const adminUrl = `${BASE_URL}/postgres`;
 
   try {

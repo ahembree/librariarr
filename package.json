@@ -27,7 +27,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:unit": "vitest run tests/unit",
+    "test:unit": "VITEST_SKIP_DB_SETUP=true vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "docker:dev": "docker compose -f docker-compose.dev.yml up --build",
     "docker:dev:detach": "docker compose -f docker-compose.dev.yml up --build -d",
