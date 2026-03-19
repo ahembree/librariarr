@@ -239,12 +239,15 @@ export default function OnboardingPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-8">
-      <div className="w-full max-w-3xl space-y-6">
+      <div className="absolute inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-150 h-150 rounded-full bg-amber-500/5 blur-3xl" />
+      </div>
+      <div className="relative w-full max-w-5xl space-y-8">
         <div className="text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/20">
             <Logo size={32} />
           </div>
-          <h1 className="text-3xl font-bold">Select Your Plex Servers</h1>
+          <h1 className="text-3xl font-bold bg-linear-to-r from-amber-400 to-orange-500 bg-clip-text text-transparent">Select Your Plex Servers</h1>
           <p className="mt-2 text-muted-foreground">
             Choose which servers to connect. You can select which libraries to
             sync.
@@ -275,11 +278,11 @@ export default function OnboardingPage() {
               return (
                 <Card
                   key={id}
-                  className={`w-full max-w-sm ${error ? "border-destructive/50" : ""}`}
+                  className={`max-w-sm flex-1 min-w-72 ${isAdded ? "border-amber-500/40" : error ? "border-destructive/50" : "border-amber-500/15"}`}
                 >
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
-                      <Server className="h-5 w-5" />
+                      <Server className="h-5 w-5 text-amber-500" />
                       {server.name}
                     </CardTitle>
                     <CardDescription>
@@ -319,7 +322,7 @@ export default function OnboardingPage() {
                                 }
                                 className={`block w-full rounded px-2 py-1 text-left text-xs transition-colors ${
                                   currentUrl === conn.uri
-                                    ? "bg-primary/10 text-primary"
+                                    ? "bg-amber-500/10 text-amber-400"
                                     : "text-muted-foreground hover:bg-muted"
                                 }`}
                               >
@@ -411,7 +414,7 @@ export default function OnboardingPage() {
                         <Button
                           onClick={() => confirmLibrarySelection(id)}
                           disabled={savingLibraries}
-                          className="w-full"
+                          className="w-full bg-amber-500 text-black hover:bg-amber-600"
                         >
                           {savingLibraries && (
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -426,7 +429,7 @@ export default function OnboardingPage() {
                       <Button
                         onClick={() => addServer(server)}
                         disabled={isAdding || isAdded}
-                        className="w-full"
+                        className={`w-full ${isAdded ? "bg-amber-500/15 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20" : "bg-amber-500 text-black hover:bg-amber-600"}`}
                         variant={isAdded ? "secondary" : "default"}
                       >
                         {isAdding && (
@@ -454,6 +457,7 @@ export default function OnboardingPage() {
             onClick={() => router.push("/")}
             size="lg"
             disabled={addedServers.size === 0}
+            className="bg-amber-500 text-black hover:bg-amber-600 disabled:opacity-40"
           >
             Continue to Dashboard
           </Button>
