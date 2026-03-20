@@ -93,6 +93,11 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate
 
+      - name: Validate migrations
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://librariarr:librariarr@localhost:5432/librariarr
+
       - name: Run integration tests
         run: npm run test:integration
 
