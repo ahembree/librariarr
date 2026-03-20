@@ -120,13 +120,19 @@ const HOLIDAYS = [
   { name: "New Year's Eve", startMonth: 12, startDay: 31, endMonth: 12, endDay: 31 },
 ];
 
+/** Format a Date as a datetime-local input value using the browser's local timezone. */
+function toDatetimeLocalValue(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 function getHolidayDates(holiday: typeof HOLIDAYS[number], year: number) {
   const startDate = new Date(year, holiday.startMonth - 1, holiday.startDay, 0, 0);
   const endYear = holiday.endMonth < holiday.startMonth ? year + 1 : year;
   const endDate = new Date(endYear, holiday.endMonth - 1, holiday.endDay, 23, 59);
   return {
-    startDate: startDate.toISOString().slice(0, 16),
-    endDate: endDate.toISOString().slice(0, 16),
+    startDate: toDatetimeLocalValue(startDate),
+    endDate: toDatetimeLocalValue(endDate),
   };
 }
 
@@ -218,10 +224,10 @@ function scheduleToForm(schedule: PrerollSchedule): ScheduleFormState {
     prerollPath: schedule.prerollPath,
     scheduleType: schedule.scheduleType,
     startDate: schedule.startDate
-      ? new Date(schedule.startDate).toISOString().slice(0, 16)
+      ? toDatetimeLocalValue(new Date(schedule.startDate))
       : "",
     endDate: schedule.endDate
-      ? new Date(schedule.endDate).toISOString().slice(0, 16)
+      ? toDatetimeLocalValue(new Date(schedule.endDate))
       : "",
     daysOfWeek: schedule.daysOfWeek || [],
     startTime: schedule.startTime || "00:00",
@@ -489,8 +495,8 @@ export default function PrerollManagerPage() {
       scheduleType: apiScheduleType,
       ...(isDateType
         ? {
-            startDate: scheduleForm.startDate,
-            endDate: scheduleForm.endDate,
+            startDate: new Date(scheduleForm.startDate).toISOString(),
+            endDate: new Date(scheduleForm.endDate).toISOString(),
           }
         : {}),
       ...(scheduleForm.scheduleType === "recurring"
