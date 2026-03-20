@@ -111,6 +111,8 @@ async function processPrerollSchedules() {
       },
     });
 
+    if (schedules.length === 0) return;
+
     // Group by user
     const byUser = new Map<string, { servers: typeof schedules[0]["user"]["mediaServers"]; schedules: typeof schedules }>();
     for (const schedule of schedules) {
@@ -148,7 +150,7 @@ async function processPrerollSchedules() {
             logger.info("Enforcer", "Preroll: cleared (no active schedule)");
           }
         } catch (error) {
-          logger.debug("Enforcer", "Preroll: could not update server", { error: String(error) });
+          logger.error("Enforcer", "Preroll: could not update server", { error: String(error) });
         }
       }
 
@@ -219,101 +221,100 @@ export async function runEnforcerTick() {
 
       if (allSettings.length === 0) {
         pendingTerminations.clear();
-        return;
-      }
+      } else {
+        const now = Date.now();
+        const activeSessionKeys = new Set<string>();
 
-      const now = Date.now();
-      const activeSessionKeys = new Set<string>();
+        for (const settings of allSettings) {
+          const maintenanceEnabled = settings.maintenanceMode;
+          const maintenanceDelayMs = (settings.maintenanceDelay ?? 30) * 1000;
+          const maintenanceMsg = settings.maintenanceMessage || "Server is in maintenance mode.";
 
-      for (const settings of allSettings) {
-        const maintenanceEnabled = settings.maintenanceMode;
-        const maintenanceDelayMs = (settings.maintenanceDelay ?? 30) * 1000;
-        const maintenanceMsg = settings.maintenanceMessage || "Server is in maintenance mode.";
+          const transcodeEnabled = settings.transcodeManagerEnabled;
+          const transcodeDelayMs = (settings.transcodeManagerDelay ?? 30) * 1000;
+          const transcodeMsg = settings.transcodeManagerMessage || "This stream has been terminated.";
+          const criteria = (settings.transcodeManagerCriteria as TranscodeManagerCriteria | null) ?? {
+            anyTranscoding: false,
+            videoTranscoding: false,
+            audioTranscoding: false,
+            fourKTranscoding: false,
+            remoteTranscoding: false,
+          };
 
-        const transcodeEnabled = settings.transcodeManagerEnabled;
-        const transcodeDelayMs = (settings.transcodeManagerDelay ?? 30) * 1000;
-        const transcodeMsg = settings.transcodeManagerMessage || "This stream has been terminated.";
-        const criteria = (settings.transcodeManagerCriteria as TranscodeManagerCriteria | null) ?? {
-          anyTranscoding: false,
-          videoTranscoding: false,
-          audioTranscoding: false,
-          fourKTranscoding: false,
-          remoteTranscoding: false,
-        };
+          for (const server of settings.user.mediaServers) {
+            try {
+              const client = createMediaServerClient(server.type, server.url, server.accessToken, {
+                skipTlsVerify: server.tlsSkipVerify,
+              });
+              const sessions = await client.getSessions();
 
-        for (const server of settings.user.mediaServers) {
-          try {
-            const client = createMediaServerClient(server.type, server.url, server.accessToken, {
-              skipTlsVerify: server.tlsSkipVerify,
-            });
-            const sessions = await client.getSessions();
+              for (const session of sessions) {
+                const sessionKey = `${settings.userId}:${server.id}:${session.sessionId}`;
+                activeSessionKeys.add(sessionKey);
 
-            for (const session of sessions) {
-              const sessionKey = `${settings.userId}:${server.id}:${session.sessionId}`;
-              activeSessionKeys.add(sessionKey);
+                // Determine if this session should be terminated and with what delay/message
+                let shouldTerminate = false;
+                let delay = 0;
+                let message = "";
 
-              // Determine if this session should be terminated and with what delay/message
-              let shouldTerminate = false;
-              let delay = 0;
-              let message = "";
-
-              if (maintenanceEnabled && !settings.maintenanceExcludedUsers.includes(session.username)) {
-                shouldTerminate = true;
-                delay = maintenanceDelayMs;
-                message = maintenanceMsg;
-              }
-
-              if (transcodeEnabled && !settings.transcodeManagerExcludedUsers.includes(session.username) && sessionMatchesCriteria(session, criteria)) {
-                if (!shouldTerminate || transcodeDelayMs < delay) {
-                  delay = transcodeDelayMs;
-                  message = transcodeMsg;
+                if (maintenanceEnabled && !settings.maintenanceExcludedUsers.includes(session.username)) {
+                  shouldTerminate = true;
+                  delay = maintenanceDelayMs;
+                  message = maintenanceMsg;
                 }
-                shouldTerminate = true;
-              }
 
-              if (!shouldTerminate) continue;
+                if (transcodeEnabled && !settings.transcodeManagerExcludedUsers.includes(session.username) && sessionMatchesCriteria(session, criteria)) {
+                  if (!shouldTerminate || transcodeDelayMs < delay) {
+                    delay = transcodeDelayMs;
+                    message = transcodeMsg;
+                  }
+                  shouldTerminate = true;
+                }
 
-              // Track first-seen time
-              if (!pendingTerminations.has(sessionKey)) {
-                pendingTerminations.set(sessionKey, now);
-                logger.info(
-                  "Enforcer",
-                  `Session "${session.username}" on "${server.name}" (${session.title}) pending termination (delay: ${delay / 1000}s)`
-                );
-              }
+                if (!shouldTerminate) continue;
 
-              const firstSeen = pendingTerminations.get(sessionKey)!;
-              if (now - firstSeen >= delay) {
-                try {
-                  await client.terminateSession(session.sessionId, message);
+                // Track first-seen time
+                if (!pendingTerminations.has(sessionKey)) {
+                  pendingTerminations.set(sessionKey, now);
                   logger.info(
                     "Enforcer",
-                    `Terminated session for "${session.username}" on "${server.name}" (${session.title})`
-                  );
-                  pendingTerminations.delete(sessionKey);
-                } catch (error) {
-                  logger.error(
-                    "Enforcer",
-                    `Failed to terminate session ${session.sessionId} on "${server.name}"`,
-                    { error: String(error) }
+                    `Session "${session.username}" on "${server.name}" (${session.title}) pending termination (delay: ${delay / 1000}s)`
                   );
                 }
+
+                const firstSeen = pendingTerminations.get(sessionKey)!;
+                if (now - firstSeen >= delay) {
+                  try {
+                    await client.terminateSession(session.sessionId, message);
+                    logger.info(
+                      "Enforcer",
+                      `Terminated session for "${session.username}" on "${server.name}" (${session.title})`
+                    );
+                    pendingTerminations.delete(sessionKey);
+                  } catch (error) {
+                    logger.error(
+                      "Enforcer",
+                      `Failed to terminate session ${session.sessionId} on "${server.name}"`,
+                      { error: String(error) }
+                    );
+                  }
+                }
               }
+            } catch (error) {
+              logger.debug(
+                "Enforcer",
+                `Could not reach server "${server.name}"`,
+                { error: String(error) }
+              );
             }
-          } catch (error) {
-            logger.debug(
-              "Enforcer",
-              `Could not reach server "${server.name}"`,
-              { error: String(error) }
-            );
           }
         }
-      }
 
-      // Prune entries for sessions that no longer exist
-      for (const key of pendingTerminations.keys()) {
-        if (!activeSessionKeys.has(key)) {
-          pendingTerminations.delete(key);
+        // Prune entries for sessions that no longer exist
+        for (const key of pendingTerminations.keys()) {
+          if (!activeSessionKeys.has(key)) {
+            pendingTerminations.delete(key);
+          }
         }
       }
 
@@ -463,13 +464,22 @@ export async function runEnforcerTick() {
         }
       }
 
-      // --- Preroll Schedule Processing ---
-      await processPrerollSchedules();
     } catch (error) {
       logger.error("Enforcer", "Error in enforcer", { error: String(error) });
     } finally {
       isRunning = false;
     }
+}
+
+let prerollInitialized = false;
+
+export function initializePrerollEnforcer() {
+  if (prerollInitialized) return;
+  prerollInitialized = true;
+
+  setInterval(processPrerollSchedules, 30000);
+
+  logger.info("Enforcer", "Preroll enforcer initialized — polling every 30 seconds");
 }
 
 export function initializeMaintenanceEnforcer() {
@@ -478,12 +488,13 @@ export function initializeMaintenanceEnforcer() {
 
   setInterval(runEnforcerTick, 30000);
 
-  logger.info("Enforcer", "Initialized — polling every 30 seconds");
+  logger.info("Enforcer", "Maintenance enforcer initialized — polling every 30 seconds");
 }
 
 /** Reset module-level state between tests. */
 export function _resetForTesting() {
   initialized = false;
+  prerollInitialized = false;
   isRunning = false;
   pendingTerminations.clear();
   knownBlackoutSessions.clear();

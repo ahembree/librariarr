@@ -362,12 +362,6 @@ export default function PrerollManagerPage() {
     fetchData();
   }, [fetchData]);
 
-  // Poll every 30 seconds
-  useEffect(() => {
-    const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
-
   // Auto-clear page messages
   useEffect(() => {
     if (!pageMessage) return;
