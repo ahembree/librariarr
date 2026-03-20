@@ -23,20 +23,58 @@ The dashboard uses a card system that displays statistics, charts, and summaries
 ### Available Card Types
 
 | Card | Description |
-|------|-------------|
+|-|-|
 | Total Counts | Number of movies, shows, episodes, music tracks |
 | File Size | Total storage used by media type |
-| Quality Charts | Breakdown by resolution, video codec, audio codec, dynamic range, content rating, audio channels, genres |
-| Top Plays | Most-played movies and series |
-| Recently Added | Latest additions to your library |
+| Quality Breakdown | Resolution distribution across your library |
+| Video Codec | Video codec distribution (H.264, HEVC, etc.) |
+| Audio Codec | Audio codec distribution (AAC, AC3, etc.) |
+| Content Rating | Content rating distribution (PG, R, TV-MA, etc.) |
+| Top Played | Most played movies, series, and music |
+| Dynamic Range | HDR format distribution (Dolby Vision, HDR10, SDR, etc.) |
+| Audio Channels | Surround sound layout distribution (Stereo, 5.1, 7.1, etc.) |
+| Genre Breakdown | Genre distribution across your library |
+| Recently Added | Most recent additions to your library |
+| Sync Status | Library sync progress and recent sync jobs (Main tab only) |
+
+### Custom Cards
+
+Custom cards let you create charts with any dimension and chart type. Click **Add Card → Custom Card** in edit mode.
+
+#### Chart Types
+
+| Type | Description |
+|-|-|
+| Bar | Vertical bar chart |
+| Pie | Donut chart |
+| Line | Line chart |
+| Area | Filled area chart |
+| Radar | Spider/radar chart |
+| Treemap | Proportional rectangle grid |
+| Heatmap | Two-dimension correlation grid (requires two dimensions) |
+| Count | Large single number |
+| Timeline | Time-series chart with zoom slider; pick a date field for the X-axis, an optional breakdown dimension for colored series, and a time interval (day, week, month, quarter, year) |
+
+#### Available Dimensions
+
+Custom cards can visualize data across many dimensions, grouped by category:
+
+- **Video** — Resolution, Video Codec, Dynamic Range, Video Profile, Frame Rate, Bit Depth, Scan Type, Aspect Ratio, Video Bitrate
+- **Audio** — Audio Codec, Audio Channels, Audio Profile, Sampling Rate, Audio Bitrate
+- **Streams** — Audio Language, Subtitle Language
+- **Content** — Content Rating, Genre, Year, Studio, Countries
+- **File** — Container, File Size, Duration
+- **Dates** — Added Date, Last Played, Release Date
+- **Engagement** — Critic Rating, Audience Rating, Play Count
 
 ### Customizing the Dashboard
 
 Enter **Edit Mode** to:
 
 - **Rearrange cards** by dragging them to a new position
+- **Resize cards** by adjusting their column span
 - **Hide cards** you don't need
-- **Show cards** that were previously hidden
+- **Add cards** including built-in and custom chart cards
 
 Your layout is saved automatically and persists across sessions.
 
