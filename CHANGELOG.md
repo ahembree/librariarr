@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/ahembree/librariarr/compare/v0.3.1...v0.4.0) (2026-03-20)
+
+
+### Features
+
+* new dashboard timeline card, fix dashboard UI bugs ([448017e](https://github.com/ahembree/librariarr/commit/448017e8768458faa95ea724ddcf01ac073474d9))
+* new dashboard timeline card, fix dashboard UI bugs ([187d2ad](https://github.com/ahembree/librariarr/commit/187d2ad1b0fe5b3891fdf99bb991489873a62327))
+
 ## [0.3.1](https://github.com/ahembree/librariarr/compare/v0.3.0...v0.3.1) (2026-03-20)
 
 
