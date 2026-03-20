@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.1](https://github.com/ahembree/librariarr/compare/v0.3.0...v0.3.1) (2026-03-20)
+
+
+### Bug Fixes
+
+* fix invalid migration file ([0d1d49f](https://github.com/ahembree/librariarr/commit/0d1d49fd67ad4360f0bc51c4d9062515388bff36))
+* resolve restore from config-only backup issue ([b39cc33](https://github.com/ahembree/librariarr/commit/b39cc3363c03bddd0c92cb3c90c056fe7361466e))
+* sanitize restore messages ([682ea37](https://github.com/ahembree/librariarr/commit/682ea3743c3aa7fb1ccbfd2cfbced2b7c6a72798))
+
 ## [0.3.0](https://github.com/ahembree/librariarr/compare/v0.2.4...v0.3.0) (2026-03-19)
 
 
