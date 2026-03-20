@@ -186,6 +186,10 @@ function normalizeResolutionBin(raw: string | null): string {
   return "Other";
 }
 
+export const DATE_DIMENSION_IDS = new Set<string>(
+  DIMENSION_REGISTRY.filter((d) => d.category === "date_bucket").map((d) => d.id)
+);
+
 export function getDimensionMeta(id: string): DimensionMeta | undefined {
   return DIMENSION_REGISTRY.find((d) => d.id === id);
 }

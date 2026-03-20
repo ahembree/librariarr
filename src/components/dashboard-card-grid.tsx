@@ -76,6 +76,11 @@ interface Stats {
     parentTitle: string;
     totalPlays: number;
   }[];
+  topMusic: {
+    parentTitle: string;
+    totalPlays: number;
+    mediaItemId: string | null;
+  }[];
   videoCodecBreakdown: {
     videoCodec: string | null;
     type: string;
@@ -120,6 +125,7 @@ interface DashboardCardGridProps {
   onLayoutChange: (cards: CardEntry[]) => void;
   onMovieClick: (movieId: string) => void;
   onSeriesClick: (seriesName: string) => void;
+  onArtistClick: (mediaItemId: string) => void;
   onSyncComplete: () => void;
   onConfigChange?: (cardId: string, config: CustomCardConfig) => void;
 }
@@ -136,6 +142,7 @@ export function DashboardCardGrid({
   onLayoutChange,
   onMovieClick,
   onSeriesClick,
+  onArtistClick,
   onSyncComplete,
   onConfigChange,
 }: DashboardCardGridProps) {
@@ -286,9 +293,11 @@ export function DashboardCardGrid({
           <TopPlayed
             topMovies={stats.topMovies ?? []}
             topSeries={stats.topSeries ?? []}
+            topMusic={stats.topMusic ?? []}
             filterType={filterType}
             onMovieClick={onMovieClick}
             onSeriesClick={onSeriesClick}
+            onArtistClick={onArtistClick}
           />
         );
       case "dynamic-range":

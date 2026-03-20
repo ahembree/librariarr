@@ -30,13 +30,15 @@ import {
   LayoutGrid,
   Grid3x3,
   Hash,
+  CalendarRange,
 } from "lucide-react";
-import { getDimensionsByGroup } from "@/lib/dashboard/custom-dimensions";
+import { getDimensionsByGroup, DATE_DIMENSION_IDS } from "@/lib/dashboard/custom-dimensions";
 import {
   HEATMAP_GRADIENTS,
   type CustomCardConfig,
   type CustomChartType,
   type CustomDimension,
+  type TimelineBin,
 } from "@/lib/dashboard/card-registry";
 
 const CHART_TYPES: { type: CustomChartType; label: string; icon: typeof BarChart3 }[] = [
@@ -48,6 +50,7 @@ const CHART_TYPES: { type: CustomChartType; label: string; icon: typeof BarChart
   { type: "treemap", label: "Treemap", icon: LayoutGrid },
   { type: "heatmap", label: "Heatmap", icon: Grid3x3 },
   { type: "count", label: "Count", icon: Hash },
+  { type: "timeline", label: "Timeline", icon: CalendarRange },
 ];
 
 const dimensionGroups = getDimensionsByGroup();
@@ -107,6 +110,9 @@ function CustomCardDialogContent({
   const [countValues, setCountValues] = useState<Set<string>>(
     new Set(initialConfig?.countValues ?? [])
   );
+  const [timelineBin, setTimelineBin] = useState<TimelineBin>(
+    initialConfig?.timelineBin ?? "month"
+  );
   const [fetchedValues, setFetchedValues] = useState<{ key: string; values: string[] } | null>(null);
 
   const valuesKey = chartType === "count" && dimension ? dimension : "";
@@ -132,7 +138,10 @@ function CustomCardDialogContent({
   }, [valuesKey, dimension]);
 
   const isEditing = !!initialConfig;
-  const canSubmit = dimension !== "" && (chartType !== "heatmap" || dimension2 !== "");
+  const isTimeline = chartType === "timeline";
+  const canSubmit = dimension !== ""
+    && (chartType !== "heatmap" || dimension2 !== "")
+    && (!isTimeline || DATE_DIMENSION_IDS.has(dimension));
 
   function handleSubmit() {
     if (!canSubmit) return;
@@ -140,10 +149,12 @@ function CustomCardDialogContent({
       chartType,
       dimension: dimension as CustomDimension,
       ...(chartType === "heatmap" && dimension2 ? { dimension2: dimension2 as CustomDimension } : {}),
+      ...(isTimeline && dimension2 ? { dimension2: dimension2 as CustomDimension } : {}),
       ...(chartType === "heatmap" ? { heatmapGradient } : {}),
       ...(title.trim() ? { title: title.trim() } : {}),
       ...(chartType !== "count" ? { topN } : {}),
       ...(chartType === "count" && countValues.size > 0 ? { countValues: Array.from(countValues) } : {}),
+      ...(isTimeline ? { timelineBin } : {}),
     });
   }
 
@@ -181,16 +192,18 @@ function CustomCardDialogContent({
 
         {/* Dimension selector */}
         <div className="space-y-2">
-          <Label>Dimension</Label>
+          <Label>{isTimeline ? "Date Field" : "Dimension"}</Label>
           <Select
             value={dimension}
             onValueChange={(val) => setDimension(val as CustomDimension)}
           >
             <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select a data dimension..." />
+              <SelectValue placeholder={isTimeline ? "Select a date field..." : "Select a data dimension..."} />
             </SelectTrigger>
             <SelectContent>
-              {Array.from(dimensionGroups.entries()).map(([group, dims]) => (
+              {Array.from(dimensionGroups.entries())
+                .filter(([group]) => !isTimeline || group === "Dates")
+                .map(([group, dims]) => (
                 <SelectGroup key={group}>
                   <SelectLabel>{group}</SelectLabel>
                   {dims.map((dim) => (
@@ -203,6 +216,55 @@ function CustomCardDialogContent({
             </SelectContent>
           </Select>
         </div>
+
+        {/* Time bin selector (timeline only) */}
+        {isTimeline && (
+          <div className="space-y-2">
+            <Label>Time Interval</Label>
+            <Select value={timelineBin} onValueChange={(val) => setTimelineBin(val as TimelineBin)}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="day">Day</SelectItem>
+                <SelectItem value="week">Week</SelectItem>
+                <SelectItem value="month">Month</SelectItem>
+                <SelectItem value="quarter">Quarter</SelectItem>
+                <SelectItem value="year">Year</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {/* Breakdown dimension (timeline) */}
+        {isTimeline && (
+          <div className="space-y-2">
+            <Label>Color By <span className="text-muted-foreground font-normal">(optional)</span></Label>
+            <Select
+              value={dimension2 || "__none__"}
+              onValueChange={(val) => setDimension2(val === "__none__" ? "" : val as CustomDimension)}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="None — show total count" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">None</SelectItem>
+                {Array.from(dimensionGroups.entries())
+                  .filter(([group]) => group !== "Dates")
+                  .map(([group, dims]) => (
+                  <SelectGroup key={group}>
+                    <SelectLabel>{group}</SelectLabel>
+                    {dims.map((dim) => (
+                      <SelectItem key={dim.id} value={dim.id}>
+                        {dim.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
         {/* Second dimension (heatmap only) */}
         {chartType === "heatmap" && (
@@ -260,8 +322,8 @@ function CustomCardDialogContent({
           </div>
         )}
 
-        {/* Top N (not applicable to count cards) */}
-        {chartType !== "count" && <div className="space-y-2">
+        {/* Top N (not applicable to count cards; timeline only when breakdown is set) */}
+        {chartType !== "count" && (!isTimeline || dimension2) && <div className="space-y-2">
           <Label>Show Items</Label>
           <Select
             value={topN === null ? "all" : String(topN)}

@@ -16,7 +16,9 @@ import type { LucideIcon } from "lucide-react";
 
 export type DashboardTab = "main" | "movies" | "series" | "music";
 
-export type CustomChartType = "bar" | "pie" | "line" | "area" | "radar" | "treemap" | "heatmap" | "count";
+export type CustomChartType = "bar" | "pie" | "line" | "area" | "radar" | "treemap" | "heatmap" | "count" | "timeline";
+
+export type TimelineBin = "day" | "week" | "month" | "quarter" | "year";
 
 export type CustomDimension =
   | "resolution" | "videoCodec" | "audioCodec" | "contentRating"
@@ -37,6 +39,7 @@ export interface CustomCardConfig {
   topN?: number | null;
   heatmapGradient?: string;
   countValues?: string[];
+  timelineBin?: TimelineBin;
 }
 
 export const HEATMAP_GRADIENTS = [
@@ -102,7 +105,7 @@ export const CARD_REGISTRY: DashboardCardDefinition[] = [
     description: "Resolution distribution across your library",
     icon: Layers,
     allowedTabs: ["main", "movies", "series", "music"],
-    defaultTabs: ["main", "movies", "series", "music"],
+    defaultTabs: ["main", "movies", "series"],
     minSize: 2,
     maxSize: 12,
     defaultSize: 12,
@@ -135,7 +138,7 @@ export const CARD_REGISTRY: DashboardCardDefinition[] = [
     description: "Content rating distribution (PG, R, TV-MA, etc.)",
     icon: Shield,
     allowedTabs: ["main", "movies", "series", "music"],
-    defaultTabs: ["movies", "series", "music"],
+    defaultTabs: ["movies", "series"],
     minSize: 2,
     maxSize: 12,
     defaultSize: 6,
@@ -143,7 +146,7 @@ export const CARD_REGISTRY: DashboardCardDefinition[] = [
   {
     id: "top-played",
     label: "Top Played",
-    description: "Most played movies and series",
+    description: "Most played movies, series, and music",
     icon: Trophy,
     allowedTabs: ["main", "music"],
     defaultTabs: ["main"],
@@ -179,7 +182,7 @@ export const CARD_REGISTRY: DashboardCardDefinition[] = [
     description: "Genre distribution across your library",
     icon: Tags,
     allowedTabs: ["main", "movies", "series", "music"],
-    defaultTabs: [],
+    defaultTabs: ["music"],
     minSize: 2,
     maxSize: 12,
     defaultSize: 6,
@@ -223,7 +226,9 @@ export function isCustomCardId(id: string): boolean {
   return id.startsWith("custom-");
 }
 
-const VALID_CHART_TYPES = new Set<string>(["bar", "pie", "line", "area", "radar", "treemap", "heatmap", "count"]);
+const VALID_CHART_TYPES = new Set<string>(["bar", "pie", "line", "area", "radar", "treemap", "heatmap", "count", "timeline"]);
+const VALID_TIMELINE_BINS = new Set<string>(["day", "week", "month", "quarter", "year"]);
+const DATE_DIMENSIONS = new Set<string>(["addedAt", "lastPlayedAt", "originallyAvailableAt"]);
 const VALID_DIMENSIONS = new Set<string>([
   "resolution", "videoCodec", "audioCodec", "contentRating", "dynamicRange",
   "audioChannels", "genre", "year", "studio", "container", "videoProfile",
@@ -247,6 +252,11 @@ function isValidCustomConfig(config: unknown): config is CustomCardConfig {
   if (c.chartType === "heatmap") {
     if (!VALID_DIMENSIONS.has(c.dimension2 as string)) return false;
     if (c.dimension === c.dimension2) return false;
+  }
+  if (c.chartType === "timeline") {
+    if (!DATE_DIMENSIONS.has(c.dimension as string)) return false;
+    if (!c.timelineBin || !VALID_TIMELINE_BINS.has(c.timelineBin as string)) return false;
+    if (c.dimension2 !== undefined && !VALID_DIMENSIONS.has(c.dimension2 as string)) return false;
   }
   return true;
 }

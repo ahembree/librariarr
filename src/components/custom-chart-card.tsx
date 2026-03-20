@@ -70,6 +70,8 @@ function getGradientColors(gradientId?: string) {
 type BreakdownRow = { value: string | null; type: string; _count: number };
 type AggregatedEntry = { label: string; count: number; movies: number; series: number; music: number };
 type CrossTabRow = { dim1: string | null; dim2: string | null; type: string; _count: number };
+type TimelinePoint = { date: string; total: number; breakdown?: Record<string, number> };
+type TimelineData = { points: TimelinePoint[]; series: string[] };
 
 interface HeatmapCell {
   dim1: string;
@@ -104,12 +106,14 @@ export function CustomChartCard({
   const { getHex } = useChipColors();
   const [breakdown, setBreakdown] = useState<BreakdownRow[]>([]);
   const [heatmapRaw, setHeatmapRaw] = useState<CrossTabRow[]>([]);
+  const [timelineData, setTimelineData] = useState<TimelineData | null>(null);
   const [loading, setLoading] = useState(true);
   const [localFilter, setLocalFilter] = useState<string>("ALL");
   const [hiddenItems, setHiddenItems] = useState<Set<string>>(new Set());
 
   const isHeatmap = config.chartType === "heatmap";
   const isCount = config.chartType === "count";
+  const isTimeline = config.chartType === "timeline";
 
   const toggleHidden = (label: string) => {
     setHiddenItems((prev) => {
@@ -125,7 +129,10 @@ export function CustomChartCard({
   const meta = getDimensionMeta(config.dimension);
   const meta2 = config.dimension2 ? getDimensionMeta(config.dimension2) : null;
   const cardTitle = config.title || (
-    isHeatmap && meta && meta2
+    isTimeline && meta && meta2
+      ? `${meta.label} by ${meta2.label}`
+      : isTimeline && meta ? `${meta.label} Timeline`
+      : isHeatmap && meta && meta2
       ? `${meta.label} vs ${meta2.label}`
       : isCount && meta ? `${meta.label} Count`
       : meta ? `${meta.label} Breakdown` : "Custom Chart"
@@ -134,7 +141,18 @@ export function CustomChartCard({
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      if (isHeatmap && config.dimension2) {
+      if (isTimeline) {
+        const params = new URLSearchParams({ dateField: config.dimension, bin: config.timelineBin ?? "month" });
+        if (config.dimension2) params.set("breakdown", config.dimension2);
+        if (config.topN !== undefined && config.topN !== null) params.set("topN", String(config.topN));
+        if (serverId) params.set("serverId", serverId);
+        if (filterType) params.set("type", filterType as string);
+        const res = await fetch(`/api/media/stats/timeline?${params}`);
+        if (res.ok) {
+          const data = await res.json();
+          setTimelineData(data);
+        }
+      } else if (isHeatmap && config.dimension2) {
         const params = new URLSearchParams({
           dimension1: config.dimension,
           dimension2: config.dimension2,
@@ -159,7 +177,7 @@ export function CustomChartCard({
     } finally {
       setLoading(false);
     }
-  }, [config.dimension, config.dimension2, isHeatmap, serverId]);
+  }, [config.dimension, config.dimension2, config.timelineBin, config.topN, isHeatmap, isTimeline, serverId, filterType]);
 
   useEffect(() => {
     fetchData();
@@ -259,6 +277,39 @@ export function CustomChartCard({
                   </div>
                 );
               })()}
+            </>
+          ) : (
+            <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+              No data available
+            </div>
+          )
+        ) : isTimeline ? (
+          timelineData && timelineData.points.length > 0 ? (
+            <>
+              <TimelineChart data={timelineData} hiddenItems={hiddenItems} />
+              {timelineData.series.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
+                  {timelineData.series.map((label, i) => {
+                    const isHidden = hiddenItems.has(label);
+                    const color = label === "Other" ? OTHER_HEX : AUTO_HEX[i % AUTO_HEX.length];
+                    return (
+                      <div
+                        key={label}
+                        className={`flex items-center gap-1.5 cursor-pointer select-none transition-opacity ${isHidden ? "opacity-35" : "hover:opacity-80"}`}
+                        onClick={() => toggleHidden(label)}
+                      >
+                        <div
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: isHidden ? "#6b7280" : color }}
+                        />
+                        <span className={`text-xs ${isHidden ? "line-through text-muted-foreground" : ""}`}>
+                          {label}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </>
           ) : (
             <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
@@ -605,6 +656,258 @@ function HeatmapChart({ data, gradientId }: { data: HeatmapData; gradientId?: st
             {tooltip.dim1} &times; {tooltip.dim2}
           </p>
           <p className="text-muted-foreground">{tooltip.count.toLocaleString()} items</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Pan-enabled range slider ─────────────────────────────────────
+
+function PanSlider({ value, onChange }: { value: [number, number]; onChange: (v: [number, number]) => void }) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ startX: number; startRange: [number, number]; mode: "left" | "right" | "pan" } | null>(null);
+
+  const pctToPos = useCallback((pct: number) => {
+    const track = trackRef.current;
+    if (!track) return 0;
+    return (pct / 100) * track.clientWidth;
+  }, []);
+
+  const posToPercent = useCallback((x: number) => {
+    const track = trackRef.current;
+    if (!track) return 0;
+    return Math.max(0, Math.min(100, (x / track.clientWidth) * 100));
+  }, []);
+
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    const track = trackRef.current;
+    if (!track) return;
+
+    const rect = track.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const pct = posToPercent(x);
+
+    const leftPos = pctToPos(value[0]);
+    const rightPos = pctToPos(value[1]);
+    const thumbHit = 8; // px hit zone for thumbs
+
+    let mode: "left" | "right" | "pan";
+    if (Math.abs(x - leftPos) <= thumbHit) {
+      mode = "left";
+    } else if (Math.abs(x - rightPos) <= thumbHit) {
+      mode = "right";
+    } else if (pct > value[0] && pct < value[1]) {
+      mode = "pan";
+    } else {
+      // Click outside range — jump nearest thumb
+      if (pct < value[0]) {
+        onChange([Math.round(pct), value[1]]);
+      } else {
+        onChange([value[0], Math.round(pct)]);
+      }
+      return;
+    }
+
+    dragRef.current = { startX: e.clientX, startRange: [...value] as [number, number], mode };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }, [value, onChange, pctToPos, posToPercent]);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    const drag = dragRef.current;
+    const track = trackRef.current;
+    if (!drag || !track) return;
+
+    const deltaPx = e.clientX - drag.startX;
+    const deltaPct = (deltaPx / track.clientWidth) * 100;
+
+    if (drag.mode === "pan") {
+      const span = drag.startRange[1] - drag.startRange[0];
+      let newStart = drag.startRange[0] + deltaPct;
+      let newEnd = drag.startRange[1] + deltaPct;
+      // Clamp to bounds
+      if (newStart < 0) { newStart = 0; newEnd = span; }
+      if (newEnd > 100) { newEnd = 100; newStart = 100 - span; }
+      onChange([Math.round(newStart), Math.round(newEnd)]);
+    } else if (drag.mode === "left") {
+      const newLeft = Math.max(0, Math.min(drag.startRange[1] - 1, drag.startRange[0] + deltaPct));
+      onChange([Math.round(newLeft), value[1]]);
+    } else {
+      const newRight = Math.max(drag.startRange[0] + 1, Math.min(100, drag.startRange[1] + deltaPct));
+      onChange([value[0], Math.round(newRight)]);
+    }
+  }, [onChange, value]);
+
+  const handlePointerUp = useCallback(() => {
+    dragRef.current = null;
+  }, []);
+
+  const leftPct = value[0];
+  const widthPct = value[1] - value[0];
+
+  return (
+    <div
+      ref={trackRef}
+      className="relative h-5 w-full cursor-pointer touch-none select-none"
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+    >
+      {/* Track background */}
+      <div className="absolute top-1/2 -translate-y-1/2 h-1.5 w-full rounded-full bg-muted" />
+      {/* Active range */}
+      <div
+        className="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-primary cursor-grab active:cursor-grabbing"
+        style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+      />
+      {/* Left thumb */}
+      <div
+        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 size-4 rounded-full border border-primary bg-white shadow-sm cursor-ew-resize"
+        style={{ left: `${value[0]}%` }}
+      />
+      {/* Right thumb */}
+      <div
+        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 size-4 rounded-full border border-primary bg-white shadow-sm cursor-ew-resize"
+        style={{ left: `${value[1]}%` }}
+      />
+    </div>
+  );
+}
+
+// ── Timeline chart ───────────────────────────────────────────────
+
+function TimelineTooltip({ active, payload, label }: { active?: boolean; payload?: { dataKey: string; value: number; color: string }[]; label?: string }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-md border bg-popover px-3 py-2 text-sm shadow-md">
+      <p className="font-medium mb-1">{label}</p>
+      {payload.map((entry) => (
+        <p key={entry.dataKey} className="text-muted-foreground flex items-center gap-1.5">
+          <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: entry.color }} />
+          {entry.dataKey}: {entry.value.toLocaleString()}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function TimelineChart({ data, hiddenItems }: { data: TimelineData; hiddenItems: Set<string> }) {
+  const [range, setRange] = useState<[number, number]>([0, 100]);
+  const margin = { top: 5, right: 10, bottom: 5, left: 10 };
+  const hasSeries = data.series.length > 0;
+
+  // Flatten points into recharts format: { date, total, "4K": 10, "1080P": 20, ... }
+  const allChartData = useMemo(() => data.points.map((p) => {
+    const entry: Record<string, string | number> = { date: p.date, total: p.total };
+    if (p.breakdown) {
+      for (const [key, value] of Object.entries(p.breakdown)) {
+        entry[key] = value;
+      }
+    }
+    return entry;
+  }), [data.points]);
+
+  // Slice data to the visible range
+  const chartData = useMemo(() => {
+    const len = allChartData.length;
+    if (len === 0) return allChartData;
+    const startIdx = Math.floor((range[0] / 100) * len);
+    const endIdx = Math.ceil((range[1] / 100) * len);
+    return allChartData.slice(startIdx, Math.max(startIdx + 1, endIdx));
+  }, [allChartData, range]);
+
+  const visibleSeries = data.series.filter((s) => !hiddenItems.has(s));
+
+  // Labels for the range endpoints
+  const startLabel = chartData.length > 0 ? chartData[0].date : "";
+  const endLabel = chartData.length > 0 ? chartData[chartData.length - 1].date : "";
+  const isZoomed = range[0] > 0 || range[1] < 100;
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="min-h-48 flex-1">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={chartData} margin={margin}>
+            <defs>
+              {hasSeries ? (
+                visibleSeries.map((label, i) => {
+                  const color = label === "Other" ? OTHER_HEX : AUTO_HEX[i % AUTO_HEX.length];
+                  return (
+                    <linearGradient key={label} id={`tl-grad-${i}`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={color} stopOpacity={0.3} />
+                      <stop offset="100%" stopColor={color} stopOpacity={0.02} />
+                    </linearGradient>
+                  );
+                })
+              ) : (
+                <linearGradient id="tl-grad-total" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.3} />
+                  <stop offset="100%" stopColor="#3b82f6" stopOpacity={0.02} />
+                </linearGradient>
+              )}
+            </defs>
+            <XAxis
+              dataKey="date"
+              tick={{ fontSize: 11, fill: "#b5b5b5" }}
+              tickLine={false}
+              axisLine={false}
+              interval="preserveStartEnd"
+              angle={-35}
+              textAnchor="end"
+              height={60}
+            />
+            <YAxis
+              tick={{ fontSize: 11, fill: "#b5b5b5" }}
+              tickLine={false}
+              axisLine={false}
+              width={40}
+              allowDecimals={false}
+            />
+            <RechartsTooltip content={<TimelineTooltip />} />
+            {hasSeries ? (
+              visibleSeries.map((label, i) => {
+                const origIdx = data.series.indexOf(label);
+                const color = label === "Other" ? OTHER_HEX : AUTO_HEX[origIdx % AUTO_HEX.length];
+                return (
+                  <Area
+                    key={label}
+                    type="monotone"
+                    dataKey={label}
+                    stroke={color}
+                    strokeWidth={1.5}
+                    fill={`url(#tl-grad-${i})`}
+                    fillOpacity={0.15}
+                  />
+                );
+              })
+            ) : (
+              <Area
+                type="monotone"
+                dataKey="total"
+                stroke="#3b82f6"
+                strokeWidth={2}
+                fill="url(#tl-grad-total)"
+              />
+            )}
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+      {allChartData.length > 1 && (
+        <div className="mt-2 space-y-1 px-1">
+          <PanSlider value={range} onChange={setRange} />
+          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+            <span>{startLabel}</span>
+            {isZoomed && (
+              <button
+                type="button"
+                className="text-primary hover:underline"
+                onClick={() => setRange([0, 100])}
+              >
+                Reset
+              </button>
+            )}
+            <span>{endLabel}</span>
+          </div>
         </div>
       )}
     </div>
