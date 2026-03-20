@@ -103,7 +103,10 @@ const TABLE_ORDER = [
   "lidarrInstance",
   "seerrInstance",
   "ruleSet",
+  "ruleMatch",
   "lifecycleAction",
+  "lifecycleException",
+  "watchHistory",
   "blackoutSchedule",
   "prerollPreset",
   "prerollSchedule",
@@ -111,8 +114,12 @@ const TABLE_ORDER = [
   "logEntry",
 ] as const;
 
-// Tables populated by sync — excluded from config-only backups
-const SYNC_TABLES = new Set(["mediaItem", "mediaItemExternalId", "mediaStream", "syncJob", "logEntry"]);
+// Tables that depend on mediaItem or are populated by sync — excluded from config-only backups
+const MEDIA_DEPENDENT_TABLES = new Set([
+  "mediaItem", "mediaItemExternalId", "mediaStream", "syncJob",
+  "ruleMatch", "lifecycleAction", "lifecycleException", "watchHistory",
+  "logEntry",
+]);
 
 async function ensureBackupDir(): Promise<void> {
   await fs.mkdir(BACKUP_DIR, { recursive: true });
@@ -140,7 +147,7 @@ export async function createBackup(passphrase?: string, configOnly = true): Prom
   const tables: Record<string, number> = {};
 
   for (const table of TABLE_ORDER) {
-    if (configOnly && SYNC_TABLES.has(table)) {
+    if (configOnly && MEDIA_DEPENDENT_TABLES.has(table)) {
       data[table] = [];
       tables[table] = 0;
       continue;
@@ -433,7 +440,10 @@ function tableToDbName(table: string): string {
     lidarrInstance: "LidarrInstance",
     seerrInstance: "SeerrInstance",
     ruleSet: "RuleSet",
+    ruleMatch: "RuleMatch",
     lifecycleAction: "LifecycleAction",
+    lifecycleException: "LifecycleException",
+    watchHistory: "WatchHistory",
     blackoutSchedule: "BlackoutSchedule",
     prerollPreset: "PrerollPreset",
     prerollSchedule: "PrerollSchedule",
