@@ -793,6 +793,20 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
       ref={setDropRef}
       className={`p-4 space-y-2 ${BG_COLORS[depth % BG_COLORS.length]} ${isOver ? ACTIVE_BORDER_COLORS[depth % ACTIVE_BORDER_COLORS.length] : BORDER_COLORS[depth % BORDER_COLORS.length]} ${group.enabled === false ? "opacity-50" : ""} ${isStreamQuery ? "border-primary/30" : ""}`}
     >
+      {/* Stream query name - positioned at top-left, separate from the query logic */}
+      {isStreamQuery && (
+        <Input
+          value={group.name ?? ""}
+          onChange={(e) =>
+            onUpdateTree(group.id, (g) => ({
+              ...g,
+              name: e.target.value || undefined,
+            }))
+          }
+          placeholder="Name (optional)"
+          className="h-8 max-w-48 text-xs"
+        />
+      )}
       {/* Group header */}
       <div className="flex items-center justify-between mb-1">
         <div className="flex items-center gap-2">
@@ -849,17 +863,6 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
               <span className="text-xs font-medium text-primary whitespace-nowrap">
                 stream where
               </span>
-              <Input
-                value={group.name ?? ""}
-                onChange={(e) =>
-                  onUpdateTree(group.id, (g) => ({
-                    ...g,
-                    name: e.target.value || undefined,
-                  }))
-                }
-                placeholder="Name (optional)"
-                className="h-8 flex-1 text-xs"
-              />
             </>
           ) : (
             <>

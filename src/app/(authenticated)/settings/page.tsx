@@ -380,9 +380,13 @@ export default function SettingsPage() {
   const [editSeerrTesting, setEditSeerrTesting] = useState(false);
   const [editSeerrTestResult, setEditSeerrTestResult] = useState<TestResult | null>(null);
 
-  // Sync active tab to URL hash
+  // Sync active tab to URL hash (replaceState avoids creating extra history
+  // entries that break browser back/forward navigation in the App Router)
   useEffect(() => {
-    window.location.hash = activeTab;
+    const newHash = `#${activeTab}`;
+    if (window.location.hash !== newHash) {
+      window.history.replaceState(window.history.state, "", newHash);
+    }
   }, [activeTab]);
 
   // ─── Fetchers ───

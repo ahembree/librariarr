@@ -51,6 +51,7 @@ export async function GET(request: NextRequest) {
       qualityBreakdown: [],
       topMovies: [],
       topSeries: [],
+      topMusic: [],
       videoCodecBreakdown: [],
       audioCodecBreakdown: [],
       contentRatingBreakdown: [],
@@ -70,6 +71,7 @@ export async function GET(request: NextRequest) {
     totalSizeResult,
     topMovies,
     topSeriesAgg,
+    topMusicAgg,
     videoCodecBreakdown,
     audioCodecBreakdown,
     contentRatingBreakdown,
@@ -111,6 +113,18 @@ export async function GET(request: NextRequest) {
       where: {
         ...serverFilter,
         type: "SERIES",
+        parentTitle: { not: null },
+        playCount: { gt: 0 },
+      },
+      _sum: { playCount: true },
+      orderBy: { _sum: { playCount: "desc" } },
+      take: 10,
+    }),
+    prisma.mediaItem.groupBy({
+      by: ["parentTitle"],
+      where: {
+        ...serverFilter,
+        type: "MUSIC",
         parentTitle: { not: null },
         playCount: { gt: 0 },
       },
@@ -246,6 +260,31 @@ export async function GET(request: NextRequest) {
     thumbUrl: thumbMap.get(s.parentTitle!) ?? null,
   }));
 
+  // Batch fetch thumb URLs for all top music artists (same pattern as series)
+  const topMusicArtists = topMusicAgg
+    .map((s) => s.parentTitle)
+    .filter((t): t is string => t != null);
+
+  const musicDetails = topMusicArtists.length > 0
+    ? await prisma.mediaItem.findMany({
+        where: { ...serverFilter, type: "MUSIC", parentTitle: { in: topMusicArtists } },
+        select: { id: true, parentTitle: true, parentThumbUrl: true, playCount: true },
+        orderBy: { playCount: "desc" },
+        distinct: ["parentTitle"],
+      })
+    : [];
+
+  const musicDetailMap = new Map(
+    musicDetails.map((s) => [s.parentTitle, { thumbUrl: s.parentThumbUrl, id: s.id }])
+  );
+
+  const topMusicWithDetails = topMusicAgg.map((s) => ({
+    parentTitle: s.parentTitle!,
+    totalPlays: s._sum?.playCount ?? 0,
+    mediaItemId: musicDetailMap.get(s.parentTitle!)?.id ?? null,
+    thumbUrl: musicDetailMap.get(s.parentTitle!)?.thumbUrl ?? null,
+  }));
+
   return NextResponse.json({
     movieCount: dedupEnabled ? dedupMovieCount : movieCount,
     seriesCount,
@@ -264,6 +303,7 @@ export async function GET(request: NextRequest) {
     qualityBreakdown,
     topMovies,
     topSeries: topSeriesWithThumbs,
+    topMusic: topMusicWithDetails,
     videoCodecBreakdown,
     audioCodecBreakdown,
     contentRatingBreakdown,

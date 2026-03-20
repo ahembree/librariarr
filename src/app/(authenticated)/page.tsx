@@ -61,6 +61,11 @@ interface Stats {
     parentTitle: string;
     totalPlays: number;
   }[];
+  topMusic: {
+    parentTitle: string;
+    totalPlays: number;
+    mediaItemId: string | null;
+  }[];
   videoCodecBreakdown: {
     videoCodec: string | null;
     type: string;
@@ -114,9 +119,13 @@ export default function DashboardPage() {
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [editingCustomCard, setEditingCustomCard] = useState<{ cardId: string; config: CustomCardConfig } | null>(null);
 
-  // Sync active tab to URL hash
+  // Sync active tab to URL hash (replaceState avoids creating extra history
+  // entries that break browser back/forward navigation in the App Router)
   useEffect(() => {
-    window.location.hash = activeTab;
+    const newHash = `#${activeTab}`;
+    if (window.location.hash !== newHash) {
+      window.history.replaceState(window.history.state, "", newHash);
+    }
   }, [activeTab]);
 
   const fetchData = useCallback(async () => {
@@ -219,6 +228,10 @@ export default function DashboardPage() {
     },
     [router]
   );
+
+  const handleArtistClick = useCallback((mediaItemId: string) => {
+    router.push(`/library/music/artist/${mediaItemId}`);
+  }, [router]);
 
   const handleAddCustom = useCallback(
     (config: CustomCardConfig) => {
@@ -419,6 +432,7 @@ export default function DashboardPage() {
             onLayoutChange={(cards) => updateLayout("main", cards)}
             onMovieClick={handleMovieClick}
             onSeriesClick={handleSeriesClick}
+            onArtistClick={handleArtistClick}
             onSyncComplete={fetchStats}
             onConfigChange={handleConfigChange}
           />
@@ -438,6 +452,7 @@ export default function DashboardPage() {
               onLayoutChange={(cards) => updateLayout("movies", cards)}
               onMovieClick={handleMovieClick}
               onSeriesClick={handleSeriesClick}
+              onArtistClick={handleArtistClick}
               onSyncComplete={fetchStats}
               onConfigChange={handleConfigChange}
             />
@@ -458,6 +473,7 @@ export default function DashboardPage() {
               onLayoutChange={(cards) => updateLayout("series", cards)}
               onMovieClick={handleMovieClick}
               onSeriesClick={handleSeriesClick}
+              onArtistClick={handleArtistClick}
               onSyncComplete={fetchStats}
               onConfigChange={handleConfigChange}
             />
@@ -478,6 +494,7 @@ export default function DashboardPage() {
               onLayoutChange={(cards) => updateLayout("music", cards)}
               onMovieClick={handleMovieClick}
               onSeriesClick={handleSeriesClick}
+              onArtistClick={handleArtistClick}
               onSyncComplete={fetchStats}
               onConfigChange={handleConfigChange}
             />
