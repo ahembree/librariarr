@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { restoreBackup, type RestoreProgress } from "@/lib/backup/backup-service";
 import { validateRequest, backupRestoreSchema } from "@/lib/validation";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
 export async function POST(request: NextRequest) {
   // Only allowed when no users exist (initial setup)
@@ -33,7 +34,7 @@ export async function POST(request: NextRequest) {
 
           send({ type: "complete" });
         } catch (err) {
-          send({ type: "error", message: err instanceof Error ? err.message : "Restore failed" });
+          send({ type: "error", message: sanitizeErrorDetail(err instanceof Error ? err.message : "Restore failed") ?? "Restore failed" });
         } finally {
           controller.close();
         }

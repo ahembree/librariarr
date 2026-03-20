@@ -10,7 +10,8 @@ const { mockPrismaModels, TABLE_NAMES, mockFs } = vi.hoisted(() => {
     "systemConfig", "user", "appSettings", "mediaServer", "library",
     "mediaItem", "mediaItemExternalId", "mediaStream", "syncJob",
     "sonarrInstance", "radarrInstance", "lidarrInstance", "seerrInstance",
-    "ruleSet", "lifecycleAction", "blackoutSchedule", "prerollPreset",
+    "ruleSet", "ruleMatch", "lifecycleAction", "lifecycleException",
+    "watchHistory", "blackoutSchedule", "prerollPreset",
     "prerollSchedule", "savedQuery", "logEntry",
   ];
 
@@ -114,14 +115,18 @@ describe("createBackup", () => {
     expect(buffer.subarray(0, 8).toString()).toBe("LBRENC01");
   });
 
-  it("skips sync tables in config-only mode (default)", async () => {
+  it("skips media-dependent tables in config-only mode (default)", async () => {
     await createBackup();
 
-    // mediaItem, mediaItemExternalId, mediaStream, syncJob, logEntry should NOT be queried
+    // Media-dependent tables should NOT be queried
     expect(mockPrismaModels.mediaItem.findMany).not.toHaveBeenCalled();
     expect(mockPrismaModels.mediaStream.findMany).not.toHaveBeenCalled();
     expect(mockPrismaModels.syncJob.findMany).not.toHaveBeenCalled();
     expect(mockPrismaModels.logEntry.findMany).not.toHaveBeenCalled();
+    expect(mockPrismaModels.ruleMatch.findMany).not.toHaveBeenCalled();
+    expect(mockPrismaModels.lifecycleAction.findMany).not.toHaveBeenCalled();
+    expect(mockPrismaModels.lifecycleException.findMany).not.toHaveBeenCalled();
+    expect(mockPrismaModels.watchHistory.findMany).not.toHaveBeenCalled();
 
     // Config tables should be queried
     expect(mockPrismaModels.user.findMany).toHaveBeenCalled();
@@ -135,6 +140,10 @@ describe("createBackup", () => {
     expect(mockPrismaModels.mediaStream.findMany).toHaveBeenCalled();
     expect(mockPrismaModels.syncJob.findMany).toHaveBeenCalled();
     expect(mockPrismaModels.logEntry.findMany).toHaveBeenCalled();
+    expect(mockPrismaModels.ruleMatch.findMany).toHaveBeenCalled();
+    expect(mockPrismaModels.lifecycleAction.findMany).toHaveBeenCalled();
+    expect(mockPrismaModels.lifecycleException.findMany).toHaveBeenCalled();
+    expect(mockPrismaModels.watchHistory.findMany).toHaveBeenCalled();
   });
 });
 
