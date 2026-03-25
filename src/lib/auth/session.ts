@@ -41,8 +41,8 @@ function resolveSessionSecret(): string {
       const stored = readFileSync(SESSION_SECRET_FILE, "utf-8").trim();
       if (stored.length >= 32) {
         logger.info(
-          "Using auto-generated session secret from %s",
-          SESSION_SECRET_FILE
+          "session",
+          `Using auto-generated session secret from ${SESSION_SECRET_FILE}`
         );
         return stored;
       }
@@ -60,18 +60,18 @@ function resolveSessionSecret(): string {
       mode: 0o600,
     });
     logger.info(
-      "No SESSION_SECRET configured — auto-generated and saved to %s",
-      SESSION_SECRET_FILE
+      "session",
+      `No SESSION_SECRET configured — auto-generated and saved to ${SESSION_SECRET_FILE}`
     );
   } catch (err) {
     // Persist failed (e.g. read-only filesystem) — use the generated value
     // for this process lifetime but warn that sessions won't survive restarts
     logger.warn(
-      "Auto-generated SESSION_SECRET but could not persist to %s — " +
+      "session",
+      `Auto-generated SESSION_SECRET but could not persist to ${SESSION_SECRET_FILE} — ` +
         "sessions will be invalidated on restart. " +
-        "Set SESSION_SECRET in your environment to avoid this. Error: %s",
-      SESSION_SECRET_FILE,
-      err instanceof Error ? err.message : String(err)
+        "Set SESSION_SECRET in your environment to avoid this.",
+      { error: err instanceof Error ? err.message : String(err) }
     );
   }
 
