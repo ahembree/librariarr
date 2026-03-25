@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/ahembree/librariarr/compare/v0.4.0...v0.5.0) (2026-03-25)
+
+
+### Features
+
+* **auth:** auto-generate SESSION_SECRET when not configured ([846e789](https://github.com/ahembree/librariarr/commit/846e7892e1047af869eb00be3f02a21ad2b53d0b))
+* **auth:** auto-generate SESSION_SECRET when not configured ([cc3bcbb](https://github.com/ahembree/librariarr/commit/cc3bcbb7a58f374cac921e62ad3463fe9c4ce31f))
+
+
+### Bug Fixes
+
+* **auth:** use correct logger signature for session secret messages ([c5ba213](https://github.com/ahembree/librariarr/commit/c5ba213f2694606d2a879e8934b2eeaf605987df))
+
 ## [0.4.0](https://github.com/ahembree/librariarr/compare/v0.3.1...v0.4.0) (2026-03-20)
 
 
