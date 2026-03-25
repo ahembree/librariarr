@@ -30,20 +30,11 @@ Media library management for Plex, Jellyfin, and Emby. Track your media metadata
 
 Pull the pre-built image and run with Docker Compose.
 
-### 1. Create a directory and config files
+### 1. Create a directory and docker-compose.yml
 
 ```bash
 mkdir librariarr && cd librariarr
 ```
-
-Create a `.env` file:
-
-```env
-# Required — generate a random 32+ character string for session encryption
-SESSION_SECRET="your-random-secret-here"
-```
-
-### 2. Create docker-compose.yml
 
 ```yaml
 services:
@@ -54,7 +45,6 @@ services:
       - "${LIBRARIARR_PORT:-3000}:3000"
     environment:
       - DATABASE_URL=postgresql://librariarr:librariarr@librariarr-db:5432/librariarr
-      - SESSION_SECRET=${SESSION_SECRET}
       - NEXT_TELEMETRY_DISABLED=1
       - TZ=${TZ:-UTC}
     volumes:
@@ -90,7 +80,7 @@ volumes:
   librariarr-db:
 ```
 
-### 3. Start
+### 2. Start
 
 ```bash
 docker compose up -d
@@ -104,7 +94,7 @@ Database migrations run automatically on container start.
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `SESSION_SECRET` | Yes | Random 32+ character string for session encryption |
+| `SESSION_SECRET` | No | Random 32+ character string for session encryption. Auto-generated and saved to `/config/.session-secret` if not set. |
 | `DATABASE_URL` | Yes | PostgreSQL connection string (set automatically if using the provided compose file) |
 | `PUID` | No | UID to run the app process as (default: `1000`) |
 | `PGID` | No | GID to run the app process as (default: `1000`) |

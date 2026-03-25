@@ -29,7 +29,6 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
          - "${LIBRARIARR_PORT:-3000}:3000"
        environment:
          - DATABASE_URL=postgresql://librariarr:${DB_PASSWORD}@librariarr-db:5432/librariarr
-         - SESSION_SECRET=${SESSION_SECRET}
          - TZ=${TZ:-UTC}
          - PUID=${PUID:-1000}
          - PGID=${PGID:-1000}
@@ -69,11 +68,11 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
 2. **Create a `.env` file**
 
    ```bash title=".env"
-   # Required — generate with: openssl rand -base64 32
-   SESSION_SECRET=your-random-secret-here
-
    # Required — database password
    DB_PASSWORD=your-secure-db-password
+
+   # Optional — session encryption key (auto-generated if not set)
+   # SESSION_SECRET=your-random-secret-here
 
    # Optional
    PUID=1000
@@ -81,8 +80,8 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
    LIBRARIARR_PORT=3000
    ```
 
-   <Aside type="caution">
-     `SESSION_SECRET` must be at least 32 characters. Use `openssl rand -base64 32` to generate a secure value. Changing this after deployment will invalidate all active sessions.
+   <Aside type="tip">
+     `SESSION_SECRET` is auto-generated and saved to `/config/.session-secret` if not set. To provide your own, set it in `.env` (must be at least 32 characters — generate with `openssl rand -base64 32`). Changing the secret after deployment will invalidate all active sessions.
    </Aside>
 
 3. **Start the stack**
@@ -102,7 +101,7 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
 | Variable | Required | Default | Description |
 |----------|:--------:|---------|-------------|
 | `DATABASE_URL` | Yes | — | PostgreSQL connection URL (provided in the docker-compose.yml above) |
-| `SESSION_SECRET` | Yes | — | Random string (32+ characters) used to secure your login sessions |
+| `SESSION_SECRET` | No | Auto-generated | Random string (32+ characters) used to secure your login sessions. Auto-generated and saved to `/config/.session-secret` if not set. |
 | `PUID` | No | `1000` | User ID for file permissions |
 | `PGID` | No | `1000` | Group ID for file permissions |
 | `LIBRARIARR_PORT` | No | `3000` | Host port to expose |

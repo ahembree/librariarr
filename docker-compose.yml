@@ -6,7 +6,7 @@ services:
       - "${LIBRARIARR_PORT:-3000}:3000"
     environment:
       - DATABASE_URL=postgresql://librariarr:librariarr@librariarr-db:5432/librariarr
-      - SESSION_SECRET=${SESSION_SECRET:?Set SESSION_SECRET in .env (random 32+ char string)}
+      - SESSION_SECRET=${SESSION_SECRET:-}
       - NEXT_TELEMETRY_DISABLED=1
       - TZ=${TZ:-UTC}
       # Optional: run the app process as a specific UID/GID (default: 1000)
