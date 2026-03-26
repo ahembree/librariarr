@@ -18,6 +18,7 @@ interface TopMovie {
 interface TopSeries {
   parentTitle: string;
   totalPlays: number;
+  mediaItemId: string | null;
 }
 
 interface TopMusic {
@@ -32,7 +33,7 @@ interface TopPlayedProps {
   topMusic: TopMusic[];
   filterType?: "MOVIE" | "SERIES" | "MUSIC";
   onMovieClick?: (movieId: string) => void;
-  onSeriesClick?: (seriesName: string) => void;
+  onSeriesClick?: (seriesName: string, mediaItemId?: string) => void;
   onArtistClick?: (mediaItemId: string) => void;
 }
 
@@ -120,7 +121,7 @@ export function TopPlayed({ topMovies, topSeries, topMusic, filterType, onMovieC
                 <div
                   key={series.parentTitle}
                   className="group relative flex items-center gap-3 rounded-md px-2 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors"
-                  onClick={() => onSeriesClick?.(series.parentTitle)}
+                  onClick={() => onSeriesClick?.(series.parentTitle, series.mediaItemId ?? undefined)}
                 >
                   <div
                     className="absolute inset-0 rounded-md bg-primary/5"
