@@ -4,8 +4,9 @@ export async function register() {
     const { initializeScheduler } = await import("@/lib/scheduler/scheduler");
     initializeScheduler();
 
-    const { initializeMaintenanceEnforcer } = await import("@/lib/maintenance/enforcer");
+    const { initializeMaintenanceEnforcer, initializePrerollEnforcer } = await import("@/lib/maintenance/enforcer");
     initializeMaintenanceEnforcer();
+    initializePrerollEnforcer();
 
     // Backfill dedupKeys for items synced before the dedup columns were added
     const { runBackfillIfNeeded } = await import("@/lib/dedup/recompute-canonical");

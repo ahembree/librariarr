@@ -120,13 +120,19 @@ const HOLIDAYS = [
   { name: "New Year's Eve", startMonth: 12, startDay: 31, endMonth: 12, endDay: 31 },
 ];
 
+/** Format a Date as a datetime-local input value using the browser's local timezone. */
+function toDatetimeLocalValue(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 function getHolidayDates(holiday: typeof HOLIDAYS[number], year: number) {
   const startDate = new Date(year, holiday.startMonth - 1, holiday.startDay, 0, 0);
   const endYear = holiday.endMonth < holiday.startMonth ? year + 1 : year;
   const endDate = new Date(endYear, holiday.endMonth - 1, holiday.endDay, 23, 59);
   return {
-    startDate: startDate.toISOString().slice(0, 16),
-    endDate: endDate.toISOString().slice(0, 16),
+    startDate: toDatetimeLocalValue(startDate),
+    endDate: toDatetimeLocalValue(endDate),
   };
 }
 
@@ -144,19 +150,18 @@ function formatScheduleDescription(schedule: PrerollSchedule): string {
   }
 
   if (schedule.scheduleType === "one_time" || schedule.scheduleType === "seasonal") {
+    const dateTimeOpts: Intl.DateTimeFormatOptions = {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    };
     const start = schedule.startDate
-      ? new Date(schedule.startDate).toLocaleDateString(undefined, {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-        })
+      ? new Date(schedule.startDate).toLocaleString(undefined, dateTimeOpts)
       : "N/A";
     const end = schedule.endDate
-      ? new Date(schedule.endDate).toLocaleDateString(undefined, {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-        })
+      ? new Date(schedule.endDate).toLocaleString(undefined, dateTimeOpts)
       : "N/A";
     return `${start} - ${end}`;
   }
@@ -169,6 +174,35 @@ function formatTimeDisplay(time: string): string {
   const period = h >= 12 ? "PM" : "AM";
   const displayHour = h === 0 ? 12 : h > 12 ? h - 12 : h;
   return `${displayHour}:${String(m).padStart(2, "0")} ${period}`;
+}
+
+function isScheduleCurrentlyActive(schedule: PrerollSchedule): boolean {
+  if (!schedule.enabled) return false;
+  const now = new Date();
+
+  if (schedule.scheduleType === "one_time" || schedule.scheduleType === "seasonal") {
+    if (!schedule.startDate || !schedule.endDate) return false;
+    return now >= new Date(schedule.startDate) && now <= new Date(schedule.endDate);
+  }
+
+  if (schedule.scheduleType === "recurring") {
+    const days = schedule.daysOfWeek;
+    if (!days || !schedule.startTime || !schedule.endTime) return false;
+    if (!days.includes(now.getDay())) return false;
+
+    const [startH, startM] = schedule.startTime.split(":").map(Number);
+    const [endH, endM] = schedule.endTime.split(":").map(Number);
+    const currentMin = now.getHours() * 60 + now.getMinutes();
+    const startMin = startH * 60 + startM;
+    const endMin = endH * 60 + endM;
+
+    if (endMin <= startMin) {
+      return currentMin >= startMin || currentMin <= endMin;
+    }
+    return currentMin >= startMin && currentMin <= endMin;
+  }
+
+  return false;
 }
 
 function formatScheduleTypeLabel(type: string): string {
@@ -218,10 +252,10 @@ function scheduleToForm(schedule: PrerollSchedule): ScheduleFormState {
     prerollPath: schedule.prerollPath,
     scheduleType: schedule.scheduleType,
     startDate: schedule.startDate
-      ? new Date(schedule.startDate).toISOString().slice(0, 16)
+      ? toDatetimeLocalValue(new Date(schedule.startDate))
       : "",
     endDate: schedule.endDate
-      ? new Date(schedule.endDate).toISOString().slice(0, 16)
+      ? toDatetimeLocalValue(new Date(schedule.endDate))
       : "",
     daysOfWeek: schedule.daysOfWeek || [],
     startTime: schedule.startTime || "00:00",
@@ -302,6 +336,7 @@ export default function PrerollManagerPage() {
 
   // Preset dialog
   const [presetDialogOpen, setPresetDialogOpen] = useState(false);
+  const [editingPreset, setEditingPreset] = useState<PrerollPreset | null>(null);
   const [presetName, setPresetName] = useState("");
   const [presetPath, setPresetPath] = useState("");
   const [presetSaving, setPresetSaving] = useState(false);
@@ -354,12 +389,6 @@ export default function PrerollManagerPage() {
 
   useEffect(() => {
     fetchData();
-  }, [fetchData]);
-
-  // Poll every 30 seconds
-  useEffect(() => {
-    const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
   }, [fetchData]);
 
   // Auto-clear page messages
@@ -417,21 +446,26 @@ export default function PrerollManagerPage() {
     setPresetSaving(true);
     setPageMessage(null);
     try {
-      const res = await fetch("/api/tools/preroll/presets", {
-        method: "POST",
+      const isEdit = !!editingPreset;
+      const url = isEdit
+        ? `/api/tools/preroll/presets/${editingPreset.id}`
+        : "/api/tools/preroll/presets";
+      const res = await fetch(url, {
+        method: isEdit ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: presetName.trim(), path: presetPath.trim() }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setPageMessage({ type: "error", text: data.error || "Failed to save preset" });
+        setPageMessage({ type: "error", text: data.error || `Failed to ${isEdit ? "update" : "save"} preset` });
         return;
       }
       setPresetDialogOpen(false);
+      setEditingPreset(null);
       setPresetName("");
       setPresetPath("");
       await fetchData();
-      setPageMessage({ type: "success", text: "Preset saved" });
+      setPageMessage({ type: "success", text: isEdit ? "Preset updated" : "Preset saved" });
     } catch {
       setPageMessage({ type: "error", text: "Network error saving preset" });
     } finally {
@@ -489,8 +523,8 @@ export default function PrerollManagerPage() {
       scheduleType: apiScheduleType,
       ...(isDateType
         ? {
-            startDate: scheduleForm.startDate,
-            endDate: scheduleForm.endDate,
+            startDate: new Date(scheduleForm.startDate).toISOString(),
+            endDate: new Date(scheduleForm.endDate).toISOString(),
           }
         : {}),
       ...(scheduleForm.scheduleType === "recurring"
@@ -957,6 +991,7 @@ export default function PrerollManagerPage() {
           <Button
             size="sm"
             onClick={() => {
+              setEditingPreset(null);
               setPresetName("");
               setPresetPath(quickSetPath || currentPreroll || "");
               setPresetDialogOpen(true);
@@ -1004,6 +1039,18 @@ export default function PrerollManagerPage() {
                         <Play className="h-3.5 w-3.5 mr-1.5" />
                       )}
                       Apply
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setEditingPreset(preset);
+                        setPresetName(preset.name);
+                        setPresetPath(preset.path);
+                        setPresetDialogOpen(true);
+                      }}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
                     </Button>
                     <Button
                       variant="ghost"
@@ -1072,6 +1119,11 @@ export default function PrerollManagerPage() {
                         <Badge variant="outline" className="text-[10px] px-1.5">
                           Priority: {schedule.priority}
                         </Badge>
+                        {isScheduleCurrentlyActive(schedule) && (
+                          <Badge className="text-[10px] px-1.5 bg-emerald-600 hover:bg-emerald-600">
+                            Active
+                          </Badge>
+                        )}
                       </div>
                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                         <Clock className="h-3 w-3" />
@@ -1119,12 +1171,17 @@ export default function PrerollManagerPage() {
       </div>
 
       {/* Preset Dialog */}
-      <Dialog open={presetDialogOpen} onOpenChange={setPresetDialogOpen}>
+      <Dialog open={presetDialogOpen} onOpenChange={(open) => {
+        if (!open) {
+          setPresetDialogOpen(false);
+          setEditingPreset(null);
+        }
+      }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Save Preset</DialogTitle>
+            <DialogTitle>{editingPreset ? "Edit Preset" : "Save Preset"}</DialogTitle>
             <DialogDescription>
-              Save a preroll path as a reusable preset
+              {editingPreset ? "Update the preset name or path" : "Save a preroll path as a reusable preset"}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -1150,7 +1207,10 @@ export default function PrerollManagerPage() {
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setPresetDialogOpen(false)}
+              onClick={() => {
+                setPresetDialogOpen(false);
+                setEditingPreset(null);
+              }}
             >
               Cancel
             </Button>
@@ -1160,10 +1220,12 @@ export default function PrerollManagerPage() {
             >
               {presetSaving ? (
                 <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+              ) : editingPreset ? (
+                <Pencil className="h-4 w-4 mr-1.5" />
               ) : (
                 <Plus className="h-4 w-4 mr-1.5" />
               )}
-              Save
+              {editingPreset ? "Update" : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1238,7 +1300,8 @@ export default function PrerollManagerPage() {
                     <SelectContent>
                       {presets.map((preset) => (
                         <SelectItem key={preset.id} value={preset.path}>
-                          {preset.name}
+                          <span>{preset.name}</span>
+                          <span className="ml-2 text-muted-foreground font-mono text-[11px]">{preset.path}</span>
                         </SelectItem>
                       ))}
                       <SelectItem value="__custom__">Custom path...</SelectItem>
