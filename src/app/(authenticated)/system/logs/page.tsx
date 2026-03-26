@@ -20,9 +20,22 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Bug,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  CircleAlert,
+  Info,
   RefreshCw,
+  TriangleAlert,
   X,
 } from "lucide-react";
 
@@ -43,6 +56,13 @@ const LEVEL_COLORS: Record<string, string> = {
   INFO: "bg-blue-500/20 text-blue-400 border-blue-500/30",
   WARN: "bg-amber-500/20 text-amber-400 border-amber-500/30",
   ERROR: "bg-red-500/20 text-red-400 border-red-500/30",
+};
+
+const LEVEL_ICONS: Record<string, React.ReactNode> = {
+  DEBUG: <Bug className="h-4 w-4 text-zinc-400" />,
+  INFO: <Info className="h-4 w-4 text-blue-400" />,
+  WARN: <TriangleAlert className="h-4 w-4 text-amber-400" />,
+  ERROR: <CircleAlert className="h-4 w-4 text-red-400" />,
 };
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -186,30 +206,37 @@ export default function LogsPage() {
 
       {/* Filters */}
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        {/* Log level toggles */}
-        <div className="flex gap-1">
-          {LOG_LEVELS.map((level) => (
-            <Button
-              key={level}
-              variant={activeLevels.has(level) ? "default" : "outline"}
-              size="sm"
-              onClick={() => toggleLevel(level)}
-              className={
-                activeLevels.has(level)
-                  ? level === "ERROR"
-                    ? "bg-red-600 hover:bg-red-700"
-                    : level === "WARN"
-                      ? "bg-amber-600 hover:bg-amber-700"
-                      : level === "INFO"
-                        ? "bg-blue-600 hover:bg-blue-700"
-                        : "bg-zinc-600 hover:bg-zinc-700"
-                  : ""
-              }
-            >
-              {level}
+        {/* Log level dropdown */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="default">
+              Log Levels
+              {activeLevels.size < LOG_LEVELS.length && (
+                <Badge variant="secondary" className="ml-1.5 px-1.5 py-0 text-xs">
+                  {activeLevels.size}
+                </Badge>
+              )}
+              <ChevronDown className="ml-1 h-3.5 w-3.5 opacity-50" />
             </Button>
-          ))}
-        </div>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuLabel>Filter by level</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {LOG_LEVELS.map((level) => (
+              <DropdownMenuCheckboxItem
+                key={level}
+                checked={activeLevels.has(level)}
+                onCheckedChange={() => toggleLevel(level)}
+                onSelect={(e) => e.preventDefault()}
+              >
+                <span className="flex items-center gap-2">
+                  {LEVEL_ICONS[level]}
+                  {level}
+                </span>
+              </DropdownMenuCheckboxItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         {/* Category filter */}
         <Select value={category} onValueChange={(v) => { setCategory(v); setPage(1); }}>
