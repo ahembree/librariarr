@@ -200,6 +200,7 @@ export async function processLifecycleRules(userId?: string) {
       const { items: matchedItems, episodeIdMap, currentItems } = await detectAndSaveMatches(
         {
           id: ruleSet.id,
+          name: ruleSet.name,
           userId: ruleSet.userId,
           type: ruleSet.type,
           rules: ruleSet.rules,

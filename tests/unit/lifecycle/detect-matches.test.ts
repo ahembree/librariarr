@@ -9,6 +9,9 @@ const mockPrisma = vi.hoisted(() => ({
   ruleSet: {
     findMany: vi.fn(),
   },
+  mediaItem: {
+    findMany: vi.fn(),
+  },
   lifecycleException: {
     findMany: vi.fn(),
   },
@@ -58,6 +61,7 @@ import { detectAndSaveMatches, runDetection } from "@/lib/lifecycle/detect-match
 function makeRuleSetConfig(overrides: Partial<Parameters<typeof detectAndSaveMatches>[0]> = {}) {
   return {
     id: "rs1",
+    name: "Test Rule Set",
     userId: "u1",
     type: "MOVIE" as const,
     rules: [{ field: "title", operator: "contains", value: "test", enabled: true }],
@@ -83,6 +87,7 @@ describe("detectAndSaveMatches", () => {
     mockGetMatchedCriteriaForItems.mockReturnValue(new Map());
     mockGetActualValuesForAllRules.mockReturnValue(new Map());
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+    mockPrisma.mediaItem.findMany.mockResolvedValue([]);
   });
 
   it("returns empty result when no active rules and incremental mode", async () => {
