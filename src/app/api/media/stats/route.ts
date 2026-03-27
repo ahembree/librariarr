@@ -244,7 +244,7 @@ export async function GET(request: NextRequest) {
   const seriesThumbs = topSeriesTitles.length > 0
     ? await prisma.mediaItem.findMany({
         where: { ...serverFilter, type: "SERIES", parentTitle: { in: topSeriesTitles } },
-        select: { parentTitle: true, parentThumbUrl: true, playCount: true },
+        select: { id: true, parentTitle: true, parentThumbUrl: true, playCount: true },
         orderBy: { playCount: "desc" },
         distinct: ["parentTitle"],
       })
@@ -253,11 +253,15 @@ export async function GET(request: NextRequest) {
   const thumbMap = new Map(
     seriesThumbs.map((s) => [s.parentTitle, s.parentThumbUrl])
   );
+  const seriesIdMap = new Map(
+    seriesThumbs.map((s) => [s.parentTitle, s.id])
+  );
 
   const topSeriesWithThumbs = topSeriesAgg.map((s) => ({
     parentTitle: s.parentTitle!,
     totalPlays: s._sum?.playCount ?? 0,
     thumbUrl: thumbMap.get(s.parentTitle!) ?? null,
+    mediaItemId: seriesIdMap.get(s.parentTitle!) ?? null,
   }));
 
   // Batch fetch thumb URLs for all top music artists (same pattern as series)

@@ -9,6 +9,7 @@ import { syncPlexCollection } from "@/lib/lifecycle/collections";
 
 interface RuleSetConfig {
   id: string;
+  name: string;
   userId: string;
   type: "MOVIE" | "SERIES" | "MUSIC";
   rules: unknown;
@@ -24,6 +25,11 @@ interface RuleSetConfig {
   collectionEnabled: boolean;
   collectionName: string | null;
   stickyMatches: boolean;
+}
+
+/** Format matched criteria into a readable string like "Resolution = 4K, Year > 2020" */
+function formatCriteria(criteria: Array<{ field: string; operator: string; value: unknown; negate?: boolean }>): string {
+  return criteria.map(c => `${c.negate ? "NOT " : ""}${c.field} ${c.operator} ${c.value}`).join(", ");
 }
 
 // BigInt-safe JSON serializer for Prisma Json columns
@@ -52,7 +58,7 @@ export async function detectAndSaveMatches(
   if (!hasAnyActiveRules(rules)) {
     if (fullReEval) {
       await prisma.ruleMatch.deleteMany({ where: { ruleSetId: ruleSet.id } });
-      logger.info("Lifecycle", `Skipping rule set "${ruleSet.id}" — no active rules (cleared matches)`);
+      logger.info("Lifecycle", `Skipping rule set "${ruleSet.name}" — no active rules (cleared matches)`);
       return { items: [], count: 0, episodeIdMap: new Map(), currentItems: [] };
     }
     // Incremental: preserve existing matches, add nothing new
@@ -60,7 +66,7 @@ export async function detectAndSaveMatches(
       where: { ruleSetId: ruleSet.id },
       select: { itemData: true },
     });
-    logger.info("Lifecycle", `Skipping rule set "${ruleSet.id}" — no active rules (preserving ${existingMatches.length} existing matches)`);
+    logger.info("Lifecycle", `Skipping rule set "${ruleSet.name}" — no active rules (preserving ${existingMatches.length} existing matches)`);
     return {
       items: existingMatches.map((m) => m.itemData as Record<string, unknown>),
       count: existingMatches.length,
@@ -147,7 +153,7 @@ export async function detectAndSaveMatches(
     const filtered = enrichedItems.filter(
       (item) => !excludedIds.has(item.id as string)
     );
-    logger.info("Lifecycle", `Filtered ${beforeCount - filtered.length} excluded items from rule set "${ruleSet.id}"`);
+    logger.info("Lifecycle", `Filtered ${beforeCount - filtered.length} excluded items from rule set "${ruleSet.name}"`);
     enrichedItems.length = 0;
     enrichedItems.push(...filtered);
   }
@@ -171,7 +177,7 @@ export async function detectAndSaveMatches(
       }
     });
 
-    logger.info("Lifecycle", `Detected ${enrichedItems.length} matches for rule set "${ruleSet.id}" (full re-evaluation)`);
+    logger.info("Lifecycle", `Detected ${enrichedItems.length} matches for rule set "${ruleSet.name}" (full re-evaluation)`);
     return { items: enrichedItems, count: enrichedItems.length, episodeIdMap, currentItems: enrichedItems };
   }
 
@@ -181,6 +187,7 @@ export async function detectAndSaveMatches(
     select: { mediaItemId: true, itemData: true },
   });
   const existingIds = new Set(existingMatches.map((m) => m.mediaItemId));
+  const existingDataMap = new Map(existingMatches.map((m) => [m.mediaItemId, m.itemData as Record<string, unknown>]));
   const currentIds = new Set(enrichedItems.map((item) => item.id as string));
 
   const newItems = enrichedItems.filter(
@@ -204,7 +211,52 @@ export async function detectAndSaveMatches(
     await prisma.ruleMatch.deleteMany({
       where: { ruleSetId: ruleSet.id, mediaItemId: { in: staleIds } },
     });
-    logger.info("Lifecycle", `Removed ${staleIds.length} stale matches from rule set "${ruleSet.id}"`);
+
+    // Fetch current state of stale items to determine which criteria changed
+    const staleItems = await prisma.mediaItem.findMany({
+      where: { id: { in: staleIds } },
+      include: {
+        externalIds: true,
+        streams: true,
+        library: {
+          select: {
+            title: true,
+            mediaServer: { select: { id: true, name: true, type: true } },
+          },
+        },
+      },
+    });
+    const staleItemMap = new Map(staleItems.map((item) => [item.id, item as unknown as Record<string, unknown>]));
+
+    for (const id of staleIds) {
+      const oldData = existingDataMap.get(id);
+      const title = (oldData?.parentTitle ?? oldData?.title ?? id) as string;
+      const oldCriteria = oldData?.matchedCriteria as Array<{ ruleId: string; field: string; operator: string; value: unknown; negate?: boolean }> | undefined;
+
+      if (!oldCriteria?.length) {
+        logger.info("Lifecycle", `Removed stale match "${title}" from rule set "${ruleSet.name}"`);
+        continue;
+      }
+
+      const currentItem = staleItemMap.get(id);
+      if (!currentItem) {
+        logger.info("Lifecycle", `Removed stale match "${title}" from rule set "${ruleSet.name}" (item no longer exists)`);
+        continue;
+      }
+
+      // Re-evaluate each rule independently against current item data
+      const currentCriteriaMap = getMatchedCriteriaForItems([currentItem], rules, ruleSet.type, arrData, seerrData);
+      const currentRuleIds = new Set((currentCriteriaMap.get(id) ?? []).map((c) => c.ruleId));
+
+      // Criteria in old set but not current = the rules that caused the item to drop
+      const changedCriteria = oldCriteria.filter((c) => !currentRuleIds.has(c.ruleId));
+
+      if (changedCriteria.length > 0) {
+        logger.info("Lifecycle", `Removed stale match "${title}" from rule set "${ruleSet.name}" (no longer matching: ${formatCriteria(changedCriteria)})`);
+      } else {
+        logger.info("Lifecycle", `Removed stale match "${title}" from rule set "${ruleSet.name}" (was matching: ${formatCriteria(oldCriteria)})`);
+      }
+    }
   }
 
   // When sticky, return all items (existing + new); otherwise return only current matches
@@ -225,7 +277,7 @@ export async function detectAndSaveMatches(
   }
 
   const removedCount = ruleSet.stickyMatches ? 0 : staleIds.length;
-  logger.info("Lifecycle", `Detected ${newItems.length} new matches for rule set "${ruleSet.id}" (${existingMatches.length - removedCount} existing, ${removedCount} removed, ${returnItems.length} total)`);
+  logger.info("Lifecycle", `Detected ${newItems.length} new matches for rule set "${ruleSet.name}" (${existingMatches.length - removedCount} existing, ${removedCount} removed, ${returnItems.length} total)`);
   return { items: returnItems, count: returnItems.length, episodeIdMap: fullEpisodeIdMap, currentItems: enrichedItems };
 }
 
@@ -330,6 +382,7 @@ export async function runDetection(userId: string, ruleSetId?: string, fullReEva
     const result = await detectAndSaveMatches(
       {
         id: rs.id,
+        name: rs.name,
         userId: rs.userId,
         type: rs.type,
         rules: rs.rules,

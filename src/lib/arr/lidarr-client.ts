@@ -62,20 +62,16 @@ export class LidarrClient {
 
     this.client.interceptors.request.use((config) => {
       (config as unknown as Record<string, unknown>).__startTime = Date.now();
-      logger.debug("Lidarr", `${config.method?.toUpperCase()} ${config.url}`);
       return config;
     });
 
     this.client.interceptors.response.use(
-      (response) => {
-        const start = (response.config as unknown as Record<string, unknown>).__startTime as number;
-        const duration = start ? Date.now() - start : 0;
-        logger.debug("Lidarr", `${response.status} ${response.config.url} (${duration}ms)`);
-        return response;
-      },
+      (response) => response,
       (error) => {
         if (axios.isAxiosError(error)) {
-          logger.debug("Lidarr", `ERROR ${error.response?.status ?? "NETWORK"} ${error.config?.url}`, {
+          const start = (error.config as unknown as Record<string, unknown>)?.__startTime as number | undefined;
+          const duration = start ? ` (${Date.now() - start}ms)` : "";
+          logger.debug("Lidarr", `ERROR ${error.response?.status ?? "NETWORK"} ${error.config?.url}${duration}`, {
             message: error.message,
           });
         }

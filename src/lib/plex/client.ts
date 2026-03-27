@@ -44,7 +44,9 @@ export class PlexClient implements MediaServerClient {
 
     this.client.interceptors.request.use((config) => {
       (config as unknown as Record<string, unknown>).__startTime = Date.now();
-      logger.debug("Plex", `${config.method?.toUpperCase()} ${config.url}`);
+      if (!config.url?.includes("/library/metadata/")) {
+        logger.debug("Plex", `${config.method?.toUpperCase()} ${config.url}`);
+      }
       return config;
     });
 
@@ -52,7 +54,9 @@ export class PlexClient implements MediaServerClient {
       (response) => {
         const start = (response.config as unknown as Record<string, unknown>).__startTime as number;
         const duration = start ? Date.now() - start : 0;
-        logger.debug("Plex", `${response.status} ${response.config.url} (${duration}ms)`);
+        if (!response.config.url?.includes("/library/metadata/")) {
+          logger.debug("Plex", `${response.status} ${response.config.url} (${duration}ms)`);
+        }
         return response;
       },
       (error) => {

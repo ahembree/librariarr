@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/engine";
-import { logger, dbLogger } from "@/lib/logger";
+import { logger } from "@/lib/logger";
 import { executeAction, extractActionError } from "@/lib/lifecycle/actions";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
@@ -136,7 +136,6 @@ export async function scheduleActionsForRuleSet(
       });
 
       for (const item of newItems) {
-        dbLogger.debug("DB", `Created lifecycle action for "${item.title}" in rule set "${ruleSet.name}"`);
         logger.info("Lifecycle", `Scheduled ${ruleSet.actionType} for "${item.title}" on ${scheduledFor.toISOString()}`);
       }
     }
@@ -200,6 +199,7 @@ export async function processLifecycleRules(userId?: string) {
       const { items: matchedItems, episodeIdMap, currentItems } = await detectAndSaveMatches(
         {
           id: ruleSet.id,
+          name: ruleSet.name,
           userId: ruleSet.userId,
           type: ruleSet.type,
           rules: ruleSet.rules,
@@ -422,12 +422,12 @@ export async function executeLifecycleActions(userId?: string) {
         },
       });
 
+      logger.info("Lifecycle", `Executed ${action.actionType} for "${mediaItem.parentTitle ?? mediaItem.title}" in rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
+
       // Remove the match so completed items don't linger on the matches page
       await prisma.ruleMatch.deleteMany({
         where: { ruleSetId: action.ruleSetId!, mediaItemId: action.mediaItemId },
       });
-
-      dbLogger.debug("DB", `Updated lifecycle action ${action.id} to COMPLETED`);
 
       // Queue a targeted library sync for destructive actions
       if (action.actionType.includes("DELETE") && mediaItem.library?.mediaServerId) {

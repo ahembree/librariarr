@@ -301,7 +301,7 @@ export function GeneralTab({
                   </Button>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Logs older than this will be automatically deleted. Maximum of 50,000 entries kept regardless.
+                  Previous days&apos; logs are archived to compressed tarballs in the config folder. Archives older than this are pruned.
                 </p>
               </div>
             </div>

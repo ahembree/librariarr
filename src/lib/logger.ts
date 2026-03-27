@@ -17,6 +17,8 @@ async function writeLog(
   else if (level === "DEBUG") {
     if (process.env.LOG_DEBUG === "true") {
       console.debug(prefix, message, meta ?? "");
+    } else {
+      return; // Skip DB write when debug logging is disabled
     }
   } else console.log(prefix, message, meta ?? "");
 

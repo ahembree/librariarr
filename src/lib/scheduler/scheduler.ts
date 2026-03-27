@@ -8,6 +8,7 @@ import {
 } from "@/lib/lifecycle/processor";
 import { logger } from "@/lib/logger";
 import { createBackup, getBackupPassphrase, pruneBackups } from "@/lib/backup/backup-service";
+import { archiveLogs } from "@/lib/logs/archive";
 
 /** Known preset schedule names (used by presetToCron) */
 const PRESET_SCHEDULES = new Set(["EVERY_6H", "EVERY_12H", "DAILY", "WEEKLY"]);
@@ -97,9 +98,9 @@ export function initializeScheduler() {
       }
 
       try {
-        await cleanupOldLogs();
+        await archiveLogs();
       } catch (error) {
-        logger.error("Scheduler", "Error cleaning up old logs", { error: String(error) });
+        logger.error("Scheduler", "Error archiving logs", { error: String(error) });
       }
 
       try {
@@ -234,41 +235,6 @@ async function runScheduledLifecycleExecution(allSettings: SchedulerSettings) {
     } catch (error) {
       logger.error("Scheduler", `Lifecycle execution failed for user ${settings.user.username}`, { error: String(error) });
     }
-  }
-}
-
-const MAX_LOG_ENTRIES = 50000;
-
-async function cleanupOldLogs() {
-  const settings = await prisma.appSettings.findFirst({
-    select: { logRetentionDays: true },
-  });
-  const retentionDays = settings?.logRetentionDays ?? 7;
-
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - retentionDays);
-
-  const deleted = await prisma.logEntry.deleteMany({
-    where: { createdAt: { lt: cutoff } },
-  });
-
-  if (deleted.count > 0) {
-    logger.info("Scheduler", `Log cleanup: removed ${deleted.count} entries older than ${retentionDays} days`);
-  }
-
-  // Safety cap: if total logs exceed limit, delete oldest excess
-  const totalCount = await prisma.logEntry.count();
-  if (totalCount > MAX_LOG_ENTRIES) {
-    const excess = totalCount - MAX_LOG_ENTRIES;
-    const oldest = await prisma.logEntry.findMany({
-      orderBy: { createdAt: "asc" },
-      take: excess,
-      select: { id: true },
-    });
-    await prisma.logEntry.deleteMany({
-      where: { id: { in: oldest.map((l) => l.id) } },
-    });
-    logger.info("Scheduler", `Log cleanup: trimmed ${excess} entries to stay under ${MAX_LOG_ENTRIES} cap`);
   }
 }
 
