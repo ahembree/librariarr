@@ -9,75 +9,163 @@ interface LogoProps {
 
 export function Logo({ size = 24, className }: LogoProps) {
   const id = useId();
-  const gradientId = `logo-grad-${id}`;
+  const cp1 = `logo-cp1-${id}`;
+  const cp2 = `logo-cp2-${id}`;
+
+  const clipPathData =
+    "M200 390C94.93 390 10 305.07 10 200S94.93 10 200 10s190 84.93 190 190-84.93 190-190 190m155-190c0-85.72-69.28-155-155-155S45 114.28 45 200s69.28 155 155 155 155-69.28 155-155m-155 80c-44.24 0-80-35.76-80-80s35.76-80 80-80 80 35.76 80 80-35.76 80-80 80m164-83v6c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-6c0-1.1-.9-2-2-2h-12c-1.1 0-2 .9-2 2m-20.47 82.4-3 5.2c-.55.95-.23 2.18.73 2.73l10.39 6c.96.55 2.18.22 2.73-.73l3-5.2c.56-.95.23-2.18-.73-2.73l-10.39-6c-.96-.55-2.18-.22-2.73.73m-58.93 61.13-5.2 3c-.95.55-1.28 1.77-.73 2.73l6 10.39c.55.96 1.78 1.29 2.73.73l5.2-3c.95-.55 1.28-1.77.73-2.73l-6-10.39a1.997 1.997 0 0 0-2.73-.73M203 364h-6c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h6c1.1 0 2-.9 2-2v-12c0-1.1-.9-2-2-2m-82.4-20.47-5.2-3c-.95-.55-2.18-.23-2.73.73l-6 10.39c-.55.96-.22 2.18.73 2.73l5.2 3c.95.56 2.18.23 2.73-.73l6-10.39c.55-.96.22-2.18-.73-2.73M59.47 284.6l-3-5.2a2.003 2.003 0 0 0-2.73-.73l-10.39 6c-.96.55-1.29 1.78-.73 2.73l3 5.2c.55.95 1.77 1.28 2.73.73l10.39-6c.96-.55 1.28-1.78.73-2.73M36 203v-6c0-1.1-.9-2-2-2H22c-1.1 0-2 .9-2 2v6c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2m20.47-82.4 3-5.2c.55-.95.23-2.18-.73-2.73l-10.39-6c-.96-.55-2.18-.22-2.73.73l-3 5.2c-.56.95-.23 2.18.73 2.73l10.39 6c.96.55 2.18.22 2.73-.73m58.93-61.13 5.2-3c.95-.55 1.28-1.77.73-2.73l-6-10.39a1.99 1.99 0 0 0-2.73-.73l-5.2 3c-.95.55-1.28 1.77-.73 2.73l6 10.39c.55.96 1.78 1.28 2.73.73M197 36h6c1.1 0 2-.9 2-2V22c0-1.1-.9-2-2-2h-6c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2m82.4 20.47 5.2 3c.95.55 2.18.23 2.73-.73l6-10.39c.55-.96.22-2.18-.73-2.73l-5.2-3c-.95-.56-2.18-.23-2.73.73l-6 10.39c-.55.96-.22 2.18.73 2.73m61.13 58.93 3 5.2c.55.95 1.77 1.28 2.73.73l10.39-6c.96-.55 1.29-1.78.73-2.73l-3-5.2a2.003 2.003 0 0 0-2.73-.73l-10.39 6c-.96.55-1.28 1.78-.73 2.73M200 280v75m-69.3-195-64.9-37.5M269.3 160l64.9-37.5";
+
+  // Inline style equivalents for CSS classes
+  const s5 = { opacity: 0.12, fill: "none", stroke: "#fff" };
+  const s14 = {
+    fill: "#000",
+    stroke: "#fff",
+    opacity: 0.3,
+    strokeWidth: 1.5,
+  };
+  const s15 = { fill: "#000", stroke: "#fff", opacity: 0.18 };
 
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 512 512"
-      fill="none"
+      viewBox="0 0 400 400"
       width={size}
       height={size}
       className={className}
       aria-hidden="true"
     >
       <defs>
-        <linearGradient
-          id={gradientId}
-          x1="66"
-          y1="44"
-          x2="446"
-          y2="452"
-          gradientUnits="userSpaceOnUse"
-        >
-          <stop stopColor="#818cf8" />
-          <stop offset="1" stopColor="#3b82f6" />
-        </linearGradient>
+        <clipPath clipPathUnits="userSpaceOnUse" id={cp1}>
+          <path d={clipPathData} />
+        </clipPath>
+        <clipPath clipPathUnits="userSpaceOnUse" id={cp2}>
+          <path d={clipPathData} />
+        </clipPath>
       </defs>
-      {/* Back book body */}
-      <rect
-        x="66"
-        y="72"
-        width="120"
-        height="368"
-        rx="14"
-        fill={`url(#${gradientId})`}
-        opacity="0.2"
-      />
-      {/* Back book spine */}
-      <rect
-        x="66"
-        y="72"
-        width="18"
-        height="368"
-        rx="9"
-        fill={`url(#${gradientId})`}
-        opacity="0.38"
-      />
-      {/* Front book body */}
-      <rect
-        x="146"
-        y="44"
-        width="124"
-        height="424"
-        rx="14"
-        fill={`url(#${gradientId})`}
-        opacity="0.5"
-      />
-      {/* Front book spine */}
-      <rect
-        x="146"
-        y="44"
-        width="18"
-        height="424"
-        rx="9"
-        fill={`url(#${gradientId})`}
-        opacity="0.72"
-      />
-      {/* Play triangle with rounded tip */}
+      {/* Background */}
+      <g clipPath={`url(#${cp1})`}>
+        <path
+          fillRule="evenodd"
+          d="M200 390C94.93 390 10 305.07 10 200S94.93 10 200 10s190 84.93 190 190-84.93 190-190 190"
+          style={{ fill: "#0f1923" }}
+        />
+      </g>
+      {/* Border ring */}
+      <g clipPath={`url(#${cp2})`}>
+        <path
+          fillRule="evenodd"
+          d="M200 389.5C95.21 389.5 10.5 304.79 10.5 200S95.21 10.5 200 10.5 389.5 95.21 389.5 200 304.79 389.5 200 389.5z"
+          style={{
+            opacity: 0.35,
+            fill: "none",
+            stroke: "#fff",
+            strokeWidth: 2,
+          }}
+        />
+      </g>
+      {/* Circular arc with arrow */}
+      <g style={{ opacity: 0.65 }}>
+        <path
+          d="M251 94.7c49.08 23.77 75.23 78.31 63.04 131.46C301.84 279.32 254.54 317 200 317S98.16 279.32 85.96 226.16C73.77 173.01 99.92 118.47 149 94.7"
+          style={{
+            fill: "none",
+            stroke: "#00a4dc",
+            strokeLinecap: "round",
+            strokeWidth: 32,
+          }}
+        />
+        <path
+          d="m121.03 84.01 45.1-2.98-17.05 41.81"
+          style={{
+            fill: "none",
+            stroke: "#00a4dc",
+            strokeLinecap: "round",
+            strokeLinejoin: "round",
+            strokeWidth: 22,
+          }}
+        />
+      </g>
+      {/* Line masks */}
       <path
-        d="M286 60 L440 248 Q448 256 440 264 L286 452 Z"
-        fill={`url(#${gradientId})`}
+        fillRule="evenodd"
+        d="M200 276v83m-65.21-196.63-73.35-42.39M264 163.51 339.29 120"
+        style={{ fill: "#0f1923", stroke: "#0f1923", strokeWidth: 26 }}
+      />
+      {/* Clock tick marks - right/bottom */}
+      <path
+        fillRule="evenodd"
+        style={s5}
+        d="M366 195h12c1.1 0 2 .9 2 2v6c0 1.1-.9 2-2 2h-12c-1.1 0-2-.9-2-2v-6c0-1.1.9-2 2-2zm-19.74 83.67 10.39 6c.96.55 1.29 1.78.73 2.73l-3 5.2c-.55.95-1.77 1.28-2.73.73l-10.39-6a1.997 1.997 0 0 1-.73-2.73l3-5.2c.55-.95 1.77-1.28 2.73-.73zm-58.93 62.59 6 10.39c.55.96.22 2.18-.73 2.73l-5.2 3c-.95.56-2.18.23-2.73-.73l-6-10.39c-.55-.96-.22-2.18.73-2.73l5.2-3c.95-.55 2.18-.23 2.73.73zM205 366v12c0 1.1-.9 2-2 2h-6c-1.1 0-2-.9-2-2v-12c0-1.1.9-2 2-2h6c1.1 0 2 .9 2 2z"
+      />
+      <path
+        fillRule="evenodd"
+        d="m121.33 346.26-6 10.39c-.55.96-1.78 1.29-2.73.73l-5.2-3a2.003 2.003 0 0 1-.73-2.73l6-10.39c.55-.96 1.78-1.28 2.73-.73l5.2 3c.95.55 1.28 1.77.73 2.73z"
+        style={{
+          opacity: 0.12,
+          fill: "none",
+          stroke: "#fff",
+          strokeWidth: 1,
+        }}
+      />
+      {/* Clock tick marks - left/top */}
+      <path
+        fillRule="evenodd"
+        style={s5}
+        d="m58.74 287.33-10.39 6c-.96.55-2.18.22-2.73-.73l-3-5.2c-.56-.95-.23-2.18.73-2.73l10.39-6c.96-.55 2.18-.22 2.73.73l3 5.2c.55.95.23 2.18-.73 2.73zM34 205H22c-1.1 0-2-.9-2-2v-6c0-1.1.9-2 2-2h12c1.1 0 2 .9 2 2v6c0 1.1-.9 2-2 2zm19.74-83.67-10.39-6a1.99 1.99 0 0 1-.73-2.73l3-5.2c.55-.95 1.77-1.28 2.73-.73l10.39 6c.96.55 1.28 1.78.73 2.73l-3 5.2c-.55.95-1.77 1.28-2.73.73zm58.93-62.59-6-10.39c-.55-.96-.22-2.18.73-2.73l5.2-3c.95-.56 2.18-.23 2.73.73l6 10.39c.55.96.22 2.18-.73 2.73l-5.2 3c-.95.55-2.18.23-2.73-.73zM195 34V22c0-1.1.9-2 2-2h6c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2h-6c-1.1 0-2-.9-2-2zm83.67 19.74 6-10.39c.55-.96 1.78-1.29 2.73-.73l5.2 3c.95.55 1.28 1.77.73 2.73l-6 10.39c-.55.96-1.78 1.28-2.73.73l-5.2-3a2.003 2.003 0 0 1-.73-2.73zm62.59 58.93 10.39-6c.96-.55 2.18-.22 2.73.73l3 5.2c.56.95.23 2.18-.73 2.73l-10.39 6c-.96.55-2.18.22-2.73-.73l-3-5.2c-.55-.95-.23-2.18.73-2.73z"
+      />
+      {/* Center dot */}
+      <path
+        fillRule="evenodd"
+        d="M200 213c-7.19 0-13-5.81-13-13s5.81-13 13-13 13 5.81 13 13-5.81 13-13 13"
+        style={{ fill: "#1a2d40" }}
+      />
+      <path
+        fillRule="evenodd"
+        d="M200 213c-7.19 0-13-5.81-13-13s5.81-13 13-13 13 5.81 13 13-5.81 13-13 13z"
+        style={{ opacity: 0.15, fill: "none", stroke: "#fff" }}
+      />
+      {/* Bar chart columns */}
+      <path
+        fillRule="evenodd"
+        d="M158 171h8c1.66 0 3 1.34 3 3v75c0 1.66-1.34 3-3 3h-8c-1.66 0-3-1.34-3-3v-75c0-1.66 1.34-3 3-3"
+        style={{ fill: "#e5a00d" }}
+      />
+      <path
+        fillRule="evenodd"
+        d="M177 147h8c1.66 0 3 1.34 3 3v99c0 1.66-1.34 3-3 3h-8c-1.66 0-3-1.34-3-3v-99c0-1.66 1.34-3 3-3"
+        style={{ fill: "#00a4dc" }}
+      />
+      <path
+        fillRule="evenodd"
+        d="M196 181h8c1.66 0 3 1.34 3 3v65c0 1.66-1.34 3-3 3h-8c-1.66 0-3-1.34-3-3v-65c0-1.66 1.34-3 3-3"
+        style={{ fill: "#52b54b" }}
+      />
+      <path
+        fillRule="evenodd"
+        d="M215 157h8c1.66 0 3 1.34 3 3v89c0 1.66-1.34 3-3 3h-8c-1.66 0-3-1.34-3-3v-89c0-1.66 1.34-3 3-3"
+        style={{ fill: "#e4881c" }}
+      />
+      <path
+        fillRule="evenodd"
+        d="M234 173h8c1.66 0 3 1.34 3 3v73c0 1.66-1.34 3-3 3h-8c-1.66 0-3-1.34-3-3v-73c0-1.66 1.34-3 3-3"
+        style={{ fill: "#9b59b6" }}
+      />
+      {/* Bar chart detail lines */}
+      <path fillRule="evenodd" style={s14} d="M157 183h10" />
+      <path fillRule="evenodd" style={s15} d="M157 190h10" />
+      <path fillRule="evenodd" style={s14} d="M176 159h10" />
+      <path fillRule="evenodd" style={s15} d="M176 166h10" />
+      <path fillRule="evenodd" style={s14} d="M195 193h10" />
+      <path fillRule="evenodd" style={s15} d="M195 200h10" />
+      <path fillRule="evenodd" style={s14} d="M214 169h10" />
+      <path fillRule="evenodd" style={s15} d="M214 176h10" />
+      <path fillRule="evenodd" style={s14} d="M233 185h10" />
+      <path fillRule="evenodd" style={s15} d="M233 192h10" />
+      {/* Bottom bar */}
+      <path
+        fillRule="evenodd"
+        d="M151.5 252h97c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5h-97c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5"
+        style={{ fill: "#00a4dc" }}
       />
     </svg>
   );
