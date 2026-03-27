@@ -278,8 +278,8 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-105">
         <CardHeader className="text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
-            <Logo size={32} />
+          <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-primary/10">
+            <Logo size={96} />
           </div>
           <CardTitle className="text-2xl">Welcome to Librariarr</CardTitle>
           <CardDescription>

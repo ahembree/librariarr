@@ -419,8 +419,8 @@ export default function OnboardingPage() {
       <div className="flex min-h-screen items-center justify-center bg-background p-8">
         <div className="w-full max-w-3xl space-y-8">
           <div className="text-center">
-            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 ring-1 ring-primary/20">
-              <Logo size={32} />
+            <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-primary/10 ring-1 ring-primary/20">
+              <Logo size={96} />
             </div>
             <h1 className="text-3xl font-bold">Connect a Media Server</h1>
             <p className="mt-2 text-muted-foreground">
@@ -514,8 +514,8 @@ export default function OnboardingPage() {
                 Back
               </button>
             )}
-            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/20">
-              <Logo size={32} />
+            <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/20">
+              <Logo size={96} />
             </div>
             <h1 className="text-3xl font-bold bg-linear-to-r from-amber-400 to-orange-500 bg-clip-text text-transparent">Select Your Plex Servers</h1>
             <p className="mt-2 text-muted-foreground">
