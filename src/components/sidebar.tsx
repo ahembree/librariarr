@@ -145,7 +145,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
           isCollapsed ? "justify-center px-2" : "px-6"
         )}>
           <div className="flex items-center gap-2">
-            <Logo size={24} />
+            <Logo size={32} />
             {!isCollapsed && <h1 className="text-xl font-bold">Librariarr</h1>}
           </div>
         </div>

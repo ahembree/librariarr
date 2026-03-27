@@ -59,7 +59,7 @@ export function AuthenticatedShell({ children }: { children: React.ReactNode }) 
                 findScrollContainer()?.scrollTo({ top: 0, behavior: "smooth" });
               }}
             >
-              <Logo size={20} />
+              <Logo size={32} />
               <span className="text-lg font-bold">Librariarr</span>
             </button>
           </header>
