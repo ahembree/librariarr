@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/ahembree/librariarr/compare/v0.5.2...v0.6.0) (2026-03-27)
+
+
+### Features
+
+* update logo to new SVG design ([78e3409](https://github.com/ahembree/librariarr/commit/78e3409a7795a1ce57e5653c254f183134996f11))
+
 ## [0.5.2](https://github.com/ahembree/librariarr/compare/v0.5.1...v0.5.2) (2026-03-27)
 
 
