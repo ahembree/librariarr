@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/ahembree/librariarr/compare/v0.6.0...v0.7.0) (2026-03-27)
+
+
+### Features
+
+* update hero page nav logo to new SVG design ([0b3534f](https://github.com/ahembree/librariarr/commit/0b3534f15b128c48e7f5c8b5d418e31dd1429818))
+* update hero page nav logo to new SVG design ([01d0e6a](https://github.com/ahembree/librariarr/commit/01d0e6a5442b125ca555a3269fb2df588b177993))
+
+
+### Bug Fixes
+
+* update logo sizing ([c5772e6](https://github.com/ahembree/librariarr/commit/c5772e658d4525275de49d7f9eade8011f18888d))
+* update logo sizing ([2d65daf](https://github.com/ahembree/librariarr/commit/2d65daf8adb5b3967e2de4f793067b91afc9f9a3))
+
 ## [0.6.0](https://github.com/ahembree/librariarr/compare/v0.5.2...v0.6.0) (2026-03-27)
 
 
