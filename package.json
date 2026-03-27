@@ -94,7 +94,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitest/coverage-v8": "^4.1.0",
-    "eslint": "^10.0.3",
+    "eslint": "^10.1.0",
     "eslint-config-next": "16.2.1",
     "husky": "^9.1.7",
     "prisma": "^7.5.0",
