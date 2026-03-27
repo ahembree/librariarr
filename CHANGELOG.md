@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.2](https://github.com/ahembree/librariarr/compare/v0.5.1...v0.5.2) (2026-03-27)
+
+
+### Bug Fixes
+
+* ci build ([8e0df82](https://github.com/ahembree/librariarr/commit/8e0df82c5fdd18d42587a125f171cf6ef506a274))
+* cleanup log level selector ([27a167a](https://github.com/ahembree/librariarr/commit/27a167aa7db346b2d773c42f7400f8cd416e8e6f))
+* cleanup logging ([7825a96](https://github.com/ahembree/librariarr/commit/7825a96879e7d7224af63591b1b04ae6d4d0dc6c))
+* identify lifecycle diff that caused item to lose match ([ffaee8b](https://github.com/ahembree/librariarr/commit/ffaee8bb7670e768d2b6a64ec4de37212a25b422))
+* improve log retention ([2bd73d8](https://github.com/ahembree/librariarr/commit/2bd73d89acd5b5af50f20f3cbd41a4f161753731))
+* most played series click now navs to series item ([316a3bc](https://github.com/ahembree/librariarr/commit/316a3bccd6f7a37ac4a357d0de1c8404827d44bc))
+* update sidebar ([daf31f2](https://github.com/ahembree/librariarr/commit/daf31f24ad264fa8734428775bb8e45aa1db6534))
+
 ## [0.5.1](https://github.com/ahembree/librariarr/compare/v0.5.0...v0.5.1) (2026-03-26)
 
 
