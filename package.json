@@ -90,7 +90,7 @@
     "@types/bcryptjs": "^3.0.0",
     "@types/node": "^25",
     "@types/node-cron": "^3.0.11",
-    "@types/pg": "^8.18.0",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitest/coverage-v8": "^4.1.0",
