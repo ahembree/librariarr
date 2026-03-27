@@ -60,6 +60,7 @@ interface Stats {
   topSeries: {
     parentTitle: string;
     totalPlays: number;
+    mediaItemId: string | null;
   }[];
   topMusic: {
     parentTitle: string;
@@ -219,7 +220,7 @@ export default function DashboardPage() {
   }, [router]);
 
   const handleSeriesClick = useCallback(
-    (seriesName: string, mediaItemId?: string) => {
+    (_seriesName: string, mediaItemId?: string) => {
       if (mediaItemId) {
         router.push(`/library/series/show/${mediaItemId}`);
       } else {

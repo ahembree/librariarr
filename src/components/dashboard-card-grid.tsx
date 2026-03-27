@@ -75,6 +75,7 @@ interface Stats {
   topSeries: {
     parentTitle: string;
     totalPlays: number;
+    mediaItemId: string | null;
   }[];
   topMusic: {
     parentTitle: string;
