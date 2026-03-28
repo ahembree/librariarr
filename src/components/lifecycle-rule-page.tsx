@@ -1171,7 +1171,7 @@ export function LifecycleRulePage({
             <CardTitle>Saved Rule Sets</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6">
+            <div className="grid gap-2">
               {savedRuleSets.map((ruleSet) => (
                 <div
                   key={ruleSet.id}
