@@ -4,6 +4,17 @@ import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { apiLogger } from "@/lib/logger";
 
+interface ServerHistory {
+  serverId: string;
+  serverName: string;
+  serverType: string;
+  users: {
+    username: string;
+    playCount: number;
+    lastPlayedAt: string | null;
+  }[];
+}
+
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -36,45 +47,107 @@ export async function GET(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  try {
-    const server = item.library.mediaServer;
-    const client = createMediaServerClient(server.type, server.url, server.accessToken, {
-      skipTlsVerify: server.tlsSkipVerify,
-    });
+  // Find all copies of this item across servers (via dedupKey)
+  const copies = item.dedupKey
+    ? await prisma.mediaItem.findMany({
+        where: {
+          dedupKey: item.dedupKey,
+          library: { mediaServer: { userId: session.userId, enabled: true } },
+        },
+        include: {
+          library: { include: { mediaServer: true } },
+        },
+      })
+    : [item];
 
-    const rawHistory = await client.getWatchHistory(
-      item.ratingKey,
-      item.duration ?? undefined
-    );
+  const serverHistories: ServerHistory[] = [];
 
-    // Aggregate play counts and latest play date per user
-    const userStats = new Map<string, { playCount: number; lastPlayedAt: string | null }>();
-    for (const entry of rawHistory) {
-      const existing = userStats.get(entry.username);
+  // Query history from each server in parallel
+  const results = await Promise.allSettled(
+    copies.map(async (copy) => {
+      const server = copy.library.mediaServer;
+      if (!server) return null;
+
+      try {
+        const client = createMediaServerClient(server.type, server.url, server.accessToken, {
+          skipTlsVerify: server.tlsSkipVerify,
+        });
+
+        const rawHistory = await client.getWatchHistory(
+          copy.ratingKey,
+          copy.duration ?? undefined
+        );
+
+        // Aggregate play counts and latest play date per user
+        const userStats = new Map<string, { playCount: number; lastPlayedAt: string | null }>();
+        for (const entry of rawHistory) {
+          const existing = userStats.get(entry.username);
+          if (existing) {
+            existing.playCount++;
+            if (entry.watchedAt && (!existing.lastPlayedAt || entry.watchedAt > existing.lastPlayedAt)) {
+              existing.lastPlayedAt = entry.watchedAt;
+            }
+          } else {
+            userStats.set(entry.username, {
+              playCount: 1,
+              lastPlayedAt: entry.watchedAt,
+            });
+          }
+        }
+
+        const users = Array.from(userStats.entries())
+          .map(([username, stats]) => ({
+            username,
+            playCount: stats.playCount,
+            lastPlayedAt: stats.lastPlayedAt,
+          }))
+          .sort((a, b) => b.playCount - a.playCount);
+
+        return {
+          serverId: server.id,
+          serverName: server.name,
+          serverType: server.type,
+          users,
+        };
+      } catch (error) {
+        apiLogger.warn("Media", `Failed to fetch watch history from ${server.name}`, { error: String(error) });
+        return null;
+      }
+    })
+  );
+
+  for (const result of results) {
+    if (result.status === "fulfilled" && result.value) {
+      serverHistories.push(result.value);
+    }
+  }
+
+  // Backwards-compatible flat "history" field (merged across all servers)
+  const mergedUserStats = new Map<string, { playCount: number; lastPlayedAt: string | null }>();
+  for (const sh of serverHistories) {
+    for (const user of sh.users) {
+      const existing = mergedUserStats.get(user.username);
       if (existing) {
-        existing.playCount++;
-        if (entry.watchedAt && (!existing.lastPlayedAt || entry.watchedAt > existing.lastPlayedAt)) {
-          existing.lastPlayedAt = entry.watchedAt;
+        existing.playCount += user.playCount;
+        if (user.lastPlayedAt && (!existing.lastPlayedAt || user.lastPlayedAt > existing.lastPlayedAt)) {
+          existing.lastPlayedAt = user.lastPlayedAt;
         }
       } else {
-        userStats.set(entry.username, {
-          playCount: 1,
-          lastPlayedAt: entry.watchedAt,
+        mergedUserStats.set(user.username, {
+          playCount: user.playCount,
+          lastPlayedAt: user.lastPlayedAt,
         });
       }
     }
-
-    const history = Array.from(userStats.entries())
-      .map(([username, stats]) => ({
-        username,
-        playCount: stats.playCount,
-        lastPlayedAt: stats.lastPlayedAt,
-      }))
-      .sort((a, b) => b.playCount - a.playCount);
-
-    return NextResponse.json({ history });
-  } catch (error) {
-    apiLogger.error("Media", "Failed to fetch watch history", { error: String(error) });
-    return NextResponse.json({ history: [] });
   }
+
+  const history = Array.from(mergedUserStats.entries())
+    .map(([username, stats]) => ({
+      username,
+      playCount: stats.playCount,
+      lastPlayedAt: stats.lastPlayedAt,
+    }))
+    .sort((a, b) => b.playCount - a.playCount);
+
+  return NextResponse.json({ history, serverHistories });
 }
