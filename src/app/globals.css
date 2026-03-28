@@ -121,12 +121,31 @@
     @apply border-border outline-ring/50;
   }
   *:focus-visible {
-    outline: 2px solid oklch(var(--ring));
+    outline: 2px solid var(--ring);
     outline-offset: 2px;
   }
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Collapsible expand/collapse animation */
+[data-slot="collapsible-content"] {
+  overflow: hidden;
+}
+[data-slot="collapsible-content"][data-state="open"] {
+  animation: collapsible-expand 200ms ease-out;
+}
+[data-slot="collapsible-content"][data-state="closed"] {
+  animation: collapsible-collapse 200ms ease-out;
+}
+@keyframes collapsible-expand {
+  from { height: 0; opacity: 0; }
+  to { height: var(--radix-collapsible-content-height); opacity: 1; }
+}
+@keyframes collapsible-collapse {
+  from { height: var(--radix-collapsible-content-height); opacity: 1; }
+  to { height: 0; opacity: 0; }
 }
 
 /* Lazy-render off-screen grid cards for large libraries */

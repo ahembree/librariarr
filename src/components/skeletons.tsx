@@ -3,13 +3,15 @@
 import { useSyncExternalStore } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { CARD_MIN_WIDTHS, type CardSize } from "@/hooks/use-card-size";
+import { CARD_MIN_WIDTHS, MOBILE_CARD_MIN_WIDTHS, BREAKPOINTS, type CardSize } from "@/hooks/use-card-size";
 
 const CARD_SIZE_KEY = "library-card-size";
 const emptySubscribe = () => () => {};
 function getCardWidthSnapshot(): number {
   const stored = localStorage.getItem(CARD_SIZE_KEY) as CardSize | null;
-  return CARD_MIN_WIDTHS[stored && stored in CARD_MIN_WIDTHS ? stored : "medium"];
+  const size = stored && stored in CARD_MIN_WIDTHS ? stored : "medium";
+  const widths = window.innerWidth < BREAKPOINTS.md ? MOBILE_CARD_MIN_WIDTHS : CARD_MIN_WIDTHS;
+  return widths[size];
 }
 function getCardWidthServerSnapshot(): number {
   return CARD_MIN_WIDTHS.medium;
@@ -161,6 +163,23 @@ export function LibraryPageSkeleton() {
       <FilterBarSkeleton />
       <MediaGridSkeleton />
     </div>
+  );
+}
+
+/** Logs table skeleton matching the system logs table layout */
+export function LogsTableSkeleton({ rows = 6 }: { rows?: number }) {
+  return (
+    <>
+      {Array.from({ length: rows }).map((_, i) => (
+        <tr key={i} className="border-b last:border-b-0">
+          <td className="px-4 py-3"><Skeleton className="h-4 w-28" /></td>
+          <td className="px-4 py-3"><Skeleton className="h-5 w-14 rounded-full" /></td>
+          <td className="hidden px-4 py-3 md:table-cell"><Skeleton className="h-5 w-16 rounded-full" /></td>
+          <td className="hidden px-4 py-3 md:table-cell"><Skeleton className="h-4 w-20" /></td>
+          <td className="px-4 py-3"><Skeleton className="h-4 w-full max-w-md" /></td>
+        </tr>
+      ))}
+    </>
   );
 }
 

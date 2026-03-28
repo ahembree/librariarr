@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Slider } from "@/components/ui/slider";
 import {
   Popover,
@@ -26,7 +27,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { X, SlidersHorizontal, ChevronRight, Play, Calendar, Star, Hash, Plus, Trash2, AudioLines } from "lucide-react";
+import { X, SlidersHorizontal, ChevronRight, ChevronDown, Play, Calendar, Star, Hash, Plus, Trash2, AudioLines, Search, MonitorPlay, Volume2, Layers, BookOpen, Tv, File, type LucideIcon } from "lucide-react";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 
 export interface MediaFilterValues {
   [key: string]: string;
@@ -100,6 +102,29 @@ const FILTER_LABELS: Record<string, string> = {
   audienceRating: "Audience Rating",
   isWatchlisted: "Watchlisted",
 };
+
+const CATEGORY_ICONS: Record<string, LucideIcon> = {
+  Video: MonitorPlay,
+  Audio: Volume2,
+  "Stream Counts": Layers,
+  Content: BookOpen,
+  Series: Tv,
+  File: File,
+  Dates: Calendar,
+};
+
+function CategoryTrigger({ name, isOpen }: { name: string; isOpen: boolean }) {
+  const Icon = CATEGORY_ICONS[name];
+  return (
+    <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-2 hover:bg-accent/50 transition-colors">
+      {Icon && <Icon className="h-3.5 w-3.5 text-muted-foreground/70" />}
+      <span className="flex-1 text-left text-[11px] font-semibold text-muted-foreground tracking-wide uppercase">
+        {name}
+      </span>
+      <ChevronDown className={`h-3 w-3 text-muted-foreground/50 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} />
+    </CollapsibleTrigger>
+  );
+}
 
 type ComparisonOp = "eq" | "gt" | "lt" | "gte" | "lte";
 
@@ -188,6 +213,7 @@ function FilterCombobox({
   onSelect: (key: string, values: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const isMobile = useIsMobile();
   const showSearch = option.values.length > 10;
   const count = selectedValues.length;
 
@@ -219,10 +245,10 @@ function FilterCombobox({
         </button>
       </PopoverTrigger>
       <PopoverContent
-        side="right"
+        side={isMobile ? "bottom" : "right"}
         align="start"
         className="w-56 max-w-[calc(100vw-2rem)] p-0"
-        sideOffset={2}
+        sideOffset={isMobile ? 8 : 2}
       >
         <Command>
           {showSearch && <CommandInput placeholder={`Search ${option.label.toLowerCase()}...`} />}
@@ -323,6 +349,7 @@ function ComparisonPopover({
   inline?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const isMobile = useIsMobile();
   const [localConditions, setLocalConditions] = useState<ComparisonCondition[]>([{ op: "eq", value: "" }]);
   const [localLogic, setLocalLogic] = useState<LogicMode>("and");
   const [prevExternal, setPrevExternal] = useState({ conditions: externalConditions, logic: externalLogic });
@@ -406,7 +433,7 @@ function ComparisonPopover({
           </Button>
         )}
       </PopoverTrigger>
-      <PopoverContent align="start" side={inline ? "right" : "bottom"} className="w-80 max-w-[calc(100vw-2rem)] space-y-3" sideOffset={inline ? 2 : 8}>
+      <PopoverContent align="start" side={inline && !isMobile ? "right" : "bottom"} className="w-80 max-w-[calc(100vw-2rem)] space-y-3" sideOffset={inline && !isMobile ? 2 : 8}>
         <div className="flex items-center justify-between">
           <p className="text-sm font-medium">{label}</p>
           {isActive && (
@@ -533,6 +560,7 @@ function DateFilterPopover({
   inline?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const isMobile = useIsMobile();
   const [mode, setMode] = useState<DateMode>(filters[daysKey] ? "days" : "date");
   const [localMin, setLocalMin] = useState(filters[minKey] ?? "");
   const [localMax, setLocalMax] = useState(filters[maxKey] ?? "");
@@ -599,7 +627,7 @@ function DateFilterPopover({
           </Button>
         )}
       </PopoverTrigger>
-      <PopoverContent align="start" side={inline ? "right" : "bottom"} className="w-80 max-w-[calc(100vw-2rem)] space-y-3" sideOffset={inline ? 2 : 8}>
+      <PopoverContent align="start" side={inline && !isMobile ? "right" : "bottom"} className="w-80 max-w-[calc(100vw-2rem)] space-y-3" sideOffset={inline && !isMobile ? 2 : 8}>
         <div className="flex items-center justify-between">
           <p className="text-sm font-medium">{label}</p>
           {isActive && (
@@ -738,6 +766,7 @@ function InlineSliderPopover({
   unit: string;
 }) {
   const [open, setOpen] = useState(false);
+  const isMobile = useIsMobile();
   const isActive = range !== null;
   const effectiveMax = Math.max(max, min + step);
 
@@ -765,7 +794,7 @@ function InlineSliderPopover({
           </span>
         </button>
       </PopoverTrigger>
-      <PopoverContent side="right" align="start" className="w-72 max-w-[calc(100vw-2rem)] space-y-4" sideOffset={2}>
+      <PopoverContent side={isMobile ? "bottom" : "right"} align="start" className="w-72 max-w-[calc(100vw-2rem)] space-y-4" sideOffset={isMobile ? 8 : 2}>
         <div className="flex items-center justify-between">
           <p className="text-sm font-medium">{label} ({unit})</p>
           {isActive && (
@@ -806,6 +835,31 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
   const [searchInput, setSearchInput] = useState("");
   const [distinctData, setDistinctData] = useState<DistinctData>({});
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filterSearch, setFilterSearch] = useState("");
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+
+  const toggleCategory = useCallback((name: string) => {
+    setExpandedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }, []);
+
+  const filterSearchLower = filterSearch.toLowerCase();
+  const isSearching = filterSearchLower.length > 0;
+
+  // Check if a label matches the current filter search
+  const matchesFilterSearch = useCallback(
+    (label: string) => !isSearching || label.toLowerCase().includes(filterSearchLower),
+    [isSearching, filterSearchLower],
+  );
+
+  // Reset filter search when popover closes
+  useEffect(() => {
+    if (!filtersOpen) setFilterSearch("");
+  }, [filtersOpen]);
 
   // Range slider states (file size, duration)
   const [fileSizeRange, setFileSizeRange] = useState<[number, number] | null>(null);
@@ -1284,375 +1338,262 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
             </Button>
           </PopoverTrigger>
           <PopoverContent align="start" className="w-64 max-w-[calc(100vw-2rem)] p-0" sideOffset={8}>
-            <div className="p-3 pb-2">
-              <p className="text-sm font-medium">Filters</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Narrow down your library
-              </p>
+            <div className="p-3 pb-2 space-y-2.5">
+              <div>
+                <p className="text-[13px] font-semibold tracking-tight">Filters</p>
+                <p className="text-[11px] text-muted-foreground/70 mt-0.5">
+                  Narrow down your library
+                </p>
+              </div>
+              <div className="relative">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  placeholder="Search filters..."
+                  value={filterSearch}
+                  onChange={(e) => setFilterSearch(e.target.value)}
+                  className="h-8 pl-7 text-xs"
+                />
+              </div>
             </div>
             <Separator />
             <div className="py-1 max-h-[70vh] overflow-y-auto">
-              {categories.map((cat, catIdx) => (
-                <div key={cat.name}>
-                  {catIdx > 0 && <Separator className="my-1" />}
-                  <div className="px-3 py-1.5">
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                      {cat.name}
-                    </p>
+              {categories.map((cat, catIdx) => {
+                const catItems = cat.options.filter((opt) => matchesFilterSearch(opt.label));
+                // Extra inline items for this category
+                const hasVideoBitrate = cat.name === "Video" && matchesFilterSearch("Video Bitrate");
+                const hasAudioBitrate = cat.name === "Audio" && matchesFilterSearch("Audio Bitrate");
+                const visibleCount = catItems.length + (hasVideoBitrate ? 1 : 0) + (hasAudioBitrate ? 1 : 0);
+                if (visibleCount === 0 && isSearching) return null;
+                const isOpen = isSearching || expandedCategories.has(cat.name);
+                return (
+                  <div key={cat.name}>
+                    {catIdx > 0 && <Separator className="my-1" />}
+                    <Collapsible open={isOpen} onOpenChange={() => toggleCategory(cat.name)}>
+                      <CategoryTrigger name={cat.name} isOpen={isOpen} />
+                      <CollapsibleContent>
+                        {catItems.map((opt) => (
+                          <FilterCombobox
+                            key={opt.key}
+                            option={opt}
+                            selectedValues={getSelectedValues(opt.key)}
+                            onSelect={updateMultiFilter}
+                          />
+                        ))}
+                        {cat.name === "Video" && hasVideoBitrate && (
+                          <ComparisonPopover
+                            label="Video Bitrate (kbps)"
+                            icon={Hash}
+                            conditionsKey="videoBitrateConditions"
+                            logicKey="videoBitrateLogic"
+                            conditions={videoBitrateConditions}
+                            logic={videoBitrateLogic}
+                            onApply={applyConditions}
+                            onClear={clearConditions}
+                            step="1"
+                            placeholder="5000"
+                            inline
+                          />
+                        )}
+                        {cat.name === "Audio" && hasAudioBitrate && (
+                          <ComparisonPopover
+                            label="Audio Bitrate (kbps)"
+                            icon={AudioLines}
+                            conditionsKey="audioBitrateConditions"
+                            logicKey="audioBitrateLogic"
+                            conditions={audioBitrateConditions}
+                            logic={audioBitrateLogic}
+                            onApply={applyConditions}
+                            onClear={clearConditions}
+                            step="1"
+                            placeholder="320"
+                            inline
+                          />
+                        )}
+                      </CollapsibleContent>
+                    </Collapsible>
                   </div>
-                  {cat.options.map((opt) => (
-                    <FilterCombobox
-                      key={opt.key}
-                      option={opt}
-                      selectedValues={getSelectedValues(opt.key)}
-                      onSelect={updateMultiFilter}
-                    />
-                  ))}
-                  {/* Video Bitrate condition filter in Video category */}
-                  {cat.name === "Video" && (
-                    <ComparisonPopover
-                      label="Video Bitrate (kbps)"
-                      icon={Hash}
-                      conditionsKey="videoBitrateConditions"
-                      logicKey="videoBitrateLogic"
-                      conditions={videoBitrateConditions}
-                      logic={videoBitrateLogic}
-                      onApply={applyConditions}
-                      onClear={clearConditions}
-                      step="1"
-                      placeholder="5000"
-                      inline
-                    />
-                  )}
-                  {/* Audio Bitrate condition filter in Audio category */}
-                  {cat.name === "Audio" && (
-                    <ComparisonPopover
-                      label="Audio Bitrate (kbps)"
-                      icon={AudioLines}
-                      conditionsKey="audioBitrateConditions"
-                      logicKey="audioBitrateLogic"
-                      conditions={audioBitrateConditions}
-                      logic={audioBitrateLogic}
-                      onApply={applyConditions}
-                      onClear={clearConditions}
-                      step="1"
-                      placeholder="320"
-                      inline
-                    />
-                  )}
-                </div>
-              ))}
+                );
+              })}
 
               {/* Stream count filters */}
-              {(distinctData.audioStreamCountMax != null || distinctData.subtitleStreamCountMax != null) && (
-                <>
-                  <Separator className="my-1" />
-                  <div className="px-3 py-1.5">
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                      Stream Counts
-                    </p>
-                  </div>
-                  {distinctData.audioStreamCountMax != null && (
-                    <ComparisonPopover
-                      label="Audio Tracks"
-                      icon={AudioLines}
-                      conditionsKey="audioStreamCountConditions"
-                      logicKey="audioStreamCountLogic"
-                      conditions={audioStreamCountConditions}
-                      logic={audioStreamCountLogic}
-                      onApply={applyConditions}
-                      onClear={clearConditions}
-                      step="1"
-                      placeholder="1"
-                      inline
-                    />
-                  )}
-                  {distinctData.subtitleStreamCountMax != null && (
-                    <ComparisonPopover
-                      label="Subtitle Tracks"
-                      icon={AudioLines}
-                      conditionsKey="subtitleStreamCountConditions"
-                      logicKey="subtitleStreamCountLogic"
-                      conditions={subtitleStreamCountConditions}
-                      logic={subtitleStreamCountLogic}
-                      onApply={applyConditions}
-                      onClear={clearConditions}
-                      step="1"
-                      placeholder="1"
-                      inline
-                    />
-                  )}
-                </>
-              )}
+              {(distinctData.audioStreamCountMax != null || distinctData.subtitleStreamCountMax != null) && (() => {
+                const hasAudioTracks = distinctData.audioStreamCountMax != null && matchesFilterSearch("Audio Tracks");
+                const hasSubTracks = distinctData.subtitleStreamCountMax != null && matchesFilterSearch("Subtitle Tracks");
+                if (!hasAudioTracks && !hasSubTracks && isSearching) return null;
+                const isOpen = isSearching || expandedCategories.has("Stream Counts");
+                return (
+                  <>
+                    <Separator className="my-1" />
+                    <Collapsible open={isOpen} onOpenChange={() => toggleCategory("Stream Counts")}>
+                      <CategoryTrigger name="Stream Counts" isOpen={isOpen} />
+                      <CollapsibleContent>
+                        {hasAudioTracks && (
+                          <ComparisonPopover
+                            label="Audio Tracks"
+                            icon={AudioLines}
+                            conditionsKey="audioStreamCountConditions"
+                            logicKey="audioStreamCountLogic"
+                            conditions={audioStreamCountConditions}
+                            logic={audioStreamCountLogic}
+                            onApply={applyConditions}
+                            onClear={clearConditions}
+                            step="1"
+                            placeholder="1"
+                            inline
+                          />
+                        )}
+                        {hasSubTracks && (
+                          <ComparisonPopover
+                            label="Subtitle Tracks"
+                            icon={AudioLines}
+                            conditionsKey="subtitleStreamCountConditions"
+                            logicKey="subtitleStreamCountLogic"
+                            conditions={subtitleStreamCountConditions}
+                            logic={subtitleStreamCountLogic}
+                            onApply={applyConditions}
+                            onClear={clearConditions}
+                            step="1"
+                            placeholder="1"
+                            inline
+                          />
+                        )}
+                      </CollapsibleContent>
+                    </Collapsible>
+                  </>
+                );
+              })()}
 
               {/* Content filters */}
-              <Separator className="my-1" />
-              <div className="px-3 py-1.5">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Content
-                </p>
-              </div>
-              {distinctData.contentRating?.length && (
-                <FilterCombobox
-                  option={{
-                    key: "contentRating",
-                    label: "Content Rating",
-                    values: sortContentRatings(distinctData.contentRating).map((r) => ({ value: r, label: r })),
-                  }}
-                  selectedValues={getSelectedValues("contentRating")}
-                  onSelect={updateMultiFilter}
-                />
-              )}
-              {distinctData.studio?.length && (
-                <FilterCombobox
-                  option={{
-                    key: "studio",
-                    label: "Studio",
-                    values: distinctData.studio.map((s) => ({ value: s, label: s })),
-                  }}
-                  selectedValues={getSelectedValues("studio")}
-                  onSelect={updateMultiFilter}
-                />
-              )}
-              {distinctData.genre?.length && (
-                <FilterCombobox
-                  option={{
-                    key: "genre",
-                    label: "Genre",
-                    values: distinctData.genre.map((g) => ({
-                      value: g,
-                      label: g.charAt(0).toUpperCase() + g.slice(1).toLowerCase(),
-                    })),
-                  }}
-                  selectedValues={getSelectedValues("genre")}
-                  onSelect={updateMultiFilter}
-                />
-              )}
-              <InlineSliderPopover
-                label="Duration"
-                range={durationRange}
-                onRangeChange={setDurationRange}
-                onApply={applyDurationFilter}
-                onReset={() => {
-                  setDurationRange(null);
-                  const newFilters = { ...filters };
-                  delete newFilters.durationMin;
-                  delete newFilters.durationMax;
-                  setFilters(newFilters);
-                  onFilterChange(newFilters);
-                }}
-                min={durationMinMin}
-                max={durationMaxMin}
-                step={1}
-                formatValue={(v) => v.toString()}
-                unit="min"
-              />
-              <ComparisonPopover
-                label="Play Count"
-                icon={Play}
-                conditionsKey="playCountConditions"
-                logicKey="playCountLogic"
-                conditions={playCountConditions}
-                logic={playCountLogic}
-                onApply={applyConditions}
-                onClear={clearConditions}
-                step="1"
-                placeholder="0"
-                inline
-              />
-              <ComparisonPopover
-                label="Rating"
-                icon={Star}
-                conditionsKey="ratingConditions"
-                logicKey="ratingLogic"
-                conditions={ratingConditions}
-                logic={ratingLogic}
-                onApply={applyConditions}
-                onClear={clearConditions}
-                step="0.1"
-                placeholder="7.0"
-                inline
-              />
-              <ComparisonPopover
-                label="Audience Rating"
-                icon={Star}
-                conditionsKey="audienceRatingConditions"
-                logicKey="audienceRatingLogic"
-                conditions={audienceRatingConditions}
-                logic={audienceRatingLogic}
-                onApply={applyConditions}
-                onClear={clearConditions}
-                step="0.1"
-                placeholder="7.0"
-                inline
-              />
-              <FilterCombobox
-                option={{
-                  key: "isWatchlisted",
-                  label: "Watchlisted",
-                  values: [
-                    { value: "true", label: "Yes" },
-                    { value: "false", label: "No" },
-                  ],
-                }}
-                selectedValues={filters.isWatchlisted ? [filters.isWatchlisted] : []}
-                onSelect={(key, values) => updateFilter(key, values.length > 0 ? values[values.length - 1] : undefined)}
-              />
+              {(() => {
+                const contentItems: React.ReactNode[] = [];
+                if (distinctData.contentRating?.length && matchesFilterSearch("Content Rating")) {
+                  contentItems.push(
+                    <FilterCombobox key="contentRating" option={{ key: "contentRating", label: "Content Rating", values: sortContentRatings(distinctData.contentRating).map((r) => ({ value: r, label: r })) }} selectedValues={getSelectedValues("contentRating")} onSelect={updateMultiFilter} />
+                  );
+                }
+                if (distinctData.studio?.length && matchesFilterSearch("Studio")) {
+                  contentItems.push(
+                    <FilterCombobox key="studio" option={{ key: "studio", label: "Studio", values: distinctData.studio.map((s) => ({ value: s, label: s })) }} selectedValues={getSelectedValues("studio")} onSelect={updateMultiFilter} />
+                  );
+                }
+                if (distinctData.genre?.length && matchesFilterSearch("Genre")) {
+                  contentItems.push(
+                    <FilterCombobox key="genre" option={{ key: "genre", label: "Genre", values: distinctData.genre.map((g) => ({ value: g, label: g.charAt(0).toUpperCase() + g.slice(1).toLowerCase() })) }} selectedValues={getSelectedValues("genre")} onSelect={updateMultiFilter} />
+                  );
+                }
+                if (matchesFilterSearch("Duration")) {
+                  contentItems.push(
+                    <InlineSliderPopover key="duration" label="Duration" range={durationRange} onRangeChange={setDurationRange} onApply={applyDurationFilter} onReset={() => { setDurationRange(null); const nf = { ...filters }; delete nf.durationMin; delete nf.durationMax; setFilters(nf); onFilterChange(nf); }} min={durationMinMin} max={durationMaxMin} step={1} formatValue={(v) => v.toString()} unit="min" />
+                  );
+                }
+                if (matchesFilterSearch("Play Count")) {
+                  contentItems.push(<ComparisonPopover key="playCount" label="Play Count" icon={Play} conditionsKey="playCountConditions" logicKey="playCountLogic" conditions={playCountConditions} logic={playCountLogic} onApply={applyConditions} onClear={clearConditions} step="1" placeholder="0" inline />);
+                }
+                if (matchesFilterSearch("Rating")) {
+                  contentItems.push(<ComparisonPopover key="rating" label="Rating" icon={Star} conditionsKey="ratingConditions" logicKey="ratingLogic" conditions={ratingConditions} logic={ratingLogic} onApply={applyConditions} onClear={clearConditions} step="0.1" placeholder="7.0" inline />);
+                }
+                if (matchesFilterSearch("Audience Rating")) {
+                  contentItems.push(<ComparisonPopover key="audienceRating" label="Audience Rating" icon={Star} conditionsKey="audienceRatingConditions" logicKey="audienceRatingLogic" conditions={audienceRatingConditions} logic={audienceRatingLogic} onApply={applyConditions} onClear={clearConditions} step="0.1" placeholder="7.0" inline />);
+                }
+                if (matchesFilterSearch("Watchlisted")) {
+                  contentItems.push(
+                    <FilterCombobox key="isWatchlisted" option={{ key: "isWatchlisted", label: "Watchlisted", values: [{ value: "true", label: "Yes" }, { value: "false", label: "No" }] }} selectedValues={filters.isWatchlisted ? [filters.isWatchlisted] : []} onSelect={(key, values) => updateFilter(key, values.length > 0 ? values[values.length - 1] : undefined)} />
+                  );
+                }
+                if (contentItems.length === 0 && isSearching) return null;
+                const isOpen = isSearching || expandedCategories.has("Content");
+                return (
+                  <>
+                    <Separator className="my-1" />
+                    <Collapsible open={isOpen} onOpenChange={() => toggleCategory("Content")}>
+                      <CategoryTrigger name="Content" isOpen={isOpen} />
+                      <CollapsibleContent>{contentItems}</CollapsibleContent>
+                    </Collapsible>
+                  </>
+                );
+              })()}
 
-              {/* Series aggregate filters (only for series views) */}
-              {mediaType === "SERIES" && (
-                <>
-                  <Separator className="my-1" />
-                  <div className="px-3 py-1.5">
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                      Series
-                    </p>
-                  </div>
-                  <ComparisonPopover
-                    label="Episode Count"
-                    icon={Hash}
-                    conditionsKey="episodeCountConditions"
-                    logicKey="episodeCountLogic"
-                    conditions={episodeCountConditions}
-                    logic={episodeCountLogic}
-                    onApply={applyConditions}
-                    onClear={clearConditions}
-                    step="1"
-                    placeholder="10"
-                    inline
-                  />
-                  <ComparisonPopover
-                    label="Watched Episodes"
-                    icon={Play}
-                    conditionsKey="watchedEpisodeCountConditions"
-                    logicKey="watchedEpisodeCountLogic"
-                    conditions={watchedEpisodeCountConditions}
-                    logic={watchedEpisodeCountLogic}
-                    onApply={applyConditions}
-                    onClear={clearConditions}
-                    step="1"
-                    placeholder="5"
-                    inline
-                  />
-                  <ComparisonPopover
-                    label="Watched %"
-                    icon={Hash}
-                    conditionsKey="watchedEpisodePercentageConditions"
-                    logicKey="watchedEpisodePercentageLogic"
-                    conditions={watchedEpisodePercentageConditions}
-                    logic={watchedEpisodePercentageLogic}
-                    onApply={applyConditions}
-                    onClear={clearConditions}
-                    step="1"
-                    placeholder="50"
-                    inline
-                  />
-                  <DateFilterPopover
-                    label="Last Episode Aired"
-                    minKey="lastEpisodeAiredAtMin"
-                    maxKey="lastEpisodeAiredAtMax"
-                    daysKey="lastEpisodeAiredAtDays"
-                    filters={filters}
-                    onApplyDate={applyDateUpdates}
-                    onClear={clearDateKeys}
-                    inline
-                  />
-                </>
-              )}
+              {/* Series aggregate filters */}
+              {mediaType === "SERIES" && (() => {
+                const seriesItems: React.ReactNode[] = [];
+                if (matchesFilterSearch("Episode Count")) seriesItems.push(<ComparisonPopover key="episodeCount" label="Episode Count" icon={Hash} conditionsKey="episodeCountConditions" logicKey="episodeCountLogic" conditions={episodeCountConditions} logic={episodeCountLogic} onApply={applyConditions} onClear={clearConditions} step="1" placeholder="10" inline />);
+                if (matchesFilterSearch("Watched Episodes")) seriesItems.push(<ComparisonPopover key="watchedEpisodes" label="Watched Episodes" icon={Play} conditionsKey="watchedEpisodeCountConditions" logicKey="watchedEpisodeCountLogic" conditions={watchedEpisodeCountConditions} logic={watchedEpisodeCountLogic} onApply={applyConditions} onClear={clearConditions} step="1" placeholder="5" inline />);
+                if (matchesFilterSearch("Watched %")) seriesItems.push(<ComparisonPopover key="watchedPct" label="Watched %" icon={Hash} conditionsKey="watchedEpisodePercentageConditions" logicKey="watchedEpisodePercentageLogic" conditions={watchedEpisodePercentageConditions} logic={watchedEpisodePercentageLogic} onApply={applyConditions} onClear={clearConditions} step="1" placeholder="50" inline />);
+                if (matchesFilterSearch("Last Episode Aired")) seriesItems.push(<DateFilterPopover key="lastEpisodeAired" label="Last Episode Aired" minKey="lastEpisodeAiredAtMin" maxKey="lastEpisodeAiredAtMax" daysKey="lastEpisodeAiredAtDays" filters={filters} onApplyDate={applyDateUpdates} onClear={clearDateKeys} inline />);
+                if (seriesItems.length === 0 && isSearching) return null;
+                const isOpen = isSearching || expandedCategories.has("Series");
+                return (
+                  <>
+                    <Separator className="my-1" />
+                    <Collapsible open={isOpen} onOpenChange={() => toggleCategory("Series")}>
+                      <CategoryTrigger name="Series" isOpen={isOpen} />
+                      <CollapsibleContent>{seriesItems}</CollapsibleContent>
+                    </Collapsible>
+                  </>
+                );
+              })()}
 
               {/* File filters */}
-              <Separator className="my-1" />
-              <div className="px-3 py-1.5">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  File
-                </p>
-              </div>
-              {distinctData.container?.length && (
-                <FilterCombobox
-                  option={{
-                    key: "container",
-                    label: "Container",
-                    values: distinctData.container.map((c) => ({
-                      value: c,
-                      label: c.toUpperCase(),
-                    })),
-                  }}
-                  selectedValues={getSelectedValues("container")}
-                  onSelect={updateMultiFilter}
-                />
-              )}
-              <InlineSliderPopover
-                label="File Size"
-                range={fileSizeRange}
-                onRangeChange={setFileSizeRange}
-                onApply={applyFileSizeFilter}
-                onReset={() => {
-                  setFileSizeRange(null);
-                  const newFilters = { ...filters };
-                  delete newFilters.fileSizeMin;
-                  delete newFilters.fileSizeMax;
-                  setFilters(newFilters);
-                  onFilterChange(newFilters);
-                }}
-                min={Math.floor(fileSizeMinMB)}
-                max={Math.ceil(fileSizeMaxMB)}
-                step={1}
-                formatValue={(v) => Math.round(v).toString()}
-                unit="MB"
-              />
+              {(() => {
+                const fileItems: React.ReactNode[] = [];
+                if (distinctData.container?.length && matchesFilterSearch("Container")) {
+                  fileItems.push(
+                    <FilterCombobox key="container" option={{ key: "container", label: "Container", values: distinctData.container.map((c) => ({ value: c, label: c.toUpperCase() })) }} selectedValues={getSelectedValues("container")} onSelect={updateMultiFilter} />
+                  );
+                }
+                if (matchesFilterSearch("File Size")) {
+                  fileItems.push(
+                    <InlineSliderPopover key="fileSize" label="File Size" range={fileSizeRange} onRangeChange={setFileSizeRange} onApply={applyFileSizeFilter} onReset={() => { setFileSizeRange(null); const nf = { ...filters }; delete nf.fileSizeMin; delete nf.fileSizeMax; setFilters(nf); onFilterChange(nf); }} min={Math.floor(fileSizeMinMB)} max={Math.ceil(fileSizeMaxMB)} step={1} formatValue={(v) => Math.round(v).toString()} unit="MB" />
+                  );
+                }
+                if (fileItems.length === 0 && isSearching) return null;
+                const isOpen = isSearching || expandedCategories.has("File");
+                return (
+                  <>
+                    <Separator className="my-1" />
+                    <Collapsible open={isOpen} onOpenChange={() => toggleCategory("File")}>
+                      <CategoryTrigger name="File" isOpen={isOpen} />
+                      <CollapsibleContent>{fileItems}</CollapsibleContent>
+                    </Collapsible>
+                  </>
+                );
+              })()}
 
               {/* Date filters */}
-              <Separator className="my-1" />
-              <div className="px-3 py-1.5">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Dates
-                </p>
-              </div>
-              {distinctData.year && distinctData.year.length > 0 && (
-                <ComparisonPopover
-                  label="Year"
-                  icon={Hash}
-                  conditionsKey="yearConditions"
-                  logicKey="yearLogic"
-                  conditions={yearConditions}
-                  logic={yearLogic}
-                  onApply={applyConditions}
-                  onClear={clearConditions}
-                  step="1"
-                  placeholder="2024"
-                  inline
-                />
-              )}
-              <DateFilterPopover
-                label="Last Played"
-                minKey="lastPlayedAtMin"
-                maxKey="lastPlayedAtMax"
-                daysKey="lastPlayedAtDays"
-                filters={filters}
-                onApplyDate={applyDateUpdates}
-                onClear={clearDateKeys}
-                inline
-              />
-              <DateFilterPopover
-                label="Date Added"
-                minKey="addedAtMin"
-                maxKey="addedAtMax"
-                daysKey="addedAtDays"
-                filters={filters}
-                onApplyDate={applyDateUpdates}
-                onClear={clearDateKeys}
-                inline
-              />
-              <DateFilterPopover
-                label="Release Date"
-                minKey="originallyAvailableAtMin"
-                maxKey="originallyAvailableAtMax"
-                daysKey="originallyAvailableAtDays"
-                filters={filters}
-                onApplyDate={applyDateUpdates}
-                onClear={clearDateKeys}
-                inline
-              />
+              {(() => {
+                const dateItems: React.ReactNode[] = [];
+                if (distinctData.year && distinctData.year.length > 0 && matchesFilterSearch("Year")) {
+                  dateItems.push(<ComparisonPopover key="year" label="Year" icon={Hash} conditionsKey="yearConditions" logicKey="yearLogic" conditions={yearConditions} logic={yearLogic} onApply={applyConditions} onClear={clearConditions} step="1" placeholder="2024" inline />);
+                }
+                if (matchesFilterSearch("Last Played")) dateItems.push(<DateFilterPopover key="lastPlayed" label="Last Played" minKey="lastPlayedAtMin" maxKey="lastPlayedAtMax" daysKey="lastPlayedAtDays" filters={filters} onApplyDate={applyDateUpdates} onClear={clearDateKeys} inline />);
+                if (matchesFilterSearch("Date Added")) dateItems.push(<DateFilterPopover key="dateAdded" label="Date Added" minKey="addedAtMin" maxKey="addedAtMax" daysKey="addedAtDays" filters={filters} onApplyDate={applyDateUpdates} onClear={clearDateKeys} inline />);
+                if (matchesFilterSearch("Release Date")) dateItems.push(<DateFilterPopover key="releaseDate" label="Release Date" minKey="originallyAvailableAtMin" maxKey="originallyAvailableAtMax" daysKey="originallyAvailableAtDays" filters={filters} onApplyDate={applyDateUpdates} onClear={clearDateKeys} inline />);
+                if (dateItems.length === 0 && isSearching) return null;
+                const isOpen = isSearching || expandedCategories.has("Dates");
+                return (
+                  <>
+                    <Separator className="my-1" />
+                    <Collapsible open={isOpen} onOpenChange={() => toggleCategory("Dates")}>
+                      <CategoryTrigger name="Dates" isOpen={isOpen} />
+                      <CollapsibleContent>{dateItems}</CollapsibleContent>
+                    </Collapsible>
+                  </>
+                );
+              })()}
+
+              {/* No results message */}
+              {isSearching && (() => {
+                const dynamicCats = categories.some((cat) => cat.options.some((opt) => matchesFilterSearch(opt.label)));
+                if (dynamicCats) return null;
+                return (
+                  <div className="px-3 py-6 text-center">
+                    <Search className="mx-auto h-5 w-5 text-muted-foreground/30 mb-2" />
+                    <p className="text-[11px] text-muted-foreground/70">
+                      No filters matching &ldquo;{filterSearch}&rdquo;
+                    </p>
+                  </div>
+                );
+              })()}
             </div>
             {activeFilterCount > 0 && (
               <>

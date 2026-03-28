@@ -56,7 +56,7 @@ export const MediaCard = memo(function MediaCard({
 
   return (
     <Card
-      className="group cursor-pointer overflow-hidden py-0 gap-0 hover:scale-105 hover:ring-2 hover:ring-primary/50 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none transition-all rounded-sm"
+      className="group cursor-pointer overflow-hidden py-0 gap-0 hover:scale-[1.02] hover:shadow-lg hover:ring-2 hover:ring-primary/50 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none transition-all duration-200 rounded-sm"
       onClick={onClick}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {

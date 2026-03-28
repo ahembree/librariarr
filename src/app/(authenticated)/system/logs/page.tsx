@@ -33,11 +33,14 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
+  FileText,
   Info,
   RefreshCw,
   TriangleAlert,
   X,
 } from "lucide-react";
+import { LogsTableSkeleton } from "@/components/skeletons";
+import { EmptyState } from "@/components/empty-state";
 
 interface LogEntry {
   id: string;
@@ -304,15 +307,11 @@ export default function LogsPage() {
           </TableHeader>
           <TableBody>
             {loading && logs.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                  Loading...
-                </TableCell>
-              </TableRow>
+              <LogsTableSkeleton />
             ) : logs.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                  No log entries found.
+                <TableCell colSpan={5}>
+                  <EmptyState icon={FileText} title="No log entries found" description="Logs will appear here as activity occurs." />
                 </TableCell>
               </TableRow>
             ) : (

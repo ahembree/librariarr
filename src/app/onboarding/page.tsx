@@ -16,6 +16,7 @@ import {
 import { Server, Loader2, Check, AlertCircle, Pencil, ShieldOff, ArrowLeft, Plug, CheckCircle, XCircle } from "lucide-react";
 import { Logo } from "@/components/logo";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
+import { SERVER_TYPE_STYLES } from "@/lib/server-styles";
 
 // ─── Types ───
 
@@ -48,44 +49,17 @@ interface DiscoveredLibrary {
 type OnboardingMode = "choose" | "plex" | "manual";
 type ManualServerType = "JELLYFIN" | "EMBY";
 
-// Server type config for the chooser cards
+// Server type config for the chooser cards (derived from centralized styles)
 const SERVER_TYPES = [
-  {
-    type: "PLEX" as const,
-    label: "Plex",
-    description: "Auto-discover servers from your Plex account",
-    iconColor: "text-orange-400",
-    borderColor: "border-orange-500/30",
-    bgColor: "bg-orange-500/10",
-    hoverBg: "hover:bg-orange-500/15",
-    glowColor: "bg-orange-500/5",
-  },
-  {
-    type: "JELLYFIN" as const,
-    label: "Jellyfin",
-    description: "Connect with your server URL and API key",
-    iconColor: "text-purple-400",
-    borderColor: "border-purple-500/30",
-    bgColor: "bg-purple-500/10",
-    hoverBg: "hover:bg-purple-500/15",
-    glowColor: "bg-purple-500/5",
-  },
-  {
-    type: "EMBY" as const,
-    label: "Emby",
-    description: "Connect with your server URL and API key",
-    iconColor: "text-emerald-400",
-    borderColor: "border-emerald-500/30",
-    bgColor: "bg-emerald-500/10",
-    hoverBg: "hover:bg-emerald-500/15",
-    glowColor: "bg-emerald-500/5",
-  },
+  { type: "PLEX" as const, label: "Plex", description: "Auto-discover servers from your Plex account", ...SERVER_TYPE_STYLES.PLEX.onboarding },
+  { type: "JELLYFIN" as const, label: "Jellyfin", description: "Connect with your server URL and API key", ...SERVER_TYPE_STYLES.JELLYFIN.onboarding },
+  { type: "EMBY" as const, label: "Emby", description: "Connect with your server URL and API key", ...SERVER_TYPE_STYLES.EMBY.onboarding },
 ] as const;
 
-// Color config per manual server type
-const MANUAL_COLORS: Record<ManualServerType, { btn: string; btnHover: string; btnText: string; addedBg: string; addedText: string; addedBorder: string; border: string; glow: string }> = {
-  JELLYFIN: { btn: "bg-purple-500", btnHover: "hover:bg-purple-600", btnText: "text-white", addedBg: "bg-purple-500/15", addedText: "text-purple-400", addedBorder: "border-purple-500/30", border: "border-purple-500/40", glow: "bg-purple-500/5" },
-  EMBY: { btn: "bg-emerald-500", btnHover: "hover:bg-emerald-600", btnText: "text-white", addedBg: "bg-emerald-500/15", addedText: "text-emerald-400", addedBorder: "border-emerald-500/30", border: "border-emerald-500/40", glow: "bg-emerald-500/5" },
+// Color config per manual server type (derived from centralized styles)
+const MANUAL_COLORS: Record<ManualServerType, NonNullable<(typeof SERVER_TYPE_STYLES)[string]["manual"]>> = {
+  JELLYFIN: SERVER_TYPE_STYLES.JELLYFIN.manual!,
+  EMBY: SERVER_TYPE_STYLES.EMBY.manual!,
 };
 
 function getDefaultUrl(connections: PlexConnection[]): string {

@@ -191,7 +191,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
                   <TooltipTrigger asChild>
                     <button
                       onClick={() => setCollapsed(!collapsed)}
-                      className="flex w-full items-center justify-center rounded-md p-2 text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                      className="flex w-full items-center justify-center rounded-md p-2 min-h-10 min-w-10 text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
                       aria-expanded={!isCollapsed}
                       aria-label="Expand sidebar"
                     >
@@ -217,7 +217,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
                 <TooltipTrigger asChild>
                   <button
                     onClick={handleLogout}
-                    className="flex w-full items-center justify-center rounded-md p-2 text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                    className="flex w-full items-center justify-center rounded-md p-2 min-h-10 min-w-10 text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
                   >
                     <LogOut className="h-4 w-4" />
                   </button>
@@ -243,7 +243,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
   if (isMobile) {
     return (
       <Sheet open={mobileOpen} onOpenChange={onMobileOpenChange}>
-        <SheetContent side="left" className="w-64 p-0" showCloseButton={false}>
+        <SheetContent side="left" className="w-[min(16rem,85vw)] p-0" showCloseButton={false}>
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <TooltipProvider>
             <div className="flex h-full flex-col bg-card">

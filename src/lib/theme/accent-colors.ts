@@ -16,6 +16,7 @@ export const ACCENT_PRESETS: AccentPreset[] = [
       "--ring": "oklch(0.556 0 0)",
       "--sidebar-primary": "oklch(0.488 0.243 264.376)",
       "--sidebar-primary-foreground": "oklch(0.985 0 0)",
+      "--chart-1": "oklch(0.488 0.243 264.376)",
     },
   },
   {
@@ -28,6 +29,7 @@ export const ACCENT_PRESETS: AccentPreset[] = [
       "--ring": "oklch(0.623 0.214 259.815)",
       "--sidebar-primary": "oklch(0.623 0.214 259.815)",
       "--sidebar-primary-foreground": "oklch(0.985 0 0)",
+      "--chart-1": "oklch(0.623 0.214 259.815)",
     },
   },
   {
@@ -40,6 +42,7 @@ export const ACCENT_PRESETS: AccentPreset[] = [
       "--ring": "oklch(0.627 0.265 303.9)",
       "--sidebar-primary": "oklch(0.627 0.265 303.9)",
       "--sidebar-primary-foreground": "oklch(0.985 0 0)",
+      "--chart-1": "oklch(0.627 0.265 303.9)",
     },
   },
   {
@@ -52,6 +55,7 @@ export const ACCENT_PRESETS: AccentPreset[] = [
       "--ring": "oklch(0.696 0.17 162.48)",
       "--sidebar-primary": "oklch(0.696 0.17 162.48)",
       "--sidebar-primary-foreground": "oklch(0.985 0 0)",
+      "--chart-1": "oklch(0.696 0.17 162.48)",
     },
   },
   {
@@ -64,6 +68,7 @@ export const ACCENT_PRESETS: AccentPreset[] = [
       "--ring": "oklch(0.769 0.188 70.08)",
       "--sidebar-primary": "oklch(0.769 0.188 70.08)",
       "--sidebar-primary-foreground": "oklch(0.205 0 0)",
+      "--chart-1": "oklch(0.769 0.188 70.08)",
     },
   },
   {
@@ -76,6 +81,7 @@ export const ACCENT_PRESETS: AccentPreset[] = [
       "--ring": "oklch(0.645 0.246 16.439)",
       "--sidebar-primary": "oklch(0.645 0.246 16.439)",
       "--sidebar-primary-foreground": "oklch(0.985 0 0)",
+      "--chart-1": "oklch(0.645 0.246 16.439)",
     },
   },
   {
@@ -88,6 +94,7 @@ export const ACCENT_PRESETS: AccentPreset[] = [
       "--ring": "oklch(0.6 0.118 184.704)",
       "--sidebar-primary": "oklch(0.6 0.118 184.704)",
       "--sidebar-primary-foreground": "oklch(0.985 0 0)",
+      "--chart-1": "oklch(0.6 0.118 184.704)",
     },
   },
 ];

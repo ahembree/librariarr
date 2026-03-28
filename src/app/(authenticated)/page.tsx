@@ -27,7 +27,8 @@ import {
 } from "@/lib/dashboard/card-registry";
 import { CustomCardDialog } from "@/components/custom-card-dialog";
 import { Pencil, Check, Server, Film, Tv, Music, LayoutDashboard } from "lucide-react";
-import { cn, generateId } from "@/lib/utils";
+import { generateId } from "@/lib/utils";
+import { TabNav, type TabNavItem } from "@/components/tab-nav";
 import { DashboardSkeleton } from "@/components/skeletons";
 import { useRealtime } from "@/hooks/use-realtime";
 
@@ -364,62 +365,23 @@ export default function DashboardPage() {
         onValueChange={(v) => setActiveTab(v as DashboardTab)}
         className=""
       >
-        <nav className="flex items-center gap-1 border-b mb-6 overflow-x-auto">
-          <button
-            onClick={() => setActiveTab("main")}
-            className={cn(
-              "flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors",
-              activeTab === "main"
-                ? "border-primary text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30"
-            )}
-          >
-            <LayoutDashboard className="h-4 w-4" />
-            Main
-          </button>
-          {(availableTypes.length === 0 || availableTypes.includes("MOVIE")) && (
-            <button
-              onClick={() => setActiveTab("movies")}
-              className={cn(
-                "flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors",
-                activeTab === "movies"
-                  ? "border-primary text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30"
-              )}
-            >
-              <Film className="h-4 w-4" />
-              Movies
-            </button>
-          )}
-          {(availableTypes.length === 0 || availableTypes.includes("SERIES")) && (
-            <button
-              onClick={() => setActiveTab("series")}
-              className={cn(
-                "flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors",
-                activeTab === "series"
-                  ? "border-primary text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30"
-              )}
-            >
-              <Tv className="h-4 w-4" />
-              Series
-            </button>
-          )}
-          {(availableTypes.length === 0 || availableTypes.includes("MUSIC")) && (
-            <button
-              onClick={() => setActiveTab("music")}
-              className={cn(
-                "flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors",
-                activeTab === "music"
-                  ? "border-primary text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30"
-              )}
-            >
-              <Music className="h-4 w-4" />
-              Music
-            </button>
-          )}
-        </nav>
+        <TabNav
+          tabs={[
+            { value: "main" as DashboardTab, label: "Main", icon: LayoutDashboard },
+            ...(availableTypes.length === 0 || availableTypes.includes("MOVIE")
+              ? [{ value: "movies" as DashboardTab, label: "Movies", icon: Film }]
+              : []),
+            ...(availableTypes.length === 0 || availableTypes.includes("SERIES")
+              ? [{ value: "series" as DashboardTab, label: "Series", icon: Tv }]
+              : []),
+            ...(availableTypes.length === 0 || availableTypes.includes("MUSIC")
+              ? [{ value: "music" as DashboardTab, label: "Music", icon: Music }]
+              : []),
+          ] satisfies TabNavItem<DashboardTab>[]}
+          activeTab={activeTab}
+          onTabChange={(v) => setActiveTab(v)}
+          className="mb-6"
+        />
 
         <TabsContent value="main">
           <DashboardCardGrid
