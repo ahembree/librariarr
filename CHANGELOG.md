@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.0](https://github.com/ahembree/librariarr/compare/v0.7.0...v0.8.0) (2026-03-28)
+
+
+### Features
+
+* add seed data ([0d575f2](https://github.com/ahembree/librariarr/commit/0d575f2fd4ba255808754171c3a036c3f55f23b6))
+
+
+### Bug Fixes
+
+* dedup top play history ([e4666b6](https://github.com/ahembree/librariarr/commit/e4666b64938298ffe89d63343f681c9a3efe8610))
+* fix lifecycle rule card rendering ([f60a569](https://github.com/ahembree/librariarr/commit/f60a5693979ec83c02cda6896dbe27feffff5f23))
+* fix play history with multiple media servers ([d2bdfbf](https://github.com/ahembree/librariarr/commit/d2bdfbf4722a46cfa77cac9f4c0baa1fec235f36))
+* lint issue in seed.ts ([501a4b9](https://github.com/ahembree/librariarr/commit/501a4b964a076dca2fe5adb192365357228ac46e))
+
 ## [0.7.0](https://github.com/ahembree/librariarr/compare/v0.6.0...v0.7.0) (2026-03-27)
 
 
