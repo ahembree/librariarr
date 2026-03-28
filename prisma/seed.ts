@@ -11,6 +11,7 @@
  */
 
 import { PrismaClient } from "../src/generated/prisma/client.js";
+import type { InputJsonValue } from "../src/generated/prisma/internal/prismaNamespace.js";
 import { PrismaPg } from "@prisma/adapter-pg";
 import bcrypt from "bcryptjs";
 import { createHash } from "crypto";
@@ -1207,11 +1208,10 @@ async function main() {
 
   // Helper: build a full itemData snapshot from a Prisma MediaItem record
   // (mirrors what detect-matches.ts stores via jsonSafe(item))
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function buildItemData(
     movie: typeof atlasMovieItems[0],
     matchedCriteria: Array<{ ruleId: string; field: string; operator: string; value: string; negate: boolean; actualValue?: string }>,
-  ): any {
+  ): InputJsonValue {
     return {
       id: movie.id,
       libraryId: movie.libraryId,
