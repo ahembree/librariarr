@@ -167,6 +167,13 @@ interface WatchHistoryEntry {
   lastPlayedAt: string | null;
 }
 
+interface ServerHistoryEntry {
+  serverId: string;
+  serverName: string;
+  serverType: string;
+  users: WatchHistoryEntry[];
+}
+
 interface MediaDetailContentProps {
   item: MediaItemWithRelations;
   /** Extra content rendered before the standard sections (e.g. horizontal lists) */
@@ -188,6 +195,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
   const [detailData, setDetailData] = useState<Partial<MediaItemWithRelations> | null>(null);
   const [streams, setStreams] = useState<MediaItemWithRelations["streams"]>([]);
   const [history, setHistory] = useState<WatchHistoryEntry[]>([]);
+  const [serverHistories, setServerHistories] = useState<ServerHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [videoOpen, setVideoOpen] = useState(!compact);
   const [audioOpen, setAudioOpen] = useState(!compact);
@@ -234,8 +242,10 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
       const response = await fetch(`/api/media/${itemId}/history`);
       const data = await response.json();
       setHistory(data.history || []);
+      setServerHistories(data.serverHistories || []);
     } catch {
       setHistory([]);
+      setServerHistories([]);
     } finally {
       setHistoryLoading(false);
     }
@@ -434,6 +444,31 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
             <p className="text-sm text-muted-foreground">
               {merged.type === "MUSIC" ? "No listen history available." : "No watch history available."}
             </p>
+          ) : serverHistories.length > 1 ? (
+            <div className="space-y-4">
+              {serverHistories.filter((sh) => sh.users.length > 0).map((sh) => (
+                <div key={sh.serverId} className="space-y-2">
+                  <Badge variant="outline" className="text-xs">
+                    {sh.serverName}
+                  </Badge>
+                  {sh.users.map((entry) => (
+                    <div key={`${sh.serverId}-${entry.username}`} className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2 text-sm">
+                      <div>
+                        <span className="font-medium">{entry.username}</span>
+                        {entry.lastPlayedAt && (
+                          <p className="text-xs text-muted-foreground">
+                            Last: {new Date(entry.lastPlayedAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}
+                          </p>
+                        )}
+                      </div>
+                      <span className="text-muted-foreground">
+                        {entry.playCount} {entry.playCount === 1 ? "play" : "plays"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
           ) : (
             <div className="space-y-2">
               {history.map((entry) => (

@@ -68,6 +68,18 @@ Librariarr uses Docker Compose for development to provide a PostgreSQL database 
 | `npm run docker:dev:db:studio` | Open Prisma Studio (DB browser) |
 | `npm run docker:dev:db:reset` | Reset DB completely |
 
+### Mock Data
+
+Populate the database with fictional media data for testing or taking screenshots without exposing personal data.
+
+| Command | Description |
+|---------|-------------|
+| `npm run docker:dev:seed` | Seed the dev database with mock data |
+
+<Aside>
+  The seed script creates a demo user with username `demo` and password `demo`. It also creates 3 media servers (Plex, Jellyfin, Emby) with overlapping libraries to demonstrate multi-server dedup. The script is idempotent — running it again replaces the previous seed data.
+</Aside>
+
 ### Build & Lint
 
 | Command | Description |
