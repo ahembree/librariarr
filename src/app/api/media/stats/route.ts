@@ -97,7 +97,7 @@ export async function GET(request: NextRequest) {
       _sum: { fileSize: true },
     }),
     prisma.mediaItem.findMany({
-      where: { ...serverFilter, type: "MOVIE", playCount: { gt: 0 } },
+      where: { ...serverFilter, type: "MOVIE", playCount: { gt: 0 }, ...(dedupEnabled ? { dedupCanonical: true } : {}) },
       orderBy: { playCount: "desc" },
       take: 10,
       select: {
@@ -115,6 +115,7 @@ export async function GET(request: NextRequest) {
         type: "SERIES",
         parentTitle: { not: null },
         playCount: { gt: 0 },
+        ...(dedupEnabled ? { dedupCanonical: true } : {}),
       },
       _sum: { playCount: true },
       orderBy: { _sum: { playCount: "desc" } },
@@ -127,6 +128,7 @@ export async function GET(request: NextRequest) {
         type: "MUSIC",
         parentTitle: { not: null },
         playCount: { gt: 0 },
+        ...(dedupEnabled ? { dedupCanonical: true } : {}),
       },
       _sum: { playCount: true },
       orderBy: { _sum: { playCount: "desc" } },
