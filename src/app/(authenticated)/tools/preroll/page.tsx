@@ -700,12 +700,12 @@ export default function PrerollManagerPage() {
     <div className="p-4 sm:p-6 lg:p-8 space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight flex items-center gap-2">
+        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight flex items-center gap-2">
           <Clapperboard className="h-7 w-7" />
           Preroll Manager
         </h1>
         <p className="text-muted-foreground mt-1">
-          Manage preroll videos for your Plex servers
+          Configure preroll presets and schedules for your Plex servers.
         </p>
       </div>
 

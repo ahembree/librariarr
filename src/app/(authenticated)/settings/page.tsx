@@ -1913,7 +1913,7 @@ export default function SettingsPage() {
   return (
     <div className="p-4 sm:p-6 lg:p-8">
       <div className="mb-6">
-        <h1 className="text-2xl sm:text-3xl font-bold">Settings</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Settings</h1>
       </div>
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as SettingsTab)} className="space-y-6">

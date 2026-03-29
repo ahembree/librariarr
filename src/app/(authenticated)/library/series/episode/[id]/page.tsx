@@ -5,6 +5,8 @@ import { useParams } from "next/navigation";
 import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MediaDetailHero } from "@/components/media-detail-hero";
+import { RatingChip } from "@/components/rating-chip";
+import { getRatingLabel } from "@/lib/rating-labels";
 import { MediaDetailContent } from "@/components/media-detail-content";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -107,21 +109,9 @@ export default function EpisodeDetailPage() {
       }
       ratings={
         <>
-          {item.rating != null && (
-            <span className="text-white/60">
-              Critic: <span className="font-medium text-white/90">{item.rating.toFixed(1)}</span>
-            </span>
-          )}
-          {item.audienceRating != null && (
-            <span className="text-white/60">
-              Audience: <span className="font-medium text-white/90">{item.audienceRating.toFixed(1)}</span>
-            </span>
-          )}
-          {item.userRating != null && (
-            <span className="text-white/60">
-              You: <span className="font-medium text-white/90">{item.userRating.toFixed(1)}</span>
-            </span>
-          )}
+          {item.rating != null && <RatingChip label={getRatingLabel(item.ratingImage, item.library?.mediaServer?.type, "rating", "Critic")} value={item.rating} />}
+          {item.audienceRating != null && <RatingChip label={getRatingLabel(item.audienceRatingImage, item.library?.mediaServer?.type, "audienceRating", "Audience")} value={item.audienceRating} />}
+          {item.userRating != null && <RatingChip label="You" value={item.userRating} />}
         </>
       }
       genres={

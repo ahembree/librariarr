@@ -17,13 +17,13 @@ import {
 } from "@/components/ui/select";
 import { DataTable } from "@/components/data-table";
 import type { DataTableColumn } from "@/components/data-table";
-import { Tv, Search, ArrowUpDown, Layers, List, LayoutGrid, TableProperties } from "lucide-react";
+import { Tv, Search, ArrowUpDown, Layers, List, LayoutGrid, TableProperties, HardDrive, Play } from "lucide-react";
 import Link from "next/link";
 import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
-import { MetadataLine } from "@/components/metadata-line";
+import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
@@ -210,7 +210,7 @@ export default function AllSeasonsPage() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <h1 className="text-2xl sm:text-3xl font-bold mb-4">Series</h1>
+      <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight mb-4">Series</h1>
 
       <nav className="mb-6 flex items-center gap-1 border-b overflow-x-auto">
         <Link
@@ -343,11 +343,11 @@ export default function AllSeasonsPage() {
                     fallbackIcon="series"
                     onClick={() => navigateToSeason(season)}
                     metadata={
-                      <MetadataLine>
-                        {show("metadata", "episodeCount") && <span>{season.episodeCount} {season.episodeCount === 1 ? "ep" : "eps"}</span>}
-                        {show("metadata", "fileSize") && <span>{formatFileSize(season.totalSize)}</span>}
+                      <MetadataLine stacked>
+                        {show("metadata", "episodeCount") && <MetadataItem icon={<List />}>{season.episodeCount} {season.episodeCount === 1 ? "ep" : "eps"}</MetadataItem>}
+                        {show("metadata", "fileSize") && <MetadataItem icon={<HardDrive />}>{formatFileSize(season.totalSize)}</MetadataItem>}
                         {show("metadata", "playCount") && season.totalPlayCount > 0 && (
-                          <span>{season.totalPlayCount} {season.totalPlayCount === 1 ? "play" : "plays"}</span>
+                          <MetadataItem icon={<Play />}>{season.totalPlayCount} {season.totalPlayCount === 1 ? "play" : "plays"}</MetadataItem>
                         )}
                       </MetadataLine>
                     }

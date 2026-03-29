@@ -11,7 +11,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { Loader2, ChevronDown, ChevronRight, Database } from "lucide-react";
+import { Loader2, ChevronDown, ChevronRight, Database, History, FileText, Play, Monitor, Volume2, Subtitles } from "lucide-react";
 import {
   Carousel,
   CarouselContent,
@@ -34,9 +34,9 @@ function formatResolution(resolution: string | null): string {
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex justify-between py-1.5">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-medium">{value}</span>
+    <div className="flex justify-between items-baseline py-1.5 border-b border-border/30 last:border-0">
+      <span className="text-xs text-muted-foreground uppercase tracking-wide">{label}</span>
+      <span className="font-medium text-sm">{value}</span>
     </div>
   );
 }
@@ -251,16 +251,17 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
     }
   }, []);
 
-  const fetchAllMetadata = useCallback(async (mediaItemId: string) => {
-    setMetadataLoadingMap((prev) => ({ ...prev, [mediaItemId]: true }));
+  const fetchAllMetadata = useCallback(async (cacheKey: string, mediaItemId?: string) => {
+    const fetchId = mediaItemId ?? cacheKey;
+    setMetadataLoadingMap((prev) => ({ ...prev, [cacheKey]: true }));
     try {
-      const response = await fetch(`/api/media/${mediaItemId}`);
+      const response = await fetch(`/api/media/${fetchId}`);
       const data = await response.json();
-      setMetadataMap((prev) => ({ ...prev, [mediaItemId]: data.item ?? null }));
+      setMetadataMap((prev) => ({ ...prev, [cacheKey]: data.item ?? null }));
     } catch {
-      setMetadataMap((prev) => ({ ...prev, [mediaItemId]: null }));
+      setMetadataMap((prev) => ({ ...prev, [cacheKey]: null }));
     } finally {
-      setMetadataLoadingMap((prev) => ({ ...prev, [mediaItemId]: false }));
+      setMetadataLoadingMap((prev) => ({ ...prev, [cacheKey]: false }));
     }
   }, []);
 
@@ -287,7 +288,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
 
         {/* Aggregate stats */}
         <section>
-          <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Playback</h3>
+          <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground"><Play className="h-3.5 w-3.5" />Playback</h3>
           <div className="text-sm">
             <DetailRow
               label="Total Play Count"
@@ -379,8 +380,8 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                         key={`${actor.tag}-${i}`}
                         className={compact ? "basis-16 sm:basis-20 md:basis-24 pl-2" : "basis-28 sm:basis-40 md:basis-44 lg:basis-52 pl-3"}
                       >
-                        <div className="flex flex-col items-center gap-2 text-center">
-                          <div className={compact ? "h-12 w-12 sm:h-16 sm:w-16 md:h-20 md:w-20 shrink-0 overflow-hidden rounded-full bg-muted" : "h-20 w-20 sm:h-32 sm:w-32 md:h-40 md:w-40 lg:h-48 lg:w-48 shrink-0 overflow-hidden rounded-full bg-muted"}>
+                        <div className="flex flex-col items-center gap-2 text-center rounded-lg bg-muted/20 p-2 transition-colors hover:bg-muted/40">
+                          <div className={compact ? "h-12 w-12 sm:h-16 sm:w-16 md:h-20 md:w-20 shrink-0 overflow-hidden rounded-full bg-muted ring-1 ring-white/5" : "h-20 w-20 sm:h-28 sm:w-28 md:h-36 md:w-36 lg:h-40 lg:w-40 shrink-0 overflow-hidden rounded-full bg-muted ring-1 ring-white/5"}>
                             {actor.thumb ? (
                               <FadeImage
                                 src={`/api/media/${item.id}/image?type=role&index=${i}`}
@@ -398,10 +399,10 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                             )}
                           </div>
                           <div className="w-full min-w-0">
-                            <p className="truncate text-xs font-medium">{actor.tag}</p>
-                            {actor.role && (
-                              <p className="truncate text-[11px] text-muted-foreground">{actor.role}</p>
-                            )}
+                            <p className="truncate text-xs font-semibold">{actor.tag}</p>
+                            <p className="truncate text-[11px] text-muted-foreground">
+                              {actor.role || "\u00A0"}
+                            </p>
                           </div>
                         </div>
                       </CarouselItem>
@@ -424,10 +425,11 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
       {!isAggregate && <ArrSection itemId={item.id} mediaType={merged.type} />}
 
       {/* ── Detail columns ──────────────────────────────────── */}
-      <div className={compact ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4"}>
+      <div className={compact ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 stagger-children"}>
         {/* Column 1: Watch/Listen History */}
         <div className="rounded-xl border bg-muted/30 p-5 space-y-3">
           <div className="flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            <History className="h-3.5 w-3.5" />
             {merged.type === "MUSIC" ? "Listen History" : "Watch History"}
             {!historyLoading && history.length > 0 && (
               <span className="text-xs font-normal normal-case">
@@ -494,7 +496,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
         <div className="rounded-xl border bg-muted/30 p-5 space-y-5">
           {/* File Section */}
           <section>
-            <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">File</h3>
+            <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground"><FileText className="h-3.5 w-3.5" />File</h3>
             <div className="text-sm">
               <DetailRow label="Size" value={formatFileSize(merged.fileSize)} />
               <DetailRow label="Duration" value={formatDuration(merged.duration)} />
@@ -511,7 +513,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
 
           {/* Playback Section */}
           <section>
-            <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Playback</h3>
+            <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground"><Play className="h-3.5 w-3.5" />Playback</h3>
             <div className="text-sm">
               <DetailRow
                 label="Play Count"
@@ -530,7 +532,8 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
           {/* Subtitles */}
           {subtitleStreams.length > 0 && (
             <section>
-              <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+              <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                <Subtitles className="h-3.5 w-3.5" />
                 Subtitles ({subtitleStreams.length})
               </h3>
               <div className="flex flex-wrap gap-2">
@@ -547,69 +550,100 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
 
           <Separator />
 
-          {/* Database Metadata collapsibles */}
-          {(merged.servers && merged.servers.length > 1
-            ? merged.servers.map((srv) => ({ key: srv.mediaItemId ?? srv.serverId, mediaItemId: srv.mediaItemId ?? merged.id, label: `${srv.serverName} Metadata`, serverType: srv.serverType }))
-            : [{ key: merged.id, mediaItemId: merged.id, label: "All Database Metadata", serverType: null as string | null }]
-          ).map((entry) => {
-            const isOpen = metadataOpenMap[entry.key] ?? false;
-            const isLoading = metadataLoadingMap[entry.key] ?? false;
-            const metadata = metadataMap[entry.key];
-            const style = entry.serverType ? (SERVER_TYPE_STYLES[entry.serverType] ?? DEFAULT_SERVER_STYLE) : null;
+          {/* Database Metadata */}
+          {(() => {
+            const isMultiServer = merged.servers && merged.servers.length > 1;
+            const entries = isMultiServer
+              ? merged.servers!.map((srv) => ({ key: srv.mediaItemId ?? srv.serverId, mediaItemId: srv.mediaItemId ?? merged.id, label: `${srv.serverName} Metadata`, serverType: srv.serverType }))
+              : [{ key: merged.id, mediaItemId: merged.id, label: "All Database Metadata", serverType: null as string | null }];
+
+            /** Renders a single metadata collapsible that fetches + displays data for one mediaItemId */
+            const renderMetadataCollapsible = (entry: typeof entries[0]) => {
+              const isOpen = metadataOpenMap[entry.key] ?? false;
+              const isLoading = metadataLoadingMap[entry.key] ?? false;
+              const metadata = metadataMap[entry.key];
+              const style = entry.serverType ? (SERVER_TYPE_STYLES[entry.serverType] ?? DEFAULT_SERVER_STYLE) : null;
+              return (
+                <Collapsible key={entry.key} open={isOpen} onOpenChange={(open) => {
+                  setMetadataOpenMap((prev) => ({ ...prev, [entry.key]: open }));
+                  if (open && metadata === undefined && !isLoading) {
+                    fetchAllMetadata(entry.key, entry.mediaItemId);
+                  }
+                }}>
+                  <CollapsibleTrigger asChild>
+                    <button className="flex w-full items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors">
+                      {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      {!isMultiServer && <Database className="h-3.5 w-3.5" />}
+                      {style ? (
+                        <span className="flex items-center gap-1.5">
+                          <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: style.color }}></span>
+                          {entry.label}
+                        </span>
+                      ) : entry.label}
+                    </button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <div className="mt-2">
+                      {isLoading ? (
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Loading...
+                        </div>
+                      ) : metadata ? (
+                        <div className="space-y-1 text-sm">
+                          {Object.entries(metadata)
+                            .filter(([key]) => key !== "streams" && key !== "library" && key !== "externalIds" && key !== "lifecycleActions")
+                            .map(([key, value]) => {
+                              if (value == null || value === "") return null;
+                              return <MetadataEntry key={key} label={key} value={value} />;
+                            })}
+                          {Array.isArray(metadata.externalIds) && (metadata.externalIds as Array<{ source: string; externalId: string }>).length > 0 && (
+                            <>
+                              <p className="mt-3 mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">External IDs</p>
+                              {(metadata.externalIds as Array<{ source: string; externalId: string }>).map((ext) => (
+                                <div key={ext.source} className="flex justify-between gap-4 py-1 border-b border-border/50 last:border-0">
+                                  <span className="text-muted-foreground font-mono text-xs">{ext.source}</span>
+                                  <span className="font-medium text-xs">{ext.externalId}</span>
+                                </div>
+                              ))}
+                            </>
+                          )}
+                        </div>
+                      ) : metadata === null ? (
+                        <p className="text-sm text-muted-foreground">Failed to load metadata.</p>
+                      ) : null}
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+              );
+            };
+
+            // Single server: one collapsible directly
+            if (!isMultiServer) {
+              return renderMetadataCollapsible(entries[0]);
+            }
+
+            // Multi-server: outer "All Database Metadata" wrapping per-server collapsibles
+            const outerOpen = metadataOpenMap["__all__"] ?? false;
             return (
-              <Collapsible key={entry.key} open={isOpen} onOpenChange={(open) => {
-                setMetadataOpenMap((prev) => ({ ...prev, [entry.key]: open }));
-                if (open && metadata === undefined && !isLoading) {
-                  fetchAllMetadata(entry.mediaItemId);
-                }
+              <Collapsible open={outerOpen} onOpenChange={(open) => {
+                setMetadataOpenMap((prev) => ({ ...prev, ["__all__"]: open }));
               }}>
                 <CollapsibleTrigger asChild>
                   <button className="flex w-full items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors">
-                    {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                    {outerOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                     <Database className="h-3.5 w-3.5" />
-                    {style ? (
-                      <span className="flex items-center gap-1.5">
-                        <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: style.color }}></span>
-                        {entry.label}
-                      </span>
-                    ) : entry.label}
+                    All Database Metadata
                   </button>
                 </CollapsibleTrigger>
                 <CollapsibleContent>
-                  <div className="mt-2">
-                    {isLoading ? (
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Loading...
-                      </div>
-                    ) : metadata ? (
-                      <div className="space-y-1 text-sm">
-                        {Object.entries(metadata)
-                          .filter(([key]) => key !== "streams" && key !== "library" && key !== "externalIds" && key !== "lifecycleActions")
-                          .map(([key, value]) => {
-                            if (value == null || value === "") return null;
-                            return <MetadataEntry key={key} label={key} value={value} />;
-                          })}
-                        {Array.isArray(metadata.externalIds) && (metadata.externalIds as Array<{ source: string; externalId: string }>).length > 0 && (
-                          <>
-                            <p className="mt-3 mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">External IDs</p>
-                            {(metadata.externalIds as Array<{ source: string; externalId: string }>).map((ext) => (
-                              <div key={ext.source} className="flex justify-between gap-4 py-1 border-b border-border/50 last:border-0">
-                                <span className="text-muted-foreground font-mono text-xs">{ext.source}</span>
-                                <span className="font-medium text-xs">{ext.externalId}</span>
-                              </div>
-                            ))}
-                          </>
-                        )}
-                      </div>
-                    ) : metadata === null ? (
-                      <p className="text-sm text-muted-foreground">Failed to load metadata.</p>
-                    ) : null}
+                  <div className="mt-2 ml-4 space-y-1">
+                    {entries.map(renderMetadataCollapsible)}
                   </div>
                 </CollapsibleContent>
               </Collapsible>
             );
-          })}
+          })()}
         </div>
 
         {/* Column 3: Video */}
@@ -619,6 +653,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
               <CollapsibleTrigger asChild>
                 <button className="flex w-full items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors">
                   {videoOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                  <Monitor className="h-3.5 w-3.5" />
                   Video
                   {videoStreams.length > 0 && (
                     <span className="text-xs font-normal normal-case">
@@ -716,6 +751,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
             <CollapsibleTrigger asChild>
               <button className="flex w-full items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors">
                 {audioOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                <Volume2 className="h-3.5 w-3.5" />
                 Audio
                 {audioStreams.length > 0 && (
                   <span className="text-xs font-normal normal-case">

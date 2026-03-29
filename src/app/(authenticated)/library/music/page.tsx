@@ -15,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Music, Search, ArrowUpDown, LayoutGrid, TableProperties } from "lucide-react";
+import { Music, Search, ArrowUpDown, LayoutGrid, TableProperties, Disc3, ListMusic, HardDrive } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DataTable } from "@/components/data-table";
 import type { DataTableColumn } from "@/components/data-table";
@@ -23,7 +23,7 @@ import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
-import { MetadataLine } from "@/components/metadata-line";
+import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { useServers } from "@/hooks/use-servers";
 import { ServerFilter } from "@/components/server-filter";
 import { AlphabetFilter } from "@/components/alphabet-filter";
@@ -302,7 +302,7 @@ export default function MusicPage() {
   return (
     <div className="p-4 sm:p-6 md:pr-12">
       <div className="flex items-center gap-3 mb-6">
-        <h1 className="text-2xl sm:text-3xl font-bold">Music</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Music</h1>
         {!loading && artistList.length > 0 && (
           <div className="flex items-center gap-1.5">
             <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{artistList.length.toLocaleString()} artists</span>
@@ -469,10 +469,10 @@ export default function MusicPage() {
                             fallbackIcon="music"
                             onClick={() => { markChildNavigation(); router.push(`/library/music/artist/${a.mediaItemId}`); }}
                             metadata={
-                              <MetadataLine>
-                                {show("metadata", "albumCount") && <span>{a.albumCount} {a.albumCount === 1 ? "album" : "albums"}</span>}
-                                {show("metadata", "trackCount") && <span>{a.trackCount} tracks</span>}
-                                {show("metadata", "fileSize") && <span>{formatFileSize(a.totalSize)}</span>}
+                              <MetadataLine stacked>
+                                {show("metadata", "albumCount") && <MetadataItem icon={<Disc3 />}>{a.albumCount} {a.albumCount === 1 ? "album" : "albums"}</MetadataItem>}
+                                {show("metadata", "trackCount") && <MetadataItem icon={<ListMusic />}>{a.trackCount} tracks</MetadataItem>}
+                                {show("metadata", "fileSize") && <MetadataItem icon={<HardDrive />}>{formatFileSize(a.totalSize)}</MetadataItem>}
                               </MetadataLine>
                             }
                             badges={

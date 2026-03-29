@@ -390,13 +390,13 @@ export default function OnboardingPage() {
 
   if (mode === "choose") {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background p-8">
+      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))] p-8">
         <div className="w-full max-w-3xl space-y-8">
           <div className="text-center">
             <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-primary/10 ring-1 ring-primary/20">
               <Logo size={96} />
             </div>
-            <h1 className="text-3xl font-bold">Connect a Media Server</h1>
+            <h1 className="text-3xl font-bold font-display tracking-tight">Connect a Media Server</h1>
             <p className="mt-2 text-muted-foreground">
               Choose your media server type to get started.
             </p>
@@ -472,7 +472,7 @@ export default function OnboardingPage() {
 
   if (mode === "plex") {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background p-8">
+      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))] p-8">
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
           <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-150 h-150 rounded-full bg-amber-500/5 blur-3xl" />
         </div>
@@ -491,7 +491,7 @@ export default function OnboardingPage() {
             <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/20">
               <Logo size={96} />
             </div>
-            <h1 className="text-3xl font-bold bg-linear-to-r from-amber-400 to-orange-500 bg-clip-text text-transparent">Select Your Plex Servers</h1>
+            <h1 className="text-3xl font-bold font-display tracking-tight bg-linear-to-r from-amber-400 to-orange-500 bg-clip-text text-transparent">Select Your Plex Servers</h1>
             <p className="mt-2 text-muted-foreground">
               Choose which servers to connect. You can select which libraries to sync.
             </p>
@@ -677,7 +677,7 @@ export default function OnboardingPage() {
   const typeLabel = manualType === "JELLYFIN" ? "Jellyfin" : "Emby";
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-8">
+    <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))] p-8">
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
         <div className={`absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-150 h-150 rounded-full ${colors.glow} blur-3xl`} />
       </div>
@@ -694,7 +694,7 @@ export default function OnboardingPage() {
           <div className={`mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full ${manualType === "JELLYFIN" ? "bg-purple-500/15 ring-1 ring-purple-500/20" : "bg-emerald-500/15 ring-1 ring-emerald-500/20"}`}>
             <Server className={`h-8 w-8 ${manualType === "JELLYFIN" ? "text-purple-400" : "text-emerald-400"}`} />
           </div>
-          <h1 className="text-3xl font-bold">Add {typeLabel} Server</h1>
+          <h1 className="text-3xl font-bold font-display tracking-tight">Add {typeLabel} Server</h1>
           <p className="mt-2 text-muted-foreground">
             Enter your server details to connect.
           </p>

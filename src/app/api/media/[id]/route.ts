@@ -53,6 +53,11 @@ export async function GET(
     },
   ];
 
+  // Server presence array for metadata display
+  const servers = [
+    { serverId: ms.id, serverName: ms.name, serverType: ms.type, mediaItemId: item.id },
+  ];
+
   // If item has a dedup key, find copies on other servers
   if (item.dedupKey) {
     const siblings = await prisma.mediaItem.findMany({
@@ -62,6 +67,7 @@ export async function GET(
         library: { mediaServer: { userId: session.userId } },
       },
       select: {
+        id: true,
         ratingKey: true,
         parentRatingKey: true,
         grandparentRatingKey: true,
@@ -87,16 +93,24 @@ export async function GET(
           parentRatingKey: sibling.parentRatingKey,
           grandparentRatingKey: sibling.grandparentRatingKey,
         });
+        servers.push({
+          serverId: sms.id,
+          serverName: sms.name,
+          serverType: sms.type,
+          mediaItemId: sibling.id,
+        });
       }
     }
 
     playServers.sort((a, b) => a.serverName.localeCompare(b.serverName));
+    servers.sort((a, b) => a.serverName.localeCompare(b.serverName));
   }
 
   return NextResponse.json({
     item: {
       ...item,
       fileSize: item.fileSize?.toString() ?? null,
+      servers,
     },
     playServers,
   });

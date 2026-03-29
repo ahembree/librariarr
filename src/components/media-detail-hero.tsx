@@ -41,8 +41,8 @@ function PlayButton({ playServers }: { playServers: PlayServer[] }) {
   if (playServers.length === 0) return null;
 
   const baseClasses = cn(
-    "flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium",
-    "backdrop-blur-sm transition-all duration-200",
+    "flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold",
+    "backdrop-blur-sm transition-all duration-200 shadow-lg",
   );
 
   // Single link — render as a direct button
@@ -193,16 +193,16 @@ export function MediaDetailHero({
             className="absolute inset-0"
             style={{
               background: [
-                "linear-gradient(to bottom, oklch(0.145 0 0 / 0.3) 0%, transparent 30%)",
-                "linear-gradient(to bottom, transparent 40%, oklch(0.145 0 0 / 0.7) 70%, oklch(0.145 0 0) 100%)",
-                "linear-gradient(to right, oklch(0.145 0 0 / 0.5) 0%, transparent 50%)",
+                "linear-gradient(to bottom, oklch(0.16 0.006 270 / 0.3) 0%, transparent 30%)",
+                "linear-gradient(to bottom, transparent 40%, oklch(0.16 0.006 270 / 0.7) 70%, oklch(0.16 0.006 270) 100%)",
+                "linear-gradient(to right, oklch(0.16 0.006 270 / 0.5) 0%, transparent 50%)",
               ].join(", "),
             }}
           />
         </div>
 
         {/* Top navigation — back button + open button */}
-        <div className="relative z-10 flex items-center justify-between p-4 sm:p-6 lg:p-8">
+        <div className="relative z-10 flex items-center p-4 sm:p-6 lg:p-8">
           <Link
             href={backHref}
             className={cn(
@@ -215,9 +215,6 @@ export function MediaDetailHero({
             <ArrowLeft className="h-4 w-4" />
             {backLabel || "Back"}
           </Link>
-          {playServers && playServers.length > 0 && (
-            <PlayButton playServers={playServers} />
-          )}
         </div>
 
         {/* Localized dark gradient behind poster + text */}
@@ -226,15 +223,15 @@ export function MediaDetailHero({
           style={{
             width: "min(56rem, 80%)",
             height: "70%",
-            background: "radial-gradient(ellipse at 10% 100%, oklch(0.145 0 0 / 0.7) 0%, oklch(0.145 0 0 / 0.35) 40%, transparent 70%)",
+            background: "radial-gradient(ellipse at 10% 100%, oklch(0.16 0.006 270 / 0.7) 0%, oklch(0.16 0.006 270 / 0.35) 40%, transparent 70%)",
           }}
         />
 
         {/* Poster + title area — anchored to the bottom of the hero */}
-        <div className="absolute inset-x-0 bottom-0 z-10 px-4 pb-6 sm:px-6 sm:pb-8 lg:px-8">
+        <div className="absolute inset-x-0 bottom-0 z-10 px-4 pb-6 sm:px-6 sm:pb-8 lg:px-8 animate-fade-in-up">
           <div className="flex items-center gap-5 sm:gap-7">
-            {/* Poster */}
-            <div className="shrink-0">
+            {/* Poster + play button */}
+            <div className="shrink-0 w-30 sm:w-40 lg:w-50">
               <div
                 className="relative overflow-hidden rounded-lg shadow-2xl"
                 style={{
@@ -245,23 +242,28 @@ export function MediaDetailHero({
                 <FadeImage
                   src={imageUrl}
                   alt={title}
-                  className="block h-auto w-30 sm:w-40 lg:w-50"
+                  className="block h-auto w-full"
                   style={{ aspectRatio: posterAspectRatio, objectFit: "cover" }}
                   onError={(e) => {
                     (e.target as HTMLImageElement).style.display = "none";
                   }}
                 />
               </div>
+              {playServers && playServers.length > 0 && (
+                <div className="mt-2 w-full *:w-full *:justify-center">
+                  <PlayButton playServers={playServers} />
+                </div>
+              )}
             </div>
 
             {/* Title + metadata */}
             <div className="min-w-0 flex-1">
-              <h1 className="text-xl font-bold leading-tight tracking-tight text-white sm:text-3xl lg:text-4xl">
+              <h1 className="text-xl font-bold font-display leading-tight tracking-tight text-white sm:text-3xl lg:text-4xl">
                 {title}
               </h1>
 
               {tagline && (
-                <p className="mt-1 text-sm italic text-white/50 sm:text-base">
+                <p className="mt-1.5 text-sm font-display italic text-white/60 sm:text-base lg:text-lg">
                   &ldquo;{tagline}&rdquo;
                 </p>
               )}
@@ -285,7 +287,7 @@ export function MediaDetailHero({
               )}
 
               {genres && (
-                <div className="mt-2 hidden sm:flex flex-wrap gap-1.5">
+                <div className="mt-2 flex gap-1.5 overflow-x-auto sm:flex-wrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                   {genres}
                 </div>
               )}

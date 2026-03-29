@@ -1255,7 +1255,7 @@ export default function StreamManagerPage() {
     <div className="p-4 sm:p-6 lg:p-8 space-y-6 min-w-0">
       {/* Header */}
       <div>
-        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Stream Manager</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Stream Manager</h1>
         <p className="text-muted-foreground mt-1">
           Monitor and manage active streams across your media servers
         </p>

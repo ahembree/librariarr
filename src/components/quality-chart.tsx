@@ -408,7 +408,7 @@ export function QualityChart({ breakdown, onQualityClick, filterType, lockedFilt
               >
                 <div
                   className="h-3 w-3 rounded-full"
-                  style={{ backgroundColor: isHidden ? "#6b7280" : getHex("resolution", label) }}
+                  style={{ backgroundColor: isHidden ? "#6e7383" : getHex("resolution", label) }}
                 />
                 <div>
                   <p className={`text-sm font-medium ${isHidden ? "line-through" : ""}`}>{label}</p>

@@ -11,13 +11,13 @@ import { MediaCard } from "@/components/media-card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { LayoutGrid, TableProperties } from "lucide-react";
+import { LayoutGrid, TableProperties, List, Clock, HardDrive } from "lucide-react";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
-import { MetadataLine } from "@/components/metadata-line";
+import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
 import { ArrSection } from "@/components/arr-link-button";
@@ -246,12 +246,12 @@ export default function SeasonDetailPage() {
                   fallbackIcon="series"
                   onClick={() => router.push(`/library/series/episode/${ep.id}`)}
                   metadata={
-                    <MetadataLine>
+                    <MetadataLine stacked>
                       {show("metadata", "episodeLabel") && ep.seasonNumber != null && ep.episodeNumber != null && (
-                        <span>S{String(ep.seasonNumber).padStart(2, "0")}E{String(ep.episodeNumber).padStart(2, "0")}</span>
+                        <MetadataItem icon={<List />}>S{String(ep.seasonNumber).padStart(2, "0")}E{String(ep.episodeNumber).padStart(2, "0")}</MetadataItem>
                       )}
-                      {show("metadata", "duration") && formatDuration(ep.duration) && <span>{formatDuration(ep.duration)}</span>}
-                      {show("metadata", "fileSize") && formatFileSize(ep.fileSize) && <span>{formatFileSize(ep.fileSize)}</span>}
+                      {show("metadata", "duration") && formatDuration(ep.duration) && <MetadataItem icon={<Clock />}>{formatDuration(ep.duration)}</MetadataItem>}
+                      {show("metadata", "fileSize") && formatFileSize(ep.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(ep.fileSize)}</MetadataItem>}
                     </MetadataLine>
                   }
                   badges={

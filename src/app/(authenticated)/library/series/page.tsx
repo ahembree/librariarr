@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tv, Search, ArrowUpDown, Layers, List, LayoutGrid, TableProperties } from "lucide-react";
+import { Tv, Search, ArrowUpDown, Layers, List, LayoutGrid, TableProperties, HardDrive } from "lucide-react";
 import { DataTable } from "@/components/data-table";
 import type { DataTableColumn } from "@/components/data-table";
 import Link from "next/link";
@@ -31,7 +31,7 @@ import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
-import { MetadataLine } from "@/components/metadata-line";
+import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { SyncLibraryButton } from "@/components/sync-library-button";
@@ -356,7 +356,7 @@ export default function SeriesPage() {
   return (
     <div className="p-4 sm:p-6 md:pr-12">
       <div className="flex items-center gap-3 mb-4">
-        <h1 className="text-2xl sm:text-3xl font-bold">Series</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Series</h1>
         {!loading && filteredSeries.length > 0 && (
           <div className="flex items-center gap-1.5">
             <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{filteredSeries.length.toLocaleString()} series</span>
@@ -546,12 +546,12 @@ export default function SeriesPage() {
                             fallbackIcon="series"
                             onClick={() => { markChildNavigation(); router.push(`/library/series/show/${s.mediaItemId}`); }}
                             metadata={
-                              <MetadataLine>
+                              <MetadataLine stacked>
                                 {show("metadata", "seasonCount") && s.seasonCount > 0 && (
-                                  <span>{s.seasonCount} {s.seasonCount === 1 ? "season" : "seasons"}</span>
+                                  <MetadataItem icon={<Layers />}>{s.seasonCount} {s.seasonCount === 1 ? "season" : "seasons"}</MetadataItem>
                                 )}
-                                {show("metadata", "episodeCount") && <span>{s.episodeCount} ep</span>}
-                                {show("metadata", "fileSize") && <span>{formatFileSize(s.totalSize)}</span>}
+                                {show("metadata", "episodeCount") && <MetadataItem icon={<List />}>{s.episodeCount} ep</MetadataItem>}
+                                {show("metadata", "fileSize") && <MetadataItem icon={<HardDrive />}>{formatFileSize(s.totalSize)}</MetadataItem>}
                               </MetadataLine>
                             }
                             badges={

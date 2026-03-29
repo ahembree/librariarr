@@ -140,7 +140,7 @@ export default function LifecycleExceptionsPage() {
     <div className="flex md:h-full">
       <div className="flex-1 min-w-0 space-y-6 p-6 md:overflow-y-auto">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Lifecycle Exceptions</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Lifecycle Exceptions</h1>
           <p className="text-muted-foreground">
             Media items excluded from lifecycle actions. These items will not be matched or actioned by any rule set.
           </p>

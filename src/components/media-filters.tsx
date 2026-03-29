@@ -113,15 +113,20 @@ const CATEGORY_ICONS: Record<string, LucideIcon> = {
   Dates: Calendar,
 };
 
-function CategoryTrigger({ name, isOpen }: { name: string; isOpen: boolean }) {
+function CategoryTrigger({ name, isOpen, activeCount }: { name: string; isOpen: boolean; activeCount?: number }) {
   const Icon = CATEGORY_ICONS[name];
   return (
     <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-2 hover:bg-accent/50 transition-colors">
-      {Icon && <Icon className="h-3.5 w-3.5 text-muted-foreground/70" />}
-      <span className="flex-1 text-left text-[11px] font-semibold text-muted-foreground tracking-wide uppercase">
+      {Icon && <Icon className="h-3.5 w-3.5 text-foreground/50" />}
+      <span className="flex-1 text-left text-[11px] font-semibold text-foreground/70 tracking-wide uppercase">
         {name}
       </span>
-      <ChevronDown className={`h-3 w-3 text-muted-foreground/50 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} />
+      {!!activeCount && activeCount > 0 && (
+        <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground px-1">
+          {activeCount}
+        </span>
+      )}
+      <ChevronDown className={`h-3 w-3 text-foreground/40 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} />
     </CollapsibleTrigger>
   );
 }
@@ -1203,6 +1208,35 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
     return cats;
   }, [distinctData, mediaType]);
 
+  // Map of category name → extra inline filter keys (comparisons, dates, etc.)
+  const CATEGORY_EXTRA_KEYS: Record<string, string[]> = useMemo(() => ({
+    Video: ["videoBitrateConditions"],
+    Audio: ["audioBitrateConditions"],
+    "Stream Counts": ["audioStreamCountConditions", "subtitleStreamCountConditions"],
+    Content: ["contentRating", "studio", "genre", "playCountConditions", "ratingConditions", "audienceRatingConditions", "isWatchlisted", "durationMin", "durationMax"],
+    Series: ["episodeCountConditions", "watchedEpisodeCountConditions", "watchedEpisodePercentageConditions", "lastEpisodeAiredAtMin", "lastEpisodeAiredAtMax", "lastEpisodeAiredAtDays"],
+    File: ["container", "fileSizeMin", "fileSizeMax"],
+    Dates: ["yearConditions", "lastPlayedAtMin", "lastPlayedAtMax", "lastPlayedAtDays", "addedAtMin", "addedAtMax", "addedAtDays", "originallyAvailableAtMin", "originallyAvailableAtMax", "originallyAvailableAtDays"],
+  }), []);
+
+  const getCategoryActiveCount = useCallback((catName: string, catOptions: FilterOption[]) => {
+    let count = 0;
+    // Count individual selected values from multi-select filters (pipe-separated)
+    for (const opt of catOptions) {
+      const val = filters[opt.key];
+      if (val) count += val.split("|").length;
+    }
+    // Count active inline/comparison filters
+    const extraKeys = CATEGORY_EXTRA_KEYS[catName];
+    if (extraKeys) {
+      for (const key of extraKeys) {
+        const val = filters[key];
+        if (val) count += val.includes("|") ? val.split("|").length : 1;
+      }
+    }
+    return count;
+  }, [filters, CATEGORY_EXTRA_KEYS]);
+
   // Compute active filter chips (exclude range/date/search keys)
   const chipFilterKeys = useMemo(() => {
     return Object.keys(filters).filter((k) => !RANGE_KEYS.has(k));
@@ -1310,17 +1344,18 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
     + (hasIsWatchlisted ? 1 : 0);
 
   return (
-    <div className="mb-6">
-      {/* Search + Filters + Comparison Popovers + Chips */}
+    <div className="mb-6 glass rounded-lg px-4 py-3 space-y-2">
+      {/* Toolbar row: prefix + search + filters button */}
       <div className="flex flex-wrap items-center gap-2">
         {prefix}
-        <div className="w-full sm:w-auto">
+        <div className="relative w-full sm:w-auto">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
           <Input
             placeholder="Search titles..."
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            className="w-full sm:w-64"
+            className="w-full sm:w-64 pl-8"
           />
         </div>
 
@@ -1369,7 +1404,7 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                   <div key={cat.name}>
                     {catIdx > 0 && <Separator className="my-1" />}
                     <Collapsible open={isOpen} onOpenChange={() => toggleCategory(cat.name)}>
-                      <CategoryTrigger name={cat.name} isOpen={isOpen} />
+                      <CategoryTrigger name={cat.name} isOpen={isOpen} activeCount={getCategoryActiveCount(cat.name, cat.options)} />
                       <CollapsibleContent>
                         {catItems.map((opt) => (
                           <FilterCombobox
@@ -1425,7 +1460,7 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                   <>
                     <Separator className="my-1" />
                     <Collapsible open={isOpen} onOpenChange={() => toggleCategory("Stream Counts")}>
-                      <CategoryTrigger name="Stream Counts" isOpen={isOpen} />
+                      <CategoryTrigger name="Stream Counts" isOpen={isOpen} activeCount={getCategoryActiveCount("Stream Counts", [])} />
                       <CollapsibleContent>
                         {hasAudioTracks && (
                           <ComparisonPopover
@@ -1506,7 +1541,7 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                   <>
                     <Separator className="my-1" />
                     <Collapsible open={isOpen} onOpenChange={() => toggleCategory("Content")}>
-                      <CategoryTrigger name="Content" isOpen={isOpen} />
+                      <CategoryTrigger name="Content" isOpen={isOpen} activeCount={getCategoryActiveCount("Content", [])} />
                       <CollapsibleContent>{contentItems}</CollapsibleContent>
                     </Collapsible>
                   </>
@@ -1526,7 +1561,7 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                   <>
                     <Separator className="my-1" />
                     <Collapsible open={isOpen} onOpenChange={() => toggleCategory("Series")}>
-                      <CategoryTrigger name="Series" isOpen={isOpen} />
+                      <CategoryTrigger name="Series" isOpen={isOpen} activeCount={getCategoryActiveCount("Series", [])} />
                       <CollapsibleContent>{seriesItems}</CollapsibleContent>
                     </Collapsible>
                   </>
@@ -1552,7 +1587,7 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                   <>
                     <Separator className="my-1" />
                     <Collapsible open={isOpen} onOpenChange={() => toggleCategory("File")}>
-                      <CategoryTrigger name="File" isOpen={isOpen} />
+                      <CategoryTrigger name="File" isOpen={isOpen} activeCount={getCategoryActiveCount("File", [])} />
                       <CollapsibleContent>{fileItems}</CollapsibleContent>
                     </Collapsible>
                   </>
@@ -1574,7 +1609,7 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                   <>
                     <Separator className="my-1" />
                     <Collapsible open={isOpen} onOpenChange={() => toggleCategory("Dates")}>
-                      <CategoryTrigger name="Dates" isOpen={isOpen} />
+                      <CategoryTrigger name="Dates" isOpen={isOpen} activeCount={getCategoryActiveCount("Dates", [])} />
                       <CollapsibleContent>{dateItems}</CollapsibleContent>
                     </Collapsible>
                   </>
@@ -1616,7 +1651,11 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
           </PopoverContent>
         </Popover>
 
-        {/* Active filter chips */}
+      </div>
+
+      {/* Active filter chips — separate row */}
+      {hasFilters && (
+        <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-white/5 animate-fade-in-up">
         {chipFilterKeys.map((key) => (
           <Badge
             key={key}
@@ -1850,14 +1889,12 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
           </Badge>
         )}
 
-        {hasFilters && (
-          <Button variant="ghost" size="sm" onClick={clearFilters}>
-            <X className="mr-1 h-4 w-4" />
-            Clear
-          </Button>
-        )}
-      </div>
-
+        <Button variant="ghost" size="sm" onClick={clearFilters} className="text-muted-foreground hover:text-foreground">
+          <X className="mr-1 h-3.5 w-3.5" />
+          Clear all
+        </Button>
+        </div>
+      )}
     </div>
   );
 }

@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -492,8 +493,7 @@ export function ServersTab({
                             {server.type !== "PLEX" && (
                               <div>
                                 <label className="text-xs text-muted-foreground">API Key</label>
-                                <Input
-                                  type="password"
+                                <SecretInput
                                   value={editServerAccessToken}
                                   onChange={(e) => setEditServerAccessToken(e.target.value)}
                                   className="text-sm font-mono"
@@ -853,7 +853,7 @@ export function ServersTab({
               </div>
               <div className="space-y-1">
                 <Label htmlFor="add-server-apikey">API Key</Label>
-                <Input
+                <SecretInput
                   id="add-server-apikey"
                   placeholder="API key from dashboard"
                   value={addServerForm.apiKey}

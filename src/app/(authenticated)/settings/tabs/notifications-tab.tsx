@@ -9,6 +9,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
 import {
   Loader2,
@@ -59,9 +60,8 @@ export function NotificationsTab({
           <CardContent className="space-y-6">
             <div className="space-y-2">
               <Label htmlFor="discord-webhook-url">Webhook URL</Label>
-              <Input
+              <SecretInput
                 id="discord-webhook-url"
-                type="url"
                 placeholder="https://discord.com/api/webhooks/..."
                 value={discordWebhookUrl}
                 onChange={(e) => onDiscordWebhookUrlChange(e.target.value)}

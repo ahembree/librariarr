@@ -45,6 +45,10 @@ import {
   LayoutGrid,
   TableProperties,
   Columns3,
+  Calendar,
+  Clock,
+  HardDrive,
+  Layers,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { QueryBuilder, queryBuilderConfig, countAllRules, validateAllRules } from "@/components/query-builder";
@@ -53,7 +57,7 @@ import type { QueryGroup, QueryDefinition } from "@/lib/query/types";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { MediaCard } from "@/components/media-card";
-import { MetadataLine } from "@/components/metadata-line";
+import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { CardSizeControl } from "@/components/card-size-control";
 import { useCardSize } from "@/hooks/use-card-size";
 import { useChipColors } from "@/components/chip-color-provider";
@@ -821,7 +825,7 @@ export default function QueryPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Query Builder</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Query Builder</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Search across all media types, servers, and metadata
           </p>
@@ -1158,17 +1162,17 @@ export default function QueryPage() {
                               fallbackIcon={FALLBACK_ICONS[item.type] ?? "movie"}
                               onClick={() => navigateToItem(item)}
                               metadata={
-                                <MetadataLine>
-                                  {item.type !== "SERIES" && item.year && <span>{item.year}</span>}
+                                <MetadataLine stacked>
+                                  {item.type !== "SERIES" && item.year && <MetadataItem icon={<Calendar />}>{item.year}</MetadataItem>}
                                   {item.matchedEpisodes != null && (
-                                    <span>
+                                    <MetadataItem icon={<Layers />}>
                                       {item.seasonCount}S / {item.matchedEpisodes}E
-                                    </span>
+                                    </MetadataItem>
                                   )}
                                   {item.matchedEpisodes == null && formatDuration(item.duration) && (
-                                    <span>{formatDuration(item.duration)}</span>
+                                    <MetadataItem icon={<Clock />}>{formatDuration(item.duration)}</MetadataItem>
                                   )}
-                                  {formatFileSize(item.fileSize) && <span>{formatFileSize(item.fileSize)}</span>}
+                                  {formatFileSize(item.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(item.fileSize)}</MetadataItem>}
                                 </MetadataLine>
                               }
                               badges={

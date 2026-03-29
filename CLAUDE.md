@@ -80,7 +80,7 @@ npx vitest run tests/path/to/file.test.ts  # Run a single test file
   - Dashboard (`/`), System Logs (`/system/logs`)
   - Settings (`/settings`) — `page.tsx` is the orchestrator (all state + handlers); 7 tab components in `settings/tabs/` are pure render receiving props; shared types in `settings/types.ts`; tab navigation via URL hash (`#general`, `#servers`, etc.)
   - Library: `/library/movies`, `/library/series` (with `/seasons` and `/episodes` sub-routes), `/library/music`
-  - Lifecycle: `/lifecycle/movies`, `/lifecycle/series`, `/lifecycle/music`, `/lifecycle/matches`, `/lifecycle/pending`
+  - Lifecycle: `/lifecycle/rules` (unified rules page with Movies/Series/Music tabs), `/lifecycle/matches`, `/lifecycle/pending`, `/lifecycle/exceptions`
   - Tools: `/tools/streams` (Stream Manager: active sessions, maintenance mode, transcode manager, blackout schedules), `/tools/preroll` (Preroll Manager: presets, schedules, combine modes)
 - `src/app/login/` and `src/app/onboarding/` — Public pages
 - `src/app/api/` — API routes (all require authenticated session except auth endpoints)
@@ -206,8 +206,11 @@ When users connect multiple servers, dedup prevents duplicate items from appeari
 
 - Tailwind CSS v4 with **OKLCH color model** (not HSL). CSS variables defined in `src/app/globals.css`
 - Dark mode is hardcoded (`className="dark"` on `<html>` tag in layout.tsx)
+- **Fonts:** Sora (display/headings via `font-display`), Plus Jakarta Sans (body via `font-sans`), JetBrains Mono (code via `font-mono`)
+- All page `<h1>` elements must use `text-2xl sm:text-3xl font-bold font-display tracking-tight`
 - Theme accent colors override CSS vars: `--primary`, `--primary-foreground`, `--ring`, `--sidebar-primary`
 - shadcn/ui uses "new-york" style variant
+- **Full style guide:** `docs/src/content/docs/docs/development/style-guide.mdx` — covers color palette, typography, effects, component patterns, and don'ts. Consult when making UI changes.
 
 ### Data Patterns
 
@@ -313,6 +316,6 @@ When adding features, update the relevant documentation in `docs/src/content/doc
 
 ### Git Conventions
 
-- Husky pre-commit hook runs `npx next lint --quiet`
+- Husky pre-commit hook runs `npx eslint --quiet`
 - Husky commit-msg hook enforces [Conventional Commits](https://www.conventionalcommits.org/) via commitlint (`@commitlint/config-conventional`)
 - Commit format: `type(scope): description` — e.g. `feat: add stream manager`, `fix(auth): handle expired tokens`

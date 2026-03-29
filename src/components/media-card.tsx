@@ -56,7 +56,7 @@ export const MediaCard = memo(function MediaCard({
 
   return (
     <Card
-      className="group cursor-pointer overflow-hidden py-0 gap-0 hover:scale-[1.02] hover:shadow-lg hover:ring-2 hover:ring-primary/50 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none transition-all duration-200 rounded-sm"
+      className="group cursor-pointer overflow-hidden py-0 gap-0 rounded-lg hover:scale-[1.03] hover:shadow-[0_8px_32px_oklch(0_0_0/0.4)] hover:ring-1 hover:ring-white/10 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none transition-all duration-300 ease-out"
       onClick={onClick}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -87,7 +87,7 @@ export const MediaCard = memo(function MediaCard({
             alt={title}
             loading="lazy"
             decoding="async"
-            className="absolute inset-0 w-full h-full object-cover"
+            className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 ease-out group-hover:scale-105"
             onError={() => setImgError(true)}
           />
         )}

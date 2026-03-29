@@ -9,13 +9,13 @@ import { MediaCard } from "@/components/media-card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { LayoutGrid, TableProperties } from "lucide-react";
+import { LayoutGrid, TableProperties, List, Clock, HardDrive } from "lucide-react";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
-import { MetadataLine } from "@/components/metadata-line";
+import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
 
@@ -230,12 +230,12 @@ export default function AlbumDetailPage() {
                   fallbackIcon="music"
                   onClick={() => router.push(`/library/music/track/${t.id}`)}
                   metadata={
-                    <MetadataLine>
+                    <MetadataLine stacked>
                       {show("metadata", "trackNumber") && t.episodeNumber != null && (
-                        <span>Track {t.episodeNumber}</span>
+                        <MetadataItem icon={<List />}>Track {t.episodeNumber}</MetadataItem>
                       )}
-                      {show("metadata", "duration") && formatDuration(t.duration) && <span>{formatDuration(t.duration)}</span>}
-                      {show("metadata", "fileSize") && formatFileSize(t.fileSize) && <span>{formatFileSize(t.fileSize)}</span>}
+                      {show("metadata", "duration") && formatDuration(t.duration) && <MetadataItem icon={<Clock />}>{formatDuration(t.duration)}</MetadataItem>}
+                      {show("metadata", "fileSize") && formatFileSize(t.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(t.fileSize)}</MetadataItem>}
                     </MetadataLine>
                   }
                   badges={

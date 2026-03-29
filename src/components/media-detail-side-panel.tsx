@@ -119,9 +119,19 @@ export function MediaDetailSidePanel({
   const resolutionLabel = formatResolution(item.resolution);
 
   const header = (
-    <div className="border-b shrink-0">
+    <div className="border-b shrink-0 relative overflow-hidden">
+      {/* Ambient blurred poster background */}
+      <div className="absolute inset-0 -z-10">
+        <FadeImage
+          src={imageUrl}
+          alt=""
+          className="w-full h-full object-cover blur-3xl opacity-20 scale-110"
+        />
+        <div className="absolute inset-0 bg-background/60" />
+      </div>
+
       {/* Close / Open full page buttons */}
-      <div className="flex items-center justify-end gap-1 px-3 pt-3">
+      <div className="flex items-center justify-end gap-1 px-3 pt-3 relative">
         <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
           <Link href={detailUrl}>
             <ExternalLink className="h-3.5 w-3.5" />
@@ -134,60 +144,56 @@ export function MediaDetailSidePanel({
         </Button>
       </div>
 
-      {/* Centered artwork */}
-      <div className="flex justify-center px-4 pb-3">
-        <div className="w-36 h-54 rounded-lg overflow-hidden bg-muted shadow-lg" style={{ aspectRatio: mediaType === "MUSIC" ? "1/1" : "2/3" }}>
+      {/* Poster + Title inline layout */}
+      <div className="flex gap-3 px-4 pb-4 relative">
+        <div className="w-20 shrink-0 rounded-lg overflow-hidden bg-muted shadow-[0_4px_16px_oklch(0_0_0/0.3)]" style={{ aspectRatio: mediaType === "MUSIC" ? "1/1" : "2/3" }}>
           <FadeImage
             src={imageUrl}
             alt={displayTitle}
             className="w-full h-full object-cover"
           />
         </div>
-      </div>
-
-      {/* Title + metadata */}
-      <div className="text-center px-4 pb-4 space-y-2">
-        <h3 className="font-semibold text-base leading-tight line-clamp-2">
-          {displayTitle}
-        </h3>
-        {isAggregate ? (
-          <p className="text-xs text-muted-foreground">
-            {[
-              item.matchedEpisodes && `${item.matchedEpisodes} ${mediaType === "MUSIC" ? "tracks" : "episodes"}`,
-              item.fileSize ? formatFileSize(item.fileSize) : null,
-              item.playCount > 0 ? `${item.playCount} plays` : null,
-            ].filter(Boolean).join(" \u00b7 ")}
-          </p>
-        ) : (
-          <>
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <h3 className="font-display font-semibold text-base leading-tight line-clamp-2">
+            {displayTitle}
+          </h3>
+          {isAggregate ? (
             <p className="text-xs text-muted-foreground">
               {[
-                item.year,
-                item.duration ? formatDuration(item.duration) : null,
+                item.matchedEpisodes && `${item.matchedEpisodes} ${mediaType === "MUSIC" ? "tracks" : "episodes"}`,
                 item.fileSize ? formatFileSize(item.fileSize) : null,
+                item.playCount > 0 ? `${item.playCount} plays` : null,
               ].filter(Boolean).join(" \u00b7 ")}
             </p>
-
-            {/* Quality chips */}
-            <div className="flex flex-wrap justify-center gap-1.5">
-              {resolutionLabel && (
-                <Badge variant="secondary" className="text-xs" style={getBadgeStyle("resolution", resolutionLabel)}>
-                  {resolutionLabel}
-                </Badge>
-              )}
-              {item.dynamicRange && (
-                <Badge variant="secondary" className="text-xs" style={getBadgeStyle("dynamicRange", item.dynamicRange)}>
-                  {item.dynamicRange}
-                </Badge>
-              )}
-              {item.audioProfile && (
-                <Badge variant="secondary" className="text-xs" style={getBadgeStyle("audioProfile", item.audioProfile)}>
-                  {item.audioProfile}
-                </Badge>
-              )}
-            </div>
-          </>
-        )}
+          ) : (
+            <>
+              <p className="text-xs text-muted-foreground">
+                {[
+                  item.year,
+                  item.duration ? formatDuration(item.duration) : null,
+                  item.fileSize ? formatFileSize(item.fileSize) : null,
+                ].filter(Boolean).join(" \u00b7 ")}
+              </p>
+              <div className="flex flex-wrap gap-1">
+                {resolutionLabel && (
+                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0" style={getBadgeStyle("resolution", resolutionLabel)}>
+                    {resolutionLabel}
+                  </Badge>
+                )}
+                {item.dynamicRange && (
+                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0" style={getBadgeStyle("dynamicRange", item.dynamicRange)}>
+                    {item.dynamicRange}
+                  </Badge>
+                )}
+                {item.audioProfile && (
+                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0" style={getBadgeStyle("audioProfile", item.audioProfile)}>
+                    {item.audioProfile}
+                  </Badge>
+                )}
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -264,18 +270,20 @@ export function MediaDetailSidePanel({
   // Desktop: side panel with resize handle
   return (
     <div
-      className="relative border-l bg-background flex flex-col h-full overflow-hidden shrink-0"
+      className="relative border-l border-white/5 glass flex flex-col h-full overflow-hidden shrink-0"
       style={{ width }}
     >
-      {/* Resize handle */}
+      {/* Resize handle — wider hit target with grip indicator */}
       <div
         role="separator"
         aria-label="Resize panel"
-        className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-20 hover:bg-primary/50 active:bg-primary transition-colors touch-none"
+        className="group/resize absolute left-0 top-0 bottom-0 w-3 cursor-col-resize z-20 transition-colors touch-none flex items-center justify-center"
         onMouseDown={resizeHandleProps.onMouseDown}
         onTouchStart={resizeHandleProps.onTouchStart}
         onDoubleClick={resizeHandleProps.onDoubleClick}
-      />
+      >
+        <div className="h-8 w-1 rounded-full bg-white/10 group-hover/resize:bg-primary/50 group-active/resize:bg-primary transition-colors" />
+      </div>
       {header}
       {content}
     </div>

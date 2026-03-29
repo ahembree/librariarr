@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -244,9 +245,8 @@ function ArrSection({
               </div>
               <div>
                 <Label htmlFor={`${idPrefix}-key`}>API Key</Label>
-                <Input
+                <SecretInput
                   id={`${idPrefix}-key`}
-                  type="password"
                   placeholder={placeholder.apiKey}
                   value={form.apiKey}
                   onChange={(e) =>
@@ -347,8 +347,7 @@ function ArrSection({
                       </div>
                       <div>
                         <Label>API Key</Label>
-                        <Input
-                          type="password"
+                        <SecretInput
                           placeholder="Leave blank to keep current"
                           value={editing.form.apiKey}
                           onChange={(e) => onEditFormChange({ ...editing.form, apiKey: e.target.value })}
@@ -521,9 +520,8 @@ function SeerrSection({
               </div>
               <div>
                 <Label htmlFor="seerr-key">API Key</Label>
-                <Input
+                <SecretInput
                   id="seerr-key"
-                  type="password"
                   placeholder="API key from Seerr settings"
                   value={form.apiKey}
                   onChange={(e) =>
@@ -613,8 +611,7 @@ function SeerrSection({
                       </div>
                       <div>
                         <Label>API Key</Label>
-                        <Input
-                          type="password"
+                        <SecretInput
                           placeholder="Leave blank to keep current"
                           value={editing.form.apiKey}
                           onChange={(e) => onEditFormChange({ ...editing.form, apiKey: e.target.value })}

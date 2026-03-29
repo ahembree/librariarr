@@ -1,0 +1,397 @@
+---
+title: Style & Branding Guide
+description: Design system, color palette, typography, and component patterns for Librariarr.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+# Style & Branding Guide
+
+Librariarr uses a **modern cinematic** aesthetic — a layered dark interface with navy-tinted surfaces, atmospheric depth, and editorial typography. The design draws from premium streaming services while maintaining a functional media-management tool identity.
+
+## Brand Identity
+
+### Logo
+
+The logo is an SVG side view of a movie reel with a circular arrow (representing lifecycle/recycling) enclosing book spines (representing a media library). Primary brand colors within the logo:
+
+| Element | Color | Hex |
+|-|-|-|
+| Circular arc / arrow | Plex blue | `#00a4dc` |
+| Spine 1 (gold) | Plex accent | `#e5a00d` |
+| Spine 2 (blue) | Primary blue | `#00a4dc` |
+| Spine 3 (green) | Success green | `#52b54b` |
+| Spine 4 (orange) | Warm orange | `#e4881c` |
+| Spine 5 (purple) | Purple accent | `#9b59b6` |
+| Background fill | Deep navy | `#0f1923` |
+
+### Application Name
+
+"Librariarr" is displayed in the sidebar using the display font:
+
+```
+font-family: Sora
+font-weight: 600 (semibold)
+letter-spacing: tight (-0.025em)
+```
+
+---
+
+## Color System
+
+All colors use the **OKLCH color model** for perceptual uniformity. The application enforces dark mode only (`className="dark"` on `<html>`).
+
+### Core Palette
+
+| Token | OKLCH Value | Role |
+|-|-|-|
+| `--background` | `oklch(0.16 0.006 270)` | Page background — deep navy-grey |
+| `--foreground` | `oklch(0.95 0.008 80)` | Primary text — warm off-white |
+| `--card` | `oklch(0.21 0.008 270)` | Card/panel surfaces — lifted from background |
+| `--popover` | `oklch(0.23 0.01 270)` | Popover/dropdown surfaces |
+| `--primary` | `oklch(0.90 0 0)` | Primary actions — near-white |
+| `--primary-foreground` | `oklch(0.18 0.01 270)` | Text on primary — dark navy |
+| `--secondary` | `oklch(0.27 0.01 270)` | Secondary surfaces |
+| `--muted` | `oklch(0.25 0.01 265)` | Muted backgrounds |
+| `--muted-foreground` | `oklch(0.65 0.015 260)` | Secondary/helper text |
+| `--accent` | `oklch(0.27 0.015 270)` | Accent surfaces |
+| `--destructive` | `oklch(0.704 0.191 22.216)` | Error/danger actions |
+| `--border` | `oklch(1 0.01 270 / 12%)` | Borders — translucent white |
+| `--input` | `oklch(1 0.01 270 / 15%)` | Input field borders |
+| `--ring` | `oklch(0.50 0.015 260)` | Focus ring color |
+
+### Sidebar Palette
+
+| Token | OKLCH Value |
+|-|-|
+| `--sidebar` | `oklch(0.18 0.008 270)` |
+| `--sidebar-foreground` | `oklch(0.95 0.008 80)` |
+| `--sidebar-primary` | `oklch(0.55 0.26 264)` |
+| `--sidebar-accent` | `oklch(0.25 0.012 270)` |
+
+### Chart Colors
+
+| Token | OKLCH Value | Approximate hue |
+|-|-|-|
+| `--chart-1` | `oklch(0.55 0.26 264)` | Blue |
+| `--chart-2` | `oklch(0.72 0.19 162)` | Green |
+| `--chart-3` | `oklch(0.78 0.20 70)` | Amber |
+| `--chart-4` | `oklch(0.65 0.28 304)` | Violet |
+| `--chart-5` | `oklch(0.67 0.26 16)` | Rose |
+
+### Surface Elevation
+
+The design uses **layered lightness** to create depth. Each surface level is incrementally brighter:
+
+```
+Background  0.16  ← deepest
+Sidebar     0.18
+Card        0.21
+Popover     0.23
+Muted       0.25
+Secondary   0.27  ← lightest surface
+```
+
+All surfaces share a blue hue angle (~270) with very low chroma (0.006–0.015), giving a cohesive navy tint rather than flat grey.
+
+### Accent Color Presets
+
+Users can choose from 7 accent colors in Settings. Each overrides `--primary`, `--ring`, `--sidebar-primary`, and `--chart-1`:
+
+| Preset | Primary OKLCH | Swatch |
+|-|-|-|
+| Default | `oklch(0.90 0 0)` | Neutral (near-white) |
+| Blue | `oklch(0.65 0.24 260)` | `#3b82f6` |
+| Violet | `oklch(0.65 0.28 304)` | `#8b5cf6` |
+| Green | `oklch(0.72 0.19 162)` | `#22c55e` |
+| Orange | `oklch(0.78 0.20 70)` | `#f59e0b` |
+| Rose | `oklch(0.67 0.26 16)` | `#f43f5e` |
+| Teal | `oklch(0.65 0.14 185)` | `#14b8a6` |
+
+---
+
+## Typography
+
+Three font families from Google Fonts, each serving a distinct role:
+
+### Sora (Display)
+
+**Usage:** Page headings, sidebar brand name, section titles.
+**Weights:** 400, 500, 600, 700
+**CSS variable:** `--font-display`
+**Tailwind class:** `font-display`
+
+Sora is a geometric sans-serif with clean letterforms and wide weight range. Applied to all `<h1>` elements with `font-display tracking-tight`.
+
+### Plus Jakarta Sans (Body)
+
+**Usage:** All body text, navigation items, labels, inputs, buttons.
+**Weights:** 300, 400, 500, 600, 700
+**CSS variable:** `--font-sans`
+**Tailwind class:** `font-sans` (default)
+
+A geometric humanist sans-serif — warm, readable at small sizes, and well-suited for UI text.
+
+### JetBrains Mono (Monospace)
+
+**Usage:** System log messages, code blocks, technical data.
+**Weights:** 400, 500
+**CSS variable:** `--font-mono`
+**Tailwind class:** `font-mono`
+
+### Type Scale
+
+| Context | Classes |
+|-|-|
+| Page title | `text-2xl sm:text-3xl font-bold font-display tracking-tight` |
+| Card title | `text-lg font-semibold` |
+| Section heading | `text-xl font-bold font-display` |
+| Body text | `text-sm` (14px) — default |
+| Helper/metadata | `text-xs text-muted-foreground` |
+| Badge text | `text-xs font-medium` |
+| Micro text | `text-[10px]` or `text-[11px]` |
+
+---
+
+## Border Radius
+
+Base radius: `0.625rem` (10px). Derived values:
+
+| Token | Value | Usage |
+|-|-|-|
+| `radius-sm` | 6px | Small buttons, inputs |
+| `radius-md` | 8px | Buttons, badges |
+| `radius-lg` | 10px | Cards (inner elements) |
+| `radius-xl` | 14px | Cards (outer) |
+| `radius-full` | 9999px | Badges, avatars |
+
+---
+
+## Effects & Atmosphere
+
+### Glass Morphism
+
+Applied to filter bars, detail panels, login card, and mobile header:
+
+```css
+.glass {
+  backdrop-filter: blur(20px);
+  background: oklch(0.21 0.008 270 / 70%);
+  border: 1px solid oklch(1 0 0 / 5%);
+}
+```
+
+### Film Grain / Noise Overlay
+
+A subtle SVG noise texture is overlaid on the entire page at 2.5% opacity using `mix-blend-mode: overlay`. This adds organic texture that prevents the dark surfaces from feeling digitally flat.
+
+### Atmospheric Gradient
+
+The main content area has a radial gradient at the top providing subtle ambient light:
+
+```
+radial-gradient(ellipse at 50% 0%, oklch(0.22 0.02 270) 0%, transparent 60%)
+```
+
+### Logo Glow
+
+On the login page, the logo has a pulsing glow animation:
+
+```css
+@keyframes logo-glow {
+  0%, 100% { box-shadow: 0 0 20px oklch(0.50 0.15 270 / 0.15); }
+  50% { box-shadow: 0 0 40px oklch(0.50 0.15 270 / 0.3); }
+}
+```
+
+### Custom Scrollbar
+
+All scrollable areas use thin, translucent scrollbars:
+
+```css
+scrollbar-width: thin;
+scrollbar-color: oklch(1 0 0 / 10%) transparent;
+```
+
+### Focus Ring
+
+Focus-visible states use a glow effect instead of a hard outline:
+
+```css
+box-shadow: 0 0 0 2px var(--ring), 0 0 12px oklch(0.50 0.15 270 / 0.2);
+```
+
+### Selection
+
+Text selection uses the primary accent color at 30% opacity:
+
+```css
+::selection {
+  background: oklch(0.50 0.15 270 / 30%);
+  color: oklch(0.95 0.008 80);
+}
+```
+
+---
+
+## Animation
+
+### Entry Animations
+
+Page elements use a staggered fade-in-up animation on load:
+
+```css
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+```
+
+Apply `animate-fade-in-up` for single elements, or `stagger-children` on a parent to auto-stagger up to 12 children (50ms intervals).
+
+### Transitions
+
+| Context | Duration | Easing |
+|-|-|-|
+| Hover effects | 300ms | ease-out |
+| Button press | 200ms | default |
+| Sidebar collapse | 300ms | ease-in-out |
+| Collapsible expand | 200ms | ease-out |
+| Tab changes | instant | — |
+
+### Micro-Interactions
+
+- **Buttons:** `active:scale-[0.98]` press feedback
+- **Media cards:** `hover:scale-[1.03]` with image `group-hover:scale-105`
+- **Nav items:** `hover:translate-x-0.5` subtle rightward shift
+
+---
+
+## Component Patterns
+
+### Cards
+
+Default card styling:
+
+```
+bg-card rounded-xl
+border border-white/6
+shadow-[0_1px_3px_0_rgb(0_0_0/0.1),inset_0_1px_0_oklch(1_0_0/4%)]
+```
+
+Cards use an inset top highlight (`inset_0_1px_0`) to simulate a subtle light edge, adding perceived depth.
+
+### Buttons
+
+Six variants: `default`, `destructive`, `outline`, `secondary`, `ghost`, `link`
+Eight sizes: `default` (h-9), `xs` (h-6), `sm` (h-8), `lg` (h-10), `icon` (9), `icon-xs` (6), `icon-sm` (8), `icon-lg` (10)
+
+All buttons include `active:scale-[0.98]` and `transition-all duration-200`.
+
+### Badges
+
+Rounded-full pills with `backdrop-blur-sm` for use over images. Variants: `default`, `secondary`, `destructive`, `outline`, `ghost`, `link`.
+
+### Media Cards
+
+Poster-forward cards with cinematic hover:
+
+```
+hover:scale-[1.03]
+hover:shadow-[0_8px_32px_oklch(0_0_0/0.4)]
+hover:ring-1 hover:ring-white/10
+transition-all duration-300 ease-out
+```
+
+Image zooms on hover: `group-hover:scale-105`
+
+### Tab Navigation
+
+Border-bottom style tabs with icon support:
+
+- **Active:** `border-primary text-foreground` with 2px bottom border
+- **Inactive:** `border-transparent text-muted-foreground` with hover fade-in
+
+### Sidebar Navigation
+
+- **Active item:** `bg-sidebar-accent border-l-2 border-sidebar-primary` with inset shadow
+- **Inactive item:** `text-sidebar-foreground/70` with hover to `text-sidebar-foreground`
+- **Group labels:** `text-[11px] font-medium uppercase tracking-widest text-sidebar-foreground/60`
+- **Gradient overlay:** Top gradient from `primary/5` to transparent for atmospheric depth
+
+### Dialogs
+
+Dialogs use `backdrop-blur-sm` on the overlay and `border-white/6` on the content panel.
+
+---
+
+## Page Layout Patterns
+
+### Authenticated Pages
+
+All authenticated pages share this structure:
+
+```
+Sidebar (collapsible 64px/256px) | Main content (flex-1, overflow-y-auto)
+```
+
+The main content area includes the atmospheric radial gradient and a 1px `border-l border-white/3` separator.
+
+### Page Headers
+
+Every page follows this heading pattern:
+
+```html
+<h1 class="text-2xl sm:text-3xl font-bold font-display tracking-tight">
+  Page Title
+</h1>
+<p class="text-muted-foreground mt-1">
+  Brief description of the page purpose.
+</p>
+```
+
+### Lifecycle Pages
+
+All lifecycle pages (Rules, Matches, Pending Actions, Exceptions) include a `TabNav` for filtering by media type (Movies / Series / Music), plus an "All" tab on Matches and Pending Actions.
+
+### Login / Onboarding
+
+Full-screen cinematic gradient background with glass-morphism card:
+
+```
+bg-[radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))]
+```
+
+---
+
+## Status Colors
+
+### Log Levels
+
+| Level | Badge classes |
+|-|-|
+| DEBUG | `bg-zinc-500/20 text-zinc-400 shadow-zinc-500/10` |
+| INFO | `bg-blue-500/20 text-blue-400 shadow-blue-500/15` |
+| WARN | `bg-amber-500/20 text-amber-400 shadow-amber-500/15` |
+| ERROR | `bg-red-500/20 text-red-400 shadow-red-500/20` |
+
+All log level badges include a subtle `shadow-[0_0_8px]` glow matching their color.
+
+### Action Statuses
+
+| Status | Color |
+|-|-|
+| Pending | `bg-yellow-500` |
+| Completed | `bg-green-500` |
+| Failed | `bg-red-500` |
+
+---
+
+## Don'ts
+
+- **Don't use flat grey** — all dark surfaces should have the navy tint (hue ~270)
+- **Don't use HSL** — the entire color system is OKLCH for perceptual consistency
+- **Don't use generic fonts** — never fall back to Inter, Roboto, Arial, or system fonts
+- **Don't edit shadcn/ui primitives** in `src/components/ui/` unless adding project-wide enhancements
+- **Don't use light mode** — the application enforces dark mode only
+- **Don't add emojis** — use Lucide icons for all iconography

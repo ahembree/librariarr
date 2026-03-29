@@ -41,7 +41,7 @@ const AUTO_HEX = [
   "#84cc16", "#f43f5e", "#0ea5e9", "#8b5cf6", "#d946ef",
 ];
 
-const OTHER_HEX = "#6b7280";
+const OTHER_HEX = "#6e7383";
 
 const DIMENSION_CHIP_CATEGORY: Partial<Record<string, ChipColorCategory>> = {
   resolution: "resolution",
@@ -300,7 +300,7 @@ export function CustomChartCard({
                       >
                         <div
                           className="h-2.5 w-2.5 shrink-0 rounded-full"
-                          style={{ backgroundColor: isHidden ? "#6b7280" : color }}
+                          style={{ backgroundColor: isHidden ? "#6e7383" : color }}
                         />
                         <span className={`text-xs ${isHidden ? "line-through text-muted-foreground" : ""}`}>
                           {label}
@@ -337,7 +337,7 @@ export function CustomChartCard({
                   >
                     <div
                       className="h-2.5 w-2.5 shrink-0 rounded-full"
-                      style={{ backgroundColor: isHidden ? "#6b7280" : entry.fill }}
+                      style={{ backgroundColor: isHidden ? "#6e7383" : entry.fill }}
                     />
                     <span className={`text-xs ${isHidden ? "line-through text-muted-foreground" : ""}`}>
                       {entry.label} ({entry.count.toLocaleString()})

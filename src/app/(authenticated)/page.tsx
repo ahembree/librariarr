@@ -281,7 +281,7 @@ export default function DashboardPage() {
   return (
     <div className="p-4 sm:p-6 lg:p-8">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 sm:mb-8">
-        <h1 className="text-2xl sm:text-3xl font-bold">Dashboard</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Dashboard</h1>
         <div className="flex flex-wrap items-center gap-2">
           <SyncIndicator onSyncComplete={fetchStats} />
           {servers.length > 1 && (

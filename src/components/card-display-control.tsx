@@ -17,11 +17,13 @@ export function CardDisplayControl({ prefs, config, onToggle }: CardDisplayContr
     <Popover>
       <PopoverTrigger asChild>
         <button
-          className="flex items-center gap-1 rounded-lg border p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          className="flex items-center gap-1 rounded-lg border p-1 text-muted-foreground hover:text-foreground transition-colors"
           title="Card display options"
           aria-label="Card display options"
         >
-          <Eye className="h-4 w-4" />
+          <span className="rounded-md p-1.5 hover:bg-muted transition-colors">
+            <Eye className="h-4 w-4" />
+          </span>
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-56 p-3">

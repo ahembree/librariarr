@@ -11,14 +11,14 @@ import { MediaFilters } from "@/components/media-filters";
 import { MediaCard } from "@/components/media-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Film, LayoutGrid, TableProperties } from "lucide-react";
+import { Film, LayoutGrid, TableProperties, Calendar, Clock, HardDrive } from "lucide-react";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
-import { MetadataLine } from "@/components/metadata-line";
+import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { ServerFilter } from "@/components/server-filter";
 import { AlphabetFilter } from "@/components/alphabet-filter";
 import { useVirtualGridAlphabet } from "@/hooks/use-virtual-grid-alphabet";
@@ -223,7 +223,7 @@ export default function MoviesPage() {
   return (
     <div className="p-4 sm:p-6 md:pr-12">
       <div className="flex items-center gap-3 mb-6">
-        <h1 className="text-2xl sm:text-3xl font-bold">Movies</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Movies</h1>
         {!loading && items.length > 0 && (
           <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{items.length.toLocaleString()}</span>
         )}
@@ -341,10 +341,10 @@ export default function MoviesPage() {
                             fallbackIcon="movie"
                             onClick={() => { markChildNavigation(); router.push(`/library/movies/${movie.id}`); }}
                             metadata={
-                              <MetadataLine>
-                                {show("metadata", "year") && movie.year && <span>{movie.year}</span>}
-                                {show("metadata", "duration") && formatDuration(movie.duration) && <span>{formatDuration(movie.duration)}</span>}
-                                {show("metadata", "fileSize") && formatFileSize(movie.fileSize) && <span>{formatFileSize(movie.fileSize)}</span>}
+                              <MetadataLine stacked>
+                                {show("metadata", "year") && movie.year && <MetadataItem icon={<Calendar />}>{movie.year}</MetadataItem>}
+                                {show("metadata", "duration") && formatDuration(movie.duration) && <MetadataItem icon={<Clock />}>{formatDuration(movie.duration)}</MetadataItem>}
+                                {show("metadata", "fileSize") && formatFileSize(movie.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(movie.fileSize)}</MetadataItem>}
                               </MetadataLine>
                             }
                             badges={

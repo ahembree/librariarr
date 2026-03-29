@@ -17,7 +17,9 @@ export interface MediaItemWithRelations {
   // Content metadata
   contentRating: string | null;
   rating: number | null;
+  ratingImage: string | null;
   audienceRating: number | null;
+  audienceRatingImage: string | null;
   userRating: number | null;
   studio: string | null;
   tagline: string | null;

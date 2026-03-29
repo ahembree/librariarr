@@ -9,14 +9,14 @@ import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
 import { MediaCard } from "@/components/media-card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Tv, Layers, List, LayoutGrid, TableProperties } from "lucide-react";
+import { Loader2, Tv, Layers, List, LayoutGrid, TableProperties, Clock, HardDrive } from "lucide-react";
 import Link from "next/link";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
-import { MetadataLine } from "@/components/metadata-line";
+import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
@@ -129,7 +129,7 @@ export default function AllEpisodesPage() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <h1 className="text-2xl sm:text-3xl font-bold mb-4">Series</h1>
+      <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight mb-4">Series</h1>
 
       <nav className="mb-6 flex items-center gap-1 border-b overflow-x-auto">
         <Link
@@ -224,13 +224,13 @@ export default function AllEpisodesPage() {
                   fallbackIcon="series"
                   onClick={() => router.push(`/library/series/episode/${ep.id}`)}
                   metadata={
-                    <MetadataLine>
-                      {show("metadata", "seriesName") && ep.parentTitle && <span>{ep.parentTitle}</span>}
+                    <MetadataLine stacked>
+                      {show("metadata", "seriesName") && ep.parentTitle && <MetadataItem icon={<Tv />}>{ep.parentTitle}</MetadataItem>}
                       {show("metadata", "episodeLabel") && ep.seasonNumber != null && ep.episodeNumber != null && (
-                        <span>S{String(ep.seasonNumber).padStart(2, "0")}E{String(ep.episodeNumber).padStart(2, "0")}</span>
+                        <MetadataItem icon={<List />}>S{String(ep.seasonNumber).padStart(2, "0")}E{String(ep.episodeNumber).padStart(2, "0")}</MetadataItem>
                       )}
-                      {show("metadata", "duration") && formatDuration(ep.duration) && <span>{formatDuration(ep.duration)}</span>}
-                      {show("metadata", "fileSize") && formatFileSize(ep.fileSize) && <span>{formatFileSize(ep.fileSize)}</span>}
+                      {show("metadata", "duration") && formatDuration(ep.duration) && <MetadataItem icon={<Clock />}>{formatDuration(ep.duration)}</MetadataItem>}
+                      {show("metadata", "fileSize") && formatFileSize(ep.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(ep.fileSize)}</MetadataItem>}
                     </MetadataLine>
                   }
                   badges={
