@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.9.0](https://github.com/ahembree/librariarr/compare/v0.8.0...v0.9.0) (2026-03-29)
+
+
+### Features
+
+* ui updates ([5fc65a3](https://github.com/ahembree/librariarr/commit/5fc65a3139d6de875849958f66653d1499fb26f1))
+* ui updates ([2324518](https://github.com/ahembree/librariarr/commit/232451892a0dfba86023223e39f8ca121a7451a4))
+
+
+### Bug Fixes
+
+* run frontend-builder skill ([eaa077c](https://github.com/ahembree/librariarr/commit/eaa077cadbfc97d586d4b782052f5d9244e82f5e))
+
 ## [0.8.0](https://github.com/ahembree/librariarr/compare/v0.7.0...v0.8.0) (2026-03-28)
 
 
