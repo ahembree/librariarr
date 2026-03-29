@@ -187,7 +187,7 @@ export default function SeasonDetailPage() {
             <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
               Episodes
             </h2>
-            <div className="flex items-center gap-1 rounded-lg border p-1">
+            <div className="flex items-center gap-1 rounded-lg border p-1 h-9">
               <button
                 onClick={() => handleViewModeChange("cards")}
                 className={cn(

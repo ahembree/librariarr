@@ -7,30 +7,19 @@ import { useRouter } from "next/navigation";
 import { MediaFilters } from "@/components/media-filters";
 import { MediaCard } from "@/components/media-card";
 import { useServers } from "@/hooks/use-servers";
-import { ServerFilter } from "@/components/server-filter";
+import { LibraryToolbar } from "@/components/library-toolbar";
 import { AlphabetFilter } from "@/components/alphabet-filter";
 import { useVirtualGridAlphabet } from "@/hooks/use-virtual-grid-alphabet";
 import { useTableAlphabet } from "@/hooks/use-table-alphabet";
 
-import { cn } from "@/lib/utils";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Tv, Search, ArrowUpDown, Layers, List, LayoutGrid, TableProperties, HardDrive } from "lucide-react";
+import { Tv, Layers, List, HardDrive } from "lucide-react";
 import { DataTable } from "@/components/data-table";
 import type { DataTableColumn } from "@/components/data-table";
 import Link from "next/link";
 import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
-import { CardSizeControl } from "@/components/card-size-control";
-import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
@@ -187,7 +176,6 @@ export default function SeriesPage() {
   const { show, showServers, setVisible, prefs } = useCardDisplay("SERIES");
   const [seriesList, setSeriesList] = useState<GroupedSeries[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<Record<string, string>>({});
   const { savedFilters, persistFilters } = useFilterPersistence("filters-/library/series");
   const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
@@ -257,7 +245,6 @@ export default function SeriesPage() {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (search) params.set("search", search);
       params.set("sortBy", sortBy);
       params.set("sortOrder", sortOrder);
       params.set("limit", "0");
@@ -274,7 +261,7 @@ export default function SeriesPage() {
       console.error("Failed to fetch series:", error);
       setLoading(false);
     }
-  }, [search, sortBy, sortOrder, selectedServerId]);
+  }, [sortBy, sortOrder, selectedServerId]);
 
   useRealtime("sync:completed", fetchSeries);
 
@@ -391,93 +378,29 @@ export default function SeriesPage() {
         </Link>
       </nav>
 
-      <div className="mb-6 flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1 rounded-lg border p-1">
-            <button
-              onClick={() => handleViewModeChange("cards")}
-              className={cn(
-                "rounded-md p-1.5 transition-colors",
-                viewMode === "cards"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
-              )}
-              title="Card view"
-              aria-label="Card view"
-            >
-              <LayoutGrid className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => handleViewModeChange("table")}
-              className={cn(
-                "rounded-md p-1.5 transition-colors",
-                viewMode === "table"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
-              )}
-              title="Table view"
-              aria-label="Table view"
-            >
-              <TableProperties className="h-4 w-4" />
-            </button>
-          </div>
-          {viewMode === "cards" && (
-            <>
-              <CardSizeControl size={size} onChange={setSize} />
-              <CardDisplayControl prefs={prefs} config={TOGGLE_CONFIGS.SERIES} onToggle={setVisible} />
-            </>
-          )}
-        </div>
-
-        <ServerFilter
-          servers={servers}
-          value={selectedServerId}
-          onChange={setSelectedServerId}
-        />
-
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search series..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-10"
-          />
-        </div>
-
-        <div className="flex items-center gap-2">
-          <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
-          <Select value={sortBy} onValueChange={(v) => toggleSort(v)}>
-            <SelectTrigger className="w-full sm:w-40">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {SORT_OPTIONS.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={() =>
-              setSortOrder((o) => (o === "asc" ? "desc" : "asc"))
-            }
-            title={sortOrder === "asc" ? "Ascending" : "Descending"}
-          >
-            <span className="text-xs font-medium">
-              {sortOrder === "asc" ? "A-Z" : "Z-A"}
-            </span>
-          </Button>
-        </div>
-      </div>
-
       <MediaFilters
         onFilterChange={(f) => { setFilters(f); persistFilters(f); }}
         externalFilters={Object.keys(savedFilters).length > 0 ? savedFilters : undefined}
         mediaType="SERIES"
+        prefix={
+          <LibraryToolbar
+            viewMode={viewMode}
+            onViewModeChange={handleViewModeChange}
+            cardSize={size}
+            onCardSizeChange={setSize}
+            cardDisplayPrefs={prefs}
+            cardDisplayConfig={TOGGLE_CONFIGS.SERIES}
+            onCardDisplayToggle={setVisible}
+            servers={servers}
+            selectedServerId={selectedServerId}
+            onServerChange={setSelectedServerId}
+            sortOptions={SORT_OPTIONS}
+            sortBy={sortBy}
+            sortOrder={sortOrder}
+            onSortChange={(v) => toggleSort(v)}
+            onSortOrderToggle={() => setSortOrder((o) => (o === "asc" ? "desc" : "asc"))}
+          />
+        }
       />
 
       {loading ? (

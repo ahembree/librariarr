@@ -17,7 +17,7 @@ export function CardDisplayControl({ prefs, config, onToggle }: CardDisplayContr
     <Popover>
       <PopoverTrigger asChild>
         <button
-          className="flex items-center gap-1 rounded-lg border p-1 text-muted-foreground hover:text-foreground transition-colors"
+          className="flex items-center gap-1 rounded-lg border p-1 h-9 text-muted-foreground hover:text-foreground transition-colors"
           title="Card display options"
           aria-label="Card display options"
         >

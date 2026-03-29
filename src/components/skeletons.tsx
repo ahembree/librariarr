@@ -104,7 +104,7 @@ export function FilterBarSkeleton() {
   return (
     <div className="mb-6 flex flex-wrap items-center gap-3">
       <Skeleton className="h-9 w-28 rounded-md" />
-      <div className="flex items-center gap-1 rounded-lg border p-1">
+      <div className="flex items-center gap-1 rounded-lg border p-1 h-9">
         <Skeleton className="h-7 w-7 rounded-md" />
         <Skeleton className="h-7 w-7 rounded-md" />
       </div>

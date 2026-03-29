@@ -30,7 +30,7 @@ export async function PUT(
   const { data, error } = await validateRequest(request, serverEditSchema);
   if (error) return error;
 
-  const { url, tlsSkipVerify, accessToken, enabled } = data;
+  const { url, tlsSkipVerify, accessToken, enabled, deleteData } = data;
 
   // Test connection if URL or access token changed (skip if just toggling enabled)
   if ((url || accessToken) && enabled !== false) {
@@ -57,6 +57,31 @@ export async function PUT(
       ...(enabled !== undefined && { enabled }),
     },
   });
+
+  // Purge media data when disabling with deleteData
+  if (enabled === false && deleteData) {
+    const libraries = await prisma.library.findMany({
+      where: { mediaServerId: server.id },
+      select: { id: true },
+    });
+    const libraryIds = libraries.map((l) => l.id);
+
+    if (libraryIds.length > 0) {
+      await prisma.lifecycleAction.deleteMany({
+        where: { mediaItem: { libraryId: { in: libraryIds } } },
+      });
+      await prisma.mediaItem.deleteMany({
+        where: { libraryId: { in: libraryIds } },
+      });
+    }
+
+    await recomputeCanonical(session.userId!);
+
+    apiLogger.info(
+      "Auth",
+      `Media server "${server.name}" disabled with data purge`
+    );
+  }
 
   // Invalidate caches when enabled state changes so media queries reflect immediately
   if (enabled !== undefined) {

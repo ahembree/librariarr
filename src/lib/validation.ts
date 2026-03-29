@@ -484,6 +484,7 @@ export const serverEditSchema = z.object({
   accessToken: z.string().optional(),
   tlsSkipVerify: z.boolean().optional(),
   enabled: z.boolean().optional(),
+  deleteData: z.boolean().optional(),
 });
 
 export const serverLibraryUpdateSchema = z.object({

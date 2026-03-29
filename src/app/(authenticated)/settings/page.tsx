@@ -843,15 +843,22 @@ export default function SettingsPage() {
   };
 
   const toggleServerEnabled = async (serverId: string, enabled: boolean) => {
+    if (!enabled) {
+      const server = servers.find((s) => s.id === serverId);
+      if (server) {
+        setPurgeDialog({ open: true, mode: "server", serverId, serverName: server.name });
+        return;
+      }
+    }
     try {
       const res = await fetch(`/api/servers/${serverId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
+        body: JSON.stringify({ enabled: true }),
       });
       if (res.ok) await fetchServers();
     } catch (error) {
-      console.error("Failed to toggle server enabled:", error);
+      console.error("Failed to enable server:", error);
     }
   };
 
@@ -886,19 +893,18 @@ export default function SettingsPage() {
   };
 
   const toggleLibrary = async (serverId: string, libraryKey: string, enabled: boolean) => {
-    // When disabling, check if this is the last enabled library of its type
     if (!enabled) {
       const server = servers.find((s) => s.id === serverId);
       const lib = server?.libraries.find((l) => l.key === libraryKey);
       if (lib) {
-        // Count enabled libraries of this type across ALL servers
         const enabledOfType = servers.flatMap((s) => s.libraries)
           .filter((l) => l.type === lib.type && l.enabled);
-        if (enabledOfType.length === 1 && enabledOfType[0].key === libraryKey) {
-          // This is the last enabled library of this type — show purge dialog
-          setPurgeDialog({ open: true, serverId, libraryKey, libraryType: lib.type });
-          return;
-        }
+        const isLastOfType = enabledOfType.length === 1 && enabledOfType[0].key === libraryKey;
+        setPurgeDialog({
+          open: true, mode: "library", serverId, libraryKey,
+          libraryId: lib.id, libraryType: lib.type, isLastOfType,
+        });
+        return;
       }
     }
     await doToggleLibrary(serverId, libraryKey, enabled);
@@ -949,15 +955,23 @@ export default function SettingsPage() {
     if (!purgeDialog) return;
     setPurging(true);
     try {
-      // Disable the library first
-      await doToggleLibrary(purgeDialog.serverId, purgeDialog.libraryKey, false);
-      if (deleteData) {
-        await fetch(`/api/media/purge?type=${purgeDialog.libraryType}`, {
-          method: "DELETE",
+      if (purgeDialog.mode === "library") {
+        await doToggleLibrary(purgeDialog.serverId, purgeDialog.libraryKey!, false);
+        if (deleteData && purgeDialog.libraryId) {
+          await fetch(`/api/media/purge?libraryId=${purgeDialog.libraryId}`, {
+            method: "DELETE",
+          });
+        }
+      } else {
+        const res = await fetch(`/api/servers/${purgeDialog.serverId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: false, deleteData }),
         });
+        if (res.ok) await fetchServers();
       }
     } catch (error) {
-      console.error("Failed to purge library data:", error);
+      console.error("Failed to disable:", error);
     } finally {
       setPurging(false);
       setPurgeDialog(null);

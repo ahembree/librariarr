@@ -847,7 +847,7 @@ export default function PrerollManagerPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             {/* Mode selector */}
-            <div className="flex items-center gap-1 rounded-lg border p-1 w-fit">
+            <div className="flex items-center gap-1 rounded-lg border p-1 h-9 w-fit">
               <button
                 onClick={() => setCombineMode("sequential")}
                 className={cn(

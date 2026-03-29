@@ -632,7 +632,7 @@ export default function HistoryPage() {
             {usernames.length > 0 && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-9">
+                  <Button variant="outline" size="default">
                     Users{selectedUsernames.size > 0 ? ` (${selectedUsernames.size})` : ""}
                   </Button>
                 </DropdownMenuTrigger>
@@ -654,7 +654,7 @@ export default function HistoryPage() {
             {platforms.length > 0 && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-9">
+                  <Button variant="outline" size="default">
                     Platforms{selectedPlatforms.size > 0 ? ` (${selectedPlatforms.size})` : ""}
                   </Button>
                 </DropdownMenuTrigger>

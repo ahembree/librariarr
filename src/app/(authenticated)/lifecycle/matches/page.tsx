@@ -795,7 +795,7 @@ export default function RuleMatchesPage() {
           <p className="text-muted-foreground mt-1">Media items that match your lifecycle rules, grouped by rule set.</p>
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1 rounded-lg border p-1">
+          <div className="flex items-center gap-1 rounded-lg border p-1 h-9">
             <button
               onClick={() => handleViewModeChange("cards")}
               className={cn(

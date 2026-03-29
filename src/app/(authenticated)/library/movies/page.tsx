@@ -5,21 +5,18 @@ import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
-import { cn } from "@/lib/utils";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
 import { MediaCard } from "@/components/media-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Film, LayoutGrid, TableProperties, Calendar, Clock, HardDrive } from "lucide-react";
+import { Film, Calendar, Clock, HardDrive } from "lucide-react";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
-import { CardSizeControl } from "@/components/card-size-control";
-import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
-import { ServerFilter } from "@/components/server-filter";
+import { LibraryToolbar } from "@/components/library-toolbar";
 import { AlphabetFilter } from "@/components/alphabet-filter";
 import { useVirtualGridAlphabet } from "@/hooks/use-virtual-grid-alphabet";
 import { useTableAlphabet } from "@/hooks/use-table-alphabet";
@@ -30,6 +27,16 @@ import { SyncLibraryButton } from "@/components/sync-library-button";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useFilterPersistence } from "@/hooks/use-filter-persistence";
 import { useRealtime } from "@/hooks/use-realtime";
+
+const SORT_OPTIONS = [
+  { value: "title", label: "Name" },
+  { value: "year", label: "Year" },
+  { value: "addedAt", label: "Date Added" },
+  { value: "lastPlayedAt", label: "Last Played" },
+  { value: "fileSize", label: "File Size" },
+  { value: "duration", label: "Duration" },
+  { value: "rating", label: "Rating" },
+];
 
 function formatResolution(resolution: string | null): string {
   if (!resolution) return "";
@@ -234,47 +241,23 @@ export default function MoviesPage() {
         onFilterChange={(f) => { setFilters(f); persistFilters(f); }}
         externalFilters={Object.keys(savedFilters).length > 0 ? savedFilters : undefined}
         prefix={
-          <div className="flex items-center gap-3">
-            <ServerFilter
-              servers={servers}
-              value={selectedServerId}
-              onChange={setSelectedServerId}
-            />
-            <div className="flex items-center gap-1 rounded-lg border p-1">
-              <button
-                onClick={() => handleViewModeChange("cards")}
-                className={cn(
-                  "rounded-md p-1.5 transition-colors",
-                  viewMode === "cards"
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted",
-                )}
-                title="Card view"
-                aria-label="Card view"
-              >
-                <LayoutGrid className="h-4 w-4" />
-              </button>
-              <button
-                onClick={() => handleViewModeChange("table")}
-                className={cn(
-                  "rounded-md p-1.5 transition-colors",
-                  viewMode === "table"
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted",
-                )}
-                title="Table view"
-                aria-label="Table view"
-              >
-                <TableProperties className="h-4 w-4" />
-              </button>
-            </div>
-            {viewMode === "cards" && (
-              <>
-                <CardSizeControl size={size} onChange={setSize} />
-                <CardDisplayControl prefs={prefs} config={TOGGLE_CONFIGS.MOVIE} onToggle={setVisible} />
-              </>
-            )}
-          </div>
+          <LibraryToolbar
+            viewMode={viewMode}
+            onViewModeChange={handleViewModeChange}
+            cardSize={size}
+            onCardSizeChange={setSize}
+            cardDisplayPrefs={prefs}
+            cardDisplayConfig={TOGGLE_CONFIGS.MOVIE}
+            onCardDisplayToggle={setVisible}
+            servers={servers}
+            selectedServerId={selectedServerId}
+            onServerChange={setSelectedServerId}
+            sortOptions={SORT_OPTIONS}
+            sortBy={sortBy}
+            sortOrder={sortOrder}
+            onSortChange={(v) => { if (v === sortBy) { setSortOrder((o) => o === "asc" ? "desc" : "asc"); } else { setSortBy(v); setSortOrder("asc"); } }}
+            onSortOrderToggle={() => setSortOrder((o) => (o === "asc" ? "desc" : "asc"))}
+          />
         }
       />
 

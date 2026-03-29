@@ -1032,7 +1032,7 @@ export default function QueryPage() {
         <div className="flex-1" />
 
         {/* View toggle */}
-        <div className="flex items-center gap-1 rounded-lg border p-1">
+        <div className="flex items-center gap-1 rounded-lg border p-1 h-9">
           <button
             onClick={() => handleViewModeChange("table")}
             className={cn(
