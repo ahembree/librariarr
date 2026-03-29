@@ -58,7 +58,7 @@ const AUTO_HEX = [
   "#d946ef",
 ];
 
-const OTHER_HEX = "#6b7280";
+const OTHER_HEX = "#6e7383";
 
 type SortedEntry = [string, { movies: number; series: number; music: number }];
 
@@ -437,7 +437,7 @@ export function BreakdownChart({
               >
                 <div
                   className="h-3 w-3 shrink-0 rounded-full"
-                  style={{ backgroundColor: isHidden ? "#6b7280" : (hexMap[label] ?? OTHER_HEX) }}
+                  style={{ backgroundColor: isHidden ? "#6e7383" : (hexMap[label] ?? OTHER_HEX) }}
                 />
                 <div className="min-w-0">
                   <p className={`text-sm font-medium truncate ${isHidden ? "line-through" : ""}`}>{label}</p>

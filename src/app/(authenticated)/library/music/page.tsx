@@ -3,29 +3,19 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, useTransition } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { MediaFilters } from "@/components/media-filters";
 import { MediaCard } from "@/components/media-card";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Music, Search, ArrowUpDown, LayoutGrid, TableProperties } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { LibraryToolbar } from "@/components/library-toolbar";
+import { Music, Disc3, ListMusic, HardDrive } from "lucide-react";
 import { DataTable } from "@/components/data-table";
 import type { DataTableColumn } from "@/components/data-table";
 import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
-import { CardSizeControl } from "@/components/card-size-control";
-import { CardDisplayControl } from "@/components/card-display-control";
-import { MetadataLine } from "@/components/metadata-line";
+import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { useServers } from "@/hooks/use-servers";
-import { ServerFilter } from "@/components/server-filter";
 import { AlphabetFilter } from "@/components/alphabet-filter";
 import { useVirtualGridAlphabet } from "@/hooks/use-virtual-grid-alphabet";
 import { useTableAlphabet } from "@/hooks/use-table-alphabet";
@@ -133,7 +123,6 @@ export default function MusicPage() {
   const router = useRouter();
   const [artistList, setArtistList] = useState<GroupedArtist[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<Record<string, string>>({});
   const { savedFilters, persistFilters } = useFilterPersistence("filters-/library/music");
   const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
@@ -205,7 +194,6 @@ export default function MusicPage() {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (search) params.set("search", search);
       params.set("sortBy", sortBy);
       params.set("sortOrder", sortOrder);
       params.set("limit", "0");
@@ -225,7 +213,7 @@ export default function MusicPage() {
       console.error("Failed to fetch artists:", error);
       setLoading(false);
     }
-  }, [search, sortBy, sortOrder, selectedServerId, filters]);
+  }, [sortBy, sortOrder, selectedServerId, filters]);
 
   useRealtime("sync:completed", fetchArtists);
 
@@ -302,7 +290,7 @@ export default function MusicPage() {
   return (
     <div className="p-4 sm:p-6 md:pr-12">
       <div className="flex items-center gap-3 mb-6">
-        <h1 className="text-2xl sm:text-3xl font-bold">Music</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Music</h1>
         {!loading && artistList.length > 0 && (
           <div className="flex items-center gap-1.5">
             <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{artistList.length.toLocaleString()} artists</span>
@@ -313,94 +301,54 @@ export default function MusicPage() {
         <SyncLibraryButton libraryType="MUSIC" onSyncComplete={fetchArtists} />
       </div>
 
+      <nav className="mb-6 flex items-center gap-1 border-b overflow-x-auto">
+        <Link
+          href="/library/music"
+          className="flex items-center gap-2 border-b-2 border-primary px-4 py-2 text-sm font-medium text-foreground"
+        >
+          <Music className="h-4 w-4" />
+          Artists
+        </Link>
+        <Link
+          href="/library/music/albums"
+          className="flex items-center gap-2 border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 transition-colors"
+        >
+          <Disc3 className="h-4 w-4" />
+          All Albums
+        </Link>
+        <Link
+          href="/library/music/tracks"
+          className="flex items-center gap-2 border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 transition-colors"
+        >
+          <ListMusic className="h-4 w-4" />
+          All Tracks
+        </Link>
+      </nav>
+
       <MediaFilters
         onFilterChange={(f) => { setFilters(f); persistFilters(f); }}
         externalFilters={Object.keys(savedFilters).length > 0 ? savedFilters : undefined}
         mediaType="MUSIC"
         prefix={
-          <div className="flex items-center gap-3">
-            <ServerFilter
-              servers={servers}
-              value={selectedServerId}
-              onChange={setSelectedServerId}
-            />
-            <div className="flex items-center gap-1 rounded-lg border p-1">
-              <button
-                onClick={() => handleViewModeChange("cards")}
-                className={cn(
-                  "rounded-md p-1.5 transition-colors",
-                  viewMode === "cards"
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                )}
-                title="Card view"
-                aria-label="Card view"
-              >
-                <LayoutGrid className="h-4 w-4" />
-              </button>
-              <button
-                onClick={() => handleViewModeChange("table")}
-                className={cn(
-                  "rounded-md p-1.5 transition-colors",
-                  viewMode === "table"
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                )}
-                title="Table view"
-                aria-label="Table view"
-              >
-                <TableProperties className="h-4 w-4" />
-              </button>
-            </div>
-            {viewMode === "cards" && (
-              <>
-                <CardSizeControl size={size} onChange={setSize} />
-                <CardDisplayControl prefs={prefs} config={TOGGLE_CONFIGS.MUSIC} onToggle={setVisible} />
-              </>
-            )}
-          </div>
+          <LibraryToolbar
+            viewMode={viewMode}
+            onViewModeChange={handleViewModeChange}
+            cardSize={size}
+            onCardSizeChange={setSize}
+            cardDisplayPrefs={prefs}
+            cardDisplayConfig={TOGGLE_CONFIGS.MUSIC}
+            onCardDisplayToggle={setVisible}
+            servers={servers}
+            selectedServerId={selectedServerId}
+            onServerChange={setSelectedServerId}
+            sortOptions={SORT_OPTIONS}
+            sortBy={sortBy}
+            sortOrder={sortOrder}
+            onSortChange={(v) => toggleSort(v)}
+            onSortOrderToggle={() => setSortOrder((o) => (o === "asc" ? "desc" : "asc"))}
+          />
         }
       />
-
-      <div className="mb-6 flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search artists..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-10"
-          />
-        </div>
-
-        <div className="flex items-center gap-2">
-          <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
-          <Select value={sortBy} onValueChange={(v) => toggleSort(v)}>
-            <SelectTrigger className="w-full sm:w-40">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {SORT_OPTIONS.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={() =>
-              setSortOrder((o) => (o === "asc" ? "desc" : "asc"))
-            }
-            title={sortOrder === "asc" ? "Ascending" : "Descending"}
-          >
-            <span className="text-xs font-medium">
-              {sortOrder === "asc" ? "A-Z" : "Z-A"}
-            </span>
-          </Button>
-        </div>
-      </div>
 
       {loading ? (
         <MediaGridSkeleton />
@@ -469,10 +417,10 @@ export default function MusicPage() {
                             fallbackIcon="music"
                             onClick={() => { markChildNavigation(); router.push(`/library/music/artist/${a.mediaItemId}`); }}
                             metadata={
-                              <MetadataLine>
-                                {show("metadata", "albumCount") && <span>{a.albumCount} {a.albumCount === 1 ? "album" : "albums"}</span>}
-                                {show("metadata", "trackCount") && <span>{a.trackCount} tracks</span>}
-                                {show("metadata", "fileSize") && <span>{formatFileSize(a.totalSize)}</span>}
+                              <MetadataLine stacked>
+                                {show("metadata", "albumCount") && <MetadataItem icon={<Disc3 />}>{a.albumCount} {a.albumCount === 1 ? "album" : "albums"}</MetadataItem>}
+                                {show("metadata", "trackCount") && <MetadataItem icon={<ListMusic />}>{a.trackCount} tracks</MetadataItem>}
+                                {show("metadata", "fileSize") && <MetadataItem icon={<HardDrive />}>{formatFileSize(a.totalSize)}</MetadataItem>}
                               </MetadataLine>
                             }
                             badges={

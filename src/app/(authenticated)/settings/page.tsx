@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
 import {
   DEFAULT_CHIP_COLORS,
@@ -18,7 +18,7 @@ import {
   Bell,
   Lock,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { TabNav, type TabNavItem } from "@/components/tab-nav";
 import { SettingsSkeleton } from "@/components/skeletons";
 
 // ─── Tab components ───
@@ -69,74 +69,21 @@ function getInitialSettingsTab(): SettingsTab {
   return VALID_SETTINGS_TABS.has(hash) ? (hash as SettingsTab) : "general";
 }
 
-// ─── Tab navigation with scroll fade ───
+// ─── Tab navigation helpers ───
 
-function SettingsTabNav({ activeTab, onTabChange, updateAvailable, latestVersion }: { activeTab: SettingsTab; onTabChange: (tab: SettingsTab) => void; updateAvailable?: boolean; latestVersion?: string | null }) {
-  const navRef = useRef<HTMLElement>(null);
-  const [canScrollRight, setCanScrollRight] = useState(false);
-
-  const checkScroll = useCallback(() => {
-    const el = navRef.current;
-    if (!el) return;
-    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 2);
-  }, []);
-
-  useEffect(() => {
-    const el = navRef.current;
-    if (!el) return;
-    checkScroll();
-    el.addEventListener("scroll", checkScroll, { passive: true });
-    const ro = new ResizeObserver(checkScroll);
-    ro.observe(el);
-    return () => { el.removeEventListener("scroll", checkScroll); ro.disconnect(); };
-  }, [checkScroll]);
-
-  // Auto-scroll active tab into view
-  useEffect(() => {
-    const el = navRef.current;
-    if (!el) return;
-    const activeBtn = el.querySelector<HTMLButtonElement>(`[data-tab="${activeTab}"]`);
-    activeBtn?.scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" });
-  }, [activeTab]);
-
-  return (
-    <div className="relative mb-6">
-      <nav
-        ref={navRef}
-        className="flex items-center gap-1 border-b overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-      >
-        {SETTINGS_TABS.map((tab) => {
-          const Icon = tab.icon;
-          return (
-            <button
-              key={tab.value}
-              data-tab={tab.value}
-              onClick={() => onTabChange(tab.value)}
-              className={cn(
-                "flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap shrink-0",
-                activeTab === tab.value
-                  ? "border-primary text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30"
-              )}
-            >
-              <Icon className="h-4 w-4" />
-              {tab.label}
-              {tab.value === "system" && updateAvailable && (
-                <span
-                  className="h-2 w-2 rounded-full bg-emerald-400 shrink-0"
-                  title={latestVersion ? `Update available: v${latestVersion}` : "Update available"}
-                />
-              )}
-            </button>
-          );
-        })}
-      </nav>
-      {/* Right fade indicator when more tabs are scrollable */}
-      {canScrollRight && (
-        <div className="pointer-events-none absolute right-0 top-0 h-full w-12 bg-linear-to-l from-background to-transparent md:hidden" />
-      )}
-    </div>
-  );
+function buildSettingsTabs(updateAvailable?: boolean, latestVersion?: string | null): TabNavItem<SettingsTab>[] {
+  return SETTINGS_TABS.map((tab) => ({
+    value: tab.value,
+    label: tab.label,
+    icon: tab.icon,
+    indicator:
+      tab.value === "system" && updateAvailable ? (
+        <span
+          className="h-2 w-2 rounded-full bg-emerald-400 shrink-0"
+          title={latestVersion ? `Update available: v${latestVersion}` : "Update available"}
+        />
+      ) : undefined,
+  }));
 }
 
 // ─── Main component ───
@@ -896,15 +843,22 @@ export default function SettingsPage() {
   };
 
   const toggleServerEnabled = async (serverId: string, enabled: boolean) => {
+    if (!enabled) {
+      const server = servers.find((s) => s.id === serverId);
+      if (server) {
+        setPurgeDialog({ open: true, mode: "server", serverId, serverName: server.name });
+        return;
+      }
+    }
     try {
       const res = await fetch(`/api/servers/${serverId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
+        body: JSON.stringify({ enabled: true }),
       });
       if (res.ok) await fetchServers();
     } catch (error) {
-      console.error("Failed to toggle server enabled:", error);
+      console.error("Failed to enable server:", error);
     }
   };
 
@@ -939,19 +893,18 @@ export default function SettingsPage() {
   };
 
   const toggleLibrary = async (serverId: string, libraryKey: string, enabled: boolean) => {
-    // When disabling, check if this is the last enabled library of its type
     if (!enabled) {
       const server = servers.find((s) => s.id === serverId);
       const lib = server?.libraries.find((l) => l.key === libraryKey);
       if (lib) {
-        // Count enabled libraries of this type across ALL servers
         const enabledOfType = servers.flatMap((s) => s.libraries)
           .filter((l) => l.type === lib.type && l.enabled);
-        if (enabledOfType.length === 1 && enabledOfType[0].key === libraryKey) {
-          // This is the last enabled library of this type — show purge dialog
-          setPurgeDialog({ open: true, serverId, libraryKey, libraryType: lib.type });
-          return;
-        }
+        const isLastOfType = enabledOfType.length === 1 && enabledOfType[0].key === libraryKey;
+        setPurgeDialog({
+          open: true, mode: "library", serverId, libraryKey,
+          libraryId: lib.id, libraryType: lib.type, isLastOfType,
+        });
+        return;
       }
     }
     await doToggleLibrary(serverId, libraryKey, enabled);
@@ -1002,15 +955,23 @@ export default function SettingsPage() {
     if (!purgeDialog) return;
     setPurging(true);
     try {
-      // Disable the library first
-      await doToggleLibrary(purgeDialog.serverId, purgeDialog.libraryKey, false);
-      if (deleteData) {
-        await fetch(`/api/media/purge?type=${purgeDialog.libraryType}`, {
-          method: "DELETE",
+      if (purgeDialog.mode === "library") {
+        await doToggleLibrary(purgeDialog.serverId, purgeDialog.libraryKey!, false);
+        if (deleteData && purgeDialog.libraryId) {
+          await fetch(`/api/media/purge?libraryId=${purgeDialog.libraryId}`, {
+            method: "DELETE",
+          });
+        }
+      } else {
+        const res = await fetch(`/api/servers/${purgeDialog.serverId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: false, deleteData }),
         });
+        if (res.ok) await fetchServers();
       }
     } catch (error) {
-      console.error("Failed to purge library data:", error);
+      console.error("Failed to disable:", error);
     } finally {
       setPurging(false);
       setPurgeDialog(null);
@@ -1966,11 +1927,16 @@ export default function SettingsPage() {
   return (
     <div className="p-4 sm:p-6 lg:p-8">
       <div className="mb-6">
-        <h1 className="text-2xl sm:text-3xl font-bold">Settings</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Settings</h1>
       </div>
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as SettingsTab)} className="space-y-6">
-        <SettingsTabNav activeTab={activeTab} onTabChange={setActiveTab} updateAvailable={systemInfo?.updateInfo?.updateAvailable} latestVersion={systemInfo?.updateInfo?.latestVersion} />
+        <TabNav
+          tabs={buildSettingsTabs(systemInfo?.updateInfo?.updateAvailable, systemInfo?.updateInfo?.latestVersion)}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          className="mb-6"
+        />
 
         <TabsContent value="general">
           <GeneralTab

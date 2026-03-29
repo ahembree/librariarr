@@ -12,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { type PlayServer, buildPlayUrl } from "@/lib/play-url";
+import { SERVER_TYPE_STYLES, DEFAULT_SERVER_STYLE } from "@/lib/server-styles";
 
 interface MediaDetailHeroProps {
   itemId: string;
@@ -32,42 +33,37 @@ interface MediaDetailHeroProps {
   playServers?: PlayServer[];
 }
 
-const SERVER_COLORS: Record<string, { bg: string; hover: string; text: string }> = {
-  PLEX: { bg: "rgba(229,160,13,0.25)", hover: "rgba(229,160,13,0.4)", text: "rgba(229,160,13,0.95)" },
-  JELLYFIN: { bg: "rgba(170,92,195,0.25)", hover: "rgba(170,92,195,0.4)", text: "rgba(170,92,195,0.95)" },
-  EMBY: { bg: "rgba(82,181,75,0.25)", hover: "rgba(82,181,75,0.4)", text: "rgba(82,181,75,0.95)" },
-};
+function getServerColors(serverType: string) {
+  return (SERVER_TYPE_STYLES[serverType] ?? DEFAULT_SERVER_STYLE).rgba;
+}
 
 function PlayButton({ playServers }: { playServers: PlayServer[] }) {
   if (playServers.length === 0) return null;
 
   const baseClasses = cn(
-    "flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium",
-    "backdrop-blur-sm transition-all duration-200",
+    "flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold",
+    "backdrop-blur-sm transition-all duration-200 shadow-lg",
   );
 
   // Single link — render as a direct button
   if (playServers.length === 1) {
     const server = playServers[0];
-    const colors = SERVER_COLORS[server.serverType];
+    const colors = getServerColors(server.serverType);
     return (
       <a
         href={buildPlayUrl(server)}
         target="_blank"
         rel="noopener noreferrer"
         className={baseClasses}
-        style={colors ? {
+        style={{
           backgroundColor: colors.bg,
           color: colors.text,
-        } : {
-          backgroundColor: "rgba(255,255,255,0.15)",
-          color: "rgba(255,255,255,0.9)",
         }}
         onMouseEnter={(e) => {
-          if (colors) e.currentTarget.style.backgroundColor = colors.hover;
+          e.currentTarget.style.backgroundColor = colors.hover;
         }}
         onMouseLeave={(e) => {
-          if (colors) e.currentTarget.style.backgroundColor = colors.bg;
+          e.currentTarget.style.backgroundColor = colors.bg;
         }}
       >
         <ExternalLink className="h-3 w-3" />
@@ -79,19 +75,16 @@ function PlayButton({ playServers }: { playServers: PlayServer[] }) {
   // Multiple links — dropdown
   const hasLabels = playServers.some((s) => s.label);
   const multiServer = new Set(playServers.map((s) => s.serverName)).size > 1;
-  const primary = SERVER_COLORS[playServers[0].serverType];
+  const primary = getServerColors(playServers[0].serverType);
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           className={baseClasses}
-          style={primary ? {
+          style={{
             backgroundColor: primary.bg,
             color: primary.text,
-          } : {
-            backgroundColor: "rgba(255,255,255,0.15)",
-            color: "rgba(255,255,255,0.9)",
           }}
         >
           <ExternalLink className="h-3 w-3" />
@@ -101,7 +94,7 @@ function PlayButton({ playServers }: { playServers: PlayServer[] }) {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         {playServers.map((server, i) => {
-          const colors = SERVER_COLORS[server.serverType];
+          const colors = getServerColors(server.serverType);
           // Build a descriptive label for the menu item
           let itemLabel: string;
           if (hasLabels && multiServer) {
@@ -119,7 +112,7 @@ function PlayButton({ playServers }: { playServers: PlayServer[] }) {
                 rel="noopener noreferrer"
                 className="flex items-center gap-2"
               >
-                <ExternalLink className="h-3.5 w-3.5" style={colors ? { color: colors.text } : undefined} />
+                <ExternalLink className="h-3.5 w-3.5" style={{ color: colors.text }} />
                 {itemLabel}
                 {!hasLabels && (
                   <span className="ml-auto text-xs text-muted-foreground">
@@ -167,7 +160,7 @@ export function MediaDetailHero({
   return (
     <div className="min-h-screen">
       {/* Hero section */}
-      <div className="relative h-[55vh] min-h-[400px] max-h-[700px] w-full overflow-hidden">
+      <div className="relative h-[55vh] min-h-70 sm:min-h-100 max-h-175 w-full overflow-hidden">
         {/* Background artwork layer */}
         <div className="absolute inset-0">
           {artFailed ? (
@@ -200,16 +193,16 @@ export function MediaDetailHero({
             className="absolute inset-0"
             style={{
               background: [
-                "linear-gradient(to bottom, oklch(0.145 0 0 / 0.3) 0%, transparent 30%)",
-                "linear-gradient(to bottom, transparent 40%, oklch(0.145 0 0 / 0.7) 70%, oklch(0.145 0 0) 100%)",
-                "linear-gradient(to right, oklch(0.145 0 0 / 0.5) 0%, transparent 50%)",
+                "linear-gradient(to bottom, oklch(0.16 0.006 270 / 0.3) 0%, transparent 30%)",
+                "linear-gradient(to bottom, transparent 40%, oklch(0.16 0.006 270 / 0.7) 70%, oklch(0.16 0.006 270) 100%)",
+                "linear-gradient(to right, oklch(0.16 0.006 270 / 0.5) 0%, transparent 50%)",
               ].join(", "),
             }}
           />
         </div>
 
         {/* Top navigation — back button + open button */}
-        <div className="relative z-10 flex items-center justify-between p-4 sm:p-6 lg:p-8">
+        <div className="relative z-10 flex items-center p-4 sm:p-6 lg:p-8">
           <Link
             href={backHref}
             className={cn(
@@ -222,9 +215,6 @@ export function MediaDetailHero({
             <ArrowLeft className="h-4 w-4" />
             {backLabel || "Back"}
           </Link>
-          {playServers && playServers.length > 0 && (
-            <PlayButton playServers={playServers} />
-          )}
         </div>
 
         {/* Localized dark gradient behind poster + text */}
@@ -233,15 +223,15 @@ export function MediaDetailHero({
           style={{
             width: "min(56rem, 80%)",
             height: "70%",
-            background: "radial-gradient(ellipse at 10% 100%, oklch(0.145 0 0 / 0.7) 0%, oklch(0.145 0 0 / 0.35) 40%, transparent 70%)",
+            background: "radial-gradient(ellipse at 10% 100%, oklch(0.16 0.006 270 / 0.7) 0%, oklch(0.16 0.006 270 / 0.35) 40%, transparent 70%)",
           }}
         />
 
         {/* Poster + title area — anchored to the bottom of the hero */}
-        <div className="absolute inset-x-0 bottom-0 z-10 px-4 pb-6 sm:px-6 sm:pb-8 lg:px-8">
+        <div className="absolute inset-x-0 bottom-0 z-10 px-4 pb-6 sm:px-6 sm:pb-8 lg:px-8 animate-fade-in-up">
           <div className="flex items-center gap-5 sm:gap-7">
-            {/* Poster */}
-            <div className="shrink-0">
+            {/* Poster + play button */}
+            <div className="shrink-0 w-30 sm:w-40 lg:w-50">
               <div
                 className="relative overflow-hidden rounded-lg shadow-2xl"
                 style={{
@@ -252,23 +242,28 @@ export function MediaDetailHero({
                 <FadeImage
                   src={imageUrl}
                   alt={title}
-                  className="block h-auto w-30 sm:w-40 lg:w-50"
+                  className="block h-auto w-full"
                   style={{ aspectRatio: posterAspectRatio, objectFit: "cover" }}
                   onError={(e) => {
                     (e.target as HTMLImageElement).style.display = "none";
                   }}
                 />
               </div>
+              {playServers && playServers.length > 0 && (
+                <div className="mt-2 w-full *:w-full *:justify-center">
+                  <PlayButton playServers={playServers} />
+                </div>
+              )}
             </div>
 
             {/* Title + metadata */}
             <div className="min-w-0 flex-1">
-              <h1 className="text-xl font-bold leading-tight tracking-tight text-white sm:text-3xl lg:text-4xl">
+              <h1 className="text-xl font-bold font-display leading-tight tracking-tight text-white sm:text-3xl lg:text-4xl">
                 {title}
               </h1>
 
               {tagline && (
-                <p className="mt-1 text-sm italic text-white/50 sm:text-base">
+                <p className="mt-1.5 text-sm font-display italic text-white/60 sm:text-base lg:text-lg">
                   &ldquo;{tagline}&rdquo;
                 </p>
               )}
@@ -292,7 +287,7 @@ export function MediaDetailHero({
               )}
 
               {genres && (
-                <div className="mt-2 hidden sm:flex flex-wrap gap-1.5">
+                <div className="mt-2 flex gap-1.5 overflow-x-auto sm:flex-wrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                   {genres}
                 </div>
               )}

@@ -87,13 +87,13 @@ function NavItemLink({
     <Link
       href={item.href}
       className={cn(
-        "group relative flex items-center rounded-md text-sm transition-all duration-150 focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:ring-offset-1 focus-visible:outline-none",
+        "group relative flex items-center rounded-md text-sm transition-all duration-300 ease-out focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:ring-offset-1 focus-visible:outline-none",
         isCollapsed ? "justify-center p-2" : "gap-3 px-3 py-2",
         !isCollapsed && "hover:translate-x-0.5",
         isMobile && "min-h-11",
         isActive
-          ? "bg-sidebar-accent text-sidebar-accent-foreground before:absolute before:inset-y-1 before:left-0 before:w-0.75 before:rounded-full before:bg-sidebar-primary"
-          : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+          ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_oklch(1_0_0/6%)] border-l-2 border-sidebar-primary"
+          : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
       )}
     >
       {linkContent}
@@ -139,6 +139,9 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
 
     return (
       <>
+        {/* Atmospheric gradient overlay */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-20 bg-linear-to-b from-primary/5 to-transparent" />
+
         {/* Header — logo only */}
         <div className={cn(
           "flex h-16 items-center border-b",
@@ -146,7 +149,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
         )}>
           <div className="flex items-center gap-2">
             <Logo size={32} />
-            {!isCollapsed && <h1 className="text-xl font-bold">Librariarr</h1>}
+            {!isCollapsed && <h1 className="text-xl font-semibold tracking-tight font-display">Librariarr</h1>}
           </div>
         </div>
 
@@ -156,7 +159,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
             <div key={group.label}>
               {groupIndex > 0 && <Separator className="my-3 opacity-30" />}
               {!isCollapsed && (
-                <p className="mb-2 px-3 text-[11px] font-medium uppercase tracking-widest text-muted-foreground/60">
+                <p className="mb-2 px-3 text-[11px] font-medium uppercase tracking-widest text-sidebar-foreground/60">
                   {group.label}
                 </p>
               )}
@@ -191,7 +194,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
                   <TooltipTrigger asChild>
                     <button
                       onClick={() => setCollapsed(!collapsed)}
-                      className="flex w-full items-center justify-center rounded-md p-2 text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                      className="flex w-full items-center justify-center rounded-md p-2 min-h-10 min-w-10 text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
                       aria-expanded={!isCollapsed}
                       aria-label="Expand sidebar"
                     >
@@ -203,7 +206,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
               ) : (
                 <button
                   onClick={() => setCollapsed(!collapsed)}
-                  className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-all duration-150 hover:translate-x-0.5 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                  className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-sidebar-foreground/70 transition-all duration-150 hover:translate-x-0.5 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
                   aria-expanded={!isCollapsed}
                   aria-label="Collapse sidebar"
                 >
@@ -217,7 +220,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
                 <TooltipTrigger asChild>
                   <button
                     onClick={handleLogout}
-                    className="flex w-full items-center justify-center rounded-md p-2 text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                    className="flex w-full items-center justify-center rounded-md p-2 min-h-10 min-w-10 text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
                   >
                     <LogOut className="h-4 w-4" />
                   </button>
@@ -227,7 +230,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
             ) : (
               <button
                 onClick={handleLogout}
-                className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-all duration-150 hover:translate-x-0.5 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-sidebar-foreground/70 transition-all duration-150 hover:translate-x-0.5 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
               >
                 <LogOut className="h-4 w-4" />
                 Logout
@@ -243,10 +246,10 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
   if (isMobile) {
     return (
       <Sheet open={mobileOpen} onOpenChange={onMobileOpenChange}>
-        <SheetContent side="left" className="w-64 p-0" showCloseButton={false}>
+        <SheetContent side="left" className="w-[min(16rem,85vw)] p-0" showCloseButton={false}>
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <TooltipProvider>
-            <div className="flex h-full flex-col bg-card">
+            <div className="flex h-full flex-col bg-sidebar">
               {sidebarInner(true)}
             </div>
           </TooltipProvider>
@@ -260,7 +263,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
     <TooltipProvider>
       <div
         className={cn(
-          "flex h-screen flex-col border-r bg-card transition-all duration-300 ease-in-out",
+          "relative flex h-screen flex-col border-r bg-sidebar transition-all duration-300 ease-in-out",
           collapsed ? "w-16" : "w-64"
         )}
       >

@@ -43,9 +43,9 @@ export function AuthenticatedShell({ children }: { children: React.ReactNode }) 
   return (
     <div className="flex h-screen">
       <Sidebar mobileOpen={mobileOpen} onMobileOpenChange={setMobileOpen} />
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex flex-1 flex-col overflow-hidden border-l border-white/3">
         {isMobile && (
-          <header className="flex h-14 shrink-0 items-center border-b bg-card px-4">
+          <header className="flex h-14 shrink-0 items-center border-b border-white/5 glass px-4">
             <Button
               variant="ghost"
               size="icon"
@@ -73,7 +73,7 @@ export function AuthenticatedShell({ children }: { children: React.ReactNode }) 
             <span>Maintenance mode is active</span>
           </Link>
         )}
-        <main className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain bg-background">{children}</main>
+        <main className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain bg-background bg-[radial-gradient(ellipse_at_50%_0%,oklch(0.22_0.02_270)_0%,transparent_60%)]">{children}</main>
         <BackToTop />
       </div>
     </div>

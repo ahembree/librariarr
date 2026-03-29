@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -45,6 +46,9 @@ import {
   ChevronDown,
   AlertCircle,
   Plug,
+  Film,
+  Tv,
+  Music,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { MediaServer, PlexServer, PlexConnection, AuthInfo, TestResult } from "../types";
@@ -192,9 +196,13 @@ export interface AddServerFormState {
 
 export interface PurgeDialogState {
   open: boolean;
+  mode: "library" | "server";
   serverId: string;
-  libraryKey: string;
-  libraryType: string;
+  serverName?: string;
+  libraryId?: string;
+  libraryKey?: string;
+  libraryType?: string;
+  isLastOfType?: boolean;
 }
 
 export interface SyncPromptState {
@@ -492,8 +500,7 @@ export function ServersTab({
                             {server.type !== "PLEX" && (
                               <div>
                                 <label className="text-xs text-muted-foreground">API Key</label>
-                                <Input
-                                  type="password"
+                                <SecretInput
                                   value={editServerAccessToken}
                                   onChange={(e) => setEditServerAccessToken(e.target.value)}
                                   className="text-sm font-mono"
@@ -669,20 +676,27 @@ export function ServersTab({
                           Refresh
                         </Button>
                       </div>
-                      <div className="space-y-2">
-                        {server.libraries.map((lib) => (
-                          <div key={lib.id} className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <Badge variant="outline" className={!lib.enabled ? "opacity-50" : ""}>
-                                {lib.title} ({lib.type}){lib._count.mediaItems > 0 && ` — ${lib._count.mediaItems.toLocaleString()}`}
-                              </Badge>
+                      <div className="space-y-1">
+                        {server.libraries.map((lib) => {
+                          const TypeIcon = lib.type === "MOVIE" ? Film : lib.type === "SERIES" ? Tv : Music;
+                          return (
+                            <div key={lib.id} className={`flex items-center gap-3 rounded-lg px-3 py-2 transition-colors ${lib.enabled ? "bg-muted/30" : "opacity-50"}`}>
+                              <Switch
+                                checked={lib.enabled}
+                                onCheckedChange={(checked) => onToggleLibrary(server.id, lib.key, checked)}
+                                size="sm"
+                              />
+                              <TypeIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                              <div className="flex-1 min-w-0">
+                                <span className="text-sm font-medium">{lib.title}</span>
+                                {lib._count.mediaItems > 0 && (
+                                  <span className="ml-2 text-xs text-muted-foreground">{lib._count.mediaItems.toLocaleString()} items</span>
+                                )}
+                              </div>
+                              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{lib.type}</span>
                             </div>
-                            <Switch
-                              checked={lib.enabled}
-                              onCheckedChange={(checked) => onToggleLibrary(server.id, lib.key, checked)}
-                            />
-                          </div>
-                        ))}
+                          );
+                        })}
                         {server.libraries.length === 0 && (
                           <p className="text-sm text-muted-foreground">
                             No libraries synced yet
@@ -745,18 +759,31 @@ export function ServersTab({
         )}
       </div>
 
-      {/* Purge library data dialog */}
+      {/* Disable confirmation dialog (library or server) */}
       <AlertDialog
         open={!!purgeDialog?.open}
         onOpenChange={(open) => { if (!open) setPurgeDialog(null); }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Disable Last {purgeDialog?.libraryType?.charAt(0)}{purgeDialog?.libraryType?.slice(1).toLowerCase()} Library</AlertDialogTitle>
+            <AlertDialogTitle>
+              {purgeDialog?.mode === "server"
+                ? `Disable ${purgeDialog.serverName}?`
+                : purgeDialog?.isLastOfType
+                  ? `Disable Last ${purgeDialog.libraryType?.charAt(0)}${purgeDialog.libraryType?.slice(1).toLowerCase()} Library`
+                  : "Disable Library"}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              This is the last enabled {purgeDialog?.libraryType?.toLowerCase()} library.
-              Would you like to delete existing {purgeDialog?.libraryType?.toLowerCase()} data from the database?
-              Existing data will remain searchable if kept.
+              {purgeDialog?.mode === "server" ? (
+                <>Would you like to also delete all synced media data from this server&apos;s libraries? This only removes database records — no actual media files will be affected.</>
+              ) : (
+                <>
+                  {purgeDialog?.isLastOfType && (
+                    <>This is the last enabled {purgeDialog.libraryType?.toLowerCase()} library.{" "}</>
+                  )}
+                  Would you like to also delete this library&apos;s media data from the database? This only removes database records — no actual media files will be affected.
+                </>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -805,28 +832,31 @@ export function ServersTab({
 
           {addServerDialog?.step === "libraries" ? (
             <div className="space-y-3 py-2">
-              {addServerDialog.libraries?.map((lib) => (
-                <label
-                  key={lib.key}
-                  className="flex items-center justify-between rounded-lg border px-3 py-2 cursor-pointer hover:bg-muted/50 transition-colors"
-                >
-                  <div>
-                    <span className="text-sm font-medium">{lib.title}</span>
-                    <span className="ml-2 text-xs text-muted-foreground">({lib.type})</span>
-                  </div>
-                  <Switch
-                    checked={lib.enabled}
-                    onCheckedChange={(checked) => {
-                      setAddServerDialog((prev) => prev ? {
-                        ...prev,
-                        libraries: prev.libraries?.map((l) =>
-                          l.key === lib.key ? { ...l, enabled: checked } : l
-                        ),
-                      } : null);
-                    }}
-                  />
-                </label>
-              ))}
+              {addServerDialog.libraries?.map((lib) => {
+                const TypeIcon = lib.type === "MOVIE" ? Film : lib.type === "SERIES" ? Tv : Music;
+                return (
+                  <label
+                    key={lib.key}
+                    className="flex items-center gap-3 rounded-lg border px-3 py-2 cursor-pointer hover:bg-muted/50 transition-colors"
+                  >
+                    <Switch
+                      checked={lib.enabled}
+                      size="sm"
+                      onCheckedChange={(checked) => {
+                        setAddServerDialog((prev) => prev ? {
+                          ...prev,
+                          libraries: prev.libraries?.map((l) =>
+                            l.key === lib.key ? { ...l, enabled: checked } : l
+                          ),
+                        } : null);
+                      }}
+                    />
+                    <TypeIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="text-sm font-medium flex-1">{lib.title}</span>
+                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{lib.type}</span>
+                  </label>
+                );
+              })}
               {addServerDialog.libraries?.length === 0 && (
                 <p className="text-sm text-muted-foreground text-center py-4">
                   No compatible libraries found on this server.
@@ -853,7 +883,7 @@ export function ServersTab({
               </div>
               <div className="space-y-1">
                 <Label htmlFor="add-server-apikey">API Key</Label>
-                <Input
+                <SecretInput
                   id="add-server-apikey"
                   placeholder="API key from dashboard"
                   value={addServerForm.apiKey}

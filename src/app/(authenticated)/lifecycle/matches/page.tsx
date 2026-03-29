@@ -33,7 +33,11 @@ import {
   TableProperties,
   Columns3,
   ShieldOff,
+  Film,
+  Tv,
+  Music,
 } from "lucide-react";
+import { TabNav, type TabNavItem } from "@/components/tab-nav";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -548,7 +552,24 @@ function MatchItemsView({
   return <MatchItemsTableView {...props} />;
 }
 
+type MediaTypeTab = "all" | "movies" | "series" | "music";
+
+const MEDIA_TYPE_TABS: TabNavItem<MediaTypeTab>[] = [
+  { value: "all", label: "All" },
+  { value: "movies", label: "Movies", icon: Film },
+  { value: "series", label: "Series", icon: Tv },
+  { value: "music", label: "Music", icon: Music },
+];
+
+const TAB_TO_TYPE: Record<MediaTypeTab, string | null> = {
+  all: null,
+  movies: "MOVIE",
+  series: "SERIES",
+  music: "MUSIC",
+};
+
 export default function RuleMatchesPage() {
+  const [mediaTypeTab, setMediaTypeTab] = useState<MediaTypeTab>("all");
   const { width: panelWidth, resizeHandleProps } = usePanelResize({
     storageKey: "lifecycle-matches-panel-width",
     defaultWidth: 480,
@@ -567,6 +588,12 @@ export default function RuleMatchesPage() {
   const { getSolidStyle } = useChipColors();
   const { show, setVisible, prefs } = useCardDisplay("MOVIE");
   const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(getDefaultMatchColumnVisibility);
+
+  const filteredRuleMatches = useMemo(() => {
+    const typeFilter = TAB_TO_TYPE[mediaTypeTab];
+    if (!typeFilter) return ruleMatches;
+    return ruleMatches.filter((m) => m.ruleSet.type === typeFilter);
+  }, [ruleMatches, mediaTypeTab]);
 
   // Load column visibility from localStorage on mount
   useEffect(() => {
@@ -763,9 +790,12 @@ export default function RuleMatchesPage() {
       <div className="flex-1 min-w-0 md:overflow-y-auto">
         <div className="p-4 sm:p-6 lg:p-8">
       <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <h1 className="text-2xl sm:text-3xl font-bold">Rule Matches</h1>
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Rule Matches</h1>
+          <p className="text-muted-foreground mt-1">Media items that match your lifecycle rules, grouped by rule set.</p>
+        </div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1 rounded-lg border p-1">
+          <div className="flex items-center gap-1 rounded-lg border p-1 h-9">
             <button
               onClick={() => handleViewModeChange("cards")}
               className={cn(
@@ -845,7 +875,9 @@ export default function RuleMatchesPage() {
         </div>
       </div>
 
-      {ruleMatches.length === 0 && (
+      <TabNav tabs={MEDIA_TYPE_TABS} activeTab={mediaTypeTab} onTabChange={setMediaTypeTab} className="mb-6" />
+
+      {filteredRuleMatches.length === 0 && (
         <Card>
           <CardContent className="py-12 text-center">
             <p className="text-muted-foreground">
@@ -856,7 +888,7 @@ export default function RuleMatchesPage() {
       )}
 
       <div className="space-y-4">
-        {ruleMatches.map((match) => {
+        {filteredRuleMatches.map((match) => {
           const isExpanded = expandedRules.has(match.ruleSet.id);
 
           return (

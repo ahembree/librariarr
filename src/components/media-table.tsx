@@ -572,7 +572,7 @@ export const MediaTable = memo(function MediaTable({ items, onItemClick, sortBy,
 
     if (!onSort || !sortable) {
       return (
-        <TableHead key={key} style={{ width, position: "relative" }}>
+        <TableHead key={key} className="font-display text-xs uppercase tracking-wider" style={{ width, position: "relative" }}>
           {label}
           <div
             className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/50 active:bg-primary z-10 touch-none"
@@ -588,7 +588,7 @@ export const MediaTable = memo(function MediaTable({ items, onItemClick, sortBy,
     return (
       <TableHead
         key={key}
-        className="cursor-pointer select-none hover:text-foreground"
+        className="cursor-pointer select-none hover:text-foreground font-display text-xs uppercase tracking-wider"
         style={{ width, position: "relative" }}
         onClick={() => onSort(field)}
       >
@@ -665,7 +665,7 @@ export const MediaTable = memo(function MediaTable({ items, onItemClick, sortBy,
 
       <div ref={tableContainerRef} className="rounded-lg border overflow-x-auto">
         <Table className="table-fixed" style={{ minWidth: totalWidth }}>
-          <TableHeader className="sticky top-0 z-10 bg-background [&_tr]:bg-background">
+          <TableHeader className="sticky top-0 z-10 bg-background [&_tr]:bg-background shadow-[0_1px_0_oklch(1_0_0/5%)]">
             <TableRow>
               {/* Title is always shown */}
               {renderSortHeader("Title", "title", "_title")}
@@ -702,7 +702,7 @@ export const MediaTable = memo(function MediaTable({ items, onItemClick, sortBy,
                         key={item.id}
                         data-index={virtualRow.index}
                         onClick={() => onItemClick(item)}
-                        className={`cursor-pointer transition-all duration-200 hover:bg-primary/5 hover:ring-1 hover:ring-primary/20 hover:shadow-md hover:shadow-primary/10 ${rowClassName?.(item) ?? ""}`}
+                        className={`cursor-pointer transition-all duration-200 hover:bg-white/3 even:bg-white/1.5 hover:ring-1 hover:ring-primary/20 hover:shadow-md hover:shadow-primary/10 ${rowClassName?.(item) ?? ""}`}
                       >
                         {/* Title cell - always shown */}
                         <TableCell className="font-medium overflow-hidden text-ellipsis">

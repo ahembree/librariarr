@@ -231,6 +231,8 @@ export interface LifecycleRulePageProps {
   actionTypes: ActionTypeOption[];
   importErrorMessage: string;
   scopeConfig?: ScopeConfig;
+  /** When true, skips outer padding and page title (used when embedded in the unified rules page) */
+  embedded?: boolean;
 }
 
 function DiffSection({
@@ -292,6 +294,7 @@ export function LifecycleRulePage({
   actionTypes,
   importErrorMessage,
   scopeConfig,
+  embedded,
 }: LifecycleRulePageProps) {
   const { width: panelWidth, resizeHandleProps } = usePanelResize({
     storageKey: "lifecycle-rule-panel-width",
@@ -1155,14 +1158,24 @@ export function LifecycleRulePage({
   return (
     <div className="flex h-full">
       <div ref={scrollContainerRef} className="flex-1 min-w-0 overflow-y-auto">
-        <div className="p-4 sm:p-6 lg:p-8">
-      <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <h1 className="text-2xl sm:text-3xl font-bold">{pageTitle}</h1>
-        <Button variant="outline" onClick={newRuleSet}>
-          <FileText className="mr-2 h-4 w-4" />
-          New Rule Set
-        </Button>
-      </div>
+        <div className={embedded ? "" : "p-4 sm:p-6 lg:p-8"}>
+      {!embedded && (
+        <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">{pageTitle}</h1>
+          <Button variant="outline" onClick={newRuleSet}>
+            <FileText className="mr-2 h-4 w-4" />
+            New Rule Set
+          </Button>
+        </div>
+      )}
+      {embedded && (
+        <div className="mb-6 flex justify-end">
+          <Button variant="outline" onClick={newRuleSet}>
+            <FileText className="mr-2 h-4 w-4" />
+            New Rule Set
+          </Button>
+        </div>
+      )}
 
       {/* Saved Rule Sets */}
       {savedRuleSets.length > 0 && (
@@ -1873,7 +1886,7 @@ export function LifecycleRulePage({
       {preview.length > 0 && (
         <div className="mt-8">
           <div className="flex items-center gap-3 mb-4 flex-wrap">
-            <h2 className="text-xl font-bold">
+            <h2 className="text-xl font-bold font-display">
               Preview Results ({previewDiffCounts ? preview.length - (previewDiffCounts.removed) : preview.length} matches)
             </h2>
             {previewDiffCounts && (previewDiffCounts.added > 0 || previewDiffCounts.removed > 0) && (

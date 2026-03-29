@@ -16,6 +16,7 @@ import {
 import { Server, Loader2, Check, AlertCircle, Pencil, ShieldOff, ArrowLeft, Plug, CheckCircle, XCircle } from "lucide-react";
 import { Logo } from "@/components/logo";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
+import { SERVER_TYPE_STYLES } from "@/lib/server-styles";
 
 // ─── Types ───
 
@@ -48,44 +49,17 @@ interface DiscoveredLibrary {
 type OnboardingMode = "choose" | "plex" | "manual";
 type ManualServerType = "JELLYFIN" | "EMBY";
 
-// Server type config for the chooser cards
+// Server type config for the chooser cards (derived from centralized styles)
 const SERVER_TYPES = [
-  {
-    type: "PLEX" as const,
-    label: "Plex",
-    description: "Auto-discover servers from your Plex account",
-    iconColor: "text-orange-400",
-    borderColor: "border-orange-500/30",
-    bgColor: "bg-orange-500/10",
-    hoverBg: "hover:bg-orange-500/15",
-    glowColor: "bg-orange-500/5",
-  },
-  {
-    type: "JELLYFIN" as const,
-    label: "Jellyfin",
-    description: "Connect with your server URL and API key",
-    iconColor: "text-purple-400",
-    borderColor: "border-purple-500/30",
-    bgColor: "bg-purple-500/10",
-    hoverBg: "hover:bg-purple-500/15",
-    glowColor: "bg-purple-500/5",
-  },
-  {
-    type: "EMBY" as const,
-    label: "Emby",
-    description: "Connect with your server URL and API key",
-    iconColor: "text-emerald-400",
-    borderColor: "border-emerald-500/30",
-    bgColor: "bg-emerald-500/10",
-    hoverBg: "hover:bg-emerald-500/15",
-    glowColor: "bg-emerald-500/5",
-  },
+  { type: "PLEX" as const, label: "Plex", description: "Auto-discover servers from your Plex account", ...SERVER_TYPE_STYLES.PLEX.onboarding },
+  { type: "JELLYFIN" as const, label: "Jellyfin", description: "Connect with your server URL and API key", ...SERVER_TYPE_STYLES.JELLYFIN.onboarding },
+  { type: "EMBY" as const, label: "Emby", description: "Connect with your server URL and API key", ...SERVER_TYPE_STYLES.EMBY.onboarding },
 ] as const;
 
-// Color config per manual server type
-const MANUAL_COLORS: Record<ManualServerType, { btn: string; btnHover: string; btnText: string; addedBg: string; addedText: string; addedBorder: string; border: string; glow: string }> = {
-  JELLYFIN: { btn: "bg-purple-500", btnHover: "hover:bg-purple-600", btnText: "text-white", addedBg: "bg-purple-500/15", addedText: "text-purple-400", addedBorder: "border-purple-500/30", border: "border-purple-500/40", glow: "bg-purple-500/5" },
-  EMBY: { btn: "bg-emerald-500", btnHover: "hover:bg-emerald-600", btnText: "text-white", addedBg: "bg-emerald-500/15", addedText: "text-emerald-400", addedBorder: "border-emerald-500/30", border: "border-emerald-500/40", glow: "bg-emerald-500/5" },
+// Color config per manual server type (derived from centralized styles)
+const MANUAL_COLORS: Record<ManualServerType, NonNullable<(typeof SERVER_TYPE_STYLES)[string]["manual"]>> = {
+  JELLYFIN: SERVER_TYPE_STYLES.JELLYFIN.manual!,
+  EMBY: SERVER_TYPE_STYLES.EMBY.manual!,
 };
 
 function getDefaultUrl(connections: PlexConnection[]): string {
@@ -416,13 +390,13 @@ export default function OnboardingPage() {
 
   if (mode === "choose") {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background p-8">
+      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))] p-8">
         <div className="w-full max-w-3xl space-y-8">
           <div className="text-center">
             <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-primary/10 ring-1 ring-primary/20">
               <Logo size={96} />
             </div>
-            <h1 className="text-3xl font-bold">Connect a Media Server</h1>
+            <h1 className="text-3xl font-bold font-display tracking-tight">Connect a Media Server</h1>
             <p className="mt-2 text-muted-foreground">
               Choose your media server type to get started.
             </p>
@@ -498,7 +472,7 @@ export default function OnboardingPage() {
 
   if (mode === "plex") {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background p-8">
+      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))] p-8">
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
           <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-150 h-150 rounded-full bg-amber-500/5 blur-3xl" />
         </div>
@@ -517,7 +491,7 @@ export default function OnboardingPage() {
             <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/20">
               <Logo size={96} />
             </div>
-            <h1 className="text-3xl font-bold bg-linear-to-r from-amber-400 to-orange-500 bg-clip-text text-transparent">Select Your Plex Servers</h1>
+            <h1 className="text-3xl font-bold font-display tracking-tight bg-linear-to-r from-amber-400 to-orange-500 bg-clip-text text-transparent">Select Your Plex Servers</h1>
             <p className="mt-2 text-muted-foreground">
               Choose which servers to connect. You can select which libraries to sync.
             </p>
@@ -703,7 +677,7 @@ export default function OnboardingPage() {
   const typeLabel = manualType === "JELLYFIN" ? "Jellyfin" : "Emby";
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-8">
+    <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))] p-8">
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
         <div className={`absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-150 h-150 rounded-full ${colors.glow} blur-3xl`} />
       </div>
@@ -720,7 +694,7 @@ export default function OnboardingPage() {
           <div className={`mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full ${manualType === "JELLYFIN" ? "bg-purple-500/15 ring-1 ring-purple-500/20" : "bg-emerald-500/15 ring-1 ring-emerald-500/20"}`}>
             <Server className={`h-8 w-8 ${manualType === "JELLYFIN" ? "text-purple-400" : "text-emerald-400"}`} />
           </div>
-          <h1 className="text-3xl font-bold">Add {typeLabel} Server</h1>
+          <h1 className="text-3xl font-bold font-display tracking-tight">Add {typeLabel} Server</h1>
           <p className="mt-2 text-muted-foreground">
             Enter your server details to connect.
           </p>

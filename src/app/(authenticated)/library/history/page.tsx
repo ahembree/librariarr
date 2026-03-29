@@ -560,7 +560,7 @@ export default function HistoryPage() {
           {/* Header */}
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
-              <h1 className="text-2xl sm:text-3xl font-bold">Watch History</h1>
+              <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Watch History</h1>
               {!loading && totalCount > 0 && (
                 <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
                   {totalCount.toLocaleString()} {totalCount === 1 ? "play" : "plays"}
@@ -632,7 +632,7 @@ export default function HistoryPage() {
             {usernames.length > 0 && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-9">
+                  <Button variant="outline" size="default">
                     Users{selectedUsernames.size > 0 ? ` (${selectedUsernames.size})` : ""}
                   </Button>
                 </DropdownMenuTrigger>
@@ -654,7 +654,7 @@ export default function HistoryPage() {
             {platforms.length > 0 && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-9">
+                  <Button variant="outline" size="default">
                     Platforms{selectedPlatforms.size > 0 ? ` (${selectedPlatforms.size})` : ""}
                   </Button>
                 </DropdownMenuTrigger>

@@ -10,10 +10,23 @@ const CARD_MIN_WIDTHS: Record<CardSize, number> = {
   large: 175,
 };
 
+// On mobile (<768px), shift sizes down so S fits an extra column
+const MOBILE_CARD_MIN_WIDTHS: Record<CardSize, number> = {
+  small: 80,
+  medium: 100,
+  large: 125,
+};
+
 const LANDSCAPE_MIN_WIDTHS: Record<CardSize, number> = {
   small: 140,
   medium: 200,
   large: 260,
+};
+
+const MOBILE_LANDSCAPE_MIN_WIDTHS: Record<CardSize, number> = {
+  small: 110,
+  medium: 140,
+  large: 200,
 };
 
 const GAP = 16;
@@ -102,14 +115,15 @@ export function useCardSize() {
     for (const l of sizeListeners) l();
   }, []);
 
-  const cardWidth = CARD_MIN_WIDTHS[size];
+  const isMobile = screenWidth < BREAKPOINTS.md;
+  const cardWidth = isMobile ? MOBILE_CARD_MIN_WIDTHS[size] : CARD_MIN_WIDTHS[size];
 
   const columns = useMemo(() => {
     const contentWidth = estimateContentWidth(screenWidth);
     return Math.max(2, Math.floor((contentWidth + GAP) / (cardWidth + GAP)));
   }, [screenWidth, cardWidth]);
 
-  const landscapeWidth = LANDSCAPE_MIN_WIDTHS[size];
+  const landscapeWidth = isMobile ? MOBILE_LANDSCAPE_MIN_WIDTHS[size] : LANDSCAPE_MIN_WIDTHS[size];
 
   // For non-virtualized grids: auto-fill with card min width
   const gridStyle = useMemo(
@@ -133,4 +147,4 @@ export function useCardSize() {
   return { size, setSize, columns, gridStyle, landscapeGridStyle, cardWidth };
 }
 
-export { CARD_MIN_WIDTHS };
+export { CARD_MIN_WIDTHS, MOBILE_CARD_MIN_WIDTHS, BREAKPOINTS };

@@ -3,27 +3,17 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useChipColors } from "@/components/chip-color-provider";
-import { cn } from "@/lib/utils";
 import { MediaCard } from "@/components/media-card";
-import { Input } from "@/components/ui/input";
+import { MediaFilters } from "@/components/media-filters";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { DataTable } from "@/components/data-table";
 import type { DataTableColumn } from "@/components/data-table";
-import { Tv, Search, ArrowUpDown, Layers, List, LayoutGrid, TableProperties } from "lucide-react";
+import { LibraryToolbar } from "@/components/library-toolbar";
+import { Tv, Layers, List, HardDrive, Play } from "lucide-react";
 import Link from "next/link";
 import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
-import { CardSizeControl } from "@/components/card-size-control";
-import { CardDisplayControl } from "@/components/card-display-control";
-import { MetadataLine } from "@/components/metadata-line";
+import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
@@ -153,7 +143,7 @@ export default function AllSeasonsPage() {
   const { show, setVisible, prefs } = useCardDisplay("SERIES_SEASONS");
   const [seasons, setSeasons] = useState<SeasonEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
+  const [filters, setFilters] = useState<Record<string, string>>({});
   const [sortBy, setSortBy] = useState("parentTitle");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
@@ -176,9 +166,11 @@ export default function AllSeasonsPage() {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (search) params.set("search", search);
       params.set("sortBy", sortBy);
       params.set("sortOrder", sortOrder);
+      for (const [key, value] of Object.entries(filters)) {
+        if (value) params.set(key, value);
+      }
       const response = await fetch(`/api/media/series/all-seasons?${params}`);
       const data = await response.json();
       setSeasons(data.seasons || []);
@@ -187,7 +179,7 @@ export default function AllSeasonsPage() {
     } finally {
       setLoading(false);
     }
-  }, [search, sortBy, sortOrder]);
+  }, [filters, sortBy, sortOrder]);
 
   useEffect(() => {
     const timeout = setTimeout(() => fetchSeasons(), 300);
@@ -210,7 +202,7 @@ export default function AllSeasonsPage() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <h1 className="text-2xl sm:text-3xl font-bold mb-4">Series</h1>
+      <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight mb-4">Series</h1>
 
       <nav className="mb-6 flex items-center gap-1 border-b overflow-x-auto">
         <Link
@@ -236,82 +228,26 @@ export default function AllSeasonsPage() {
         </Link>
       </nav>
 
-      <div className="mb-6 flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1 rounded-lg border p-1">
-            <button
-              onClick={() => handleViewModeChange("cards")}
-              className={cn(
-                "rounded-md p-1.5 transition-colors",
-                viewMode === "cards"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
-              )}
-              title="Card view"
-              aria-label="Card view"
-            >
-              <LayoutGrid className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => handleViewModeChange("table")}
-              className={cn(
-                "rounded-md p-1.5 transition-colors",
-                viewMode === "table"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
-              )}
-              title="Table view"
-              aria-label="Table view"
-            >
-              <TableProperties className="h-4 w-4" />
-            </button>
-          </div>
-          {viewMode === "cards" && (
-            <>
-              <CardSizeControl size={size} onChange={setSize} />
-              <CardDisplayControl prefs={prefs} config={TOGGLE_CONFIGS.SERIES_SEASONS} onToggle={setVisible} />
-            </>
-          )}
-        </div>
-
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search series..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-10"
+      <MediaFilters
+        onFilterChange={setFilters}
+        mediaType="SERIES"
+        prefix={
+          <LibraryToolbar
+            viewMode={viewMode}
+            onViewModeChange={handleViewModeChange}
+            cardSize={size}
+            onCardSizeChange={setSize}
+            cardDisplayPrefs={prefs}
+            cardDisplayConfig={TOGGLE_CONFIGS.SERIES_SEASONS}
+            onCardDisplayToggle={setVisible}
+            sortOptions={SORT_OPTIONS}
+            sortBy={sortBy}
+            sortOrder={sortOrder}
+            onSortChange={(v) => toggleSort(v)}
+            onSortOrderToggle={() => setSortOrder((o) => (o === "asc" ? "desc" : "asc"))}
           />
-        </div>
-
-        <div className="flex items-center gap-2">
-          <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
-          <Select value={sortBy} onValueChange={(v) => toggleSort(v)}>
-            <SelectTrigger className="w-44">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {SORT_OPTIONS.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={() =>
-              setSortOrder((o) => (o === "asc" ? "desc" : "asc"))
-            }
-            title={sortOrder === "asc" ? "Ascending" : "Descending"}
-          >
-            <span className="text-xs font-medium">
-              {sortOrder === "asc" ? "A-Z" : "Z-A"}
-            </span>
-          </Button>
-        </div>
-      </div>
+        }
+      />
 
       {loading ? (
         <MediaGridSkeleton />
@@ -339,15 +275,15 @@ export default function AllSeasonsPage() {
                   <MediaCard
                     key={`${season.parentTitle}::${season.seasonNumber}`}
                     imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
-                    title={season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}
+                    title={`${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`}
                     fallbackIcon="series"
                     onClick={() => navigateToSeason(season)}
                     metadata={
-                      <MetadataLine>
-                        {show("metadata", "episodeCount") && <span>{season.episodeCount} {season.episodeCount === 1 ? "ep" : "eps"}</span>}
-                        {show("metadata", "fileSize") && <span>{formatFileSize(season.totalSize)}</span>}
+                      <MetadataLine stacked>
+                        {show("metadata", "episodeCount") && <MetadataItem icon={<List />}>{season.episodeCount} {season.episodeCount === 1 ? "ep" : "eps"}</MetadataItem>}
+                        {show("metadata", "fileSize") && <MetadataItem icon={<HardDrive />}>{formatFileSize(season.totalSize)}</MetadataItem>}
                         {show("metadata", "playCount") && season.totalPlayCount > 0 && (
-                          <span>{season.totalPlayCount} {season.totalPlayCount === 1 ? "play" : "plays"}</span>
+                          <MetadataItem icon={<Play />}>{season.totalPlayCount} {season.totalPlayCount === 1 ? "play" : "plays"}</MetadataItem>
                         )}
                       </MetadataLine>
                     }

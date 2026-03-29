@@ -59,9 +59,7 @@ function buildNavigation(
   ].filter(Boolean) as NavItem[];
 
   const lifecycleItems = [
-    (hasMovies || knownMovies) && { name: "Movie Rules", href: "/lifecycle/movies", icon: Recycle, warning: knownMovies && !hasMovies },
-    (hasSeries || knownSeries) && { name: "Series Rules", href: "/lifecycle/series", icon: Recycle, warning: knownSeries && !hasSeries },
-    (hasMusic || knownMusic) && { name: "Music Rules", href: "/lifecycle/music", icon: Recycle, warning: knownMusic && !hasMusic },
+    { name: "Rules", href: "/lifecycle/rules", icon: Recycle },
     { name: "Rule Matches", href: "/lifecycle/matches", icon: Target },
     { name: "Pending Actions", href: "/lifecycle/pending", icon: Clock },
     { name: "Exceptions", href: "/lifecycle/exceptions", icon: ShieldOff },

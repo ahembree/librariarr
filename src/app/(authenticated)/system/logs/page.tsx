@@ -33,11 +33,14 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
+  FileText,
   Info,
   RefreshCw,
   TriangleAlert,
   X,
 } from "lucide-react";
+import { LogsTableSkeleton } from "@/components/skeletons";
+import { EmptyState } from "@/components/empty-state";
 
 interface LogEntry {
   id: string;
@@ -52,10 +55,10 @@ interface LogEntry {
 const LOG_LEVELS = ["DEBUG", "INFO", "WARN", "ERROR"] as const;
 
 const LEVEL_COLORS: Record<string, string> = {
-  DEBUG: "bg-zinc-500/20 text-zinc-400 border-zinc-500/30",
-  INFO: "bg-blue-500/20 text-blue-400 border-blue-500/30",
-  WARN: "bg-amber-500/20 text-amber-400 border-amber-500/30",
-  ERROR: "bg-red-500/20 text-red-400 border-red-500/30",
+  DEBUG: "bg-zinc-500/20 text-zinc-400 border-zinc-500/30 shadow-[0_0_8px] shadow-zinc-500/10",
+  INFO: "bg-blue-500/20 text-blue-400 border-blue-500/30 shadow-[0_0_8px] shadow-blue-500/15",
+  WARN: "bg-amber-500/20 text-amber-400 border-amber-500/30 shadow-[0_0_8px] shadow-amber-500/15",
+  ERROR: "bg-red-500/20 text-red-400 border-red-500/30 shadow-[0_0_8px] shadow-red-500/20",
 };
 
 const LEVEL_ICONS: Record<string, React.ReactNode> = {
@@ -185,7 +188,7 @@ export default function LogsPage() {
   return (
     <div className="p-4 sm:p-6 lg:p-8">
       <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <h1 className="text-2xl sm:text-3xl font-bold">Logs</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Logs</h1>
         <div className="flex items-center gap-2">
           <Button
             variant={autoRefresh ? "default" : "outline"}
@@ -304,15 +307,11 @@ export default function LogsPage() {
           </TableHeader>
           <TableBody>
             {loading && logs.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                  Loading...
-                </TableCell>
-              </TableRow>
+              <LogsTableSkeleton />
             ) : logs.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                  No log entries found.
+                <TableCell colSpan={5}>
+                  <EmptyState icon={FileText} title="No log entries found" description="Logs will appear here as activity occurs." />
                 </TableCell>
               </TableRow>
             ) : (
@@ -340,7 +339,7 @@ export default function LogsPage() {
                   <TableCell className="hidden text-sm font-medium md:table-cell">
                     {log.source}
                   </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
+                  <TableCell className="text-sm text-muted-foreground font-mono">
                     <span className="mb-0.5 flex flex-wrap gap-1 md:hidden">
                       <Badge variant="outline" className={`text-xs ${CATEGORY_COLORS[log.category] ?? ""}`}>{log.category}</Badge>
                       <span className="text-xs text-muted-foreground/70">{log.source}</span>

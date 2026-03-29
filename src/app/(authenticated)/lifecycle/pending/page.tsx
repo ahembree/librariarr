@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
@@ -31,7 +31,11 @@ import {
   CheckCircle2,
   AlertTriangle,
   ShieldOff,
+  Film,
+  Tv,
+  Music,
 } from "lucide-react";
+import { TabNav, type TabNavItem } from "@/components/tab-nav";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { MediaItemWithRelations } from "@/lib/types";
@@ -376,7 +380,24 @@ function VirtualizedActionTable({
 
 /* ---------- Main page ---------- */
 
+type MediaTypeTab = "all" | "movies" | "series" | "music";
+
+const MEDIA_TYPE_TABS: TabNavItem<MediaTypeTab>[] = [
+  { value: "all", label: "All" },
+  { value: "movies", label: "Movies", icon: Film },
+  { value: "series", label: "Series", icon: Tv },
+  { value: "music", label: "Music", icon: Music },
+];
+
+const TAB_TO_TYPE: Record<MediaTypeTab, string | null> = {
+  all: null,
+  movies: "MOVIE",
+  series: "SERIES",
+  music: "MUSIC",
+};
+
 export default function PendingActionsPage() {
+  const [mediaTypeTab, setMediaTypeTab] = useState<MediaTypeTab>("all");
   const [groups, setGroups] = useState<RuleSetGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("PENDING");
@@ -396,6 +417,12 @@ export default function PendingActionsPage() {
     minWidth: 360,
     maxWidth: 800,
   });
+
+  const filteredGroups = useMemo(() => {
+    const typeFilter = TAB_TO_TYPE[mediaTypeTab];
+    if (!typeFilter) return groups;
+    return groups.filter((g) => g.ruleSet.type === typeFilter);
+  }, [groups, mediaTypeTab]);
 
   const fetchActions = useCallback(async () => {
     setLoading(true);
@@ -600,7 +627,12 @@ export default function PendingActionsPage() {
   return (
     <div className="flex md:h-full">
       <div className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 md:overflow-auto">
-        <h1 className="text-2xl sm:text-3xl font-bold mb-6">Pending Actions</h1>
+        <div className="mb-6">
+          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Pending Actions</h1>
+          <p className="text-muted-foreground mt-1">Scheduled lifecycle actions awaiting execution, grouped by rule set.</p>
+        </div>
+
+        <TabNav tabs={MEDIA_TYPE_TABS} activeTab={mediaTypeTab} onTabChange={setMediaTypeTab} className="mb-6" />
 
         {/* Status filter */}
         <div className="flex gap-2 mb-4">
@@ -620,13 +652,13 @@ export default function PendingActionsPage() {
           <div className="flex justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
-        ) : groups.length === 0 ? (
+        ) : filteredGroups.length === 0 ? (
           <p className="text-center py-12 text-muted-foreground">
             No {(STATUS_LABELS[statusFilter] ?? statusFilter).toLowerCase()} actions found.
           </p>
         ) : (
           <div className="space-y-4">
-            {groups.map((group) => {
+            {filteredGroups.map((group) => {
               const isExpanded = expandedRules.has(group.ruleSet.id);
               const isExecuting = executingRules.has(group.ruleSet.id);
               const result = executeResults[group.ruleSet.id];
