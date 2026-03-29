@@ -217,6 +217,7 @@ export default function SettingsPage() {
   // Server editing
   const [editingServerId, setEditingServerId] = useState<string | null>(null);
   const [editServerUrl, setEditServerUrl] = useState("");
+  const [editServerExternalUrl, setEditServerExternalUrl] = useState("");
   const [editServerAccessToken, setEditServerAccessToken] = useState("");
   const [editServerTlsSkip, setEditServerTlsSkip] = useState(false);
   const [editServerSaving, setEditServerSaving] = useState(false);
@@ -795,6 +796,7 @@ export default function SettingsPage() {
   const startEditServer = async (server: MediaServer) => {
     setEditingServerId(server.id);
     setEditServerUrl(server.url);
+    setEditServerExternalUrl((server as MediaServer & { externalUrl?: string | null }).externalUrl ?? "");
     setEditServerAccessToken("");
     setEditServerTlsSkip(server.tlsSkipVerify);
     setEditServerError("");
@@ -823,6 +825,7 @@ export default function SettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           url: editServerUrl,
+          externalUrl: editServerExternalUrl || null,
           ...(editServerAccessToken && { accessToken: editServerAccessToken }),
           tlsSkipVerify: editServerTlsSkip,
         }),
@@ -2043,6 +2046,7 @@ export default function SettingsPage() {
             authInfo={authInfo}
             editingServerId={editingServerId}
             editServerUrl={editServerUrl}
+            editServerExternalUrl={editServerExternalUrl}
             editServerAccessToken={editServerAccessToken}
             editServerTlsSkip={editServerTlsSkip}
             editServerSaving={editServerSaving}
@@ -2062,6 +2066,7 @@ export default function SettingsPage() {
             onCancelPlexOAuth={plexOAuthForOnboarding.cancel}
             setEditingServerId={setEditingServerId}
             setEditServerUrl={setEditServerUrl}
+            setEditServerExternalUrl={setEditServerExternalUrl}
             setEditServerAccessToken={setEditServerAccessToken}
             setEditServerTlsSkip={setEditServerTlsSkip}
             setEditServerError={setEditServerError}

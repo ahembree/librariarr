@@ -66,8 +66,8 @@ function PlayButton({ playServers }: { playServers: PlayServer[] }) {
           e.currentTarget.style.backgroundColor = colors.bg;
         }}
       >
-        <ExternalLink className="h-3 w-3" />
-        Open in {server.serverName}
+        <ExternalLink className="h-3 w-3 shrink-0" />
+        <span className="truncate">Open in {server.serverName}</span>
       </a>
     );
   }
@@ -250,7 +250,7 @@ export function MediaDetailHero({
                 />
               </div>
               {playServers && playServers.length > 0 && (
-                <div className="mt-2 w-full *:w-full *:justify-center">
+                <div className="mt-2 w-full overflow-hidden *:w-full *:justify-center">
                   <PlayButton playServers={playServers} />
                 </div>
               )}

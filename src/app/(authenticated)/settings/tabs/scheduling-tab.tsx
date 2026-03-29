@@ -152,7 +152,7 @@ export function SchedulingTab({
                   value={syncSchedule}
                   onValueChange={onSyncScheduleChange}
                 >
-                  <SelectTrigger id="sync-schedule" className="mt-1.5 w-64">
+                  <SelectTrigger id="sync-schedule" className="mt-1.5 w-full sm:w-64">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -235,7 +235,7 @@ export function SchedulingTab({
                   value={lcDetectSchedule}
                   onValueChange={onLcDetectScheduleChange}
                 >
-                  <SelectTrigger id="lc-detect-schedule" className="w-64">
+                  <SelectTrigger id="lc-detect-schedule" className="w-full sm:w-64">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -312,7 +312,7 @@ export function SchedulingTab({
                   value={lcExecSchedule}
                   onValueChange={onLcExecScheduleChange}
                 >
-                  <SelectTrigger id="lc-exec-schedule" className="w-64">
+                  <SelectTrigger id="lc-exec-schedule" className="w-full sm:w-64">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>

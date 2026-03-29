@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -253,6 +252,7 @@ export interface ServersTabProps {
   // Server editing state
   editingServerId: string | null;
   editServerUrl: string;
+  editServerExternalUrl: string;
   editServerAccessToken: string;
   editServerTlsSkip: boolean;
   editServerSaving: boolean;
@@ -280,6 +280,7 @@ export interface ServersTabProps {
   onCancelPlexOAuth: () => void;
   setEditingServerId: (value: string | null) => void;
   setEditServerUrl: (value: string) => void;
+  setEditServerExternalUrl: (value: string) => void;
   setEditServerAccessToken: (value: string) => void;
   setEditServerTlsSkip: (value: boolean) => void;
   setEditServerError: (value: string) => void;
@@ -323,6 +324,7 @@ export function ServersTab({
   authInfo,
   editingServerId,
   editServerUrl,
+  editServerExternalUrl,
   editServerAccessToken,
   editServerTlsSkip,
   editServerSaving,
@@ -342,6 +344,7 @@ export function ServersTab({
   onCancelPlexOAuth,
   setEditingServerId,
   setEditServerUrl,
+  setEditServerExternalUrl,
   setEditServerAccessToken,
   setEditServerTlsSkip,
   setEditServerError,
@@ -465,144 +468,44 @@ export function ServersTab({
               const connections = isEditing ? getPlexConnectionsForServer(server) : [];
 
               return (
-                <Card key={server.id}>
-                  <CardHeader>
-                    <div className="flex items-center justify-between">
+                <Card key={server.id} className="overflow-hidden">
+                  <CardHeader className="overflow-hidden pb-2">
+                    <div className="flex items-center justify-between gap-2">
                       <div className="flex-1 min-w-0">
-                        <CardTitle className="flex items-center gap-2">
-                          <Server className="h-5 w-5" />
-                          {server.name}
-                          <Badge variant="outline" className="text-xs font-normal">
+                        <CardTitle className="flex flex-wrap items-center gap-2">
+                          <Server className="h-5 w-5 shrink-0" />
+                          <span className="truncate">{server.name}</span>
+                          <Badge variant="outline" className="shrink-0 text-xs font-normal">
                             {server.type === "PLEX" ? "Plex" : server.type === "JELLYFIN" ? "Jellyfin" : server.type === "EMBY" ? "Emby" : server.type}
                           </Badge>
                           {!server.enabled && (
-                            <Badge variant="secondary" className="text-xs font-normal bg-amber-500/20 text-amber-400">
+                            <Badge variant="secondary" className="shrink-0 text-xs font-normal bg-amber-500/20 text-amber-400">
                               Disabled
                             </Badge>
                           )}
                           <Switch
+                            className="shrink-0"
                             checked={server.enabled}
                             onCheckedChange={(checked) => onToggleServerEnabled(server.id, checked)}
                           />
                         </CardTitle>
-                        {isEditing ? (
-                          <div className="mt-2 space-y-2">
-                            <div>
-                              <label className="text-xs text-muted-foreground">URL</label>
-                              <Input
-                                value={editServerUrl}
-                                onChange={(e) => setEditServerUrl(e.target.value)}
-                                className="text-sm font-mono"
-                                placeholder="http://your-server:32400"
-                              />
-                              <p className="text-xs text-muted-foreground mt-1">Must include http:// or https://</p>
-                            </div>
-                            {server.type !== "PLEX" && (
-                              <div>
-                                <label className="text-xs text-muted-foreground">API Key</label>
-                                <SecretInput
-                                  value={editServerAccessToken}
-                                  onChange={(e) => setEditServerAccessToken(e.target.value)}
-                                  className="text-sm font-mono"
-                                  placeholder="Leave blank to keep current key"
-                                />
-                              </div>
-                            )}
-                            {loadingPlexConnections ? (
-                              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                                Loading known addresses...
-                              </div>
-                            ) : connections.length > 0 ? (
-                              <div className="space-y-1">
-                                <p className="text-xs text-muted-foreground">Known addresses:</p>
-                                {connections.map((conn) => (
-                                  <button
-                                    key={conn.uri}
-                                    type="button"
-                                    onClick={() => setEditServerUrl(conn.uri)}
-                                    className={`block w-full rounded px-2 py-1 text-left text-xs transition-colors ${
-                                      editServerUrl === conn.uri
-                                        ? "bg-primary/10 text-primary"
-                                        : "text-muted-foreground hover:bg-muted"
-                                    }`}
-                                  >
-                                    {conn.uri}
-                                    {conn.local && (
-                                      <span className="ml-1 opacity-60">(local)</span>
-                                    )}
-                                  </button>
-                                ))}
-                              </div>
-                            ) : null}
-                            <label className="flex items-start gap-2 cursor-pointer pt-1">
-                              <input
-                                type="checkbox"
-                                checked={editServerTlsSkip}
-                                onChange={(e) => setEditServerTlsSkip(e.target.checked)}
-                                className="mt-0.5 rounded border-muted-foreground"
-                              />
-                              <div>
-                                <span className="flex items-center gap-1 text-xs font-medium">
-                                  <ShieldOff className="h-3 w-3" />
-                                  Skip TLS Verification
-                                </span>
-                                <span className="text-xs text-muted-foreground">
-                                  Enable if using self-signed certificates
-                                </span>
-                              </div>
-                            </label>
-                            <div className="flex items-center gap-2 pt-1">
-                              <Button
-                                size="sm"
-                                onClick={() => onSaveServer(server.id)}
-                                disabled={editServerSaving || !editServerUrl}
-                              >
-                                {editServerSaving ? (
-                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                ) : (
-                                  <Save className="mr-2 h-4 w-4" />
-                                )}
-                                Save
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => {
-                                  setEditingServerId(null);
-                                  setEditServerError("");
-                                  setPlexServers([]);
-                                }}
-                              >
-                                Cancel
-                              </Button>
-                            </div>
-                            {editServerError && (
-                              <p className="text-xs text-red-400">{editServerError}</p>
-                            )}
-                          </div>
-                        ) : (
-                          <CardDescription className="flex items-center gap-1">
-                            {server.url}
-                            <button
-                              type="button"
-                              onClick={() => onStartEditServer(server)}
-                              className="ml-1 text-muted-foreground hover:text-foreground"
-                            >
-                              <Pencil className="h-3 w-3" />
-                            </button>
-                          </CardDescription>
-                        )}
                       </div>
                       {!isEditing && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="outline" size="sm">
+                            <Button variant="outline" size="sm" className="shrink-0">
                               Actions
                               <ChevronDown className="ml-2 h-4 w-4" />
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              onClick={() => onStartEditServer(server)}
+                            >
+                              <Pencil className="mr-2 h-4 w-4" />
+                              Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
                             <DropdownMenuItem
                               onClick={() => onTestServerConnection(server.id)}
                               disabled={testingServer === server.id}
@@ -643,6 +546,127 @@ export function ServersTab({
                     </div>
                   </CardHeader>
                   <CardContent className={cn(!server.enabled && "opacity-50")}>
+                    {isEditing ? (
+                      <div className="space-y-2 mb-4">
+                        <div className="space-y-1.5">
+                          <label className="text-xs text-muted-foreground">URL</label>
+                          <Input
+                            value={editServerUrl}
+                            onChange={(e) => setEditServerUrl(e.target.value)}
+                            className="text-sm font-mono"
+                            placeholder="http://your-server:32400"
+                          />
+                          <p className="text-xs text-muted-foreground">Must include http:// or https://</p>
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-xs text-muted-foreground">External URL</label>
+                          <Input
+                            value={editServerExternalUrl}
+                            onChange={(e) => setEditServerExternalUrl(e.target.value)}
+                            className={`text-sm font-mono ${editServerExternalUrl && !/^https?:\/\//i.test(editServerExternalUrl) ? "border-destructive" : ""}`}
+                            placeholder="https://your-server.example.com (optional)"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            {editServerExternalUrl && !/^https?:\/\//i.test(editServerExternalUrl)
+                              ? "Must include http:// or https://"
+                              : "Used for \u201cOpen in\u201d links. Falls back to URL above if empty."}
+                          </p>
+                        </div>
+                        {server.type !== "PLEX" && (
+                          <div className="space-y-1.5">
+                            <label className="text-xs text-muted-foreground">API Key</label>
+                            <SecretInput
+                              value={editServerAccessToken}
+                              onChange={(e) => setEditServerAccessToken(e.target.value)}
+                              className="text-sm font-mono"
+                              placeholder="Leave blank to keep current key"
+                            />
+                          </div>
+                        )}
+                        {loadingPlexConnections ? (
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Loading known addresses...
+                          </div>
+                        ) : connections.length > 0 ? (
+                          <div className="space-y-1">
+                            <p className="text-xs text-muted-foreground">Known addresses:</p>
+                            {connections.map((conn) => (
+                              <button
+                                key={conn.uri}
+                                type="button"
+                                onClick={() => setEditServerUrl(conn.uri)}
+                                className={`block w-full rounded px-2 py-1 text-left text-xs transition-colors ${
+                                  editServerUrl === conn.uri
+                                    ? "bg-primary/10 text-primary"
+                                    : "text-muted-foreground hover:bg-muted"
+                                }`}
+                              >
+                                {conn.uri}
+                                {conn.local && (
+                                  <span className="ml-1 opacity-60">(local)</span>
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                        <label className="flex items-start gap-2 cursor-pointer pt-1">
+                          <input
+                            type="checkbox"
+                            checked={editServerTlsSkip}
+                            onChange={(e) => setEditServerTlsSkip(e.target.checked)}
+                            className="mt-0.5 rounded border-muted-foreground"
+                          />
+                          <div>
+                            <span className="flex items-center gap-1 text-xs font-medium">
+                              <ShieldOff className="h-3 w-3" />
+                              Skip TLS Verification
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              Enable if using self-signed certificates
+                            </span>
+                          </div>
+                        </label>
+                        <div className="flex items-center gap-2 pt-1">
+                          <Button
+                            size="sm"
+                            onClick={() => onSaveServer(server.id)}
+                            disabled={editServerSaving || !editServerUrl || (!!editServerExternalUrl && !/^https?:\/\//i.test(editServerExternalUrl))}
+                          >
+                            {editServerSaving ? (
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                              <Save className="mr-2 h-4 w-4" />
+                            )}
+                            Save
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setEditingServerId(null);
+                              setEditServerError("");
+                              setPlexServers([]);
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                        {editServerError && (
+                          <p className="text-xs text-red-400">{editServerError}</p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="mb-3 space-y-0.5">
+                        <p className="text-sm font-mono text-muted-foreground truncate">{server.url}</p>
+                        {(server as unknown as { externalUrl?: string | null }).externalUrl && (
+                          <p className="text-xs text-muted-foreground truncate">
+                            <span className="text-muted-foreground/60">External:</span>{" "}
+                            <span className="font-mono">{(server as unknown as { externalUrl: string }).externalUrl}</span>
+                          </p>
+                        )}
+                      </div>
+                    )}
                     {testResult?.serverId === server.id && (
                       <div className={`mb-4 flex items-center gap-2 rounded-lg p-3 text-sm ${
                         testResult.ok

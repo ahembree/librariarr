@@ -836,7 +836,7 @@ export default function QueryPage() {
       <div className="flex flex-wrap items-center gap-2">
         {savedQueries.length > 0 && (
           <Select value={activeQueryId ?? ""} onValueChange={(v) => handleLoad(v)}>
-            <SelectTrigger className="w-60">
+            <SelectTrigger className="w-full sm:w-60">
               <SelectValue placeholder="Load saved query..." />
             </SelectTrigger>
             <SelectContent>
@@ -853,7 +853,7 @@ export default function QueryPage() {
               <Save className="mr-1.5 h-3.5 w-3.5" />Save
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-72" align="start">
+          <PopoverContent className="w-72 max-w-[calc(100vw-2rem)]" align="start">
             <div className="space-y-3">
               <p className="text-sm font-medium">{activeQueryId ? "Update saved query" : "Save query as"}</p>
               <Input value={saveName} onChange={(e) => setSaveName(e.target.value)} placeholder="Query name..." onKeyDown={(e) => e.key === "Enter" && handleSave()} />
@@ -899,7 +899,7 @@ export default function QueryPage() {
         </div>
 
         {(mediaTypes.length === 0 || mediaTypes.includes("SERIES")) && (
-          <div className="flex items-center gap-4 pl-27">
+          <div className="flex items-center gap-4 sm:pl-27">
             <label className="flex items-center gap-1.5 cursor-pointer">
               <Checkbox checked={includeEpisodes} onCheckedChange={(checked) => setIncludeEpisodes(checked === true)} />
               <span className="text-sm">Include individual episodes</span>
@@ -915,14 +915,14 @@ export default function QueryPage() {
             <span className="text-sm font-medium text-muted-foreground">Servers:</span>
             <Popover>
               <PopoverTrigger asChild>
-                <Button variant="outline" size="sm" className="h-8">
+                <Button variant="outline" size="sm">
                   <span className="truncate">
                     {selectedServerIds.length === 0 ? "All Servers" : `${selectedServerIds.length} selected`}
                   </span>
                   <ChevronDown className="ml-1.5 h-3.5 w-3.5 opacity-50" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-56 p-0" align="start">
+              <PopoverContent className="w-56 max-w-[calc(100vw-2rem)] p-0" align="start">
                 <Command>
                   <CommandInput placeholder="Search servers..." />
                   <CommandList>
@@ -1064,12 +1064,12 @@ export default function QueryPage() {
         {viewMode === "table" && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm">
+              <Button variant="outline" size="default">
                 <Columns3 className="mr-1.5 h-3.5 w-3.5" />
                 Columns
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-52 max-h-80 overflow-y-auto p-2">
+            <DropdownMenuContent align="end" className="w-52 max-w-[calc(100vw-2rem)] max-h-80 overflow-y-auto p-2">
               {Object.entries(COLUMN_GROUPS).map(([groupKey, groupLabel]) => {
                 const groupCols = allColumns.filter((c) => c.group === groupKey);
                 if (groupCols.length === 0) return null;

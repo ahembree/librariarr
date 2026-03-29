@@ -675,12 +675,12 @@ export default function HistoryPage() {
             {/* Column visibility */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-9 ml-auto">
+                <Button variant="outline" size="default" className="ml-auto">
                   <Columns3 className="mr-2 h-4 w-4" />
                   Columns
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56 max-h-80 overflow-y-auto p-2">
+              <DropdownMenuContent align="end" className="w-56 max-w-[calc(100vw-2rem)] max-h-80 overflow-y-auto p-2">
                 {Object.entries(COLUMN_GROUPS).map(([groupKey, groupLabel]) => {
                   const groupCols = allColumns.filter((c) => c.group === groupKey);
                   if (groupCols.length === 0) return null;

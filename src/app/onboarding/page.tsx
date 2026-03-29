@@ -413,7 +413,7 @@ export default function OnboardingPage() {
                   type="button"
                   onClick={() => handleChooseServerType(st.type)}
                   disabled={isPlexLoading}
-                  className={`group relative flex-1 min-w-56 max-w-xs rounded-xl border ${st.borderColor} ${st.bgColor} p-6 text-left transition-all cursor-pointer ${st.hoverBg}`}
+                  className={`group relative flex-1 min-w-0 sm:min-w-56 max-w-xs rounded-xl border ${st.borderColor} ${st.bgColor} p-6 text-left transition-all cursor-pointer ${st.hoverBg}`}
                 >
                   <div className="flex items-center gap-3 mb-3">
                     <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${st.bgColor}`}>
@@ -520,7 +520,7 @@ export default function OnboardingPage() {
                 return (
                   <Card
                     key={id}
-                    className={`max-w-sm flex-1 min-w-72 ${isAdded ? "border-amber-500/40" : error ? "border-destructive/50" : "border-amber-500/15"}`}
+                    className={`max-w-sm flex-1 min-w-0 sm:min-w-72 ${isAdded ? "border-amber-500/40" : error ? "border-destructive/50" : "border-amber-500/15"}`}
                   >
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">

@@ -17,12 +17,12 @@ export function buildPlayUrl(server: PlayServer): string {
 
   switch (server.serverType) {
     case "PLEX":
+      // Always use app.plex.tv — avoids long plex.direct URLs on mobile
       if (server.machineId) {
-        // Plex web app — works remotely
         return `https://app.plex.tv/desktop/#!/server/${server.machineId}/details?key=${encodeURIComponent(`/library/metadata/${server.ratingKey}`)}`;
       }
-      // Fallback to local server URL
-      return `${baseUrl}/web/index.html#!/server/details?key=${encodeURIComponent(`/library/metadata/${server.ratingKey}`)}`;
+      // Fallback without machineId — still use app.plex.tv which will prompt server selection
+      return `https://app.plex.tv/desktop/#!/details?key=${encodeURIComponent(`/library/metadata/${server.ratingKey}`)}`;
 
     case "JELLYFIN":
       return `${baseUrl}/web/index.html#/details?id=${server.ratingKey}`;

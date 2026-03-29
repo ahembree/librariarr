@@ -481,6 +481,10 @@ export const serverEditSchema = z.object({
     (val) => /^https?:\/\//i.test(val),
     "URL must start with http:// or https://"
   ).optional(),
+  externalUrl: z.string().refine(
+    (val) => /^https?:\/\//i.test(val),
+    "External URL must start with http:// or https://"
+  ).nullable().optional(),
   accessToken: z.string().optional(),
   tlsSkipVerify: z.boolean().optional(),
   enabled: z.boolean().optional(),

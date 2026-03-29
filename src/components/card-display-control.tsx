@@ -26,7 +26,7 @@ export function CardDisplayControl({ prefs, config, onToggle }: CardDisplayContr
           </span>
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-56 p-3">
+      <PopoverContent align="end" className="w-56 max-w-[calc(100vw-2rem)] p-3">
         <div className="space-y-3">
           {config.badges.length > 0 && (
             <div>

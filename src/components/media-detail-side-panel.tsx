@@ -132,13 +132,13 @@ export function MediaDetailSidePanel({
 
       {/* Close / Open full page buttons */}
       <div className="flex items-center justify-end gap-1 px-3 pt-3 relative">
-        <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
+        <Button variant="ghost" size="icon-sm" asChild>
           <Link href={detailUrl}>
             <ExternalLink className="h-3.5 w-3.5" />
             <span className="sr-only">Open full page</span>
           </Link>
         </Button>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
+        <Button variant="ghost" size="icon-sm" onClick={onClose}>
           <X className="h-3.5 w-3.5" />
           <span className="sr-only">Close</span>
         </Button>

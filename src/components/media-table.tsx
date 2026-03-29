@@ -640,7 +640,7 @@ export const MediaTable = memo(function MediaTable({ items, onItemClick, sortBy,
               Columns
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-52 max-h-80 overflow-y-auto">
+          <DropdownMenuContent align="end" className="w-52 max-w-[calc(100vw-2rem)] max-h-80 overflow-y-auto">
             {columnGroups.map((group, idx) => (
               <React.Fragment key={group.key}>
                 {idx > 0 && <DropdownMenuSeparator />}
