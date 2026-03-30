@@ -20,13 +20,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Install pnpm
+        run: corepack enable
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 22
-
-      - name: Install pnpm
-        run: corepack enable
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -47,13 +48,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Install pnpm
+        run: corepack enable
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 22
-
-      - name: Install pnpm
-        run: corepack enable
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -85,13 +87,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Install pnpm
+        run: corepack enable
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 22
-
-      - name: Install pnpm
-        run: corepack enable
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -114,13 +117,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Install pnpm
+        run: corepack enable
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 22
-
-      - name: Install pnpm
-        run: corepack enable
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
