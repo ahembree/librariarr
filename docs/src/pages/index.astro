@@ -12,6 +12,12 @@
       content="Self-hosted media library management for Plex, Jellyfin, and Emby. Browse, filter, and automate your media with lifecycle rules, stream management, and more."
     />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
     <style>
       /* Reset & base */
       *,
@@ -23,23 +29,25 @@
       }
 
       :root {
-        --bg: #09090b;
-        --bg-card: #18181b;
-        --bg-card-hover: #1f1f23;
-        --border: #27272a;
-        --text: #fafafa;
-        --text-muted: #a1a1aa;
+        --bg: oklch(0.16 0.006 270);
+        --bg-card: oklch(0.21 0.008 270);
+        --bg-card-hover: oklch(0.25 0.01 270);
+        --border: oklch(1 0.01 270 / 12%);
+        --text: oklch(0.95 0.008 80);
+        --text-muted: oklch(0.65 0.015 260);
         --accent: oklch(0.6 0.15 250);
         --accent-hover: oklch(0.55 0.18 250);
-        --accent-subtle: oklch(0.2 0.05 250);
-        --radius: 12px;
+        --accent-subtle: oklch(0.22 0.04 250);
+        --radius: 10px;
+        --radius-xl: 14px;
         --max-width: 1100px;
+        --font-display: "Sora", sans-serif;
+        --font-sans: "Plus Jakarta Sans", sans-serif;
+        --font-mono: "JetBrains Mono", monospace;
       }
 
       html {
-        font-family:
-          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
-          Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+        font-family: var(--font-sans);
         background: var(--bg);
         color: var(--text);
         line-height: 1.6;
@@ -52,9 +60,9 @@
         position: sticky;
         top: 0;
         z-index: 50;
-        background: oklch(0.05 0 0 / 0.8);
-        backdrop-filter: blur(12px);
-        border-bottom: 1px solid var(--border);
+        background: oklch(0.18 0.008 270 / 70%);
+        backdrop-filter: blur(20px);
+        border-bottom: 1px solid oklch(1 0 0 / 5%);
       }
 
       .nav-inner {
@@ -70,6 +78,7 @@
         display: inline-flex;
         align-items: center;
         gap: 0.5rem;
+        font-family: var(--font-display);
         font-size: 1.25rem;
         font-weight: 700;
         color: var(--text);
@@ -79,23 +88,52 @@
 
       .nav-links {
         display: flex;
-        gap: 1.5rem;
+        gap: 1rem;
         align-items: center;
       }
 
-      .nav-links a {
+      .nav-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.35rem 0.6rem;
+        border-radius: 8px;
         color: var(--text-muted);
         text-decoration: none;
-        font-size: 0.9rem;
-        transition: color 0.15s;
+        font-size: 0.875rem;
+        font-weight: 500;
+        transition: color 0.2s, background 0.2s;
       }
 
-      .nav-links a:hover {
+      .nav-link:hover {
         color: var(--text);
+        background: oklch(1 0 0 / 8%);
+      }
+
+      .nav-link svg {
+        width: 1.125rem;
+        height: 1.125rem;
+        flex-shrink: 0;
       }
 
       /* Hero */
+      .hero-wrapper {
+        position: relative;
+        overflow: hidden;
+      }
+
+      .hero-gradient {
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(ellipse 80% 50% at 50% -10%, oklch(0.35 0.15 250 / 40%) 0%, transparent 60%),
+          radial-gradient(ellipse 60% 40% at 30% 10%, oklch(0.30 0.10 280 / 25%) 0%, transparent 50%),
+          radial-gradient(ellipse 60% 40% at 70% 10%, oklch(0.28 0.12 230 / 20%) 0%, transparent 50%);
+        pointer-events: none;
+      }
+
       .hero {
+        position: relative;
         max-width: var(--max-width);
         margin: 0 auto;
         padding: 6rem 1.5rem 4rem;
@@ -108,6 +146,7 @@
         border-radius: 999px;
         background: var(--accent-subtle);
         color: var(--accent);
+        font-family: var(--font-sans);
         font-size: 0.8rem;
         font-weight: 600;
         letter-spacing: 0.03em;
@@ -116,6 +155,7 @@
       }
 
       .hero h1 {
+        font-family: var(--font-display);
         font-size: clamp(2.5rem, 6vw, 4rem);
         font-weight: 800;
         letter-spacing: -0.03em;
@@ -124,7 +164,10 @@
       }
 
       .hero h1 .accent {
-        color: var(--accent);
+        background: linear-gradient(135deg, oklch(0.65 0.20 250), oklch(0.55 0.22 280));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
       }
 
       .hero p {
@@ -148,12 +191,17 @@
         gap: 0.5rem;
         padding: 0.75rem 1.75rem;
         border-radius: 8px;
+        font-family: var(--font-sans);
         font-size: 0.95rem;
         font-weight: 600;
         text-decoration: none;
-        transition: all 0.15s;
+        transition: all 0.2s;
         cursor: pointer;
         border: none;
+      }
+
+      .btn:active {
+        transform: scale(0.98);
       }
 
       .btn-primary {
@@ -173,7 +221,7 @@
 
       .btn-secondary:hover {
         background: var(--bg-card-hover);
-        border-color: var(--text-muted);
+        border-color: oklch(1 0 0 / 20%);
       }
 
       /* Features */
@@ -189,6 +237,7 @@
       }
 
       .features-heading h2 {
+        font-family: var(--font-display);
         font-size: 1.75rem;
         font-weight: 700;
         letter-spacing: -0.02em;
@@ -209,14 +258,15 @@
       .feature-card {
         background: var(--bg-card);
         border: 1px solid var(--border);
-        border-radius: var(--radius);
+        border-radius: var(--radius-xl);
         padding: 1.75rem;
-        transition: border-color 0.15s, background 0.15s;
+        transition: border-color 0.3s, background 0.3s, transform 0.3s;
       }
 
       .feature-card:hover {
-        border-color: var(--text-muted);
+        border-color: oklch(1 0 0 / 20%);
         background: var(--bg-card-hover);
+        transform: translateY(-2px);
       }
 
       .feature-icon {
@@ -227,6 +277,7 @@
       }
 
       .feature-card h3 {
+        font-family: var(--font-display);
         font-size: 1.1rem;
         font-weight: 600;
         margin-bottom: 0.5rem;
@@ -247,6 +298,7 @@
       }
 
       .integrations h2 {
+        font-family: var(--font-display);
         font-size: 1.75rem;
         font-weight: 700;
         letter-spacing: -0.02em;
@@ -276,11 +328,12 @@
         font-size: 0.9rem;
         font-weight: 500;
         color: var(--text-muted);
-        transition: border-color 0.15s;
+        transition: border-color 0.2s, color 0.2s;
       }
 
       .integration-chip:hover {
-        border-color: var(--text-muted);
+        border-color: oklch(1 0 0 / 20%);
+        color: var(--text);
       }
 
       /* CTA */
@@ -292,21 +345,38 @@
       }
 
       .cta-box {
+        position: relative;
+        overflow: hidden;
         background: var(--bg-card);
         border: 1px solid var(--border);
-        border-radius: var(--radius);
+        border-radius: var(--radius-xl);
         padding: 3rem 2rem;
       }
 
+      .cta-box::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(ellipse 80% 60% at 50% 0%, oklch(0.30 0.10 250 / 30%) 0%, transparent 60%);
+        pointer-events: none;
+      }
+
       .cta-box h2 {
+        position: relative;
+        font-family: var(--font-display);
         font-size: 1.5rem;
         font-weight: 700;
         margin-bottom: 0.75rem;
       }
 
       .cta-box p {
+        position: relative;
         color: var(--text-muted);
         margin-bottom: 2rem;
+      }
+
+      .cta-box .hero-actions {
+        position: relative;
       }
 
       /* Footer */
@@ -344,6 +414,14 @@
           max-width: 280px;
           justify-content: center;
         }
+
+        .nav-brand span {
+          display: none;
+        }
+
+        .nav-link span {
+          display: none;
+        }
       }
     </style>
   </head>
@@ -356,14 +434,25 @@
           Librariarr
         </a>
         <div class="nav-links">
-          <a href="/docs/getting-started/installation/">Docs</a>
-          <a href="https://github.com/ahembree/librariarr">GitHub</a>
-          <a href="https://hub.docker.com/r/ahembree/librariarr">Docker Hub</a>
+          <a href="/docs/getting-started/installation/" class="nav-link">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/></svg>
+            <span>Docs</span>
+          </a>
+          <a href="https://github.com/ahembree/librariarr" class="nav-link">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            <span>GitHub</span>
+          </a>
+          <a href="https://hub.docker.com/r/ahembree/librariarr" class="nav-link">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.983 11.078h2.119a.186.186 0 0 0 .186-.185V9.006a.186.186 0 0 0-.186-.186h-2.119a.185.185 0 0 0-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 0 0 .186-.186V3.574a.186.186 0 0 0-.186-.185h-2.118a.185.185 0 0 0-.185.185v1.888c0 .102.082.186.185.186m0 2.716h2.118a.187.187 0 0 0 .186-.186V6.29a.186.186 0 0 0-.186-.185h-2.118a.185.185 0 0 0-.185.185v1.887c0 .102.082.186.185.186m-2.93 0h2.12a.186.186 0 0 0 .184-.186V6.29a.185.185 0 0 0-.185-.185H8.1a.185.185 0 0 0-.185.185v1.887c0 .102.083.186.185.186m-2.964 0h2.119a.186.186 0 0 0 .185-.186V6.29a.186.186 0 0 0-.185-.185H5.136a.186.186 0 0 0-.186.185v1.887c0 .102.084.186.186.186m5.893 2.715h2.118a.186.186 0 0 0 .186-.185V9.006a.186.186 0 0 0-.186-.186h-2.118a.185.185 0 0 0-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 0 0 .184-.185V9.006a.185.185 0 0 0-.184-.186h-2.12a.185.185 0 0 0-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 0 0 .185-.185V9.006a.186.186 0 0 0-.185-.186H5.136a.186.186 0 0 0-.186.185v1.888c0 .102.084.185.186.185m-2.92 0h2.12a.185.185 0 0 0 .184-.185V9.006a.185.185 0 0 0-.184-.186h-2.12a.185.185 0 0 0-.184.186v1.887c0 .102.082.185.185.185M23.763 9.89c-.065-.051-.672-.51-1.954-.51-.338.001-.676.03-1.01.087-.248-1.7-1.653-2.53-1.716-2.566l-.344-.199-.226.327c-.284.438-.49.922-.612 1.43-.23.97-.09 1.882.403 2.661-.595.332-1.55.413-1.744.42H.751a.751.751 0 0 0-.75.748 11.376 11.376 0 0 0 .692 4.062c.545 1.428 1.355 2.48 2.41 3.124 1.18.723 3.1 1.137 5.275 1.137.983.003 1.963-.086 2.93-.266a12.248 12.248 0 0 0 3.823-1.389c.98-.567 1.86-1.288 2.61-2.136 1.252-1.418 1.998-2.997 2.553-4.4h.221c1.372 0 2.215-.549 2.68-1.009.309-.293.55-.65.707-1.046l.098-.288Z"/></svg>
+            <span>Docker Hub</span>
+          </a>
         </div>
       </div>
     </nav>
 
-    <section class="hero">
+    <div class="hero-wrapper">
+      <div class="hero-gradient"></div>
+      <section class="hero">
       <span class="hero-badge">Self-Hosted &middot; Open Source</span>
       <h1>
         Manage your <span class="accent">media libraries</span> with confidence
@@ -394,6 +483,7 @@
         </a>
       </div>
     </section>
+    </div>
 
     <section class="features">
       <div class="features-heading">
@@ -564,6 +654,7 @@
             href="https://hub.docker.com/r/ahembree/librariarr"
             class="btn btn-secondary"
           >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M13.983 11.078h2.119a.186.186 0 0 0 .186-.185V9.006a.186.186 0 0 0-.186-.186h-2.119a.185.185 0 0 0-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 0 0 .186-.186V3.574a.186.186 0 0 0-.186-.185h-2.118a.185.185 0 0 0-.185.185v1.888c0 .102.082.186.185.186m0 2.716h2.118a.187.187 0 0 0 .186-.186V6.29a.186.186 0 0 0-.186-.185h-2.118a.185.185 0 0 0-.185.185v1.887c0 .102.082.186.185.186m-2.93 0h2.12a.186.186 0 0 0 .184-.186V6.29a.185.185 0 0 0-.185-.185H8.1a.185.185 0 0 0-.185.185v1.887c0 .102.083.186.185.186m-2.964 0h2.119a.186.186 0 0 0 .185-.186V6.29a.186.186 0 0 0-.185-.185H5.136a.186.186 0 0 0-.186.185v1.887c0 .102.084.186.186.186m5.893 2.715h2.118a.186.186 0 0 0 .186-.185V9.006a.186.186 0 0 0-.186-.186h-2.118a.185.185 0 0 0-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 0 0 .184-.185V9.006a.185.185 0 0 0-.184-.186h-2.12a.185.185 0 0 0-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 0 0 .185-.185V9.006a.186.186 0 0 0-.185-.186H5.136a.186.186 0 0 0-.186.185v1.888c0 .102.084.185.186.185m-2.92 0h2.12a.185.185 0 0 0 .184-.185V9.006a.185.185 0 0 0-.184-.186h-2.12a.185.185 0 0 0-.184.186v1.887c0 .102.082.185.185.185M23.763 9.89c-.065-.051-.672-.51-1.954-.51-.338.001-.676.03-1.01.087-.248-1.7-1.653-2.53-1.716-2.566l-.344-.199-.226.327c-.284.438-.49.922-.612 1.43-.23.97-.09 1.882.403 2.661-.595.332-1.55.413-1.744.42H.751a.751.751 0 0 0-.75.748 11.376 11.376 0 0 0 .692 4.062c.545 1.428 1.355 2.48 2.41 3.124 1.18.723 3.1 1.137 5.275 1.137.983.003 1.963-.086 2.93-.266a12.248 12.248 0 0 0 3.823-1.389c.98-.567 1.86-1.288 2.61-2.136 1.252-1.418 1.998-2.997 2.553-4.4h.221c1.372 0 2.215-.549 2.68-1.009.309-.293.55-.65.707-1.046l.098-.288Z"/></svg>
             Docker Hub
           </a>
         </div>

@@ -271,9 +271,9 @@ export default function QueryPage() {
               if (main) {
                 if (scrollFraction > 0) {
                   const maxScroll = main.scrollHeight - main.clientHeight;
-                  main.scrollTop = Math.round(scrollFraction * maxScroll);
+                  main.scrollTo({ top: Math.round(scrollFraction * maxScroll), behavior: "instant" });
                 } else {
-                  main.scrollTop = scrollTop;
+                  main.scrollTo({ top: scrollTop, behavior: "instant" });
                 }
               }
             });

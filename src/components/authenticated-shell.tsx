@@ -10,12 +10,14 @@ import { Button } from "@/components/ui/button";
 import { BackToTop } from "@/components/back-to-top";
 import { findScrollContainer } from "@/lib/scroll-utils";
 import { useStatusBarScroll } from "@/hooks/use-status-bar-scroll";
+import { useScrollToTop } from "@/hooks/use-scroll-to-top";
 
 export function AuthenticatedShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const isMobile = useIsMobile();
   const [maintenanceActive, setMaintenanceActive] = useState(false);
   useStatusBarScroll();
+  useScrollToTop();
 
   const checkMaintenance = useCallback(() => {
     fetch("/api/tools/maintenance")

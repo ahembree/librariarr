@@ -156,7 +156,7 @@ export default function MusicPage() {
       const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
       const rowHeight = Math.round(columnWidth * 1.0 + 80 + GAP);
       const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
-      main.scrollTop = Math.max(0, gridTop + row * rowHeight + rowHeight / 2 - main.clientHeight / 2);
+      main.scrollTo({ top: Math.max(0, gridTop + row * rowHeight + rowHeight / 2 - main.clientHeight / 2), behavior: "instant" });
       return true;
     },
   });

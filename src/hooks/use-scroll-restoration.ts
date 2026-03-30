@@ -133,7 +133,7 @@ export function useScrollRestoration(
       // Pass 1: Set approximate scroll position so the virtualizer renders nearby rows.
       // Pass 2: After layout settles, fine-tune with index-based centering.
       requestAnimationFrame(() => {
-        main.scrollTop = scrollTop;
+        main.scrollTo({ top: scrollTop, behavior: "instant" });
 
         if (firstVisibleIndex >= 0) {
           requestAnimationFrame(() => {

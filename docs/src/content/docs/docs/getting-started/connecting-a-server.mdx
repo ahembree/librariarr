@@ -41,14 +41,6 @@ import { Aside, Steps } from "@astrojs/starlight/components";
 
 ### Getting Your Access Token
 
-#### Plex
-
-If you signed in with Plex OAuth, Librariarr can auto-discover your servers. You can also provide a token manually:
-
-1. Open Plex Web and navigate to any media item
-2. Click **Get Info** → **View XML**
-3. Look for `X-Plex-Token` in the URL
-
 #### Jellyfin
 
 1. Go to **Dashboard → API Keys** in Jellyfin
@@ -58,6 +50,10 @@ If you signed in with Plex OAuth, Librariarr can auto-discover your servers. You
 
 1. Go to **Server → API Keys** in Emby
 2. Create a new API key for Librariarr
+
+<Aside>
+  Plex does not require a manual access token. Librariarr uses Plex OAuth to authenticate and automatically discovers your servers.
+</Aside>
 
 ## Onboarding Flow
 

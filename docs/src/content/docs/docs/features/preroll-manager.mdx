@@ -17,7 +17,37 @@ Presets store references to preroll media files on your server.
 2. Click **Add Preset**
 3. Enter a **name** (e.g., "Holiday 2024", "Default Intro")
 4. Enter the **file path** to the preroll video on your server
-5. The path is validated server-side to confirm the file exists
+5. The path is validated server-side to confirm the file exists and is readable
+
+### Path Validation
+
+When you enter a preroll file path, Librariarr validates it in two ways:
+
+1. **Directory whitelisting** — The path must fall within an allowed directory. By default, the allowed prefixes are `/media`, `/data`, `/mnt`, and `/opt/prerolls`. You can customize this with the `PREROLL_ALLOWED_PATHS` environment variable (comma-separated list of directory prefixes).
+2. **Read-only file access check** — Librariarr verifies the file exists and is readable from inside the container. It only needs read access — preroll files are never modified.
+
+<Aside type="tip">
+  To enable path validation, mount your preroll files into the Librariarr container as a **read-only volume**. This gives Librariarr visibility to verify paths without granting write access to your media files.
+
+  ```yaml title="docker-compose.yml (excerpt)"
+  services:
+    librariarr:
+      volumes:
+        - ./config:/config
+        - /path/to/your/prerolls:/media/prerolls:ro
+  ```
+
+  The `:ro` flag ensures the mount is read-only. Librariarr will never write to or modify your preroll files.
+</Aside>
+
+<Aside>
+  If `PREROLL_ALLOWED_PATHS` is not set, the defaults are `/media`, `/data`, `/mnt`, and `/opt/prerolls`. To restrict or expand the allowed directories, set it in your environment:
+
+  ```yaml
+  environment:
+    - PREROLL_ALLOWED_PATHS=/media/prerolls,/data/prerolls
+  ```
+</Aside>
 
 ### Supported Formats
 
@@ -76,9 +106,8 @@ When a user starts playing media:
 
 - **Plex**: Preroll support works by setting the preroll path via the Plex API. Requires Plex Pass for the preroll feature.
 - **Jellyfin/Emby**: Preroll support varies by server version and may require plugins or specific configuration.
-- Preroll files must be accessible by the media server at the specified path.
 - Changes to active prerolls take effect on the next playback start — currently playing content is not affected.
 
 <Aside type="caution">
-  Ensure the file paths in your presets are valid from the media server's perspective, not the Librariarr container's perspective. The paths must be reachable by the media server process.
+  The preroll file paths stored in presets must be valid from the **media server's** perspective. Librariarr validates that the file exists inside its own container (via the read-only volume mount), but the media server must also be able to access the same file at the same path. Ensure both containers mount the preroll directory at the same path.
 </Aside>
