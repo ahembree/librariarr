@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.11.0](https://github.com/ahembree/librariarr/compare/v0.10.0...v0.11.0) (2026-03-30)
+
+
+### Features
+
+* **docs:** improve hero and docs site styling to match app theme ([8abd327](https://github.com/ahembree/librariarr/commit/8abd327afedcda5d6861526b113ea267bda907b8))
+* migrate to pnpm ([f897b67](https://github.com/ahembree/librariarr/commit/f897b67af68366ae4f5589f668f36c0fea5de3d6))
+* migrate to pnpm ([bfba350](https://github.com/ahembree/librariarr/commit/bfba3501bf3bc99849f3177c84743ef96cb53a8f))
+
+
+### Bug Fixes
+
+* **backup:** clear active sync jobs when restoring from backup ([03e1d37](https://github.com/ahembree/librariarr/commit/03e1d37d8e930aabe258df51d6d69bd3e995fe3f))
+* **docs:** add text labels to nav icons, fix sidebar, remove colored title ([3054eab](https://github.com/ahembree/librariarr/commit/3054eabc6ae8df4520a9a4ac17addb3e2a731d19))
+* momentum scroll on mobile ([0b74d88](https://github.com/ahembree/librariarr/commit/0b74d88f20159726e6a0bc7bbdb267c2363e50e5))
+
 ## [0.10.0](https://github.com/ahembree/librariarr/compare/v0.9.1...v0.10.0) (2026-03-30)
 
 
