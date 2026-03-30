@@ -1,15 +1,20 @@
-# Librariarr
+<p align="center">
+  <img src="docs/public/librariarr_hero.png" alt="Librariarr" width="600" />
+</p>
 
-[![CI](https://github.com/ahembree/librariarr/actions/workflows/ci.yml/badge.svg)](https://github.com/ahembree/librariarr/actions/workflows/ci.yml)
-[![Docker Hub](https://img.shields.io/docker/pulls/ahembree/librariarr)](https://hub.docker.com/r/ahembree/librariarr)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+<p align="center">
+  <a href="https://github.com/ahembree/librariarr/actions/workflows/ci.yml"><img src="https://github.com/ahembree/librariarr/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://hub.docker.com/r/ahembree/librariarr"><img src="https://img.shields.io/docker/pulls/ahembree/librariarr" alt="Docker Hub" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue.svg" alt="License: AGPL-3.0" /></a>
+  <a href="https://discord.gg/cuVnryKSRD"><img src="https://dcbadge.limes.pink/api/server/cuVnryKSRD?style=plastic" alt="Discord" /></a>
+</p>
 
 > [!WARNING]
 > **This software is currently in beta.** There is the potential for bugs, breaking changes, and data loss. Use at your own risk and ensure you have backups of your data.
 
 Media library management for Plex, Jellyfin, and Emby. Track your media metadata, monitor quality breakdowns, and build lifecycle rules to manage your libraries.
 
-**Documentation:** [librariarr.dev](https://librariarr.dev)
+**Documentation:** [librariarr.dev](https://librariarr.dev) | **Discord:** [Join the community](https://discord.gg/cuVnryKSRD)
 
 ## Features
 
