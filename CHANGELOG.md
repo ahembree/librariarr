@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.10.0](https://github.com/ahembree/librariarr/compare/v0.9.1...v0.10.0) (2026-03-30)
+
+
+### Features
+
+* add Docker security hardening to compose files ([d53d498](https://github.com/ahembree/librariarr/commit/d53d4988ec7a3d55476f1b890f0f8d0408b11069))
+* add Unraid compatibility ([694e465](https://github.com/ahembree/librariarr/commit/694e46588549c6d89fec953e770cfd5478523e41))
+* **lifecycle:** improve exclusions with reason prompts, collection removal, manual add, and edit ([87eec70](https://github.com/ahembree/librariarr/commit/87eec70190dcd626b4535ff6b53d6ee155c53930))
+
+
+### Bug Fixes
+
+* default UMASK to 022 and always disable Next.js telemetry ([466994a](https://github.com/ahembree/librariarr/commit/466994a824a725b2594313298896570bd65f8409))
+* preserve backward-compatible PostgreSQL volume mount path ([8d06269](https://github.com/ahembree/librariarr/commit/8d0626919ff46c58d66abe68cf85500123024dcc))
+* use official PostgreSQL PGDATA subdirectory pattern ([5802b83](https://github.com/ahembree/librariarr/commit/5802b8356bd81e0602cc0f0f007aece9ddf44ae4))
+
 ## [0.9.1](https://github.com/ahembree/librariarr/compare/v0.9.0...v0.9.1) (2026-03-30)
 
 
