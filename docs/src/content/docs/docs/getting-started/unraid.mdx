@@ -113,7 +113,7 @@ If your media files or appdata use different ownership, adjust `PUID` and `PGID`
 stat -c '%u:%g' /mnt/user/appdata
 ```
 
-An optional `UMASK` variable (default: `022`) is also available under advanced settings to control file permission masks.
+`UMASK` defaults to `022` and is available under advanced settings if your environment requires a different value.
 
 ## Environment Variables
 

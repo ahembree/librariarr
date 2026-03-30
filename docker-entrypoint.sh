@@ -3,15 +3,12 @@ set -e
 
 PUID=${PUID:-1000}
 PGID=${PGID:-1000}
-UMASK=${UMASK:-}
+UMASK=${UMASK:-022}
+export NEXT_TELEMETRY_DISABLED=1
 
 echo "==> Starting with UID: $PUID, GID: $PGID"
-
-# Apply umask if set (commonly used on Unraid)
-if [ -n "$UMASK" ]; then
-  echo "    Setting umask: $UMASK"
-  umask "$UMASK"
-fi
+echo "    Setting umask: $UMASK"
+umask "$UMASK"
 
 # Resolve or create a group with the target GID
 EXISTING_GROUP=$(getent group "$PGID" | cut -d: -f1)
