@@ -12,6 +12,10 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
 - Docker and Docker Compose v2+
 - A Plex, Jellyfin, or Emby media server
 
+<Aside type="danger" title="Internal network only">
+  Librariarr is designed to run on your **local or internal network only**. Do not expose it directly to the public internet. It does not include the hardening, rate limiting on all endpoints, or abuse protections necessary for public-facing deployment. If you need remote access, use a VPN (e.g., WireGuard, Tailscale) to reach your internal network securely.
+</Aside>
+
 ## Quick Start
 
 <Steps>
@@ -136,6 +140,7 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
 | `LOG_DEBUG` | No | `false` | Enable debug-level logging |
 | `BACKUP_DIR` | No | `/config/backups` | Backup storage directory |
 | `IMAGE_CACHE_DIR` | No | `/config/cache/images` | Artwork cache directory |
+| `PREROLL_ALLOWED_PATHS` | No | `/media,/data,/mnt,/opt/prerolls` | Comma-separated list of allowed directory prefixes for [preroll file validation](/docs/features/preroll-manager/#path-validation) |
 
 ## Persistent Data
 
