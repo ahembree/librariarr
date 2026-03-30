@@ -64,9 +64,9 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
          POSTGRES_USER: librariarr
          POSTGRES_PASSWORD: ${DB_PASSWORD}
          POSTGRES_DB: librariarr
-         PGDATA: /var/lib/postgresql/data
+         PGDATA: /var/lib/postgresql/data/pgdata
        volumes:
-         - librariarr-db:/var/lib/postgresql
+         - librariarr-db:/var/lib/postgresql/data
        security_opt:
          - no-new-privileges:true
        cap_drop:
@@ -257,7 +257,6 @@ services:
     environment:
       - DATABASE_URL=postgresql://librariarr:${DB_PASSWORD}@librariarr-db:5432/librariarr
       - SESSION_SECRET=${SESSION_SECRET:-}
-      - NEXT_TELEMETRY_DISABLED=1
       - TZ=${TZ:-UTC}
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
@@ -295,9 +294,9 @@ services:
       POSTGRES_USER: librariarr
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: librariarr
-      PGDATA: /var/lib/postgresql/data
+      PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - librariarr-db:/var/lib/postgresql
+      - librariarr-db:/var/lib/postgresql/data
     security_opt:
       - no-new-privileges:true
     cap_drop:
