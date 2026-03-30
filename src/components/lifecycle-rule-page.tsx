@@ -797,7 +797,7 @@ export function LifecycleRulePage({
       setPreview(mergedItems);
       requestAnimationFrame(() => {
         if (scrollContainerRef.current) {
-          scrollContainerRef.current.scrollTop = scrollTop;
+          scrollContainerRef.current.scrollTo({ top: scrollTop, behavior: "instant" });
         }
       });
     } catch (error) {
