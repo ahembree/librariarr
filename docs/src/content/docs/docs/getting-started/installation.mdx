@@ -122,6 +122,78 @@ All persistent data is stored under `/config` inside the container:
   The `./config` bind mount ensures your backups and cache survive container recreation.
 </Aside>
 
+## Using an Existing PostgreSQL Database
+
+If you already have a PostgreSQL server (e.g., a shared instance on your network or a managed database), you can skip the `librariarr-db` container and point Librariarr directly at it.
+
+### Database Requirements
+
+- **PostgreSQL 14 or later** (17+ recommended)
+- A dedicated database for Librariarr (the app manages its own schema)
+- A user with full privileges on that database (`CREATE`, `ALTER`, `DROP`, `INSERT`, `UPDATE`, `DELETE`)
+- No PostgreSQL extensions are required
+
+### Setup
+
+<Steps>
+
+1. **Create the database and user** on your PostgreSQL server:
+
+   ```sql
+   CREATE USER librariarr WITH PASSWORD 'your-secure-password';
+   CREATE DATABASE librariarr OWNER librariarr;
+   ```
+
+2. **Use a simplified `docker-compose.yml`** without the database service:
+
+   ```yaml title="docker-compose.yml"
+   services:
+     librariarr:
+       image: ahembree/librariarr:latest
+       container_name: librariarr
+       ports:
+         - "${LIBRARIARR_PORT:-3000}:3000"
+       environment:
+         - DATABASE_URL=postgresql://librariarr:${DB_PASSWORD}@your-db-host:5432/librariarr
+         - TZ=${TZ:-UTC}
+         - PUID=${PUID:-1000}
+         - PGID=${PGID:-1000}
+       volumes:
+         - ./config:/config
+       restart: unless-stopped
+       healthcheck:
+         test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+         interval: 30s
+         timeout: 5s
+         start_period: 60s
+         retries: 3
+   ```
+
+3. **Update your `.env` file** with the database password and hostname:
+
+   ```bash title=".env"
+   DB_PASSWORD=your-secure-password
+   ```
+
+   Adjust the `DATABASE_URL` in `docker-compose.yml` to match your PostgreSQL server's hostname, port, and credentials.
+
+4. **Start the container:**
+
+   ```bash
+   docker compose up -d
+   ```
+
+</Steps>
+
+<Aside type="caution">
+  Librariarr automatically creates and migrates all tables on startup. Do not manually create tables or run SQL migrations — the app handles this entirely.
+</Aside>
+
+<Aside type="tip">
+  If your PostgreSQL server uses a non-default port or requires SSL, include it in the connection URL:
+  `postgresql://user:password@host:5433/librariarr?sslmode=require`
+</Aside>
+
 ## Startup Behavior
 
 On every container start, Librariarr:
