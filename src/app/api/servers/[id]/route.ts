@@ -30,7 +30,7 @@ export async function PUT(
   const { data, error } = await validateRequest(request, serverEditSchema);
   if (error) return error;
 
-  const { url, tlsSkipVerify, accessToken, enabled, deleteData } = data;
+  const { url, externalUrl, tlsSkipVerify, accessToken, enabled, deleteData } = data;
 
   // Test connection if URL or access token changed (skip if just toggling enabled)
   if ((url || accessToken) && enabled !== false) {
@@ -52,6 +52,7 @@ export async function PUT(
     where: { id: server.id },
     data: {
       ...(url !== undefined && { url }),
+      ...(externalUrl !== undefined && { externalUrl: externalUrl || null }),
       ...(tlsSkipVerify !== undefined && { tlsSkipVerify }),
       ...(accessToken !== undefined && accessToken !== "" && { accessToken }),
       ...(enabled !== undefined && { enabled }),

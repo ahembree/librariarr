@@ -836,12 +836,12 @@ export default function RuleMatchesPage() {
           {viewMode === "table" && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm">
+                <Button variant="outline" size="default">
                   <Columns3 className="mr-1.5 h-3.5 w-3.5" />
                   Columns
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuContent align="end" className="w-52 max-w-[calc(100vw-2rem)]">
                 {ALL_MATCH_COLUMNS.filter((col) => !col.alwaysVisible).map((col) => (
                   <DropdownMenuCheckboxItem
                     key={col.id}

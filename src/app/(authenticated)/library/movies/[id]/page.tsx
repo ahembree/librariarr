@@ -47,7 +47,7 @@ export default function MovieDetailPage() {
 
   if (loading) {
     return (
-      <div className="p-8 space-y-4">
+      <div className="p-4 sm:p-6 lg:p-8 space-y-4">
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-[400px] w-full rounded-lg" />
       </div>

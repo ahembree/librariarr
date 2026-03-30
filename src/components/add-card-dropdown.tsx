@@ -47,7 +47,7 @@ export function AddCardDropdown({
             Add Card
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="center" className="w-64">
+        <DropdownMenuContent align="center" className="w-64 max-w-[calc(100vw-2rem)]">
           {/* Custom Card — always at top */}
           <DropdownMenuItem
             onClick={() => setDialogOpen(true)}

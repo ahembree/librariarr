@@ -206,7 +206,7 @@ function ArrSection({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2 *:space-y-1.5">
               <div>
                 <Label htmlFor={`${idPrefix}-name`}>Name</Label>
                 <Input
@@ -319,7 +319,7 @@ function ArrSection({
               <CardContent className="py-4">
                 {editing.id === instance.id ? (
                   <div className="space-y-3">
-                    <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="grid gap-4 sm:grid-cols-2 *:space-y-1.5">
                       <div>
                         <Label>Name</Label>
                         <Input

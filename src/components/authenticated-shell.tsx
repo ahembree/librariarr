@@ -60,7 +60,7 @@ export function AuthenticatedShell({ children }: { children: React.ReactNode }) 
               }}
             >
               <Logo size={32} />
-              <span className="text-lg font-bold">Librariarr</span>
+              <span className="text-lg font-semibold font-display tracking-tight">Librariarr</span>
             </button>
           </header>
         )}

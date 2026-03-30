@@ -95,6 +95,7 @@ model MediaServer {
   type          MediaServerType @default(PLEX)
   name          String
   url           String
+  externalUrl   String?
   accessToken   String
   machineId     String?
   tlsSkipVerify Boolean         @default(false)

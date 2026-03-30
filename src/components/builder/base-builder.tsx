@@ -268,7 +268,7 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
                     })()}
                     {section.label}
                   </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent className="w-52 max-h-(--radix-dropdown-menu-content-available-height) overflow-y-auto">
+                  <DropdownMenuSubContent className="w-52 max-w-[calc(100vw-2rem)] max-h-(--radix-dropdown-menu-content-available-height) overflow-y-auto">
                     {sectionFields.map((f) => {
                       const disabled = config.isFieldDisabled(
                         f.value,
@@ -791,7 +791,7 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
   return (
     <Card
       ref={setDropRef}
-      className={`p-4 space-y-2 ${BG_COLORS[depth % BG_COLORS.length]} ${isOver ? ACTIVE_BORDER_COLORS[depth % ACTIVE_BORDER_COLORS.length] : BORDER_COLORS[depth % BORDER_COLORS.length]} ${group.enabled === false ? "opacity-50" : ""} ${isStreamQuery ? "border-primary/30" : ""}`}
+      className={`p-3 sm:p-4 space-y-2 overflow-hidden ${BG_COLORS[depth % BG_COLORS.length]} ${isOver ? ACTIVE_BORDER_COLORS[depth % ACTIVE_BORDER_COLORS.length] : BORDER_COLORS[depth % BORDER_COLORS.length]} ${group.enabled === false ? "opacity-50" : ""} ${isStreamQuery ? "border-primary/30" : ""}`}
     >
       {/* Stream query name - positioned at top-left, separate from the query logic */}
       {isStreamQuery && (
@@ -808,8 +808,8 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
         />
       )}
       {/* Group header */}
-      <div className="flex items-center justify-between mb-1">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
           {dragHandleProps && (
             <button
               type="button"
@@ -1074,7 +1074,7 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
       )}
 
       {/* Action buttons */}
-      <div className="flex gap-2 pt-1">
+      <div className="flex flex-wrap gap-2 pt-1">
         <Button
           onClick={handleAddRule}
           variant="ghost"

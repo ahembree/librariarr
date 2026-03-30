@@ -42,7 +42,7 @@ export function BuilderWithPseudocode<
       <div className="lg:hidden mt-4">
         <Collapsible open={mobileOpen} onOpenChange={setMobileOpen}>
           <CollapsibleTrigger asChild>
-            <Button variant="outline" size="sm" className="w-full">
+            <Button variant="outline" className="w-full">
               <Code className="mr-2 h-4 w-4" />
               {mobileOpen ? "Hide" : "Show"} Logic Preview
             </Button>

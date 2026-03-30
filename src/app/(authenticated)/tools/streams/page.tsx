@@ -1275,7 +1275,10 @@ export default function StreamManagerPage() {
             <span
               className={`h-2 w-2 rounded-full ${connected ? "bg-emerald-500 animate-pulse" : "bg-muted-foreground"}`}
               title={connected ? "Live — connected to server" : "Connecting..."}
+              role="status"
+              aria-label={connected ? "Live — connected to server" : "Connecting to server"}
             />
+            {connected && <span className="text-xs text-emerald-400 hidden sm:inline">Live</span>}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {sessions.length > 0 && (
@@ -1304,8 +1307,9 @@ export default function StreamManagerPage() {
               </Button>
             )}
             <Button
-              variant="destructive"
+              variant="outline"
               size="sm"
+              className="text-destructive hover:text-destructive hover:bg-destructive/10"
               disabled={sessions.length === 0 || terminating}
               onClick={() => handleTerminateClick("all")}
             >
@@ -1329,7 +1333,7 @@ export default function StreamManagerPage() {
             </CardContent>
           </Card>
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 stagger-children">
             {sessions.map((s) => (
               <SessionCard
                 key={sessionKey(s)}
@@ -1347,7 +1351,7 @@ export default function StreamManagerPage() {
       <Separator />
 
       {/* Maintenance Mode + Transcode Manager grid */}
-      <div className="grid gap-6 lg:grid-cols-2 min-w-0">
+      <div className="grid gap-6 lg:grid-cols-2 min-w-0 animate-fade-in-up">
         {/* Maintenance Mode */}
         <div className="space-y-4 min-w-0">
           <h2 className="text-lg font-semibold flex items-center gap-2">
@@ -1355,7 +1359,7 @@ export default function StreamManagerPage() {
             Maintenance Mode
           </h2>
 
-          <Card className={`overflow-hidden ${maintenanceEnabled ? "border-amber-500/40 bg-amber-500/5" : ""}`}>
+          <Card className={`overflow-hidden transition-colors ${maintenanceEnabled ? "border-amber-500/40 bg-amber-500/5 shadow-[0_0_12px] shadow-amber-500/10" : ""}`}>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="space-y-1 min-w-0">
@@ -1380,7 +1384,7 @@ export default function StreamManagerPage() {
               </div>
             </CardHeader>
 
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-4">
               {/* Delay input */}
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground uppercase tracking-wider">
@@ -1395,14 +1399,12 @@ export default function StreamManagerPage() {
                     const val = parseInt(e.target.value, 10);
                     if (!isNaN(val) && val >= 0) updateMaintenanceDelay(val);
                   }}
-                  className="w-24"
+                  className="w-full sm:w-24"
                 />
                 <p className="text-[11px] text-muted-foreground">
                   Time before a new stream is terminated (0 for immediate)
                 </p>
               </div>
-
-              <Separator />
 
               {/* Message selector */}
               <MessageSelector
@@ -1415,10 +1417,8 @@ export default function StreamManagerPage() {
                 }}
               />
 
-              <Separator />
-
               {/* Discord notification toggle */}
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center justify-between gap-3 rounded-md bg-muted/30 px-3 py-2.5">
                 <div className="min-w-0">
                   <p className="text-sm font-medium">Notify Discord</p>
                   <p className="text-[11px] text-muted-foreground">
@@ -1435,8 +1435,6 @@ export default function StreamManagerPage() {
                   className="shrink-0"
                 />
               </div>
-
-              <Separator />
 
               {/* Excluded users */}
               <ExcludedUsersSelect
@@ -1458,7 +1456,7 @@ export default function StreamManagerPage() {
             Transcode Manager
           </h2>
 
-          <Card className={`overflow-hidden ${transcodeEnabled ? "border-amber-500/40 bg-amber-500/5" : ""}`}>
+          <Card className={`overflow-hidden transition-colors ${transcodeEnabled ? "border-amber-500/40 bg-amber-500/5 shadow-[0_0_12px] shadow-amber-500/10" : ""}`}>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="space-y-1 min-w-0">
@@ -1483,7 +1481,7 @@ export default function StreamManagerPage() {
               </div>
             </CardHeader>
 
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-4">
               {/* Delay input */}
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground uppercase tracking-wider">
@@ -1498,14 +1496,12 @@ export default function StreamManagerPage() {
                     const val = parseInt(e.target.value, 10);
                     if (!isNaN(val) && val >= 0) updateTranscodeDelay(val);
                   }}
-                  className="w-24"
+                  className="w-full sm:w-24"
                 />
                 <p className="text-[11px] text-muted-foreground">
                   Time before a matching stream is terminated (0 for immediate)
                 </p>
               </div>
-
-              <Separator />
 
               {/* Criteria toggles */}
               <div className="space-y-1.5">
@@ -1530,8 +1526,6 @@ export default function StreamManagerPage() {
                 ))}
               </div>
 
-              <Separator />
-
               {/* Termination message */}
               <MessageSelector
                 selectedMessage={transcodeMessage}
@@ -1543,8 +1537,6 @@ export default function StreamManagerPage() {
                   if (msg) updateTranscodeMessage(msg);
                 }}
               />
-
-              <Separator />
 
               {/* Excluded users */}
               <ExcludedUsersSelect
@@ -1630,16 +1622,15 @@ export default function StreamManagerPage() {
                       />
                       <Button
                         variant="ghost"
-                        size="sm"
-                        className="h-8 w-8 p-0"
+                        size="icon-sm"
                         onClick={() => openEditBlackout(schedule)}
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </Button>
                       <Button
                         variant="ghost"
-                        size="sm"
-                        className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                        size="icon-sm"
+                        className="text-destructive hover:text-destructive hover:bg-destructive/10"
                         onClick={() => setDeleteBlackoutId(schedule.id)}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -1697,7 +1688,7 @@ export default function StreamManagerPage() {
 
             {/* One-time: date range */}
             {blackoutForm.scheduleType === "one_time" && (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label>Start Date/Time</Label>
                   <Input
@@ -1738,7 +1729,7 @@ export default function StreamManagerPage() {
                     ))}
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <Label>Start Time</Label>
                     <Input
@@ -1796,7 +1787,7 @@ export default function StreamManagerPage() {
                     if (!isNaN(val) && val >= 0)
                       setBlackoutForm((f) => ({ ...f, delay: val }));
                   }}
-                  className="w-24"
+                  className="w-full sm:w-24"
                 />
               </div>
             )}

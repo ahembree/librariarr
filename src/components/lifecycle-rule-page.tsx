@@ -1272,12 +1272,12 @@ export function LifecycleRulePage({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4">
             <Input
               placeholder="Rule set name (e.g., 'Old unwatched 720p movies')"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className={`flex-1${!name ? " border-destructive" : ""}`}
+              className={`flex-1 min-w-0${!name ? " border-destructive" : ""}`}
             />
             <div className="flex items-center gap-2 shrink-0">
               <Switch
@@ -1308,7 +1308,7 @@ export function LifecycleRulePage({
                   <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-64 p-0">
+              <PopoverContent className="w-64 max-w-[calc(100vw-2rem)] p-0">
                 <Command>
                   <CommandInput placeholder="Search servers..." />
                   <CommandList>
@@ -1364,7 +1364,7 @@ export function LifecycleRulePage({
           </div>
 
           {/* Arr Server Selection */}
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4">
             <Label className="text-sm whitespace-nowrap">{arrServiceName} Server</Label>
             {arrInstances.length > 0 ? (
               <Select
@@ -1388,7 +1388,7 @@ export function LifecycleRulePage({
                   <TooltipTrigger asChild>
                     <span>
                       <Select disabled>
-                        <SelectTrigger className="w-64">
+                        <SelectTrigger className="w-full sm:w-64">
                           <SelectValue placeholder="No instances available" />
                         </SelectTrigger>
                       </Select>
@@ -1581,7 +1581,7 @@ export function LifecycleRulePage({
                   {manageTagsEnabled && !actionType.startsWith("DELETE_") && arrInstanceId && (
                     <div className="ml-7 space-y-3">
                       <Select value={tagMode} onValueChange={(v) => setTagMode(v as "add" | "remove")}>
-                        <SelectTrigger className="w-56">
+                        <SelectTrigger className="w-full sm:w-56">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>

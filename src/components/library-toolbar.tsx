@@ -85,7 +85,7 @@ export function LibraryToolbar({
   children,
 }: LibraryToolbarProps) {
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex flex-wrap items-center gap-2 sm:gap-3">
       {/* Server filter */}
       {servers && selectedServerId && onServerChange && (
         <ServerFilter
@@ -139,7 +139,7 @@ export function LibraryToolbar({
 
       {/* Sort controls */}
       {sortOptions && sortBy && onSortChange && onSortOrderToggle && (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
           <Select value={sortBy} onValueChange={onSortChange}>
             <SelectTrigger className="w-full sm:w-40">
