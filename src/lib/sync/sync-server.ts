@@ -717,12 +717,14 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       const cancelRows1 = await prisma.$queryRawUnsafe<{ cancelRequested: boolean }[]>(
         `SELECT "cancelRequested" FROM "SyncJob" WHERE "id"=$1`, syncJob.id,
       );
-      if (cancelRows1[0]?.cancelRequested) {
+      if (!cancelRows1[0] || cancelRows1[0].cancelRequested) {
         logger.info("Sync", `Sync cancelled for server (${processedItems} items processed before cancel)`);
-        await prisma.$queryRawUnsafe(
-          `UPDATE "SyncJob" SET "status"=$1,"completedAt"=$2,"itemsProcessed"=$3,"currentLibrary"=NULL WHERE "id"=$4`,
-          "CANCELLED", new Date(), processedItems, syncJob.id,
-        );
+        if (cancelRows1[0]) {
+          await prisma.$queryRawUnsafe(
+            `UPDATE "SyncJob" SET "status"=$1,"completedAt"=$2,"itemsProcessed"=$3,"currentLibrary"=NULL WHERE "id"=$4`,
+            "CANCELLED", new Date(), processedItems, syncJob.id,
+          );
+        }
         return;
       }
 
@@ -819,7 +821,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
             const cancelRows = await prisma.$queryRawUnsafe<{ cancelRequested: boolean }[]>(
               `SELECT "cancelRequested" FROM "SyncJob" WHERE "id"=$1`, syncJob.id,
             );
-            if (cancelRows[0]?.cancelRequested) {
+            if (!cancelRows[0] || cancelRows[0].cancelRequested) {
               cancelled = true;
               break;
             }
@@ -909,10 +911,15 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
 
       if (cancelled) {
         logger.info("Sync", `Sync cancelled for server (${processedItems} items processed before cancel)`);
-        await prisma.$queryRawUnsafe(
-          `UPDATE "SyncJob" SET "status"=$1,"completedAt"=$2,"itemsProcessed"=$3,"currentLibrary"=NULL WHERE "id"=$4`,
-          "CANCELLED", new Date(), processedItems, syncJob.id,
+        const jobExists = await prisma.$queryRawUnsafe<{ id: string }[]>(
+          `SELECT "id" FROM "SyncJob" WHERE "id"=$1`, syncJob.id,
         );
+        if (jobExists.length > 0) {
+          await prisma.$queryRawUnsafe(
+            `UPDATE "SyncJob" SET "status"=$1,"completedAt"=$2,"itemsProcessed"=$3,"currentLibrary"=NULL WHERE "id"=$4`,
+            "CANCELLED", new Date(), processedItems, syncJob.id,
+          );
+        }
         return;
       }
 

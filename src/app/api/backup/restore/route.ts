@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { restoreBackup, type RestoreProgress } from "@/lib/backup/backup-service";
 import { validateRequest, backupRestoreSchema } from "@/lib/validation";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { appCache } from "@/lib/cache/memory-cache";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -30,6 +31,9 @@ export async function POST(request: NextRequest) {
           await restoreBackup(data.filename, data.passphrase, (progress) => {
             send({ type: "progress", ...progress });
           });
+
+          // Clear in-memory cache so stale server/filter data isn't served
+          appCache.clear();
 
           // Destroy current session since user data may have changed
           session.isLoggedIn = false;
