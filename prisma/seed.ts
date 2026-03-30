@@ -4,8 +4,8 @@
  * Generates placeholder poster artwork in the image cache.
  *
  * Usage:
- *   npm run docker:dev:seed     (inside Docker dev container)
- *   npm run seed                (locally, if DB is accessible)
+ *   pnpm docker:dev:seed     (inside Docker dev container)
+ *   pnpm seed                (locally, if DB is accessible)
  *
  * Login with: username "demo", password "demo"
  */

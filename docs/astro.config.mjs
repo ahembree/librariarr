@@ -19,6 +19,29 @@ export default defineConfig({
           href: "https://github.com/ahembree/librariarr",
         },
       ],
+      head: [
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:image",
+            content: "https://librariarr.dev/librariarr_hero.png",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            name: "twitter:card",
+            content: "summary_large_image",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            name: "twitter:image",
+            content: "https://librariarr.dev/librariarr_hero.png",
+          },
+        },
+      ],
       customCss: ["./src/styles/custom.css"],
       sidebar: [
         {

@@ -11,42 +11,42 @@ Librariarr is a media library management webapp for Plex, Jellyfin, and Emby ser
 ### Development (Docker-based, preferred)
 
 ```bash
-npm run docker:dev          # Start dev environment (foreground)
-npm run docker:dev:detach   # Start dev environment (background)
-npm run docker:dev:down     # Stop dev environment
-npm run docker:dev:rebuild  # Rebuild containers from scratch
-npm run docker:dev:clean    # Stop containers and delete DB volume
-npm run docker:dev:logs     # Tail dev container logs
+pnpm docker:dev          # Start dev environment (foreground)
+pnpm docker:dev:detach   # Start dev environment (background)
+pnpm docker:dev:down     # Stop dev environment
+pnpm docker:dev:rebuild  # Rebuild containers from scratch
+pnpm docker:dev:clean    # Stop containers and delete DB volume
+pnpm docker:dev:logs     # Tail dev container logs
 ```
 
 ### Database Commands
 
 ```bash
-npm run docker:dev:db:push    # Push schema changes (no migration files)
-npm run docker:dev:db:migrate # Run Prisma migrations
-npm run docker:dev:db:studio  # Open Prisma Studio (DB browser)
-npm run docker:dev:db:reset   # Reset DB completely
+pnpm docker:dev:db:push    # Push schema changes (no migration files)
+pnpm docker:dev:db:migrate # Run Prisma migrations
+pnpm docker:dev:db:studio  # Open Prisma Studio (DB browser)
+pnpm docker:dev:db:reset   # Reset DB completely
 ```
 
 ### Build and Lint
 
 ```bash
-npm run build   # Next.js production build
-npm run lint    # ESLint
-npx prisma generate  # Regenerate Prisma client (needed after schema changes when DB isn't available)
+pnpm build   # Next.js production build
+pnpm lint    # ESLint
+pnpm exec prisma generate  # Regenerate Prisma client (needed after schema changes when DB isn't available)
 ```
 
 ### Testing
 
-Requires the Docker DB to be running (`npm run docker:dev` or `npm run docker:dev:detach`).
+Requires the Docker DB to be running (`pnpm docker:dev` or `pnpm docker:dev:detach`).
 
 ```bash
-npm test                    # Run full test suite
-npm run test:watch          # Watch mode
-npm run test:unit           # Unit tests only (no DB needed)
-npm run test:integration    # Integration tests only (requires DB)
-npm run test:coverage       # Run with coverage report
-npx vitest run tests/path/to/file.test.ts  # Run a single test file
+pnpm test                    # Run full test suite
+pnpm test:watch              # Watch mode
+pnpm test:unit               # Unit tests only (no DB needed)
+pnpm test:integration        # Integration tests only (requires DB)
+pnpm test:coverage           # Run with coverage report
+pnpm exec vitest run tests/path/to/file.test.ts  # Run a single test file
 ```
 
 **Framework:** Vitest 4 with real PostgreSQL test database (`librariarr_test`), auto-created by global setup.
@@ -294,9 +294,9 @@ The `docs/` directory contains a static documentation website built with **Astro
 - `.dockerignore` excludes `docs/` from Docker builds
 
 ```bash
-npm run docs:dev      # Start docs dev server (localhost:4321)
-npm run docs:build    # Production build
-npm run docs:preview  # Preview built docs
+pnpm docs:dev      # Start docs dev server (localhost:4321)
+pnpm docs:build    # Production build
+pnpm docs:preview  # Preview built docs
 ```
 
 **Structure:**
@@ -316,6 +316,6 @@ When adding features, update the relevant documentation in `docs/src/content/doc
 
 ### Git Conventions
 
-- Husky pre-commit hook runs `npx eslint --quiet`
+- Husky pre-commit hook runs `pnpm exec eslint --quiet`
 - Husky commit-msg hook enforces [Conventional Commits](https://www.conventionalcommits.org/) via commitlint (`@commitlint/config-conventional`)
 - Commit format: `type(scope): description` — e.g. `feat: add stream manager`, `fix(auth): handle expired tokens`

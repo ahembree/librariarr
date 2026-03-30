@@ -49,7 +49,7 @@ mkdir -p /config/backups /config/cache/images
 chown -R "$PUID:$PGID" /config
 
 echo "==> Generating Prisma client from mounted schema..."
-su-exec "$APP_USER" npx prisma generate
+su-exec "$APP_USER" pnpm exec prisma generate
 echo "    Prisma client generated."
 
 echo "==> Waiting for database to be ready..."
@@ -84,7 +84,7 @@ done
 echo "    Database is ready."
 
 echo "==> Pushing schema to database..."
-su-exec "$APP_USER" npx prisma db push --accept-data-loss
+su-exec "$APP_USER" pnpm exec prisma db push --accept-data-loss
 echo "    Database schema synced successfully."
 
 # --expose-gc: makes global.gc() available so the sync engine can force
@@ -96,4 +96,4 @@ echo "    Database schema synced successfully."
 export NODE_OPTIONS="--expose-gc --max-old-space-size=4096"
 
 echo "==> Starting dev server as $APP_USER..."
-exec su-exec "$APP_USER" npm run dev
+exec su-exec "$APP_USER" pnpm dev

@@ -27,7 +27,7 @@ export async function setup() {
   await client.end();
 
   // Push schema to test database (Prisma 7: use --url flag, no --skip-generate)
-  execSync(`npx prisma db push --url "${testDbUrl}" --accept-data-loss`, {
+  execSync(`pnpm exec prisma db push --url "${testDbUrl}" --accept-data-loss`, {
     stdio: "pipe",
     env: { ...process.env },
     cwd: process.cwd(),

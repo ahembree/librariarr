@@ -1,15 +1,20 @@
-# Librariarr
+<p align="center">
+  <img src="docs/public/librariarr_hero.png" alt="Librariarr" width="600" />
+</p>
 
-[![CI](https://github.com/ahembree/librariarr/actions/workflows/ci.yml/badge.svg)](https://github.com/ahembree/librariarr/actions/workflows/ci.yml)
-[![Docker Hub](https://img.shields.io/docker/pulls/ahembree/librariarr)](https://hub.docker.com/r/ahembree/librariarr)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+<p align="center">
+  <a href="https://github.com/ahembree/librariarr/actions/workflows/ci.yml"><img src="https://github.com/ahembree/librariarr/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://hub.docker.com/r/ahembree/librariarr"><img src="https://img.shields.io/docker/pulls/ahembree/librariarr" alt="Docker Hub" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue.svg" alt="License: AGPL-3.0" /></a>
+  <a href="https://discord.gg/cuVnryKSRD"><img src="https://dcbadge.limes.pink/api/server/cuVnryKSRD?style=plastic" alt="Discord" /></a>
+</p>
 
 > [!WARNING]
 > **This software is currently in beta.** There is the potential for bugs, breaking changes, and data loss. Use at your own risk and ensure you have backups of your data.
 
 Media library management for Plex, Jellyfin, and Emby. Track your media metadata, monitor quality breakdowns, and build lifecycle rules to manage your libraries.
 
-**Documentation:** [librariarr.dev](https://librariarr.dev)
+**Documentation:** [librariarr.dev](https://librariarr.dev) | **Discord:** [Join the community](https://discord.gg/cuVnryKSRD)
 
 ## Features
 
@@ -93,7 +98,7 @@ Database migrations run automatically on container start.
 ## Environment Variables
 
 | Variable | Required | Description |
-| --- | --- | --- |
+| - | - | - |
 | `SESSION_SECRET` | No | Random 32+ character string for session encryption. Auto-generated and saved to `/config/.session-secret` if not set. |
 | `DATABASE_URL` | Yes | PostgreSQL connection string (set automatically if using the provided compose file) |
 | `PUID` | No | UID to run the app process as (default: `1000`) |
@@ -106,13 +111,13 @@ Database migrations run automatically on container start.
 
 ## Development Setup
 
-For contributing to Librariarr. Requires Docker and npm.
+For contributing to Librariarr. Requires Docker and pnpm.
 
 ### 1. Clone and start
 
 ```bash
 git clone https://github.com/ahembree/librariarr.git && cd librariarr
-npm run docker:dev
+pnpm docker:dev
 ```
 
 No `.env` file needed for development — the dev compose file includes sensible defaults.
@@ -126,39 +131,39 @@ Source code in `src/`, `public/`, and `prisma/` is mounted into the container, s
 On first start (or after schema changes):
 
 ```bash
-npm run docker:dev:db:push
+pnpm docker:dev:db:push
 ```
 
-### npm Scripts Reference
+### pnpm Scripts Reference
 
 | Command | Description |
-| --- | --- |
-| `npm run docker:dev` | Start dev environment (foreground with logs) |
-| `npm run docker:dev:detach` | Start dev environment (background) |
-| `npm run docker:dev:down` | Stop dev environment |
-| `npm run docker:dev:logs` | Tail app container logs |
-| `npm run docker:dev:db:push` | Push schema to DB (no migration files) |
-| `npm run docker:dev:db:migrate` | Run Prisma migrations |
-| `npm run docker:dev:db:studio` | Open Prisma Studio (DB browser) |
-| `npm run docker:dev:db:reset` | Reset DB and re-run all migrations |
-| `npm run docker:dev:rebuild` | Rebuild containers from scratch |
-| `npm run docker:dev:clean` | Stop containers and delete DB volume |
+| - | - |
+| `pnpm docker:dev` | Start dev environment (foreground with logs) |
+| `pnpm docker:dev:detach` | Start dev environment (background) |
+| `pnpm docker:dev:down` | Stop dev environment |
+| `pnpm docker:dev:logs` | Tail app container logs |
+| `pnpm docker:dev:db:push` | Push schema to DB (no migration files) |
+| `pnpm docker:dev:db:migrate` | Run Prisma migrations |
+| `pnpm docker:dev:db:studio` | Open Prisma Studio (DB browser) |
+| `pnpm docker:dev:db:reset` | Reset DB and re-run all migrations |
+| `pnpm docker:dev:rebuild` | Rebuild containers from scratch |
+| `pnpm docker:dev:clean` | Stop containers and delete DB volume |
 
 ### Running Tests
 
 Requires the dev DB to be running.
 
 ```bash
-npm test                    # Full test suite
-npm run test:unit           # Unit tests only (no DB needed)
-npm run test:integration    # Integration tests only (requires DB)
-npm run test:coverage       # Run with coverage report
+pnpm test                    # Full test suite
+pnpm test:unit               # Unit tests only (no DB needed)
+pnpm test:integration        # Integration tests only (requires DB)
+pnpm test:coverage           # Run with coverage report
 ```
 
 ## CI/CD (GitHub Actions)
 
 | Workflow | Trigger | Purpose |
-| --- | --- | --- |
+| - | - | - |
 | `ci.yml` | Push to `main`, PRs | Lint, type check, unit tests, integration tests, build |
 | `docker-publish.yml` | Push to `main`, version tags (`v*`) | Build and push Docker image to Docker Hub |
 | `docs-deploy.yml` | Push to `main` (`docs/**` changes) | Build and deploy docs to GitHub Pages |
@@ -174,7 +179,7 @@ npm run test:coverage       # Run with coverage report
 **Required GitHub secrets:**
 
 | Secret | Description |
-| --- | --- |
+| - | - |
 | `DOCKERHUB_USERNAME` | Your DockerHub username |
 | `DOCKERHUB_TOKEN` | A DockerHub [access token](https://hub.docker.com/settings/security) |
 
