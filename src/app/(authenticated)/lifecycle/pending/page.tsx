@@ -38,6 +38,15 @@ import {
 import { TabNav, type TabNavItem } from "@/components/tab-nav";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { useRealtime } from "@/hooks/use-realtime";
 
@@ -578,8 +587,10 @@ export default function PendingActionsPage() {
 
   const [retryingItems, setRetryingItems] = useState<Set<string>>(new Set());
   const [excludingItems, setExcludingItems] = useState<Set<string>>(new Set());
+  const [excludePromptAction, setExcludePromptAction] = useState<ActionItem | null>(null);
+  const [excludeReason, setExcludeReason] = useState("");
 
-  const excludeItem = async (action: ActionItem) => {
+  const confirmExclude = async (action: ActionItem, reason: string) => {
     if (!action.mediaItem.id) return;
     const mediaItemId = action.mediaItem.id;
     setExcludingItems((prev) => new Set(prev).add(mediaItemId));
@@ -587,7 +598,7 @@ export default function PendingActionsPage() {
       const response = await fetch("/api/lifecycle/exceptions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mediaItemId }),
+        body: JSON.stringify({ mediaItemId, reason: reason || undefined }),
       });
       if (response.ok) {
         setExceptedItemIds((prev) => new Set(prev).add(mediaItemId));
@@ -602,6 +613,11 @@ export default function PendingActionsPage() {
         return next;
       });
     }
+  };
+
+  const excludeItem = (action: ActionItem) => {
+    setExcludeReason("");
+    setExcludePromptAction(action);
   };
 
   const openDetailPanel = async (action: ActionItem) => {
@@ -881,6 +897,44 @@ export default function PendingActionsPage() {
           resizeHandleProps={resizeHandleProps}
         />
       )}
+
+      {/* Exclude reason prompt */}
+      <Dialog open={!!excludePromptAction} onOpenChange={(open) => { if (!open) setExcludePromptAction(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Exclude from lifecycle actions</DialogTitle>
+            <DialogDescription>
+              &quot;{excludePromptAction?.mediaItem.parentTitle
+                ? `${excludePromptAction.mediaItem.parentTitle} — ${excludePromptAction.mediaItem.title}`
+                : excludePromptAction?.mediaItem.title}&quot; will be excluded from all lifecycle rules. Optionally provide a reason.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            placeholder="Reason (optional)"
+            value={excludeReason}
+            onChange={(e) => setExcludeReason(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && excludePromptAction) {
+                setExcludePromptAction(null);
+                confirmExclude(excludePromptAction, excludeReason);
+              }
+            }}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setExcludePromptAction(null)}>
+              Cancel
+            </Button>
+            <Button onClick={() => {
+              if (excludePromptAction) {
+                setExcludePromptAction(null);
+                confirmExclude(excludePromptAction, excludeReason);
+              }
+            }}>
+              Exclude
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -295,6 +295,83 @@ async function applyDeletionDateOrder(
 }
 
 /**
+ * Remove a single item from a Plex collection across all matching libraries.
+ * Used when a media item is excluded from lifecycle actions.
+ *
+ * @param seriesTitle - If provided (for series-scope rules), finds the series
+ *   ratingKey by title instead of using the item ratingKey directly.
+ */
+export async function removeItemFromCollections(
+  userId: string,
+  type: string,
+  collectionName: string,
+  itemRatingKey: string,
+  seriesTitle: string | null
+) {
+  const libraryType = type as "MOVIE" | "SERIES" | "MUSIC";
+  const userLibraries = await prisma.library.findMany({
+    where: {
+      mediaServer: { userId, type: "PLEX" },
+      type: libraryType,
+    },
+    include: { mediaServer: true },
+  });
+
+  for (const library of userLibraries) {
+    try {
+      if (!library.mediaServer?.machineId) continue;
+
+      const server = library.mediaServer;
+      if (!server) continue;
+      const client = new PlexClient(server.url, server.accessToken, {
+        skipTlsVerify: server.tlsSkipVerify,
+      });
+
+      const collections = await client.getCollections(library.key);
+      const collection = collections.find((c) => c.title === collectionName);
+      if (!collection) continue;
+
+      let ratingKeyToRemove = itemRatingKey;
+
+      // For series-scope rules, resolve the series-level ratingKey by title
+      if (seriesTitle) {
+        const plexSeries = await client.getLibraryItems(library.key);
+        const match = plexSeries.find((s) => s.title === seriesTitle);
+        if (!match) continue;
+        ratingKeyToRemove = match.ratingKey;
+      }
+
+      // Check if item is actually in the collection before removing
+      const currentItems = await client.getCollectionItems(collection.ratingKey);
+      const inCollection = currentItems.some((i) => i.ratingKey === ratingKeyToRemove);
+      if (!inCollection) continue;
+
+      await client.removeCollectionItem(collection.ratingKey, ratingKeyToRemove);
+
+      // If collection is now empty, remove it
+      if (currentItems.length === 1) {
+        await client.deleteCollection(collection.ratingKey);
+        logger.info(
+          "Lifecycle",
+          `Removed empty Plex collection "${collectionName}" after excluding item`
+        );
+      } else {
+        logger.info(
+          "Lifecycle",
+          `Removed excluded item from Plex collection "${collectionName}"`
+        );
+      }
+    } catch (error) {
+      logger.error(
+        "Lifecycle",
+        `Failed to remove item from collection "${collectionName}" in library ${library.id}`,
+        { error: String(error) }
+      );
+    }
+  }
+}
+
+/**
  * Remove a Plex collection by name across all libraries for a user.
  * Used when collection sync is disabled on a rule set.
  */

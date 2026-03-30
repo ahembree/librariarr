@@ -413,6 +413,10 @@ export const exceptionCreateSchema = z.object({
   reason: z.string().optional(),
 });
 
+export const exceptionUpdateSchema = z.object({
+  reason: z.string().optional(),
+});
+
 // ─── Auth schemas ───
 
 export const changePasswordSchema = z.object({
