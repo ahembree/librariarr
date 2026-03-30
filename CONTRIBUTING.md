@@ -6,7 +6,7 @@ Thanks for your interest in contributing! This guide will help you get started.
 
 - [Docker](https://docs.docker.com/get-docker/) and Docker Compose
 - [Node.js](https://nodejs.org/) 22+
-- npm
+- [pnpm](https://pnpm.io/) (or enable via `corepack enable`)
 
 ## Development Setup
 
@@ -26,7 +26,7 @@ Thanks for your interest in contributing! This guide will help you get started.
 3. Start the development environment:
 
    ```bash
-   npm run docker:dev
+   pnpm docker:dev
    ```
 
    This starts the Next.js dev server with hot reload and a PostgreSQL database.
@@ -40,9 +40,9 @@ See the [README](README.md) for the full list of development commands.
 The project uses [Vitest](https://vitest.dev/) with a real PostgreSQL test database.
 
 ```bash
-npm run test:unit           # Unit tests (no DB needed)
-npm run test:integration    # Integration tests (requires Docker DB running)
-npm test                    # Full test suite
+pnpm test:unit               # Unit tests (no DB needed)
+pnpm test:integration        # Integration tests (requires Docker DB running)
+pnpm test                    # Full test suite
 ```
 
 - **Unit tests** (`tests/unit/`) test pure logic with no database dependency.
@@ -62,9 +62,9 @@ npm test                    # Full test suite
 3. Ensure everything passes locally:
 
    ```bash
-   npm run lint
-   npx tsc --noEmit
-   npm test
+   pnpm lint
+   pnpm exec tsc --noEmit
+   pnpm test
    ```
 
 4. Push your branch and open a pull request against `main`.

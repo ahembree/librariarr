@@ -1,1 +1,1 @@
-npx eslint --quiet
+pnpm exec eslint --quiet

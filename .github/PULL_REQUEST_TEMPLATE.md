@@ -18,6 +18,6 @@
 
 ## Checklist
 
-- [ ] ESLint passes (`npm run lint`)
-- [ ] TypeScript compiles (`npx tsc --noEmit`)
-- [ ] Tests pass (`npm test`)
+- [ ] ESLint passes (`pnpm lint`)
+- [ ] TypeScript compiles (`pnpm exec tsc --noEmit`)
+- [ ] Tests pass (`pnpm test`)

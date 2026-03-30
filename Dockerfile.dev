@@ -1,21 +1,21 @@
-FROM node:20-alpine
+FROM node:22-alpine
 
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # su-exec for dropping privileges to the host user's UID/GID
-RUN apk add --no-cache su-exec
+RUN corepack enable && apk add --no-cache su-exec
 
 # Install dependencies first (cached layer)
-COPY package.json package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --no-fund --no-audit
+COPY package.json pnpm-lock.yaml ./
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
 
 # Copy prisma schema + config and generate client
 # (will be regenerated at startup from mounted volume)
 COPY prisma ./prisma
 COPY prisma.config.ts ./prisma.config.ts
-RUN npx prisma generate
+RUN pnpm exec prisma generate
 
 # Copy entrypoint script
 COPY docker-entrypoint.dev.sh ./docker-entrypoint.dev.sh

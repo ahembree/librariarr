@@ -8,6 +8,7 @@
     "url": "https://github.com/ahembree/librariarr.git"
   },
   "homepage": "https://librariarr.dev",
+  "packageManager": "pnpm@10.28.2",
   "license": "AGPL-3.0-only",
   "author": "Aidan Hembree",
   "keywords": [
@@ -33,19 +34,19 @@
     "docker:dev:detach": "docker compose -f docker-compose.dev.yml up --build -d",
     "docker:dev:down": "docker compose -f docker-compose.dev.yml down",
     "docker:dev:logs": "docker compose -f docker-compose.dev.yml logs -f librariarr-dev",
-    "docker:dev:db:migrate": "docker compose -f docker-compose.dev.yml exec librariarr-dev npx prisma migrate dev",
-    "docker:dev:db:push": "docker compose -f docker-compose.dev.yml exec librariarr-dev npx prisma db push",
-    "docker:dev:db:studio": "docker compose -f docker-compose.dev.yml exec librariarr-dev npx prisma studio",
-    "docker:dev:db:reset": "docker compose -f docker-compose.dev.yml exec librariarr-dev npx prisma migrate reset --force",
+    "docker:dev:db:migrate": "docker compose -f docker-compose.dev.yml exec librariarr-dev pnpm exec prisma migrate dev",
+    "docker:dev:db:push": "docker compose -f docker-compose.dev.yml exec librariarr-dev pnpm exec prisma db push",
+    "docker:dev:db:studio": "docker compose -f docker-compose.dev.yml exec librariarr-dev pnpm exec prisma studio",
+    "docker:dev:db:reset": "docker compose -f docker-compose.dev.yml exec librariarr-dev pnpm exec prisma migrate reset --force",
     "docker:dev:rebuild": "docker compose -f docker-compose.dev.yml up --build --force-recreate",
     "docker:dev:clean": "docker compose -f docker-compose.dev.yml down -v",
-    "docker:dev:seed": "docker compose -f docker-compose.dev.yml exec librariarr-dev npx tsx prisma/seed.ts",
+    "docker:dev:seed": "docker compose -f docker-compose.dev.yml exec librariarr-dev pnpm exec tsx prisma/seed.ts",
     "docker:build": "docker build -t ahembree/librariarr:latest -t ahembree/librariarr:$(node -p \"require('./package.json').version\") .",
     "docker:push": "docker push ahembree/librariarr:latest && docker push ahembree/librariarr:$(node -p \"require('./package.json').version\")",
-    "docs:dev": "npm run --prefix docs dev",
-    "docs:build": "npm run --prefix docs build",
-    "docs:preview": "npm run --prefix docs preview",
-    "seed": "npx tsx prisma/seed.ts",
+    "docs:dev": "pnpm --prefix docs dev",
+    "docs:build": "pnpm --prefix docs build",
+    "docs:preview": "pnpm --prefix docs preview",
+    "seed": "pnpm exec tsx prisma/seed.ts",
     "prepare": "husky"
   },
   "dependencies": {
@@ -84,6 +85,14 @@
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",
     "zod": "^4.3.6"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/engines",
+      "prisma",
+      "sharp",
+      "unrs-resolver"
+    ]
   },
   "devDependencies": {
     "@commitlint/cli": "^20.5.0",

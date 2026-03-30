@@ -8,8 +8,8 @@ import { Aside, Steps } from "@astrojs/starlight/components";
 ## Prerequisites
 
 - Docker and Docker Compose v2+
-- Node.js 20+
-- npm
+- Node.js 22+
+- [pnpm](https://pnpm.io/) (or enable via `corepack enable`)
 
 ## Development Setup
 
@@ -35,7 +35,7 @@ Librariarr uses Docker Compose for development to provide a PostgreSQL database 
 3. **Start the dev environment**
 
    ```bash
-   npm run docker:dev
+   pnpm docker:dev
    ```
 
    This builds the dev container, starts PostgreSQL, runs migrations, and starts the Next.js dev server with Turbopack hot-reloading.
@@ -51,30 +51,30 @@ Librariarr uses Docker Compose for development to provide a PostgreSQL database 
 ### Docker
 
 | Command | Description |
-|---------|-------------|
-| `npm run docker:dev` | Start dev environment (foreground) |
-| `npm run docker:dev:detach` | Start dev environment (background) |
-| `npm run docker:dev:down` | Stop dev environment |
-| `npm run docker:dev:rebuild` | Rebuild containers from scratch |
-| `npm run docker:dev:clean` | Stop containers and delete DB volume |
-| `npm run docker:dev:logs` | Tail dev container logs |
+|-|-|
+| `pnpm docker:dev` | Start dev environment (foreground) |
+| `pnpm docker:dev:detach` | Start dev environment (background) |
+| `pnpm docker:dev:down` | Stop dev environment |
+| `pnpm docker:dev:rebuild` | Rebuild containers from scratch |
+| `pnpm docker:dev:clean` | Stop containers and delete DB volume |
+| `pnpm docker:dev:logs` | Tail dev container logs |
 
 ### Database
 
 | Command | Description |
-|---------|-------------|
-| `npm run docker:dev:db:push` | Push schema changes (fast iteration, no migration files) |
-| `npm run docker:dev:db:migrate` | Run Prisma migrations |
-| `npm run docker:dev:db:studio` | Open Prisma Studio (DB browser) |
-| `npm run docker:dev:db:reset` | Reset DB completely |
+|-|-|
+| `pnpm docker:dev:db:push` | Push schema changes (fast iteration, no migration files) |
+| `pnpm docker:dev:db:migrate` | Run Prisma migrations |
+| `pnpm docker:dev:db:studio` | Open Prisma Studio (DB browser) |
+| `pnpm docker:dev:db:reset` | Reset DB completely |
 
 ### Mock Data
 
 Populate the database with fictional media data for testing or taking screenshots without exposing personal data.
 
 | Command | Description |
-|---------|-------------|
-| `npm run docker:dev:seed` | Seed the dev database with mock data |
+|-|-|
+| `pnpm docker:dev:seed` | Seed the dev database with mock data |
 
 <Aside>
   The seed script creates a demo user with username `demo` and password `demo`. It also creates 3 media servers (Plex, Jellyfin, Emby) with overlapping libraries to demonstrate multi-server dedup. The script is idempotent — running it again replaces the previous seed data.
@@ -83,29 +83,29 @@ Populate the database with fictional media data for testing or taking screenshot
 ### Build & Lint
 
 | Command | Description |
-|---------|-------------|
-| `npm run build` | Next.js production build |
-| `npm run lint` | ESLint |
-| `npx prisma generate` | Regenerate Prisma client (needed after schema changes when DB isn't available) |
+|-|-|
+| `pnpm build` | Next.js production build |
+| `pnpm lint` | ESLint |
+| `pnpm exec prisma generate` | Regenerate Prisma client (needed after schema changes when DB isn't available) |
 
 ## Testing
 
 Tests use **Vitest** with a real PostgreSQL test database (`librariarr_test`), auto-created by the global setup.
 
 <Aside>
-  The Docker dev database must be running for integration tests. Start it with `npm run docker:dev` or `npm run docker:dev:detach` before running tests.
+  The Docker dev database must be running for integration tests. Start it with `pnpm docker:dev` or `pnpm docker:dev:detach` before running tests.
 </Aside>
 
 ### Test Commands
 
 | Command | Description |
-|---------|-------------|
-| `npm test` | Run full test suite |
-| `npm run test:watch` | Watch mode |
-| `npm run test:unit` | Unit tests only (no DB needed) |
-| `npm run test:integration` | Integration tests only (requires DB) |
-| `npm run test:coverage` | Run with coverage report |
-| `npx vitest run tests/path/to/file.test.ts` | Run a single test file |
+|-|-|
+| `pnpm test` | Run full test suite |
+| `pnpm test:watch` | Watch mode |
+| `pnpm test:unit` | Unit tests only (no DB needed) |
+| `pnpm test:integration` | Integration tests only (requires DB) |
+| `pnpm test:coverage` | Run with coverage report |
+| `pnpm exec vitest run tests/path/to/file.test.ts` | Run a single test file |
 
 ### Test Structure
 
@@ -115,7 +115,7 @@ Tests use **Vitest** with a real PostgreSQL test database (`librariarr_test`), a
 ## Tech Stack
 
 | Technology | Version | Purpose |
-|------------|---------|---------|
+|-|-|-|
 | Next.js | 16 | App Router framework |
 | React | 19 | UI library |
 | TypeScript | 5 | Type safety |
@@ -127,7 +127,7 @@ Tests use **Vitest** with a real PostgreSQL test database (`librariarr_test`), a
 
 ## Git Conventions
 
-- **Pre-commit hook**: Runs `npx next lint --quiet` via Husky
+- **Pre-commit hook**: Runs `pnpm exec eslint --quiet` via Husky
 - **Commit format**: [Conventional Commits](https://www.conventionalcommits.org/) enforced by commitlint
   - `feat: add new feature`
   - `fix(auth): handle expired tokens`
