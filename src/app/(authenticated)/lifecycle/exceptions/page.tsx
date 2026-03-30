@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Table,
   TableBody,
   TableCell,
@@ -28,10 +36,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Input } from "@/components/ui/input";
 import {
   Loader2,
   ShieldOff,
   Trash2,
+  Pencil,
+  Plus,
+  Search,
   Film,
   Tv,
   Music,
@@ -54,6 +66,14 @@ interface ExceptionItem {
   };
 }
 
+interface SearchResult {
+  id: string;
+  title: string;
+  parentTitle: string | null;
+  year: number | null;
+  type: string;
+}
+
 type TabType = "MOVIE" | "SERIES" | "MUSIC";
 
 const TABS: { value: TabType; label: string; icon: typeof Film }[] = [
@@ -68,6 +88,20 @@ export default function LifecycleExceptionsPage() {
   const [loading, setLoading] = useState(true);
   const [removing, setRemoving] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<ExceptionItem | null>(null);
+
+  // Edit reason
+  const [editingException, setEditingException] = useState<ExceptionItem | null>(null);
+  const [editReason, setEditReason] = useState("");
+  const [savingReason, setSavingReason] = useState(false);
+
+  // Add manually
+  const [showAddDialog, setShowAddDialog] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [addingItemId, setAddingItemId] = useState<string | null>(null);
+  const [addReason, setAddReason] = useState("");
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Media detail panel
   const [selectedItem, setSelectedItem] = useState<MediaItemWithRelations | null>(null);
@@ -136,14 +170,102 @@ export default function LifecycleExceptionsPage() {
     }
   };
 
+  const handleEditReason = async () => {
+    if (!editingException) return;
+    setSavingReason(true);
+    try {
+      const response = await fetch(`/api/lifecycle/exceptions/${editingException.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: editReason || undefined }),
+      });
+      if (response.ok) {
+        setExceptions((prev) =>
+          prev.map((e) =>
+            e.id === editingException.id ? { ...e, reason: editReason || null } : e
+          )
+        );
+        setEditingException(null);
+      }
+    } catch (error) {
+      console.error("Failed to update reason:", error);
+    } finally {
+      setSavingReason(false);
+    }
+  };
+
+  // Search for media items to add manually
+  const handleSearch = useCallback(async (query: string) => {
+    if (!query.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    setSearching(true);
+    try {
+      const params = new URLSearchParams({ q: query, type: activeTab });
+      const response = await fetch(`/api/media/search?${params}`);
+      if (response.ok) {
+        const data = await response.json();
+        setSearchResults(data.items || []);
+      }
+    } catch (error) {
+      console.error("Failed to search media:", error);
+    } finally {
+      setSearching(false);
+    }
+  }, [activeTab]);
+
+  const handleSearchInput = (value: string) => {
+    setSearchQuery(value);
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+    searchTimeoutRef.current = setTimeout(() => {
+      handleSearch(value);
+    }, 300);
+  };
+
+  const handleAddException = async (item: SearchResult) => {
+    setAddingItemId(item.id);
+    try {
+      const response = await fetch("/api/lifecycle/exceptions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mediaItemId: item.id, reason: addReason || undefined }),
+      });
+      if (response.ok) {
+        // Remove from search results and refresh exceptions
+        setSearchResults((prev) => prev.filter((r) => r.id !== item.id));
+        await fetchExceptions();
+      }
+    } catch (error) {
+      console.error("Failed to add exception:", error);
+    } finally {
+      setAddingItemId(null);
+    }
+  };
+
+  const existingMediaItemIds = new Set(exceptions.map((e) => e.mediaItem.id));
+
   return (
     <div className="flex md:h-full">
       <div className="flex-1 min-w-0 space-y-6 p-6 md:overflow-y-auto">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Lifecycle Exceptions</h1>
-          <p className="text-muted-foreground">
-            Media items excluded from lifecycle actions. These items will not be matched or actioned by any rule set.
-          </p>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Lifecycle Exceptions</h1>
+            <p className="text-muted-foreground">
+              Media items excluded from lifecycle actions. These items will not be matched or actioned by any rule set.
+            </p>
+          </div>
+          <Button onClick={() => {
+            setShowAddDialog(true);
+            setSearchQuery("");
+            setSearchResults([]);
+            setAddReason("");
+          }}>
+            <Plus className="h-4 w-4 mr-2" />
+            Add Exception
+          </Button>
         </div>
 
         {/* Tab navigation */}
@@ -195,10 +317,9 @@ export default function LifecycleExceptionsPage() {
                   <TableRow>
                     <TableHead>Title</TableHead>
                     <TableHead className="w-20">Year</TableHead>
-                    <TableHead className="w-24">Resolution</TableHead>
                     <TableHead>Reason</TableHead>
                     <TableHead className="w-36">Date Added</TableHead>
-                    <TableHead className="w-16" />
+                    <TableHead className="w-24" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -224,9 +345,6 @@ export default function LifecycleExceptionsPage() {
                         {exception.mediaItem.year ?? "—"}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
-                        {exception.mediaItem.resolution ?? "—"}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
                         <span className="truncate max-w-xs block">
                           {exception.reason || "—"}
                         </span>
@@ -235,22 +353,32 @@ export default function LifecycleExceptionsPage() {
                         {new Date(exception.createdAt).toLocaleDateString()}
                       </TableCell>
                       <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setConfirmRemove(exception);
-                          }}
-                          disabled={removing === exception.id}
-                        >
-                          {removing === exception.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="h-4 w-4" />
-                          )}
-                        </Button>
+                        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                            onClick={() => {
+                              setEditingException(exception);
+                              setEditReason(exception.reason || "");
+                            }}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            onClick={() => setConfirmRemove(exception)}
+                            disabled={removing === exception.id}
+                          >
+                            {removing === exception.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -281,6 +409,118 @@ export default function LifecycleExceptionsPage() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        {/* Edit reason dialog */}
+        <Dialog open={!!editingException} onOpenChange={(open) => { if (!open) setEditingException(null); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Edit exclusion reason</DialogTitle>
+              <DialogDescription>
+                Update the reason for excluding &quot;{editingException?.mediaItem.parentTitle
+                  ? `${editingException.mediaItem.parentTitle} — ${editingException.mediaItem.title}`
+                  : editingException?.mediaItem.title}&quot;.
+              </DialogDescription>
+            </DialogHeader>
+            <Input
+              placeholder="Reason (optional)"
+              value={editReason}
+              onChange={(e) => setEditReason(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleEditReason();
+              }}
+            />
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditingException(null)}>
+                Cancel
+              </Button>
+              <Button onClick={handleEditReason} disabled={savingReason}>
+                {savingReason ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                Save
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Add exception dialog */}
+        <Dialog open={showAddDialog} onOpenChange={(open) => { if (!open) setShowAddDialog(false); }}>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Add Exception</DialogTitle>
+              <DialogDescription>
+                Search for a {TABS.find((t) => t.value === activeTab)?.label.toLowerCase().replace(/s$/, "")} to exclude from lifecycle actions.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search by title..."
+                  className="pl-9"
+                  value={searchQuery}
+                  onChange={(e) => handleSearchInput(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <Input
+                placeholder="Reason (optional)"
+                value={addReason}
+                onChange={(e) => setAddReason(e.target.value)}
+              />
+              <div className="max-h-64 overflow-y-auto rounded-md border">
+                {searching ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : searchResults.length === 0 ? (
+                  <div className="py-8 text-center text-sm text-muted-foreground">
+                    {searchQuery.trim() ? "No results found." : "Type to search for media items."}
+                  </div>
+                ) : (
+                  <div className="divide-y">
+                    {searchResults.map((item) => {
+                      const alreadyExcluded = existingMediaItemIds.has(item.id);
+                      return (
+                        <div
+                          key={item.id}
+                          className="flex items-center justify-between px-4 py-2.5 hover:bg-muted/50"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium truncate">
+                              {item.parentTitle
+                                ? `${item.parentTitle} — ${item.title}`
+                                : item.title}
+                            </p>
+                            {item.year && (
+                              <p className="text-xs text-muted-foreground">{item.year}</p>
+                            )}
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="ml-3 shrink-0"
+                            disabled={alreadyExcluded || addingItemId === item.id}
+                            onClick={() => handleAddException(item)}
+                          >
+                            {addingItemId === item.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : alreadyExcluded ? (
+                              "Excluded"
+                            ) : (
+                              <>
+                                <Plus className="h-3.5 w-3.5 mr-1" />
+                                Add
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
 
       {/* Media detail side panel */}

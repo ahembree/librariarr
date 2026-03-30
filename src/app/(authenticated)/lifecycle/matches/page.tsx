@@ -46,6 +46,15 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { useRealtime } from "@/hooks/use-realtime";
 
 interface MatchedCriterion {
@@ -657,17 +666,18 @@ export default function RuleMatchesPage() {
   }, [fetchExceptions]);
 
   const [excludingItems, setExcludingItems] = useState<Set<string>>(new Set());
+  const [excludePromptItem, setExcludePromptItem] = useState<MatchedMediaItem | null>(null);
+  const [excludeReason, setExcludeReason] = useState("");
 
-  const excludeItem = useCallback(async (item: MatchedMediaItem) => {
+  const confirmExclude = useCallback(async (item: MatchedMediaItem, reason: string) => {
     setExcludingItems((prev) => new Set(prev).add(item.id));
     try {
       const response = await fetch("/api/lifecycle/exceptions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mediaItemId: item.id }),
+        body: JSON.stringify({ mediaItemId: item.id, reason: reason || undefined }),
       });
       if (response.ok) {
-        // Add to excepted set and remove item from matches in UI
         setExceptedItemIds((prev) => new Set(prev).add(item.id));
         setRuleMatches((prev) =>
           prev.map((match) => {
@@ -685,6 +695,11 @@ export default function RuleMatchesPage() {
         return next;
       });
     }
+  }, []);
+
+  const excludeItem = useCallback((item: MatchedMediaItem) => {
+    setExcludeReason("");
+    setExcludePromptItem(item);
   }, []);
 
   const runRule = useCallback(async (ruleSetId: string, fullReEval = false) => {
@@ -1026,6 +1041,44 @@ export default function RuleMatchesPage() {
           allActualValues={selectedItem.actualValues}
         />
       )}
+
+      {/* Exclude reason prompt */}
+      <Dialog open={!!excludePromptItem} onOpenChange={(open) => { if (!open) setExcludePromptItem(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Exclude from lifecycle actions</DialogTitle>
+            <DialogDescription>
+              &quot;{excludePromptItem?.parentTitle
+                ? `${excludePromptItem.parentTitle} — ${excludePromptItem.title}`
+                : excludePromptItem?.title}&quot; will be excluded from all lifecycle rules. Optionally provide a reason.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            placeholder="Reason (optional)"
+            value={excludeReason}
+            onChange={(e) => setExcludeReason(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && excludePromptItem) {
+                setExcludePromptItem(null);
+                confirmExclude(excludePromptItem, excludeReason);
+              }
+            }}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setExcludePromptItem(null)}>
+              Cancel
+            </Button>
+            <Button onClick={() => {
+              if (excludePromptItem) {
+                setExcludePromptItem(null);
+                confirmExclude(excludePromptItem, excludeReason);
+              }
+            }}>
+              Exclude
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
