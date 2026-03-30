@@ -79,12 +79,28 @@ Ensure the database and user already exist on your PostgreSQL server before star
 
 ## Networking
 
-Both containers must be on the same Docker network to communicate. By default, Unraid places containers on the `bridge` network, which works out of the box.
+Both `librariarr` and `librariarr-db` must be on the same Docker network to communicate. By default, Unraid places containers on the `bridge` network, which works out of the box.
 
-If you use a custom Docker network, ensure both containers are on the same network so that `librariarr-db` is resolvable by hostname in the `DATABASE_URL`.
+### Connecting to other containers
+
+To let Librariarr reach your media servers and integrations (Plex, Sonarr, Radarr, etc.) by container name, put them on the same custom Docker network.
+
+1. Create a network in the Unraid terminal:
+
+   ```bash
+   docker network create media
+   ```
+
+2. For each container (Librariarr, librariarr-db, Plex, Sonarr, etc.), edit the container in the Docker tab, switch **Network Type** to **Custom: media**, and click **Apply**.
+
+Once all containers share the `media` network, you can use container names as hostnames when adding servers and integrations in Librariarr (e.g., `http://plex:32400`, `http://sonarr:8989`).
+
+<Aside type="tip">
+  A custom network isn't required. You can always use your Unraid server's IP address (e.g., `http://192.168.1.10:32400`) to reach other services regardless of network configuration.
+</Aside>
 
 <Aside type="caution">
-  If using **host** network mode, the database hostname `librariarr-db` won't resolve. Use `localhost` or `127.0.0.1` in the `DATABASE_URL` instead, and ensure PostgreSQL is configured to accept connections on the expected port.
+  If using **host** network mode, container hostnames like `librariarr-db` won't resolve. Use `localhost` or `127.0.0.1` in the `DATABASE_URL` instead, and ensure PostgreSQL is configured to accept connections on the expected port.
 </Aside>
 
 ## Permissions
