@@ -29,37 +29,62 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
          - "${LIBRARIARR_PORT:-3000}:3000"
        environment:
          - DATABASE_URL=postgresql://librariarr:${DB_PASSWORD}@librariarr-db:5432/librariarr
+         - SESSION_SECRET=${SESSION_SECRET:-}
          - TZ=${TZ:-UTC}
          - PUID=${PUID:-1000}
          - PGID=${PGID:-1000}
        volumes:
          - ./config:/config
-       depends_on:
-         librariarr-db:
-           condition: service_healthy
-       restart: unless-stopped
+       security_opt:
+         - no-new-privileges:true
+       cap_drop:
+         - ALL
+       cap_add:
+         - CHOWN
+         - SETUID
+         - SETGID
+         - FOWNER
+       tmpfs:
+         - /tmp:noexec,nosuid
        healthcheck:
          test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
          interval: 30s
          timeout: 5s
          start_period: 60s
          retries: 3
+       depends_on:
+         librariarr-db:
+           condition: service_healthy
+       restart: unless-stopped
 
      librariarr-db:
        image: postgres:18-alpine
        container_name: librariarr-db
        environment:
-         - POSTGRES_USER=librariarr
-         - POSTGRES_PASSWORD=${DB_PASSWORD}
-         - POSTGRES_DB=librariarr
+         POSTGRES_USER: librariarr
+         POSTGRES_PASSWORD: ${DB_PASSWORD}
+         POSTGRES_DB: librariarr
+         PGDATA: /var/lib/postgresql/data/pgdata
        volumes:
-         - librariarr-db:/var/lib/postgresql
-       restart: unless-stopped
+         - librariarr-db:/var/lib/postgresql/data
+       security_opt:
+         - no-new-privileges:true
+       cap_drop:
+         - ALL
+       cap_add:
+         - CHOWN
+         - DAC_OVERRIDE
+         - FOWNER
+         - SETUID
+         - SETGID
+       tmpfs:
+         - /tmp:noexec,nosuid
        healthcheck:
          test: ["CMD-SHELL", "pg_isready -U librariarr"]
-         interval: 10s
+         interval: 5s
          timeout: 5s
          retries: 5
+       restart: unless-stopped
 
    volumes:
      librariarr-db:
@@ -104,8 +129,10 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
 | `SESSION_SECRET` | No | Auto-generated | Random string (32+ characters) used to secure your login sessions. Auto-generated and saved to `/config/.session-secret` if not set. |
 | `PUID` | No | `1000` | User ID for file permissions |
 | `PGID` | No | `1000` | Group ID for file permissions |
+| `UMASK` | No | `022` | File permission mask. Override only if your environment requires different permissions. |
 | `LIBRARIARR_PORT` | No | `3000` | Host port to expose |
 | `TZ` | No | `UTC` | Timezone for scheduled jobs (e.g., `America/New_York`) — [full list](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) |
+| `NEXT_TELEMETRY_DISABLED` | No | `1` | Always set to `1` by the container. Next.js telemetry is permanently disabled. |
 | `LOG_DEBUG` | No | `false` | Enable debug-level logging |
 | `BACKUP_DIR` | No | `/config/backups` | Backup storage directory |
 | `IMAGE_CACHE_DIR` | No | `/config/cache/images` | Artwork cache directory |
@@ -120,6 +147,208 @@ All persistent data is stored under `/config` inside the container:
 
 <Aside>
   The `./config` bind mount ensures your backups and cache survive container recreation.
+</Aside>
+
+## Using an Existing PostgreSQL Database
+
+If you already have a PostgreSQL server (e.g., a shared instance on your network or a managed database), you can skip the `librariarr-db` container and point Librariarr directly at it.
+
+### Database Requirements
+
+- **PostgreSQL 14 or later** (17+ recommended)
+- A dedicated database for Librariarr (the app manages its own schema)
+- A user with full privileges on that database (`CREATE`, `ALTER`, `DROP`, `INSERT`, `UPDATE`, `DELETE`)
+- No PostgreSQL extensions are required
+
+### Setup
+
+<Steps>
+
+1. **Create the database and user** on your PostgreSQL server:
+
+   ```sql
+   CREATE USER librariarr WITH PASSWORD 'your-secure-password';
+   CREATE DATABASE librariarr OWNER librariarr;
+   ```
+
+2. **Use a simplified `docker-compose.yml`** without the database service:
+
+   ```yaml title="docker-compose.yml"
+   services:
+     librariarr:
+       image: ahembree/librariarr:latest
+       container_name: librariarr
+       ports:
+         - "${LIBRARIARR_PORT:-3000}:3000"
+       environment:
+         - DATABASE_URL=postgresql://librariarr:${DB_PASSWORD}@your-db-host:5432/librariarr
+         - SESSION_SECRET=${SESSION_SECRET:-}
+         - TZ=${TZ:-UTC}
+         - PUID=${PUID:-1000}
+         - PGID=${PGID:-1000}
+       volumes:
+         - ./config:/config
+       security_opt:
+         - no-new-privileges:true
+       cap_drop:
+         - ALL
+       cap_add:
+         - CHOWN
+         - SETUID
+         - SETGID
+         - FOWNER
+       tmpfs:
+         - /tmp:noexec,nosuid
+       healthcheck:
+         test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+         interval: 30s
+         timeout: 5s
+         start_period: 60s
+         retries: 3
+       restart: unless-stopped
+   ```
+
+3. **Update your `.env` file** with the database password and hostname:
+
+   ```bash title=".env"
+   DB_PASSWORD=your-secure-password
+   ```
+
+   Adjust the `DATABASE_URL` in `docker-compose.yml` to match your PostgreSQL server's hostname, port, and credentials.
+
+4. **Start the container:**
+
+   ```bash
+   docker compose up -d
+   ```
+
+</Steps>
+
+<Aside type="caution">
+  Librariarr automatically creates and migrates all tables on startup. Do not manually create tables or run SQL migrations — the app handles this entirely.
+</Aside>
+
+<Aside type="tip">
+  If your PostgreSQL server uses a non-default port or requires SSL, include it in the connection URL:
+  `postgresql://user:password@host:5433/librariarr?sslmode=require`
+</Aside>
+
+## Docker Networking
+
+By default, Docker Compose creates an isolated network for the Librariarr stack. This works well when you access media servers and integrations (Sonarr, Radarr, etc.) via their host IP addresses. However, if your other services are also running in Docker, you can connect them on a shared network so they can communicate by container name instead.
+
+### Connecting to existing containers
+
+If your media server or Arr apps run in separate Docker Compose stacks, create an external network that all stacks share:
+
+```bash
+docker network create media
+```
+
+Then reference it in each stack. For Librariarr:
+
+```yaml title="docker-compose.yml"
+services:
+  librariarr:
+    image: ahembree/librariarr:latest
+    container_name: librariarr
+    ports:
+      - "${LIBRARIARR_PORT:-3000}:3000"
+    environment:
+      - DATABASE_URL=postgresql://librariarr:${DB_PASSWORD}@librariarr-db:5432/librariarr
+      - SESSION_SECRET=${SESSION_SECRET:-}
+      - TZ=${TZ:-UTC}
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+    volumes:
+      - ./config:/config
+    networks:
+      - default
+      - media
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - FOWNER
+    tmpfs:
+      - /tmp:noexec,nosuid
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    depends_on:
+      librariarr-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  librariarr-db:
+    image: postgres:18-alpine
+    container_name: librariarr-db
+    environment:
+      POSTGRES_USER: librariarr
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: librariarr
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - librariarr-db:/var/lib/postgresql/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+    tmpfs:
+      - /tmp:noexec,nosuid
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U librariarr"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+networks:
+  default:
+  media:
+    external: true
+
+volumes:
+  librariarr-db:
+```
+
+Add the same `media` network to your other stacks (Plex, Sonarr, Radarr, etc.):
+
+```yaml title="Other stack's docker-compose.yml (excerpt)"
+services:
+  sonarr:
+    # ... existing config ...
+    networks:
+      - default
+      - media
+
+networks:
+  default:
+  media:
+    external: true
+```
+
+Once all containers are on the `media` network, you can reference them by container name when adding servers and integrations in Librariarr (e.g., `http://plex:32400`, `http://sonarr:8989`).
+
+<Aside type="tip">
+  The `default` network is kept alongside `media` so that internal services like `librariarr-db` remain reachable within their own stack without being exposed to the shared network.
+</Aside>
+
+<Aside>
+  You don't need a shared network if you prefer using host IPs. When adding servers or integrations in Librariarr, you can always use `http://your-host-ip:port` to reach services regardless of network configuration.
 </Aside>
 
 ## Startup Behavior

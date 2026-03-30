@@ -29,6 +29,10 @@ export default defineConfig({
               slug: "docs/getting-started/installation",
             },
             {
+              label: "Unraid Installation",
+              slug: "docs/getting-started/unraid",
+            },
+            {
               label: "Configuration",
               slug: "docs/getting-started/configuration",
             },

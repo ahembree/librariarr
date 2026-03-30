@@ -1,0 +1,143 @@
+---
+title: Unraid Installation
+description: Install Librariarr on Unraid using Community Applications or Docker templates.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+Librariarr provides Unraid XML templates for easy installation through the Unraid Docker UI. Two containers are required: the Librariarr app and a PostgreSQL database.
+
+## Requirements
+
+- Unraid 6.11+
+- Community Applications plugin (recommended) or manual Docker template support
+
+## Installation
+
+<Steps>
+
+1. **Install the database container first**
+
+   In the Unraid Docker tab, click **Add Container** and set the **Template Repository** to:
+
+   ```
+   https://raw.githubusercontent.com/ahembree/librariarr/main/unraid/librariarr-db.xml
+   ```
+
+   Click **Apply** to load the template, then configure:
+
+   | Field | Default | Notes |
+   |-------|---------|-------|
+   | **Postgres Password** | `librariarr` | Change this to a secure password |
+   | **Data Path** | `/mnt/user/appdata/librariarr-db` | Where PostgreSQL stores its data |
+
+   Leave other fields at their defaults unless you have a specific reason to change them. Click **Apply** to create the container.
+
+2. **Install the Librariarr container**
+
+   Add another container with the **Template Repository**:
+
+   ```
+   https://raw.githubusercontent.com/ahembree/librariarr/main/unraid/librariarr.xml
+   ```
+
+   Click **Apply** to load the template, then configure:
+
+   | Field | Default | Notes |
+   |-------|---------|-------|
+   | **Database URL** | `postgresql://librariarr:librariarr@librariarr-db:5432/librariarr` | Update the password if you changed it in step 1 |
+   | **Config Path** | `/mnt/user/appdata/librariarr` | Persistent storage for backups and cache |
+   | **PUID** | `99` | Unraid `nobody` user |
+   | **PGID** | `100` | Unraid `users` group |
+   | **Timezone** | `America/New_York` | Your local timezone |
+
+   Click **Apply** to create the container.
+
+3. **Verify both containers are running**
+
+   In the Docker tab, confirm both `librariarr-db` and `librariarr` show as started. The app container waits for the database to be ready before starting.
+
+4. **Open the app**
+
+   Navigate to `http://your-unraid-ip:3000`. You'll be directed to the login page where you can sign in with Plex or create local credentials.
+
+</Steps>
+
+## Using an Existing PostgreSQL Database
+
+If you already run a PostgreSQL server on your network (or in another Docker container on Unraid), you can skip the `librariarr-db` container entirely.
+
+See the [external database requirements](/docs/getting-started/installation/#database-requirements) for PostgreSQL version and privilege details.
+
+To configure this on Unraid, install only the Librariarr container template and set the **Database URL** to point at your existing server:
+
+```
+postgresql://librariarr:your-password@your-db-host:5432/librariarr
+```
+
+Ensure the database and user already exist on your PostgreSQL server before starting the container. Librariarr creates and migrates all tables automatically on startup.
+
+## Networking
+
+Both `librariarr` and `librariarr-db` must be on the same Docker network to communicate. By default, Unraid places containers on the `bridge` network, which works out of the box.
+
+### Connecting to other containers
+
+To let Librariarr reach your media servers and integrations (Plex, Sonarr, Radarr, etc.) by container name, put them on the same custom Docker network.
+
+1. Create a network in the Unraid terminal:
+
+   ```bash
+   docker network create media
+   ```
+
+2. For each container (Librariarr, librariarr-db, Plex, Sonarr, etc.), edit the container in the Docker tab, switch **Network Type** to **Custom: media**, and click **Apply**.
+
+Once all containers share the `media` network, you can use container names as hostnames when adding servers and integrations in Librariarr (e.g., `http://plex:32400`, `http://sonarr:8989`).
+
+<Aside type="tip">
+  A custom network isn't required. You can always use your Unraid server's IP address (e.g., `http://192.168.1.10:32400`) to reach other services regardless of network configuration.
+</Aside>
+
+<Aside type="caution">
+  If using **host** network mode, container hostnames like `librariarr-db` won't resolve. Use `localhost` or `127.0.0.1` in the `DATABASE_URL` instead, and ensure PostgreSQL is configured to accept connections on the expected port.
+</Aside>
+
+## Permissions
+
+The templates default to `PUID=99` and `PGID=100`, which map to Unraid's `nobody` user and `users` group. This matches the standard Unraid convention for Docker containers.
+
+If your media files or appdata use different ownership, adjust `PUID` and `PGID` to match. You can find the correct values by running in the Unraid terminal:
+
+```bash
+stat -c '%u:%g' /mnt/user/appdata
+```
+
+`UMASK` defaults to `022` and is available under advanced settings if your environment requires a different value.
+
+## Environment Variables
+
+All environment variables from the [standard installation](/docs/getting-started/installation/#environment-variables) are supported. The Unraid templates expose the most common ones in the container settings UI. To add additional variables (e.g., `LOG_DEBUG`, `BACKUP_DIR`), click **Add another Path, Port, Variable, Label, or Device** in the container edit screen and add them as variables.
+
+## Updating
+
+To update Librariarr on Unraid:
+
+1. Go to the **Docker** tab
+2. Click the Librariarr container icon and select **Check for Updates**
+3. If an update is available, click **Update**
+
+Database updates run automatically on startup.
+
+## Troubleshooting
+
+### Container won't start
+
+Check the container logs (click the container icon, then **Logs**). Common issues:
+
+- **Database not reachable**: Ensure `librariarr-db` is running and both containers are on the same network. The app retries database connections up to 30 times on startup.
+- **Permission denied on /config**: Verify `PUID` and `PGID` match the ownership of your appdata directory.
+
+### Database connection refused
+
+If the `DATABASE_URL` uses `librariarr-db` as the hostname, both containers must be on the same Docker network. Check that neither container is set to **host** network mode unless you've adjusted the URL accordingly.

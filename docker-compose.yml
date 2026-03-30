@@ -7,13 +7,23 @@ services:
     environment:
       - DATABASE_URL=postgresql://librariarr:librariarr@librariarr-db:5432/librariarr
       - SESSION_SECRET=${SESSION_SECRET:-}
-      - NEXT_TELEMETRY_DISABLED=1
       - TZ=${TZ:-UTC}
       # Optional: run the app process as a specific UID/GID (default: 1000)
       # - PUID=1000
       # - PGID=1000
     volumes:
       - ./config:/config
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - FOWNER
+    tmpfs:
+      - /tmp:noexec,nosuid
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
       interval: 30s
@@ -32,9 +42,21 @@ services:
       POSTGRES_USER: librariarr
       POSTGRES_PASSWORD: librariarr
       POSTGRES_DB: librariarr
-      #PGDATA: /var/lib/postgresql/data
+      PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - librariarr-db:/var/lib/postgresql
+      - librariarr-db:/var/lib/postgresql/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+    tmpfs:
+      - /tmp:noexec,nosuid
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U librariarr"]
       interval: 5s
