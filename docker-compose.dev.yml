@@ -9,7 +9,6 @@ services:
     environment:
       - DATABASE_URL=postgresql://librariarr:librariarr@librariarr-dev-db:5432/librariarr
       - SESSION_SECRET=dev-secret-must-be-at-least-32-characters-long!!
-      - NEXT_TELEMETRY_DISABLED=1
       - TZ=${TZ:-UTC}
       # Optional: run the app process as a specific UID/GID (default: 1000)
       # - PUID=1000

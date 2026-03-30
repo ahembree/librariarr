@@ -30,7 +30,6 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
        environment:
          - DATABASE_URL=postgresql://librariarr:${DB_PASSWORD}@librariarr-db:5432/librariarr
          - SESSION_SECRET=${SESSION_SECRET:-}
-         - NEXT_TELEMETRY_DISABLED=1
          - TZ=${TZ:-UTC}
          - PUID=${PUID:-1000}
          - PGID=${PGID:-1000}
@@ -184,7 +183,6 @@ If you already have a PostgreSQL server (e.g., a shared instance on your network
        environment:
          - DATABASE_URL=postgresql://librariarr:${DB_PASSWORD}@your-db-host:5432/librariarr
          - SESSION_SECRET=${SESSION_SECRET:-}
-         - NEXT_TELEMETRY_DISABLED=1
          - TZ=${TZ:-UTC}
          - PUID=${PUID:-1000}
          - PGID=${PGID:-1000}
