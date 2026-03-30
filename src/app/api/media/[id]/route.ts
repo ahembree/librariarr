@@ -29,7 +29,7 @@ export async function GET(
       },
       library: {
         include: {
-          mediaServer: { select: { id: true, name: true, url: true, type: true, machineId: true } },
+          mediaServer: { select: { id: true, name: true, url: true, externalUrl: true, type: true, machineId: true } },
         },
       },
     },
@@ -46,6 +46,7 @@ export async function GET(
       serverName: ms.name,
       serverType: ms.type,
       serverUrl: ms.url,
+      externalUrl: ms.externalUrl,
       machineId: ms.machineId,
       ratingKey: item.ratingKey,
       parentRatingKey: item.parentRatingKey,
@@ -73,7 +74,7 @@ export async function GET(
         grandparentRatingKey: true,
         library: {
           select: {
-            mediaServer: { select: { id: true, name: true, url: true, type: true, machineId: true } },
+            mediaServer: { select: { id: true, name: true, url: true, externalUrl: true, type: true, machineId: true } },
           },
         },
       },
@@ -88,6 +89,7 @@ export async function GET(
           serverName: sms.name,
           serverType: sms.type,
           serverUrl: sms.url,
+          externalUrl: sms.externalUrl,
           machineId: sms.machineId,
           ratingKey: sibling.ratingKey,
           parentRatingKey: sibling.parentRatingKey,

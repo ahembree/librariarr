@@ -2,6 +2,7 @@ export interface PlayServer {
   serverName: string;
   serverType: string;
   serverUrl: string;
+  externalUrl?: string | null;
   machineId: string | null;
   ratingKey: string;
   parentRatingKey: string | null;
@@ -13,11 +14,15 @@ export interface PlayServer {
  * Builds a deep link URL to open/play an item in its media server's web UI.
  */
 export function buildPlayUrl(server: PlayServer): string {
-  const baseUrl = server.serverUrl.replace(/\/+$/, "");
+  const baseUrl = (server.externalUrl || server.serverUrl).replace(/\/+$/, "");
 
   switch (server.serverType) {
     case "PLEX":
-      // Always use app.plex.tv — avoids long plex.direct URLs on mobile
+      // If user specified an external URL, use it directly
+      if (server.externalUrl) {
+        return `${baseUrl}/web/index.html#!/server/details?key=${encodeURIComponent(`/library/metadata/${server.ratingKey}`)}`;
+      }
+      // Default: use app.plex.tv — avoids long plex.direct URLs on mobile
       if (server.machineId) {
         return `https://app.plex.tv/desktop/#!/server/${server.machineId}/details?key=${encodeURIComponent(`/library/metadata/${server.ratingKey}`)}`;
       }

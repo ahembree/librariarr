@@ -39,7 +39,34 @@ describe("buildPlayUrl", () => {
       expect(url).toContain("key=%2Flibrary%2Fmetadata%2F123");
     });
 
-    it("falls back to local server URL when machineId is null", () => {
+    it("uses externalUrl for Plex when specified", () => {
+      const server = makeServer({
+        serverType: "PLEX",
+        machineId: "m1",
+        serverUrl: "https://long-hash.plex.direct:32400",
+        externalUrl: "https://plex.example.com",
+        ratingKey: "123",
+      });
+      const url = buildPlayUrl(server);
+      expect(url).toBe(
+        "https://plex.example.com/web/index.html#!/server/details?key=%2Flibrary%2Fmetadata%2F123"
+      );
+    });
+
+    it("uses externalUrl for Jellyfin when specified", () => {
+      const server = makeServer({
+        serverType: "JELLYFIN",
+        serverUrl: "http://192.168.1.100:8096",
+        externalUrl: "https://jellyfin.example.com",
+        ratingKey: "abc",
+      });
+      const url = buildPlayUrl(server);
+      expect(url).toBe(
+        "https://jellyfin.example.com/web/index.html#/details?id=abc"
+      );
+    });
+
+    it("uses app.plex.tv when machineId is null", () => {
       const server = makeServer({
         serverType: "PLEX",
         machineId: null,
@@ -48,11 +75,11 @@ describe("buildPlayUrl", () => {
       });
       const url = buildPlayUrl(server);
       expect(url).toBe(
-        "http://192.168.1.100:32400/web/index.html#!/server/details?key=%2Flibrary%2Fmetadata%2F456"
+        "https://app.plex.tv/desktop/#!/details?key=%2Flibrary%2Fmetadata%2F456"
       );
     });
 
-    it("strips trailing slashes from server URL", () => {
+    it("uses app.plex.tv regardless of server URL format", () => {
       const server = makeServer({
         serverType: "PLEX",
         machineId: null,
@@ -60,8 +87,7 @@ describe("buildPlayUrl", () => {
         ratingKey: "789",
       });
       const url = buildPlayUrl(server);
-      expect(url).toMatch(/^http:\/\/plex\.local:32400\/web\//);
-      expect(url).not.toContain("///");
+      expect(url).toMatch(/^https:\/\/app\.plex\.tv\/desktop/);
     });
   });
 
