@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.1](https://github.com/ahembree/librariarr/compare/v0.11.0...v0.11.1) (2026-03-30)
+
+
+### Bug Fixes
+
+* dockerhub updates and force update image ([dae0186](https://github.com/ahembree/librariarr/commit/dae01860e07a785fc56439f0e95bd6735ddd3bbe))
+* dockerhub updates and force update image ([2758e12](https://github.com/ahembree/librariarr/commit/2758e122734c7c6d0a34087771d84dca68b945ed))
+
 ## [0.11.0](https://github.com/ahembree/librariarr/compare/v0.10.0...v0.11.0) (2026-03-30)
 
 
