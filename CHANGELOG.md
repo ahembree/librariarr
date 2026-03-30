@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.1](https://github.com/ahembree/librariarr/compare/v0.9.0...v0.9.1) (2026-03-30)
+
+
+### Bug Fixes
+
+* fix play-url with external URL specified ([7ae83a6](https://github.com/ahembree/librariarr/commit/7ae83a6113b34bec96f8f2e5f96ed85157d5c15f))
+* ui updates ([b8a1ed1](https://github.com/ahembree/librariarr/commit/b8a1ed1631e0ec84e3c6d11eccbe98006cc222db))
+
 ## [0.9.0](https://github.com/ahembree/librariarr/compare/v0.8.0...v0.9.0) (2026-03-29)
 
 
