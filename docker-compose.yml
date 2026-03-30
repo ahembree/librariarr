@@ -32,9 +32,9 @@ services:
       POSTGRES_USER: librariarr
       POSTGRES_PASSWORD: librariarr
       POSTGRES_DB: librariarr
-      #PGDATA: /var/lib/postgresql/data
+      PGDATA: /var/lib/postgresql/data
     volumes:
-      - librariarr-db:/var/lib/postgresql
+      - librariarr-db:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U librariarr"]
       interval: 5s

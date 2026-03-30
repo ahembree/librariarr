@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>librariarr-db</Name>
+  <Repository>postgres:18-alpine</Repository>
+  <Registry>https://hub.docker.com/_/postgres</Registry>
+  <Branch>
+    <Tag>18-alpine</Tag>
+    <TagDescription>PostgreSQL 18 Alpine</TagDescription>
+  </Branch>
+  <Network>bridge</Network>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/ahembree/librariarr/issues</Support>
+  <Project>https://github.com/ahembree/librariarr</Project>
+  <Overview>PostgreSQL database for Librariarr. This companion container provides the required database for the Librariarr application.</Overview>
+  <Category>Tools:Database</Category>
+  <Icon>https://raw.githubusercontent.com/docker-library/docs/01c12653951b2fe592c1f93a13b4e289ada0e3a1/postgres/logo.png</Icon>
+  <Description>PostgreSQL database for Librariarr. Install this before installing the Librariarr container.</Description>
+  <TemplateURL>https://raw.githubusercontent.com/ahembree/librariarr/main/unraid/librariarr-db.xml</TemplateURL>
+  <DonateText/>
+  <DonateLink/>
+  <DonateImg/>
+  <Config Name="Postgres User" Target="POSTGRES_USER" Default="librariarr" Mode="" Description="Database username" Type="Variable" Display="always" Required="true" Mask="false">librariarr</Config>
+  <Config Name="Postgres Password" Target="POSTGRES_PASSWORD" Default="librariarr" Mode="" Description="Database password. Change this for security." Type="Variable" Display="always" Required="true" Mask="true">librariarr</Config>
+  <Config Name="Postgres Database" Target="POSTGRES_DB" Default="librariarr" Mode="" Description="Database name" Type="Variable" Display="always" Required="true" Mask="false">librariarr</Config>
+  <Config Name="Data Path" Target="/var/lib/postgresql/data" Default="/mnt/user/appdata/librariarr-db" Mode="rw" Description="PostgreSQL data directory" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/librariarr-db</Config>
+</Container>
