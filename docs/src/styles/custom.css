@@ -9,6 +9,8 @@
   --sl-color-accent-high: oklch(0.85 0.08 264);
   --sl-font: "Plus Jakarta Sans", sans-serif;
   --sl-font-system: "Plus Jakarta Sans", sans-serif;
+  --sl-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo,
+    Monaco, Consolas, monospace;
 }
 
 :root[data-theme="dark"] {
@@ -16,9 +18,9 @@
   --sl-color-accent: oklch(0.55 0.26 264);
   --sl-color-accent-high: oklch(0.85 0.08 264);
 
-  /* Navy-tinted backgrounds matching the app */
+  /* Navy-tinted surface colors matching the app */
   --sl-color-bg: oklch(0.16 0.006 270);
-  --sl-color-bg-nav: oklch(0.18 0.008 270 / 70%);
+  --sl-color-bg-nav: oklch(0.18 0.008 270);
   --sl-color-bg-sidebar: oklch(0.18 0.008 270);
   --sl-color-bg-inline-code: oklch(0.23 0.01 270);
   --sl-color-hairline: oklch(1 0.01 270 / 12%);
@@ -33,31 +35,27 @@
   --sl-color-gray-5: oklch(0.27 0.01 270);
 }
 
+/* Make Starlight site title and header icons uncolored (regular text color) */
+.site-title {
+  color: var(--sl-color-white) !important;
+}
+
+.social-icons a {
+  color: var(--sl-color-gray-2) !important;
+}
+
+.social-icons a:hover {
+  color: var(--sl-color-white) !important;
+}
+
 /* Typography — use Sora for headings */
-starlight-content h1,
-starlight-content h2,
-starlight-content h3,
-starlight-content h4,
-.sl-markdown-content h1,
-.sl-markdown-content h2,
-.sl-markdown-content h3,
-.sl-markdown-content h4,
+.sl-markdown-content :is(h1, h2, h3, h4),
 .content-panel h1 {
   font-family: "Sora", sans-serif;
   letter-spacing: -0.02em;
 }
 
-/* Code blocks use JetBrains Mono */
-:root {
-  --sl-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo,
-    Monaco, Consolas, monospace;
-}
-
 /* Nav backdrop blur matching the app glass-morphism */
-nav.sidebar {
-  backdrop-filter: blur(20px);
-}
-
 header {
   backdrop-filter: blur(20px);
 }
