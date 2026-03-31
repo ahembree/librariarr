@@ -80,27 +80,26 @@ Use built-in holiday presets or define custom date ranges.
 - **Holiday presets**: New Year, Valentine's Day, Easter, Halloween, Christmas, and more (dates auto-calculated)
 - **Custom**: Define your own annual date range
 
-### Combine Mode
-
-When multiple schedules are active simultaneously, the **combine mode** determines which prerolls play:
-
-| Mode | Behavior |
-|------|----------|
-| **Sequential** | Play all matching prerolls in order before the content |
-| **Random** | Pick one matching preroll at random |
-| **First** | Play only the highest-priority matching preroll |
-
 ### Priority
 
-Each schedule has a priority value. Higher-priority schedules take precedence when using the **First** combine mode or when resolving conflicts.
+Each schedule has a priority value. When multiple schedules are active simultaneously, the highest-priority schedule's preroll path is used.
+
+### Combining Presets
+
+The Preroll Manager includes a preset combination tool in the UI. Select multiple presets and combine their paths using:
+
+- **Sequential** (comma-separated) — play all selected prerolls in order
+- **Random** (semicolon-separated) — media server picks one at random
+
+The combined path can then be used in a schedule's preroll path field. This leverages your media server's native path separator support (Plex uses `;` for random and `,` for sequential).
 
 ## How It Works
 
-When a user starts playing media:
+The preroll enforcer checks every 30 seconds:
 
-1. Librariarr checks which preroll schedules are currently active
-2. Based on the combine mode, selects the appropriate preroll file(s)
-3. The preroll path is set on the media server to prepend to playback
+1. Evaluates which preroll schedules are currently active
+2. Selects the highest-priority active schedule
+3. Sets that schedule's preroll path on the media server
 
 ## Limitations
 

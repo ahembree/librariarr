@@ -282,7 +282,7 @@ The lifecycle system operates in three phases, orchestrated by `src/lib/lifecycl
 ### Scheduler
 
 - Initialized in `src/instrumentation.ts` (guarded by `NEXT_RUNTIME === "nodejs"` — skipped during Edge/build)
-- Checks every 15 minutes for scheduled syncs and lifecycle rule processing
+- Checks every minute for scheduled syncs and lifecycle rule processing
 - Also starts the maintenance enforcer (30s polling loop) in the same `instrumentation.ts`
 
 ### Documentation Site

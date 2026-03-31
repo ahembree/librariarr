@@ -9,7 +9,7 @@ The Stream Manager provides real-time monitoring of active media streams and too
 
 ## Active Sessions
 
-The sessions view shows all currently active streams across your connected servers, refreshing every 3–5 seconds.
+The sessions view shows all currently active streams across your connected servers, refreshing every 5 seconds.
 
 ### Information Displayed
 
@@ -61,21 +61,29 @@ When maintenance mode is **disabled**:
 
 ## Transcode Manager
 
-Control transcoding behavior across your servers.
+Automatically terminate streams that match transcoding criteria.
+
+### Criteria
+
+| Criterion | Description |
+|-----------|-------------|
+| **Any Transcoding** | Terminate sessions where video or audio is being transcoded |
+| **Video Transcoding** | Terminate sessions where video is being transcoded |
+| **Audio Transcoding** | Terminate sessions where audio is being transcoded |
+| **4K Transcoding** | Terminate sessions that are transcoding 4K content |
+| **Remote Transcoding** | Terminate remote (non-local) sessions that are transcoding |
 
 ### Settings
 
 | Setting | Description |
 |---------|-------------|
-| **Default Video Transcode** | Allow, disallow, or throttle video transcoding |
-| **Default Audio Transcode** | Allow, disallow, or throttle audio transcoding |
-| **Bandwidth Throttle** | Maximum quality for converted streams (e.g., limit remote users to 1 Mbps) |
-| **Remote Only** | Only apply transcode limits to remote (non-local) connections |
+| **Delay** | Seconds to wait before terminating matching streams (default: 30) |
+| **Custom Message** | Message displayed to users when their session is terminated |
 | **Excluded Users** | Users who bypass transcode restrictions |
 
 ### Enforcement
 
-The enforcer checks active streams every 30 seconds. Streams that violate the policy (e.g., converting when not allowed) receive a warning and may be stopped after a configurable period.
+The enforcer checks active streams every 30 seconds. Sessions matching any enabled criterion are terminated after the configured delay.
 
 <Aside type="caution">
   Enforcement depends on what your media server reports about each stream. Some player apps may not accurately report their status.
@@ -101,21 +109,22 @@ Set a single maintenance window with specific start and end dates/times.
 
 - **Example**: December 25, 2024 12:00 AM to December 26, 2024 11:59 PM
 
-#### Seasonal
-
-Use built-in holiday presets or custom date ranges that repeat annually.
-
-- **Presets**: New Year, Valentine's Day, Easter, and more
-- **Custom**: Define your own date range
-
 ### Blackout Behavior
 
-During a blackout window, the same behavior as maintenance mode applies:
+During a blackout window:
 
+- Active sessions are terminated after a configurable delay
 - Custom message displayed to users
-- Configurable delay before stream termination
 - User exclusions supported
-- Notifications sent (Discord, push)
+- Discord notification sent (if configured)
+
+### Actions
+
+| Action | Description |
+|--------|-------------|
+| **Terminate Immediately** | Stop sessions as soon as the blackout starts |
+| **Warn Then Terminate** | Send a warning, then terminate after a configurable delay |
+| **Block New Only** | Allow existing sessions to continue but block new connections |
 
 ## Limitations
 

@@ -28,8 +28,11 @@ Send notifications to a Discord channel via webhook.
 
 Discord notifications are sent for:
 
-- **Lifecycle actions**: When rules execute actions (delete, unmonitor, tag)
+- **Lifecycle actions**: When rules execute actions (delete, unmonitor, etc.) — success or failure
+- **Match changes**: When rule detection finds new matches or removes stale ones (configurable per rule set)
 - **Maintenance mode**: When maintenance mode is toggled on/off
+
+Lifecycle notifications are configured **per rule set** via the `discordNotifyOnAction` and `discordNotifyOnMatch` toggles in the rule set settings.
 
 ### Message Format
 
