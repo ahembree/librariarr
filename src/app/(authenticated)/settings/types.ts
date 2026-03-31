@@ -76,6 +76,8 @@ export interface AuthInfo {
   hasPassword: boolean;
   localAuthEnabled: boolean;
   displayName: string;
+  mfaEnabled: boolean;
+  recoveryCodesRemaining: number;
 }
 
 export interface UpdateInfo {

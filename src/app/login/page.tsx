@@ -20,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertCircle, RotateCcw, Loader2 } from "lucide-react";
+import { AlertCircle, RotateCcw, Loader2, ShieldCheck, KeyRound } from "lucide-react";
 import { Logo } from "@/components/logo";
 
 export default function LoginPage() {
@@ -46,6 +46,20 @@ export default function LoginPage() {
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [restoreProgress, setRestoreProgress] = useState<string | null>(null);
+  const [mfaPending, setMfaPending] = useState(false);
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaLoading, setMfaLoading] = useState(false);
+  const [mfaError, setMfaError] = useState<string | null>(null);
+  const [mfaUseRecovery, setMfaUseRecovery] = useState(false);
+  const [mfaRecoveryCode, setMfaRecoveryCode] = useState("");
+
+  // MFA setup prompt after first local account creation
+  const [mfaSetupPrompt, setMfaSetupPrompt] = useState(false);
+  const [mfaSetupData, setMfaSetupData] = useState<{ secret: string; qrCode: string; uri: string } | null>(null);
+  const [mfaSetupToken, setMfaSetupToken] = useState("");
+  const [mfaSetupLoading, setMfaSetupLoading] = useState(false);
+  const [mfaSetupError, setMfaSetupError] = useState<string | null>(null);
+  const [mfaRecoveryCodes, setMfaRecoveryCodes] = useState<string[] | null>(null);
 
   const completeAuth = useCallback(async () => {
     try {
@@ -121,6 +135,12 @@ export default function LoginPage() {
         return;
       }
 
+      if (data.mfaRequired) {
+        setMfaPending(true);
+        setLocalLoading(false);
+        return;
+      }
+
       try {
         const serversRes = await fetch("/api/servers");
         const serversData = await serversRes.json();
@@ -133,6 +153,35 @@ export default function LoginPage() {
     } catch {
       setLocalError("Login failed. Please try again.");
       setLocalLoading(false);
+    }
+  };
+
+  const handleMfaVerify = async (e: React.SyntheticEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setMfaError(null);
+    setMfaLoading(true);
+
+    try {
+      const endpoint = mfaUseRecovery ? "/api/auth/mfa/recovery" : "/api/auth/mfa/verify";
+      const body = mfaUseRecovery ? { code: mfaRecoveryCode } : { token: mfaCode };
+
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setMfaError(data.error || "Verification failed");
+        setMfaLoading(false);
+        return;
+      }
+
+      await completeAuth();
+    } catch {
+      setMfaError("Verification failed. Please try again.");
+      setMfaLoading(false);
     }
   };
 
@@ -171,10 +220,47 @@ export default function LoginPage() {
         return;
       }
 
-      router.push("/onboarding");
+      // Prompt MFA setup after first account creation
+      setSetupLoading(false);
+      setMfaSetupPrompt(true);
+      // Fetch MFA setup data
+      try {
+        const mfaRes = await fetch("/api/auth/mfa/setup", { method: "POST" });
+        if (mfaRes.ok) {
+          setMfaSetupData(await mfaRes.json());
+        }
+      } catch {
+        // MFA setup is optional, user can skip
+      }
     } catch {
       setSetupError("Setup failed. Please try again.");
       setSetupLoading(false);
+    }
+  };
+
+  const handleMfaSetupVerify = async () => {
+    setMfaSetupError(null);
+    setMfaSetupLoading(true);
+
+    try {
+      const res = await fetch("/api/auth/mfa/verify-setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: mfaSetupToken, secret: mfaSetupData?.secret }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setMfaSetupError(data.error || "Verification failed");
+        setMfaSetupLoading(false);
+        return;
+      }
+
+      setMfaRecoveryCodes(data.recoveryCodes);
+      setMfaSetupLoading(false);
+    } catch {
+      setMfaSetupError("Verification failed. Please try again.");
+      setMfaSetupLoading(false);
     }
   };
 
@@ -270,6 +356,213 @@ export default function LoginPage() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))]">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      </div>
+    );
+  }
+
+  // MFA setup prompt after first account creation
+  if (mfaSetupPrompt) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))] p-4">
+        <Card className="w-full max-w-md glass animate-fade-in-up">
+          <CardHeader className="text-center">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
+              <ShieldCheck className="h-8 w-8 text-primary" />
+            </div>
+            <CardTitle className="text-2xl font-display tracking-tight">
+              {mfaRecoveryCodes ? "Save Your Recovery Codes" : "Set Up Two-Factor Authentication"}
+            </CardTitle>
+            <CardDescription>
+              {mfaRecoveryCodes
+                ? "Store these codes in a safe place. Each code can only be used once."
+                : "Add an extra layer of security to your account. You can skip this and set it up later in settings."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {mfaRecoveryCodes ? (
+              <>
+                <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted/50 p-4 font-mono text-sm">
+                  {mfaRecoveryCodes.map((code) => (
+                    <span key={code} className="text-center">{code}</span>
+                  ))}
+                </div>
+                <Button
+                  className="w-full cursor-pointer"
+                  size="lg"
+                  onClick={() => router.push("/onboarding")}
+                >
+                  I&apos;ve Saved My Codes — Continue
+                </Button>
+              </>
+            ) : mfaSetupData ? (
+              <>
+                <div className="flex justify-center">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={mfaSetupData.qrCode}
+                    alt="Scan this QR code with your authenticator app"
+                    className="h-48 w-48 rounded-lg"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground text-center">
+                    Can&apos;t scan? Enter this key manually:
+                  </p>
+                  <p className="text-center font-mono text-xs select-all break-all bg-muted rounded px-2 py-1">
+                    {mfaSetupData.secret}
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="mfa-setup-token">Verification Code</Label>
+                  <Input
+                    id="mfa-setup-token"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    placeholder="000000"
+                    value={mfaSetupToken}
+                    onChange={(e) => setMfaSetupToken(e.target.value.replace(/\D/g, ""))}
+                    disabled={mfaSetupLoading}
+                  />
+                </div>
+                {mfaSetupError && (
+                  <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    {mfaSetupError}
+                  </div>
+                )}
+                <Button
+                  className="w-full cursor-pointer"
+                  size="lg"
+                  disabled={mfaSetupLoading || mfaSetupToken.length !== 6}
+                  onClick={handleMfaSetupVerify}
+                >
+                  {mfaSetupLoading ? "Verifying..." : "Enable MFA"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="w-full cursor-pointer"
+                  size="sm"
+                  onClick={() => router.push("/onboarding")}
+                >
+                  Skip for now
+                </Button>
+              </>
+            ) : (
+              <div className="flex flex-col items-center gap-4 py-4">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <Button
+                  variant="ghost"
+                  className="cursor-pointer"
+                  size="sm"
+                  onClick={() => router.push("/onboarding")}
+                >
+                  Skip for now
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // MFA verification step during login
+  if (mfaPending) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))] p-4">
+        <Card className="w-full max-w-105 glass animate-fade-in-up">
+          <CardHeader className="text-center">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
+              {mfaUseRecovery ? (
+                <KeyRound className="h-8 w-8 text-primary" />
+              ) : (
+                <ShieldCheck className="h-8 w-8 text-primary" />
+              )}
+            </div>
+            <CardTitle className="text-2xl font-display tracking-tight">
+              {mfaUseRecovery ? "Recovery Code" : "Two-Factor Authentication"}
+            </CardTitle>
+            <CardDescription>
+              {mfaUseRecovery
+                ? "Enter one of your recovery codes to sign in"
+                : "Enter the 6-digit code from your authenticator app"}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <form onSubmit={handleMfaVerify} className="space-y-3">
+              {mfaUseRecovery ? (
+                <div className="space-y-2">
+                  <Label htmlFor="recovery-code">Recovery Code</Label>
+                  <Input
+                    id="recovery-code"
+                    type="text"
+                    autoComplete="off"
+                    placeholder="XXXXX-XXXXX"
+                    value={mfaRecoveryCode}
+                    onChange={(e) => setMfaRecoveryCode(e.target.value)}
+                    disabled={mfaLoading}
+                  />
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <Label htmlFor="mfa-code">Verification Code</Label>
+                  <Input
+                    id="mfa-code"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    placeholder="000000"
+                    value={mfaCode}
+                    onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ""))}
+                    disabled={mfaLoading}
+                  />
+                </div>
+              )}
+              {mfaError && (
+                <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  {mfaError}
+                </div>
+              )}
+              <Button
+                type="submit"
+                className="w-full cursor-pointer"
+                size="lg"
+                disabled={mfaLoading || (mfaUseRecovery ? !mfaRecoveryCode : mfaCode.length !== 6)}
+              >
+                {mfaLoading ? "Verifying..." : "Verify"}
+              </Button>
+            </form>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full cursor-pointer"
+              onClick={() => {
+                setMfaUseRecovery(!mfaUseRecovery);
+                setMfaError(null);
+              }}
+            >
+              {mfaUseRecovery ? "Use authenticator app instead" : "Use a recovery code instead"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full cursor-pointer"
+              onClick={() => {
+                setMfaPending(false);
+                setMfaCode("");
+                setMfaRecoveryCode("");
+                setMfaError(null);
+                setMfaUseRecovery(false);
+              }}
+            >
+              Back to login
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     );
   }

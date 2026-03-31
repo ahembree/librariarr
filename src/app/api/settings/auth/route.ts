@@ -16,6 +16,8 @@ export async function GET() {
       localUsername: true,
       passwordHash: true,
       username: true,
+      totpEnabled: true,
+      totpRecoveryCodes: true,
       appSettings: {
         select: { localAuthEnabled: true },
       },
@@ -32,6 +34,8 @@ export async function GET() {
     hasPassword: !!user.passwordHash,
     localAuthEnabled: user.appSettings?.localAuthEnabled ?? false,
     displayName: user.username,
+    mfaEnabled: user.totpEnabled,
+    recoveryCodesRemaining: user.totpRecoveryCodes.length,
   });
 }
 

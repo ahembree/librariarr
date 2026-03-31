@@ -11,6 +11,7 @@ export interface SessionData {
   plexToken?: string;
   isLoggedIn: boolean;
   sessionVersion?: number;
+  pendingMfaUserId?: string;
 }
 
 const SESSION_SECRET_FILE = "/config/.session-secret";

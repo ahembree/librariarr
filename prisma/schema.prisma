@@ -13,6 +13,9 @@ model User {
   plexToken        String?
   localUsername     String?           @unique
   passwordHash     String?
+  totpSecret       String?
+  totpEnabled      Boolean           @default(false)
+  totpRecoveryCodes String[]         @default([])
   email            String?
   username         String
   sessionVersion   Int               @default(0)

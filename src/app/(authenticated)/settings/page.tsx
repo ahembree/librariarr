@@ -29,7 +29,7 @@ import type { AddServerDialogState, AddServerFormState, PurgeDialogState, SyncPr
 import { IntegrationsTab } from "./tabs/integrations-tab";
 import { NotificationsTab } from "./tabs/notifications-tab";
 import { AuthenticationTab } from "./tabs/authentication-tab";
-import type { CredentialsForm, PromptForm } from "./tabs/authentication-tab";
+import type { CredentialsForm, PromptForm, MfaSetupData } from "./tabs/authentication-tab";
 import { SystemTab } from "./tabs/system-tab";
 
 // ─── Shared types ───
@@ -155,6 +155,17 @@ export default function SettingsPage() {
   const [promptForm, setPromptForm] = useState<PromptForm>({ username: "", password: "", confirmPassword: "" });
   const [promptError, setPromptError] = useState("");
   const [promptSaving, setPromptSaving] = useState(false);
+  // MFA state
+  const [showMfaSetup, setShowMfaSetup] = useState(false);
+  const [mfaSetupData, setMfaSetupData] = useState<MfaSetupData | null>(null);
+  const [mfaSetupToken, setMfaSetupToken] = useState("");
+  const [mfaSetupLoading, setMfaSetupLoading] = useState(false);
+  const [mfaSetupError, setMfaSetupError] = useState("");
+  const [mfaRecoveryCodes, setMfaRecoveryCodes] = useState<string[] | null>(null);
+  const [showMfaDisable, setShowMfaDisable] = useState(false);
+  const [mfaDisablePassword, setMfaDisablePassword] = useState("");
+  const [mfaDisableLoading, setMfaDisableLoading] = useState(false);
+  const [mfaDisableError, setMfaDisableError] = useState("");
 
   // Library purge dialog
   const [purgeDialog, setPurgeDialog] = useState<PurgeDialogState | null>(null);
@@ -1881,6 +1892,97 @@ export default function SettingsPage() {
     }
   };
 
+  // ─── MFA handlers ───
+
+  const handleStartMfaSetup = async () => {
+    setShowMfaSetup(true);
+    setMfaSetupData(null);
+    setMfaSetupToken("");
+    setMfaSetupError("");
+    setMfaRecoveryCodes(null);
+    try {
+      const res = await fetch("/api/auth/mfa/setup", { method: "POST" });
+      if (res.ok) {
+        setMfaSetupData(await res.json());
+      } else {
+        const data = await res.json();
+        setMfaSetupError(data.error || "Failed to start MFA setup");
+      }
+    } catch {
+      setMfaSetupError("Failed to start MFA setup");
+    }
+  };
+
+  const handleVerifyMfaSetup = async () => {
+    setMfaSetupError("");
+    setMfaSetupLoading(true);
+    try {
+      const res = await fetch("/api/auth/mfa/verify-setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: mfaSetupToken, secret: mfaSetupData?.secret }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMfaSetupError(data.error || "Verification failed");
+        return;
+      }
+      setMfaRecoveryCodes(data.recoveryCodes);
+      // Refresh auth info to show MFA enabled
+      const infoRes = await fetch("/api/settings/auth");
+      if (infoRes.ok) setAuthInfo(await infoRes.json());
+    } catch {
+      setMfaSetupError("Verification failed");
+    } finally {
+      setMfaSetupLoading(false);
+    }
+  };
+
+  const handleCloseMfaSetup = () => {
+    setShowMfaSetup(false);
+    setMfaSetupData(null);
+    setMfaSetupToken("");
+    setMfaSetupError("");
+    setMfaRecoveryCodes(null);
+  };
+
+  const handleStartMfaDisable = () => {
+    setShowMfaDisable(true);
+    setMfaDisablePassword("");
+    setMfaDisableError("");
+  };
+
+  const handleConfirmMfaDisable = async () => {
+    setMfaDisableError("");
+    setMfaDisableLoading(true);
+    try {
+      const res = await fetch("/api/auth/mfa/disable", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: mfaDisablePassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMfaDisableError(data.error || "Failed to disable MFA");
+        return;
+      }
+      setShowMfaDisable(false);
+      // Refresh auth info
+      const infoRes = await fetch("/api/settings/auth");
+      if (infoRes.ok) setAuthInfo(await infoRes.json());
+    } catch {
+      setMfaDisableError("Network error");
+    } finally {
+      setMfaDisableLoading(false);
+    }
+  };
+
+  const handleCloseMfaDisable = () => {
+    setShowMfaDisable(false);
+    setMfaDisablePassword("");
+    setMfaDisableError("");
+  };
+
   // ─── System handlers ───
 
   const handleClearImageCache = async () => {
@@ -2260,6 +2362,16 @@ export default function SettingsPage() {
             promptForm={promptForm}
             promptError={promptError}
             promptSaving={promptSaving}
+            mfaSetupData={mfaSetupData}
+            mfaSetupToken={mfaSetupToken}
+            mfaSetupLoading={mfaSetupLoading}
+            mfaSetupError={mfaSetupError}
+            mfaRecoveryCodes={mfaRecoveryCodes}
+            mfaDisablePassword={mfaDisablePassword}
+            mfaDisableLoading={mfaDisableLoading}
+            mfaDisableError={mfaDisableError}
+            showMfaSetup={showMfaSetup}
+            showMfaDisable={showMfaDisable}
             onSetCredentialsForm={setCredentialsForm}
             onSetPromptForm={setPromptForm}
             onSetShowCredentialPrompt={setShowCredentialPrompt}
@@ -2267,6 +2379,14 @@ export default function SettingsPage() {
             onChangeCredentials={handleChangeCredentials}
             onPlexLink={handlePlexLink}
             onCreateCredentialsAndEnable={handleCreateCredentialsAndEnable}
+            onStartMfaSetup={handleStartMfaSetup}
+            onSetMfaSetupToken={setMfaSetupToken}
+            onVerifyMfaSetup={handleVerifyMfaSetup}
+            onCloseMfaSetup={handleCloseMfaSetup}
+            onStartMfaDisable={handleStartMfaDisable}
+            onSetMfaDisablePassword={setMfaDisablePassword}
+            onConfirmMfaDisable={handleConfirmMfaDisable}
+            onCloseMfaDisable={handleCloseMfaDisable}
           />
         </TabsContent>
 

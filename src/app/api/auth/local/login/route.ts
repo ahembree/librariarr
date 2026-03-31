@@ -34,6 +34,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // If MFA is enabled, don't complete login yet — put user into pending MFA state
+    if (user.totpEnabled && user.totpSecret) {
+      const session = await getSession();
+      session.destroy();
+      session.pendingMfaUserId = user.id;
+      session.isLoggedIn = false;
+      await session.save();
+
+      apiLogger.info("Auth", `Local login pending MFA: "${user.username}"`);
+
+      return NextResponse.json({
+        mfaRequired: true,
+      });
+    }
+
     // Destroy first to clear any stale data (e.g. prior plexToken from a different session)
     const session = await getSession();
     session.destroy();

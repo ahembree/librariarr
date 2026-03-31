@@ -26,6 +26,9 @@ import {
   Save,
   Lock,
   AlertCircle,
+  ShieldCheck,
+  ShieldOff,
+  KeyRound,
 } from "lucide-react";
 import type { AuthInfo } from "../types";
 
@@ -42,6 +45,12 @@ export interface PromptForm {
   confirmPassword: string;
 }
 
+export interface MfaSetupData {
+  secret: string;
+  qrCode: string;
+  uri: string;
+}
+
 export interface AuthenticationTabProps {
   authInfo: AuthInfo | null;
   authLoading: boolean;
@@ -54,6 +63,16 @@ export interface AuthenticationTabProps {
   promptForm: PromptForm;
   promptError: string;
   promptSaving: boolean;
+  mfaSetupData: MfaSetupData | null;
+  mfaSetupToken: string;
+  mfaSetupLoading: boolean;
+  mfaSetupError: string;
+  mfaRecoveryCodes: string[] | null;
+  mfaDisablePassword: string;
+  mfaDisableLoading: boolean;
+  mfaDisableError: string;
+  showMfaSetup: boolean;
+  showMfaDisable: boolean;
   onSetCredentialsForm: (updater: (prev: CredentialsForm) => CredentialsForm) => void;
   onSetPromptForm: (updater: (prev: PromptForm) => PromptForm) => void;
   onSetShowCredentialPrompt: (open: boolean) => void;
@@ -61,6 +80,14 @@ export interface AuthenticationTabProps {
   onChangeCredentials: () => void;
   onPlexLink: () => void;
   onCreateCredentialsAndEnable: () => void;
+  onStartMfaSetup: () => void;
+  onSetMfaSetupToken: (token: string) => void;
+  onVerifyMfaSetup: () => void;
+  onCloseMfaSetup: () => void;
+  onStartMfaDisable: () => void;
+  onSetMfaDisablePassword: (pw: string) => void;
+  onConfirmMfaDisable: () => void;
+  onCloseMfaDisable: () => void;
 }
 
 export function AuthenticationTab({
@@ -75,6 +102,16 @@ export function AuthenticationTab({
   promptForm,
   promptError,
   promptSaving,
+  mfaSetupData,
+  mfaSetupToken,
+  mfaSetupLoading,
+  mfaSetupError,
+  mfaRecoveryCodes,
+  mfaDisablePassword,
+  mfaDisableLoading,
+  mfaDisableError,
+  showMfaSetup,
+  showMfaDisable,
   onSetCredentialsForm,
   onSetPromptForm,
   onSetShowCredentialPrompt,
@@ -82,6 +119,14 @@ export function AuthenticationTab({
   onChangeCredentials,
   onPlexLink,
   onCreateCredentialsAndEnable,
+  onStartMfaSetup,
+  onSetMfaSetupToken,
+  onVerifyMfaSetup,
+  onCloseMfaSetup,
+  onStartMfaDisable,
+  onSetMfaDisablePassword,
+  onConfirmMfaDisable,
+  onCloseMfaDisable,
 }: AuthenticationTabProps) {
   return (
     <div className="space-y-6">
@@ -234,6 +279,193 @@ export function AuthenticationTab({
           )}
         </CardContent>
       </Card>
+
+      {/* Two-Factor Authentication */}
+      {authInfo?.hasPassword && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ShieldCheck className="h-4 w-4" />
+              Two-Factor Authentication
+            </CardTitle>
+            <CardDescription>
+              Add an extra layer of security with an authenticator app
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {authInfo.mfaEnabled ? (
+              <>
+                <div className="flex items-center gap-2 text-sm">
+                  <CheckCircle className="h-4 w-4 text-green-500" />
+                  <span>Two-factor authentication is <strong>enabled</strong></span>
+                </div>
+                {authInfo.recoveryCodesRemaining > 0 && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <KeyRound className="h-4 w-4" />
+                    <span>{authInfo.recoveryCodesRemaining} recovery code{authInfo.recoveryCodesRemaining !== 1 ? "s" : ""} remaining</span>
+                  </div>
+                )}
+                {authInfo.recoveryCodesRemaining <= 2 && authInfo.recoveryCodesRemaining > 0 && (
+                  <div className="flex items-center gap-2 rounded-md bg-yellow-500/10 p-3 text-sm text-yellow-500">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    Low recovery codes. Consider disabling and re-enabling MFA to generate new codes.
+                  </div>
+                )}
+                {authInfo.recoveryCodesRemaining === 0 && (
+                  <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    No recovery codes remaining. Disable and re-enable MFA to generate new codes.
+                  </div>
+                )}
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={onStartMfaDisable}
+                >
+                  <ShieldOff className="mr-2 h-4 w-4" />
+                  Disable MFA
+                </Button>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <XCircle className="h-4 w-4" />
+                  <span>Two-factor authentication is not enabled</span>
+                </div>
+                <Button size="sm" onClick={onStartMfaSetup}>
+                  <ShieldCheck className="mr-2 h-4 w-4" />
+                  Enable MFA
+                </Button>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* MFA Setup Dialog */}
+      <Dialog open={showMfaSetup} onOpenChange={(open) => { if (!open) onCloseMfaSetup(); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {mfaRecoveryCodes ? "Save Your Recovery Codes" : "Set Up Two-Factor Authentication"}
+            </DialogTitle>
+            <DialogDescription>
+              {mfaRecoveryCodes
+                ? "Store these codes in a safe place. Each code can only be used once."
+                : "Scan the QR code with your authenticator app, then enter the verification code."}
+            </DialogDescription>
+          </DialogHeader>
+          {mfaRecoveryCodes ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted/50 p-4 font-mono text-sm">
+                {mfaRecoveryCodes.map((code) => (
+                  <span key={code} className="text-center">{code}</span>
+                ))}
+              </div>
+              <DialogFooter>
+                <Button onClick={onCloseMfaSetup}>
+                  I&apos;ve Saved My Codes
+                </Button>
+              </DialogFooter>
+            </div>
+          ) : mfaSetupData ? (
+            <div className="space-y-4">
+              <div className="flex justify-center">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={mfaSetupData.qrCode}
+                  alt="Scan this QR code with your authenticator app"
+                  className="h-48 w-48 rounded-lg"
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground text-center">
+                  Can&apos;t scan? Enter this key manually:
+                </p>
+                <p className="text-center font-mono text-xs select-all break-all bg-muted rounded px-2 py-1">
+                  {mfaSetupData.secret}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="mfa-settings-token">Verification Code</Label>
+                <Input
+                  id="mfa-settings-token"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  placeholder="000000"
+                  value={mfaSetupToken}
+                  onChange={(e) => onSetMfaSetupToken(e.target.value.replace(/\D/g, ""))}
+                  disabled={mfaSetupLoading}
+                />
+              </div>
+              {mfaSetupError && (
+                <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  {mfaSetupError}
+                </div>
+              )}
+              <DialogFooter>
+                <Button variant="outline" onClick={onCloseMfaSetup}>Cancel</Button>
+                <Button
+                  disabled={mfaSetupLoading || mfaSetupToken.length !== 6}
+                  onClick={onVerifyMfaSetup}
+                >
+                  {mfaSetupLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}
+                  Enable MFA
+                </Button>
+              </DialogFooter>
+            </div>
+          ) : (
+            <div className="flex justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* MFA Disable Dialog */}
+      <Dialog open={showMfaDisable} onOpenChange={(open) => { if (!open) onCloseMfaDisable(); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Disable Two-Factor Authentication</DialogTitle>
+            <DialogDescription>
+              Enter your password to confirm disabling MFA. This will remove all recovery codes.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor="mfa-disable-pw">Password</Label>
+              <Input
+                id="mfa-disable-pw"
+                type="password"
+                placeholder="Enter your current password"
+                value={mfaDisablePassword}
+                onChange={(e) => onSetMfaDisablePassword(e.target.value)}
+                disabled={mfaDisableLoading}
+              />
+            </div>
+            {mfaDisableError && (
+              <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                {mfaDisableError}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={onCloseMfaDisable}>Cancel</Button>
+            <Button
+              variant="destructive"
+              disabled={mfaDisableLoading || !mfaDisablePassword}
+              onClick={onConfirmMfaDisable}
+            >
+              {mfaDisableLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldOff className="mr-2 h-4 w-4" />}
+              Disable MFA
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Create Credentials Dialog -- shown when enabling local auth without existing credentials */}
       <Dialog open={showCredentialPrompt} onOpenChange={(open) => { if (!open) onSetShowCredentialPrompt(false); }}>

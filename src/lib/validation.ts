@@ -185,6 +185,25 @@ export const authSettingsSchema = z.object({
   localAuthEnabled: z.boolean(),
 });
 
+// ─── MFA schemas ───
+
+export const mfaVerifySetupSchema = z.object({
+  token: z.string().length(6, "Code must be 6 digits").regex(/^\d{6}$/, "Code must be 6 digits"),
+  secret: z.string().min(1, "Secret is required"),
+});
+
+export const mfaVerifySchema = z.object({
+  token: z.string().length(6, "Code must be 6 digits").regex(/^\d{6}$/, "Code must be 6 digits"),
+});
+
+export const mfaDisableSchema = z.object({
+  password: z.string().min(1, "Password is required"),
+});
+
+export const mfaRecoverySchema = z.object({
+  code: z.string().min(1, "Recovery code is required"),
+});
+
 export const runJobSchema = z.object({
   job: z.enum(["sync", "detection", "execution"]),
 });
