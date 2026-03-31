@@ -108,6 +108,10 @@ export default defineConfig({
           label: "Advanced",
           items: [
             { label: "Development", slug: "docs/advanced/development" },
+            {
+              label: "Security Hardening",
+              slug: "docs/advanced/security-hardening",
+            },
           ],
         },
         {

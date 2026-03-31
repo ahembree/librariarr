@@ -23,17 +23,6 @@ services:
       - ./components.json:/app/components.json
       - ./prisma.config.ts:/app/prisma.config.ts
       - librariarr-dev-config:/config
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - SETUID
-      - SETGID
-      - FOWNER
-    tmpfs:
-      - /tmp:noexec,nosuid
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
       interval: 30s
@@ -57,18 +46,6 @@ services:
       - librariarr-dev-db:/var/lib/postgresql/data
     ports:
       - "5432:5432"
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - DAC_OVERRIDE
-      - FOWNER
-      - SETUID
-      - SETGID
-    tmpfs:
-      - /tmp:noexec,nosuid
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U librariarr"]
       interval: 5s

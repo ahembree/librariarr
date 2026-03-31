@@ -1,0 +1,122 @@
+---
+title: Security Hardening
+description: Optional Docker Compose security settings for hardened deployments.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+The default Compose templates work out of the box without any special security configuration. For users who want additional container-level hardening, the template below adds capability restrictions, privilege escalation prevention, and a `noexec` tmpfs mount.
+
+<Aside>
+  These settings are entirely optional. Librariarr works correctly without them. They reduce the container's attack surface but are not required for normal operation.
+</Aside>
+
+## What the settings do
+
+| Setting | Effect |
+|---------|--------|
+| `security_opt: no-new-privileges:true` | Prevents processes inside the container from gaining additional privileges (e.g., via `setuid` binaries) |
+| `cap_drop: ALL` | Drops all Linux capabilities by default |
+| `cap_add: [...]` | Re-adds only the capabilities each service actually needs |
+| `tmpfs: /tmp:noexec,nosuid` | Mounts `/tmp` as a tmpfs with execution and SUID disabled |
+
+## Hardened Compose template
+
+```yaml title="docker-compose.yml"
+services:
+  librariarr:
+    image: ahembree/librariarr:latest
+    container_name: librariarr
+    ports:
+      - "${LIBRARIARR_PORT:-3000}:3000"
+    environment:
+      - DATABASE_URL=postgresql://librariarr:${DB_PASSWORD}@librariarr-db:5432/librariarr
+      - SESSION_SECRET=${SESSION_SECRET:-}
+      - TZ=${TZ:-UTC}
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+    volumes:
+      - ./config:/config
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - FOWNER
+    tmpfs:
+      - /tmp:noexec,nosuid
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    depends_on:
+      librariarr-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  librariarr-db:
+    image: postgres:18-alpine
+    container_name: librariarr-db
+    environment:
+      POSTGRES_USER: librariarr
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: librariarr
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - librariarr-db:/var/lib/postgresql/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+    tmpfs:
+      - /tmp:noexec,nosuid
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U librariarr"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  librariarr-db:
+```
+
+## Applying to an external database setup
+
+If you use an existing PostgreSQL server, add the security settings to only the `librariarr` service:
+
+```yaml
+services:
+  librariarr:
+    image: ahembree/librariarr:latest
+    container_name: librariarr
+    # ... your existing config ...
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - FOWNER
+    tmpfs:
+      - /tmp:noexec,nosuid
+```
+
+## Required capabilities
+
+**Librariarr container** — `CHOWN`, `SETUID`, `SETGID`, `FOWNER`: needed to set up file ownership for the `PUID`/`PGID` user mapping and write to the `/config` volume.
+
+**PostgreSQL container** — `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID`, `SETGID`: needed by the PostgreSQL entrypoint to initialize the data directory and switch to the `postgres` user.
