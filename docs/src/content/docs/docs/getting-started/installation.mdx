@@ -39,17 +39,6 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
          - PGID=${PGID:-1000}
        volumes:
          - ./config:/config
-       security_opt:
-         - no-new-privileges:true
-       cap_drop:
-         - ALL
-       cap_add:
-         - CHOWN
-         - SETUID
-         - SETGID
-         - FOWNER
-       tmpfs:
-         - /tmp:noexec,nosuid
        healthcheck:
          test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
          interval: 30s
@@ -71,18 +60,6 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
          PGDATA: /var/lib/postgresql/data/pgdata
        volumes:
          - librariarr-db:/var/lib/postgresql/data
-       security_opt:
-         - no-new-privileges:true
-       cap_drop:
-         - ALL
-       cap_add:
-         - CHOWN
-         - DAC_OVERRIDE
-         - FOWNER
-         - SETUID
-         - SETGID
-       tmpfs:
-         - /tmp:noexec,nosuid
        healthcheck:
          test: ["CMD-SHELL", "pg_isready -U librariarr"]
          interval: 5s
@@ -193,17 +170,6 @@ If you already have a PostgreSQL server (e.g., a shared instance on your network
          - PGID=${PGID:-1000}
        volumes:
          - ./config:/config
-       security_opt:
-         - no-new-privileges:true
-       cap_drop:
-         - ALL
-       cap_add:
-         - CHOWN
-         - SETUID
-         - SETGID
-         - FOWNER
-       tmpfs:
-         - /tmp:noexec,nosuid
        healthcheck:
          test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
          interval: 30s
@@ -270,17 +236,6 @@ services:
     networks:
       - default
       - media
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - SETUID
-      - SETGID
-      - FOWNER
-    tmpfs:
-      - /tmp:noexec,nosuid
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
       interval: 30s
@@ -302,18 +257,6 @@ services:
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - librariarr-db:/var/lib/postgresql/data
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - DAC_OVERRIDE
-      - FOWNER
-      - SETUID
-      - SETGID
-    tmpfs:
-      - /tmp:noexec,nosuid
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U librariarr"]
       interval: 5s
@@ -381,3 +324,4 @@ Database updates run automatically on startup — no manual steps needed.
 
 - [Configure your instance](/docs/getting-started/configuration/) — authentication, schedules, and general settings
 - [Connect a server](/docs/getting-started/connecting-a-server/) — add your Plex, Jellyfin, or Emby server
+- [Security hardening](/docs/advanced/security-hardening/) — optional Docker security settings for hardened deployments
