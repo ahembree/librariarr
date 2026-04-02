@@ -83,7 +83,7 @@ Over 50 fields are available for rule conditions.
 
 | Field | Description |
 |-------|-------------|
-| `fileSize` | File size (in GB) |
+| `fileSize` | File size (in MB) |
 | `container` | File container (MKV, MP4, etc.) |
 | `subtitleLanguage` | Subtitle track language |
 | `subtitleStreamCount` | Number of subtitle tracks |
@@ -176,17 +176,19 @@ Actions determine what happens to matched media. Configure them in the **Actions
 |--------|-------------|----------|
 | **Delete** | Remove from *arr and optionally delete files | Sonarr/Radarr/Lidarr |
 | **Unmonitor** | Stop monitoring for upgrades in *arr | Sonarr/Radarr/Lidarr |
-| **Tag** | Add a custom tag in *arr | Sonarr/Radarr/Lidarr |
 | **Do Nothing** | Track matches without taking action | — |
+
+Tags can be added or removed as a supplementary operation alongside any action (including Do Nothing).
 
 ### Configuring Actions
 
 Each action links a rule set to an *arr instance:
 
 1. Select the *arr integration (e.g., "My Radarr")
-2. Choose the action type (delete, unmonitor, tag)
-3. Set action-specific options (e.g., tag name, delete files toggle)
-4. Set priority — actions execute top-to-bottom
+2. Choose the action type (delete, unmonitor, do nothing)
+3. Set action-specific options (e.g., delete files toggle)
+4. Optionally configure tags to add or remove
+5. Set priority — actions execute top-to-bottom
 
 <Aside type="caution">
   The **Delete** action permanently removes files from your *arr instance and, optionally, from disk. Preview your matches carefully before enabling deletion rules.
@@ -217,5 +219,5 @@ Both can be run manually via the **Run Now** button at any time.
 
 - *arr actions require the corresponding integration to be configured and reachable
 - Rules using integration data are slower and scale with the number of matches
-- File size rules accept input in GB but are stored and compared in bytes
+- File size rules accept input in MB but are stored and compared in bytes
 - Wildcard matching uses `*` (any characters) and `?` (single character), not regex

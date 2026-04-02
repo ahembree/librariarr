@@ -101,8 +101,8 @@ These settings only appear when you have more than one server connected.
 ### Log Retention
 
 - Configurable from 1 to 365 days (default: 7)
-- Logs older than the retention period are automatically deleted
-- Hard limit of 50,000 entries regardless of retention setting
+- Logs older than today are automatically archived to compressed files and removed from the database
+- Archive files older than the retention period are automatically pruned
 
 ## Backup Settings
 

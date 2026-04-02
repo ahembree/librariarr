@@ -44,16 +44,22 @@ Filter logs by:
 - **Source** — filter by specific component
 - **Search** — free text search across log messages
 
-## Retention
+## Retention & Archival
 
 Configure log retention in **Settings → General → Log Retention**:
 
 - **Range**: 1 to 365 days (default: 7)
-- Logs older than the configured period are automatically deleted
-- **Hard limit**: 50,000 maximum entries regardless of retention days
+- Logs older than today are automatically **archived** to compressed `.tar.gz` files and removed from the database
+- Archive files older than the retention period are automatically pruned
+
+### Archives
+
+Archived logs are stored in `/config/logs` (configurable via the `LOG_ARCHIVE_DIR` environment variable). Each archive contains a single day's logs in JSON format.
+
+You can browse and download archived logs via the **System Logs** page or the `/api/system/logs/archives` API endpoint.
 
 <Aside>
-  Debug logs can be very verbose. Enable `LOG_DEBUG=true` only when troubleshooting specific issues, and consider lowering retention during extended debug sessions to prevent the 50,000 entry limit from hiding newer logs.
+  Debug logs can be very verbose. Enable `LOG_DEBUG=true` only when troubleshooting specific issues, and consider lowering retention during extended debug sessions.
 </Aside>
 
 ## Output

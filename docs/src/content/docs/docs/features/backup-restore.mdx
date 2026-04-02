@@ -11,12 +11,16 @@ Librariarr includes a full backup and restore system that can run on a schedule 
 
 ### Config-Only (Default)
 
-Backs up your configuration, servers, rules, integrations, and settings. Excludes large tables that are repopulated by syncing:
+Backs up your configuration, servers, rules, integrations, and settings. Excludes tables that are repopulated by syncing or lifecycle processing:
 
 - Media items
 - External IDs
 - Media streams
 - Sync jobs
+- Rule matches
+- Lifecycle actions
+- Lifecycle exceptions
+- Watch history
 - Log entries
 
 **Use case**: Routine backups. After restoring, run a full sync to repopulate media data.

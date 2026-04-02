@@ -225,7 +225,7 @@ When users connect multiple servers, dedup prevents duplicate items from appeari
 
 - Rules are recursive `RuleGroup` structures with AND/OR operators, stored as JSON in `RuleSet`
 - Two-phase evaluation: Phase 1 converts rules to Prisma WHERE clauses, Phase 2 post-filters in memory for Arr/Seerr metadata, stream aggregation, and wildcard pattern matching
-- File size rules: user inputs in GB, engine converts to bytes for DB queries
+- File size rules: user inputs in MB, engine converts to bytes for DB queries
 
 ### Lifecycle Processing Workflow
 
@@ -269,7 +269,7 @@ The lifecycle system operates in three phases, orchestrated by `src/lib/lifecycl
 ### Backup & Restore
 
 - `createBackup(passphrase?, configOnly=true)` exports tables in FK dependency order, gzips, optionally encrypts with AES-256-GCM
-- Config-only (default): skips `mediaItem`, `mediaItemExternalId`, `mediaStream`, `syncJob`, `logEntry` — these are repopulated by a full sync
+- Config-only (default): skips `mediaItem`, `mediaItemExternalId`, `mediaStream`, `syncJob`, `ruleMatch`, `lifecycleAction`, `lifecycleException`, `watchHistory`, `logEntry` — these are repopulated by sync and lifecycle processing
 - Full backup: includes all tables when `configOnly=false` (UI checkbox: "Include media data")
 - Encrypted backups use `.json.gz.enc` extension; unencrypted use `.json.gz`
 - `restoreBackup(filename, passphrase?, onProgress?)` truncates all tables in reverse FK order, then re-inserts in batches of 100; streams progress via NDJSON
@@ -282,7 +282,7 @@ The lifecycle system operates in three phases, orchestrated by `src/lib/lifecycl
 ### Scheduler
 
 - Initialized in `src/instrumentation.ts` (guarded by `NEXT_RUNTIME === "nodejs"` — skipped during Edge/build)
-- Checks every 15 minutes for scheduled syncs and lifecycle rule processing
+- Checks every minute for scheduled syncs and lifecycle rule processing
 - Also starts the maintenance enforcer (30s polling loop) in the same `instrumentation.ts`
 
 ### Documentation Site
@@ -307,7 +307,36 @@ pnpm docs:preview  # Preview built docs
 - `docs/src/content.config.ts` — Astro 5 content collection config
 - `.github/workflows/docs-deploy.yml` — GitHub Actions workflow (triggers on `docs/**` changes)
 
-When adding features, update the relevant documentation in `docs/src/content/docs/docs/`.
+### Documentation Maintenance
+
+When adding features or changing behavior, **always update the corresponding documentation** in `docs/src/content/docs/docs/` within the same PR. Documentation and code must stay in sync. Specifically:
+
+- **New features**: Add or update the relevant page under `docs/src/content/docs/docs/features/` or `docs/src/content/docs/docs/integrations/`
+- **Changed defaults, env vars, or config options**: Update `docs/src/content/docs/docs/getting-started/configuration.mdx` and `docs/src/content/docs/docs/getting-started/installation.mdx`
+- **API changes**: Update any docs that reference the affected endpoints or behavior
+- **Schema changes**: If Prisma models change in ways that affect user-facing behavior (new fields, changed defaults, removed tables), update the relevant feature docs
+- **Scheduler/timing changes**: Update both this file (CLAUDE.md) and any feature docs that reference polling intervals, cron schedules, or processing frequency
+- **Rule engine changes**: Update `docs/src/content/docs/docs/features/lifecycle-rules.mdx` — field lists, operators, action types, and units must match the code
+- **CLAUDE.md itself**: When implementation details described in this file change (architecture, conventions, defaults, file paths), update this file too
+
+Documentation files to be aware of:
+
+| Area | Documentation file |
+|------|--------------------|
+| Installation & env vars | `getting-started/installation.mdx`, `getting-started/configuration.mdx` |
+| Server setup | `getting-started/connecting-a-server.mdx` |
+| Library browsing & filters | `features/library.mdx` |
+| Lifecycle rules & actions | `features/lifecycle-rules.mdx` |
+| Backup & restore | `features/backup-restore.mdx` |
+| Notifications | `features/notifications.mdx` |
+| Stream manager & maintenance | `features/stream-manager.mdx` |
+| Preroll manager | `features/preroll-manager.mdx` |
+| System logs | `features/system-logs.mdx` |
+| Integrations | `integrations/plex.mdx`, `integrations/jellyfin-emby.mdx`, `integrations/sonarr.mdx`, `integrations/radarr.mdx`, `integrations/lidarr.mdx`, `integrations/seerr.mdx` |
+| Unraid | `getting-started/unraid.mdx` |
+| Style guide | `development/style-guide.mdx` |
+| Security | `advanced/security-hardening.mdx` |
+| Development | `advanced/development.mdx` |
 
 ### CI/CD
 
