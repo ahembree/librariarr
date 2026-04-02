@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.3](https://github.com/ahembree/librariarr/compare/v0.11.2...v0.11.3) (2026-04-02)
+
+
+### Performance Improvements
+
+* add missing indexes to MediaItem for frequently-filtered fields ([2719c59](https://github.com/ahembree/librariarr/commit/2719c590bafbde0f934ac345c5bb91501f3ac845))
+* add missing indexes to MediaItem schema ([f1cc41f](https://github.com/ahembree/librariarr/commit/f1cc41ffbc4a9921a290f2e4acf86b7881122b24))
+
 ## [0.11.2](https://github.com/ahembree/librariarr/compare/v0.11.1...v0.11.2) (2026-04-02)
 
 
