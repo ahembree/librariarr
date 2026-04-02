@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
+import { appCache } from "@/lib/cache/memory-cache";
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -32,37 +33,46 @@ export async function GET(request: NextRequest) {
     serverIds = [serverId];
   }
 
+  const emptyStats = {
+    movieCount: 0,
+    seriesCount: 0,
+    seasonCount: 0,
+    musicCount: 0,
+    artistCount: 0,
+    albumCount: 0,
+    episodeCount: 0,
+    totalSize: "0",
+    movieSize: "0",
+    seriesSize: "0",
+    musicSize: "0",
+    movieDuration: 0,
+    seriesDuration: 0,
+    musicDuration: 0,
+    qualityBreakdown: [],
+    topMovies: [],
+    topSeries: [],
+    topMusic: [],
+    videoCodecBreakdown: [],
+    audioCodecBreakdown: [],
+    contentRatingBreakdown: [],
+    dynamicRangeBreakdown: [],
+    audioChannelsBreakdown: [],
+    genreBreakdown: [],
+  };
+
   if (serverIds.length === 0) {
-    return NextResponse.json({
-      movieCount: 0,
-      seriesCount: 0,
-      seasonCount: 0,
-      musicCount: 0,
-      artistCount: 0,
-      albumCount: 0,
-      episodeCount: 0,
-      totalSize: "0",
-      movieSize: "0",
-      seriesSize: "0",
-      musicSize: "0",
-      movieDuration: 0,
-      seriesDuration: 0,
-      musicDuration: 0,
-      qualityBreakdown: [],
-      topMovies: [],
-      topSeries: [],
-      topMusic: [],
-      videoCodecBreakdown: [],
-      audioCodecBreakdown: [],
-      contentRatingBreakdown: [],
-      dynamicRangeBreakdown: [],
-      audioChannelsBreakdown: [],
-      genreBreakdown: [],
-    });
+    return NextResponse.json(emptyStats);
   }
 
+  const cacheKey = `stats:${session.userId}:${serverId ?? "all"}`;
+  const result = await appCache.getOrSet(cacheKey, () => computeStats(serverIds, dedupEnabled), 60_000);
+  return NextResponse.json(result);
+}
+
+async function computeStats(serverIds: string[], dedupEnabled: boolean) {
   const serverFilter = { library: { mediaServerId: { in: serverIds } } };
 
+  // Run all independent queries in a single parallel batch
   const [
     movieCount,
     episodeCount,
@@ -77,6 +87,9 @@ export async function GET(request: NextRequest) {
     contentRatingBreakdown,
     dynamicRangeBreakdown,
     audioChannelsBreakdown,
+    genreBreakdown,
+    groupedCounts,
+    ...dedupResults
   ] = await Promise.all([
     prisma.mediaItem.count({
       where: { ...serverFilter, type: "MOVIE" },
@@ -159,98 +172,105 @@ export async function GET(request: NextRequest) {
       where: serverFilter,
       _count: true,
     }),
+    // Genre breakdown — previously sequential, now parallel
+    prisma.$queryRaw<
+      { value: string; type: string; _count: number }[]
+    >`
+      SELECT g.genre AS "value", mi.type::text AS "type",
+        COUNT(DISTINCT COALESCE(mi."parentTitle", mi.id))::int AS "_count"
+      FROM "MediaItem" mi
+      JOIN "Library" l ON mi."libraryId" = l.id
+      CROSS JOIN LATERAL jsonb_array_elements_text(mi.genres) AS g(genre)
+      WHERE l."mediaServerId" IN (${Prisma.join(serverIds)})
+        AND mi.genres IS NOT NULL AND jsonb_typeof(mi.genres) = 'array'
+      GROUP BY g.genre, mi.type
+      ORDER BY "_count" DESC
+    `,
+    // Grouped counts — previously sequential, now parallel
+    prisma.$queryRaw<
+      [{
+        seriesCount: number; seasonCount: number; artistCount: number; albumCount: number;
+        movieSize: bigint; seriesSize: bigint; musicSize: bigint;
+        movieDuration: bigint; seriesDuration: bigint; musicDuration: bigint;
+      }]
+    >`
+      SELECT
+        COUNT(DISTINCT CASE WHEN mi.type = 'SERIES'
+          THEN COALESCE(mi."grandparentRatingKey", mi."parentTitle") END)::int AS "seriesCount",
+        COUNT(DISTINCT CASE WHEN mi.type = 'SERIES' AND mi."seasonNumber" IS NOT NULL
+          THEN COALESCE(mi."parentRatingKey", mi."parentTitle" || ':' || mi."seasonNumber") END)::int AS "seasonCount",
+        COUNT(DISTINCT CASE WHEN mi.type = 'MUSIC'
+          THEN COALESCE(mi."grandparentRatingKey", mi."parentTitle") END)::int AS "artistCount",
+        COUNT(DISTINCT CASE WHEN mi.type = 'MUSIC'
+          THEN COALESCE(mi."parentRatingKey", mi."parentTitle" || ':' || mi."albumTitle") END)::int AS "albumCount",
+        COALESCE(SUM(CASE WHEN mi.type = 'MOVIE' THEN mi."fileSize" END), 0) AS "movieSize",
+        COALESCE(SUM(CASE WHEN mi.type = 'SERIES' THEN mi."fileSize" END), 0) AS "seriesSize",
+        COALESCE(SUM(CASE WHEN mi.type = 'MUSIC' THEN mi."fileSize" END), 0) AS "musicSize",
+        COALESCE(SUM(CASE WHEN mi.type = 'MOVIE' THEN mi.duration END), 0)::bigint AS "movieDuration",
+        COALESCE(SUM(CASE WHEN mi.type = 'SERIES' THEN mi.duration END), 0)::bigint AS "seriesDuration",
+        COALESCE(SUM(CASE WHEN mi.type = 'MUSIC' THEN mi.duration END), 0)::bigint AS "musicDuration"
+      FROM "MediaItem" mi
+      JOIN "Library" l ON mi."libraryId" = l.id
+      WHERE l."mediaServerId" IN (${Prisma.join(serverIds)})
+        ${dedupEnabled ? Prisma.sql`AND mi."dedupCanonical" = true` : Prisma.empty}
+    `,
+    // Dedup queries — conditionally included in the same parallel batch
+    ...(dedupEnabled ? [
+      prisma.mediaItem.count({ where: { ...serverFilter, dedupCanonical: true, type: "MOVIE" } }),
+      prisma.mediaItem.count({ where: { ...serverFilter, dedupCanonical: true, type: "SERIES" } }),
+      prisma.mediaItem.count({ where: { ...serverFilter, dedupCanonical: true, type: "MUSIC" } }),
+      prisma.mediaItem.aggregate({
+        where: { ...serverFilter, dedupCanonical: true },
+        _sum: { fileSize: true },
+      }),
+    ] : []),
   ]);
 
-  // Genre breakdown using raw SQL to unnest JSON array
-  // For SERIES: count distinct series (by parentTitle) not individual episodes
-  // For MOVIE/MUSIC: parentTitle is NULL, so COALESCE falls back to id (counts each item)
-  const genreBreakdown = await prisma.$queryRaw<
-    { value: string; type: string; _count: number }[]
-  >`
-    SELECT g.genre AS "value", mi.type::text AS "type",
-      COUNT(DISTINCT COALESCE(mi."parentTitle", mi.id))::int AS "_count"
-    FROM "MediaItem" mi
-    JOIN "Library" l ON mi."libraryId" = l.id
-    CROSS JOIN LATERAL jsonb_array_elements_text(mi.genres) AS g(genre)
-    WHERE l."mediaServerId" IN (${Prisma.join(serverIds)})
-      AND mi.genres IS NOT NULL AND jsonb_typeof(mi.genres) = 'array'
-    GROUP BY g.genre, mi.type
-    ORDER BY "_count" DESC
-  `;
-
-  // Grouped counts + per-type size/duration using COALESCE with server-scoped IDs
-  // for accuracy, falling back to title-based grouping when IDs are null.
-  // A single raw query computes all grouped stats, with optional dedupCanonical filter.
-  const groupedCounts = await prisma.$queryRaw<
-    [{
-      seriesCount: number; seasonCount: number; artistCount: number; albumCount: number;
-      movieSize: bigint; seriesSize: bigint; musicSize: bigint;
-      movieDuration: bigint; seriesDuration: bigint; musicDuration: bigint;
-    }]
-  >`
-    SELECT
-      COUNT(DISTINCT CASE WHEN mi.type = 'SERIES'
-        THEN COALESCE(mi."grandparentRatingKey", mi."parentTitle") END)::int AS "seriesCount",
-      COUNT(DISTINCT CASE WHEN mi.type = 'SERIES' AND mi."seasonNumber" IS NOT NULL
-        THEN COALESCE(mi."parentRatingKey", mi."parentTitle" || ':' || mi."seasonNumber") END)::int AS "seasonCount",
-      COUNT(DISTINCT CASE WHEN mi.type = 'MUSIC'
-        THEN COALESCE(mi."grandparentRatingKey", mi."parentTitle") END)::int AS "artistCount",
-      COUNT(DISTINCT CASE WHEN mi.type = 'MUSIC'
-        THEN COALESCE(mi."parentRatingKey", mi."parentTitle" || ':' || mi."albumTitle") END)::int AS "albumCount",
-      COALESCE(SUM(CASE WHEN mi.type = 'MOVIE' THEN mi."fileSize" END), 0) AS "movieSize",
-      COALESCE(SUM(CASE WHEN mi.type = 'SERIES' THEN mi."fileSize" END), 0) AS "seriesSize",
-      COALESCE(SUM(CASE WHEN mi.type = 'MUSIC' THEN mi."fileSize" END), 0) AS "musicSize",
-      COALESCE(SUM(CASE WHEN mi.type = 'MOVIE' THEN mi.duration END), 0)::bigint AS "movieDuration",
-      COALESCE(SUM(CASE WHEN mi.type = 'SERIES' THEN mi.duration END), 0)::bigint AS "seriesDuration",
-      COALESCE(SUM(CASE WHEN mi.type = 'MUSIC' THEN mi.duration END), 0)::bigint AS "musicDuration"
-    FROM "MediaItem" mi
-    JOIN "Library" l ON mi."libraryId" = l.id
-    WHERE l."mediaServerId" IN (${Prisma.join(serverIds)})
-      ${dedupEnabled ? Prisma.sql`AND mi."dedupCanonical" = true` : Prisma.empty}
-  `;
   const {
     seriesCount, seasonCount, artistCount, albumCount,
     movieSize, seriesSize, musicSize,
     movieDuration, seriesDuration, musicDuration,
   } = groupedCounts[0];
 
-  // Cross-server dedup counts using pre-computed dedupCanonical flags
+  // Extract dedup results if present
   let dedupMovieCount = movieCount;
   let dedupEpisodeCount = episodeCount;
   let dedupMusicCount = musicCount;
   let dedupTotalSize: bigint | null = null;
 
-  if (dedupEnabled) {
-    const dedupFilter = { ...serverFilter, dedupCanonical: true };
-    const [movieDedup, episodeDedup, musicDedup, sizeDedup] = await Promise.all([
-      prisma.mediaItem.count({ where: { ...dedupFilter, type: "MOVIE" } }),
-      prisma.mediaItem.count({ where: { ...dedupFilter, type: "SERIES" } }),
-      prisma.mediaItem.count({ where: { ...dedupFilter, type: "MUSIC" } }),
-      prisma.mediaItem.aggregate({
-        where: dedupFilter,
-        _sum: { fileSize: true },
-      }),
-    ]);
-
-    dedupMovieCount = movieDedup;
-    dedupEpisodeCount = episodeDedup;
-    dedupMusicCount = musicDedup;
-    dedupTotalSize = sizeDedup._sum.fileSize;
+  if (dedupEnabled && dedupResults.length === 4) {
+    dedupMovieCount = dedupResults[0] as number;
+    dedupEpisodeCount = dedupResults[1] as number;
+    dedupMusicCount = dedupResults[2] as number;
+    dedupTotalSize = (dedupResults[3] as { _sum: { fileSize: bigint | null } })._sum.fileSize;
   }
 
-  // Batch fetch thumb URLs for all top series in a single query (avoids N+1)
+  // Batch fetch thumb URLs for top series and music in parallel
   const topSeriesTitles = topSeriesAgg
     .map((s) => s.parentTitle)
     .filter((t): t is string => t != null);
+  const topMusicArtists = topMusicAgg
+    .map((s) => s.parentTitle)
+    .filter((t): t is string => t != null);
 
-  const seriesThumbs = topSeriesTitles.length > 0
-    ? await prisma.mediaItem.findMany({
-        where: { ...serverFilter, type: "SERIES", parentTitle: { in: topSeriesTitles } },
-        select: { id: true, parentTitle: true, parentThumbUrl: true, playCount: true },
-        orderBy: { playCount: "desc" },
-        distinct: ["parentTitle"],
-      })
-    : [];
+  const [seriesThumbs, musicDetails] = await Promise.all([
+    topSeriesTitles.length > 0
+      ? prisma.mediaItem.findMany({
+          where: { ...serverFilter, type: "SERIES", parentTitle: { in: topSeriesTitles } },
+          select: { id: true, parentTitle: true, parentThumbUrl: true, playCount: true },
+          orderBy: { playCount: "desc" },
+          distinct: ["parentTitle"],
+        })
+      : [],
+    topMusicArtists.length > 0
+      ? prisma.mediaItem.findMany({
+          where: { ...serverFilter, type: "MUSIC", parentTitle: { in: topMusicArtists } },
+          select: { id: true, parentTitle: true, parentThumbUrl: true, playCount: true },
+          orderBy: { playCount: "desc" },
+          distinct: ["parentTitle"],
+        })
+      : [],
+  ]);
 
   const thumbMap = new Map(
     seriesThumbs.map((s) => [s.parentTitle, s.parentThumbUrl])
@@ -266,20 +286,6 @@ export async function GET(request: NextRequest) {
     mediaItemId: seriesIdMap.get(s.parentTitle!) ?? null,
   }));
 
-  // Batch fetch thumb URLs for all top music artists (same pattern as series)
-  const topMusicArtists = topMusicAgg
-    .map((s) => s.parentTitle)
-    .filter((t): t is string => t != null);
-
-  const musicDetails = topMusicArtists.length > 0
-    ? await prisma.mediaItem.findMany({
-        where: { ...serverFilter, type: "MUSIC", parentTitle: { in: topMusicArtists } },
-        select: { id: true, parentTitle: true, parentThumbUrl: true, playCount: true },
-        orderBy: { playCount: "desc" },
-        distinct: ["parentTitle"],
-      })
-    : [];
-
   const musicDetailMap = new Map(
     musicDetails.map((s) => [s.parentTitle, { thumbUrl: s.parentThumbUrl, id: s.id }])
   );
@@ -291,7 +297,7 @@ export async function GET(request: NextRequest) {
     thumbUrl: musicDetailMap.get(s.parentTitle!)?.thumbUrl ?? null,
   }));
 
-  return NextResponse.json({
+  return {
     movieCount: dedupEnabled ? dedupMovieCount : movieCount,
     seriesCount,
     seasonCount,
@@ -316,5 +322,5 @@ export async function GET(request: NextRequest) {
     dynamicRangeBreakdown,
     audioChannelsBreakdown,
     genreBreakdown,
-  });
+  };
 }

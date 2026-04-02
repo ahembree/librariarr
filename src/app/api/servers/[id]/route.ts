@@ -88,6 +88,7 @@ export async function PUT(
   if (enabled !== undefined) {
     appCache.invalidatePrefix("server-filter:");
     appCache.invalidate("distinct-values");
+    appCache.invalidatePrefix("stats:");
   }
 
   return NextResponse.json({ server: sanitize(updated) });
