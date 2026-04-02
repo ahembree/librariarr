@@ -288,8 +288,17 @@ model MediaItem {
   @@index([parentTitle])
   @@index([albumTitle])
   @@index([contentRating])
+  @@index([contentRating, type])
   @@index([studio])
+  @@index([studio, type])
   @@index([addedAt])
+  @@index([videoCodec, type])
+  @@index([audioCodec, type])
+  @@index([dynamicRange, type])
+  @@index([container, type])
+  @@index([originallyAvailableAt])
+  @@index([year, type])
+  @@index([isWatchlisted, type])
 }
 
 model MediaItemExternalId {
