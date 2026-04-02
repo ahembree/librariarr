@@ -168,6 +168,7 @@ function saveVisibleColumns(cols: Set<string>) {
 }
 
 const GAP = 16;
+const CARD_CONTENT_HEIGHT = 88; // Fixed content area below poster (matches h-[5.5rem] in MediaCard)
 const CACHE_KEY = "query-page-state";
 
 // ── Component ───────────────────────────────────────────────────
@@ -792,7 +793,7 @@ export default function QueryPage() {
     const containerWidth = container.offsetWidth;
     const columnWidth = (containerWidth - GAP * (cardColumns - 1)) / cardColumns;
     const posterHeight = columnWidth * 1.5;
-    return Math.round(posterHeight + 80 + GAP);
+    return Math.round(posterHeight + CARD_CONTENT_HEIGHT + GAP);
   }, [cardColumns]);
 
   const gridVirtualizer = useVirtualizer({

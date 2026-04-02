@@ -93,41 +93,45 @@ export const MediaCard = memo(function MediaCard({
         )}
       </div>
 
-      {/* Title */}
-      <CardHeader className="px-3 pt-2 pb-0">
-        <CardTitle
-          className="text-sm leading-tight line-clamp-2"
-          title={title}
-        >
-          {title}
-        </CardTitle>
-      </CardHeader>
+      {/* Content below poster — fixed height for virtualizer stability.
+           All cards render this section at the same height regardless of
+           title length, metadata count, or badge count, preventing layout
+           shifts during virtualized scroll restoration. */}
+      <div className="h-[5.5rem] overflow-hidden">
+        {/* Title — min-h reserves 2 lines even for short titles */}
+        <CardHeader className="px-3 pt-2 pb-0">
+          <CardTitle
+            className="text-sm leading-tight line-clamp-2 min-h-[2lh]"
+            title={title}
+          >
+            {title}
+          </CardTitle>
+        </CardHeader>
 
-      {/* Metadata */}
-      {metadata && (
-        <CardDescription className="px-3 pt-1 text-xs">
+        {/* Metadata — always rendered for consistent height */}
+        <CardDescription className="px-3 pt-1 text-xs h-4 overflow-hidden">
           {metadata}
         </CardDescription>
-      )}
 
-      {/* Footer: badges + server chips + info button */}
-      <CardFooter className="px-3 pt-2 pb-3 flex flex-wrap gap-1 items-center">
-        {badges}
-        {servers && servers.length > 0 && <ServerChips servers={servers} />}
-        {onInfo && (
-          <button
-            className="ml-auto rounded-md border border-border bg-muted/50 p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
-            title="Summary"
-            aria-label={`View summary for ${title}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onInfo();
-            }}
-          >
-            <Info className="h-4 w-4" />
-          </button>
-        )}
-      </CardFooter>
+        {/* Footer: badges + server chips + info button */}
+        <CardFooter className="px-3 pt-1 pb-2 gap-1 items-center overflow-hidden">
+          {badges}
+          {servers && servers.length > 0 && <ServerChips servers={servers} />}
+          {onInfo && (
+            <button
+              className="ml-auto rounded-md border border-border bg-muted/50 p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+              title="Summary"
+              aria-label={`View summary for ${title}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onInfo();
+              }}
+            >
+              <Info className="h-4 w-4" />
+            </button>
+          )}
+        </CardFooter>
+      </div>
     </Card>
   );
 });

@@ -28,6 +28,7 @@ import { useFilterPersistence } from "@/hooks/use-filter-persistence";
 import { useRealtime } from "@/hooks/use-realtime";
 
 const GAP = 16;
+const CARD_CONTENT_HEIGHT = 88; // Fixed content area below poster (matches h-[5.5rem] in MediaCard)
 
 interface GroupedArtist {
   parentTitle: string;
@@ -141,7 +142,7 @@ export default function MusicPage() {
       if (!main) return -1;
       const containerWidth = gridContainerRef.current.offsetWidth;
       const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.0 + 80 + GAP);
+      const rowHeight = Math.round(columnWidth * 1.0 + CARD_CONTENT_HEIGHT + GAP);
       if (rowHeight <= 0) return -1;
       const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
       const centerInGrid = main.scrollTop + main.clientHeight / 2 - gridTop;
@@ -154,7 +155,7 @@ export default function MusicPage() {
       const row = Math.floor(index / actualColumns);
       const containerWidth = gridContainerRef.current.offsetWidth;
       const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.0 + 80 + GAP);
+      const rowHeight = Math.round(columnWidth * 1.0 + CARD_CONTENT_HEIGHT + GAP);
       const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
       main.scrollTo({ top: Math.max(0, gridTop + row * rowHeight + rowHeight / 2 - main.clientHeight / 2), behavior: "instant" });
       return true;
@@ -233,7 +234,7 @@ export default function MusicPage() {
     const containerWidth = container.offsetWidth;
     const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
     const posterHeight = columnWidth * 1.0;
-    return Math.round(posterHeight + 80 + GAP);
+    return Math.round(posterHeight + CARD_CONTENT_HEIGHT + GAP);
   }, [actualColumns]);
 
   const virtualizer = useVirtualizer({

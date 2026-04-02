@@ -45,6 +45,7 @@ function formatResolution(resolution: string | null): string {
 }
 
 const GAP = 16; // 1rem grid gap
+const CARD_CONTENT_HEIGHT = 88; // Fixed content area below poster (matches h-[5.5rem] in MediaCard)
 
 export default function MoviesPage() {
   const router = useRouter();
@@ -71,7 +72,7 @@ export default function MoviesPage() {
       // Compute row height from the same formula as estimateSize
       const containerWidth = gridContainerRef.current.offsetWidth;
       const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.5 + 80 + GAP);
+      const rowHeight = Math.round(columnWidth * 1.5 + CARD_CONTENT_HEIGHT + GAP);
       if (rowHeight <= 0) return -1;
       // Use getBoundingClientRect for reliable grid offset (offsetTop depends on offsetParent chain)
       const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
@@ -86,7 +87,7 @@ export default function MoviesPage() {
       const row = Math.floor(index / actualColumns);
       const containerWidth = gridContainerRef.current.offsetWidth;
       const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.5 + 80 + GAP);
+      const rowHeight = Math.round(columnWidth * 1.5 + CARD_CONTENT_HEIGHT + GAP);
       // Use getBoundingClientRect for reliable grid offset
       const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
       main.scrollTo({ top: Math.max(0, gridTop + row * rowHeight + rowHeight / 2 - main.clientHeight / 2), behavior: "instant" });
@@ -124,7 +125,7 @@ export default function MoviesPage() {
     const containerWidth = container.offsetWidth;
     const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
     const posterHeight = columnWidth * 1.5;
-    return Math.round(posterHeight + 80 + GAP);
+    return Math.round(posterHeight + CARD_CONTENT_HEIGHT + GAP);
   }, [actualColumns]);
 
   const virtualizer = useVirtualizer({
