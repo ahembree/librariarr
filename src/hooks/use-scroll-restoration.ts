@@ -132,13 +132,18 @@ export function useScrollRestoration(
       // Two-pass restore:
       // Pass 1: Set approximate scroll position so the virtualizer renders nearby rows.
       // Pass 2: After layout settles, fine-tune with index-based centering.
+      // A short delay between passes gives the virtualizer time to process
+      // the scroll event and re-render, which is critical on mobile where
+      // rapid programmatic scrollTo calls can desync iOS momentum tracking.
       requestAnimationFrame(() => {
         main.scrollTo({ top: scrollTop, behavior: "instant" });
 
         if (firstVisibleIndex >= 0) {
-          requestAnimationFrame(() => {
-            optionsRef.current?.scrollToIndex?.(firstVisibleIndex);
-          });
+          setTimeout(() => {
+            requestAnimationFrame(() => {
+              optionsRef.current?.scrollToIndex?.(firstVisibleIndex);
+            });
+          }, 50);
         }
       });
     } catch {
