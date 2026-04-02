@@ -33,38 +33,36 @@ export async function GET(request: NextRequest) {
     serverIds = [serverId];
   }
 
-  const emptyStats = {
-    movieCount: 0,
-    seriesCount: 0,
-    seasonCount: 0,
-    musicCount: 0,
-    artistCount: 0,
-    albumCount: 0,
-    episodeCount: 0,
-    totalSize: "0",
-    movieSize: "0",
-    seriesSize: "0",
-    musicSize: "0",
-    movieDuration: 0,
-    seriesDuration: 0,
-    musicDuration: 0,
-    qualityBreakdown: [],
-    topMovies: [],
-    topSeries: [],
-    topMusic: [],
-    videoCodecBreakdown: [],
-    audioCodecBreakdown: [],
-    contentRatingBreakdown: [],
-    dynamicRangeBreakdown: [],
-    audioChannelsBreakdown: [],
-    genreBreakdown: [],
-  };
-
   if (serverIds.length === 0) {
-    return NextResponse.json(emptyStats);
+    return NextResponse.json({
+      movieCount: 0,
+      seriesCount: 0,
+      seasonCount: 0,
+      musicCount: 0,
+      artistCount: 0,
+      albumCount: 0,
+      episodeCount: 0,
+      totalSize: "0",
+      movieSize: "0",
+      seriesSize: "0",
+      musicSize: "0",
+      movieDuration: 0,
+      seriesDuration: 0,
+      musicDuration: 0,
+      qualityBreakdown: [],
+      topMovies: [],
+      topSeries: [],
+      topMusic: [],
+      videoCodecBreakdown: [],
+      audioCodecBreakdown: [],
+      contentRatingBreakdown: [],
+      dynamicRangeBreakdown: [],
+      audioChannelsBreakdown: [],
+      genreBreakdown: [],
+    });
   }
 
-  const cacheKey = `stats:${session.userId}:${serverId ?? "all"}`;
+  const cacheKey = `stats:${session.userId}:${serverId ?? "all"}:${dedupEnabled ? "dedup" : "raw"}`;
   const result = await appCache.getOrSet(cacheKey, () => computeStats(serverIds, dedupEnabled), 60_000);
   return NextResponse.json(result);
 }
@@ -72,7 +70,8 @@ export async function GET(request: NextRequest) {
 async function computeStats(serverIds: string[], dedupEnabled: boolean) {
   const serverFilter = { library: { mediaServerId: { in: serverIds } } };
 
-  // Run all independent queries in a single parallel batch
+  // Run all independent queries in a single parallel batch (genre + grouped counts
+  // were previously sequential — now included here for better parallelism)
   const [
     movieCount,
     episodeCount,
@@ -89,7 +88,6 @@ async function computeStats(serverIds: string[], dedupEnabled: boolean) {
     audioChannelsBreakdown,
     genreBreakdown,
     groupedCounts,
-    ...dedupResults
   ] = await Promise.all([
     prisma.mediaItem.count({
       where: { ...serverFilter, type: "MOVIE" },
@@ -214,16 +212,6 @@ async function computeStats(serverIds: string[], dedupEnabled: boolean) {
       WHERE l."mediaServerId" IN (${Prisma.join(serverIds)})
         ${dedupEnabled ? Prisma.sql`AND mi."dedupCanonical" = true` : Prisma.empty}
     `,
-    // Dedup queries — conditionally included in the same parallel batch
-    ...(dedupEnabled ? [
-      prisma.mediaItem.count({ where: { ...serverFilter, dedupCanonical: true, type: "MOVIE" } }),
-      prisma.mediaItem.count({ where: { ...serverFilter, dedupCanonical: true, type: "SERIES" } }),
-      prisma.mediaItem.count({ where: { ...serverFilter, dedupCanonical: true, type: "MUSIC" } }),
-      prisma.mediaItem.aggregate({
-        where: { ...serverFilter, dedupCanonical: true },
-        _sum: { fileSize: true },
-      }),
-    ] : []),
   ]);
 
   const {
@@ -232,20 +220,31 @@ async function computeStats(serverIds: string[], dedupEnabled: boolean) {
     movieDuration, seriesDuration, musicDuration,
   } = groupedCounts[0];
 
-  // Extract dedup results if present
+  // Cross-server dedup counts using pre-computed dedupCanonical flags
   let dedupMovieCount = movieCount;
   let dedupEpisodeCount = episodeCount;
   let dedupMusicCount = musicCount;
   let dedupTotalSize: bigint | null = null;
 
-  if (dedupEnabled && dedupResults.length === 4) {
-    dedupMovieCount = dedupResults[0] as number;
-    dedupEpisodeCount = dedupResults[1] as number;
-    dedupMusicCount = dedupResults[2] as number;
-    dedupTotalSize = (dedupResults[3] as { _sum: { fileSize: bigint | null } })._sum.fileSize;
+  if (dedupEnabled) {
+    const dedupFilter = { ...serverFilter, dedupCanonical: true };
+    const [movieDedup, episodeDedup, musicDedup, sizeDedup] = await Promise.all([
+      prisma.mediaItem.count({ where: { ...dedupFilter, type: "MOVIE" } }),
+      prisma.mediaItem.count({ where: { ...dedupFilter, type: "SERIES" } }),
+      prisma.mediaItem.count({ where: { ...dedupFilter, type: "MUSIC" } }),
+      prisma.mediaItem.aggregate({
+        where: dedupFilter,
+        _sum: { fileSize: true },
+      }),
+    ]);
+
+    dedupMovieCount = movieDedup;
+    dedupEpisodeCount = episodeDedup;
+    dedupMusicCount = musicDedup;
+    dedupTotalSize = sizeDedup._sum.fileSize;
   }
 
-  // Batch fetch thumb URLs for top series and music in parallel
+  // Batch fetch thumb URLs for top series and music in parallel (avoids N+1)
   const topSeriesTitles = topSeriesAgg
     .map((s) => s.parentTitle)
     .filter((t): t is string => t != null);
