@@ -1134,7 +1134,7 @@ function buildItemData(
     videoRangeType: videoStream?.videoRangeType ?? null,
     isWatchlisted: item.isWatchlisted ?? false,
     playCount,
-    lastPlayedAt: latestDate > 0 ? new Date(latestDate) : null,
+    lastPlayedAt: playCount > 0 && latestDate > 0 ? new Date(latestDate) : null,
     addedAt: item.addedAt ? new Date(item.addedAt * 1000) : null,
   };
 }
