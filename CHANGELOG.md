@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.2](https://github.com/ahembree/librariarr/compare/v0.11.1...v0.11.2) (2026-04-02)
+
+
+### Bug Fixes
+
+* **lifecycle:** only set lastPlayedAt when playCount &gt; 0 ([a16f286](https://github.com/ahembree/librariarr/commit/a16f2865718b63294e222bd386c7b58b3c0027bf))
+
 ## [0.11.1](https://github.com/ahembree/librariarr/compare/v0.11.0...v0.11.1) (2026-03-30)
 
 
