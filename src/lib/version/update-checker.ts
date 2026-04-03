@@ -179,8 +179,8 @@ export function deduplicateReleaseBody(body: string): string {
 
 /**
  * Fetch changelog/release notes from GitHub Releases.
- * Returns the current version's notes, plus any newer versions if an update is available.
- * Results are cached for 1 hour.
+ * Returns up to 10 release notes: any newer versions, the current version,
+ * and recent prior versions. Results are cached for 1 hour.
  */
 export async function fetchChangelog(): Promise<ReleaseNote[]> {
   const currentVersion = process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown";
@@ -197,9 +197,8 @@ export async function fetchChangelog(): Promise<ReleaseNote[]> {
           REQUEST_TIMEOUT_MS,
         );
 
-        // Fetch recent releases (up to 15 to cover several versions)
         const response = await fetch(
-          `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=15`,
+          `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=25`,
           {
             headers: {
               Accept: "application/vnd.github.v3+json",
@@ -232,8 +231,6 @@ export async function fetchChangelog(): Promise<ReleaseNote[]> {
           if (!version) continue;
 
           const cmp = compareSemver(version, currentVersion);
-          // Include: current version, and any version newer than current
-          if (cmp < 0) continue;
 
           notes.push({
             version,
@@ -254,7 +251,8 @@ export async function fetchChangelog(): Promise<ReleaseNote[]> {
           notes[0].isLatest = true;
         }
 
-        return notes;
+        // Keep all newer versions + enough older ones to total 10
+        return notes.slice(0, 10);
       } catch (error) {
         logger.debug("Changelog", "Failed to fetch changelog", {
           error: String(error),
