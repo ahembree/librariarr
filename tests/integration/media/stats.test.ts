@@ -22,6 +22,19 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+// Disable in-memory cache so each test gets fresh DB results
+vi.mock("@/lib/cache/memory-cache", () => {
+  const noopCache = {
+    get: () => undefined,
+    set: () => {},
+    getOrSet: async (_k: string, compute: () => Promise<unknown>) => compute(),
+    invalidate: () => {},
+    invalidatePrefix: () => {},
+    clear: () => {},
+  };
+  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+});
+
 // Import route handler AFTER mocks
 import { GET } from "@/app/api/media/stats/route";
 

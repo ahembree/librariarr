@@ -151,6 +151,11 @@ export async function DELETE(
 
   apiLogger.info("Auth", `Media server "${server.name}" removed (deleteData=${deleteData})`);
 
+  // Invalidate caches that depend on server/media data
+  appCache.invalidatePrefix("server-filter:");
+  appCache.invalidate("distinct-values");
+  appCache.invalidatePrefix("stats:");
+
   // Recompute canonical flags for remaining items
   await recomputeCanonical(session.userId!);
 
