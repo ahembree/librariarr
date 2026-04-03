@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { useChipColors } from "@/components/chip-color-provider";
+import { AUDIO_CODEC_ORDER } from "@/lib/theme/chip-colors";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { MediaTable } from "@/components/media-table";
 import { MediaCard } from "@/components/media-card";
@@ -22,6 +24,7 @@ import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
 export default function AlbumDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const { getBadgeStyle } = useChipColors();
   const { show, setVisible, prefs } = useCardDisplay("MUSIC_TRACKS");
   const { size, setSize, gridStyle } = useCardSize();
   const [item, setItem] = useState<(MediaItemWithRelations & { albumTitle?: string | null }) | null>(null);
@@ -140,10 +143,11 @@ export default function AlbumDetailPage() {
       }
       badges={
         <>
-          {Object.entries(codecCounts)
-            .sort(([, a], [, b]) => b - a)
-            .map(([codec, count]) => (
-              <Badge key={codec} variant="outline">
+          {[
+            ...AUDIO_CODEC_ORDER.filter((c) => codecCounts[c]).map((c) => [c, codecCounts[c]] as const),
+            ...Object.entries(codecCounts).filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c)),
+          ].map(([codec, count]) => (
+              <Badge key={codec} variant="secondary" style={getBadgeStyle("audioCodec", codec)}>
                 {codec}: {count}
               </Badge>
             ))}

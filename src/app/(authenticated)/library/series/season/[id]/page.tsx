@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useChipColors } from "@/components/chip-color-provider";
-import { normalizeResolutionLabel } from "@/lib/resolution";
+import { normalizeResolutionLabel, QUALITY_ORDER } from "@/lib/resolution";
 import { cn } from "@/lib/utils";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { MediaTable } from "@/components/media-table";
@@ -131,10 +131,10 @@ export default function SeasonDetailPage() {
   const seasonLabel = seasonNumber === 0 ? "Specials" : `Season ${seasonNumber}`;
   const totalSize = episodes.reduce((sum, ep) => sum + (ep.fileSize ? Number(ep.fileSize) : 0), 0);
 
-  // Quality breakdown
+  // Quality breakdown (normalize to standard labels so QUALITY_ORDER works)
   const qualityCounts: Record<string, number> = {};
   for (const ep of episodes) {
-    const label = ep.resolution || "Unknown";
+    const label = normalizeResolutionLabel(ep.resolution);
     qualityCounts[label] = (qualityCounts[label] || 0) + 1;
   }
 
@@ -151,11 +151,11 @@ export default function SeasonDetailPage() {
       }
       badges={
         <>
-          {Object.entries(qualityCounts)
-            .sort(([, a], [, b]) => b - a)
-            .map(([label, count]) => (
-              <Badge key={label} variant="secondary" style={getBadgeStyle("resolution", formatResolution(label))}>
-                {formatResolution(label)}: {count}
+          {QUALITY_ORDER
+            .filter((q) => qualityCounts[q])
+            .map((label) => (
+              <Badge key={label} variant="secondary" style={getBadgeStyle("resolution", label)}>
+                {label}: {qualityCounts[label]}
               </Badge>
             ))}
           {totalSize > 0 && (

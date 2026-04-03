@@ -1,3 +1,6 @@
+/** Canonical display order for resolution labels (highest → lowest). */
+export const QUALITY_ORDER = ["4K", "1080P", "720P", "480P", "SD", "Other"] as const;
+
 /**
  * Standard resolution labels used throughout the app for display.
  */

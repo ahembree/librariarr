@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useChipColors } from "@/components/chip-color-provider";
-import { normalizeResolutionLabel } from "@/lib/resolution";
+import { QUALITY_ORDER } from "@/lib/resolution";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { RatingChip } from "@/components/rating-chip";
 import { getRatingLabel } from "@/lib/rating-labels";
@@ -16,11 +16,6 @@ import { formatFileSize } from "@/lib/format";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
 import { ArrSection } from "@/components/arr-link-button";
-
-function formatResolution(resolution: string): string {
-  const label = normalizeResolutionLabel(resolution);
-  return label === "Other" ? resolution : label;
-}
 
 interface SeasonData {
   seasonNumber: number;
@@ -125,11 +120,11 @@ export default function SeriesDetailPage() {
       }
       badges={
         <>
-          {Object.entries(qualityCounts)
-            .sort(([, a], [, b]) => b - a)
-            .map(([label, count]) => (
-              <Badge key={label} variant="secondary" style={getBadgeStyle("resolution", formatResolution(label))}>
-                {formatResolution(label)}: {count}
+          {QUALITY_ORDER
+            .filter((q) => qualityCounts[q])
+            .map((label) => (
+              <Badge key={label} variant="secondary" style={getBadgeStyle("resolution", label)}>
+                {label}: {qualityCounts[label]}
               </Badge>
             ))}
           {totalSize > 0 && (
@@ -204,16 +199,16 @@ export default function SeriesDetailPage() {
                 )}
                 {Object.keys(s.qualityCounts).length > 0 && (
                   <div className="mt-1 flex flex-wrap gap-0.5">
-                    {Object.entries(s.qualityCounts)
-                      .sort(([, a], [, b]) => b - a)
-                      .map(([label, count]) => (
+                    {QUALITY_ORDER
+                      .filter((q) => s.qualityCounts[q])
+                      .map((label) => (
                         <Badge
                           key={label}
                           variant="secondary"
                           className="px-1 py-0 text-[9px] leading-tight"
-                          style={getBadgeStyle("resolution", formatResolution(label))}
+                          style={getBadgeStyle("resolution", label)}
                         >
-                          {formatResolution(label)}: {count}
+                          {label}: {s.qualityCounts[label]}
                         </Badge>
                       ))}
                   </div>

@@ -3,6 +3,8 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, useTransition } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRouter } from "next/navigation";
+import { useChipColors } from "@/components/chip-color-provider";
+import { AUDIO_CODEC_ORDER } from "@/lib/theme/chip-colors";
 import Link from "next/link";
 import { MediaFilters } from "@/components/media-filters";
 import { MediaCard } from "@/components/media-card";
@@ -28,7 +30,9 @@ import { useFilterPersistence } from "@/hooks/use-filter-persistence";
 import { useRealtime } from "@/hooks/use-realtime";
 
 const GAP = 16;
-const CARD_CONTENT_HEIGHT = 128; // Fixed content area below poster (matches h-32 in MediaCard)
+const CARD_CONTENT_HEIGHT = 138; // Fixed content area below poster (matches h-34.5 in MediaCard)
+const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
+const QUALITY_BAR_HEIGHT = 4; // h-1 quality bar between poster and content
 
 interface GroupedArtist {
   parentTitle: string;
@@ -91,9 +95,10 @@ function artistTableColumns(): DataTableColumn<GroupedArtist>[] {
       defaultWidth: 200,
       accessor: (a) => (
         <div className="flex flex-wrap gap-1">
-          {Object.entries(a.audioCodecCounts)
-            .sort(([, x], [, y]) => y - x)
-            .map(([codec, count]) => (
+          {[
+            ...AUDIO_CODEC_ORDER.filter((c) => a.audioCodecCounts[c]).map((c) => [c, a.audioCodecCounts[c]] as const),
+            ...Object.entries(a.audioCodecCounts).filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c)),
+          ].map(([codec, count]) => (
               <Badge key={codec} variant="secondary" className="text-[10px] px-1.5 py-0">
                 {codec}: {count}
               </Badge>
@@ -129,6 +134,7 @@ export default function MusicPage() {
   const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
   const [, startTransition] = useTransition();
   const { show, showServers, setVisible, prefs } = useCardDisplay("MUSIC");
+  const { getHex } = useChipColors();
 
   const { size, setSize, columns: actualColumns } = useCardSize();
   const { servers, selectedServerId, setSelectedServerId } = useServers();
@@ -142,7 +148,7 @@ export default function MusicPage() {
       if (!main) return -1;
       const containerWidth = gridContainerRef.current.offsetWidth;
       const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.0 + CARD_CONTENT_HEIGHT + GAP);
+      const rowHeight = Math.round(columnWidth * 1.0 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
       if (rowHeight <= 0) return -1;
       const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
       const centerInGrid = main.scrollTop + main.clientHeight / 2 - gridTop;
@@ -155,7 +161,7 @@ export default function MusicPage() {
       const row = Math.floor(index / actualColumns);
       const containerWidth = gridContainerRef.current.offsetWidth;
       const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.0 + CARD_CONTENT_HEIGHT + GAP);
+      const rowHeight = Math.round(columnWidth * 1.0 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
       const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
       main.scrollTo({ top: Math.max(0, gridTop + row * rowHeight + rowHeight / 2 - main.clientHeight / 2), behavior: "instant" });
       return true;
@@ -234,7 +240,7 @@ export default function MusicPage() {
     const containerWidth = container.offsetWidth;
     const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
     const posterHeight = columnWidth * 1.0;
-    return Math.round(posterHeight + CARD_CONTENT_HEIGHT + GAP);
+    return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
   }, [actualColumns]);
 
   const virtualizer = useVirtualizer({
@@ -392,7 +398,6 @@ export default function MusicPage() {
                     <div
                       key={virtualRow.key}
                       data-index={virtualRow.index}
-                      ref={virtualizer.measureElement}
                       style={{
                         position: "absolute",
                         top: 0,
@@ -424,20 +429,25 @@ export default function MusicPage() {
                                 {show("metadata", "fileSize") && <MetadataItem icon={<HardDrive />}>{formatFileSize(a.totalSize)}</MetadataItem>}
                               </MetadataLine>
                             }
-                            badges={
-                              <>
-                                {show("badges", "audioCodecs") && Object.entries(a.audioCodecCounts)
-                                  .sort(([, x], [, y]) => y - x)
-                                  .map(([codec, count]) => (
-                                    <Badge
-                                      key={codec}
-                                      variant="secondary"
-                                      className="text-[10px] px-1.5 py-0"
-                                    >
-                                      {codec}: {count}
-                                    </Badge>
-                                  ))}
-                              </>
+                            qualityBar={
+                              show("badges", "audioCodecs")
+                                ? [
+                                    ...AUDIO_CODEC_ORDER
+                                      .filter((c) => a.audioCodecCounts[c])
+                                      .map((codec) => ({
+                                        color: getHex("audioCodec", codec),
+                                        weight: a.audioCodecCounts[codec],
+                                        label: `${codec}: ${a.audioCodecCounts[codec]}`,
+                                      })),
+                                    ...Object.entries(a.audioCodecCounts)
+                                      .filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c))
+                                      .map(([codec, count]) => ({
+                                        color: getHex("audioCodec", codec),
+                                        weight: count,
+                                        label: `${codec}: ${count}`,
+                                      })),
+                                  ]
+                                : undefined
                             }
                             servers={showServers && servers.length > 1 ? a.servers : undefined}
                           />

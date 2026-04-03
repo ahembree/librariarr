@@ -31,7 +31,7 @@ interface SeasonEntry {
   qualityCounts: Record<string, number>;
 }
 
-const QUALITY_ORDER = ["4K", "1080P", "720P", "480P", "SD", "Other"];
+import { QUALITY_ORDER } from "@/lib/resolution";
 
 const SORT_OPTIONS = [
   { value: "parentTitle", label: "Series Name" },
