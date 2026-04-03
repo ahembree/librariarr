@@ -113,7 +113,7 @@ interface MatchItemsViewProps {
 }
 
 const GAP = 16;
-const CARD_CONTENT_HEIGHT = 88; // Fixed content area below poster (matches h-[5.5rem] in MediaCard)
+const CARD_CONTENT_HEIGHT = 128; // Fixed content area below poster (matches h-32 in MediaCard)
 
 interface MatchColumnDef {
   id: string;

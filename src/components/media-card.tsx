@@ -97,9 +97,9 @@ export const MediaCard = memo(function MediaCard({
            All cards render this section at the same height regardless of
            title length, metadata count, or badge count, preventing layout
            shifts during virtualized scroll restoration. */}
-      <div className="h-[5.5rem] overflow-hidden">
+      <div className="h-32 overflow-hidden flex flex-col">
         {/* Title — min-h reserves 2 lines even for short titles */}
-        <CardHeader className="px-3 pt-2 pb-0">
+        <CardHeader className="px-3 pt-2 pb-0 shrink-0">
           <CardTitle
             className="text-sm leading-tight line-clamp-2 min-h-[2lh]"
             title={title}
@@ -108,13 +108,13 @@ export const MediaCard = memo(function MediaCard({
           </CardTitle>
         </CardHeader>
 
-        {/* Metadata — always rendered for consistent height */}
-        <CardDescription className="px-3 pt-1 text-xs h-4 overflow-hidden">
+        {/* Metadata — fills remaining space between title and footer */}
+        <CardDescription className="px-3 pt-1 text-xs flex-1 min-h-0 overflow-hidden">
           {metadata}
         </CardDescription>
 
         {/* Footer: badges + server chips + info button */}
-        <CardFooter className="px-3 pt-1 pb-2 gap-1 items-center overflow-hidden">
+        <CardFooter className="px-3 pt-1 pb-2 gap-1 items-center shrink-0 overflow-hidden">
           {badges}
           {servers && servers.length > 0 && <ServerChips servers={servers} />}
           {onInfo && (
