@@ -41,7 +41,7 @@ interface GroupedSeries {
   servers?: Array<{ serverId: string; serverName: string; serverType: string }>;
 }
 
-const QUALITY_ORDER = ["4K", "1080P", "720P", "480P", "SD", "Other"];
+import { QUALITY_ORDER } from "@/lib/resolution";
 
 const SORT_OPTIONS = [
   { value: "parentTitle", label: "Name" },
@@ -169,10 +169,13 @@ function applyFiltersToGroupedSeries(
 }
 
 const GAP = 16;
+const CARD_CONTENT_HEIGHT = 138; // Fixed content area below poster (matches h-34.5 in MediaCard)
+const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
+const QUALITY_BAR_HEIGHT = 4; // h-1 quality bar between poster and content
 
 export default function SeriesPage() {
   const router = useRouter();
-  const { getSolidStyle } = useChipColors();
+  const { getHex, getSolidStyle } = useChipColors();
   const { show, showServers, setVisible, prefs } = useCardDisplay("SERIES");
   const [seriesList, setSeriesList] = useState<GroupedSeries[]>([]);
   const [loading, setLoading] = useState(true);
@@ -195,7 +198,7 @@ export default function SeriesPage() {
       if (!main) return -1;
       const containerWidth = gridContainerRef.current.offsetWidth;
       const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.5 + 80 + GAP);
+      const rowHeight = Math.round(columnWidth * 1.5 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
       if (rowHeight <= 0) return -1;
       const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
       const centerInGrid = main.scrollTop + main.clientHeight / 2 - gridTop;
@@ -208,7 +211,7 @@ export default function SeriesPage() {
       const row = Math.floor(index / actualColumns);
       const containerWidth = gridContainerRef.current.offsetWidth;
       const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.5 + 80 + GAP);
+      const rowHeight = Math.round(columnWidth * 1.5 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
       const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
       main.scrollTo({ top: Math.max(0, gridTop + row * rowHeight + rowHeight / 2 - main.clientHeight / 2), behavior: "instant" });
       return true;
@@ -286,7 +289,7 @@ export default function SeriesPage() {
     const containerWidth = container.offsetWidth;
     const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
     const posterHeight = columnWidth * 1.5;
-    return Math.round(posterHeight + 80 + GAP);
+    return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
   }, [actualColumns]);
 
   const virtualizer = useVirtualizer({
@@ -444,7 +447,6 @@ export default function SeriesPage() {
                     <div
                       key={virtualRow.key}
                       data-index={virtualRow.index}
-                      ref={virtualizer.measureElement}
                       style={{
                         position: "absolute",
                         top: 0,
@@ -477,20 +479,16 @@ export default function SeriesPage() {
                                 {show("metadata", "fileSize") && <MetadataItem icon={<HardDrive />}>{formatFileSize(s.totalSize)}</MetadataItem>}
                               </MetadataLine>
                             }
-                            badges={
-                              <>
-                                {show("badges", "qualityCounts") && QUALITY_ORDER.filter(
-                                  (q) => s.qualityCounts[q],
-                                ).map((quality) => (
-                                  <Badge
-                                    key={quality}
-                                    className="text-[10px] px-1.5 py-0"
-                                    style={getSolidStyle("resolution", quality)}
-                                  >
-                                    {quality}: {s.qualityCounts[quality]}
-                                  </Badge>
-                                ))}
-                              </>
+                            qualityBar={
+                              show("badges", "qualityCounts")
+                                ? QUALITY_ORDER
+                                    .filter((q) => s.qualityCounts[q])
+                                    .map((quality) => ({
+                                      color: getHex("resolution", quality),
+                                      weight: s.qualityCounts[quality],
+                                      label: `${quality}: ${s.qualityCounts[quality]}`,
+                                    }))
+                                : undefined
                             }
                             servers={showServers && servers.length > 1 ? s.servers : undefined}
                           />

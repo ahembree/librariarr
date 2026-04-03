@@ -168,13 +168,16 @@ function saveVisibleColumns(cols: Set<string>) {
 }
 
 const GAP = 16;
+const CARD_CONTENT_HEIGHT = 138; // Fixed content area below poster (matches h-34.5 in MediaCard)
+const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
+const QUALITY_BAR_HEIGHT = 4; // h-1 quality bar between poster and content
 const CACHE_KEY = "query-page-state";
 
 // ── Component ───────────────────────────────────────────────────
 
 export default function QueryPage() {
   const { servers } = useServers();
-  const { getBadgeStyle, getSolidStyle } = useChipColors();
+  const { getHex, getBadgeStyle } = useChipColors();
   const { width: panelWidth, resizeHandleProps } = usePanelResize({
     storageKey: "library-query-panel-width",
     defaultWidth: 480,
@@ -792,7 +795,7 @@ export default function QueryPage() {
     const containerWidth = container.offsetWidth;
     const columnWidth = (containerWidth - GAP * (cardColumns - 1)) / cardColumns;
     const posterHeight = columnWidth * 1.5;
-    return Math.round(posterHeight + 80 + GAP);
+    return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
   }, [cardColumns]);
 
   const gridVirtualizer = useVirtualizer({
@@ -1137,7 +1140,6 @@ export default function QueryPage() {
                       <div
                         key={virtualRow.key}
                         data-index={virtualRow.index}
-                        ref={gridVirtualizer.measureElement}
                         style={{
                           position: "absolute",
                           top: 0,
@@ -1176,35 +1178,18 @@ export default function QueryPage() {
                                 </MetadataLine>
                               }
                               badges={
-                                <>
-                                  <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0", TYPE_BADGE_COLORS[item.type])}>
-                                    {item.type === "MOVIE" ? "Movie" : item.type === "SERIES" ? "Series" : "Music"}
-                                  </Badge>
-                                  {item.matchedEpisodes == null && item.resolution && (
-                                    <Badge
-                                      className="text-[10px] px-1.5 py-0"
-                                      style={getSolidStyle("resolution", formatResolution(item.resolution))}
-                                    >
-                                      {formatResolution(item.resolution)}
-                                    </Badge>
-                                  )}
-                                  {item.matchedEpisodes == null && item.dynamicRange && item.dynamicRange !== "SDR" && (
-                                    <Badge
-                                      className="text-[10px] px-1.5 py-0"
-                                      style={getSolidStyle("dynamicRange", item.dynamicRange)}
-                                    >
-                                      {item.dynamicRange}
-                                    </Badge>
-                                  )}
-                                  {item.matchedEpisodes == null && item.audioProfile && (
-                                    <Badge
-                                      className="text-[10px] px-1.5 py-0"
-                                      style={getSolidStyle("audioProfile", item.audioProfile)}
-                                    >
-                                      {item.audioProfile}
-                                    </Badge>
-                                  )}
-                                </>
+                                <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0", TYPE_BADGE_COLORS[item.type])}>
+                                  {item.type === "MOVIE" ? "Movie" : item.type === "SERIES" ? "Series" : "Music"}
+                                </Badge>
+                              }
+                              qualityBar={
+                                item.matchedEpisodes == null
+                                  ? [
+                                      ...(item.resolution ? [{ color: getHex("resolution", formatResolution(item.resolution)), weight: 1, label: formatResolution(item.resolution) }] : []),
+                                      ...(item.dynamicRange && item.dynamicRange !== "SDR" ? [{ color: getHex("dynamicRange", item.dynamicRange), weight: 1, label: item.dynamicRange }] : []),
+                                      ...(item.audioProfile ? [{ color: getHex("audioProfile", item.audioProfile), weight: 1, label: item.audioProfile }] : []),
+                                    ]
+                                  : undefined
                               }
                             />
                           ))}

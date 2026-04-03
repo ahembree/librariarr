@@ -3,6 +3,7 @@
 Media library management for Plex, Jellyfin, and Emby.
 
 **Documentation:** [librariarr.dev](https://librariarr.dev)
+
 **Source:** [github.com/ahembree/librariarr](https://github.com/ahembree/librariarr)
 
 ## Features

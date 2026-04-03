@@ -23,6 +23,16 @@ export function useScrollToTop() {
     if (pathname === prevPathname.current) return;
     prevPathname.current = pathname;
 
+    // If scroll restoration is pending for this page (user navigated to a
+    // child page and came back), let the restoration hook handle positioning.
+    // Scrolling to 0 first and then restoring via RAF causes a rapid
+    // position jump that breaks iOS momentum scrolling.
+    try {
+      if (sessionStorage.getItem(`scroll-${pathname}-preserve`)) return;
+    } catch {
+      // sessionStorage unavailable
+    }
+
     findScrollContainer()?.scrollTo({ top: 0, behavior: "instant" });
   }, [pathname]);
 }

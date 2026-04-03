@@ -22,12 +22,19 @@ interface ServerPresence {
   serverType: string;
 }
 
+export interface QualitySegment {
+  color: string;
+  weight: number;
+  label?: string;
+}
+
 export interface MediaCardProps {
   imageUrl: string;
   title: string;
   aspectRatio?: "poster" | "square" | "landscape";
   metadata?: ReactNode;
   badges?: ReactNode;
+  qualityBar?: QualitySegment[];
   servers?: ServerPresence[];
   onClick: () => void;
   onInfo?: () => void;
@@ -46,6 +53,7 @@ export const MediaCard = memo(function MediaCard({
   aspectRatio = "poster",
   metadata,
   badges,
+  qualityBar,
   servers,
   onClick,
   onInfo,
@@ -93,41 +101,56 @@ export const MediaCard = memo(function MediaCard({
         )}
       </div>
 
-      {/* Title */}
-      <CardHeader className="px-3 pt-2 pb-0">
-        <CardTitle
-          className="text-sm leading-tight line-clamp-2"
-          title={title}
-        >
-          {title}
-        </CardTitle>
-      </CardHeader>
-
-      {/* Metadata */}
-      {metadata && (
-        <CardDescription className="px-3 pt-1 text-xs">
-          {metadata}
-        </CardDescription>
+      {/* Quality bar — colored segments between poster and content */}
+      {qualityBar && qualityBar.length > 0 && (
+        <div className="flex w-full shrink-0 gap-1 px-2 py-1 bg-card" aria-hidden="true">
+          {qualityBar.map((seg, i) => (
+            <div
+              key={i}
+              className="h-1 min-w-1 rounded-full"
+              style={{ backgroundColor: seg.color, flex: seg.weight }}
+              title={seg.label}
+            />
+          ))}
+        </div>
       )}
 
-      {/* Footer: badges + server chips + info button */}
-      <CardFooter className="px-3 pt-2 pb-3 flex flex-wrap gap-1 items-center">
-        {badges}
-        {servers && servers.length > 0 && <ServerChips servers={servers} />}
-        {onInfo && (
-          <button
-            className="ml-auto rounded-md border border-border bg-muted/50 p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
-            title="Summary"
-            aria-label={`View summary for ${title}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onInfo();
-            }}
+      {/* Content below poster — fixed height for virtualizer stability */}
+      <div className="h-34.5 overflow-hidden flex flex-col">
+        {/* Title — min-h reserves 2 lines even for short titles */}
+        <CardHeader className="px-3 pt-2 pb-0 shrink-0 gap-0">
+          <CardTitle
+            className="text-sm leading-tight line-clamp-2 min-h-[2lh]"
+            title={title}
           >
-            <Info className="h-4 w-4" />
-          </button>
-        )}
-      </CardFooter>
+            {title}
+          </CardTitle>
+        </CardHeader>
+
+        {/* Metadata — fills remaining space between title and footer */}
+        <CardDescription className="px-3 pt-1 text-xs flex-1 min-h-0 overflow-hidden">
+          {metadata}
+        </CardDescription>
+
+        {/* Footer: badges + server chips + info button */}
+        <CardFooter className="px-3 pt-1 pb-2 gap-1 items-center shrink-0 overflow-hidden">
+          {badges}
+          {servers && servers.length > 0 && <ServerChips servers={servers} />}
+          {onInfo && (
+            <button
+              className="ml-auto rounded-md border border-border bg-muted/50 p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+              title="Summary"
+              aria-label={`View summary for ${title}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onInfo();
+              }}
+            >
+              <Info className="h-4 w-4" />
+            </button>
+          )}
+        </CardFooter>
+      </div>
     </Card>
   );
 });

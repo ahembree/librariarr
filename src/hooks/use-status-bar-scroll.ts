@@ -31,8 +31,29 @@ export function useStatusBarScroll() {
     // Start scrolled to 1px so tapping the status bar can scroll to 0
     window.scrollTo(0, 1);
 
+    // Track recent touch activity to distinguish genuine status bar taps
+    // from scroll-chaining leaks (where overscroll-contain fails to fully
+    // prevent touch events from reaching the window on iOS).
+    let lastTouchTime = 0;
+    function onTouchStart() {
+      lastTouchTime = Date.now();
+    }
+    function onTouchEnd() {
+      lastTouchTime = Date.now();
+    }
+
     function onScroll() {
       if (window.scrollY === 0) {
+        // If the user was actively touching the screen, this is likely
+        // scroll chaining rather than an actual status bar tap. Just reset
+        // window scroll without scrolling the content container to top.
+        if (Date.now() - lastTouchTime < 500) {
+          requestAnimationFrame(() => {
+            window.scrollTo(0, 1);
+          });
+          return;
+        }
+
         // Status bar tap detected — scroll our content container to top
         findScrollContainer()?.scrollTo({ top: 0, behavior: "smooth" });
 
@@ -43,9 +64,13 @@ export function useStatusBarScroll() {
       }
     }
 
+    document.addEventListener("touchstart", onTouchStart, { passive: true });
+    document.addEventListener("touchend", onTouchEnd, { passive: true });
     window.addEventListener("scroll", onScroll, { passive: true });
 
     return () => {
+      document.removeEventListener("touchstart", onTouchStart);
+      document.removeEventListener("touchend", onTouchEnd);
       window.removeEventListener("scroll", onScroll);
       spacer.remove();
       document.body.style.position = "";

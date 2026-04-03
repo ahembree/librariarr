@@ -10,12 +10,13 @@
 
 // ── Color categories ──────────────────────────────────────────────
 
-export type ChipColorCategory = "resolution" | "dynamicRange" | "audioProfile";
+export type ChipColorCategory = "resolution" | "dynamicRange" | "audioProfile" | "audioCodec";
 
 export interface ChipColorMap {
   resolution: Record<string, string>;
   dynamicRange: Record<string, string>;
   audioProfile: Record<string, string>;
+  audioCodec: Record<string, string>;
 }
 
 // ── Default colors (hex) ──────────────────────────────────────────
@@ -42,10 +43,30 @@ export const DEFAULT_CHIP_COLORS: ChipColorMap = {
     "DTS-HD MA": "#22c55e",
     "DTS:X": "#14b8a6",
   },
+  audioCodec: {
+    FLAC: "#a855f7",
+    ALAC: "#8b5cf6",
+    WAV: "#6366f1",
+    OPUS: "#3b82f6",
+    VORBIS: "#0ea5e9",
+    AAC: "#22c55e",
+    MP3: "#eab308",
+    AC3: "#f97316",
+    EAC3: "#f59e0b",
+    DTS: "#14b8a6",
+    PCM: "#06b6d4",
+    WMA: "#ef4444",
+  },
 };
 
 // Fallback color for values not in the map
 export const FALLBACK_HEX = "#6b7280";
+
+/** Canonical display order for audio codecs (lossless → lossy → compressed). */
+export const AUDIO_CODEC_ORDER = [
+  "FLAC", "ALAC", "WAV", "PCM", "DTS", "OPUS", "VORBIS", "AAC",
+  "EAC3", "AC3", "MP3", "WMA",
+] as const;
 
 // ── Palette of selectable colors ──────────────────────────────────
 
@@ -126,6 +147,7 @@ export function mergeChipColors(overrides?: Partial<ChipColorMap> | null): ChipC
     resolution: { ...DEFAULT_CHIP_COLORS.resolution, ...overrides.resolution },
     dynamicRange: { ...DEFAULT_CHIP_COLORS.dynamicRange, ...overrides.dynamicRange },
     audioProfile: { ...DEFAULT_CHIP_COLORS.audioProfile, ...overrides.audioProfile },
+    audioCodec: { ...DEFAULT_CHIP_COLORS.audioCodec, ...overrides.audioCodec },
   };
 }
 
@@ -135,10 +157,12 @@ export const CHIP_CATEGORY_LABELS: Record<ChipColorCategory, string> = {
   resolution: "Resolution",
   dynamicRange: "Dynamic Range",
   audioProfile: "Audio Profile",
+  audioCodec: "Audio Codec",
 };
 
 export const CHIP_CATEGORY_ORDER: ChipColorCategory[] = [
   "resolution",
   "dynamicRange",
   "audioProfile",
+  "audioCodec",
 ];

@@ -8,7 +8,6 @@ import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
 import { MediaCard } from "@/components/media-card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Film, Calendar, Clock, HardDrive } from "lucide-react";
 import { MediaGridSkeleton } from "@/components/skeletons";
@@ -45,6 +44,9 @@ function formatResolution(resolution: string | null): string {
 }
 
 const GAP = 16; // 1rem grid gap
+const CARD_CONTENT_HEIGHT = 138; // Fixed content area below poster (matches h-34.5 in MediaCard)
+const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
+const QUALITY_BAR_HEIGHT = 4; // h-1 quality bar between poster and content
 
 export default function MoviesPage() {
   const router = useRouter();
@@ -58,7 +60,7 @@ export default function MoviesPage() {
   const { size, setSize, columns: actualColumns } = useCardSize();
   const [, startTransition] = useTransition();
   const { servers, selectedServerId, setSelectedServerId } = useServers();
-  const { getSolidStyle } = useChipColors();
+  const { getHex } = useChipColors();
   const { show, showServers, setVisible, prefs } = useCardDisplay("MOVIE");
 
   const gridContainerRef = useRef<HTMLDivElement>(null);
@@ -71,7 +73,7 @@ export default function MoviesPage() {
       // Compute row height from the same formula as estimateSize
       const containerWidth = gridContainerRef.current.offsetWidth;
       const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.5 + 80 + GAP);
+      const rowHeight = Math.round(columnWidth * 1.5 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
       if (rowHeight <= 0) return -1;
       // Use getBoundingClientRect for reliable grid offset (offsetTop depends on offsetParent chain)
       const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
@@ -86,7 +88,7 @@ export default function MoviesPage() {
       const row = Math.floor(index / actualColumns);
       const containerWidth = gridContainerRef.current.offsetWidth;
       const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.5 + 80 + GAP);
+      const rowHeight = Math.round(columnWidth * 1.5 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
       // Use getBoundingClientRect for reliable grid offset
       const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
       main.scrollTo({ top: Math.max(0, gridTop + row * rowHeight + rowHeight / 2 - main.clientHeight / 2), behavior: "instant" });
@@ -117,14 +119,13 @@ export default function MoviesPage() {
     [items.length, actualColumns],
   );
 
-  // Estimate row height: poster (1.5:1 aspect) + ~80px text/chips + gap between rows
   const estimateSize = useCallback(() => {
     const container = gridContainerRef.current;
     if (!container) return 350;
     const containerWidth = container.offsetWidth;
     const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
     const posterHeight = columnWidth * 1.5;
-    return Math.round(posterHeight + 80 + GAP);
+    return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
   }, [actualColumns]);
 
   const virtualizer = useVirtualizer({
@@ -299,7 +300,6 @@ export default function MoviesPage() {
                     <div
                       key={virtualRow.key}
                       data-index={virtualRow.index}
-                      ref={virtualizer.measureElement}
                       style={{
                         position: "absolute",
                         top: 0,
@@ -330,25 +330,17 @@ export default function MoviesPage() {
                                 {show("metadata", "fileSize") && formatFileSize(movie.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(movie.fileSize)}</MetadataItem>}
                               </MetadataLine>
                             }
-                            badges={
-                              <>
-                                {show("badges", "resolution") && movie.resolution && (
-                                  <Badge
-                                    className="text-[10px] px-1.5 py-0"
-                                    style={getSolidStyle("resolution", formatResolution(movie.resolution))}
-                                  >
-                                    {formatResolution(movie.resolution)}
-                                  </Badge>
-                                )}
-                                {show("badges", "dynamicRange") && movie.dynamicRange && movie.dynamicRange !== "SDR" && (
-                                  <Badge
-                                    className="text-[10px] px-1.5 py-0"
-                                    style={getSolidStyle("dynamicRange", movie.dynamicRange)}
-                                  >
-                                    {movie.dynamicRange}
-                                  </Badge>
-                                )}
-                              </>
+                            qualityBar={
+                              show("badges", "resolution") || show("badges", "dynamicRange")
+                                ? [
+                                    ...(show("badges", "resolution") && movie.resolution
+                                      ? [{ color: getHex("resolution", formatResolution(movie.resolution)), weight: 1, label: formatResolution(movie.resolution) }]
+                                      : []),
+                                    ...(show("badges", "dynamicRange") && movie.dynamicRange && movie.dynamicRange !== "SDR"
+                                      ? [{ color: getHex("dynamicRange", movie.dynamicRange), weight: 1, label: movie.dynamicRange }]
+                                      : []),
+                                  ]
+                                : undefined
                             }
                             servers={showServers && servers.length > 1 ? movie.servers : undefined}
                           />

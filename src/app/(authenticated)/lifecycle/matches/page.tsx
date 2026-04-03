@@ -113,6 +113,7 @@ interface MatchItemsViewProps {
 }
 
 const GAP = 16;
+const CARD_CONTENT_HEIGHT = 128; // Fixed content area below poster (matches h-32 in MediaCard)
 
 interface MatchColumnDef {
   id: string;
@@ -408,7 +409,7 @@ function MatchItemsCardView({
     const containerWidth = container.offsetWidth;
     const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
     const posterHeight = columnWidth * (ruleSet.type === "MUSIC" ? 1 : 1.5);
-    return Math.round(posterHeight + 80 + GAP);
+    return Math.round(posterHeight + CARD_CONTENT_HEIGHT + GAP);
   }, [actualColumns, ruleSet.type]);
 
   const virtualizer = useVirtualizer({

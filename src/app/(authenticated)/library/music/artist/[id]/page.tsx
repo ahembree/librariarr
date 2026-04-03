@@ -3,6 +3,8 @@
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { useChipColors } from "@/components/chip-color-provider";
+import { AUDIO_CODEC_ORDER } from "@/lib/theme/chip-colors";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { FadeImage } from "@/components/ui/fade-image";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +24,7 @@ interface AlbumData {
 
 export default function ArtistDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const { getBadgeStyle } = useChipColors();
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
   const [albums, setAlbums] = useState<AlbumData[]>([]);
@@ -95,10 +98,11 @@ export default function ArtistDetailPage() {
       }
       badges={
         <>
-          {Object.entries(codecCounts)
-            .sort(([, a], [, b]) => b - a)
-            .map(([codec, count]) => (
-              <Badge key={codec} variant="outline">
+          {[
+            ...AUDIO_CODEC_ORDER.filter((c) => codecCounts[c]).map((c) => [c, codecCounts[c]] as const),
+            ...Object.entries(codecCounts).filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c)),
+          ].map(([codec, count]) => (
+              <Badge key={codec} variant="secondary" style={getBadgeStyle("audioCodec", codec)}>
                 {codec}: {count}
               </Badge>
             ))}
