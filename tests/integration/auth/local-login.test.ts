@@ -107,6 +107,7 @@ describe("POST /api/auth/local/login", () => {
     const response = await callRoute(POST, {
       url: "/api/auth/local/login",
       method: "POST",
+      // file deepcode ignore NoHardcodedPasswords/test: test file
       body: { username: "localuser", password: "wrongpassword" },
     });
     const body = await expectJson<{ error: string }>(response, 401);

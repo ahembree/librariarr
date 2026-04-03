@@ -73,6 +73,7 @@ describe("POST /api/servers/test", () => {
 
     const res = await callRoute(serverTest, {
       method: "POST",
+      // file deepcode ignore HardcodedNonCryptoSecret/test: test file
       body: { url: "http://plex.test:32400", accessToken: "test-token", type: "PLEX" },
     });
     const body = await expectJson<{ ok: boolean; serverName: string | null }>(res);

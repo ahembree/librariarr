@@ -386,6 +386,7 @@ describe("getBackupPassphrase", () => {
     const { prisma } = await import("@/lib/db");
     (prisma as unknown as Record<string, unknown>).appSettings = {
       ...mockPrismaModels.appSettings,
+      // file deepcode ignore NoHardcodedPasswords/test: test file
       findFirst: vi.fn().mockResolvedValue({ backupEncryptionPassword: "secret123" }),
     };
 

@@ -72,6 +72,7 @@ describe("PUT /api/settings/backup-encryption-password", () => {
   it("returns 401 without auth", async () => {
     const res = await callRoute(PUT, {
       method: "PUT",
+      // file deepcode ignore NoHardcodedPasswords/test: test file
       body: { backupEncryptionPassword: "newpassword1" },
     });
     await expectJson(res, 401);

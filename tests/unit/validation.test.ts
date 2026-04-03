@@ -98,6 +98,7 @@ describe("authLoginSchema", () => {
   it("accepts valid credentials", () => {
     const result = authLoginSchema.safeParse({
       username: "admin",
+      // file deepcode ignore NoHardcodedPasswords/test: test file
       password: "password123",
     });
     expect(result.success).toBe(true);

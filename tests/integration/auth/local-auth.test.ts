@@ -141,6 +141,7 @@ describe("POST /api/auth/local/change-password", () => {
       url: "/api/auth/local/change-password",
       method: "POST",
       body: {
+        // file deepcode ignore NoHardcodedPasswords/test: test file
         currentPassword: "wrongpassword",
         newPassword: "newpassword123",
       },

@@ -169,6 +169,7 @@ describe("Radarr integration endpoints", () => {
       const response = await callRoute(POST, {
         url: "/api/integrations/radarr",
         method: "POST",
+        // file deepcode ignore HardcodedNonCryptoSecret/test: test file
         body: { name: "My Radarr", url: "http://radarr:7878", apiKey: "test-key" },
       });
       const body = await expectJson<{ instance: { id: string; name: string; url: string } }>(

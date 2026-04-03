@@ -183,6 +183,7 @@ describe("Server CRUD endpoints", () => {
         body: {
           name: "New Server",
           url: "http://plex:32400",
+          // file deepcode ignore HardcodedNonCryptoSecret/test: test file
           accessToken: "my-token",
           machineId: "machine-1",
         },

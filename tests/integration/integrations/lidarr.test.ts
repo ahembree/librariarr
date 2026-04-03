@@ -166,6 +166,7 @@ describe("Lidarr integration endpoints", () => {
       const response = await callRoute(POST, {
         url: "/api/integrations/lidarr",
         method: "POST",
+        // file deepcode ignore HardcodedNonCryptoSecret/test: test file
         body: { name: "My Lidarr", url: "http://lidarr:8686", apiKey: "test-key" },
       });
       const body = await expectJson<{ instance: { id: string; name: string; url: string } }>(
