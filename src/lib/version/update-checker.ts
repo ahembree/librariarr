@@ -142,11 +142,14 @@ export interface ReleaseNote {
 
 /**
  * Strip the commit hash suffix from a changelog line for dedup comparison.
- * e.g. "lifecycle: fix failure notification bugs in manual execution (12c2d85)"
- *    → "lifecycle: fix failure notification bugs in manual execution"
+ * Handles both formats:
+ *   "fix failure bugs (12c2d85)" → "fix failure bugs"
+ *   "fix failure bugs ([12c2d85](https://github.com/...))" → "fix failure bugs"
  */
 function lineWithoutHash(line: string): string {
-  return line.replace(/\s*\([a-f0-9]{7,40}\)\s*$/, "").trim();
+  return line
+    .replace(/\s*\(\[?[a-f0-9]{7,40}\]?\(?[^)]*\)?\)\s*$/, "")
+    .trim();
 }
 
 /**

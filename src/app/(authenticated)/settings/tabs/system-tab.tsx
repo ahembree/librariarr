@@ -29,8 +29,31 @@ export interface SystemTabProps {
 }
 
 /**
- * Parse a GitHub release body (markdown) into grouped sections.
- * Returns sections like "Features", "Bug Fixes", etc. with their items.
+ * Clean a markdown list item for display:
+ * - Strip commit hash links: "([abc1234](url))" or "(abc1234)"
+ * - Convert bold scopes: "**lifecycle:** msg" → "lifecycle: msg"
+ * - Decode HTML entities: "&gt;" → ">"
+ */
+function cleanItem(raw: string): string {
+  return (
+    raw
+      // Remove markdown commit links: ([hash](url))
+      .replace(/\s*\(\[?[a-f0-9]{7,40}\]?\([^)]*\)\)/g, "")
+      // Remove bare hash refs: (hash)
+      .replace(/\s*\([a-f0-9]{7,40}\)/g, "")
+      // Convert **scope:** to scope:
+      .replace(/\*\*([^*]+)\*\*/g, "$1")
+      // Decode common HTML entities from GitHub
+      .replace(/&gt;/g, ">")
+      .replace(/&lt;/g, "<")
+      .replace(/&amp;/g, "&")
+      .trim()
+  );
+}
+
+/**
+ * Parse a release-please body into grouped sections.
+ * Handles the format: ## [version](url) (date) then ### Section headings with * items.
  */
 function parseReleaseBody(body: string): { heading: string; items: string[] }[] {
   const lines = body.split("\n");
@@ -40,7 +63,10 @@ function parseReleaseBody(body: string): { heading: string; items: string[] }[] 
   for (const line of lines) {
     const trimmed = line.trim();
 
-    // Section heading (## or ###)
+    // Skip the version header line: ## [0.11.3](url) (date)
+    if (/^##\s+\[?\d+\.\d+/.test(trimmed)) continue;
+
+    // Section heading (### Bug Fixes, ### Features, etc.)
     const headingMatch = trimmed.match(/^#{2,3}\s+(.+)/);
     if (headingMatch) {
       current = { heading: headingMatch[1], items: [] };
@@ -50,7 +76,7 @@ function parseReleaseBody(body: string): { heading: string; items: string[] }[] 
 
     // List item
     if ((trimmed.startsWith("* ") || trimmed.startsWith("- ")) && current) {
-      current.items.push(trimmed.slice(2));
+      current.items.push(cleanItem(trimmed.slice(2)));
     }
   }
 
