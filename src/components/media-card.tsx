@@ -99,7 +99,7 @@ export const MediaCard = memo(function MediaCard({
            shifts during virtualized scroll restoration. */}
       <div className="h-32 overflow-hidden flex flex-col">
         {/* Title — min-h reserves 2 lines even for short titles */}
-        <CardHeader className="px-3 pt-2 pb-0 shrink-0">
+        <CardHeader className="px-3 pt-2 pb-0 shrink-0 gap-0">
           <CardTitle
             className="text-sm leading-tight line-clamp-2 min-h-[2lh]"
             title={title}
