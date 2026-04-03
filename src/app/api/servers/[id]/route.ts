@@ -88,6 +88,7 @@ export async function PUT(
   if (enabled !== undefined) {
     appCache.invalidatePrefix("server-filter:");
     appCache.invalidate("distinct-values");
+    appCache.invalidatePrefix("stats:");
   }
 
   return NextResponse.json({ server: sanitize(updated) });
@@ -149,6 +150,11 @@ export async function DELETE(
   await prisma.mediaServer.delete({ where: { id: server.id } });
 
   apiLogger.info("Auth", `Media server "${server.name}" removed (deleteData=${deleteData})`);
+
+  // Invalidate caches that depend on server/media data
+  appCache.invalidatePrefix("server-filter:");
+  appCache.invalidate("distinct-values");
+  appCache.invalidatePrefix("stats:");
 
   // Recompute canonical flags for remaining items
   await recomputeCanonical(session.userId!);

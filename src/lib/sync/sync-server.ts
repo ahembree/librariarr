@@ -997,6 +997,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
     // Invalidate caches that depend on media data
     appCache.invalidate("distinct-values");
     appCache.invalidatePrefix("server-filter:");
+    appCache.invalidatePrefix("stats:");
 
     logger.info("Sync", `Sync completed for server (${processedItems} items processed)`);
     eventBus.emit({ type: "sync:completed", userId: server.userId, meta: { serverId } });

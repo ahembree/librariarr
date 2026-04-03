@@ -34,6 +34,7 @@ export async function DELETE(request: NextRequest) {
 
     appCache.invalidatePrefix("server-filter:");
     appCache.invalidate("distinct-values");
+    appCache.invalidatePrefix("stats:");
 
     apiLogger.info(
       "Media",
@@ -80,6 +81,7 @@ export async function DELETE(request: NextRequest) {
 
   appCache.invalidatePrefix("server-filter:");
   appCache.invalidate("distinct-values");
+  appCache.invalidatePrefix("stats:");
 
   apiLogger.info(
     "Media",
