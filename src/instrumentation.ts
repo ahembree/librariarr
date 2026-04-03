@@ -1,6 +1,10 @@
 export async function register() {
   // Only run scheduler on the server side (not during build or in edge runtime)
   if (process.env.NEXT_RUNTIME === "nodejs") {
+    // Clean up sync jobs orphaned by a previous restart before starting the scheduler
+    const { cleanupOrphanedSyncJobs } = await import("@/lib/sync/cleanup-orphaned-syncs");
+    cleanupOrphanedSyncJobs();
+
     const { initializeScheduler } = await import("@/lib/scheduler/scheduler");
     initializeScheduler();
 
