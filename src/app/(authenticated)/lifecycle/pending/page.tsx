@@ -562,8 +562,10 @@ export default function PendingActionsPage() {
         body: JSON.stringify({ ruleSetId, mediaItemIds: [mediaItemId] }),
       });
       const data = await response.json();
-      if (data.failed > 0 && data.errors?.length > 0) {
-        toast.error(`Action failed`, {
+      if (!response.ok) {
+        toast.error(data.error || "Failed to execute action");
+      } else if (data.failed > 0 && data.errors?.length > 0) {
+        toast.error("Action failed", {
           description: data.errors.join("\n"),
         });
       }

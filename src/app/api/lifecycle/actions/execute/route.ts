@@ -154,6 +154,7 @@ export async function POST(request: NextRequest) {
   let executed = 0;
   let failed = 0;
   const errors: string[] = [];
+  const failures: { title: string; error: string }[] = [];
 
   for (const item of items) {
     const matchedMediaItemIds = episodeIdMap.get(item.id) ?? [];
@@ -203,6 +204,7 @@ export async function POST(request: NextRequest) {
     } catch (error) {
       const msg = extractActionError(error);
       errors.push(`${item.title}: ${msg}`);
+      failures.push({ title: item.title, error: msg });
       logger.error("Lifecycle", `Failed immediate ${ruleSet.actionType} for "${item.title}"`, { error: msg });
 
       await prisma.lifecycleAction.create({
@@ -237,12 +239,6 @@ export async function POST(request: NextRequest) {
         select: { discordWebhookUrl: true, discordWebhookUsername: true, discordWebhookAvatarUrl: true },
       });
       if (settings?.discordWebhookUrl) {
-        const failures = errors.map((e) => {
-          const colonIdx = e.indexOf(": ");
-          return colonIdx !== -1
-            ? { title: e.slice(0, colonIdx), error: e.slice(colonIdx + 2) }
-            : { title: e, error: "Unknown error" };
-        });
         await sendDiscordNotification(settings.discordWebhookUrl, {
           username: settings.discordWebhookUsername || "Librariarr",
           avatar_url: settings.discordWebhookAvatarUrl || undefined,
