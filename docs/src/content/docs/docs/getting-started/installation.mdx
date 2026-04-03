@@ -57,9 +57,8 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
          POSTGRES_USER: librariarr
          POSTGRES_PASSWORD: ${DB_PASSWORD}
          POSTGRES_DB: librariarr
-         PGDATA: /var/lib/postgresql/data/pgdata
        volumes:
-         - librariarr-db:/var/lib/postgresql/data
+         - librariarr-db:/var/lib/postgresql
        healthcheck:
          test: ["CMD-SHELL", "pg_isready -U librariarr"]
          interval: 5s
@@ -254,9 +253,8 @@ services:
       POSTGRES_USER: librariarr
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: librariarr
-      PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - librariarr-db:/var/lib/postgresql/data
+      - librariarr-db:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U librariarr"]
       interval: 5s

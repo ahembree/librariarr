@@ -41,9 +41,8 @@ services:
       POSTGRES_USER: librariarr
       POSTGRES_PASSWORD: librariarr
       POSTGRES_DB: librariarr
-      PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - librariarr-dev-db:/var/lib/postgresql/data
+      - librariarr-dev-db:/var/lib/postgresql
     ports:
       - "5432:5432"
     healthcheck:

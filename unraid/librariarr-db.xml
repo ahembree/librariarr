@@ -22,6 +22,5 @@
   <Config Name="Postgres User" Target="POSTGRES_USER" Default="librariarr" Mode="" Description="Database username" Type="Variable" Display="always" Required="true" Mask="false">librariarr</Config>
   <Config Name="Postgres Password" Target="POSTGRES_PASSWORD" Default="librariarr" Mode="" Description="Database password. Change this for security." Type="Variable" Display="always" Required="true" Mask="true">librariarr</Config>
   <Config Name="Postgres Database" Target="POSTGRES_DB" Default="librariarr" Mode="" Description="Database name" Type="Variable" Display="always" Required="true" Mask="false">librariarr</Config>
-  <Config Name="PGDATA" Target="PGDATA" Default="/var/lib/postgresql/data/pgdata" Mode="" Description="PostgreSQL data subdirectory inside the container. Uses a subdirectory of the mount point to avoid initdb issues with filesystem artifacts." Type="Variable" Display="advanced" Required="false" Mask="false">/var/lib/postgresql/data/pgdata</Config>
-  <Config Name="Data Path" Target="/var/lib/postgresql/data" Default="/mnt/user/appdata/librariarr-db" Mode="rw" Description="PostgreSQL data directory" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/librariarr-db</Config>
+  <Config Name="Data Path" Target="/var/lib/postgresql" Default="/mnt/user/appdata/librariarr-db" Mode="rw" Description="PostgreSQL data directory" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/librariarr-db</Config>
 </Container>

@@ -66,9 +66,8 @@ services:
       POSTGRES_USER: librariarr
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: librariarr
-      PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - librariarr-db:/var/lib/postgresql/data
+      - librariarr-db:/var/lib/postgresql
     security_opt:
       - no-new-privileges:true
     cap_drop:
