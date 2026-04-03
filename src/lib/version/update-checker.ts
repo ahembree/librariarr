@@ -3,6 +3,7 @@ import { logger } from "@/lib/logger";
 
 const GITHUB_REPO = "ahembree/librariarr";
 const CACHE_KEY = "version:latest";
+const CHANGELOG_CACHE_KEY = "version:changelog";
 const CACHE_TTL_MS = 3_600_000; // 1 hour
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -121,6 +122,141 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
           releaseName: null,
           checkedAt: new Date().toISOString(),
         };
+      }
+    },
+    CACHE_TTL_MS,
+  );
+}
+
+// ─── Changelog / Release Notes ───
+
+export interface ReleaseNote {
+  version: string;
+  name: string | null;
+  body: string;
+  url: string;
+  publishedAt: string;
+  isCurrent: boolean;
+  isLatest: boolean;
+}
+
+/**
+ * Strip the commit hash suffix from a changelog line for dedup comparison.
+ * e.g. "lifecycle: fix failure notification bugs in manual execution (12c2d85)"
+ *    → "lifecycle: fix failure notification bugs in manual execution"
+ */
+function lineWithoutHash(line: string): string {
+  return line.replace(/\s*\([a-f0-9]{7,40}\)\s*$/, "").trim();
+}
+
+/**
+ * Remove duplicate changelog entries that differ only in commit hash.
+ * Preserves the first occurrence of each unique line.
+ */
+export function deduplicateReleaseBody(body: string): string {
+  const lines = body.split("\n");
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    // Keep non-list lines (headers, blank lines) as-is
+    if (!trimmed.startsWith("* ") && !trimmed.startsWith("- ")) {
+      result.push(line);
+      continue;
+    }
+    const normalized = lineWithoutHash(trimmed);
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(line);
+  }
+
+  return result.join("\n");
+}
+
+/**
+ * Fetch changelog/release notes from GitHub Releases.
+ * Returns the current version's notes, plus any newer versions if an update is available.
+ * Results are cached for 1 hour.
+ */
+export async function fetchChangelog(): Promise<ReleaseNote[]> {
+  const currentVersion = process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown";
+
+  if (currentVersion === "unknown") return [];
+
+  return appCache.getOrSet<ReleaseNote[]>(
+    CHANGELOG_CACHE_KEY,
+    async () => {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(
+          () => controller.abort(),
+          REQUEST_TIMEOUT_MS,
+        );
+
+        // Fetch recent releases (up to 15 to cover several versions)
+        const response = await fetch(
+          `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=15`,
+          {
+            headers: {
+              Accept: "application/vnd.github.v3+json",
+              "User-Agent": `Librariarr/${currentVersion}`,
+            },
+            signal: controller.signal,
+          },
+        );
+
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+          logger.debug(
+            "Changelog",
+            `GitHub API returned ${response.status}`,
+          );
+          return [];
+        }
+
+        const releases = await response.json();
+        if (!Array.isArray(releases)) return [];
+
+        const notes: ReleaseNote[] = [];
+
+        for (const release of releases) {
+          if (release.draft) continue;
+
+          const tag: string = release.tag_name ?? "";
+          const version = tag.replace(/^v/, "");
+          if (!version) continue;
+
+          const cmp = compareSemver(version, currentVersion);
+          // Include: current version, and any version newer than current
+          if (cmp < 0) continue;
+
+          notes.push({
+            version,
+            name: release.name ?? null,
+            body: deduplicateReleaseBody(release.body ?? ""),
+            url: release.html_url ?? "",
+            publishedAt: release.published_at ?? release.created_at ?? "",
+            isCurrent: cmp === 0,
+            isLatest: false,
+          });
+        }
+
+        // Sort newest first
+        notes.sort((a, b) => compareSemver(b.version, a.version));
+
+        // Mark the latest (first after sorting)
+        if (notes.length > 0) {
+          notes[0].isLatest = true;
+        }
+
+        return notes;
+      } catch (error) {
+        logger.debug("Changelog", "Failed to fetch changelog", {
+          error: String(error),
+        });
+        return [];
       }
     },
     CACHE_TTL_MS,
