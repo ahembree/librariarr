@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { toast } from "sonner";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
@@ -524,11 +525,17 @@ export default function PendingActionsPage() {
           ...prev,
           [ruleSetId]: { executed: data.executed, failed: data.failed, errors: data.errors || [] },
         }));
+        if (data.failed > 0 && data.errors?.length > 0) {
+          toast.error(`${data.failed} action${data.failed !== 1 ? "s" : ""} failed`, {
+            description: data.errors.join("\n"),
+          });
+        }
       } else {
         setExecuteResults((prev) => ({
           ...prev,
           [ruleSetId]: { executed: 0, failed: 0, errors: [data.error || "Unknown error"] },
         }));
+        toast.error(data.error || "Failed to execute actions");
       }
       await fetchActions();
     } catch (error) {
@@ -549,11 +556,17 @@ export default function PendingActionsPage() {
     const key = `${ruleSetId}:${mediaItemId}`;
     setExecutingItems((prev) => new Set(prev).add(key));
     try {
-      await fetch("/api/lifecycle/actions/execute", {
+      const response = await fetch("/api/lifecycle/actions/execute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ruleSetId, mediaItemIds: [mediaItemId] }),
       });
+      const data = await response.json();
+      if (data.failed > 0 && data.errors?.length > 0) {
+        toast.error(`Action failed`, {
+          description: data.errors.join("\n"),
+        });
+      }
       await fetchActions();
     } catch (error) {
       console.error("Failed to execute item:", error);
