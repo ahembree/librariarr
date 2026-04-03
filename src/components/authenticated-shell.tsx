@@ -75,7 +75,7 @@ export function AuthenticatedShell({ children }: { children: React.ReactNode }) 
             <span>Maintenance mode is active</span>
           </Link>
         )}
-        <main className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain bg-background bg-[radial-gradient(ellipse_at_50%_0%,oklch(0.22_0.02_270)_0%,transparent_60%)]">{children}</main>
+        <main className="flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain bg-background bg-[radial-gradient(ellipse_at_50%_0%,oklch(0.22_0.02_270)_0%,transparent_60%)]">{children}</main>
         <BackToTop />
       </div>
     </div>
