@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError } from "@/lib/lifecycle/actions";
 import { validateRequest, actionExecuteSchema } from "@/lib/validation";
+import { sendDiscordNotification, buildFailureSummaryEmbed } from "@/lib/discord/client";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -225,6 +226,31 @@ export async function POST(request: NextRequest) {
         },
       });
       failed++;
+    }
+  }
+
+  // Send Discord notification for failures if the rule set has notifications enabled
+  if (failed > 0 && ruleSet.discordNotifyOnAction) {
+    try {
+      const settings = await prisma.appSettings.findUnique({
+        where: { userId: session.userId! },
+        select: { discordWebhookUrl: true, discordWebhookUsername: true, discordWebhookAvatarUrl: true },
+      });
+      if (settings?.discordWebhookUrl) {
+        const failures = errors.map((e) => {
+          const colonIdx = e.indexOf(": ");
+          return colonIdx !== -1
+            ? { title: e.slice(0, colonIdx), error: e.slice(colonIdx + 2) }
+            : { title: e, error: "Unknown error" };
+        });
+        await sendDiscordNotification(settings.discordWebhookUrl, {
+          username: settings.discordWebhookUsername || "Librariarr",
+          avatar_url: settings.discordWebhookAvatarUrl || undefined,
+          embeds: [buildFailureSummaryEmbed(ruleSet.name, ruleSet.actionType ?? "DO_NOTHING", failures)],
+        });
+      }
+    } catch {
+      // Don't let notification failures break the response
     }
   }
 
