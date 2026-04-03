@@ -71,6 +71,7 @@ export const TOGGLE_CONFIGS: Record<CardLibraryType, ToggleConfig> = {
     badges: [
       { key: "resolution", label: "Resolution" },
       { key: "dynamicRange", label: "Dynamic Range" },
+      { key: "audioProfile", label: "Audio Profile" },
     ],
     metadata: [
       { key: "year", label: "Year" },

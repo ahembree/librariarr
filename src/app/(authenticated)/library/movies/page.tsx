@@ -8,6 +8,7 @@ import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
 import { MediaCard } from "@/components/media-card";
+import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { Button } from "@/components/ui/button";
 import { Film, Calendar, Clock, HardDrive } from "lucide-react";
 import { MediaGridSkeleton } from "@/components/skeletons";
@@ -331,7 +332,7 @@ export default function MoviesPage() {
                               </MetadataLine>
                             }
                             qualityBar={
-                              show("badges", "resolution") || show("badges", "dynamicRange")
+                              show("badges", "resolution") || show("badges", "dynamicRange") || show("badges", "audioProfile")
                                 ? [
                                     ...(show("badges", "resolution") && movie.resolution
                                       ? [{ color: getHex("resolution", formatResolution(movie.resolution)), weight: 1, label: formatResolution(movie.resolution) }]
@@ -339,10 +340,36 @@ export default function MoviesPage() {
                                     ...(show("badges", "dynamicRange") && movie.dynamicRange && movie.dynamicRange !== "SDR"
                                       ? [{ color: getHex("dynamicRange", movie.dynamicRange), weight: 1, label: movie.dynamicRange }]
                                       : []),
+                                    ...(show("badges", "audioProfile") && movie.audioProfile
+                                      ? [{ color: getHex("audioProfile", movie.audioProfile), weight: 1, label: movie.audioProfile }]
+                                      : []),
                                   ]
                                 : undefined
                             }
                             servers={showServers && servers.length > 1 ? movie.servers : undefined}
+                            hoverContent={
+                              <MediaHoverPopover
+                                data={{
+                                  title: movie.title,
+                                  year: movie.year,
+                                  summary: movie.summary,
+                                  contentRating: movie.contentRating,
+                                  rating: movie.rating,
+                                  audienceRating: movie.audienceRating,
+                                  duration: movie.duration,
+                                  resolution: movie.resolution,
+                                  dynamicRange: movie.dynamicRange,
+                                  audioProfile: movie.audioProfile,
+                                  fileSize: movie.fileSize,
+                                  genres: movie.genres,
+                                  studio: movie.studio,
+                                  playCount: movie.playCount,
+                                  lastPlayedAt: movie.lastPlayedAt,
+                                  addedAt: movie.addedAt,
+                                  servers: movie.servers,
+                                }}
+                              />
+                            }
                           />
                         ))}
                       </div>

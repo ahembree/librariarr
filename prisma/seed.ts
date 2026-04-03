@@ -128,6 +128,7 @@ function getCachePath(cacheKey: string): string {
 
 // Deterministic color from title
 function colorFromTitle(title: string): { r: number; g: number; b: number } {
+  // file deepcode ignore InsecureHash: seed file with demo data
   const hash = createHash("md5").update(title).digest();
   return {
     r: (hash[0] % 180) + 40, // avoid pure white/black
@@ -563,6 +564,7 @@ async function main() {
       data: {
         userId: user.id, type: "PLEX", name: "Atlas",
         url: "https://atlas.plex.direct:32400",
+        // file deepcode ignore HardcodedNonCryptoSecret: seed file with demo data
         accessToken: "seed-atlas-token", machineId: "seed-atlas-001",
       },
     }),

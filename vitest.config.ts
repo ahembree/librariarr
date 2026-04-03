@@ -23,6 +23,7 @@ export default defineConfig({
     env: {
       DATABASE_URL:
         "postgresql://librariarr:librariarr@localhost:5432/librariarr_test",
+      // file deepcode ignore HardcodedNonCryptoSecret/test: test file
       SESSION_SECRET:
         "test-secret-must-be-at-least-32-characters-long!!",
     },

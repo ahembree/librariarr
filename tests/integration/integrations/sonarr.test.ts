@@ -169,6 +169,7 @@ describe("Sonarr integration endpoints", () => {
       const response = await callRoute(POST, {
         url: "/api/integrations/sonarr",
         method: "POST",
+        // file deepcode ignore HardcodedNonCryptoSecret/test: test file
         body: { name: "My Sonarr", url: "http://sonarr:8989", apiKey: "test-key" },
       });
       const body = await expectJson<{ instance: { id: string; name: string; url: string } }>(

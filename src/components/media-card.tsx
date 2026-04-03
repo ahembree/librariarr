@@ -13,6 +13,11 @@ import {
 import { Film, Tv, Music, Info } from "lucide-react";
 import { ServerChips } from "@/components/server-chips";
 import { FadeImage } from "@/components/ui/fade-image";
+import {
+  HoverCard,
+  HoverCardTrigger,
+  HoverCardContent,
+} from "@/components/ui/hover-card";
 
 type FallbackIcon = "movie" | "series" | "music";
 
@@ -39,6 +44,7 @@ export interface MediaCardProps {
   onClick: () => void;
   onInfo?: () => void;
   fallbackIcon?: FallbackIcon;
+  hoverContent?: ReactNode;
 }
 
 const FALLBACK_ICONS = {
@@ -58,11 +64,12 @@ export const MediaCard = memo(function MediaCard({
   onClick,
   onInfo,
   fallbackIcon = "movie",
+  hoverContent,
 }: MediaCardProps) {
   const [imgError, setImgError] = useState(false);
   const FallbackComponent = FALLBACK_ICONS[fallbackIcon];
 
-  return (
+  const card = (
     <Card
       className="group cursor-pointer overflow-hidden py-0 gap-0 rounded-lg hover:scale-[1.03] hover:shadow-[0_8px_32px_oklch(0_0_0/0.4)] hover:ring-1 hover:ring-white/10 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none transition-all duration-300 ease-out"
       onClick={onClick}
@@ -152,5 +159,21 @@ export const MediaCard = memo(function MediaCard({
         </CardFooter>
       </div>
     </Card>
+  );
+
+  if (!hoverContent) return card;
+
+  return (
+    <HoverCard openDelay={400} closeDelay={150}>
+      <HoverCardTrigger asChild>{card}</HoverCardTrigger>
+      <HoverCardContent
+        side="right"
+        align="start"
+        sideOffset={8}
+        className="w-72 p-0 duration-200"
+      >
+        {hoverContent}
+      </HoverCardContent>
+    </HoverCard>
   );
 });

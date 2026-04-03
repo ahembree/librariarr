@@ -113,6 +113,7 @@ describe("POST /api/auth/setup", () => {
     await callRoute(POST, {
       url: "/api/auth/setup",
       method: "POST",
+      // file deepcode ignore NoHardcodedPasswords/test: test file
       body: { username: "TestAdmin", password: "securepassword123" },
     });
 

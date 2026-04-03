@@ -143,6 +143,7 @@ describe("Seerr integration endpoints", () => {
         body: {
           name: "My Seerr",
           url: "http://seerr:5055",
+          // file deepcode ignore HardcodedNonCryptoSecret/test: test file
           apiKey: "test-key",
         },
       });

@@ -108,6 +108,7 @@ describe("POST /api/auth/local/change-password", () => {
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
       method: "POST",
+      // file deepcode ignore NoHardcodedPasswords/test: test file
       body: { currentPassword: "oldpassword", newPassword: "newpassword123" },
     });
     const body = await expectJson<{ success: boolean }>(response, 200);

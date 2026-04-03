@@ -128,6 +128,7 @@ describe("Plex Auth", () => {
       mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
         plexClientId: "client-id",
       });
+      // file deepcode ignore HardcodedNonCryptoSecret/test: test file
       const pinData = { id: 123, code: "ABC", authToken: "token-123" };
       mockAxiosGet.mockResolvedValueOnce({ data: pinData });
 

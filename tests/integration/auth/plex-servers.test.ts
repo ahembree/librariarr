@@ -109,6 +109,7 @@ describe("GET /api/auth/plex/servers", () => {
       clientIdentifier: "server-001",
       provides: "server",
       owned: true,
+      // file deepcode ignore HardcodedNonCryptoSecret/test: test file
       accessToken: "token-001",
       connections: [
         {
