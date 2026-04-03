@@ -1,15 +1,184 @@
 "use client";
 
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { ArrowUpCircle, CheckCircle2, Loader2, Trash2 } from "lucide-react";
-import type { SystemInfo, ImageCacheStats } from "../types";
+import { Badge } from "@/components/ui/badge";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  ArrowUpCircle,
+  CheckCircle2,
+  ChevronDown,
+  ExternalLink,
+  Loader2,
+  Trash2,
+} from "lucide-react";
+import type { SystemInfo, ImageCacheStats, ReleaseNote } from "../types";
 
 export interface SystemTabProps {
   systemInfo: SystemInfo | null;
   imageCacheStats: ImageCacheStats | null;
   clearingImageCache: boolean;
   onClearImageCache: () => void;
+  releaseNotes: ReleaseNote[];
+  loadingChangelog: boolean;
+}
+
+/**
+ * Clean a markdown list item for display:
+ * - Strip commit hash links: "([abc1234](url))" or "(abc1234)"
+ * - Convert bold scopes: "**lifecycle:** msg" → "lifecycle: msg"
+ * - Decode HTML entities: "&gt;" → ">"
+ */
+function cleanItem(raw: string): string {
+  return (
+    raw
+      // Remove markdown commit links: ([hash](url))
+      .replace(/\s*\(\[?[a-f0-9]{7,40}\]?\([^)]*\)\)/g, "")
+      // Remove bare hash refs: (hash)
+      .replace(/\s*\([a-f0-9]{7,40}\)/g, "")
+      // Convert **scope:** to scope:
+      .replace(/\*\*([^*]+)\*\*/g, "$1")
+      // Decode common HTML entities from GitHub
+      .replace(/&gt;/g, ">")
+      .replace(/&lt;/g, "<")
+      .replace(/&amp;/g, "&")
+      .trim()
+  );
+}
+
+/**
+ * Parse a release-please body into grouped sections.
+ * Handles the format: ## [version](url) (date) then ### Section headings with * items.
+ */
+function parseReleaseBody(body: string): { heading: string; items: string[] }[] {
+  const lines = body.split("\n");
+  const sections: { heading: string; items: string[] }[] = [];
+  let current: { heading: string; items: string[] } | null = null;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // Skip the version header line: ## [0.11.3](url) (date)
+    if (/^##\s+\[?\d+\.\d+/.test(trimmed)) continue;
+
+    // Section heading (### Bug Fixes, ### Features, etc.)
+    const headingMatch = trimmed.match(/^#{2,3}\s+(.+)/);
+    if (headingMatch) {
+      current = { heading: headingMatch[1], items: [] };
+      sections.push(current);
+      continue;
+    }
+
+    // List item
+    if ((trimmed.startsWith("* ") || trimmed.startsWith("- ")) && current) {
+      current.items.push(cleanItem(trimmed.slice(2)));
+    }
+  }
+
+  return sections.filter((s) => s.items.length > 0);
+}
+
+function formatDate(dateStr: string): string {
+  try {
+    return new Date(dateStr).toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return dateStr;
+  }
+}
+
+function ReleaseNoteCard({ note }: { note: ReleaseNote }) {
+  const [open, setOpen] = useState(note.isLatest && !note.isCurrent);
+  const sections = parseReleaseBody(note.body);
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <Card>
+        <CollapsibleTrigger asChild>
+          <button className="w-full text-left">
+            <CardContent className="flex items-center justify-between py-3">
+              <div className="flex items-center gap-3">
+                <span className="font-medium font-mono text-sm">
+                  v{note.version}
+                </span>
+                <div className="flex items-center gap-1.5">
+                  {note.isCurrent && (
+                    <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                      Current
+                    </Badge>
+                  )}
+                  {note.isLatest && !note.isCurrent && (
+                    <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/20 text-[10px] px-1.5 py-0">
+                      Latest
+                    </Badge>
+                  )}
+                </div>
+                {note.publishedAt && (
+                  <span className="text-xs text-muted-foreground">
+                    {formatDate(note.publishedAt)}
+                  </span>
+                )}
+              </div>
+              <ChevronDown
+                className={`h-4 w-4 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
+              />
+            </CardContent>
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="border-t border-border px-6 pb-4 pt-3">
+            {sections.length > 0 ? (
+              <div className="space-y-3">
+                {sections.map((section) => (
+                  <div key={section.heading}>
+                    <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                      {section.heading}
+                    </h4>
+                    <ul className="space-y-1">
+                      {section.items.map((item, i) => (
+                        <li
+                          key={i}
+                          className="text-sm text-foreground/80 flex gap-2"
+                        >
+                          <span className="text-muted-foreground mt-1 shrink-0">
+                            &bull;
+                          </span>
+                          <span>{item}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground italic">
+                No release notes available.
+              </p>
+            )}
+            {note.url && (
+              <a
+                href={note.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-3 inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                View on GitHub
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            )}
+          </div>
+        </CollapsibleContent>
+      </Card>
+    </Collapsible>
+  );
 }
 
 export function SystemTab({
@@ -17,6 +186,8 @@ export function SystemTab({
   imageCacheStats,
   clearingImageCache,
   onClearImageCache,
+  releaseNotes,
+  loadingChangelog,
 }: SystemTabProps) {
   return (
     <div className="space-y-6">
@@ -101,6 +272,30 @@ export function SystemTab({
           </div>
         </CardContent>
       </Card>
+
+      <h2 className="text-xl font-semibold">Release Notes</h2>
+      {loadingChangelog ? (
+        <Card>
+          <CardContent className="flex items-center justify-center py-8">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            <span className="ml-2 text-sm text-muted-foreground">Loading release notes...</span>
+          </CardContent>
+        </Card>
+      ) : releaseNotes.length > 0 ? (
+        <div className="space-y-2">
+          {releaseNotes.map((note) => (
+            <ReleaseNoteCard key={note.version} note={note} />
+          ))}
+        </div>
+      ) : (
+        <Card>
+          <CardContent className="py-8 text-center">
+            <p className="text-sm text-muted-foreground">
+              Unable to load release notes. Version information may be unavailable.
+            </p>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

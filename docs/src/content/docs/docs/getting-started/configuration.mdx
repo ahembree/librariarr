@@ -112,6 +112,30 @@ Configure in **Settings → General** under the Backup section. See the [Backup 
 - **Retention**: Number of backups to keep (default: 7)
 - **Encryption Password**: Optional password-based encryption for all backups (minimum 8 characters)
 
+## System
+
+The **Settings → System** tab displays system information and release notes.
+
+### System Information
+
+- **Application Version**: Current version with update indicator when a newer release is available on GitHub
+- **Database Migration**: Latest applied Prisma migration
+- **Database Size**: Current PostgreSQL database size
+- **Media Items / Libraries / Servers**: Counts of synced content
+
+### Release Notes
+
+Displays changelog entries fetched from GitHub Releases, including:
+
+- The current version's release notes
+- Release notes for any newer versions, if an update is available (auto-expanded)
+- Each release can be expanded/collapsed to view its full changelog
+
+### Image Cache
+
+- Shows the number of cached images and total size
+- **Clear Image Cache** button to reclaim disk space
+
 ## Next Steps
 
 - [Connect a server](/docs/getting-started/connecting-a-server/) to start syncing your media library

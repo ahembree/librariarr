@@ -99,6 +99,16 @@ export interface ImageCacheStats {
   totalSize: number;
 }
 
+export interface ReleaseNote {
+  version: string;
+  name: string | null;
+  body: string;
+  url: string;
+  publishedAt: string;
+  isCurrent: boolean;
+  isLatest: boolean;
+}
+
 export interface TestResult {
   ok: boolean;
   error?: string;

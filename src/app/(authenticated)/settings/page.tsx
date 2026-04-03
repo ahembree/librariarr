@@ -44,6 +44,7 @@ import type {
   ImageCacheStats,
   TestResult,
   BackupEntry,
+  ReleaseNote,
 } from "./types";
 import { PRESET_VALUES } from "./types";
 
@@ -213,6 +214,10 @@ export default function SettingsPage() {
   // Image cache
   const [imageCacheStats, setImageCacheStats] = useState<ImageCacheStats | null>(null);
   const [clearingImageCache, setClearingImageCache] = useState(false);
+
+  // Changelog
+  const [releaseNotes, setReleaseNotes] = useState<ReleaseNote[]>([]);
+  const [loadingChangelog, setLoadingChangelog] = useState(false);
 
   // Server editing
   const [editingServerId, setEditingServerId] = useState<string | null>(null);
@@ -432,6 +437,19 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const fetchChangelog = useCallback(async () => {
+    setLoadingChangelog(true);
+    try {
+      const response = await fetch("/api/system/changelog");
+      const data = await response.json();
+      setReleaseNotes(data.notes ?? []);
+    } catch (error) {
+      console.error("Failed to fetch changelog:", error);
+    } finally {
+      setLoadingChangelog(false);
+    }
+  }, []);
+
   const fetchImageCacheStats = useCallback(async () => {
     try {
       const response = await fetch("/api/settings/image-cache");
@@ -594,12 +612,13 @@ export default function SettingsPage() {
       fetchDiscordSettings(),
       fetchDedupSetting(),
       fetchImageCacheStats(),
+      fetchChangelog(),
     ]).finally(() => setLoading(false));
     // Fetch auth info separately (non-blocking)
     fetch("/api/settings/auth").then((r) => r.json()).then(setAuthInfo).catch(() => {});
     // Fetch display preferences separately (non-blocking)
     fetch("/api/settings/title-preference").then((r) => r.ok ? r.json() : null).then((data) => { if (data) { setPreferredTitleServerId(data.preferredTitleServerId ?? null); setPreferredArtworkServerId(data.preferredArtworkServerId ?? null); } }).catch(() => {});
-  }, [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchDedupSetting, fetchImageCacheStats]);
+  }, [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchDedupSetting, fetchImageCacheStats, fetchChangelog]);
 
   // Poll server data during active sync for real-time progress bar
   const hasActiveSync = servers.some(
@@ -2276,6 +2295,8 @@ export default function SettingsPage() {
             imageCacheStats={imageCacheStats}
             clearingImageCache={clearingImageCache}
             onClearImageCache={handleClearImageCache}
+            releaseNotes={releaseNotes}
+            loadingChangelog={loadingChangelog}
           />
         </TabsContent>
       </Tabs>
