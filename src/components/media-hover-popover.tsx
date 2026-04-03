@@ -1,0 +1,255 @@
+import { formatDuration, formatFileSize, formatDate } from "@/lib/format";
+import { normalizeResolutionLabel } from "@/lib/resolution";
+import { useChipColors } from "@/components/chip-color-provider";
+import { RatingChip } from "@/components/rating-chip";
+import { ServerChips } from "@/components/server-chips";
+import { Clock, HardDrive } from "lucide-react";
+
+export interface MediaHoverData {
+  title: string;
+  year?: number | null;
+  summary?: string | null;
+  contentRating?: string | null;
+  rating?: number | null;
+  audienceRating?: number | null;
+  duration?: number | null;
+  resolution?: string | null;
+  dynamicRange?: string | null;
+  audioProfile?: string | null;
+  fileSize?: string | null;
+  genres?: string[] | null;
+  studio?: string | null;
+  playCount?: number;
+  lastPlayedAt?: string | null;
+  addedAt?: string | null;
+  seasonCount?: number;
+  episodeCount?: number;
+  albumCount?: number;
+  trackCount?: number;
+  servers?: Array<{ serverId: string; serverName: string; serverType: string }>;
+}
+
+function Dot() {
+  return <span className="text-muted-foreground/40">·</span>;
+}
+
+function Section({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="border-b border-border/30 px-3.5 py-2 space-y-0.5 last:border-b-0">
+      {children}
+    </div>
+  );
+}
+
+function Row({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-muted-foreground flex-wrap">
+      {children}
+    </div>
+  );
+}
+
+function Chip({ style, children }: { style: React.CSSProperties; children: React.ReactNode }) {
+  return (
+    <span
+      className="inline-flex items-center rounded-md border px-1.5 py-px text-[10px] font-medium leading-tight"
+      style={style}
+    >
+      {children}
+    </span>
+  );
+}
+
+function DetailRow({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+      <span className="text-muted-foreground/60 shrink-0">{icon}</span>
+      <span>{children}</span>
+    </div>
+  );
+}
+
+export function MediaHoverPopover({ data }: { data: MediaHoverData }) {
+  const { getBadgeStyle } = useChipColors();
+
+  const resLabel =
+    data.resolution ? normalizeResolutionLabel(data.resolution) : null;
+  const displayRes = resLabel === "Other" ? data.resolution : resLabel;
+
+  const hasSummary = data.summary;
+  const hasGroupedCounts =
+    data.seasonCount != null ||
+    data.episodeCount != null ||
+    data.albumCount != null ||
+    data.trackCount != null;
+  const hasChips =
+    displayRes ||
+    (data.dynamicRange && data.dynamicRange !== "SDR") ||
+    data.audioProfile;
+  const hasDuration = data.duration && formatDuration(data.duration) !== "-";
+  const hasFileSize = data.fileSize && formatFileSize(data.fileSize) !== "-";
+  const hasDetails = hasDuration || hasFileSize;
+  const hasGenres = data.genres && data.genres.length > 0;
+  const hasRatings = data.rating != null || data.audienceRating != null;
+  const hasFooter = data.addedAt || (data.playCount != null && data.playCount > 0);
+  const hasServers = data.servers && data.servers.length > 0;
+
+  return (
+    <div className="py-1">
+      {/* Header: title + year + studio */}
+      <Section>
+        <div className="flex items-baseline justify-between gap-2">
+          <h4 className="text-sm font-semibold leading-tight line-clamp-2 min-w-0">
+            {data.title}
+          </h4>
+          {data.year && (
+            <span className="text-xs text-muted-foreground shrink-0">
+              {data.year}
+            </span>
+          )}
+        </div>
+        {(data.studio || data.contentRating) && (
+          <Row>
+            {data.studio && <span>{data.studio}</span>}
+            {data.studio && data.contentRating && <Dot />}
+            {data.contentRating && (
+              <span className="rounded border border-border/50 px-1 py-px text-[10px] leading-none">
+                {data.contentRating}
+              </span>
+            )}
+          </Row>
+        )}
+      </Section>
+
+      {/* Summary */}
+      {hasSummary && (
+        <Section>
+          <p className="text-xs text-muted-foreground/80 leading-relaxed line-clamp-3">
+            {data.summary}
+          </p>
+        </Section>
+      )}
+
+      {/* Grouped counts (series/music) */}
+      {hasGroupedCounts && (
+        <Section>
+          <Row>
+            {data.seasonCount != null && (
+              <span>
+                {data.seasonCount} {data.seasonCount === 1 ? "season" : "seasons"}
+              </span>
+            )}
+            {data.seasonCount != null && data.episodeCount != null && <Dot />}
+            {data.episodeCount != null && (
+              <span>
+                {data.episodeCount}{" "}
+                {data.episodeCount === 1 ? "episode" : "episodes"}
+              </span>
+            )}
+            {data.albumCount != null && (
+              <span>
+                {data.albumCount} {data.albumCount === 1 ? "album" : "albums"}
+              </span>
+            )}
+            {data.albumCount != null && data.trackCount != null && <Dot />}
+            {data.trackCount != null && (
+              <span>
+                {data.trackCount} {data.trackCount === 1 ? "track" : "tracks"}
+              </span>
+            )}
+          </Row>
+        </Section>
+      )}
+
+      {/* Quality chips */}
+      {hasChips && (
+        <Section>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {displayRes && (
+              <Chip style={getBadgeStyle("resolution", displayRes)}>
+                {displayRes}
+              </Chip>
+            )}
+            {data.dynamicRange && data.dynamicRange !== "SDR" && (
+              <Chip style={getBadgeStyle("dynamicRange", data.dynamicRange)}>
+                {data.dynamicRange}
+              </Chip>
+            )}
+            {data.audioProfile && (
+              <Chip style={getBadgeStyle("audioProfile", data.audioProfile)}>
+                {data.audioProfile}
+              </Chip>
+            )}
+          </div>
+        </Section>
+      )}
+
+      {/* Duration + file size — vertical with icons */}
+      {hasDetails && (
+        <Section>
+          <div className="flex flex-col gap-1">
+            {hasDuration && (
+              <DetailRow icon={<Clock className="h-3.5 w-3.5" />}>
+                {formatDuration(data.duration ?? null)}
+              </DetailRow>
+            )}
+            {hasFileSize && (
+              <DetailRow icon={<HardDrive className="h-3.5 w-3.5" />}>
+                {formatFileSize(data.fileSize ?? null)}
+              </DetailRow>
+            )}
+          </div>
+        </Section>
+      )}
+
+      {/* Genres */}
+      {hasGenres && (
+        <Section>
+          <Row>
+            <span className="line-clamp-1">{data.genres!.slice(0, 3).join(", ")}</span>
+          </Row>
+        </Section>
+      )}
+
+      {/* Ratings */}
+      {hasRatings && (
+        <Section>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {data.rating != null && (
+              <RatingChip label="Critic" value={data.rating} className="text-[10px] px-2 py-px" />
+            )}
+            {data.audienceRating != null && (
+              <RatingChip label="Audience" value={data.audienceRating} className="text-[10px] px-2 py-px" />
+            )}
+          </div>
+        </Section>
+      )}
+
+      {/* Footer: dates + plays */}
+      {hasFooter && (
+        <Section>
+          <Row>
+            {data.addedAt && (
+              <span>Added {formatDate(data.addedAt)}</span>
+            )}
+            {data.addedAt && data.playCount != null && data.playCount > 0 && (
+              <Dot />
+            )}
+            {data.playCount != null && data.playCount > 0 && (
+              <span>
+                {data.playCount} {data.playCount === 1 ? "play" : "plays"}
+              </span>
+            )}
+          </Row>
+        </Section>
+      )}
+
+      {/* Servers */}
+      {hasServers && (
+        <Section>
+          <ServerChips servers={data.servers!} />
+        </Section>
+      )}
+    </div>
+  );
+}

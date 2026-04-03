@@ -8,6 +8,7 @@ import { AUDIO_CODEC_ORDER } from "@/lib/theme/chip-colors";
 import Link from "next/link";
 import { MediaFilters } from "@/components/media-filters";
 import { MediaCard } from "@/components/media-card";
+import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { LibraryToolbar } from "@/components/library-toolbar";
@@ -450,6 +451,19 @@ export default function MusicPage() {
                                 : undefined
                             }
                             servers={showServers && servers.length > 1 ? a.servers : undefined}
+                            hoverContent={
+                              <MediaHoverPopover
+                                data={{
+                                  title: a.parentTitle,
+                                  albumCount: a.albumCount,
+                                  trackCount: a.trackCount,
+                                  fileSize: a.totalSize,
+                                  lastPlayedAt: a.lastPlayed,
+                                  addedAt: a.addedAt,
+                                  servers: a.servers,
+                                }}
+                              />
+                            }
                           />
                         ))}
                       </div>

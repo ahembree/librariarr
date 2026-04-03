@@ -6,6 +6,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { useRouter } from "next/navigation";
 import { MediaFilters } from "@/components/media-filters";
 import { MediaCard } from "@/components/media-card";
+import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { useServers } from "@/hooks/use-servers";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import { AlphabetFilter } from "@/components/alphabet-filter";
@@ -491,6 +492,19 @@ export default function SeriesPage() {
                                 : undefined
                             }
                             servers={showServers && servers.length > 1 ? s.servers : undefined}
+                            hoverContent={
+                              <MediaHoverPopover
+                                data={{
+                                  title: s.parentTitle,
+                                  seasonCount: s.seasonCount,
+                                  episodeCount: s.episodeCount,
+                                  fileSize: s.totalSize,
+                                  lastPlayedAt: s.lastPlayed,
+                                  addedAt: s.addedAt,
+                                  servers: s.servers,
+                                }}
+                              />
+                            }
                           />
                         ))}
                       </div>
