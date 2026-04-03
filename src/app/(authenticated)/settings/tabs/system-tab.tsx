@@ -244,30 +244,6 @@ export function SystemTab({
         </CardContent>
       </Card>
 
-      <h2 className="text-xl font-semibold">Release Notes</h2>
-      {loadingChangelog ? (
-        <Card>
-          <CardContent className="flex items-center justify-center py-8">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            <span className="ml-2 text-sm text-muted-foreground">Loading release notes...</span>
-          </CardContent>
-        </Card>
-      ) : releaseNotes.length > 0 ? (
-        <div className="space-y-2">
-          {releaseNotes.map((note) => (
-            <ReleaseNoteCard key={note.version} note={note} />
-          ))}
-        </div>
-      ) : (
-        <Card>
-          <CardContent className="py-8 text-center">
-            <p className="text-sm text-muted-foreground">
-              Unable to load release notes. Version information may be unavailable.
-            </p>
-          </CardContent>
-        </Card>
-      )}
-
       <h2 className="text-xl font-semibold">Image Cache</h2>
       <Card>
         <CardContent>
@@ -296,6 +272,30 @@ export function SystemTab({
           </div>
         </CardContent>
       </Card>
+
+      <h2 className="text-xl font-semibold">Release Notes</h2>
+      {loadingChangelog ? (
+        <Card>
+          <CardContent className="flex items-center justify-center py-8">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            <span className="ml-2 text-sm text-muted-foreground">Loading release notes...</span>
+          </CardContent>
+        </Card>
+      ) : releaseNotes.length > 0 ? (
+        <div className="space-y-2">
+          {releaseNotes.map((note) => (
+            <ReleaseNoteCard key={note.version} note={note} />
+          ))}
+        </div>
+      ) : (
+        <Card>
+          <CardContent className="py-8 text-center">
+            <p className="text-sm text-muted-foreground">
+              Unable to load release notes. Version information may be unavailable.
+            </p>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
