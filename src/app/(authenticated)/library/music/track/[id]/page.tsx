@@ -15,6 +15,20 @@ export default function TrackDetailPage() {
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
   const [loading, setLoading] = useState(true);
+  const [backOverride, setBackOverride] = useState<{ href: string; label: string } | null>(null);
+
+  useEffect(() => {
+    const backPath = sessionStorage.getItem("library-back-path");
+    if (backPath) {
+      sessionStorage.removeItem("library-back-path");
+      const labels: Record<string, string> = {
+        "/library/music/tracks": "All Tracks",
+        "/library/music/albums": "All Albums",
+      };
+      const label = labels[backPath];
+      if (label) setBackOverride({ href: backPath, label });
+    }
+  }, []);
 
   useEffect(() => {
     async function fetchItem() {
@@ -81,8 +95,8 @@ export default function TrackDetailPage() {
         </>
       }
       filePath={item.filePath}
-      backHref={`/library/music/album/${item.id}`}
-      backLabel={item.parentTitle || "Album"}
+      backHref={backOverride?.href ?? `/library/music/album/${item.id}`}
+      backLabel={backOverride?.label ?? (item.parentTitle || "Album")}
       useParentArt
       posterAspectRatio="1/1"
       playServers={playServers}

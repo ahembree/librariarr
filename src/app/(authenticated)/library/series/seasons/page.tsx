@@ -162,7 +162,32 @@ export default function AllSeasonsPage() {
 
   const gridContainerRef = useRef<HTMLDivElement>(null);
 
-  const { markChildNavigation } = useScrollRestoration("/library/series/seasons", !loading && seasons.length > 0);
+  const { markChildNavigation } = useScrollRestoration("/library/series/seasons", !loading && seasons.length > 0, undefined, undefined, {
+    getFirstVisibleIndex: () => {
+      if (!gridContainerRef.current) return -1;
+      const main = document.querySelector<HTMLElement>("main");
+      if (!main) return -1;
+      const containerWidth = gridContainerRef.current.offsetWidth;
+      const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
+      const rowHeight = Math.round(columnWidth * 1.5 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
+      if (rowHeight <= 0) return -1;
+      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
+      const centerInGrid = main.scrollTop + main.clientHeight / 2 - gridTop;
+      return Math.max(0, Math.floor(centerInGrid / rowHeight)) * actualColumns;
+    },
+    scrollToIndex: (index) => {
+      if (!gridContainerRef.current) return false;
+      const main = document.querySelector<HTMLElement>("main");
+      if (!main) return false;
+      const row = Math.floor(index / actualColumns);
+      const containerWidth = gridContainerRef.current.offsetWidth;
+      const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
+      const rowHeight = Math.round(columnWidth * 1.5 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
+      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
+      main.scrollTo({ top: Math.max(0, gridTop + row * rowHeight + rowHeight / 2 - main.clientHeight / 2), behavior: "instant" });
+      return true;
+    },
+  });
 
   const scrollElementRef = useRef<HTMLElement | null>(null);
   const [, setScrollElement] = useState<HTMLElement | null>(null);
@@ -253,6 +278,7 @@ export default function AllSeasonsPage() {
 
   const navigateToSeason = (season: SeasonEntry) => {
     markChildNavigation();
+    sessionStorage.setItem("library-back-path", "/library/series/seasons");
     router.push(`/library/series/season/${season.mediaItemId}`);
   };
 

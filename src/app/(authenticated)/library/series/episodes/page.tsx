@@ -20,6 +20,7 @@ import { formatFileSize, formatDuration } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 
 function formatResolution(resolution: string | null): string {
   if (!resolution) return "";
@@ -64,6 +65,33 @@ export default function AllEpisodesPage() {
     return Math.max(2, Math.floor((contentWidth + GAP) / (minWidth + GAP)));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size, actualColumns]); // actualColumns changes on resize, so we recompute
+
+  const { markChildNavigation } = useScrollRestoration("/library/series/episodes", !loading && items.length > 0, undefined, undefined, {
+    getFirstVisibleIndex: () => {
+      if (!gridContainerRef.current) return -1;
+      const main = document.querySelector<HTMLElement>("main");
+      if (!main) return -1;
+      const containerWidth = gridContainerRef.current.offsetWidth;
+      const columnWidth = (containerWidth - GAP * (landscapeColumns - 1)) / landscapeColumns;
+      const rowHeight = Math.round(columnWidth * 0.5625 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
+      if (rowHeight <= 0) return -1;
+      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
+      const centerInGrid = main.scrollTop + main.clientHeight / 2 - gridTop;
+      return Math.max(0, Math.floor(centerInGrid / rowHeight)) * landscapeColumns;
+    },
+    scrollToIndex: (index) => {
+      if (!gridContainerRef.current) return false;
+      const main = document.querySelector<HTMLElement>("main");
+      if (!main) return false;
+      const row = Math.floor(index / landscapeColumns);
+      const containerWidth = gridContainerRef.current.offsetWidth;
+      const columnWidth = (containerWidth - GAP * (landscapeColumns - 1)) / landscapeColumns;
+      const rowHeight = Math.round(columnWidth * 0.5625 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
+      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
+      main.scrollTo({ top: Math.max(0, gridTop + row * rowHeight + rowHeight / 2 - main.clientHeight / 2), behavior: "instant" });
+      return true;
+    },
+  });
 
   // Find the <main> scroll container on mount
   useEffect(() => {
@@ -207,7 +235,7 @@ export default function AllEpisodesPage() {
           {viewMode === "table" ? (
             <MediaTable
               items={items}
-              onItemClick={(item) => router.push(`/library/series/episode/${item.id}`)}
+              onItemClick={(item) => { markChildNavigation(); sessionStorage.setItem("library-back-path", "/library/series/episodes"); router.push(`/library/series/episode/${item.id}`); }}
               sortBy={sortBy}
               sortOrder={sortOrder}
               onSort={handleSort}
@@ -277,7 +305,7 @@ export default function AllEpisodesPage() {
                             title={ep.title}
                             aspectRatio="landscape"
                             fallbackIcon="series"
-                            onClick={() => router.push(`/library/series/episode/${ep.id}`)}
+                            onClick={() => { markChildNavigation(); sessionStorage.setItem("library-back-path", "/library/series/episodes"); router.push(`/library/series/episode/${ep.id}`); }}
                             hoverContent={
                               <MediaHoverPopover
                                 data={{

@@ -42,6 +42,20 @@ export default function SeasonDetailPage() {
   const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
   const [sortBy, setSortBy] = useState("episodeNumber");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+  const [backOverride, setBackOverride] = useState<{ href: string; label: string } | null>(null);
+
+  useEffect(() => {
+    const backPath = sessionStorage.getItem("library-back-path");
+    if (backPath) {
+      sessionStorage.removeItem("library-back-path");
+      const labels: Record<string, string> = {
+        "/library/series/seasons": "All Seasons",
+        "/library/series/episodes": "All Episodes",
+      };
+      const label = labels[backPath];
+      if (label) setBackOverride({ href: backPath, label });
+    }
+  }, []);
 
   useEffect(() => {
     const stored = localStorage.getItem("season-detail-view-mode") as "cards" | "table" | null;
@@ -173,8 +187,8 @@ export default function SeasonDetailPage() {
             ))
           : undefined
       }
-      backHref={`/library/series/show/${item.id}`}
-      backLabel={seriesTitle}
+      backHref={backOverride?.href ?? `/library/series/show/${item.id}`}
+      backLabel={backOverride?.label ?? seriesTitle}
       useParentArt
       playServers={playServers}
     >
