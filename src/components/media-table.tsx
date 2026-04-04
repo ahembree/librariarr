@@ -4,6 +4,7 @@ import React, { memo, useState, useEffect, useLayoutEffect, useCallback, useRef,
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useChipColors } from "@/components/chip-color-provider";
 import { getChipBadgeStyle, type ChipColorCategory } from "@/lib/theme/chip-colors";
+import { ColorChip } from "@/components/color-chip";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import {
   Table,
@@ -13,7 +14,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ChevronUp, ChevronDown, ChevronsUpDown, Columns3, ShieldOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { ServerChips } from "@/components/server-chips";
 import { useColumnResize } from "@/hooks/use-column-resize";
@@ -46,6 +47,8 @@ interface MediaTableProps {
   hideServers?: boolean;
   /** Optional callback to add extra CSS classes to a row based on the item */
   rowClassName?: (item: MediaItemWithRelations) => string | undefined;
+  /** Optional render function for hover popover content on each row */
+  renderHoverContent?: (item: MediaItemWithRelations) => React.ReactNode;
 }
 
 // --- Column Definitions ---
@@ -133,9 +136,9 @@ function buildColumns(getHex: (category: ChipColorCategory, value: string) => st
     defaultVisible: true,
     defaultWidth: 100,
     render: (item) => (
-      <Badge variant="outline" style={getChipBadgeStyle(getHex("resolution", formatResolution(item.resolution)))}>
+      <ColorChip style={getChipBadgeStyle(getHex("resolution", formatResolution(item.resolution)))}>
         {formatResolution(item.resolution)}
-      </Badge>
+      </ColorChip>
     ),
   },
   {
@@ -148,9 +151,9 @@ function buildColumns(getHex: (category: ChipColorCategory, value: string) => st
     render: (item) => {
       const dr = item.dynamicRange ?? "SDR";
       return (
-        <Badge variant="outline" style={getChipBadgeStyle(getHex("dynamicRange", dr))}>
+        <ColorChip style={getChipBadgeStyle(getHex("dynamicRange", dr))}>
           {formatDynamicRange(dr)}
-        </Badge>
+        </ColorChip>
       );
     },
   },
@@ -172,12 +175,15 @@ function buildColumns(getHex: (category: ChipColorCategory, value: string) => st
     group: "audio",
     defaultVisible: true,
     defaultWidth: 130,
-    render: (item) => (
-      <span className="text-muted-foreground">
-        {item.audioCodec?.toUpperCase() ?? "-"}
-        {item.audioChannels ? ` ${item.audioChannels}ch` : ""}
-      </span>
-    ),
+    render: (item) =>
+      item.audioCodec ? (
+        <ColorChip style={getChipBadgeStyle(getHex("audioCodec", item.audioCodec))}>
+          {item.audioCodec.toUpperCase()}
+          {item.audioChannels ? ` ${item.audioChannels}ch` : ""}
+        </ColorChip>
+      ) : (
+        <span className="text-muted-foreground">-</span>
+      ),
   },
   {
     id: "fileSize",
@@ -226,9 +232,9 @@ function buildColumns(getHex: (category: ChipColorCategory, value: string) => st
     defaultWidth: 120,
     render: (item) =>
       item.audioProfile ? (
-        <Badge variant="outline" style={getChipBadgeStyle(getHex("audioProfile", item.audioProfile))}>
+        <ColorChip style={getChipBadgeStyle(getHex("audioProfile", item.audioProfile))}>
           {item.audioProfile}
-        </Badge>
+        </ColorChip>
       ) : (
         <span className="text-muted-foreground">-</span>
       ),
@@ -409,7 +415,7 @@ const VIDEO_COLUMN_IDS = new Set([
   "aspectRatio",
 ]);
 
-export const MediaTable = memo(function MediaTable({ items, onItemClick, sortBy, sortOrder, onSort, mediaType, hideParentTitle, scrollToIndexRef, exceptedItemIds, hideServers, rowClassName }: MediaTableProps) {
+export const MediaTable = memo(function MediaTable({ items, onItemClick, sortBy, sortOrder, onSort, mediaType, hideParentTitle, scrollToIndexRef, exceptedItemIds, hideServers, rowClassName, renderHoverContent }: MediaTableProps) {
   const { getHex } = useChipColors();
   const allColumns = useMemo(() => buildColumns(getHex), [getHex]);
   const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(() => getDefaultVisibility(allColumns));
@@ -437,18 +443,31 @@ export const MediaTable = memo(function MediaTable({ items, onItemClick, sortBy,
     }
   }, []);
 
-  useLayoutEffect(() => {
+  const recalcScrollMargin = useCallback(() => {
     const scrollEl = scrollElementRef.current;
     const tableEl = tableContainerRef.current;
     if (scrollEl && tableEl) {
-      // Use getBoundingClientRect for correct offset relative to scroll container
-      // (offsetTop is relative to offsetParent, which may differ from the scroll element)
       const margin = Math.round(
         tableEl.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top + scrollEl.scrollTop
       );
       setScrollMargin(margin);
     }
-  }, [items.length]);
+  }, []);
+
+  useLayoutEffect(() => {
+    recalcScrollMargin();
+  }, [items.length, recalcScrollMargin]);
+
+  // Recalculate scroll margin when scroll container resizes (e.g. side panel opens/closes)
+  useEffect(() => {
+    const scrollEl = scrollElementRef.current;
+    if (!scrollEl) return;
+    const observer = new ResizeObserver(() => {
+      recalcScrollMargin();
+    });
+    observer.observe(scrollEl);
+    return () => observer.disconnect();
+  }, [recalcScrollMargin]);
 
   const virtualizer = useVirtualizer({
     count: items.length,
@@ -697,39 +716,44 @@ export const MediaTable = memo(function MediaTable({ items, onItemClick, sortBy,
                   {virtualRows.map((virtualRow) => {
                     const item = items[virtualRow.index];
                     const epLabel = formatEpisodeLabel(item, isMusic);
-                    return (
+                    const hoverContent = renderHoverContent?.(item);
+
+                    const titleContent = (
+                      <span className="inline-flex items-center gap-1.5">
+                        {exceptedItemIds?.has(item.id) && (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <ShieldOff className="h-3.5 w-3.5 text-orange-400 shrink-0" />
+                              </TooltipTrigger>
+                              <TooltipContent>Excluded from lifecycle actions</TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        )}
+                        {hideParentTitle ? (
+                          <span>{item.title}</span>
+                        ) : item.matchedEpisodes ? (
+                          <span>{item.parentTitle ?? item.title}</span>
+                        ) : item.parentTitle ? (
+                          <>
+                            <span>{item.parentTitle}</span>
+                            <span className="text-xs text-muted-foreground ml-1.5">— {item.title}</span>
+                          </>
+                        ) : (
+                          <span>{item.title}</span>
+                        )}
+                      </span>
+                    );
+
+                    const tableRow = (
                       <TableRow
-                        key={item.id}
                         data-index={virtualRow.index}
                         onClick={() => onItemClick(item)}
                         className={`cursor-pointer transition-all duration-200 hover:bg-white/3 even:bg-white/1.5 hover:ring-1 hover:ring-primary/20 hover:shadow-md hover:shadow-primary/10 ${rowClassName?.(item) ?? ""}`}
                       >
                         {/* Title cell - always shown */}
                         <TableCell className="font-medium overflow-hidden text-ellipsis">
-                          <span className="inline-flex items-center gap-1.5">
-                            {exceptedItemIds?.has(item.id) && (
-                              <TooltipProvider>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <ShieldOff className="h-3.5 w-3.5 text-orange-400 shrink-0" />
-                                  </TooltipTrigger>
-                                  <TooltipContent>Excluded from lifecycle actions</TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
-                            )}
-                            {hideParentTitle ? (
-                              <span>{item.title}</span>
-                            ) : item.matchedEpisodes ? (
-                              <span>{item.parentTitle ?? item.title}</span>
-                            ) : item.parentTitle ? (
-                              <>
-                                <span>{item.parentTitle}</span>
-                                <span className="text-xs text-muted-foreground ml-1.5">— {item.title}</span>
-                              </>
-                            ) : (
-                              <span>{item.title}</span>
-                            )}
-                          </span>
+                          {titleContent}
                         </TableCell>
                         {/* Episode column */}
                         {isShowView && !isGroupedShowView && (
@@ -749,6 +773,24 @@ export const MediaTable = memo(function MediaTable({ items, onItemClick, sortBy,
                           </TableCell>
                         ))}
                       </TableRow>
+                    );
+
+                    if (!hoverContent) return <React.Fragment key={item.id}>{tableRow}</React.Fragment>;
+
+                    return (
+                      <HoverCard key={item.id} openDelay={400} closeDelay={150}>
+                        <HoverCardTrigger asChild>
+                          {tableRow}
+                        </HoverCardTrigger>
+                        <HoverCardContent
+                          side="bottom"
+                          align="start"
+                          sideOffset={4}
+                          className="w-72 p-0 duration-200"
+                        >
+                          {hoverContent}
+                        </HoverCardContent>
+                      </HoverCard>
                     );
                   })}
                   {paddingBottom > 0 && (

@@ -8,7 +8,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { Input } from "@/components/ui/input";
 import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
@@ -133,45 +133,45 @@ function getSyncStatusBadge(status: string) {
   switch (status) {
     case "COMPLETED":
       return (
-        <Badge variant="secondary" className="bg-green-500/20 text-green-400">
+        <ColorChip className="bg-green-500/20 text-green-400">
           <CheckCircle className="mr-1 h-3 w-3" />
           Completed
-        </Badge>
+        </ColorChip>
       );
     case "FAILED":
       return (
-        <Badge variant="secondary" className="bg-red-500/20 text-red-400">
+        <ColorChip className="bg-red-500/20 text-red-400">
           <XCircle className="mr-1 h-3 w-3" />
           Failed
-        </Badge>
+        </ColorChip>
       );
     case "RUNNING":
       return (
-        <Badge variant="secondary" className="bg-blue-500/20 text-blue-400">
+        <ColorChip className="bg-blue-500/20 text-blue-400">
           <Loader2 className="mr-1 h-3 w-3 animate-spin" />
           Running
-        </Badge>
+        </ColorChip>
       );
     case "PENDING":
       return (
-        <Badge variant="secondary" className="bg-amber-500/20 text-amber-400">
+        <ColorChip className="bg-amber-500/20 text-amber-400">
           <Clock className="mr-1 h-3 w-3" />
           Pending
-        </Badge>
+        </ColorChip>
       );
     case "CANCELLED":
       return (
-        <Badge variant="secondary" className="bg-amber-500/20 text-amber-400">
+        <ColorChip className="bg-amber-500/20 text-amber-400">
           <XCircle className="mr-1 h-3 w-3" />
           Cancelled
-        </Badge>
+        </ColorChip>
       );
     default:
       return (
-        <Badge variant="secondary">
+        <ColorChip className="border-border text-muted-foreground">
           <Clock className="mr-1 h-3 w-3" />
           {status}
-        </Badge>
+        </ColorChip>
       );
   }
 }
@@ -475,13 +475,13 @@ export function ServersTab({
                         <CardTitle className="flex flex-wrap items-center gap-2">
                           <Server className="h-5 w-5 shrink-0" />
                           <span className="truncate">{server.name}</span>
-                          <Badge variant="outline" className="shrink-0 text-xs font-normal">
+                          <ColorChip className="shrink-0 text-xs font-normal border-border text-muted-foreground">
                             {server.type === "PLEX" ? "Plex" : server.type === "JELLYFIN" ? "Jellyfin" : server.type === "EMBY" ? "Emby" : server.type}
-                          </Badge>
+                          </ColorChip>
                           {!server.enabled && (
-                            <Badge variant="secondary" className="shrink-0 text-xs font-normal bg-amber-500/20 text-amber-400">
+                            <ColorChip className="shrink-0 text-xs font-normal bg-amber-500/20 text-amber-400">
                               Disabled
-                            </Badge>
+                            </ColorChip>
                           )}
                           <Switch
                             className="shrink-0"

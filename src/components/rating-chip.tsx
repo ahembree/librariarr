@@ -36,7 +36,7 @@ export function RatingChip({ label, value, min = 3, max = 8, className }: Rating
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium border",
+        "inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 text-xs font-medium leading-none border",
         className,
       )}
       style={{

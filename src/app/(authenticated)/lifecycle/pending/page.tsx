@@ -7,6 +7,7 @@ import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import {
   Card,
   CardContent,
@@ -99,9 +100,9 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  PENDING: "bg-yellow-500 hover:bg-yellow-500",
-  COMPLETED: "bg-green-500 hover:bg-green-500",
-  FAILED: "bg-red-500 hover:bg-red-500",
+  PENDING: "bg-amber-500/20 text-amber-400 border-amber-500/30",
+  COMPLETED: "bg-green-500/20 text-green-400 border-green-500/30",
+  FAILED: "bg-red-500/20 text-red-400 border-red-500/30",
 };
 
 function formatActionType(type: string): string {
@@ -244,24 +245,24 @@ function VirtualizedActionTable({
                       {action.addArrTags?.length > 0 && (
                         <div className="flex flex-wrap gap-1">
                           {action.addArrTags.map((tag) => (
-                            <Badge
+                            <ColorChip
                               key={tag}
-                              className="text-[10px] bg-green-500/20 text-green-400 border-green-500/30"
+                              className="bg-green-500/20 text-green-400 border-green-500/30"
                             >
                               +{tag}
-                            </Badge>
+                            </ColorChip>
                           ))}
                         </div>
                       )}
                       {action.removeArrTags?.length > 0 && (
                         <div className="flex flex-wrap gap-1">
                           {action.removeArrTags.map((tag) => (
-                            <Badge
+                            <ColorChip
                               key={tag}
-                              className="text-[10px] bg-red-500/20 text-red-400 border-red-500/30"
+                              className="bg-red-500/20 text-red-400 border-red-500/30"
                             >
                               -{tag}
-                            </Badge>
+                            </ColorChip>
                           ))}
                         </div>
                       )}
@@ -280,11 +281,11 @@ function VirtualizedActionTable({
                     )}
                   </td>
                   <td className="p-4 align-middle">
-                    <Badge
-                      className={`text-white ${STATUS_COLORS[action.status] || "bg-gray-500"}`}
+                    <ColorChip
+                      className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}
                     >
                       {STATUS_LABELS[action.status] ?? action.status}
-                    </Badge>
+                    </ColorChip>
                     {action.error && (
                       <div className="mt-1 max-w-64">
                         <p
@@ -656,8 +657,8 @@ export default function PendingActionsPage() {
   const isPending = statusFilter === "PENDING";
 
   return (
-    <div className="flex md:h-full">
-      <div className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 md:overflow-auto">
+    <div className="flex h-full">
+      <div className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 overflow-auto">
         <div className="mb-6">
           <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Pending Actions</h1>
           <p className="text-muted-foreground mt-1">Scheduled lifecycle actions awaiting execution, grouped by rule set.</p>
@@ -715,9 +716,9 @@ export default function PendingActionsPage() {
                             )}
                           </CardTitle>
                           <div className="flex items-center gap-2 mt-1">
-                            <Badge variant="outline">
+                            <ColorChip className="border-border text-muted-foreground">
                               {group.ruleSet.type === "MOVIE" ? "Movie" : group.ruleSet.type === "MUSIC" ? "Music" : "Series"}
-                            </Badge>
+                            </ColorChip>
                             <Badge variant="secondary">
                               {group.count} item{group.count !== 1 && "s"}
                             </Badge>
@@ -729,20 +730,20 @@ export default function PendingActionsPage() {
                             {(group.ruleSet.addArrTags?.length > 0 || group.ruleSet.removeArrTags?.length > 0) && (
                               <div className="flex flex-wrap gap-1">
                                 {group.ruleSet.addArrTags?.map((tag) => (
-                                  <Badge
+                                  <ColorChip
                                     key={`add-${tag}`}
-                                    className="text-[10px] bg-green-500/20 text-green-400 border-green-500/30"
+                                    className="bg-green-500/20 text-green-400 border-green-500/30"
                                   >
                                     +{tag}
-                                  </Badge>
+                                  </ColorChip>
                                 ))}
                                 {group.ruleSet.removeArrTags?.map((tag) => (
-                                  <Badge
+                                  <ColorChip
                                     key={`rm-${tag}`}
-                                    className="text-[10px] bg-red-500/20 text-red-400 border-red-500/30"
+                                    className="bg-red-500/20 text-red-400 border-red-500/30"
                                   >
                                     -{tag}
-                                  </Badge>
+                                  </ColorChip>
                                 ))}
                               </div>
                             )}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -41,7 +41,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { Loader2, Save, Eye, Trash2, FileText, Upload, ClipboardPaste, Copy, Check, ChevronsUpDown, X, FlaskConical, Search } from "lucide-react";
+import { Loader2, Save, Eye, Trash2, FileText, Upload, ClipboardPaste, Copy, Check, ChevronsUpDown, X, FlaskConical, Search, LayoutGrid, TableProperties, ShieldOff, Calendar, Clock, HardDrive } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -68,7 +68,18 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { PseudocodePanel } from "@/components/builder/pseudocode-panel";
-import { generateId } from "@/lib/utils";
+import { MediaCard } from "@/components/media-card";
+import { useCardSize } from "@/hooks/use-card-size";
+import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
+import { CardSizeControl } from "@/components/card-size-control";
+import { CardDisplayControl } from "@/components/card-display-control";
+import { MetadataLine, MetadataItem } from "@/components/metadata-line";
+import { useChipColors } from "@/components/chip-color-provider";
+import type { ChipColorCategory } from "@/lib/theme/chip-colors";
+import { normalizeResolutionLabel } from "@/lib/resolution";
+import { formatFileSize, formatDuration } from "@/lib/format";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { cn, generateId } from "@/lib/utils";
 
 interface PreviewItem extends MediaItemWithRelations {
   matchedCriteria?: MatchedCriterion[];
@@ -235,6 +246,17 @@ export interface LifecycleRulePageProps {
   embedded?: boolean;
 }
 
+function formatResolution(resolution: string | null): string {
+  if (!resolution) return "";
+  const label = normalizeResolutionLabel(resolution);
+  return label === "Other" ? resolution : label;
+}
+
+const CARD_GAP = 16;
+const CARD_CONTENT_HEIGHT = 138;
+const CARD_QUALITY_BAR_HEIGHT = 4;
+const CARD_BORDER = 2;
+
 function DiffSection({
   label,
   count,
@@ -284,6 +306,191 @@ function DiffSection({
   );
 }
 
+function PreviewCardGrid({
+  items,
+  mediaType,
+  onItemClick,
+  diffMap,
+  exceptedItemIds,
+  show,
+  getHex,
+  showServers,
+}: {
+  items: PreviewItem[];
+  mediaType: "MOVIE" | "SERIES" | "MUSIC";
+  onItemClick: (item: PreviewItem) => void;
+  diffMap: Map<string, "added" | "removed" | "retained">;
+  exceptedItemIds: Set<string>;
+  show: (section: "badges" | "metadata", key: string) => boolean;
+  getHex: (category: ChipColorCategory, value: string) => string;
+  showServers: boolean;
+}) {
+  const cardContainerRef = useRef<HTMLDivElement>(null);
+  const scrollElementRef = useRef<HTMLElement | null>(null);
+  const { columns: actualColumns } = useCardSize();
+  const [scrollMargin, setScrollMargin] = useState(0);
+
+  const rowCount = useMemo(
+    () => (items.length > 0 ? Math.ceil(items.length / actualColumns) : 0),
+    [items.length, actualColumns],
+  );
+
+  // Find scrollable ancestor on mount
+  useLayoutEffect(() => {
+    let el = cardContainerRef.current?.parentElement ?? null;
+    while (el) {
+      const style = getComputedStyle(el);
+      if (style.overflowY === "auto" || style.overflowY === "scroll") {
+        scrollElementRef.current = el;
+        break;
+      }
+      el = el.parentElement;
+    }
+    if (!scrollElementRef.current) {
+      scrollElementRef.current = document.querySelector<HTMLElement>("main");
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    if (cardContainerRef.current) {
+      const scrollEl = scrollElementRef.current;
+      const containerEl = cardContainerRef.current;
+      if (scrollEl && containerEl) {
+        setScrollMargin(Math.round(
+          containerEl.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top + scrollEl.scrollTop,
+        ));
+      }
+    }
+  }, [items.length]);
+
+  const estimateSize = useCallback(() => {
+    const container = cardContainerRef.current;
+    if (!container) return 350;
+    const containerWidth = container.offsetWidth;
+    const columnWidth = (containerWidth - CARD_GAP * (actualColumns - 1)) / actualColumns;
+    const posterHeight = columnWidth * (mediaType === "MUSIC" ? 1 : 1.5);
+    return Math.round(posterHeight + CARD_QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + CARD_GAP);
+  }, [actualColumns, mediaType]);
+
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => scrollElementRef.current,
+    estimateSize,
+    overscan: 5,
+    scrollMargin,
+  });
+
+  useEffect(() => {
+    virtualizer.measure();
+  }, [actualColumns, virtualizer]);
+
+  const virtualRows = virtualizer.getVirtualItems();
+
+  const fallbackIcon = mediaType === "MOVIE" ? "movie" as const
+    : mediaType === "MUSIC" ? "music" as const
+    : "series" as const;
+  const aspectRatio = mediaType === "MUSIC" ? "square" as const : "poster" as const;
+
+  return (
+    <div ref={cardContainerRef}>
+      <div
+        style={{
+          height: virtualizer.getTotalSize(),
+          width: "100%",
+          position: "relative",
+        }}
+      >
+        {virtualRows.map((virtualRow) => {
+          const rowStart = virtualRow.index * actualColumns;
+          const rowItems = items.slice(rowStart, rowStart + actualColumns);
+          return (
+            <div
+              key={virtualRow.key}
+              data-index={virtualRow.index}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                paddingBottom: CARD_GAP,
+                transform: `translateY(${virtualRow.start - (virtualizer.options.scrollMargin ?? 0)}px)`,
+              }}
+            >
+              <div
+                style={{
+                  display: "grid",
+                  gap: `${CARD_GAP}px`,
+                  gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))`,
+                }}
+              >
+                {rowItems.map((item) => {
+                  const diffStatus = diffMap.get(item.id);
+                  const isDiffActive = diffMap.size > 0;
+                  return (
+                    <div
+                      key={item.id}
+                      className={cn(
+                        "relative rounded-lg",
+                        isDiffActive && diffStatus === "added" && "ring-1 ring-emerald-500/70",
+                        isDiffActive && diffStatus === "removed" && "ring-1 ring-amber-500/70 opacity-60",
+                      )}
+                    >
+                      {exceptedItemIds.has(item.id) && (
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-orange-500/90 backdrop-blur-sm flex items-center justify-center">
+                                <ShieldOff className="h-3.5 w-3.5 text-white" />
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent>Excluded from lifecycle actions</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      )}
+                      <MediaCard
+                        imageUrl={`/api/media/${item.id}/image${mediaType !== "MOVIE" ? "?type=parent" : ""}`}
+                        title={item.parentTitle
+                          ? `${item.parentTitle} - ${item.title}`
+                          : item.title}
+                        fallbackIcon={fallbackIcon}
+                        aspectRatio={aspectRatio}
+                        onClick={() => onItemClick(item)}
+                        metadata={
+                          <MetadataLine stacked>
+                            {show("metadata", "year") && item.year && <MetadataItem icon={<Calendar />}>{item.year}</MetadataItem>}
+                            {show("metadata", "duration") && formatDuration(item.duration) && <MetadataItem icon={<Clock />}>{formatDuration(item.duration)}</MetadataItem>}
+                            {show("metadata", "fileSize") && formatFileSize(item.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(item.fileSize)}</MetadataItem>}
+                          </MetadataLine>
+                        }
+                        qualityBar={
+                          show("badges", "resolution") || show("badges", "dynamicRange") || show("badges", "audioProfile")
+                            ? [
+                                ...(show("badges", "resolution") && item.resolution
+                                  ? [{ color: getHex("resolution", formatResolution(item.resolution)), weight: 1, label: formatResolution(item.resolution) }]
+                                  : []),
+                                ...(show("badges", "dynamicRange") && item.dynamicRange && item.dynamicRange !== "SDR"
+                                  ? [{ color: getHex("dynamicRange", item.dynamicRange), weight: 1, label: item.dynamicRange }]
+                                  : []),
+                                ...(show("badges", "audioProfile") && item.audioProfile
+                                  ? [{ color: getHex("audioProfile", item.audioProfile), weight: 1, label: item.audioProfile }]
+                                  : []),
+                              ]
+                            : undefined
+                        }
+                        servers={showServers ? item.servers : undefined}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function LifecycleRulePage({
   mediaType,
   pageTitle,
@@ -319,6 +526,25 @@ export function LifecycleRulePage({
   const [justSaved, setJustSaved] = useState(false);
   const [previewSortBy, setPreviewSortBy] = useState<string | undefined>("title");
   const [previewSortOrder, setPreviewSortOrder] = useState<"asc" | "desc">("asc");
+
+  // Preview view mode (cards/table)
+  const [previewViewMode, setPreviewViewMode] = useState<"cards" | "table">(() => {
+    if (typeof window === "undefined") return "table";
+    return (localStorage.getItem("lifecycle-preview-view-mode") as "cards" | "table") ?? "table";
+  });
+  const handlePreviewViewModeChange = useCallback((mode: "cards" | "table") => {
+    const scrollTop = scrollContainerRef.current?.scrollTop ?? 0;
+    setPreviewViewMode(mode);
+    localStorage.setItem("lifecycle-preview-view-mode", mode);
+    requestAnimationFrame(() => {
+      scrollContainerRef.current?.scrollTo({ top: scrollTop, behavior: "instant" });
+    });
+  }, []);
+  const { size: cardSize, setSize: setCardSize } = useCardSize();
+  const { show: showCardField, showServers, setVisible: setCardFieldVisible, prefs: cardPrefs } = useCardDisplay(
+    mediaType === "MUSIC" ? "MUSIC" : mediaType === "SERIES" ? "SERIES" : "MOVIE",
+  );
+  const { getHex } = useChipColors();
 
   // Exception tracking for preview indicator
   const [exceptedItemIds, setExceptedItemIds] = useState<Set<string>>(new Set());
@@ -1156,9 +1382,9 @@ export function LifecycleRulePage({
   };
 
   return (
-    <div className="flex h-full">
+    <div className={`flex ${embedded ? "flex-1 min-h-0" : "h-full"}`}>
       <div ref={scrollContainerRef} className="flex-1 min-w-0 overflow-y-auto">
-        <div className={embedded ? "" : "p-4 sm:p-6 lg:p-8"}>
+        <div className={embedded ? "px-4 sm:px-6 lg:px-8 pb-4 sm:pb-6 lg:pb-8" : "p-4 sm:p-6 lg:p-8"}>
       {!embedded && (
         <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">{pageTitle}</h1>
@@ -1909,22 +2135,75 @@ export function LifecycleRulePage({
                 )}
               </div>
             )}
+            <div className="ml-auto flex items-center gap-3">
+              <div className="flex items-center gap-1 rounded-lg border p-1 h-9">
+                <button
+                  onClick={() => handlePreviewViewModeChange("cards")}
+                  className={cn(
+                    "rounded-md p-1.5 transition-colors",
+                    previewViewMode === "cards"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted",
+                  )}
+                  title="Card view"
+                  aria-label="Card view"
+                >
+                  <LayoutGrid className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => handlePreviewViewModeChange("table")}
+                  className={cn(
+                    "rounded-md p-1.5 transition-colors",
+                    previewViewMode === "table"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted",
+                  )}
+                  title="Table view"
+                  aria-label="Table view"
+                >
+                  <TableProperties className="h-4 w-4" />
+                </button>
+              </div>
+              {previewViewMode === "cards" && (
+                <>
+                  <CardSizeControl size={cardSize} onChange={setCardSize} />
+                  <CardDisplayControl
+                    prefs={cardPrefs}
+                    config={TOGGLE_CONFIGS.MOVIE}
+                    onToggle={(section, key, visible) => setCardFieldVisible(section, key, visible)}
+                  />
+                </>
+              )}
+            </div>
           </div>
-          <MediaTable
-            items={sortedPreview}
-            onItemClick={(item) => setSelectedItem(item)}
-            sortBy={previewSortBy}
-            sortOrder={previewSortOrder}
-            onSort={handlePreviewSort}
-            mediaType={mediaType}
-            exceptedItemIds={exceptedItemIds}
-            rowClassName={previewDiffMap.size > 0 ? (item) => {
-              const status = previewDiffMap.get(item.id);
-              if (status === "added") return "border-l-2 border-l-emerald-500/70 bg-emerald-500/5";
-              if (status === "removed") return "border-l-2 border-l-amber-500/70 bg-amber-500/5 opacity-60";
-              return undefined;
-            } : undefined}
-          />
+          {previewViewMode === "table" ? (
+            <MediaTable
+              items={sortedPreview}
+              onItemClick={(item) => setSelectedItem(item)}
+              sortBy={previewSortBy}
+              sortOrder={previewSortOrder}
+              onSort={handlePreviewSort}
+              mediaType={mediaType}
+              exceptedItemIds={exceptedItemIds}
+              rowClassName={previewDiffMap.size > 0 ? (item) => {
+                const status = previewDiffMap.get(item.id);
+                if (status === "added") return "border-l-2 border-l-emerald-500/70 bg-emerald-500/5";
+                if (status === "removed") return "border-l-2 border-l-amber-500/70 bg-amber-500/5 opacity-60";
+                return undefined;
+              } : undefined}
+            />
+          ) : (
+            <PreviewCardGrid
+              items={sortedPreview}
+              mediaType={mediaType}
+              onItemClick={(item) => setSelectedItem(item)}
+              diffMap={previewDiffMap}
+              exceptedItemIds={exceptedItemIds}
+              show={showCardField}
+              getHex={getHex}
+              showServers={showServers}
+            />
+          )}
         </div>
       )}
 

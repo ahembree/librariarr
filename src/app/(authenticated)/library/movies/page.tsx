@@ -284,6 +284,30 @@ export default function MoviesPage() {
               mediaType="MOVIE"
               scrollToIndexRef={tableScrollToIndexRef}
               hideServers={servers.length <= 1}
+              renderHoverContent={(movie) => (
+                <MediaHoverPopover
+                  imageUrl={`/api/media/${movie.id}/image`}
+                  data={{
+                    title: movie.title,
+                    year: movie.year,
+                    summary: movie.summary,
+                    contentRating: movie.contentRating,
+                    rating: movie.rating,
+                    audienceRating: movie.audienceRating,
+                    duration: movie.duration,
+                    resolution: movie.resolution,
+                    dynamicRange: movie.dynamicRange,
+                    audioProfile: movie.audioProfile,
+                    fileSize: movie.fileSize,
+                    genres: movie.genres,
+                    studio: movie.studio,
+                    playCount: movie.playCount,
+                    lastPlayedAt: movie.lastPlayedAt,
+                    addedAt: movie.addedAt,
+                    servers: movie.servers,
+                  }}
+                />
+              )}
             />
           ) : (
             <div ref={gridContainerRef}>

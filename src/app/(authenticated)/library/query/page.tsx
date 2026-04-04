@@ -5,7 +5,8 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
+import { ServerChips } from "@/components/server-chips";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -57,6 +58,7 @@ import type { QueryGroup, QueryDefinition } from "@/lib/query/types";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { MediaCard } from "@/components/media-card";
+import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { CardSizeControl } from "@/components/card-size-control";
 import { useCardSize } from "@/hooks/use-card-size";
@@ -411,9 +413,9 @@ export default function QueryPage() {
       group: "core",
       defaultVisible: true,
       accessor: (item) => (
-        <Badge variant="outline" className={TYPE_BADGE_COLORS[item.type] ?? ""}>
+        <ColorChip className={TYPE_BADGE_COLORS[item.type] ?? ""}>
           {item.type === "MOVIE" ? "Movie" : item.type === "SERIES" ? "Series" : "Music"}
-        </Badge>
+        </ColorChip>
       ),
       sortValue: (item) => item.type,
     },
@@ -462,9 +464,9 @@ export default function QueryPage() {
         const label = formatResolution(item.resolution);
         if (!label) return "-";
         return (
-          <Badge variant="outline" className="text-xs" style={getBadgeStyle("resolution", label)}>
+          <ColorChip style={getBadgeStyle("resolution", label)}>
             {label}
-          </Badge>
+          </ColorChip>
         );
       },
       sortValue: (item) => item.resolution,
@@ -490,9 +492,9 @@ export default function QueryPage() {
         const dr = item.dynamicRange;
         if (!dr) return "-";
         return (
-          <Badge variant="outline" className="text-xs" style={getBadgeStyle("dynamicRange", dr)}>
+          <ColorChip style={getBadgeStyle("dynamicRange", dr)}>
             {dr}
-          </Badge>
+          </ColorChip>
         );
       },
       sortValue: (item) => item.dynamicRange,
@@ -500,11 +502,19 @@ export default function QueryPage() {
     {
       id: "audioCodec",
       header: "Audio Codec",
-      defaultWidth: 90,
+      defaultWidth: 110,
       group: "audio",
       defaultVisible: true,
-      className: "text-muted-foreground",
-      accessor: (item) => item.matchedEpisodes != null ? "-" : (item.audioCodec ?? "-"),
+      accessor: (item) => {
+        if (item.matchedEpisodes != null) return "-";
+        const codec = item.audioCodec;
+        if (!codec) return "-";
+        return (
+          <ColorChip style={getBadgeStyle("audioCodec", codec)}>
+            {codec}
+          </ColorChip>
+        );
+      },
       sortValue: (item) => item.audioCodec,
     },
     {
@@ -518,9 +528,9 @@ export default function QueryPage() {
         const ap = item.audioProfile as string | null;
         if (!ap) return "-";
         return (
-          <Badge variant="outline" className="text-xs" style={getBadgeStyle("audioProfile", ap)}>
+          <ColorChip style={getBadgeStyle("audioProfile", ap)}>
             {ap}
-          </Badge>
+          </ColorChip>
         );
       },
       sortValue: (item) => item.audioProfile as string | null,
@@ -574,8 +584,10 @@ export default function QueryPage() {
       defaultWidth: 100,
       group: "core",
       defaultVisible: true,
-      className: "text-xs text-muted-foreground",
-      accessor: (item) => item.servers?.[0]?.serverName ?? item.library?.mediaServer?.name ?? "-",
+      accessor: (item) => {
+        const servers = item.servers ?? (item.library?.mediaServer ? [{ serverId: item.library.mediaServer.id, serverName: item.library.mediaServer.name, serverType: item.library.mediaServer.type }] : []);
+        return servers.length > 0 ? <ServerChips servers={servers} /> : "-";
+      },
       sortValue: (item) => item.servers?.[0]?.serverName ?? item.library?.mediaServer?.name ?? null,
     },
   ], [getBadgeStyle]);
@@ -822,8 +834,8 @@ export default function QueryPage() {
   };
 
   return (
-    <div className="flex md:h-full">
-      <div className="flex-1 min-w-0 md:overflow-y-auto">
+    <div className="flex h-full">
+      <div className="flex-1 min-w-0 overflow-y-auto">
         <div className="space-y-6 p-6">
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -1123,6 +1135,24 @@ export default function QueryPage() {
                 defaultSortId="title"
                 defaultSortOrder="asc"
                 resizeStorageKey="query-results-col-widths"
+                renderHoverContent={(item) => (
+                  <MediaHoverPopover
+                    imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" || item.parentTitle ? "?type=parent" : ""}`}
+                    data={{
+                      title: item.title,
+                      year: item.year,
+                      duration: item.duration,
+                      resolution: item.resolution,
+                      dynamicRange: item.dynamicRange,
+                      audioProfile: item.audioProfile,
+                      fileSize: item.fileSize,
+                      playCount: item.playCount,
+                      lastPlayedAt: item.lastPlayedAt,
+                      addedAt: item.addedAt,
+                      servers: item.servers,
+                    }}
+                  />
+                )}
               />
             ) : (
               <div ref={gridContainerRef}>
@@ -1178,9 +1208,9 @@ export default function QueryPage() {
                                 </MetadataLine>
                               }
                               badges={
-                                <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0", TYPE_BADGE_COLORS[item.type])}>
+                                <ColorChip className={TYPE_BADGE_COLORS[item.type] ?? ""}>
                                   {item.type === "MOVIE" ? "Movie" : item.type === "SERIES" ? "Series" : "Music"}
-                                </Badge>
+                                </ColorChip>
                               }
                               qualityBar={
                                 item.matchedEpisodes == null
@@ -1190,6 +1220,23 @@ export default function QueryPage() {
                                       ...(item.audioProfile ? [{ color: getHex("audioProfile", item.audioProfile), weight: 1, label: item.audioProfile }] : []),
                                     ]
                                   : undefined
+                              }
+                              hoverContent={
+                                <MediaHoverPopover
+                                  data={{
+                                    title: item.title,
+                                    year: item.year,
+                                    duration: item.duration,
+                                    resolution: item.resolution,
+                                    dynamicRange: item.dynamicRange,
+                                    audioProfile: item.audioProfile,
+                                    fileSize: item.fileSize,
+                                    playCount: item.playCount,
+                                    lastPlayedAt: item.lastPlayedAt,
+                                    addedAt: item.addedAt,
+                                    servers: item.servers,
+                                  }}
+                                />
                               }
                             />
                           ))}

@@ -9,7 +9,9 @@ import { MediaDetailHero } from "@/components/media-detail-hero";
 import { RatingChip } from "@/components/rating-chip";
 import { getRatingLabel } from "@/lib/rating-labels";
 import { FadeImage } from "@/components/ui/fade-image";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
+import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize } from "@/lib/format";
@@ -29,7 +31,7 @@ interface SeasonData {
 
 export default function SeriesDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { getBadgeStyle } = useChipColors();
+  const { getBadgeStyle, getHex } = useChipColors();
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
   const [seasons, setSeasons] = useState<SeasonData[]>([]);
@@ -105,6 +107,10 @@ export default function SeriesDetailPage() {
     href: `/library/series/season/${s.mediaItemId}`,
     subtitle: `${s.episodeCount} episode${s.episodeCount !== 1 ? "s" : ""}`,
     qualityCounts: s.qualityCounts,
+    episodeCount: s.episodeCount,
+    totalSize: s.totalSize,
+    totalPlayCount: s.totalPlayCount,
+    lastPlayed: s.lastPlayed,
   }));
 
   return (
@@ -123,12 +129,12 @@ export default function SeriesDetailPage() {
           {QUALITY_ORDER
             .filter((q) => qualityCounts[q])
             .map((label) => (
-              <Badge key={label} variant="secondary" style={getBadgeStyle("resolution", label)}>
+              <ColorChip key={label} style={getBadgeStyle("resolution", label)}>
                 {label}: {qualityCounts[label]}
-              </Badge>
+              </ColorChip>
             ))}
           {totalSize > 0 && (
-            <Badge variant="outline">{formatFileSize(totalSize.toString())}</Badge>
+            <ColorChip className="border-border text-muted-foreground">{formatFileSize(totalSize.toString())}</ColorChip>
           )}
         </>
       }
@@ -142,9 +148,9 @@ export default function SeriesDetailPage() {
       genres={
         item.genres && item.genres.length > 0
           ? item.genres.map((genre) => (
-              <Badge key={genre} variant="secondary" className="text-xs bg-white/10 text-white/80 border-white/20">
+              <ColorChip key={genre} className="bg-white/10 text-white/80 border-white/20">
                 {genre}
-              </Badge>
+              </ColorChip>
             ))
           : undefined
       }
@@ -170,50 +176,63 @@ export default function SeriesDetailPage() {
           </h2>
           <div className="flex flex-wrap gap-3">
             {seasonItems.map((s) => (
-              <Link
-                key={s.id}
-                href={s.href}
-                className="group w-[110px] sm:w-[130px] lg:w-[150px] rounded-lg transition-transform duration-200 hover:scale-[1.03]"
-              >
-                <div
-                  className="relative overflow-hidden rounded-lg bg-muted"
-                  style={{ aspectRatio: "2/3" }}
-                >
-                  <FadeImage
-                    src={s.imageUrl}
-                    alt={s.title}
-                    loading="lazy"
-                    className="absolute inset-0 h-full w-full object-cover group-hover:opacity-80"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).style.display = "none";
+              <HoverCard key={s.id} openDelay={400} closeDelay={150}>
+                <HoverCardTrigger asChild>
+                  <Link
+                    href={s.href}
+                    className="group w-[110px] sm:w-[130px] lg:w-[150px] rounded-lg transition-transform duration-200 hover:scale-[1.03]"
+                  >
+                    <div
+                      className="relative overflow-hidden rounded-t-lg bg-muted"
+                      style={{ aspectRatio: "2/3" }}
+                    >
+                      <FadeImage
+                        src={s.imageUrl}
+                        alt={s.title}
+                        loading="lazy"
+                        className="absolute inset-0 h-full w-full object-cover group-hover:opacity-80"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = "none";
+                        }}
+                      />
+                    </div>
+                    {Object.keys(s.qualityCounts).length > 0 && (
+                      <div className="flex w-full gap-1 px-1 py-0.5" aria-hidden="true">
+                        {QUALITY_ORDER
+                          .filter((q) => s.qualityCounts[q])
+                          .map((quality) => (
+                            <div
+                              key={quality}
+                              className="h-1 min-w-1 rounded-full"
+                              style={{ backgroundColor: getHex("resolution", quality), flex: s.qualityCounts[quality] }}
+                              title={`${quality}: ${s.qualityCounts[quality]}`}
+                            />
+                          ))}
+                      </div>
+                    )}
+                    <p className="mt-1 truncate text-xs font-medium text-foreground px-0.5">
+                      {s.title}
+                    </p>
+                    {s.subtitle && (
+                      <p className="truncate text-[11px] text-muted-foreground px-0.5">
+                        {s.subtitle}
+                      </p>
+                    )}
+                  </Link>
+                </HoverCardTrigger>
+                <HoverCardContent side="right" align="start" sideOffset={8} className="w-72 p-0 duration-200">
+                  <MediaHoverPopover
+                    imageUrl={s.imageUrl}
+                    data={{
+                      title: s.title,
+                      episodeCount: s.episodeCount,
+                      fileSize: s.totalSize,
+                      playCount: s.totalPlayCount,
+                      lastPlayedAt: s.lastPlayed,
                     }}
                   />
-                </div>
-                <p className="mt-1.5 truncate text-xs font-medium text-foreground">
-                  {s.title}
-                </p>
-                {s.subtitle && (
-                  <p className="truncate text-[11px] text-muted-foreground">
-                    {s.subtitle}
-                  </p>
-                )}
-                {Object.keys(s.qualityCounts).length > 0 && (
-                  <div className="mt-1 flex flex-wrap gap-0.5">
-                    {QUALITY_ORDER
-                      .filter((q) => s.qualityCounts[q])
-                      .map((label) => (
-                        <Badge
-                          key={label}
-                          variant="secondary"
-                          className="px-1 py-0 text-[9px] leading-tight"
-                          style={getBadgeStyle("resolution", label)}
-                        >
-                          {label}: {s.qualityCounts[label]}
-                        </Badge>
-                      ))}
-                  </div>
-                )}
-              </Link>
+                </HoverCardContent>
+              </HoverCard>
             ))}
           </div>
         </section>

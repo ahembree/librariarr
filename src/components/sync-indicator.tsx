@@ -10,6 +10,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { CheckCircle, XCircle, Loader2 } from "lucide-react";
+import { ColorChip } from "@/components/color-chip";
 import {
   SERVER_TYPE_STYLES,
   DEFAULT_SERVER_STYLE,
@@ -43,11 +44,7 @@ function formatTimeAgo(date: Date): string {
 
 function ServerTypeChip({ type }: { type: string }) {
   const style = SERVER_TYPE_STYLES[type] ?? DEFAULT_SERVER_STYLE;
-  return (
-    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium leading-none border ${style.classes}`}>
-      {style.label}
-    </span>
-  );
+  return <ColorChip className={style.classes}>{style.label}</ColorChip>;
 }
 
 function formatEta(startedAt: string, processed: number, total: number): string | null {

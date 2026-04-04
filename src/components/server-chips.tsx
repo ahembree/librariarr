@@ -5,6 +5,7 @@ import {
   SERVER_TYPE_STYLES,
   DEFAULT_SERVER_STYLE,
 } from "@/lib/server-styles";
+import { ColorChip } from "@/components/color-chip";
 
 interface ServerPresenceDisplay {
   serverId: string;
@@ -82,12 +83,9 @@ export function ServerChips({ servers }: ServerChipsProps) {
           const style =
             SERVER_TYPE_STYLES[s.serverType] ?? DEFAULT_SERVER_STYLE;
           return (
-            <span
-              key={s.serverId}
-              className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium leading-none border shrink-0 ${style.classes}`}
-            >
+            <ColorChip key={s.serverId} className={style.classes}>
               {s.serverName}
-            </span>
+            </ColorChip>
           );
         })}
       </div>
@@ -97,24 +95,21 @@ export function ServerChips({ servers }: ServerChipsProps) {
         const style =
           SERVER_TYPE_STYLES[s.serverType] ?? DEFAULT_SERVER_STYLE;
         return (
-          <span
-            key={s.serverId}
-            className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium leading-none border shrink-0 ${style.classes}`}
-          >
+          <ColorChip key={s.serverId} className={style.classes}>
             {s.serverName}
-          </span>
+          </ColorChip>
         );
       })}
       {overflow > 0 && (
-        <span
-          className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium leading-none border border-border/50 bg-muted/50 text-muted-foreground shrink-0"
+        <ColorChip
+          className="border-border/50 bg-muted/50 text-muted-foreground"
           title={servers
             .slice(visibleCount)
             .map((s) => s.serverName)
             .join(", ")}
         >
           +{overflow}
-        </span>
+        </ColorChip>
       )}
     </div>
   );

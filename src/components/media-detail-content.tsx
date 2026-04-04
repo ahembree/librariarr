@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useChipColors } from "@/components/chip-color-provider";
 import { cn } from "@/lib/utils";
 import { normalizeResolutionLabel } from "@/lib/resolution";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { Separator } from "@/components/ui/separator";
 import {
   Collapsible,
@@ -450,9 +450,9 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
             <div className="space-y-4">
               {serverHistories.filter((sh) => sh.users.length > 0).map((sh) => (
                 <div key={sh.serverId} className="space-y-2">
-                  <Badge variant="outline" className="text-xs">
+                  <ColorChip className={(SERVER_TYPE_STYLES[sh.serverType] ?? DEFAULT_SERVER_STYLE).classes}>
                     {sh.serverName}
-                  </Badge>
+                  </ColorChip>
                   {sh.users.map((entry) => (
                     <div key={`${sh.serverId}-${entry.username}`} className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2 text-sm">
                       <div>
@@ -538,11 +538,11 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
               </h3>
               <div className="flex flex-wrap gap-2">
                 {subtitleStreams.map((sub) => (
-                  <Badge key={sub.id} variant="secondary">
+                  <ColorChip key={sub.id} className="bg-secondary text-secondary-foreground">
                     {sub.language ?? sub.languageCode ?? "Unknown"}
                     {sub.forced && " (Forced)"}
                     {sub.codec && ` [${sub.codec}]`}
-                  </Badge>
+                  </ColorChip>
                 ))}
               </div>
             </section>
@@ -687,9 +687,9 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                               <DetailRow
                                 label="Dynamic Range"
                                 value={
-                                  <Badge variant="secondary" style={getBadgeStyle("dynamicRange", vs.videoRangeType)}>
+                                  <ColorChip style={getBadgeStyle("dynamicRange", vs.videoRangeType)}>
                                     {vs.videoRangeType}
-                                  </Badge>
+                                  </ColorChip>
                                 }
                               />
                             )}
@@ -709,9 +709,9 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                       <DetailRow
                         label="Resolution"
                         value={
-                          <Badge variant="outline" style={getBadgeStyle("resolution", formatResolution(merged.resolution))}>
+                          <ColorChip style={getBadgeStyle("resolution", formatResolution(merged.resolution))}>
                             {formatResolution(merged.resolution)}
-                          </Badge>
+                          </ColorChip>
                         }
                       />
                       {merged.videoWidth && merged.videoHeight && (
@@ -729,9 +729,9 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                         <DetailRow
                           label="Dynamic Range"
                           value={
-                            <Badge variant="secondary" style={getBadgeStyle("dynamicRange", merged.dynamicRange)}>
+                            <ColorChip style={getBadgeStyle("dynamicRange", merged.dynamicRange)}>
                               {merged.dynamicRange}
-                            </Badge>
+                            </ColorChip>
                           }
                         />
                       )}
@@ -778,9 +778,9 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                             <DetailRow
                               label="Profile"
                               value={
-                                <Badge variant="secondary" style={getBadgeStyle("audioProfile", as.profile)}>
+                                <ColorChip style={getBadgeStyle("audioProfile", as.profile)}>
                                   {as.profile}
-                                </Badge>
+                                </ColorChip>
                               }
                             />
                           )}
@@ -799,9 +799,9 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                       <DetailRow
                         label="Profile"
                         value={
-                          <Badge variant="secondary" style={getBadgeStyle("audioProfile", merged.audioProfile)}>
+                          <ColorChip style={getBadgeStyle("audioProfile", merged.audioProfile)}>
                             {merged.audioProfile}
-                          </Badge>
+                          </ColorChip>
                         }
                       />
                     )}

@@ -4,9 +4,15 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { MediaCard } from "@/components/media-card";
+import { useChipColors } from "@/components/chip-color-provider";
+import { AUDIO_CODEC_ORDER, getChipBadgeStyle } from "@/lib/theme/chip-colors";
+import { ColorChip } from "@/components/color-chip";
+import { DataTable } from "@/components/data-table";
+import type { DataTableColumn } from "@/components/data-table";
 import { MediaFilters } from "@/components/media-filters";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import { Music, Disc3, ListMusic, HardDrive } from "lucide-react";
+import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { useCardSize } from "@/hooks/use-card-size";
 import { useServers } from "@/hooks/use-servers";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
@@ -30,14 +36,79 @@ const SORT_OPTIONS = [
   { value: "totalSize", label: "Size" },
 ];
 
+function albumTableColumns(getHex: (category: "audioCodec", value: string) => string): DataTableColumn<AlbumEntry>[] {
+  return [
+    {
+      id: "albumTitle",
+      header: "Album",
+      defaultWidth: 250,
+      accessor: (a) => <span className="font-medium">{a.albumTitle}</span>,
+      sortValue: (a) => a.albumTitle,
+      className: "max-w-[300px] truncate",
+    },
+    {
+      id: "artistName",
+      header: "Artist",
+      defaultWidth: 200,
+      accessor: (a) => a.artistName,
+      sortValue: (a) => a.artistName,
+      className: "text-muted-foreground max-w-[200px] truncate",
+    },
+    {
+      id: "trackCount",
+      header: "Tracks",
+      defaultWidth: 90,
+      accessor: (a) => a.trackCount,
+      sortValue: (a) => a.trackCount,
+      className: "text-muted-foreground",
+    },
+    {
+      id: "totalSize",
+      header: "Size",
+      defaultWidth: 100,
+      accessor: (a) => formatFileSize(a.totalSize),
+      sortValue: (a) => Number(a.totalSize),
+      className: "text-muted-foreground",
+    },
+    {
+      id: "codecs",
+      header: "Codecs",
+      defaultWidth: 200,
+      accessor: (a) => (
+        <div className="flex flex-wrap gap-1">
+          {[
+            ...AUDIO_CODEC_ORDER.filter((c) => a.audioCodecCounts[c]).map((c) => [c, a.audioCodecCounts[c]] as const),
+            ...Object.entries(a.audioCodecCounts).filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c)),
+          ].map(([codec, count]) => (
+            <ColorChip key={codec} style={getChipBadgeStyle(getHex("audioCodec", String(codec)))}>
+              {codec}: {count}
+            </ColorChip>
+          ))}
+        </div>
+      ),
+    },
+  ];
+}
+
 export default function AllAlbumsPage() {
   const router = useRouter();
+  const { getHex } = useChipColors();
   const [albums, setAlbums] = useState<AlbumEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [sortBy, setSortBy] = useState("albumTitle");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
+
+  useEffect(() => {
+    const stored = localStorage.getItem("albums-view-mode") as "cards" | "table" | null;
+    if (stored) setViewMode(stored);
+  }, []);
+
+  const handleViewModeChange = (mode: "cards" | "table") => {
+    setViewMode(mode);
+    localStorage.setItem("albums-view-mode", mode);
+  };
 
   const { size, setSize, gridStyle } = useCardSize();
   const { servers, selectedServerId, setSelectedServerId } = useServers();
@@ -115,7 +186,7 @@ export default function AllAlbumsPage() {
         prefix={
           <LibraryToolbar
             viewMode={viewMode}
-            onViewModeChange={setViewMode}
+            onViewModeChange={handleViewModeChange}
             cardSize={size}
             onCardSizeChange={setSize}
             servers={servers}
@@ -140,16 +211,66 @@ export default function AllAlbumsPage() {
             {albums.length} {albums.length === 1 ? "album" : "albums"}
           </p>
 
+          {viewMode === "table" ? (
+            <DataTable<AlbumEntry>
+              columns={albumTableColumns(getHex)}
+              data={albums}
+              keyExtractor={(a) => `${a.artistName}::${a.albumTitle}`}
+              defaultSortId="albumTitle"
+              resizeStorageKey="dt-widths-albums"
+              onRowClick={(a) => router.push(`/library/music/album/${a.mediaItemId}`)}
+              renderHoverContent={(album) => (
+                <MediaHoverPopover
+                  imageUrl={`/api/media/${album.mediaItemId}/image?type=season`}
+                  imageAspect="square"
+                  data={{
+                    title: album.albumTitle,
+                    trackCount: album.trackCount,
+                    fileSize: album.totalSize,
+                  }}
+                />
+              )}
+            />
+          ) : (
           <div style={gridStyle}>
             {albums.map((album) => (
               <MediaCard
                 key={`${album.artistName}::${album.albumTitle}`}
-                imageUrl={`/api/media/${album.mediaItemId}/image?type=parent`}
+                imageUrl={`/api/media/${album.mediaItemId}/image?type=season`}
                 title={album.albumTitle}
                 aspectRatio="square"
                 fallbackIcon="music"
                 onClick={() =>
                   router.push(`/library/music/album/${album.mediaItemId}`)
+                }
+                qualityBar={
+                  Object.keys(album.audioCodecCounts).length > 0
+                    ? [
+                        ...AUDIO_CODEC_ORDER
+                          .filter((c) => album.audioCodecCounts[c])
+                          .map((codec) => ({
+                            color: getHex("audioCodec", codec),
+                            weight: album.audioCodecCounts[codec],
+                            label: `${codec}: ${album.audioCodecCounts[codec]}`,
+                          })),
+                        ...Object.entries(album.audioCodecCounts)
+                          .filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c))
+                          .map(([codec, count]) => ({
+                            color: getHex("audioCodec", codec),
+                            weight: count,
+                            label: `${codec}: ${count}`,
+                          })),
+                      ]
+                    : undefined
+                }
+                hoverContent={
+                  <MediaHoverPopover
+                    data={{
+                      title: album.albumTitle,
+                      trackCount: album.trackCount,
+                      fileSize: album.totalSize,
+                    }}
+                  />
                 }
                 metadata={
                   <MetadataLine stacked>
@@ -168,6 +289,7 @@ export default function AllAlbumsPage() {
               />
             ))}
           </div>
+          )}
         </>
       )}
     </div>

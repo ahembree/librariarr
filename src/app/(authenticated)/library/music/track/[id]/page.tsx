@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { MediaDetailContent } from "@/components/media-detail-content";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import type { MediaItemWithRelations } from "@/lib/types";
@@ -70,13 +70,13 @@ export default function TrackDetailPage() {
       badges={
         <>
           {item.audioCodec && (
-            <Badge variant="outline">
+            <ColorChip className="border-border text-muted-foreground">
               {item.audioCodec.toUpperCase()}
               {item.audioChannels ? ` ${item.audioChannels}ch` : ""}
-            </Badge>
+            </ColorChip>
           )}
           {item.fileSize && (
-            <Badge variant="outline">{formatFileSize(item.fileSize)}</Badge>
+            <ColorChip className="border-border text-muted-foreground">{formatFileSize(item.fileSize)}</ColorChip>
           )}
         </>
       }

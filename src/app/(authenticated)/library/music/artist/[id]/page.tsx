@@ -7,7 +7,9 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { AUDIO_CODEC_ORDER } from "@/lib/theme/chip-colors";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { FadeImage } from "@/components/ui/fade-image";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
+import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize } from "@/lib/format";
@@ -24,7 +26,7 @@ interface AlbumData {
 
 export default function ArtistDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { getBadgeStyle } = useChipColors();
+  const { getBadgeStyle, getHex } = useChipColors();
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
   const [albums, setAlbums] = useState<AlbumData[]>([]);
@@ -102,21 +104,21 @@ export default function ArtistDetailPage() {
             ...AUDIO_CODEC_ORDER.filter((c) => codecCounts[c]).map((c) => [c, codecCounts[c]] as const),
             ...Object.entries(codecCounts).filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c)),
           ].map(([codec, count]) => (
-              <Badge key={codec} variant="secondary" style={getBadgeStyle("audioCodec", codec)}>
+              <ColorChip key={codec} style={getBadgeStyle("audioCodec", codec)}>
                 {codec}: {count}
-              </Badge>
+              </ColorChip>
             ))}
           {totalSize > 0 && (
-            <Badge variant="outline">{formatFileSize(totalSize.toString())}</Badge>
+            <ColorChip className="border-border text-muted-foreground">{formatFileSize(totalSize.toString())}</ColorChip>
           )}
         </>
       }
       genres={
         item.genres && item.genres.length > 0
           ? item.genres.map((genre) => (
-              <Badge key={genre} variant="secondary" className="text-xs bg-white/10 text-white/80 border-white/20">
+              <ColorChip key={genre} className="bg-white/10 text-white/80 border-white/20">
                 {genre}
-              </Badge>
+              </ColorChip>
             ))
           : undefined
       }
@@ -139,32 +141,56 @@ export default function ArtistDetailPage() {
           </h2>
           <div className="flex flex-wrap gap-3">
             {albums.map((a) => (
-              <Link
-                key={a.mediaItemId}
-                href={`/library/music/album/${a.mediaItemId}`}
-                className="group w-[110px] sm:w-[130px] lg:w-[150px] rounded-lg transition-transform duration-200 hover:scale-[1.03]"
-              >
-                <div
-                  className="relative overflow-hidden rounded-lg bg-muted"
-                  style={{ aspectRatio: "1/1" }}
-                >
-                  <FadeImage
-                    src={`/api/media/${a.mediaItemId}/image?type=season`}
-                    alt={a.albumTitle}
-                    loading="lazy"
-                    className="absolute inset-0 h-full w-full object-cover group-hover:opacity-80"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).style.display = "none";
+              <HoverCard key={a.mediaItemId} openDelay={400} closeDelay={150}>
+                <HoverCardTrigger asChild>
+                  <Link
+                    href={`/library/music/album/${a.mediaItemId}`}
+                    className="group w-[110px] sm:w-[130px] lg:w-[150px] rounded-lg transition-transform duration-200 hover:scale-[1.03]"
+                  >
+                    <div
+                      className="relative overflow-hidden rounded-t-lg bg-muted"
+                      style={{ aspectRatio: "1/1" }}
+                    >
+                      <FadeImage
+                        src={`/api/media/${a.mediaItemId}/image?type=season`}
+                        alt={a.albumTitle}
+                        loading="lazy"
+                        className="absolute inset-0 h-full w-full object-cover group-hover:opacity-80"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = "none";
+                        }}
+                      />
+                    </div>
+                    {Object.keys(a.audioCodecCounts).length > 0 && (
+                      <div className="flex w-full gap-1 px-1 py-0.5">
+                        {[
+                          ...AUDIO_CODEC_ORDER.filter((c) => a.audioCodecCounts[c]).map((codec) => ({ color: getHex("audioCodec", codec), weight: a.audioCodecCounts[codec], label: `${codec}: ${a.audioCodecCounts[codec]}` })),
+                          ...Object.entries(a.audioCodecCounts).filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c)).map(([codec, count]) => ({ color: getHex("audioCodec", codec), weight: count, label: `${codec}: ${count}` })),
+                        ].map((seg, i) => (
+                          <div key={i} className="h-1 min-w-1 rounded-full" style={{ backgroundColor: seg.color, flex: seg.weight }} title={seg.label} />
+                        ))}
+                      </div>
+                    )}
+                    <p className="mt-1 truncate text-xs font-medium text-foreground">
+                      {a.albumTitle}
+                    </p>
+                    <p className="truncate text-[11px] text-muted-foreground">
+                      {a.trackCount} track{a.trackCount !== 1 ? "s" : ""}
+                    </p>
+                  </Link>
+                </HoverCardTrigger>
+                <HoverCardContent side="right" align="start" sideOffset={8} className="w-72 p-0 duration-200">
+                  <MediaHoverPopover
+                    imageUrl={`/api/media/${a.mediaItemId}/image?type=season`}
+                    imageAspect="square"
+                    data={{
+                      title: a.albumTitle,
+                      trackCount: a.trackCount,
+                      fileSize: a.totalSize,
                     }}
                   />
-                </div>
-                <p className="mt-1.5 truncate text-xs font-medium text-foreground">
-                  {a.albumTitle}
-                </p>
-                <p className="truncate text-[11px] text-muted-foreground">
-                  {a.trackCount} track{a.trackCount !== 1 ? "s" : ""}
-                </p>
-              </Link>
+                </HoverCardContent>
+              </HoverCard>
             ))}
           </div>
         </section>

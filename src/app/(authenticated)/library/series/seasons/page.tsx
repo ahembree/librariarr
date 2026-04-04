@@ -3,9 +3,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useChipColors } from "@/components/chip-color-provider";
+import { getChipBadgeStyle } from "@/lib/theme/chip-colors";
 import { MediaCard } from "@/components/media-card";
+import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { MediaFilters } from "@/components/media-filters";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { DataTable } from "@/components/data-table";
 import type { DataTableColumn } from "@/components/data-table";
 import { LibraryToolbar } from "@/components/library-toolbar";
@@ -43,7 +45,7 @@ const SORT_OPTIONS = [
 ];
 
 function seasonTableColumns(
-  getSolidStyle: (category: "resolution" | "dynamicRange" | "audioProfile", value: string) => React.CSSProperties
+  getHex: (category: "resolution" | "dynamicRange" | "audioProfile", value: string) => string
 ): DataTableColumn<SeasonEntry>[] {
   return [
     {
@@ -92,13 +94,12 @@ function seasonTableColumns(
         return (
           <div className="flex flex-wrap gap-1">
             {qualities.map((q) => (
-              <Badge
+              <ColorChip
                 key={q}
-                className="text-[10px] px-1.5 py-0"
-                style={getSolidStyle("resolution", q)}
+                style={getChipBadgeStyle(getHex("resolution", q))}
               >
                 {q}: {s.qualityCounts[q]}
-              </Badge>
+              </ColorChip>
             ))}
           </div>
         );
@@ -139,7 +140,7 @@ function seasonTableColumns(
 
 export default function AllSeasonsPage() {
   const router = useRouter();
-  const { getSolidStyle } = useChipColors();
+  const { getHex } = useChipColors();
   const { show, setVisible, prefs } = useCardDisplay("SERIES_SEASONS");
   const [seasons, setSeasons] = useState<SeasonEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -261,12 +262,25 @@ export default function AllSeasonsPage() {
 
           {viewMode === "table" ? (
             <DataTable<SeasonEntry>
-              columns={seasonTableColumns(getSolidStyle)}
+              columns={seasonTableColumns(getHex)}
               data={seasons}
               keyExtractor={(s) => `${s.parentTitle}::${s.seasonNumber}`}
               defaultSortId="parentTitle"
               resizeStorageKey="dt-widths-seasons"
               onRowClick={navigateToSeason}
+              renderHoverContent={(season) => (
+                <MediaHoverPopover
+                  imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
+                  data={{
+                    title: `${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`,
+                    episodeCount: season.episodeCount,
+                    fileSize: season.totalSize,
+                    playCount: season.totalPlayCount,
+                    lastPlayedAt: season.lastPlayed,
+                    addedAt: season.addedAt,
+                  }}
+                />
+              )}
             />
           ) : (
             <>
@@ -287,20 +301,29 @@ export default function AllSeasonsPage() {
                         )}
                       </MetadataLine>
                     }
-                    badges={
-                      <>
-                        {show("badges", "qualityCounts") && QUALITY_ORDER.filter(
-                          (q) => season.qualityCounts[q]
-                        ).map((quality) => (
-                          <Badge
-                            key={quality}
-                            className="text-[10px] px-1.5 py-0"
-                            style={getSolidStyle("resolution", quality)}
-                          >
-                            {quality}: {season.qualityCounts[quality]}
-                          </Badge>
-                        ))}
-                      </>
+                    qualityBar={
+                      show("badges", "qualityCounts")
+                        ? QUALITY_ORDER
+                            .filter((q) => season.qualityCounts[q])
+                            .map((quality) => ({
+                              color: getHex("resolution", quality),
+                              weight: season.qualityCounts[quality],
+                              label: `${quality}: ${season.qualityCounts[quality]}`,
+                            }))
+                        : undefined
+                    }
+                    hoverContent={
+                      <MediaHoverPopover
+                        imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
+                        data={{
+                          title: `${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`,
+                          episodeCount: season.episodeCount,
+                          fileSize: season.totalSize,
+                          playCount: season.totalPlayCount,
+                          lastPlayedAt: season.lastPlayed,
+                          addedAt: season.addedAt,
+                        }}
+                      />
                     }
                   />
                 ))}
