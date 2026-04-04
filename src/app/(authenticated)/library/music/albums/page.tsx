@@ -15,6 +15,7 @@ import { LibraryToolbar } from "@/components/library-toolbar";
 import { Music, Disc3, ListMusic, HardDrive } from "lucide-react";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { useCardSize } from "@/hooks/use-card-size";
+import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize } from "@/lib/format";
@@ -24,7 +25,7 @@ import { MediaGridSkeleton } from "@/components/skeletons";
 const GAP = 16;
 const CARD_CONTENT_HEIGHT = 138;
 const CARD_BORDER = 2;
-const QUALITY_BAR_HEIGHT = 4;
+const QUALITY_BAR_HEIGHT = 12;
 
 interface AlbumEntry {
   albumTitle: string;
@@ -33,6 +34,7 @@ interface AlbumEntry {
   totalSize: string;
   audioCodecCounts: Record<string, number>;
   mediaItemId: string;
+  servers: { serverId: string; serverName: string; serverType: string }[];
 }
 
 const SORT_OPTIONS = [
@@ -117,6 +119,7 @@ export default function AllAlbumsPage() {
   };
 
   const { size, setSize, columns: actualColumns } = useCardSize();
+  const { showServers, prefs: cardDisplayPrefs, setVisible: setCardDisplayVisible } = useCardDisplay("MUSIC_ALBUMS");
   const { servers, selectedServerId, setSelectedServerId } = useServers();
 
   const gridContainerRef = useRef<HTMLDivElement>(null);
@@ -235,6 +238,9 @@ export default function AllAlbumsPage() {
             onViewModeChange={handleViewModeChange}
             cardSize={size}
             onCardSizeChange={setSize}
+            cardDisplayPrefs={cardDisplayPrefs}
+            cardDisplayConfig={TOGGLE_CONFIGS.MUSIC_ALBUMS}
+            onCardDisplayToggle={setCardDisplayVisible}
             servers={servers}
             selectedServerId={selectedServerId}
             onServerChange={setSelectedServerId}
@@ -339,6 +345,7 @@ export default function AllAlbumsPage() {
                                   ]
                                 : undefined
                             }
+                            servers={showServers && servers.length > 1 ? album.servers : undefined}
                             hoverContent={
                               <MediaHoverPopover
                                 data={{

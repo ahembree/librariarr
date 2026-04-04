@@ -172,7 +172,7 @@ function applyFiltersToGroupedSeries(
 const GAP = 16;
 const CARD_CONTENT_HEIGHT = 138; // Fixed content area below poster (matches h-34.5 in MediaCard)
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
-const QUALITY_BAR_HEIGHT = 4; // h-1 quality bar between poster and content
+const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar (4px) + py-1 padding (8px)
 
 export default function SeriesPage() {
   const router = useRouter();

@@ -14,6 +14,7 @@ import Link from "next/link";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { useCardSize, BREAKPOINTS } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
+import { useServers } from "@/hooks/use-servers";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
@@ -29,7 +30,7 @@ function formatResolution(resolution: string | null): string {
 const GAP = 16;
 const CARD_CONTENT_HEIGHT = 138;
 const CARD_BORDER = 2;
-const QUALITY_BAR_HEIGHT = 4;
+const QUALITY_BAR_HEIGHT = 12;
 
 // Landscape card min widths (matches useCardSize internals)
 const LANDSCAPE_MIN_WIDTHS: Record<string, number> = { small: 140, medium: 200, large: 260 };
@@ -45,7 +46,8 @@ function estimateContentWidth(screenWidth: number): number {
 export default function AllEpisodesPage() {
   const router = useRouter();
   const { getHex } = useChipColors();
-  const { show, setVisible, prefs } = useCardDisplay("SERIES_EPISODES");
+  const { show, showServers, setVisible, prefs } = useCardDisplay("SERIES_EPISODES");
+  const { servers } = useServers();
   const [items, setItems] = useState<MediaItemWithRelations[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [sortBy, setSortBy] = useState("title");
@@ -330,6 +332,7 @@ export default function AllEpisodesPage() {
                                   ]
                                 : undefined
                             }
+                            servers={showServers && servers.length > 1 ? ep.servers : undefined}
                           />
                         ))}
                       </div>

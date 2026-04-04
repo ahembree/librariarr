@@ -47,7 +47,7 @@ function formatResolution(resolution: string | null): string {
 const GAP = 16; // 1rem grid gap
 const CARD_CONTENT_HEIGHT = 138; // Fixed content area below poster (matches h-34.5 in MediaCard)
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
-const QUALITY_BAR_HEIGHT = 4; // h-1 quality bar between poster and content
+const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar between poster and content
 
 export default function MoviesPage() {
   const router = useRouter();

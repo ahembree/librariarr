@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
       parentThumbUrl: true,
       library: {
         select: {
-          mediaServer: { select: { id: true } },
+          mediaServer: { select: { id: true, name: true, type: true } },
         },
       },
     },
@@ -63,6 +63,7 @@ export async function GET(request: NextRequest) {
       totalSize: bigint;
       audioCodecCounts: Record<string, number>;
       mediaItemId: string;
+      servers: { serverId: string; serverName: string; serverType: string }[];
     }
   >();
 
@@ -79,6 +80,7 @@ export async function GET(request: NextRequest) {
         totalSize: BigInt(0),
         audioCodecCounts: {},
         mediaItemId: item.id,
+        servers: [],
       };
       albumMap.set(compositeKey, albumGroup);
     }
@@ -97,6 +99,11 @@ export async function GET(request: NextRequest) {
     if (item.parentThumbUrl) {
       albumGroup.mediaItemId = item.id;
     }
+
+    const server = item.library.mediaServer;
+    if (server && !albumGroup.servers.some((s) => s.serverId === server.id)) {
+      albumGroup.servers.push({ serverId: server.id, serverName: server.name, serverType: server.type });
+    }
   }
 
   const albums = Array.from(albumMap.values()).map((a) => ({
@@ -106,6 +113,7 @@ export async function GET(request: NextRequest) {
     totalSize: a.totalSize.toString(),
     audioCodecCounts: a.audioCodecCounts,
     mediaItemId: a.mediaItemId,
+    servers: a.servers,
   }));
 
   // Sort

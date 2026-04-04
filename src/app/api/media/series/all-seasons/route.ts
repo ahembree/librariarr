@@ -58,7 +58,7 @@ export async function GET(request: NextRequest) {
       seasonThumbUrl: true,
       library: {
         select: {
-          mediaServer: { select: { id: true } },
+          mediaServer: { select: { id: true, name: true, type: true } },
         },
       },
     },
@@ -77,6 +77,7 @@ export async function GET(request: NextRequest) {
       addedAt: Date | null;
       totalPlayCount: number;
       qualityCounts: Record<string, number>;
+      servers: { serverId: string; serverName: string; serverType: string }[];
     }
   >();
 
@@ -96,6 +97,7 @@ export async function GET(request: NextRequest) {
         addedAt: null,
         totalPlayCount: 0,
         qualityCounts: {},
+        servers: [],
       };
       seasonMap.set(key, season);
     }
@@ -122,6 +124,11 @@ export async function GET(request: NextRequest) {
 
     const label = getResolutionLabel(item.resolution);
     season.qualityCounts[label] = (season.qualityCounts[label] || 0) + 1;
+
+    const server = item.library.mediaServer;
+    if (server && !season.servers.some((s) => s.serverId === server.id)) {
+      season.servers.push({ serverId: server.id, serverName: server.name, serverType: server.type });
+    }
   }
 
   const seasonsList = Array.from(seasonMap.values())
@@ -135,6 +142,7 @@ export async function GET(request: NextRequest) {
       addedAt: s.addedAt,
       totalPlayCount: s.totalPlayCount,
       qualityCounts: s.qualityCounts,
+      servers: s.servers,
     }))
     .sort((a, b) => {
       const dir = sortOrder === "desc" ? -1 : 1;

@@ -254,7 +254,7 @@ function formatResolution(resolution: string | null): string {
 
 const CARD_GAP = 16;
 const CARD_CONTENT_HEIGHT = 138;
-const CARD_QUALITY_BAR_HEIGHT = 4;
+const CARD_QUALITY_BAR_HEIGHT = 12;
 const CARD_BORDER = 2;
 
 function DiffSection({

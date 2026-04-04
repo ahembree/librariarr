@@ -22,7 +22,7 @@ import { MediaHoverPopover } from "@/components/media-hover-popover";
 const GAP = 16;
 const CARD_CONTENT_HEIGHT = 138;
 const CARD_BORDER = 2;
-const QUALITY_BAR_HEIGHT = 4;
+const QUALITY_BAR_HEIGHT = 12;
 
 export default function AllTracksPage() {
   const router = useRouter();
