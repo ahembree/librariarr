@@ -81,7 +81,10 @@ export function useTableAlphabet({
 
       // Find the first visible row in the viewport by querying virtualized rows
       const rows = document.querySelectorAll<HTMLElement>("tbody tr[data-index]");
-      if (rows.length === 0) return;
+      if (rows.length === 0) {
+        setActiveLetter(null);
+        return;
+      }
 
       const scrollTop = scrollElement.scrollTop;
       const viewportTarget = scrollTop + scrollElement.clientHeight * 0.4;

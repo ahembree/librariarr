@@ -88,7 +88,10 @@ export function useVirtualGridAlphabet({
       if (scrollingRef.current) return;
 
       const virtualItems = virtualizer.getVirtualItems();
-      if (virtualItems.length === 0) return;
+      if (virtualItems.length === 0) {
+        setActiveLetter(null);
+        return;
+      }
 
       const scrollMargin = virtualizer.options.scrollMargin;
       const scrollOffset = virtualizer.scrollOffset ?? 0;
