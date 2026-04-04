@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -94,6 +95,10 @@ import { FadeImage } from "@/components/ui/fade-image";
 import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatDurationClock } from "@/lib/format";
+import {
+  SERVER_TYPE_STYLES,
+  DEFAULT_SERVER_STYLE,
+} from "@/lib/server-styles";
 
 // --- Types ---
 
@@ -605,10 +610,10 @@ function SessionCard({
                     )}
                     <span className="font-medium text-sm truncate">{session.username}</span>
                   </div>
-                  <Badge variant="outline" className={`shrink-0 gap-1 text-[11px] ${stateConfig.className}`}>
+                  <ColorChip className={`shrink-0 gap-1 text-[11px] ${stateConfig.className}`}>
                     <StateIcon className={`h-3 w-3 ${session.player.state === "buffering" ? "animate-spin" : ""}`} />
                     {stateConfig.label}
-                  </Badge>
+                  </ColorChip>
                 </div>
 
                 {/* Media title — wraps instead of truncating */}
@@ -685,17 +690,16 @@ function SessionCard({
 
                 {/* Badges row */}
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0 gap-1">
+                  <ColorChip className="gap-1">
                     {session.player.local ? (
                       <Wifi className="h-2.5 w-2.5" />
                     ) : (
                       <WifiOff className="h-2.5 w-2.5" />
                     )}
                     {session.player.local ? "LAN" : "WAN"}
-                  </Badge>
-                  <Badge
-                    variant="secondary"
-                    className={`text-[10px] px-1.5 py-0 gap-1 ${
+                  </ColorChip>
+                  <ColorChip
+                    className={`gap-1 ${
                       streamInfo.direct ? "" : "bg-amber-500/15 text-amber-400 border-amber-500/30"
                     }`}
                   >
@@ -705,19 +709,16 @@ function SessionCard({
                       <Radio className="h-2.5 w-2.5" />
                     )}
                     {streamInfo.label}
-                  </Badge>
+                  </ColorChip>
                   {session.session.bandwidth > 0 && (
                     <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
                       {formatBandwidth(session.session.bandwidth)}
                     </Badge>
                   )}
-                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0 gap-1">
+                  <ColorChip className={`gap-1 ${(SERVER_TYPE_STYLES[session.serverType] ?? DEFAULT_SERVER_STYLE).classes}`}>
                     <Server className="h-2.5 w-2.5" />
-                    {session.serverType !== "PLEX" && (
-                      <span className="font-semibold">{session.serverType === "JELLYFIN" ? "JF" : session.serverType === "EMBY" ? "Emby" : ""} &middot;</span>
-                    )}
                     {session.serverName}
-                  </Badge>
+                  </ColorChip>
                 </div>
 
                 {/* Player info + IP + terminate */}
@@ -1953,7 +1954,7 @@ export default function StreamManagerPage() {
                     {sheetSession.genres && sheetSession.genres.length > 0 && (
                       <div className="flex flex-wrap gap-1">
                         {sheetSession.genres.map(g => (
-                          <Badge key={g} variant="outline" className="text-[10px]">{g}</Badge>
+                          <ColorChip key={g} className="bg-white/10 text-white/80 border-white/20">{g}</ColorChip>
                         ))}
                       </div>
                     )}

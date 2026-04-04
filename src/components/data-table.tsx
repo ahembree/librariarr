@@ -5,6 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useColumnResize } from "@/hooks/use-column-resize";
+import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
 
 export interface DataTableColumn<T> {
   id: string;
@@ -30,6 +31,8 @@ interface DataTableProps<T> {
   resizeStorageKey?: string;
   /** Ref to expose scrollToIndex for alphabet navigation */
   scrollToIndexRef?: React.RefObject<((index: number) => void) | null>;
+  /** Optional render function for hover popover content on each row */
+  renderHoverContent?: (item: T) => React.ReactNode;
 }
 
 export function DataTable<T>({
@@ -42,6 +45,7 @@ export function DataTable<T>({
   onSortChange,
   resizeStorageKey,
   scrollToIndexRef,
+  renderHoverContent,
 }: DataTableProps<T>) {
   const [internalSortId, setInternalSortId] = useState(defaultSortId ?? "");
   const [internalSortOrder, setInternalSortOrder] = useState<"asc" | "desc">(defaultSortOrder);
@@ -201,13 +205,15 @@ export function DataTable<T>({
           )}
           {virtualRows.map((virtualRow) => {
             const item = sortedData[virtualRow.index];
-            return (
+            const hoverContent = renderHoverContent?.(item);
+
+            const tableRow = (
               <tr
                 key={keyExtractor(item)}
                 data-index={virtualRow.index}
                 className={cn(
-                  "border-b last:border-0 transition-colors",
-                  onRowClick && "cursor-pointer hover:bg-muted/50"
+                  "transition-all duration-200 even:bg-white/1.5",
+                  onRowClick && "cursor-pointer hover:bg-white/3 hover:ring-1 hover:ring-primary/20 hover:shadow-md hover:shadow-primary/10"
                 )}
                 onClick={() => onRowClick?.(item)}
               >
@@ -220,6 +226,24 @@ export function DataTable<T>({
                   </td>
                 ))}
               </tr>
+            );
+
+            if (!hoverContent) return <React.Fragment key={keyExtractor(item)}>{tableRow}</React.Fragment>;
+
+            return (
+              <HoverCard key={keyExtractor(item)} openDelay={400} closeDelay={150}>
+                <HoverCardTrigger asChild>
+                  {tableRow}
+                </HoverCardTrigger>
+                <HoverCardContent
+                  side="bottom"
+                  align="start"
+                  sideOffset={4}
+                  className="w-72 p-0 duration-200"
+                >
+                  {hoverContent}
+                </HoverCardContent>
+              </HoverCard>
             );
           })}
           {paddingBottom > 0 && (

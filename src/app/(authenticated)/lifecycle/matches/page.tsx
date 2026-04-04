@@ -39,6 +39,9 @@ import {
 } from "lucide-react";
 import { TabNav, type TabNavItem } from "@/components/tab-nav";
 import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
+import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -107,7 +110,7 @@ interface MatchItemsViewProps {
   onExclude: (item: MatchedMediaItem) => void;
   excludingItems: Set<string>;
   exceptedItemIds: Set<string>;
-  getSolidStyle: (category: ChipColorCategory, value: string) => React.CSSProperties;
+  getHex: (category: ChipColorCategory, value: string) => string;
   show: (section: "badges" | "metadata", key: string) => boolean;
   columnVisibility: Record<string, boolean>;
 }
@@ -168,10 +171,9 @@ function CollapsibleCriteria({ criteria }: { criteria: MatchedCriterion[] }) {
 
   function renderBadge(c: MatchedCriterion, idx: number) {
     const badge = (
-      <Badge
+      <ColorChip
         key={idx}
-        variant="outline"
-        className="text-[11px] font-normal px-1.5 py-0"
+        className="border-border text-muted-foreground text-[11px] font-normal"
       >
         {c.groupName && (
           <span className="text-blue-400 mr-0.5">[{c.groupName}]</span>
@@ -184,7 +186,7 @@ function CollapsibleCriteria({ criteria }: { criteria: MatchedCriterion[] }) {
         <span>{c.operator}</span>
         {" "}
         <span className="font-medium">{c.value}</span>
-      </Badge>
+      </ColorChip>
     );
     if (c.actualValue) {
       return (
@@ -235,6 +237,7 @@ function CollapsibleCriteria({ criteria }: { criteria: MatchedCriterion[] }) {
 
 function MatchItemsTableView({
   items,
+  ruleSet,
   onItemClick,
   onExclude,
   excludingItems,
@@ -302,12 +305,11 @@ function MatchItemsTableView({
           {virtualizer.getVirtualItems().map((virtualRow) => {
             const item = items[virtualRow.index];
 
-            return (
+            const tableRow = (
               <tr
-                key={item.id}
                 ref={virtualizer.measureElement}
                 data-index={virtualRow.index}
-                className="border-b last:border-0 hover:bg-muted/30"
+                className="transition-all duration-200 hover:bg-white/3 even:bg-white/1.5 hover:ring-1 hover:ring-primary/20 hover:shadow-md hover:shadow-primary/10 cursor-pointer"
                 style={{
                   position: "absolute",
                   top: 0,
@@ -318,12 +320,12 @@ function MatchItemsTableView({
                   transform: `translateY(${virtualRow.start}px)`,
                   minWidth: totalWidth,
                 }}
+                onClick={() => onItemClick(item)}
               >
                 {columnVisibility.title && (
                   <td
-                    className="px-4 py-2 cursor-pointer overflow-hidden text-ellipsis"
+                    className="px-4 py-2 overflow-hidden text-ellipsis"
                     style={{ width: columnWidths.title }}
-                    onClick={() => onItemClick(item)}
                   >
                     <span className="inline-flex items-center gap-1.5">
                       {exceptedItemIds.has(item.id) && (
@@ -378,6 +380,29 @@ function MatchItemsTableView({
                 )}
               </tr>
             );
+
+            return (
+              <HoverCard key={item.id} openDelay={400} closeDelay={150}>
+                <HoverCardTrigger asChild>
+                  {tableRow}
+                </HoverCardTrigger>
+                <HoverCardContent side="bottom" align="start" sideOffset={4} className="w-72 p-0 duration-200">
+                  <MediaHoverPopover
+                    imageUrl={`/api/media/${item.id}/image${ruleSet.type !== "MOVIE" ? "?type=parent" : ""}`}
+                    imageAspect={ruleSet.type === "MUSIC" ? "square" : "poster"}
+                    data={{
+                      title: item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title,
+                      year: item.year,
+                      duration: item.duration,
+                      resolution: item.resolution,
+                      dynamicRange: item.dynamicRange,
+                      fileSize: item.fileSize,
+                      servers: item.servers,
+                    }}
+                  />
+                </HoverCardContent>
+              </HoverCard>
+            );
           })}
         </tbody>
       </table>
@@ -392,7 +417,7 @@ function MatchItemsCardView({
   onExclude,
   excludingItems,
   exceptedItemIds,
-  getSolidStyle,
+  getHex,
   show,
 }: MatchItemsViewProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -514,30 +539,24 @@ function MatchItemsCardView({
                             {show("metadata", "fileSize") && formatFileSize(item.fileSize) && <span>{formatFileSize(item.fileSize)}</span>}
                           </MetadataLine>
                         }
+                        qualityBar={
+                          show("badges", "resolution") || show("badges", "dynamicRange")
+                            ? [
+                                ...(show("badges", "resolution") && item.resolution
+                                  ? [{ color: getHex("resolution", formatResolution(item.resolution)), weight: 1, label: formatResolution(item.resolution) }]
+                                  : []),
+                                ...(show("badges", "dynamicRange") && item.dynamicRange && item.dynamicRange !== "SDR"
+                                  ? [{ color: getHex("dynamicRange", item.dynamicRange), weight: 1, label: item.dynamicRange }]
+                                  : []),
+                              ]
+                            : undefined
+                        }
                         badges={
-                          <>
-                            {show("badges", "resolution") && item.resolution && (
-                              <Badge
-                                className="text-[10px] px-1.5 py-0"
-                                style={getSolidStyle("resolution", formatResolution(item.resolution))}
-                              >
-                                {formatResolution(item.resolution)}
-                              </Badge>
-                            )}
-                            {show("badges", "dynamicRange") && item.dynamicRange && item.dynamicRange !== "SDR" && (
-                              <Badge
-                                className="text-[10px] px-1.5 py-0"
-                                style={getSolidStyle("dynamicRange", item.dynamicRange)}
-                              >
-                                {item.dynamicRange}
-                              </Badge>
-                            )}
-                            {item.matchedCriteria && item.matchedCriteria.length > 0 && (
-                              <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                                {item.matchedCriteria.length} {item.matchedCriteria.length === 1 ? "match" : "matches"}
-                              </Badge>
-                            )}
-                          </>
+                          item.matchedCriteria && item.matchedCriteria.length > 0 ? (
+                            <ColorChip className="border-border text-muted-foreground">
+                              {item.matchedCriteria.length} {item.matchedCriteria.length === 1 ? "match" : "matches"}
+                            </ColorChip>
+                          ) : undefined
                         }
                       />
                     </div>
@@ -595,7 +614,7 @@ export default function RuleMatchesPage() {
   const [runningRules, setRunningRules] = useState<Set<string>>(new Set());
   const [reEvalRunning, setReEvalRunning] = useState(false);
   const { size, setSize } = useCardSize();
-  const { getSolidStyle } = useChipColors();
+  const { getHex } = useChipColors();
   const { show, setVisible, prefs } = useCardDisplay("MOVIE");
   const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(getDefaultMatchColumnVisibility);
 
@@ -802,8 +821,8 @@ export default function RuleMatchesPage() {
   }
 
   return (
-    <div className="flex md:h-full">
-      <div className="flex-1 min-w-0 md:overflow-y-auto">
+    <div className="flex h-full">
+      <div className="flex-1 min-w-0 overflow-y-auto">
         <div className="p-4 sm:p-6 lg:p-8">
       <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
@@ -925,9 +944,9 @@ export default function RuleMatchesPage() {
                         {match.ruleSet.name}
                       </CardTitle>
                       <div className="flex items-center gap-2 mt-1">
-                        <Badge variant="outline">
+                        <ColorChip className="border-border text-muted-foreground">
                           {match.ruleSet.type === "MOVIE" ? "Movie" : match.ruleSet.type === "MUSIC" ? "Music" : "Series"}
-                        </Badge>
+                        </ColorChip>
                         <Badge variant="secondary">
                           {match.count} match{match.count !== 1 && "es"}
                         </Badge>
@@ -939,20 +958,20 @@ export default function RuleMatchesPage() {
                         {(match.ruleSet.addArrTags?.length > 0 || match.ruleSet.removeArrTags?.length > 0) && (
                           <div className="flex flex-wrap gap-1">
                             {match.ruleSet.addArrTags?.map((tag) => (
-                              <Badge
+                              <ColorChip
                                 key={`add-${tag}`}
-                                className="text-[10px] bg-green-500/20 text-green-400 border-green-500/30"
+                                className="bg-green-500/20 text-green-400 border-green-500/30"
                               >
                                 +{tag}
-                              </Badge>
+                              </ColorChip>
                             ))}
                             {match.ruleSet.removeArrTags?.map((tag) => (
-                              <Badge
+                              <ColorChip
                                 key={`rm-${tag}`}
-                                className="text-[10px] bg-red-500/20 text-red-400 border-red-500/30"
+                                className="bg-red-500/20 text-red-400 border-red-500/30"
                               >
                                 -{tag}
-                              </Badge>
+                              </ColorChip>
                             ))}
                           </div>
                         )}
@@ -1008,7 +1027,7 @@ export default function RuleMatchesPage() {
                     onExclude={excludeItem}
                     excludingItems={excludingItems}
                     exceptedItemIds={exceptedItemIds}
-                    getSolidStyle={getSolidStyle}
+                    getHex={getHex}
                     show={show}
                     columnVisibility={columnVisibility}
                   />

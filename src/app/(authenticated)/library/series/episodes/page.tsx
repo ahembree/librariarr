@@ -7,7 +7,6 @@ import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
 import { MediaCard } from "@/components/media-card";
-import { Badge } from "@/components/ui/badge";
 import { Loader2, Tv, Layers, List, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import Link from "next/link";
@@ -18,6 +17,7 @@ import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
+import { MediaHoverPopover } from "@/components/media-hover-popover";
 
 function formatResolution(resolution: string | null): string {
   if (!resolution) return "";
@@ -27,7 +27,7 @@ function formatResolution(resolution: string | null): string {
 
 export default function AllEpisodesPage() {
   const router = useRouter();
-  const { getSolidStyle } = useChipColors();
+  const { getHex } = useChipColors();
   const { show, setVisible, prefs } = useCardDisplay("SERIES_EPISODES");
   const [items, setItems] = useState<MediaItemWithRelations[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -183,6 +183,30 @@ export default function AllEpisodesPage() {
               sortOrder={sortOrder}
               onSort={handleSort}
               mediaType="SERIES"
+              renderHoverContent={(item) => (
+                <MediaHoverPopover
+                  imageUrl={`/api/media/${item.id}/image?type=parent`}
+                  data={{
+                    title: item.title,
+                    year: item.year,
+                    summary: item.summary,
+                    contentRating: item.contentRating,
+                    rating: item.rating,
+                    audienceRating: item.audienceRating,
+                    duration: item.duration,
+                    resolution: item.resolution,
+                    dynamicRange: item.dynamicRange,
+                    audioProfile: item.audioProfile,
+                    fileSize: item.fileSize,
+                    genres: item.genres,
+                    studio: item.studio,
+                    playCount: item.playCount,
+                    lastPlayedAt: item.lastPlayedAt,
+                    addedAt: item.addedAt,
+                    servers: item.servers,
+                  }}
+                />
+              )}
             />
           ) : (
             <div style={landscapeGridStyle}>
@@ -194,6 +218,29 @@ export default function AllEpisodesPage() {
                   aspectRatio="landscape"
                   fallbackIcon="series"
                   onClick={() => router.push(`/library/series/episode/${ep.id}`)}
+                  hoverContent={
+                    <MediaHoverPopover
+                      data={{
+                        title: ep.title,
+                        year: ep.year,
+                        summary: ep.summary,
+                        contentRating: ep.contentRating,
+                        rating: ep.rating,
+                        audienceRating: ep.audienceRating,
+                        duration: ep.duration,
+                        resolution: ep.resolution,
+                        dynamicRange: ep.dynamicRange,
+                        audioProfile: ep.audioProfile,
+                        fileSize: ep.fileSize,
+                        genres: ep.genres,
+                        studio: ep.studio,
+                        playCount: ep.playCount,
+                        lastPlayedAt: ep.lastPlayedAt,
+                        addedAt: ep.addedAt,
+                        servers: ep.servers,
+                      }}
+                    />
+                  }
                   metadata={
                     <MetadataLine stacked>
                       {show("metadata", "seriesName") && ep.parentTitle && <MetadataItem icon={<Tv />}>{ep.parentTitle}</MetadataItem>}
@@ -204,33 +251,20 @@ export default function AllEpisodesPage() {
                       {show("metadata", "fileSize") && formatFileSize(ep.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(ep.fileSize)}</MetadataItem>}
                     </MetadataLine>
                   }
-                  badges={
-                    <>
-                      {show("badges", "resolution") && ep.resolution && (
-                        <Badge
-                          className="text-[10px] px-1.5 py-0"
-                          style={getSolidStyle("resolution", formatResolution(ep.resolution))}
-                        >
-                          {formatResolution(ep.resolution)}
-                        </Badge>
-                      )}
-                      {show("badges", "dynamicRange") && ep.dynamicRange && ep.dynamicRange !== "SDR" && (
-                        <Badge
-                          className="text-[10px] px-1.5 py-0"
-                          style={getSolidStyle("dynamicRange", ep.dynamicRange)}
-                        >
-                          {ep.dynamicRange}
-                        </Badge>
-                      )}
-                      {show("badges", "audioProfile") && ep.audioProfile && (
-                        <Badge
-                          className="text-[10px] px-1.5 py-0"
-                          style={getSolidStyle("audioProfile", ep.audioProfile)}
-                        >
-                          {ep.audioProfile}
-                        </Badge>
-                      )}
-                    </>
+                  qualityBar={
+                    show("badges", "resolution") || show("badges", "dynamicRange") || show("badges", "audioProfile")
+                      ? [
+                          ...(show("badges", "resolution") && ep.resolution
+                            ? [{ color: getHex("resolution", formatResolution(ep.resolution)), weight: 1, label: formatResolution(ep.resolution) }]
+                            : []),
+                          ...(show("badges", "dynamicRange") && ep.dynamicRange && ep.dynamicRange !== "SDR"
+                            ? [{ color: getHex("dynamicRange", ep.dynamicRange), weight: 1, label: ep.dynamicRange }]
+                            : []),
+                          ...(show("badges", "audioProfile") && ep.audioProfile
+                            ? [{ color: getHex("audioProfile", ep.audioProfile), weight: 1, label: ep.audioProfile }]
+                            : []),
+                        ]
+                      : undefined
                   }
                 />
               ))}

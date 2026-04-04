@@ -1,9 +1,12 @@
+import { useState } from "react";
 import { formatDuration, formatFileSize, formatDate } from "@/lib/format";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { useChipColors } from "@/components/chip-color-provider";
 import { RatingChip } from "@/components/rating-chip";
 import { ServerChips } from "@/components/server-chips";
-import { Clock, HardDrive } from "lucide-react";
+import { FadeImage } from "@/components/ui/fade-image";
+import { ColorChip } from "@/components/color-chip";
+import { Clock, HardDrive, Film } from "lucide-react";
 
 export interface MediaHoverData {
   title: string;
@@ -49,17 +52,6 @@ function Row({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Chip({ style, children }: { style: React.CSSProperties; children: React.ReactNode }) {
-  return (
-    <span
-      className="inline-flex items-center rounded-md border px-1.5 py-px text-[10px] font-medium leading-tight"
-      style={style}
-    >
-      {children}
-    </span>
-  );
-}
-
 function DetailRow({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -69,7 +61,16 @@ function DetailRow({ icon, children }: { icon: React.ReactNode; children: React.
   );
 }
 
-export function MediaHoverPopover({ data }: { data: MediaHoverData }) {
+interface MediaHoverPopoverProps {
+  data: MediaHoverData;
+  /** Show poster image at the top (used in table view where posters aren't visible) */
+  imageUrl?: string;
+  /** Aspect ratio for the poster image. Default "poster" (2/3), "square" for music. */
+  imageAspect?: "poster" | "square";
+}
+
+export function MediaHoverPopover({ data, imageUrl, imageAspect = "poster" }: MediaHoverPopoverProps) {
+  const [imgError, setImgError] = useState(false);
   const { getBadgeStyle } = useChipColors();
 
   const resLabel =
@@ -96,6 +97,27 @@ export function MediaHoverPopover({ data }: { data: MediaHoverData }) {
 
   return (
     <div className="py-1">
+      {/* Poster image (table view) */}
+      {imageUrl && !imgError && (
+        <div className="flex justify-center bg-muted rounded-t-md">
+          <div className={`relative w-1/2 overflow-hidden ${imageAspect === "square" ? "aspect-square" : "aspect-2/3"}`}>
+            <FadeImage
+              src={imageUrl}
+              alt={data.title}
+              loading="eager"
+              decoding="async"
+              className="absolute inset-0 w-full h-full object-cover"
+              onError={() => setImgError(true)}
+            />
+          </div>
+        </div>
+      )}
+      {imageUrl && imgError && (
+        <div className="flex items-center justify-center w-full h-24 bg-muted rounded-t-md">
+          <Film className="h-8 w-8 text-muted-foreground" />
+        </div>
+      )}
+
       {/* Header: title + year + studio */}
       <Section>
         <div className="flex items-baseline justify-between gap-2">
@@ -166,19 +188,19 @@ export function MediaHoverPopover({ data }: { data: MediaHoverData }) {
         <Section>
           <div className="flex items-center gap-1.5 flex-wrap">
             {displayRes && (
-              <Chip style={getBadgeStyle("resolution", displayRes)}>
+              <ColorChip style={getBadgeStyle("resolution", displayRes)}>
                 {displayRes}
-              </Chip>
+              </ColorChip>
             )}
             {data.dynamicRange && data.dynamicRange !== "SDR" && (
-              <Chip style={getBadgeStyle("dynamicRange", data.dynamicRange)}>
+              <ColorChip style={getBadgeStyle("dynamicRange", data.dynamicRange)}>
                 {data.dynamicRange}
-              </Chip>
+              </ColorChip>
             )}
             {data.audioProfile && (
-              <Chip style={getBadgeStyle("audioProfile", data.audioProfile)}>
+              <ColorChip style={getBadgeStyle("audioProfile", data.audioProfile)}>
                 {data.audioProfile}
-              </Chip>
+              </ColorChip>
             )}
           </div>
         </Section>

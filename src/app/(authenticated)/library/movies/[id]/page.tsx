@@ -8,7 +8,7 @@ import { MediaDetailHero } from "@/components/media-detail-hero";
 import { RatingChip } from "@/components/rating-chip";
 import { getRatingLabel } from "@/lib/rating-labels";
 import { MediaDetailContent } from "@/components/media-detail-content";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import type { MediaItemWithRelations } from "@/lib/types";
@@ -79,22 +79,22 @@ export default function MovieDetailPage() {
       badges={
         <>
           {item.resolution && (
-            <Badge variant="secondary" style={getBadgeStyle("resolution", formatResolution(item.resolution))}>
+            <ColorChip style={getBadgeStyle("resolution", formatResolution(item.resolution))}>
               {formatResolution(item.resolution)}
-            </Badge>
+            </ColorChip>
           )}
           {item.dynamicRange && (
-            <Badge variant="secondary" style={getBadgeStyle("dynamicRange", item.dynamicRange)}>
+            <ColorChip style={getBadgeStyle("dynamicRange", item.dynamicRange)}>
               {item.dynamicRange}
-            </Badge>
+            </ColorChip>
           )}
           {item.audioProfile && (
-            <Badge variant="secondary" style={getBadgeStyle("audioProfile", item.audioProfile)}>
+            <ColorChip style={getBadgeStyle("audioProfile", item.audioProfile)}>
               {item.audioProfile}
-            </Badge>
+            </ColorChip>
           )}
           {item.fileSize && (
-            <Badge variant="outline">{formatFileSize(item.fileSize)}</Badge>
+            <ColorChip className="border-border text-muted-foreground">{formatFileSize(item.fileSize)}</ColorChip>
           )}
         </>
       }
@@ -108,9 +108,9 @@ export default function MovieDetailPage() {
       genres={
         item.genres && item.genres.length > 0
           ? item.genres.map((genre) => (
-              <Badge key={genre} variant="secondary" className="text-xs bg-white/10 text-white/80 border-white/20">
+              <ColorChip key={genre} className="bg-white/10 text-white/80 border-white/20">
                 {genre}
-              </Badge>
+              </ColorChip>
             ))
           : undefined
       }

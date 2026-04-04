@@ -4,12 +4,12 @@ import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, use
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRouter } from "next/navigation";
 import { useChipColors } from "@/components/chip-color-provider";
-import { AUDIO_CODEC_ORDER } from "@/lib/theme/chip-colors";
+import { AUDIO_CODEC_ORDER, getChipBadgeStyle } from "@/lib/theme/chip-colors";
 import Link from "next/link";
 import { MediaFilters } from "@/components/media-filters";
 import { MediaCard } from "@/components/media-card";
+import { ColorChip } from "@/components/color-chip";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import { Music, Disc3, ListMusic, HardDrive } from "lucide-react";
@@ -56,7 +56,7 @@ const SORT_OPTIONS = [
   { value: "addedAt", label: "Date Added" },
 ];
 
-function artistTableColumns(): DataTableColumn<GroupedArtist>[] {
+function artistTableColumns(getHex: (category: "resolution" | "dynamicRange" | "audioProfile" | "audioCodec", value: string) => string): DataTableColumn<GroupedArtist>[] {
   return [
     {
       id: "parentTitle",
@@ -100,9 +100,12 @@ function artistTableColumns(): DataTableColumn<GroupedArtist>[] {
             ...AUDIO_CODEC_ORDER.filter((c) => a.audioCodecCounts[c]).map((c) => [c, a.audioCodecCounts[c]] as const),
             ...Object.entries(a.audioCodecCounts).filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c)),
           ].map(([codec, count]) => (
-              <Badge key={codec} variant="secondary" className="text-[10px] px-1.5 py-0">
+              <ColorChip
+                key={codec}
+                style={getChipBadgeStyle(getHex("audioCodec", String(codec)))}
+              >
                 {codec}: {count}
-              </Badge>
+              </ColorChip>
             ))}
         </div>
       ),
@@ -375,13 +378,28 @@ export default function MusicPage() {
 
           {viewMode === "table" ? (
             <DataTable<GroupedArtist>
-              columns={artistTableColumns()}
+              columns={artistTableColumns(getHex)}
               data={artistList}
               keyExtractor={(a) => a.parentTitle}
               defaultSortId="parentTitle"
               resizeStorageKey="dt-widths-music"
               onRowClick={(a) => { markChildNavigation(); router.push(`/library/music/artist/${a.mediaItemId}`); }}
               scrollToIndexRef={tableScrollToIndexRef}
+              renderHoverContent={(a) => (
+                <MediaHoverPopover
+                  imageUrl={`/api/media/${a.mediaItemId}/image?type=parent`}
+                  imageAspect="square"
+                  data={{
+                    title: a.parentTitle,
+                    albumCount: a.albumCount,
+                    trackCount: a.trackCount,
+                    fileSize: a.totalSize,
+                    lastPlayedAt: a.lastPlayed,
+                    addedAt: a.addedAt,
+                    servers: a.servers,
+                  }}
+                />
+              )}
             />
           ) : (
             <div ref={gridContainerRef}>

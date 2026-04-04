@@ -8,7 +8,7 @@ import { AUDIO_CODEC_ORDER } from "@/lib/theme/chip-colors";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { MediaTable } from "@/components/media-table";
 import { MediaCard } from "@/components/media-card";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LayoutGrid, TableProperties, List, Clock, HardDrive } from "lucide-react";
@@ -20,11 +20,12 @@ import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
+import { MediaHoverPopover } from "@/components/media-hover-popover";
 
 export default function AlbumDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { getBadgeStyle } = useChipColors();
+  const { getBadgeStyle, getHex } = useChipColors();
   const { show, setVisible, prefs } = useCardDisplay("MUSIC_TRACKS");
   const { size, setSize, gridStyle } = useCardSize();
   const [item, setItem] = useState<(MediaItemWithRelations & { albumTitle?: string | null }) | null>(null);
@@ -147,21 +148,21 @@ export default function AlbumDetailPage() {
             ...AUDIO_CODEC_ORDER.filter((c) => codecCounts[c]).map((c) => [c, codecCounts[c]] as const),
             ...Object.entries(codecCounts).filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c)),
           ].map(([codec, count]) => (
-              <Badge key={codec} variant="secondary" style={getBadgeStyle("audioCodec", codec)}>
+              <ColorChip key={codec} style={getBadgeStyle("audioCodec", codec)}>
                 {codec}: {count}
-              </Badge>
+              </ColorChip>
             ))}
           {totalSize > 0 && (
-            <Badge variant="outline">{formatFileSize(totalSize.toString())}</Badge>
+            <ColorChip className="border-border text-muted-foreground">{formatFileSize(totalSize.toString())}</ColorChip>
           )}
         </>
       }
       genres={
         item.genres && item.genres.length > 0
           ? item.genres.map((genre) => (
-              <Badge key={genre} variant="secondary" className="text-xs bg-white/10 text-white/80 border-white/20">
+              <ColorChip key={genre} className="bg-white/10 text-white/80 border-white/20">
                 {genre}
-              </Badge>
+              </ColorChip>
             ))
           : undefined
       }
@@ -222,6 +223,31 @@ export default function AlbumDetailPage() {
               onSort={handleSort}
               mediaType="MUSIC"
               hideParentTitle
+              renderHoverContent={(track) => (
+                <MediaHoverPopover
+                  imageUrl={`/api/media/${track.id}/image`}
+                  imageAspect="square"
+                  data={{
+                    title: track.title,
+                    year: track.year,
+                    summary: track.summary,
+                    contentRating: track.contentRating,
+                    rating: track.rating,
+                    audienceRating: track.audienceRating,
+                    duration: track.duration,
+                    resolution: track.resolution,
+                    dynamicRange: track.dynamicRange,
+                    audioProfile: track.audioProfile,
+                    fileSize: track.fileSize,
+                    genres: track.genres,
+                    studio: track.studio,
+                    playCount: track.playCount,
+                    lastPlayedAt: track.lastPlayedAt,
+                    addedAt: track.addedAt,
+                    servers: track.servers,
+                  }}
+                />
+              )}
             />
           ) : (
             <div style={gridStyle}>
@@ -233,6 +259,29 @@ export default function AlbumDetailPage() {
                   aspectRatio="square"
                   fallbackIcon="music"
                   onClick={() => router.push(`/library/music/track/${t.id}`)}
+                  hoverContent={
+                    <MediaHoverPopover
+                      data={{
+                        title: t.title,
+                        year: t.year,
+                        summary: t.summary,
+                        contentRating: t.contentRating,
+                        rating: t.rating,
+                        audienceRating: t.audienceRating,
+                        duration: t.duration,
+                        resolution: t.resolution,
+                        dynamicRange: t.dynamicRange,
+                        audioProfile: t.audioProfile,
+                        fileSize: t.fileSize,
+                        genres: t.genres,
+                        studio: t.studio,
+                        playCount: t.playCount,
+                        lastPlayedAt: t.lastPlayedAt,
+                        addedAt: t.addedAt,
+                        servers: t.servers,
+                      }}
+                    />
+                  }
                   metadata={
                     <MetadataLine stacked>
                       {show("metadata", "trackNumber") && t.episodeNumber != null && (
@@ -242,14 +291,10 @@ export default function AlbumDetailPage() {
                       {show("metadata", "fileSize") && formatFileSize(t.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(t.fileSize)}</MetadataItem>}
                     </MetadataLine>
                   }
-                  badges={
-                    <>
-                      {show("badges", "audioCodec") && t.audioCodec && (
-                        <Badge className="text-[10px] px-1.5 py-0" variant="outline">
-                          {t.audioCodec.toUpperCase()}
-                        </Badge>
-                      )}
-                    </>
+                  qualityBar={
+                    show("badges", "audioCodec") && t.audioCodec
+                      ? [{ color: getHex("audioCodec", t.audioCodec.toUpperCase()), weight: 1, label: t.audioCodec.toUpperCase() }]
+                      : undefined
                   }
                 />
               ))}

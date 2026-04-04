@@ -8,7 +8,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { Input } from "@/components/ui/input";
 import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
@@ -403,9 +403,9 @@ function ArrSection({
                       <div className="flex items-center gap-2">
                         <p className="font-medium">{instance.name}</p>
                         {!instance.enabled && (
-                          <Badge variant="secondary" className="text-xs font-normal bg-amber-500/20 text-amber-400">
+                          <ColorChip className="text-xs font-normal bg-amber-500/20 text-amber-400">
                             Disabled
-                          </Badge>
+                          </ColorChip>
                         )}
                       </div>
                       <p className="text-sm text-muted-foreground">
@@ -666,9 +666,9 @@ function SeerrSection({
                     <div className={cn("flex items-center gap-2 flex-1", !instance.enabled && "opacity-50")}>
                       <p className="font-medium">{instance.name}</p>
                       {!instance.enabled && (
-                        <Badge variant="secondary" className="text-xs font-normal bg-amber-500/20 text-amber-400">
+                        <ColorChip className="text-xs font-normal bg-amber-500/20 text-amber-400">
                           Disabled
-                        </Badge>
+                        </ColorChip>
                       )}
                       <p className="text-sm text-muted-foreground">
                         {instance.url}

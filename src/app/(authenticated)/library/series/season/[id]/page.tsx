@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { MediaTable } from "@/components/media-table";
 import { MediaCard } from "@/components/media-card";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LayoutGrid, TableProperties, List, Clock, HardDrive } from "lucide-react";
@@ -21,6 +21,7 @@ import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
 import { ArrSection } from "@/components/arr-link-button";
+import { MediaHoverPopover } from "@/components/media-hover-popover";
 
 function formatResolution(resolution: string | null): string {
   if (!resolution) return "Unknown";
@@ -31,7 +32,7 @@ function formatResolution(resolution: string | null): string {
 export default function SeasonDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { getBadgeStyle, getSolidStyle } = useChipColors();
+  const { getBadgeStyle, getHex } = useChipColors();
   const { show, setVisible, prefs } = useCardDisplay("SERIES_EPISODES");
   const { size, setSize, landscapeGridStyle } = useCardSize();
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
@@ -154,21 +155,21 @@ export default function SeasonDetailPage() {
           {QUALITY_ORDER
             .filter((q) => qualityCounts[q])
             .map((label) => (
-              <Badge key={label} variant="secondary" style={getBadgeStyle("resolution", label)}>
+              <ColorChip key={label} style={getBadgeStyle("resolution", label)}>
                 {label}: {qualityCounts[label]}
-              </Badge>
+              </ColorChip>
             ))}
           {totalSize > 0 && (
-            <Badge variant="outline">{formatFileSize(totalSize.toString())}</Badge>
+            <ColorChip className="border-border text-muted-foreground">{formatFileSize(totalSize.toString())}</ColorChip>
           )}
         </>
       }
       genres={
         item.genres && item.genres.length > 0
           ? item.genres.map((genre) => (
-              <Badge key={genre} variant="secondary" className="text-xs bg-white/10 text-white/80 border-white/20">
+              <ColorChip key={genre} className="bg-white/10 text-white/80 border-white/20">
                 {genre}
-              </Badge>
+              </ColorChip>
             ))
           : undefined
       }
@@ -232,6 +233,30 @@ export default function SeasonDetailPage() {
               onSort={handleSort}
               mediaType="SERIES"
               hideParentTitle
+              renderHoverContent={(ep) => (
+                <MediaHoverPopover
+                  imageUrl={`/api/media/${ep.id}/image?type=parent`}
+                  data={{
+                    title: ep.title,
+                    year: ep.year,
+                    summary: ep.summary,
+                    contentRating: ep.contentRating,
+                    rating: ep.rating,
+                    audienceRating: ep.audienceRating,
+                    duration: ep.duration,
+                    resolution: ep.resolution,
+                    dynamicRange: ep.dynamicRange,
+                    audioProfile: ep.audioProfile,
+                    fileSize: ep.fileSize,
+                    genres: ep.genres,
+                    studio: ep.studio,
+                    playCount: ep.playCount,
+                    lastPlayedAt: ep.lastPlayedAt,
+                    addedAt: ep.addedAt,
+                    servers: ep.servers,
+                  }}
+                />
+              )}
             />
           ) : (
             <div style={landscapeGridStyle}>
@@ -245,6 +270,29 @@ export default function SeasonDetailPage() {
                   aspectRatio="landscape"
                   fallbackIcon="series"
                   onClick={() => router.push(`/library/series/episode/${ep.id}`)}
+                  hoverContent={
+                    <MediaHoverPopover
+                      data={{
+                        title: ep.title,
+                        year: ep.year,
+                        summary: ep.summary,
+                        contentRating: ep.contentRating,
+                        rating: ep.rating,
+                        audienceRating: ep.audienceRating,
+                        duration: ep.duration,
+                        resolution: ep.resolution,
+                        dynamicRange: ep.dynamicRange,
+                        audioProfile: ep.audioProfile,
+                        fileSize: ep.fileSize,
+                        genres: ep.genres,
+                        studio: ep.studio,
+                        playCount: ep.playCount,
+                        lastPlayedAt: ep.lastPlayedAt,
+                        addedAt: ep.addedAt,
+                        servers: ep.servers,
+                      }}
+                    />
+                  }
                   metadata={
                     <MetadataLine stacked>
                       {show("metadata", "episodeLabel") && ep.seasonNumber != null && ep.episodeNumber != null && (
@@ -254,33 +302,20 @@ export default function SeasonDetailPage() {
                       {show("metadata", "fileSize") && formatFileSize(ep.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(ep.fileSize)}</MetadataItem>}
                     </MetadataLine>
                   }
-                  badges={
-                    <>
-                      {show("badges", "resolution") && ep.resolution && (
-                        <Badge
-                          className="text-[10px] px-1.5 py-0"
-                          style={getSolidStyle("resolution", formatResolution(ep.resolution))}
-                        >
-                          {formatResolution(ep.resolution)}
-                        </Badge>
-                      )}
-                      {show("badges", "dynamicRange") && ep.dynamicRange && ep.dynamicRange !== "SDR" && (
-                        <Badge
-                          className="text-[10px] px-1.5 py-0"
-                          style={getSolidStyle("dynamicRange", ep.dynamicRange)}
-                        >
-                          {ep.dynamicRange}
-                        </Badge>
-                      )}
-                      {show("badges", "audioProfile") && ep.audioProfile && (
-                        <Badge
-                          className="text-[10px] px-1.5 py-0"
-                          style={getSolidStyle("audioProfile", ep.audioProfile)}
-                        >
-                          {ep.audioProfile}
-                        </Badge>
-                      )}
-                    </>
+                  qualityBar={
+                    show("badges", "resolution") || show("badges", "dynamicRange") || show("badges", "audioProfile")
+                      ? [
+                          ...(show("badges", "resolution") && ep.resolution
+                            ? [{ color: getHex("resolution", formatResolution(ep.resolution)), weight: 1, label: formatResolution(ep.resolution) }]
+                            : []),
+                          ...(show("badges", "dynamicRange") && ep.dynamicRange && ep.dynamicRange !== "SDR"
+                            ? [{ color: getHex("dynamicRange", ep.dynamicRange), weight: 1, label: ep.dynamicRange }]
+                            : []),
+                          ...(show("badges", "audioProfile") && ep.audioProfile
+                            ? [{ color: getHex("audioProfile", ep.audioProfile), weight: 1, label: ep.audioProfile }]
+                            : []),
+                        ]
+                      : undefined
                   }
                 />
               ))}

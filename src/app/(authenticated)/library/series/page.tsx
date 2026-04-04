@@ -3,17 +3,18 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, useTransition } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useChipColors } from "@/components/chip-color-provider";
+import { getChipBadgeStyle } from "@/lib/theme/chip-colors";
 import { useRouter } from "next/navigation";
 import { MediaFilters } from "@/components/media-filters";
 import { MediaCard } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { ColorChip } from "@/components/color-chip";
 import { useServers } from "@/hooks/use-servers";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import { AlphabetFilter } from "@/components/alphabet-filter";
 import { useVirtualGridAlphabet } from "@/hooks/use-virtual-grid-alphabet";
 import { useTableAlphabet } from "@/hooks/use-table-alphabet";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tv, Layers, List, HardDrive } from "lucide-react";
 import { DataTable } from "@/components/data-table";
@@ -53,7 +54,7 @@ const SORT_OPTIONS = [
   { value: "addedAt", label: "Date Added" },
 ];
 
-function seriesTableColumns(getSolidStyle: (category: "resolution" | "dynamicRange" | "audioProfile", value: string) => React.CSSProperties): DataTableColumn<GroupedSeries>[] {
+function seriesTableColumns(getHex: (category: "resolution" | "dynamicRange" | "audioProfile", value: string) => string): DataTableColumn<GroupedSeries>[] {
   return [
     {
       id: "parentTitle",
@@ -94,13 +95,12 @@ function seriesTableColumns(getSolidStyle: (category: "resolution" | "dynamicRan
       accessor: (s) => (
         <div className="flex flex-wrap gap-1">
           {QUALITY_ORDER.filter((q) => s.qualityCounts[q]).map((quality) => (
-            <Badge
+            <ColorChip
               key={quality}
-              className="text-[10px] px-1.5 py-0"
-              style={getSolidStyle("resolution", quality)}
+              style={getChipBadgeStyle(getHex("resolution", quality))}
             >
               {quality}: {s.qualityCounts[quality]}
-            </Badge>
+            </ColorChip>
           ))}
         </div>
       ),
@@ -176,7 +176,7 @@ const QUALITY_BAR_HEIGHT = 4; // h-1 quality bar between poster and content
 
 export default function SeriesPage() {
   const router = useRouter();
-  const { getHex, getSolidStyle } = useChipColors();
+  const { getHex } = useChipColors();
   const { show, showServers, setVisible, prefs } = useCardDisplay("SERIES");
   const [seriesList, setSeriesList] = useState<GroupedSeries[]>([]);
   const [loading, setLoading] = useState(true);
@@ -424,13 +424,27 @@ export default function SeriesPage() {
 
           {viewMode === "table" ? (
             <DataTable<GroupedSeries>
-              columns={seriesTableColumns(getSolidStyle)}
+              columns={seriesTableColumns(getHex)}
               data={filteredSeries}
               keyExtractor={(s) => s.parentTitle}
               defaultSortId="parentTitle"
               resizeStorageKey="dt-widths-series"
               onRowClick={(s) => { markChildNavigation(); router.push(`/library/series/show/${s.mediaItemId}`); }}
               scrollToIndexRef={tableScrollToIndexRef}
+              renderHoverContent={(s) => (
+                <MediaHoverPopover
+                  imageUrl={`/api/media/${s.mediaItemId}/image?type=parent`}
+                  data={{
+                    title: s.parentTitle,
+                    seasonCount: s.seasonCount,
+                    episodeCount: s.episodeCount,
+                    fileSize: s.totalSize,
+                    lastPlayedAt: s.lastPlayed,
+                    addedAt: s.addedAt,
+                    servers: s.servers,
+                  }}
+                />
+              )}
             />
           ) : (
             <div ref={gridContainerRef}>

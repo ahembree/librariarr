@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
+import { ServerChips } from "@/components/server-chips";
+import { MediaHoverPopover } from "@/components/media-hover-popover";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -240,9 +242,9 @@ export default function HistoryPage() {
       group: "core",
       defaultVisible: true,
       accessor: (item) => (
-        <Badge variant="outline" className={cn("text-xs", TYPE_BADGE_COLORS[item.mediaItem.type])}>
+        <ColorChip className={cn("text-xs", TYPE_BADGE_COLORS[item.mediaItem.type])}>
           {TYPE_LABELS[item.mediaItem.type] ?? item.mediaItem.type}
-        </Badge>
+        </ColorChip>
       ),
       sortValue: (item) => item.mediaItem.type,
     },
@@ -290,9 +292,9 @@ export default function HistoryPage() {
         if (!res) return "-";
         const label = formatResolution(res);
         return (
-          <Badge variant="outline" className="text-xs" style={getBadgeStyle("resolution", label)}>
+          <ColorChip style={getBadgeStyle("resolution", label)}>
             {label}
-          </Badge>
+          </ColorChip>
         );
       },
       sortValue: (item) => item.mediaItem.resolution,
@@ -307,9 +309,9 @@ export default function HistoryPage() {
         const dr = item.mediaItem.dynamicRange;
         if (!dr) return "-";
         return (
-          <Badge variant="outline" className="text-xs" style={getBadgeStyle("dynamicRange", dr)}>
+          <ColorChip style={getBadgeStyle("dynamicRange", dr)}>
             {dr}
-          </Badge>
+          </ColorChip>
         );
       },
       sortValue: (item) => item.mediaItem.dynamicRange,
@@ -386,8 +388,9 @@ export default function HistoryPage() {
       defaultWidth: 110,
       group: "core",
       defaultVisible: true,
-      className: "text-xs text-muted-foreground",
-      accessor: (item) => item.server.name,
+      accessor: (item) => (
+        <ServerChips servers={[{ serverId: item.server.id, serverName: item.server.name, serverType: item.server.type }]} />
+      ),
       sortValue: (item) => item.server.name,
     },
   ], [getBadgeStyle]);
@@ -554,8 +557,8 @@ export default function HistoryPage() {
   // ── Render ─────────────────────────────────────────────────────
 
   return (
-    <div className="flex md:h-full">
-      <div className="flex-1 min-w-0 md:overflow-auto">
+    <div className="flex h-full">
+      <div className="flex-1 min-w-0 overflow-auto">
         <div className="p-4 sm:p-6 lg:p-8">
           {/* Header */}
           <div className="flex items-center justify-between mb-6">
@@ -729,6 +732,22 @@ export default function HistoryPage() {
                 defaultSortOrder={sortOrder}
                 onSortChange={handleSortChange}
                 resizeStorageKey="history-col-widths"
+                renderHoverContent={(item) => (
+                  <MediaHoverPopover
+                    imageUrl={`/api/media/${item.mediaItem.id}/image${item.mediaItem.type === "episode" || item.mediaItem.parentTitle ? "?type=parent" : ""}`}
+                    data={{
+                      title: item.mediaItem.parentTitle
+                        ? `${item.mediaItem.parentTitle} — ${item.mediaItem.title}`
+                        : item.mediaItem.title,
+                      year: item.mediaItem.year,
+                      duration: item.mediaItem.duration,
+                      resolution: item.mediaItem.resolution,
+                      dynamicRange: item.mediaItem.dynamicRange,
+                      fileSize: item.mediaItem.fileSize,
+                      servers: [{ serverId: item.server.id, serverName: item.server.name, serverType: item.server.type }],
+                    }}
+                  />
+                )}
               />
 
               {/* Pagination */}

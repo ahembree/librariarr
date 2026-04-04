@@ -62,13 +62,15 @@ export default function LifecycleRulesPage() {
   }, [availableTypes, activeTab, visibleTabs]);
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8">
-      <div className="mb-6">
-        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Lifecycle Rules</h1>
-        <p className="text-muted-foreground mt-1">Define rules to automatically manage your media library based on criteria like age, play count, and quality.</p>
-      </div>
+    <div className="flex flex-col h-full">
+      <div className="shrink-0 p-4 sm:p-6 lg:p-8 pb-0 sm:pb-0 lg:pb-0">
+        <div className="mb-6">
+          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Lifecycle Rules</h1>
+          <p className="text-muted-foreground mt-1">Define rules to automatically manage your media library based on criteria like age, play count, and quality.</p>
+        </div>
 
-      <TabNav tabs={visibleTabs} activeTab={effectiveTab} onTabChange={handleTabChange} className="mb-6" />
+        <TabNav tabs={visibleTabs} activeTab={effectiveTab} onTabChange={handleTabChange} className="mb-6" />
+      </div>
 
       {effectiveTab === "movies" && (
         <LifecycleRulePage

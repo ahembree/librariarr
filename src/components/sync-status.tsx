@@ -7,7 +7,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import {
   RefreshCw,
   CheckCircle,
@@ -34,11 +34,7 @@ interface SyncJob {
 
 function ServerTypeChip({ type }: { type: string }) {
   const style = SERVER_TYPE_STYLES[type] ?? DEFAULT_SERVER_STYLE;
-  return (
-    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium leading-none border ${style.classes}`}>
-      {style.label}
-    </span>
-  );
+  return <ColorChip className={style.classes}>{style.label}</ColorChip>;
 }
 
 interface SyncStatusProps {
@@ -140,13 +136,12 @@ export function SyncStatus({ onSyncComplete }: SyncStatusProps) {
           <Database className="h-4 w-4" />
           Library Sync
           {activeJobs.length > 0 && (
-            <Badge
-              variant="secondary"
+            <ColorChip
               className="bg-blue-500/20 text-blue-400"
             >
               <Loader2 className="mr-1 h-3 w-3 animate-spin" />
               Syncing
-            </Badge>
+            </ColorChip>
           )}
         </CardTitle>
       </CardHeader>

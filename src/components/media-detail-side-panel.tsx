@@ -5,6 +5,7 @@ import Link from "next/link";
 import { X, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MediaDetailContent } from "@/components/media-detail-content";
 import { FadeImage } from "@/components/ui/fade-image";
@@ -176,19 +177,19 @@ export function MediaDetailSidePanel({
               </p>
               <div className="flex flex-wrap gap-1">
                 {resolutionLabel && (
-                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0" style={getBadgeStyle("resolution", resolutionLabel)}>
+                  <ColorChip style={getBadgeStyle("resolution", resolutionLabel)}>
                     {resolutionLabel}
-                  </Badge>
+                  </ColorChip>
                 )}
                 {item.dynamicRange && (
-                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0" style={getBadgeStyle("dynamicRange", item.dynamicRange)}>
+                  <ColorChip style={getBadgeStyle("dynamicRange", item.dynamicRange)}>
                     {item.dynamicRange}
-                  </Badge>
+                  </ColorChip>
                 )}
                 {item.audioProfile && (
-                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0" style={getBadgeStyle("audioProfile", item.audioProfile)}>
+                  <ColorChip style={getBadgeStyle("audioProfile", item.audioProfile)}>
                     {item.audioProfile}
-                  </Badge>
+                  </ColorChip>
                 )}
               </div>
             </>
@@ -271,7 +272,7 @@ export function MediaDetailSidePanel({
   return (
     <div
       className="relative border-l border-white/5 glass flex flex-col h-full overflow-hidden shrink-0"
-      style={{ width }}
+      style={{ width, maxWidth: "40vw" }}
     >
       {/* Resize handle — wider hit target with grip indicator */}
       <div

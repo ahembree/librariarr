@@ -10,6 +10,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -321,27 +322,25 @@ export default function LogsPage() {
                     {formatTimestamp(log.createdAt)}
                   </TableCell>
                   <TableCell>
-                    <Badge
-                      variant="outline"
+                    <ColorChip
                       className={LEVEL_COLORS[log.level] ?? ""}
                     >
                       {log.level}
-                    </Badge>
+                    </ColorChip>
                   </TableCell>
                   <TableCell className="hidden md:table-cell">
-                    <Badge
-                      variant="outline"
+                    <ColorChip
                       className={`text-xs ${CATEGORY_COLORS[log.category] ?? ""}`}
                     >
                       {log.category}
-                    </Badge>
+                    </ColorChip>
                   </TableCell>
                   <TableCell className="hidden text-sm font-medium md:table-cell">
                     {log.source}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground font-mono">
                     <span className="mb-0.5 flex flex-wrap gap-1 md:hidden">
-                      <Badge variant="outline" className={`text-xs ${CATEGORY_COLORS[log.category] ?? ""}`}>{log.category}</Badge>
+                      <ColorChip className={`text-xs ${CATEGORY_COLORS[log.category] ?? ""}`}>{log.category}</ColorChip>
                       <span className="text-xs text-muted-foreground/70">{log.source}</span>
                     </span>
                     <span className="block">{log.message}</span>
