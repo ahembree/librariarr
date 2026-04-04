@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.13.0](https://github.com/ahembree/librariarr/compare/v0.12.2...v0.13.0) (2026-04-04)
+
+
+### Features
+
+* **tracks:** add server chips to track cards ([ec68daf](https://github.com/ahembree/librariarr/commit/ec68dafc7def5891b03e86aa9893e96a58a2dcd7))
+
+
+### Bug Fixes
+
+* add server chips to seasons/episodes/albums cards, fix card layout issues ([bc29075](https://github.com/ahembree/librariarr/commit/bc290756de92d1fb467feb3c818ccf3f218f9a7d))
+* always render quality bar container for consistent card height ([104b564](https://github.com/ahembree/librariarr/commit/104b5642a607662ddb8fe805ba676fe1d605ac79))
+* **tracks:** fix card view by using correct scroll container ([e6d9390](https://github.com/ahembree/librariarr/commit/e6d9390b266a6a7cdabdec11c12008486eb47718))
+* use calculated fallback in virtualizer estimateSize instead of hardcoded values ([91a89fc](https://github.com/ahembree/librariarr/commit/91a89fc793362793182384e149414ba17093b50e))
+* use virtualizer measureElement for pixel-perfect row spacing ([ab09434](https://github.com/ahembree/librariarr/commit/ab0943460d227b7aed25d6b9d9f712327b98d0f0))
+
 ## [0.12.2](https://github.com/ahembree/librariarr/compare/v0.12.1...v0.12.2) (2026-04-04)
 
 
