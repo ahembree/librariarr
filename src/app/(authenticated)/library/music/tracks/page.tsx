@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, useLayoutEffect, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
 import { MediaCard } from "@/components/media-card";
 import { useChipColors } from "@/components/chip-color-provider";
-import { Loader2, Music, Disc3, ListMusic, Clock, HardDrive } from "lucide-react";
+import { Music, Disc3, ListMusic, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { useCardSize } from "@/hooks/use-card-size";
@@ -18,6 +19,11 @@ import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 
+const GAP = 16;
+const CARD_CONTENT_HEIGHT = 138;
+const CARD_BORDER = 2;
+const QUALITY_BAR_HEIGHT = 4;
+
 export default function AllTracksPage() {
   const router = useRouter();
   const { getHex } = useChipColors();
@@ -26,13 +32,15 @@ export default function AllTracksPage() {
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [sortBy, setSortBy] = useState("title");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [viewMode, setViewMode] = useState<"cards" | "table">("table");
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  const { size, setSize, landscapeGridStyle } = useCardSize();
+  const [, startTransition] = useTransition();
+  const { size, setSize, columns: actualColumns } = useCardSize();
+
+  const gridContainerRef = useRef<HTMLDivElement>(null);
+  const scrollElementRef = useRef<HTMLDivElement | null>(null);
+  const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
 
   useEffect(() => {
     const stored = localStorage.getItem("tracks-view-mode") as "cards" | "table" | null;
@@ -44,55 +52,76 @@ export default function AllTracksPage() {
     localStorage.setItem("tracks-view-mode", mode);
   };
 
-  const fetchTracks = useCallback(async (pageNum: number, append = false) => {
-    if (pageNum === 1) setLoading(true);
-    else setLoadingMore(true);
+  const fetchTracks = useCallback(async () => {
+    setLoading(true);
     try {
       const params = new URLSearchParams({
-        page: String(pageNum),
-        limit: "50",
+        limit: "0",
         sortBy,
         sortOrder,
         ...filters,
       });
       const response = await fetch(`/api/media/music?${params}`);
       const data = await response.json();
-      if (append) {
-        setItems((prev) => [...prev, ...data.items]);
-      } else {
+      startTransition(() => {
         setItems(data.items);
-      }
-      setHasMore(data.pagination?.hasMore ?? false);
+      });
     } catch (error) {
       console.error("Failed to fetch tracks:", error);
     } finally {
       setLoading(false);
-      setLoadingMore(false);
     }
   }, [sortBy, sortOrder, filters]);
 
   useEffect(() => {
-    setPage(1);
-    fetchTracks(1);
+    const timeout = setTimeout(fetchTracks, 0);
+    return () => clearTimeout(timeout);
   }, [fetchTracks]);
 
-  // Infinite scroll
+  // Resolve scroll parent and margin
   useEffect(() => {
-    if (!hasMore || loading || loadingMore) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting) {
-          const nextPage = page + 1;
-          setPage(nextPage);
-          fetchTracks(nextPage, true);
-        }
-      },
-      { rootMargin: "200px" }
-    );
-    const el = sentinelRef.current;
-    if (el) observer.observe(el);
-    return () => { if (el) observer.unobserve(el); };
-  }, [hasMore, loading, loadingMore, page, fetchTracks]);
+    const el = document.querySelector("[data-scroll-region]") as HTMLDivElement | null;
+    if (el) {
+      scrollElementRef.current = el;
+      setScrollElement(el);
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    const container = gridContainerRef.current;
+    const scroller = scrollElementRef.current;
+    if (container && scroller) {
+      const containerRect = container.getBoundingClientRect();
+      const scrollerRect = scroller.getBoundingClientRect();
+      setScrollMargin(containerRect.top - scrollerRect.top + scroller.scrollTop);
+    }
+  }, [loading, viewMode, items.length]);
+
+  const rowCount = useMemo(
+    () => Math.ceil(items.length / actualColumns),
+    [items.length, actualColumns],
+  );
+
+  const estimateSize = useCallback(() => {
+    const container = gridContainerRef.current;
+    if (!container) return 280;
+    const containerWidth = container.offsetWidth;
+    const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
+    const posterHeight = columnWidth * 1.0; // square
+    return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
+  }, [actualColumns]);
+
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => scrollElement,
+    estimateSize,
+    scrollMargin,
+    overscan: 3,
+  });
+
+  useEffect(() => {
+    virtualizer.measure();
+  }, [actualColumns, virtualizer]);
 
   const handleSort = useCallback(
     (field: string) => {
@@ -137,7 +166,7 @@ export default function AllTracksPage() {
       </nav>
 
       <MediaFilters
-        onFilterChange={(f) => { setFilters(f); setPage(1); }}
+        onFilterChange={setFilters}
         mediaType="MUSIC"
         prefix={
           <LibraryToolbar
@@ -195,61 +224,76 @@ export default function AllTracksPage() {
           )}
         />
       ) : (
-        <>
-          <div style={landscapeGridStyle}>
-            {items.map((track) => (
-              <MediaCard
-                key={track.id}
-                imageUrl={`/api/media/${track.id}/image`}
-                title={track.title}
-                aspectRatio="square"
-                fallbackIcon="music"
-                onClick={() => router.push(`/library/music/track/${track.id}`)}
-                qualityBar={
-                  track.audioCodec
-                    ? [{ color: getHex("audioCodec", track.audioCodec), weight: 1, label: track.audioCodec }]
-                    : undefined
-                }
-                hoverContent={
-                  <MediaHoverPopover
-                    data={{
-                      title: track.title,
-                      year: track.year,
-                      summary: track.summary,
-                      contentRating: track.contentRating,
-                      rating: track.rating,
-                      audienceRating: track.audienceRating,
-                      duration: track.duration,
-                      resolution: track.resolution,
-                      dynamicRange: track.dynamicRange,
-                      audioProfile: track.audioProfile,
-                      fileSize: track.fileSize,
-                      genres: track.genres,
-                      studio: track.studio,
-                      playCount: track.playCount,
-                      lastPlayedAt: track.lastPlayedAt,
-                      addedAt: track.addedAt,
-                      servers: track.servers,
-                    }}
-                  />
-                }
-                metadata={
-                  <MetadataLine stacked>
-                    {track.parentTitle && <MetadataItem icon={<Music />}>{track.parentTitle}</MetadataItem>}
-                    {show("metadata", "duration") && track.duration && <MetadataItem icon={<Clock />}>{formatDuration(track.duration)}</MetadataItem>}
-                    {show("metadata", "fileSize") && track.fileSize && <MetadataItem icon={<HardDrive />}>{formatFileSize(track.fileSize)}</MetadataItem>}
-                  </MetadataLine>
-                }
-              />
-            ))}
+        <div ref={gridContainerRef}>
+          <div style={{ height: virtualizer.getTotalSize(), width: "100%", position: "relative" }}>
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const rowStart = virtualRow.index * actualColumns;
+              const rowItems = items.slice(rowStart, rowStart + actualColumns);
+              return (
+                <div
+                  key={virtualRow.key}
+                  data-index={virtualRow.index}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    paddingBottom: GAP,
+                    transform: `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)`,
+                  }}
+                >
+                  <div style={{ display: "grid", gap: `${GAP}px`, gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))` }}>
+                    {rowItems.map((track) => (
+                      <MediaCard
+                        key={track.id}
+                        imageUrl={`/api/media/${track.id}/image`}
+                        title={track.title}
+                        aspectRatio="square"
+                        fallbackIcon="music"
+                        onClick={() => router.push(`/library/music/track/${track.id}`)}
+                        qualityBar={
+                          track.audioCodec
+                            ? [{ color: getHex("audioCodec", track.audioCodec), weight: 1, label: track.audioCodec }]
+                            : undefined
+                        }
+                        hoverContent={
+                          <MediaHoverPopover
+                            data={{
+                              title: track.title,
+                              year: track.year,
+                              summary: track.summary,
+                              contentRating: track.contentRating,
+                              rating: track.rating,
+                              audienceRating: track.audienceRating,
+                              duration: track.duration,
+                              resolution: track.resolution,
+                              dynamicRange: track.dynamicRange,
+                              audioProfile: track.audioProfile,
+                              fileSize: track.fileSize,
+                              genres: track.genres,
+                              studio: track.studio,
+                              playCount: track.playCount,
+                              lastPlayedAt: track.lastPlayedAt,
+                              addedAt: track.addedAt,
+                              servers: track.servers,
+                            }}
+                          />
+                        }
+                        metadata={
+                          <MetadataLine stacked>
+                            {track.parentTitle && <MetadataItem icon={<Music />}>{track.parentTitle}</MetadataItem>}
+                            {show("metadata", "duration") && track.duration && <MetadataItem icon={<Clock />}>{formatDuration(track.duration)}</MetadataItem>}
+                            {show("metadata", "fileSize") && track.fileSize && <MetadataItem icon={<HardDrive />}>{formatFileSize(track.fileSize)}</MetadataItem>}
+                          </MetadataLine>
+                        }
+                      />
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
           </div>
-          {loadingMore && (
-            <div className="flex justify-center py-8">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-          )}
-          <div ref={sentinelRef} className="h-1" />
-        </>
+        </div>
       )}
     </div>
   );

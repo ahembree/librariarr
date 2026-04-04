@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useChipColors } from "@/components/chip-color-provider";
 import { getChipBadgeStyle } from "@/lib/theme/chip-colors";
 import { MediaCard } from "@/components/media-card";
@@ -34,6 +35,11 @@ interface SeasonEntry {
 }
 
 import { QUALITY_ORDER } from "@/lib/resolution";
+
+const GAP = 16;
+const CARD_CONTENT_HEIGHT = 138;
+const CARD_BORDER = 2;
+const QUALITY_BAR_HEIGHT = 4;
 
 const SORT_OPTIONS = [
   { value: "parentTitle", label: "Series Name" },
@@ -149,9 +155,56 @@ export default function AllSeasonsPage() {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
 
-  const { size, setSize, gridStyle } = useCardSize();
+  const { size, setSize, columns: actualColumns } = useCardSize();
+
+  const gridContainerRef = useRef<HTMLDivElement>(null);
 
   const { markChildNavigation } = useScrollRestoration("/library/series/seasons", !loading && seasons.length > 0);
+
+  const scrollElementRef = useRef<HTMLElement | null>(null);
+  const [, setScrollElement] = useState<HTMLElement | null>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
+
+  // Find the <main> scroll container on mount
+  useEffect(() => {
+    const main = document.querySelector<HTMLElement>("main");
+    scrollElementRef.current = main;
+    setScrollElement(main);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (gridContainerRef.current) {
+      setScrollMargin(gridContainerRef.current.offsetTop);
+    }
+  }, []);
+
+  // Compute row count for virtualizer
+  const rowCount = useMemo(
+    () => (seasons.length > 0 ? Math.ceil(seasons.length / actualColumns) : 0),
+    [seasons.length, actualColumns],
+  );
+
+  const estimateSize = useCallback(() => {
+    const container = gridContainerRef.current;
+    if (!container) return 350;
+    const containerWidth = container.offsetWidth;
+    const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
+    const posterHeight = columnWidth * 1.5;
+    return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
+  }, [actualColumns]);
+
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => scrollElementRef.current,
+    estimateSize,
+    overscan: 10,
+    scrollMargin,
+  });
+
+  // Re-measure when columns change
+  useEffect(() => {
+    virtualizer.measure();
+  }, [actualColumns, virtualizer]);
 
   useEffect(() => {
     const stored = localStorage.getItem("seasons-view-mode") as "cards" | "table" | null;
@@ -283,53 +336,73 @@ export default function AllSeasonsPage() {
               )}
             />
           ) : (
-            <>
-              <div style={gridStyle}>
-                {seasons.map((season) => (
-                  <MediaCard
-                    key={`${season.parentTitle}::${season.seasonNumber}`}
-                    imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
-                    title={`${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`}
-                    fallbackIcon="series"
-                    onClick={() => navigateToSeason(season)}
-                    metadata={
-                      <MetadataLine stacked>
-                        {show("metadata", "episodeCount") && <MetadataItem icon={<List />}>{season.episodeCount} {season.episodeCount === 1 ? "ep" : "eps"}</MetadataItem>}
-                        {show("metadata", "fileSize") && <MetadataItem icon={<HardDrive />}>{formatFileSize(season.totalSize)}</MetadataItem>}
-                        {show("metadata", "playCount") && season.totalPlayCount > 0 && (
-                          <MetadataItem icon={<Play />}>{season.totalPlayCount} {season.totalPlayCount === 1 ? "play" : "plays"}</MetadataItem>
-                        )}
-                      </MetadataLine>
-                    }
-                    qualityBar={
-                      show("badges", "qualityCounts")
-                        ? QUALITY_ORDER
-                            .filter((q) => season.qualityCounts[q])
-                            .map((quality) => ({
-                              color: getHex("resolution", quality),
-                              weight: season.qualityCounts[quality],
-                              label: `${quality}: ${season.qualityCounts[quality]}`,
-                            }))
-                        : undefined
-                    }
-                    hoverContent={
-                      <MediaHoverPopover
-                        imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
-                        data={{
-                          title: `${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`,
-                          episodeCount: season.episodeCount,
-                          fileSize: season.totalSize,
-                          playCount: season.totalPlayCount,
-                          lastPlayedAt: season.lastPlayed,
-                          addedAt: season.addedAt,
-                        }}
-                      />
-                    }
-                  />
-                ))}
+            <div ref={gridContainerRef}>
+              <div style={{ height: virtualizer.getTotalSize(), width: "100%", position: "relative" }}>
+                {virtualizer.getVirtualItems().map((virtualRow) => {
+                  const rowStart = virtualRow.index * actualColumns;
+                  const rowItems = seasons.slice(rowStart, rowStart + actualColumns);
+                  return (
+                    <div
+                      key={virtualRow.key}
+                      data-index={virtualRow.index}
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        width: "100%",
+                        paddingBottom: GAP,
+                        transform: `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)`,
+                      }}
+                    >
+                      <div style={{ display: "grid", gap: `${GAP}px`, gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))` }}>
+                        {rowItems.map((season) => (
+                          <MediaCard
+                            key={`${season.parentTitle}::${season.seasonNumber}`}
+                            imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
+                            title={`${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`}
+                            fallbackIcon="series"
+                            onClick={() => navigateToSeason(season)}
+                            metadata={
+                              <MetadataLine stacked>
+                                {show("metadata", "episodeCount") && <MetadataItem icon={<List />}>{season.episodeCount} {season.episodeCount === 1 ? "ep" : "eps"}</MetadataItem>}
+                                {show("metadata", "fileSize") && <MetadataItem icon={<HardDrive />}>{formatFileSize(season.totalSize)}</MetadataItem>}
+                                {show("metadata", "playCount") && season.totalPlayCount > 0 && (
+                                  <MetadataItem icon={<Play />}>{season.totalPlayCount} {season.totalPlayCount === 1 ? "play" : "plays"}</MetadataItem>
+                                )}
+                              </MetadataLine>
+                            }
+                            qualityBar={
+                              show("badges", "qualityCounts")
+                                ? QUALITY_ORDER
+                                    .filter((q) => season.qualityCounts[q])
+                                    .map((quality) => ({
+                                      color: getHex("resolution", quality),
+                                      weight: season.qualityCounts[quality],
+                                      label: `${quality}: ${season.qualityCounts[quality]}`,
+                                    }))
+                                : undefined
+                            }
+                            hoverContent={
+                              <MediaHoverPopover
+                                imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
+                                data={{
+                                  title: `${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`,
+                                  episodeCount: season.episodeCount,
+                                  fileSize: season.totalSize,
+                                  playCount: season.totalPlayCount,
+                                  lastPlayedAt: season.lastPlayed,
+                                  addedAt: season.addedAt,
+                                }}
+                              />
+                            }
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-
-            </>
+            </div>
           )}
         </>
       )}

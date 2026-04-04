@@ -4,6 +4,7 @@ import { useCallback, useState, useEffect, useMemo, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { Separator } from "@/components/ui/separator";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Slider } from "@/components/ui/slider";
@@ -1657,155 +1658,141 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
       {hasFilters && (
         <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-white/5 animate-fade-in-up">
         {chipFilterKeys.map((key) => (
-          <Badge
+          <ColorChip
             key={key}
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => updateFilter(key, undefined)}
           >
             <span className="text-muted-foreground">{FILTER_LABELS[key] ?? key}:</span>
             {getChipLabel(key, filters[key])}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         ))}
 
         {/* Comparison chips */}
         {hasYear && (
-          <Badge
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+          <ColorChip
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => clearConditions("yearConditions", "yearLogic")}
           >
             <span className="text-muted-foreground">Year:</span>
             {formatConditionsLabel(yearConditions, yearLogic)}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         )}
         {hasPlayCount && (
-          <Badge
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+          <ColorChip
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => clearConditions("playCountConditions", "playCountLogic")}
           >
             <span className="text-muted-foreground">Plays:</span>
             {formatConditionsLabel(playCountConditions, playCountLogic)}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         )}
         {hasRating && (
-          <Badge
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+          <ColorChip
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => clearConditions("ratingConditions", "ratingLogic")}
           >
             <span className="text-muted-foreground">Rating:</span>
             {formatConditionsLabel(ratingConditions, ratingLogic)}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         )}
         {hasAudienceRating && (
-          <Badge
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+          <ColorChip
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => clearConditions("audienceRatingConditions", "audienceRatingLogic")}
           >
             <span className="text-muted-foreground">Audience Rating:</span>
             {formatConditionsLabel(audienceRatingConditions, audienceRatingLogic)}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         )}
         {hasVideoBitrate && (
-          <Badge
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+          <ColorChip
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => clearConditions("videoBitrateConditions", "videoBitrateLogic")}
           >
             <span className="text-muted-foreground">Video Bitrate:</span>
             {formatConditionsLabel(videoBitrateConditions, videoBitrateLogic)}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         )}
         {hasAudioBitrate && (
-          <Badge
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+          <ColorChip
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => clearConditions("audioBitrateConditions", "audioBitrateLogic")}
           >
             <span className="text-muted-foreground">Audio Bitrate:</span>
             {formatConditionsLabel(audioBitrateConditions, audioBitrateLogic)}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         )}
         {hasAudioStreamCount && (
-          <Badge
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+          <ColorChip
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => clearConditions("audioStreamCountConditions", "audioStreamCountLogic")}
           >
             <span className="text-muted-foreground">Audio Tracks:</span>
             {formatConditionsLabel(audioStreamCountConditions, audioStreamCountLogic)}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         )}
         {hasSubtitleStreamCount && (
-          <Badge
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+          <ColorChip
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => clearConditions("subtitleStreamCountConditions", "subtitleStreamCountLogic")}
           >
             <span className="text-muted-foreground">Subtitle Tracks:</span>
             {formatConditionsLabel(subtitleStreamCountConditions, subtitleStreamCountLogic)}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         )}
         {hasIsWatchlisted && (
-          <Badge
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+          <ColorChip
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => updateFilter("isWatchlisted", undefined)}
           >
             <span className="text-muted-foreground">Watchlisted:</span>
             {filters.isWatchlisted === "true" ? "Yes" : "No"}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         )}
         {hasEpisodeCount && (
-          <Badge
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+          <ColorChip
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => clearConditions("episodeCountConditions", "episodeCountLogic")}
           >
             <span className="text-muted-foreground">Episodes:</span>
             {formatConditionsLabel(episodeCountConditions, episodeCountLogic)}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         )}
         {hasWatchedEpisodeCount && (
-          <Badge
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+          <ColorChip
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => clearConditions("watchedEpisodeCountConditions", "watchedEpisodeCountLogic")}
           >
             <span className="text-muted-foreground">Watched Episodes:</span>
             {formatConditionsLabel(watchedEpisodeCountConditions, watchedEpisodeCountLogic)}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         )}
         {hasWatchedEpisodePercentage && (
-          <Badge
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+          <ColorChip
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => clearConditions("watchedEpisodePercentageConditions", "watchedEpisodePercentageLogic")}
           >
             <span className="text-muted-foreground">Watched %:</span>
             {formatConditionsLabel(watchedEpisodePercentageConditions, watchedEpisodePercentageLogic)}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         )}
         {hasLastEpisodeAiredAt && (
-          <Badge
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+          <ColorChip
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => clearDateKeys(["lastEpisodeAiredAtMin", "lastEpisodeAiredAtMax", "lastEpisodeAiredAtDays"])}
           >
             <span className="text-muted-foreground">Last Aired:</span>
@@ -1817,14 +1804,13 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                   ? `After ${filters.lastEpisodeAiredAtMin}`
                   : `Before ${filters.lastEpisodeAiredAtMax}`}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         )}
 
         {/* Date chips */}
         {hasLastPlayed && (
-          <Badge
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+          <ColorChip
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => clearDateKeys(["lastPlayedAtMin", "lastPlayedAtMax", "lastPlayedAtDays"])}
           >
             <span className="text-muted-foreground">Last Played:</span>
@@ -1836,12 +1822,11 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                   ? `After ${filters.lastPlayedAtMin}`
                   : `Before ${filters.lastPlayedAtMax}`}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         )}
         {hasAddedAt && (
-          <Badge
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+          <ColorChip
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => clearDateKeys(["addedAtMin", "addedAtMax", "addedAtDays"])}
           >
             <span className="text-muted-foreground">Added:</span>
@@ -1853,12 +1838,11 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                   ? `After ${filters.addedAtMin}`
                   : `Before ${filters.addedAtMax}`}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         )}
         {hasReleaseDate && (
-          <Badge
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+          <ColorChip
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => clearDateKeys(["originallyAvailableAtMin", "originallyAvailableAtMax", "originallyAvailableAtDays"])}
           >
             <span className="text-muted-foreground">Released:</span>
@@ -1870,14 +1854,13 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                   ? `After ${filters.originallyAvailableAtMin}`
                   : `Before ${filters.originallyAvailableAtMax}`}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         )}
 
         {/* Search chip */}
         {filters.search && (
-          <Badge
-            variant="secondary"
-            className="gap-1 pl-2.5 pr-1.5 py-1 text-xs cursor-pointer hover:bg-secondary/80"
+          <ColorChip
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={() => {
               setSearchInput("");
               updateFilter("search", undefined);
@@ -1886,7 +1869,7 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
             <span className="text-muted-foreground">Search:</span>
             {filters.search}
             <X className="h-3 w-3 ml-0.5" />
-          </Badge>
+          </ColorChip>
         )}
 
         <Button variant="ghost" size="sm" onClick={clearFilters} className="text-muted-foreground hover:text-foreground">

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { MediaCard } from "@/components/media-card";
@@ -19,6 +20,11 @@ import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
+
+const GAP = 16;
+const CARD_CONTENT_HEIGHT = 138;
+const CARD_BORDER = 2;
+const QUALITY_BAR_HEIGHT = 4;
 
 interface AlbumEntry {
   albumTitle: string;
@@ -110,8 +116,22 @@ export default function AllAlbumsPage() {
     localStorage.setItem("albums-view-mode", mode);
   };
 
-  const { size, setSize, gridStyle } = useCardSize();
+  const { size, setSize, columns: actualColumns } = useCardSize();
   const { servers, selectedServerId, setSelectedServerId } = useServers();
+
+  const gridContainerRef = useRef<HTMLDivElement>(null);
+  const scrollElementRef = useRef<HTMLElement | null>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
+
+  useEffect(() => {
+    scrollElementRef.current = document.querySelector<HTMLElement>("main");
+  }, []);
+
+  useLayoutEffect(() => {
+    if (gridContainerRef.current) {
+      setScrollMargin(gridContainerRef.current.offsetTop);
+    }
+  }, []);
 
   const fetchAlbums = useCallback(async () => {
     setLoading(true);
@@ -140,6 +160,32 @@ export default function AllAlbumsPage() {
     const timeout = setTimeout(() => fetchAlbums(), 300);
     return () => clearTimeout(timeout);
   }, [fetchAlbums]);
+
+  const rowCount = useMemo(
+    () => (albums.length > 0 ? Math.ceil(albums.length / actualColumns) : 0),
+    [albums.length, actualColumns]
+  );
+
+  const estimateSize = useCallback(() => {
+    const container = gridContainerRef.current;
+    if (!container) return 280;
+    const containerWidth = container.offsetWidth;
+    const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
+    const posterHeight = columnWidth * 1.0;
+    return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
+  }, [actualColumns]);
+
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => scrollElementRef.current,
+    estimateSize,
+    overscan: 10,
+    scrollMargin,
+  });
+
+  useEffect(() => {
+    virtualizer.measure();
+  }, [actualColumns, virtualizer]);
 
   const toggleSort = (field: string) => {
     if (sortBy === field) {
@@ -232,63 +278,98 @@ export default function AllAlbumsPage() {
               )}
             />
           ) : (
-          <div style={gridStyle}>
-            {albums.map((album) => (
-              <MediaCard
-                key={`${album.artistName}::${album.albumTitle}`}
-                imageUrl={`/api/media/${album.mediaItemId}/image?type=season`}
-                title={album.albumTitle}
-                aspectRatio="square"
-                fallbackIcon="music"
-                onClick={() =>
-                  router.push(`/library/music/album/${album.mediaItemId}`)
-                }
-                qualityBar={
-                  Object.keys(album.audioCodecCounts).length > 0
-                    ? [
-                        ...AUDIO_CODEC_ORDER
-                          .filter((c) => album.audioCodecCounts[c])
-                          .map((codec) => ({
-                            color: getHex("audioCodec", codec),
-                            weight: album.audioCodecCounts[codec],
-                            label: `${codec}: ${album.audioCodecCounts[codec]}`,
-                          })),
-                        ...Object.entries(album.audioCodecCounts)
-                          .filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c))
-                          .map(([codec, count]) => ({
-                            color: getHex("audioCodec", codec),
-                            weight: count,
-                            label: `${codec}: ${count}`,
-                          })),
-                      ]
-                    : undefined
-                }
-                hoverContent={
-                  <MediaHoverPopover
-                    data={{
-                      title: album.albumTitle,
-                      trackCount: album.trackCount,
-                      fileSize: album.totalSize,
-                    }}
-                  />
-                }
-                metadata={
-                  <MetadataLine stacked>
-                    <MetadataItem icon={<Music />}>
-                      {album.artistName}
-                    </MetadataItem>
-                    <MetadataItem icon={<ListMusic />}>
-                      {album.trackCount}{" "}
-                      {album.trackCount === 1 ? "track" : "tracks"}
-                    </MetadataItem>
-                    <MetadataItem icon={<HardDrive />}>
-                      {formatFileSize(album.totalSize)}
-                    </MetadataItem>
-                  </MetadataLine>
-                }
-              />
-            ))}
-          </div>
+            <div ref={gridContainerRef}>
+              <div
+                style={{
+                  height: virtualizer.getTotalSize(),
+                  width: "100%",
+                  position: "relative",
+                }}
+              >
+                {virtualizer.getVirtualItems().map((virtualRow) => {
+                  const rowStart = virtualRow.index * actualColumns;
+                  const rowItems = albums.slice(rowStart, rowStart + actualColumns);
+                  return (
+                    <div
+                      key={virtualRow.key}
+                      data-index={virtualRow.index}
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        width: "100%",
+                        paddingBottom: GAP,
+                        transform: `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)`,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "grid",
+                          gap: `${GAP}px`,
+                          gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))`,
+                        }}
+                      >
+                        {rowItems.map((album) => (
+                          <MediaCard
+                            key={`${album.artistName}::${album.albumTitle}`}
+                            imageUrl={`/api/media/${album.mediaItemId}/image?type=season`}
+                            title={album.albumTitle}
+                            aspectRatio="square"
+                            fallbackIcon="music"
+                            onClick={() =>
+                              router.push(`/library/music/album/${album.mediaItemId}`)
+                            }
+                            qualityBar={
+                              Object.keys(album.audioCodecCounts).length > 0
+                                ? [
+                                    ...AUDIO_CODEC_ORDER
+                                      .filter((c) => album.audioCodecCounts[c])
+                                      .map((codec) => ({
+                                        color: getHex("audioCodec", codec),
+                                        weight: album.audioCodecCounts[codec],
+                                        label: `${codec}: ${album.audioCodecCounts[codec]}`,
+                                      })),
+                                    ...Object.entries(album.audioCodecCounts)
+                                      .filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c))
+                                      .map(([codec, count]) => ({
+                                        color: getHex("audioCodec", codec),
+                                        weight: count,
+                                        label: `${codec}: ${count}`,
+                                      })),
+                                  ]
+                                : undefined
+                            }
+                            hoverContent={
+                              <MediaHoverPopover
+                                data={{
+                                  title: album.albumTitle,
+                                  trackCount: album.trackCount,
+                                  fileSize: album.totalSize,
+                                }}
+                              />
+                            }
+                            metadata={
+                              <MetadataLine stacked>
+                                <MetadataItem icon={<Music />}>
+                                  {album.artistName}
+                                </MetadataItem>
+                                <MetadataItem icon={<ListMusic />}>
+                                  {album.trackCount}{" "}
+                                  {album.trackCount === 1 ? "track" : "tracks"}
+                                </MetadataItem>
+                                <MetadataItem icon={<HardDrive />}>
+                                  {formatFileSize(album.totalSize)}
+                                </MetadataItem>
+                              </MetadataLine>
+                            }
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           )}
         </>
       )}

@@ -749,7 +749,7 @@ export const MediaTable = memo(function MediaTable({ items, onItemClick, sortBy,
                       <TableRow
                         data-index={virtualRow.index}
                         onClick={() => onItemClick(item)}
-                        className={`cursor-pointer transition-all duration-200 hover:bg-white/3 even:bg-white/1.5 hover:ring-1 hover:ring-primary/20 hover:shadow-md hover:shadow-primary/10 ${rowClassName?.(item) ?? ""}`}
+                        className={`cursor-pointer transition-colors duration-200 hover:bg-white/3 even:bg-white/1.5 hover:ring-1 hover:ring-primary/20 ${rowClassName?.(item) ?? ""}`}
                       >
                         {/* Title cell - always shown */}
                         <TableCell className="font-medium overflow-hidden text-ellipsis">
