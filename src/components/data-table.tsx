@@ -212,8 +212,8 @@ export function DataTable<T>({
                 key={keyExtractor(item)}
                 data-index={virtualRow.index}
                 className={cn(
-                  "transition-all duration-200 even:bg-white/1.5",
-                  onRowClick && "cursor-pointer hover:bg-white/3 hover:ring-1 hover:ring-primary/20 hover:shadow-md hover:shadow-primary/10"
+                  "transition-colors duration-200 even:bg-white/1.5",
+                  onRowClick && "cursor-pointer hover:bg-white/3 hover:ring-1 hover:ring-primary/20"
                 )}
                 onClick={() => onRowClick?.(item)}
               >
