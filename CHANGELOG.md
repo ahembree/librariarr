@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.12.0](https://github.com/ahembree/librariarr/compare/v0.11.3...v0.12.0) (2026-04-04)
+
+
+### Features
+
+* add card hover popover ([06f06ca](https://github.com/ahembree/librariarr/commit/06f06caf951ed2dd5f0a482627203ae7670db2f8))
+* **lifecycle:** add toast and Discord notifications for failed manual actions ([532c8e0](https://github.com/ahembree/librariarr/commit/532c8e0166e205880ecf23dbc5ed60c1bec51871))
+* **settings:** add changelog/release notes to System tab ([e3eb02b](https://github.com/ahembree/librariarr/commit/e3eb02ba10790360ac8d1e14f717406309cf0e3d))
+* **settings:** show last 10 versions in changelog ([81dfb87](https://github.com/ahembree/librariarr/commit/81dfb87bd102bc2fb65687e37805ce17a43d9fcf))
+* update and standardize styling ([35fe4c3](https://github.com/ahembree/librariarr/commit/35fe4c370ce8bb07826b1207371de4a56a09ee16))
+* update and standardize styling ([1a6b6c1](https://github.com/ahembree/librariarr/commit/1a6b6c11a7e50ea29c1df5a951d1b019b7a8dfe1))
+
+
+### Bug Fixes
+
+* allow macOS trackpad swipe-back navigation ([7ad5252](https://github.com/ahembree/librariarr/commit/7ad52521168ea80f3671f9a0695d5aba722066f4))
+* change quality chips to a barfor standard sizing ([656ba7a](https://github.com/ahembree/librariarr/commit/656ba7a23f38af78543af34354ff714b18869589))
+* clear sync jobs on start ([d65f34a](https://github.com/ahembree/librariarr/commit/d65f34ae4f007ded6ce4f232028d0fb521f3b634))
+* **dashboard:** add appCache mock to stats test and invalidate on server delete ([f380998](https://github.com/ahembree/librariarr/commit/f38099882e98ed97a31f1d34cae12e6b76636530))
+* **dashboard:** fix Promise.all type safety and cache key for stats ([49fd8b5](https://github.com/ahembree/librariarr/commit/49fd8b53fa7f3c397e0242e2db9e12dc3d05b3bf))
+* increase card content height to show all metadata ([c8c12df](https://github.com/ahembree/librariarr/commit/c8c12df27df5391fe457b6566c676d537f51d165))
+* **lifecycle:** fix failure notification bugs in manual execution ([12c2d85](https://github.com/ahembree/librariarr/commit/12c2d85184796834e8b79ae5dcb548eb12dc0a22))
+* **lifecycle:** fix failure notification bugs in manual execution ([5cd4ee5](https://github.com/ahembree/librariarr/commit/5cd4ee571d8dfddc6362ed9f636f9cd58fb09439))
+* mount postgres volume to /var/lib/postgresql and remove PGDATA env var ([5c201ec](https://github.com/ahembree/librariarr/commit/5c201ecc07e3da568697dd8b24871e8b7d1c9e9b))
+* override CardHeader gap to prevent metadata clipping ([ea2e9bf](https://github.com/ahembree/librariarr/commit/ea2e9bf21bbe3729aac461bd5c36dbd0c4e4a2be))
+* prevent broken momentum scrolling after back-navigation on mobile ([c2a9754](https://github.com/ahembree/librariarr/commit/c2a97542ea9593c03defa0a2b8b7b46d0f2f1884))
+* **settings:** handle release-please markdown format in changelog ([7620e4c](https://github.com/ahembree/librariarr/commit/7620e4cf3163450b6aa83025cae10d603c902a3f))
+* standardize card heights and remove useStatusBarScroll ([4f06794](https://github.com/ahembree/librariarr/commit/4f06794e6b553cf43e6bb94f978a386e12a28d5e))
+
+
+### Performance Improvements
+
+* **dashboard:** cache stats API and parallelize all DB queries ([5f1d8fd](https://github.com/ahembree/librariarr/commit/5f1d8fda0c1893835a071599346c2971b3e162a7))
+
 ## [0.11.3](https://github.com/ahembree/librariarr/compare/v0.11.2...v0.11.3) (2026-04-02)
 
 
