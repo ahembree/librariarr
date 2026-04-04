@@ -12,7 +12,7 @@ import { Tv, Layers, List, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import Link from "next/link";
 import type { MediaItemWithRelations } from "@/lib/types";
-import { useCardSize, BREAKPOINTS } from "@/hooks/use-card-size";
+import { useCardSize, BREAKPOINTS, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
@@ -36,12 +36,6 @@ const QUALITY_BAR_HEIGHT = 12;
 const LANDSCAPE_MIN_WIDTHS: Record<string, number> = { small: 140, medium: 200, large: 260 };
 const MOBILE_LANDSCAPE_MIN_WIDTHS: Record<string, number> = { small: 110, medium: 140, large: 200 };
 
-function estimateContentWidth(screenWidth: number): number {
-  if (screenWidth >= BREAKPOINTS.xl) return screenWidth - 300;
-  if (screenWidth >= BREAKPOINTS.lg) return screenWidth - 100;
-  if (screenWidth >= BREAKPOINTS.md) return screenWidth - 80;
-  return screenWidth - 48;
-}
 
 export default function AllEpisodesPage() {
   const router = useRouter();
@@ -90,8 +84,7 @@ export default function AllEpisodesPage() {
 
   const estimateSize = useCallback(() => {
     const container = gridContainerRef.current;
-    if (!container) return 250;
-    const containerWidth = container.offsetWidth;
+    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
     const columnWidth = (containerWidth - GAP * (landscapeColumns - 1)) / landscapeColumns;
     const posterHeight = columnWidth * 0.5625; // 16:9 landscape aspect ratio
     return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
