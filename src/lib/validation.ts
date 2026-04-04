@@ -411,9 +411,21 @@ export const collectionSyncSchema = z.object({
 export const exceptionCreateSchema = z.object({
   mediaItemId: z.string().min(1, "Media item ID is required"),
   reason: z.string().optional(),
+  scope: z
+    .enum(["individual", "series", "artist", "album"])
+    .default("individual"),
 });
 
 export const exceptionUpdateSchema = z.object({
+  reason: z.string().optional(),
+});
+
+export const exceptionBulkDeleteSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1, "At least one ID is required"),
+});
+
+export const exceptionBulkUpdateSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1, "At least one ID is required"),
   reason: z.string().optional(),
 });
 
