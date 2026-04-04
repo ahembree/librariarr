@@ -12,7 +12,7 @@ import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { Button } from "@/components/ui/button";
 import { Film, Calendar, Clock, HardDrive } from "lucide-react";
 import { MediaGridSkeleton } from "@/components/skeletons";
-import { useCardSize } from "@/hooks/use-card-size";
+import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
@@ -47,7 +47,7 @@ function formatResolution(resolution: string | null): string {
 const GAP = 16; // 1rem grid gap
 const CARD_CONTENT_HEIGHT = 138; // Fixed content area below poster (matches h-34.5 in MediaCard)
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
-const QUALITY_BAR_HEIGHT = 4; // h-1 quality bar between poster and content
+const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar between poster and content
 
 export default function MoviesPage() {
   const router = useRouter();
@@ -122,8 +122,7 @@ export default function MoviesPage() {
 
   const estimateSize = useCallback(() => {
     const container = gridContainerRef.current;
-    if (!container) return 350;
-    const containerWidth = container.offsetWidth;
+    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
     const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
     const posterHeight = columnWidth * 1.5;
     return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
@@ -326,6 +325,7 @@ export default function MoviesPage() {
                     <div
                       key={virtualRow.key}
                       data-index={virtualRow.index}
+                      ref={virtualizer.measureElement}
                       style={{
                         position: "absolute",
                         top: 0,

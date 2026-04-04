@@ -11,9 +11,9 @@ interface MetadataItemProps {
 /** A single metadata entry with an icon. Use inside MetadataLine. */
 export function MetadataItem({ icon, children }: MetadataItemProps) {
   return (
-    <span className="inline-flex items-center gap-1">
+    <span className="inline-flex items-center gap-1 min-w-0">
       <span className="shrink-0 opacity-60 [&_svg]:h-3 [&_svg]:w-3">{icon}</span>
-      <span>{children}</span>
+      <span className="truncate">{children}</span>
     </span>
   );
 }

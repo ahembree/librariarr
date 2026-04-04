@@ -69,7 +69,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { PseudocodePanel } from "@/components/builder/pseudocode-panel";
 import { MediaCard } from "@/components/media-card";
-import { useCardSize } from "@/hooks/use-card-size";
+import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
@@ -254,7 +254,7 @@ function formatResolution(resolution: string | null): string {
 
 const CARD_GAP = 16;
 const CARD_CONTENT_HEIGHT = 138;
-const CARD_QUALITY_BAR_HEIGHT = 4;
+const CARD_QUALITY_BAR_HEIGHT = 12;
 const CARD_BORDER = 2;
 
 function DiffSection({
@@ -365,8 +365,7 @@ function PreviewCardGrid({
 
   const estimateSize = useCallback(() => {
     const container = cardContainerRef.current;
-    if (!container) return 350;
-    const containerWidth = container.offsetWidth;
+    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
     const columnWidth = (containerWidth - CARD_GAP * (actualColumns - 1)) / actualColumns;
     const posterHeight = columnWidth * (mediaType === "MUSIC" ? 1 : 1.5);
     return Math.round(posterHeight + CARD_QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + CARD_GAP);
@@ -407,6 +406,7 @@ function PreviewCardGrid({
             <div
               key={virtualRow.key}
               data-index={virtualRow.index}
+              ref={virtualizer.measureElement}
               style={{
                 position: "absolute",
                 top: 0,

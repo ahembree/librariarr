@@ -12,8 +12,9 @@ import { Tv, Layers, List, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import Link from "next/link";
 import type { MediaItemWithRelations } from "@/lib/types";
-import { useCardSize, BREAKPOINTS } from "@/hooks/use-card-size";
+import { useCardSize, BREAKPOINTS, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
+import { useServers } from "@/hooks/use-servers";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
@@ -29,23 +30,18 @@ function formatResolution(resolution: string | null): string {
 const GAP = 16;
 const CARD_CONTENT_HEIGHT = 138;
 const CARD_BORDER = 2;
-const QUALITY_BAR_HEIGHT = 4;
+const QUALITY_BAR_HEIGHT = 12;
 
 // Landscape card min widths (matches useCardSize internals)
 const LANDSCAPE_MIN_WIDTHS: Record<string, number> = { small: 140, medium: 200, large: 260 };
 const MOBILE_LANDSCAPE_MIN_WIDTHS: Record<string, number> = { small: 110, medium: 140, large: 200 };
 
-function estimateContentWidth(screenWidth: number): number {
-  if (screenWidth >= BREAKPOINTS.xl) return screenWidth - 300;
-  if (screenWidth >= BREAKPOINTS.lg) return screenWidth - 100;
-  if (screenWidth >= BREAKPOINTS.md) return screenWidth - 80;
-  return screenWidth - 48;
-}
 
 export default function AllEpisodesPage() {
   const router = useRouter();
   const { getHex } = useChipColors();
-  const { show, setVisible, prefs } = useCardDisplay("SERIES_EPISODES");
+  const { show, showServers, setVisible, prefs } = useCardDisplay("SERIES_EPISODES");
+  const { servers } = useServers();
   const [items, setItems] = useState<MediaItemWithRelations[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [sortBy, setSortBy] = useState("title");
@@ -88,8 +84,7 @@ export default function AllEpisodesPage() {
 
   const estimateSize = useCallback(() => {
     const container = gridContainerRef.current;
-    if (!container) return 250;
-    const containerWidth = container.offsetWidth;
+    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
     const columnWidth = (containerWidth - GAP * (landscapeColumns - 1)) / landscapeColumns;
     const posterHeight = columnWidth * 0.5625; // 16:9 landscape aspect ratio
     return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
@@ -258,6 +253,7 @@ export default function AllEpisodesPage() {
                     <div
                       key={virtualRow.key}
                       data-index={virtualRow.index}
+                      ref={virtualizer.measureElement}
                       style={{
                         position: "absolute",
                         top: 0,
@@ -330,6 +326,7 @@ export default function AllEpisodesPage() {
                                   ]
                                 : undefined
                             }
+                            servers={showServers && servers.length > 1 ? ep.servers : undefined}
                           />
                         ))}
                       </div>

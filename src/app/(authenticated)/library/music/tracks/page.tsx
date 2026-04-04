@@ -11,8 +11,9 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { Music, Disc3, ListMusic, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import type { MediaItemWithRelations } from "@/lib/types";
-import { useCardSize } from "@/hooks/use-card-size";
+import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
+import { useServers } from "@/hooks/use-servers";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
@@ -22,12 +23,13 @@ import { MediaHoverPopover } from "@/components/media-hover-popover";
 const GAP = 16;
 const CARD_CONTENT_HEIGHT = 138;
 const CARD_BORDER = 2;
-const QUALITY_BAR_HEIGHT = 4;
+const QUALITY_BAR_HEIGHT = 12;
 
 export default function AllTracksPage() {
   const router = useRouter();
   const { getHex } = useChipColors();
-  const { show, setVisible, prefs } = useCardDisplay("MUSIC");
+  const { show, showServers, setVisible, prefs } = useCardDisplay("MUSIC_TRACKS");
+  const { servers } = useServers();
   const [items, setItems] = useState<MediaItemWithRelations[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [sortBy, setSortBy] = useState("title");
@@ -38,8 +40,7 @@ export default function AllTracksPage() {
   const { size, setSize, columns: actualColumns } = useCardSize();
 
   const gridContainerRef = useRef<HTMLDivElement>(null);
-  const scrollElementRef = useRef<HTMLDivElement | null>(null);
-  const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
+  const scrollElementRef = useRef<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
 
   useEffect(() => {
@@ -78,24 +79,15 @@ export default function AllTracksPage() {
     return () => clearTimeout(timeout);
   }, [fetchTracks]);
 
-  // Resolve scroll parent and margin
   useEffect(() => {
-    const el = document.querySelector("[data-scroll-region]") as HTMLDivElement | null;
-    if (el) {
-      scrollElementRef.current = el;
-      setScrollElement(el);
-    }
+    scrollElementRef.current = document.querySelector<HTMLElement>("main");
   }, []);
 
   useLayoutEffect(() => {
-    const container = gridContainerRef.current;
-    const scroller = scrollElementRef.current;
-    if (container && scroller) {
-      const containerRect = container.getBoundingClientRect();
-      const scrollerRect = scroller.getBoundingClientRect();
-      setScrollMargin(containerRect.top - scrollerRect.top + scroller.scrollTop);
+    if (gridContainerRef.current) {
+      setScrollMargin(gridContainerRef.current.offsetTop);
     }
-  }, [loading, viewMode, items.length]);
+  }, []);
 
   const rowCount = useMemo(
     () => Math.ceil(items.length / actualColumns),
@@ -104,8 +96,7 @@ export default function AllTracksPage() {
 
   const estimateSize = useCallback(() => {
     const container = gridContainerRef.current;
-    if (!container) return 280;
-    const containerWidth = container.offsetWidth;
+    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
     const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
     const posterHeight = columnWidth * 1.0; // square
     return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
@@ -113,7 +104,7 @@ export default function AllTracksPage() {
 
   const virtualizer = useVirtualizer({
     count: rowCount,
-    getScrollElement: () => scrollElement,
+    getScrollElement: () => scrollElementRef.current,
     estimateSize,
     scrollMargin,
     overscan: 3,
@@ -175,7 +166,7 @@ export default function AllTracksPage() {
             cardSize={size}
             onCardSizeChange={setSize}
             cardDisplayPrefs={prefs}
-            cardDisplayConfig={TOGGLE_CONFIGS.MUSIC}
+            cardDisplayConfig={TOGGLE_CONFIGS.MUSIC_TRACKS}
             onCardDisplayToggle={setVisible}
           />
         }
@@ -233,6 +224,7 @@ export default function AllTracksPage() {
                 <div
                   key={virtualRow.key}
                   data-index={virtualRow.index}
+                  ref={virtualizer.measureElement}
                   style={{
                     position: "absolute",
                     top: 0,
@@ -279,6 +271,7 @@ export default function AllTracksPage() {
                             }}
                           />
                         }
+                        servers={showServers && servers.length > 1 ? track.servers : undefined}
                         metadata={
                           <MetadataLine stacked>
                             {track.parentTitle && <MetadataItem icon={<Music />}>{track.parentTitle}</MetadataItem>}

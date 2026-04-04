@@ -147,4 +147,4 @@ export function useCardSize() {
   return { size, setSize, columns, gridStyle, landscapeGridStyle, cardWidth };
 }
 
-export { CARD_MIN_WIDTHS, MOBILE_CARD_MIN_WIDTHS, BREAKPOINTS };
+export { CARD_MIN_WIDTHS, MOBILE_CARD_MIN_WIDTHS, BREAKPOINTS, estimateContentWidth };

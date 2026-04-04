@@ -15,7 +15,7 @@ import { LibraryToolbar } from "@/components/library-toolbar";
 import { Music, Disc3, ListMusic, HardDrive } from "lucide-react";
 import { DataTable } from "@/components/data-table";
 import type { DataTableColumn } from "@/components/data-table";
-import { useCardSize } from "@/hooks/use-card-size";
+import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { useServers } from "@/hooks/use-servers";
@@ -33,7 +33,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 const GAP = 16;
 const CARD_CONTENT_HEIGHT = 138; // Fixed content area below poster (matches h-34.5 in MediaCard)
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
-const QUALITY_BAR_HEIGHT = 4; // h-1 quality bar between poster and content
+const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar (4px) + py-1 padding (8px)
 
 interface GroupedArtist {
   parentTitle: string;
@@ -240,8 +240,7 @@ export default function MusicPage() {
 
   const estimateSize = useCallback(() => {
     const container = gridContainerRef.current;
-    if (!container) return 280;
-    const containerWidth = container.offsetWidth;
+    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
     const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
     const posterHeight = columnWidth * 1.0;
     return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
@@ -418,6 +417,7 @@ export default function MusicPage() {
                     <div
                       key={virtualRow.key}
                       data-index={virtualRow.index}
+                      ref={virtualizer.measureElement}
                       style={{
                         position: "absolute",
                         top: 0,

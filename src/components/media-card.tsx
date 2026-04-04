@@ -108,19 +108,18 @@ export const MediaCard = memo(function MediaCard({
         )}
       </div>
 
-      {/* Quality bar — colored segments between poster and content */}
-      {qualityBar && qualityBar.length > 0 && (
-        <div className="flex w-full shrink-0 gap-1 px-2 py-1 bg-card" aria-hidden="true">
-          {qualityBar.map((seg, i) => (
-            <div
-              key={i}
-              className="h-1 min-w-1 rounded-full"
-              style={{ backgroundColor: seg.color, flex: seg.weight }}
-              title={seg.label}
-            />
-          ))}
-        </div>
-      )}
+      {/* Quality bar — always rendered for consistent card height in virtualizer */}
+      <div className="flex w-full shrink-0 gap-1 px-2 py-1 bg-card" aria-hidden="true">
+        {qualityBar && qualityBar.length > 0 && qualityBar.map((seg, i) => (
+          <div
+            key={i}
+            className="h-1 min-w-1 rounded-full"
+            style={{ backgroundColor: seg.color, flex: seg.weight }}
+            title={seg.label}
+          />
+        ))}
+        {(!qualityBar || qualityBar.length === 0) && <div className="h-1" />}
+      </div>
 
       {/* Content below poster — fixed height for virtualizer stability */}
       <div className="h-34.5 overflow-hidden flex flex-col">

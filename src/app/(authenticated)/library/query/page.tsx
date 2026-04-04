@@ -61,7 +61,7 @@ import { MediaCard } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { CardSizeControl } from "@/components/card-size-control";
-import { useCardSize } from "@/hooks/use-card-size";
+import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useChipColors } from "@/components/chip-color-provider";
 import { useServers } from "@/hooks/use-servers";
 import { formatFileSize, formatDuration } from "@/lib/format";
@@ -172,7 +172,7 @@ function saveVisibleColumns(cols: Set<string>) {
 const GAP = 16;
 const CARD_CONTENT_HEIGHT = 138; // Fixed content area below poster (matches h-34.5 in MediaCard)
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
-const QUALITY_BAR_HEIGHT = 4; // h-1 quality bar between poster and content
+const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar (4px) + py-1 padding (8px)
 const CACHE_KEY = "query-page-state";
 
 // ── Component ───────────────────────────────────────────────────
@@ -803,8 +803,7 @@ export default function QueryPage() {
 
   const estimateSize = useCallback(() => {
     const container = gridContainerRef.current;
-    if (!container) return 350;
-    const containerWidth = container.offsetWidth;
+    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
     const columnWidth = (containerWidth - GAP * (cardColumns - 1)) / cardColumns;
     const posterHeight = columnWidth * 1.5;
     return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
@@ -1170,6 +1169,7 @@ export default function QueryPage() {
                       <div
                         key={virtualRow.key}
                         data-index={virtualRow.index}
+                        ref={gridVirtualizer.measureElement}
                         style={{
                           position: "absolute",
                           top: 0,

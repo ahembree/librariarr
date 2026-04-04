@@ -13,7 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { MediaCard } from "@/components/media-card";
-import { useCardSize } from "@/hooks/use-card-size";
+import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
@@ -430,8 +430,7 @@ function MatchItemsCardView({
 
   const estimateSize = useCallback(() => {
     const container = scrollContainerRef.current;
-    if (!container) return 350;
-    const containerWidth = container.offsetWidth;
+    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
     const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
     const posterHeight = columnWidth * (ruleSet.type === "MUSIC" ? 1 : 1.5);
     return Math.round(posterHeight + CARD_CONTENT_HEIGHT + GAP);

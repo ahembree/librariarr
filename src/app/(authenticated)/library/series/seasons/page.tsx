@@ -14,8 +14,9 @@ import type { DataTableColumn } from "@/components/data-table";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import { Tv, Layers, List, HardDrive, Play } from "lucide-react";
 import Link from "next/link";
-import { useCardSize } from "@/hooks/use-card-size";
+import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
+import { useServers } from "@/hooks/use-servers";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
@@ -32,6 +33,7 @@ interface SeasonEntry {
   addedAt: string | null;
   totalPlayCount: number;
   qualityCounts: Record<string, number>;
+  servers: { serverId: string; serverName: string; serverType: string }[];
 }
 
 import { QUALITY_ORDER } from "@/lib/resolution";
@@ -39,7 +41,7 @@ import { QUALITY_ORDER } from "@/lib/resolution";
 const GAP = 16;
 const CARD_CONTENT_HEIGHT = 138;
 const CARD_BORDER = 2;
-const QUALITY_BAR_HEIGHT = 4;
+const QUALITY_BAR_HEIGHT = 12;
 
 const SORT_OPTIONS = [
   { value: "parentTitle", label: "Series Name" },
@@ -147,7 +149,8 @@ function seasonTableColumns(
 export default function AllSeasonsPage() {
   const router = useRouter();
   const { getHex } = useChipColors();
-  const { show, setVisible, prefs } = useCardDisplay("SERIES_SEASONS");
+  const { show, showServers, setVisible, prefs } = useCardDisplay("SERIES_SEASONS");
+  const { servers } = useServers();
   const [seasons, setSeasons] = useState<SeasonEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -186,8 +189,7 @@ export default function AllSeasonsPage() {
 
   const estimateSize = useCallback(() => {
     const container = gridContainerRef.current;
-    if (!container) return 350;
-    const containerWidth = container.offsetWidth;
+    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
     const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
     const posterHeight = columnWidth * 1.5;
     return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
@@ -345,6 +347,7 @@ export default function AllSeasonsPage() {
                     <div
                       key={virtualRow.key}
                       data-index={virtualRow.index}
+                      ref={virtualizer.measureElement}
                       style={{
                         position: "absolute",
                         top: 0,
@@ -382,6 +385,7 @@ export default function AllSeasonsPage() {
                                     }))
                                 : undefined
                             }
+                            servers={showServers && servers.length > 1 ? season.servers : undefined}
                             hoverContent={
                               <MediaHoverPopover
                                 imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
