@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
+import { findScrollContainer } from "@/lib/scroll-utils";
 
 /**
  * Optional callbacks for index-based scroll restoration with virtualized lists.
@@ -66,14 +67,17 @@ export function useScrollRestoration(
   // This captures state during normal browsing when DOM values are reliable,
   // avoiding the unmount timing issue where Next.js has already reset scrollTop.
   useEffect(() => {
-    const main = document.querySelector<HTMLElement>("main");
-    if (!main) return;
+    const container = findScrollContainer();
+    if (!container) return;
 
     let saveTimeout: ReturnType<typeof setTimeout>;
 
     const saveState = () => {
-      const scrollTop = main.scrollTop;
-      if (scrollTop <= 0) return;
+      const scrollTop = container.scrollTop;
+      if (scrollTop <= 0) {
+        sessionStorage.removeItem(`scroll-${key}`);
+        return;
+      }
 
       const firstVisibleIndex = optionsRef.current?.getFirstVisibleIndex?.() ?? -1;
       const data = {
@@ -89,10 +93,10 @@ export function useScrollRestoration(
       saveTimeout = setTimeout(saveState, 150);
     };
 
-    main.addEventListener("scroll", onScroll, { passive: true });
+    container.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       clearTimeout(saveTimeout);
-      main.removeEventListener("scroll", onScroll);
+      container.removeEventListener("scroll", onScroll);
     };
   }, [key]);
 
@@ -126,24 +130,24 @@ export function useScrollRestoration(
 
       if (!scrollTop || scrollTop <= 0) return;
 
-      const main = document.querySelector<HTMLElement>("main");
-      if (!main) return;
+      const container = findScrollContainer();
+      if (!container) return;
 
       // Two-pass restore:
       // Pass 1: Set approximate scroll position so the virtualizer renders nearby rows.
       // Pass 2: After layout settles, fine-tune with index-based centering.
-      // A short delay between passes gives the virtualizer time to process
-      // the scroll event and re-render, which is critical on mobile where
-      // rapid programmatic scrollTo calls can desync iOS momentum tracking.
+      // Double-RAF ensures at least one full paint cycle has elapsed, giving the
+      // virtualizer time to process the scroll event and re-render. This adapts
+      // to device speed rather than relying on a fixed timeout.
       requestAnimationFrame(() => {
-        main.scrollTo({ top: scrollTop, behavior: "instant" });
+        container.scrollTo({ top: scrollTop, behavior: "instant" });
 
         if (firstVisibleIndex >= 0) {
-          setTimeout(() => {
+          requestAnimationFrame(() => {
             requestAnimationFrame(() => {
               optionsRef.current?.scrollToIndex?.(firstVisibleIndex);
             });
-          }, 50);
+          });
         }
       });
     } catch {

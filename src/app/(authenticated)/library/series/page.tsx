@@ -322,6 +322,7 @@ export default function SeriesPage() {
     items: alphabetItems,
     enabled: viewMode === "table",
     scrollToIndexRef: tableScrollToIndexRef,
+    scrollElement,
   });
 
   const activeLetter = viewMode === "cards" ? gridAlphabet.activeLetter : tableAlphabet.activeLetter;

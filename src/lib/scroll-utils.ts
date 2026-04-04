@@ -1,24 +1,31 @@
 /**
  * Find the active scroll container. Some pages (e.g. lifecycle rule pages)
  * have their own overflow-y scroll container inside <main>, which prevents
- * <main> itself from scrolling. Walk <main>'s immediate children to find
- * the deepest directly-nested scrollable element; fall back to <main>.
+ * <main> itself from scrolling. Walk <main>'s descendants (BFS) to find
+ * the nearest scrollable element; fall back to <main>.
  */
 export function findScrollContainer(): HTMLElement | null {
   const main = document.querySelector<HTMLElement>("main");
   if (!main) return null;
 
-  // Check if a direct child (or its first child) is the actual scroll container.
+  // BFS through up to 3 levels of children to find the nearest scrollable element.
   // Lifecycle pages use: <main> → <div flex h-full> → <div overflow-y-auto>
-  let el: HTMLElement | null = main;
-  for (let depth = 0; depth < 3; depth++) {
-    const child = el.firstElementChild as HTMLElement | null;
-    if (!child) break;
-    const style = getComputedStyle(child);
+  const queue: { el: HTMLElement; depth: number }[] = [];
+  for (const child of main.children) {
+    if (child instanceof HTMLElement) queue.push({ el: child, depth: 1 });
+  }
+
+  while (queue.length > 0) {
+    const { el, depth } = queue.shift()!;
+    const style = getComputedStyle(el);
     if (style.overflowY === "auto" || style.overflowY === "scroll") {
-      return child;
+      return el;
     }
-    el = child;
+    if (depth < 3) {
+      for (const child of el.children) {
+        if (child instanceof HTMLElement) queue.push({ el: child, depth: depth + 1 });
+      }
+    }
   }
 
   return main;
