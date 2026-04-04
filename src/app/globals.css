@@ -179,6 +179,15 @@ body::before {
   border: 1px solid oklch(1 0 0 / 5%);
 }
 
+/* Disable expensive backdrop-filter on mobile to prevent scroll lag */
+@media (max-width: 767px) {
+  .glass {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: oklch(0.21 0.008 270 / 97%);
+  }
+}
+
 /* Custom scrollbar */
 * {
   scrollbar-width: thin;
