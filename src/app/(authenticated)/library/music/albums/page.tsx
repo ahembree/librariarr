@@ -359,6 +359,10 @@ export default function AllAlbumsPage() {
                                   title: album.albumTitle,
                                   trackCount: album.trackCount,
                                   fileSize: album.totalSize,
+                                  playCount: album.totalPlayCount,
+                                  lastPlayedAt: album.lastPlayed,
+                                  addedAt: album.addedAt,
+                                  servers: album.servers,
                                 }}
                               />
                             }

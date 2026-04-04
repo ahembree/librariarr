@@ -397,6 +397,7 @@ export default function AllSeasonsPage() {
                                   playCount: season.totalPlayCount,
                                   lastPlayedAt: season.lastPlayed,
                                   addedAt: season.addedAt,
+                                  servers: season.servers,
                                 }}
                               />
                             }
