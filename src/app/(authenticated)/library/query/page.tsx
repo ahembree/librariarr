@@ -1169,6 +1169,7 @@ export default function QueryPage() {
                       <div
                         key={virtualRow.key}
                         data-index={virtualRow.index}
+                        ref={gridVirtualizer.measureElement}
                         style={{
                           position: "absolute",
                           top: 0,
