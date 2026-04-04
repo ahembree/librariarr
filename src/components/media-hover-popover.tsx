@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { formatDuration, formatFileSize, formatDate } from "@/lib/format";
 import { normalizeResolutionLabel } from "@/lib/resolution";
+import { getRatingLabel } from "@/lib/rating-labels";
 import { useChipColors } from "@/components/chip-color-provider";
 import { RatingChip } from "@/components/rating-chip";
 import { ServerChips } from "@/components/server-chips";
@@ -14,7 +15,9 @@ export interface MediaHoverData {
   summary?: string | null;
   contentRating?: string | null;
   rating?: number | null;
+  ratingImage?: string | null;
   audienceRating?: number | null;
+  audienceRatingImage?: string | null;
   duration?: number | null;
   resolution?: string | null;
   dynamicRange?: string | null;
@@ -238,10 +241,10 @@ export function MediaHoverPopover({ data, imageUrl, imageAspect = "poster" }: Me
         <Section>
           <div className="flex items-center gap-1.5 flex-wrap">
             {data.rating != null && (
-              <RatingChip label="Critic" value={data.rating} className="text-[10px] px-2 py-px" />
+              <RatingChip label={getRatingLabel(data.ratingImage, data.servers?.[0]?.serverType, "rating", "Critic")} value={data.rating} className="text-[10px] px-2 py-px" />
             )}
             {data.audienceRating != null && (
-              <RatingChip label="Audience" value={data.audienceRating} className="text-[10px] px-2 py-px" />
+              <RatingChip label={getRatingLabel(data.audienceRatingImage, data.servers?.[0]?.serverType, "audienceRating", "Audience")} value={data.audienceRating} className="text-[10px] px-2 py-px" />
             )}
           </div>
         </Section>

@@ -230,7 +230,9 @@ export async function GET(request: NextRequest) {
     mi_summary: string | null;
     mi_contentRating: string | null;
     mi_rating: number | null;
+    mi_ratingImage: string | null;
     mi_audienceRating: number | null;
+    mi_audienceRatingImage: string | null;
     mi_studio: string | null;
     mi_playCount: number;
     mi_lastPlayedAt: Date | null;
@@ -251,7 +253,8 @@ export async function GET(request: NextRequest) {
       mi."audioProfile" AS "mi_audioProfile",
       mi."fileSize" AS "mi_fileSize", mi."duration" AS "mi_duration",
       mi."summary" AS "mi_summary", mi."contentRating" AS "mi_contentRating",
-      mi."rating" AS "mi_rating", mi."audienceRating" AS "mi_audienceRating",
+      mi."rating" AS "mi_rating", mi."ratingImage" AS "mi_ratingImage",
+      mi."audienceRating" AS "mi_audienceRating", mi."audienceRatingImage" AS "mi_audienceRatingImage",
       mi."studio" AS "mi_studio", mi."playCount" AS "mi_playCount",
       mi."lastPlayedAt" AS "mi_lastPlayedAt", mi."addedAt" AS "mi_addedAt",
       mi."genres" AS "mi_genres",
@@ -294,7 +297,9 @@ export async function GET(request: NextRequest) {
       summary: r.mi_summary,
       contentRating: r.mi_contentRating,
       rating: r.mi_rating,
+      ratingImage: r.mi_ratingImage,
       audienceRating: r.mi_audienceRating,
+      audienceRatingImage: r.mi_audienceRatingImage,
       studio: r.mi_studio,
       playCount: r.mi_playCount,
       lastPlayedAt: r.mi_lastPlayedAt?.toISOString() ?? null,

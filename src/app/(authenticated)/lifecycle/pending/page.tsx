@@ -82,7 +82,9 @@ interface ActionItem {
     summary?: string | null;
     contentRating?: string | null;
     rating?: number | null;
+    ratingImage?: string | null;
     audienceRating?: number | null;
+    audienceRatingImage?: string | null;
     duration?: number | null;
     resolution?: string | null;
     dynamicRange?: string | null;
@@ -424,6 +426,8 @@ function VirtualizedActionTable({
                         contentRating: action.mediaItem.contentRating,
                         rating: action.mediaItem.rating,
                         audienceRating: action.mediaItem.audienceRating,
+                        ratingImage: action.mediaItem.ratingImage,
+                        audienceRatingImage: action.mediaItem.audienceRatingImage,
                         duration: action.mediaItem.duration,
                         resolution: action.mediaItem.resolution,
                         dynamicRange: action.mediaItem.dynamicRange,
@@ -570,6 +574,8 @@ function PendingActionCardGrid({
                               contentRating: mi.contentRating,
                               rating: mi.rating,
                               audienceRating: mi.audienceRating,
+                              ratingImage: mi.ratingImage,
+                              audienceRatingImage: mi.audienceRatingImage,
                               duration: mi.duration,
                               resolution: mi.resolution,
                               dynamicRange: mi.dynamicRange,

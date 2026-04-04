@@ -66,7 +66,9 @@ interface WatchHistoryItem {
     summary: string | null;
     contentRating: string | null;
     rating: number | null;
+    ratingImage: string | null;
     audienceRating: number | null;
+    audienceRatingImage: string | null;
     studio: string | null;
     playCount: number;
     lastPlayedAt: string | null;
@@ -754,6 +756,8 @@ export default function HistoryPage() {
                       contentRating: item.mediaItem.contentRating,
                       rating: item.mediaItem.rating,
                       audienceRating: item.mediaItem.audienceRating,
+                      ratingImage: item.mediaItem.ratingImage,
+                      audienceRatingImage: item.mediaItem.audienceRatingImage,
                       duration: item.mediaItem.duration,
                       resolution: item.mediaItem.resolution,
                       dynamicRange: item.mediaItem.dynamicRange,

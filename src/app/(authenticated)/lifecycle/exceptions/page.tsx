@@ -60,7 +60,9 @@ interface ExceptionItem {
     summary: string | null;
     contentRating: string | null;
     rating: number | null;
+    ratingImage: string | null;
     audienceRating: number | null;
+    audienceRatingImage: string | null;
     duration: number | null;
     resolution: string | null;
     dynamicRange: string | null;
@@ -511,6 +513,8 @@ export default function LifecycleExceptionsPage() {
             contentRating: row.mediaItem.contentRating,
             rating: row.mediaItem.rating,
             audienceRating: row.mediaItem.audienceRating,
+            ratingImage: row.mediaItem.ratingImage,
+            audienceRatingImage: row.mediaItem.audienceRatingImage,
             duration: row.mediaItem.duration,
             resolution: row.mediaItem.resolution,
             dynamicRange: row.mediaItem.dynamicRange,

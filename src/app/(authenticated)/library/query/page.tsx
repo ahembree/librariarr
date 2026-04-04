@@ -88,7 +88,9 @@ interface QueryResultItem {
   summary: string | null;
   contentRating: string | null;
   rating: number | null;
+  ratingImage: string | null;
   audienceRating: number | null;
+  audienceRatingImage: string | null;
   resolution: string | null;
   dynamicRange: string | null;
   videoCodec: string | null;
@@ -1150,6 +1152,8 @@ export default function QueryPage() {
                       contentRating: item.contentRating,
                       rating: item.rating,
                       audienceRating: item.audienceRating,
+                      ratingImage: item.ratingImage,
+                      audienceRatingImage: item.audienceRatingImage,
                       duration: item.duration,
                       resolution: item.resolution,
                       dynamicRange: item.dynamicRange,
@@ -1242,6 +1246,8 @@ export default function QueryPage() {
                                     contentRating: item.contentRating,
                                     rating: item.rating,
                                     audienceRating: item.audienceRating,
+                                    ratingImage: item.ratingImage,
+                                    audienceRatingImage: item.audienceRatingImage,
                                     duration: item.duration,
                                     resolution: item.resolution,
                                     dynamicRange: item.dynamicRange,

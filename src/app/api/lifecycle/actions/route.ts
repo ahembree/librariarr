@@ -12,7 +12,9 @@ interface ActionItemMediaItem {
   summary: string | null;
   contentRating: string | null;
   rating: number | null;
+  ratingImage: string | null;
   audienceRating: number | null;
+  audienceRatingImage: string | null;
   duration: number | null;
   resolution: string | null;
   dynamicRange: string | null;
@@ -65,7 +67,7 @@ interface RuleSetGroup {
  */
 const MEDIA_ITEM_SELECT = {
   id: true, title: true, parentTitle: true, type: true, thumbUrl: true,
-  year: true, summary: true, contentRating: true, rating: true, audienceRating: true,
+  year: true, summary: true, contentRating: true, rating: true, ratingImage: true, audienceRating: true, audienceRatingImage: true,
   duration: true, resolution: true, dynamicRange: true, audioProfile: true, fileSize: true,
   genres: true, studio: true, playCount: true, lastPlayedAt: true, addedAt: true,
   library: { select: { mediaServer: { select: { id: true, name: true, type: true } } } },
@@ -74,7 +76,8 @@ const MEDIA_ITEM_SELECT = {
 type SelectedMediaItem = {
   id: string; title: string; parentTitle: string | null; type: string; thumbUrl: string | null;
   year: number | null; summary: string | null; contentRating: string | null;
-  rating: number | null; audienceRating: number | null;
+  rating: number | null; ratingImage: string | null;
+  audienceRating: number | null; audienceRatingImage: string | null;
   duration: number | null; resolution: string | null; dynamicRange: string | null;
   audioProfile: string | null; fileSize: bigint | null;
   genres: unknown; studio: string | null;
@@ -87,7 +90,8 @@ function serializeMediaItem(mi: SelectedMediaItem): ActionItemMediaItem {
   return {
     id: mi.id, title: mi.title, parentTitle: mi.parentTitle, type: mi.type, thumbUrl: mi.thumbUrl,
     year: mi.year, summary: mi.summary, contentRating: mi.contentRating,
-    rating: mi.rating, audienceRating: mi.audienceRating,
+    rating: mi.rating, ratingImage: mi.ratingImage,
+    audienceRating: mi.audienceRating, audienceRatingImage: mi.audienceRatingImage,
     duration: mi.duration, resolution: mi.resolution, dynamicRange: mi.dynamicRange,
     audioProfile: mi.audioProfile, fileSize: mi.fileSize?.toString() ?? null,
     genres: (Array.isArray(mi.genres) ? mi.genres : null) as string[] | null,
@@ -119,8 +123,8 @@ function buildActionMediaItem(
   const title = action.mediaItemTitle ?? "Unknown";
   const parentTitle = action.mediaItemParentTitle ?? null;
   const nullFields = {
-    thumbUrl: null, year: null, summary: null, contentRating: null, rating: null,
-    audienceRating: null, duration: null, resolution: null, dynamicRange: null,
+    thumbUrl: null, year: null, summary: null, contentRating: null, rating: null, ratingImage: null,
+    audienceRating: null, audienceRatingImage: null, duration: null, resolution: null, dynamicRange: null,
     audioProfile: null, fileSize: null, genres: null, studio: null,
     playCount: 0, lastPlayedAt: null, addedAt: null,
   };
