@@ -541,6 +541,30 @@ function MatchItemsCardView({
                         fallbackIcon={fallbackIcon}
                         aspectRatio={aspectRatio}
                         onClick={() => onItemClick(item)}
+                        hoverContent={
+                          <MediaHoverPopover
+                            imageAspect={ruleSet.type === "MUSIC" ? "square" : "poster"}
+                            data={{
+                              title: item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title,
+                              year: item.year,
+                              summary: item.summary,
+                              contentRating: item.contentRating,
+                              rating: item.rating,
+                              audienceRating: item.audienceRating,
+                              duration: item.duration,
+                              resolution: item.resolution,
+                              dynamicRange: item.dynamicRange,
+                              audioProfile: item.audioProfile,
+                              fileSize: item.fileSize,
+                              genres: item.genres,
+                              studio: item.studio,
+                              playCount: item.playCount,
+                              lastPlayedAt: item.lastPlayedAt,
+                              addedAt: item.addedAt,
+                              servers: item.servers,
+                            }}
+                          />
+                        }
                         metadata={
                           <MetadataLine>
                             {show("metadata", "year") && item.year && <span>{item.year}</span>}

@@ -36,7 +36,14 @@ import {
   Film,
   Tv,
   Music,
+  LayoutGrid,
+  TableProperties,
 } from "lucide-react";
+import { MediaCard } from "@/components/media-card";
+import { useCardSize } from "@/hooks/use-card-size";
+import { CardSizeControl } from "@/components/card-size-control";
+import { formatDuration, formatFileSize } from "@/lib/format";
+import { MetadataLine } from "@/components/metadata-line";
 import { TabNav, type TabNavItem } from "@/components/tab-nav";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -444,6 +451,101 @@ function VirtualizedActionTable({
   );
 }
 
+/* ---------- Card grid for a single group ---------- */
+
+function PendingActionCardGrid({
+  items,
+  ruleSetType,
+  onItemClick,
+  exceptedItemIds,
+}: {
+  items: ActionItem[];
+  ruleSetType: string;
+  onItemClick: (action: ActionItem) => void;
+  exceptedItemIds: Set<string>;
+}) {
+  const { columns: actualColumns } = useCardSize();
+  const isMusic = ruleSetType === "MUSIC";
+  const isMovie = ruleSetType === "MOVIE";
+  const fallbackIcon = isMovie ? "movie" as const : isMusic ? "music" as const : "series" as const;
+  const aspectRatio = isMusic ? "square" as const : "poster" as const;
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: "16px",
+        gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))`,
+      }}
+    >
+      {items.map((action) => {
+        const hasMediaItem = action.mediaItem.id !== null;
+        if (!hasMediaItem) return null;
+        const mi = action.mediaItem;
+        return (
+          <div key={action.id} className="relative">
+            {exceptedItemIds.has(mi.id!) && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-orange-500/90 backdrop-blur-sm flex items-center justify-center">
+                      <ShieldOff className="h-3.5 w-3.5 text-white" />
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>Excluded from lifecycle actions</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+            <MediaCard
+              imageUrl={`/api/media/${mi.id}/image${!isMovie ? "?type=parent" : ""}`}
+              title={mi.parentTitle ? `${mi.parentTitle} — ${mi.title}` : mi.title}
+              fallbackIcon={fallbackIcon}
+              aspectRatio={aspectRatio}
+              onClick={() => onItemClick(action)}
+              hoverContent={
+                <MediaHoverPopover
+                  imageAspect={aspectRatio}
+                  data={{
+                    title: mi.parentTitle ? `${mi.parentTitle} — ${mi.title}` : mi.title,
+                    year: mi.year,
+                    summary: mi.summary,
+                    contentRating: mi.contentRating,
+                    rating: mi.rating,
+                    audienceRating: mi.audienceRating,
+                    duration: mi.duration,
+                    resolution: mi.resolution,
+                    dynamicRange: mi.dynamicRange,
+                    audioProfile: mi.audioProfile,
+                    fileSize: mi.fileSize,
+                    genres: mi.genres,
+                    studio: mi.studio,
+                    playCount: mi.playCount,
+                    lastPlayedAt: mi.lastPlayedAt,
+                    addedAt: mi.addedAt,
+                    servers: mi.servers,
+                  }}
+                />
+              }
+              metadata={
+                <MetadataLine>
+                  {mi.year && <span>{mi.year}</span>}
+                  {formatDuration(mi.duration ?? null) && <span>{formatDuration(mi.duration ?? null)}</span>}
+                  {formatFileSize(mi.fileSize ?? null) && <span>{formatFileSize(mi.fileSize ?? null)}</span>}
+                </MetadataLine>
+              }
+              badges={
+                <ColorChip className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}>
+                  {STATUS_LABELS[action.status] ?? action.status}
+                </ColorChip>
+              }
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ---------- Main page ---------- */
 
 type MediaTypeTab = "all" | "movies" | "series" | "music";
@@ -467,6 +569,8 @@ export default function PendingActionsPage() {
   const [groups, setGroups] = useState<RuleSetGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("PENDING");
+  const [viewMode, setViewMode] = useState<"table" | "cards">("table");
+  const { size: cardSize, setSize: setCardSize } = useCardSize();
   const [expandedRules, setExpandedRules] = useState<Set<string>>(new Set());
   const [executingRules, setExecutingRules] = useState<Set<string>>(new Set());
   const [executingItems, setExecutingItems] = useState<Set<string>>(new Set());
@@ -721,18 +825,27 @@ export default function PendingActionsPage() {
 
         <TabNav tabs={MEDIA_TYPE_TABS} activeTab={mediaTypeTab} onTabChange={setMediaTypeTab} className="mb-6" />
 
-        {/* Status filter */}
-        <div className="flex gap-2 mb-4">
-          {STATUS_FILTERS.map((status) => (
-            <Button
-              key={status}
-              variant={statusFilter === status ? "default" : "outline"}
-              size="sm"
-              onClick={() => setStatusFilter(status)}
-            >
-              {STATUS_LABELS[status] ?? status}
-            </Button>
-          ))}
+        {/* Status filter + view toggle */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex gap-2">
+            {STATUS_FILTERS.map((status) => (
+              <Button
+                key={status}
+                variant={statusFilter === status ? "default" : "outline"}
+                size="sm"
+                onClick={() => setStatusFilter(status)}
+              >
+                {STATUS_LABELS[status] ?? status}
+              </Button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            {viewMode === "cards" && <CardSizeControl size={cardSize} onChange={setCardSize} />}
+            <div className="flex rounded-md border">
+              <Button variant={viewMode === "table" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 rounded-r-none" onClick={() => setViewMode("table")}><TableProperties className="h-4 w-4" /></Button>
+              <Button variant={viewMode === "cards" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 rounded-l-none" onClick={() => setViewMode("cards")}><LayoutGrid className="h-4 w-4" /></Button>
+            </div>
+          </div>
         </div>
 
         {loading ? (
@@ -847,21 +960,30 @@ export default function PendingActionsPage() {
 
                   {isExpanded && group.items.length > 0 && (
                     <CardContent>
-                      <VirtualizedActionTable
-                        items={group.items}
-                        ruleSetId={group.ruleSet.id}
-                        isPending={isPending}
-                        executingItems={executingItems}
-                        retryingItems={retryingItems}
-                        excludingItems={excludingItems}
-                        exceptedItemIds={exceptedItemIds}
-                        onExecuteItem={executeItem}
-                        onRemoveAction={removeAction}
-                        onRetryAction={(action) => retryAction(action)}
-                        onExclude={excludeItem}
-                        onItemClick={openDetailPanel}
-                        isDeletedRuleSet={group.ruleSet.deleted}
-                      />
+                      {viewMode === "table" ? (
+                        <VirtualizedActionTable
+                          items={group.items}
+                          ruleSetId={group.ruleSet.id}
+                          isPending={isPending}
+                          executingItems={executingItems}
+                          retryingItems={retryingItems}
+                          excludingItems={excludingItems}
+                          exceptedItemIds={exceptedItemIds}
+                          onExecuteItem={executeItem}
+                          onRemoveAction={removeAction}
+                          onRetryAction={(action) => retryAction(action)}
+                          onExclude={excludeItem}
+                          onItemClick={openDetailPanel}
+                          isDeletedRuleSet={group.ruleSet.deleted}
+                        />
+                      ) : (
+                        <PendingActionCardGrid
+                          items={group.items}
+                          ruleSetType={group.ruleSet.type}
+                          onItemClick={openDetailPanel}
+                          exceptedItemIds={exceptedItemIds}
+                        />
+                      )}
                     </CardContent>
                   )}
 
