@@ -177,10 +177,13 @@ describe("GET /api/media/search", () => {
       url: "/api/media/search",
       searchParams: { q: "Breaking", type: "SERIES", seriesScope: "true" },
     });
-    const body = await expectJson<{ items: { parentTitle: string | null }[] }>(response, 200);
+    const body = await expectJson<{ items: { title: string; parentTitle: string | null; scope: string; itemCount: number }[] }>(response, 200);
     // Only "Breaking Bad" matches parentTitle; "Breaking Point" title match is ignored
     expect(body.items).toHaveLength(1);
-    expect(body.items[0].parentTitle).toBe("Breaking Bad");
+    expect(body.items[0].title).toBe("Breaking Bad");
+    expect(body.items[0].parentTitle).toBeNull();
+    expect(body.items[0].scope).toBe("series");
+    expect(body.items[0].itemCount).toBe(1);
   });
 
   it("deduplicates by parentTitle when seriesScope=true", async () => {

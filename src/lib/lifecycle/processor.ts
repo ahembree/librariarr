@@ -408,8 +408,28 @@ export async function executeLifecycleActions(userId?: string) {
       logger.info("Lifecycle", `Deleted stale action ${action.id} — "${mediaItem.title}" is no longer a match for rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
       continue;
     }
+
+    // For grouped actions (series/music with episode-level tracking), filter out
+    // any member IDs that were individually excepted since the action was scheduled
+    let filteredMatchedIds = action.matchedMediaItemIds ?? [];
+    if (filteredMatchedIds.length > 0) {
+      const original = filteredMatchedIds;
+      filteredMatchedIds = original.filter(
+        (mid) => !exceptionSet.has(`${action.userId}:${mid}`)
+      );
+      if (filteredMatchedIds.length === 0) {
+        // All targeted episodes/tracks are now excepted — cancel the action
+        await prisma.lifecycleAction.delete({ where: { id: action.id } });
+        logger.info("Lifecycle", `Deleted action ${action.id} — all targeted episodes/tracks for "${mediaItem.title}" are excluded via lifecycle exceptions`);
+        continue;
+      }
+      if (filteredMatchedIds.length < original.length) {
+        logger.info("Lifecycle", `Filtered ${original.length - filteredMatchedIds.length} excepted episodes/tracks from action on "${mediaItem.title}"`);
+      }
+    }
+
     try {
-      await executeAction({ ...action, mediaItem });
+      await executeAction({ ...action, matchedMediaItemIds: filteredMatchedIds, mediaItem });
 
       await prisma.lifecycleAction.update({
         where: { id: action.id },

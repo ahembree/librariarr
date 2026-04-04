@@ -140,22 +140,104 @@ export async function detectAndSaveMatches(
     });
 
   // Filter out items that have a LifecycleException for this user
-  const excludedItems = await prisma.lifecycleException.findMany({
-    where: {
-      userId: ruleSet.userId,
-      mediaItemId: { in: enrichedItems.map((item) => item.id as string) },
-    },
-    select: { mediaItemId: true },
-  });
-  if (excludedItems.length > 0) {
-    const excludedIds = new Set(excludedItems.map((e) => e.mediaItemId));
-    const beforeCount = enrichedItems.length;
-    const filtered = enrichedItems.filter(
-      (item) => !excludedIds.has(item.id as string)
-    );
-    logger.info("Lifecycle", `Filtered ${beforeCount - filtered.length} excluded items from rule set "${ruleSet.name}"`);
-    enrichedItems.length = 0;
-    enrichedItems.push(...filtered);
+  const isGroupedScope =
+    (ruleSet.type === "SERIES" || ruleSet.type === "MUSIC") && ruleSet.seriesScope;
+
+  if (isGroupedScope) {
+    // For series/music scope rules, the enriched items are aggregated (representative
+    // episode/track ID).  Exceptions are stored against individual episode/track IDs,
+    // so we must look up by parentTitle (the series/artist name, stored as `title` on
+    // the aggregated item since the engine swaps title/parentTitle).
+    const groupTitles = enrichedItems
+      .map((item) => item.title as string)
+      .filter(Boolean);
+    if (groupTitles.length > 0) {
+      const excludedTitles = await prisma.lifecycleException.findMany({
+        where: {
+          userId: ruleSet.userId,
+          mediaItem: {
+            parentTitle: { in: groupTitles },
+            type: ruleSet.type,
+            library: { mediaServerId: { in: ruleSet.serverIds } },
+          },
+        },
+        select: {
+          mediaItem: { select: { parentTitle: true } },
+        },
+      });
+      if (excludedTitles.length > 0) {
+        const excludedSet = new Set(
+          excludedTitles.map((e) => e.mediaItem.parentTitle)
+        );
+        const beforeCount = enrichedItems.length;
+        const filtered = enrichedItems.filter(
+          (item) => !excludedSet.has(item.title as string)
+        );
+        logger.info("Lifecycle", `Filtered ${beforeCount - filtered.length} excluded items from rule set "${ruleSet.name}"`);
+        enrichedItems.length = 0;
+        enrichedItems.push(...filtered);
+      }
+    }
+  } else {
+    // Individual-scope rules: check by exact mediaItemId.
+    // For grouped SERIES (seriesScope=false), also check memberIds so excepted
+    // episodes are removed from groups without dropping the entire series.
+    const allIds = new Set<string>();
+    for (const item of enrichedItems) {
+      allIds.add(item.id as string);
+      const members = item.memberIds as string[] | undefined;
+      if (members) {
+        for (const mid of members) allIds.add(mid);
+      }
+    }
+
+    const excludedItems = await prisma.lifecycleException.findMany({
+      where: {
+        userId: ruleSet.userId,
+        mediaItemId: { in: [...allIds] },
+      },
+      select: { mediaItemId: true },
+    });
+    if (excludedItems.length > 0) {
+      const excludedIds = new Set(excludedItems.map((e) => e.mediaItemId));
+      const beforeCount = enrichedItems.length;
+      const filtered: Record<string, unknown>[] = [];
+      for (const item of enrichedItems) {
+        const members = item.memberIds as string[] | undefined;
+        if (members) {
+          // Grouped item: remove excepted members, keep group if any remain
+          const remainingMembers = members.filter((mid) => !excludedIds.has(mid));
+          if (remainingMembers.length > 0) {
+            const updated: Record<string, unknown> = { ...item, memberIds: remainingMembers };
+            // If the representative ID itself was excepted, promote the first
+            // remaining member so execution-time exception checks don't cancel
+            // the action for the non-excepted episodes.
+            if (excludedIds.has(item.id as string)) {
+              updated.id = remainingMembers[0];
+            }
+            filtered.push(updated);
+          }
+        } else if (!excludedIds.has(item.id as string)) {
+          filtered.push(item);
+        }
+      }
+      const removedCount = beforeCount - filtered.length;
+      if (removedCount > 0) {
+        logger.info("Lifecycle", `Filtered ${removedCount} excluded items from rule set "${ruleSet.name}"`);
+      }
+      enrichedItems.length = 0;
+      enrichedItems.push(...filtered);
+
+      // Rebuild episodeIdMap from filtered items so scheduled actions
+      // only reference non-excepted episode/track IDs
+      episodeIdMap.clear();
+      for (const item of enrichedItems) {
+        const members = item.memberIds as string[] | undefined;
+        if (members && members.length > 0) {
+          episodeIdMap.set(item.id as string, members);
+        }
+      }
+    }
   }
 
   const now = new Date();
