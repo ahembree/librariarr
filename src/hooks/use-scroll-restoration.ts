@@ -73,7 +73,10 @@ export function useScrollRestoration(
 
     const saveState = () => {
       const scrollTop = main.scrollTop;
-      if (scrollTop <= 0) return;
+      if (scrollTop <= 0) {
+        sessionStorage.removeItem(`scroll-${key}`);
+        return;
+      }
 
       const firstVisibleIndex = optionsRef.current?.getFirstVisibleIndex?.() ?? -1;
       const data = {

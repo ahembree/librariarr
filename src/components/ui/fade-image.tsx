@@ -13,6 +13,7 @@ export function FadeImage({ className, onLoad, onError, ...props }: ComponentPro
     // eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text -- thin wrapper; alt passed via props
     <img
       decoding="async"
+      fetchPriority="low"
       {...props}
       className={cn("opacity-0 transition-opacity duration-300", className)}
       onLoad={(e) => {
