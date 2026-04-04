@@ -188,24 +188,7 @@ body::before {
   }
 }
 
-/* Card hover effects – only on devices with a pointer/hover capability */
-@media (hover: hover) {
-  .media-card-hover {
-    transition: transform 300ms ease-out, box-shadow 300ms ease-out;
-  }
-  .media-card-hover:hover {
-    transform: scale(1.03);
-    box-shadow: 0 8px 32px oklch(0 0 0 / 0.4);
-    outline: 1px solid oklch(1 0 0 / 0.1);
-    outline-offset: -1px;
-  }
-  .media-card-image {
-    transition: transform 300ms ease-out;
-  }
-  .media-card-hover:hover .media-card-image {
-    transform: scale(1.05);
-  }
-}
+/* Card hover effects are handled via Tailwind utility classes on MediaCard */
 
 /* Custom scrollbar */
 * {
