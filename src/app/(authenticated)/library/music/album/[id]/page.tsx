@@ -35,6 +35,20 @@ export default function AlbumDetailPage() {
   const [viewMode, setViewMode] = useState<"cards" | "table">("table");
   const [sortBy, setSortBy] = useState("episodeNumber");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+  const [backOverride, setBackOverride] = useState<{ href: string; label: string } | null>(null);
+
+  useEffect(() => {
+    const backPath = sessionStorage.getItem("library-back-path");
+    if (backPath) {
+      sessionStorage.removeItem("library-back-path");
+      const labels: Record<string, string> = {
+        "/library/music/albums": "All Albums",
+        "/library/music/tracks": "All Tracks",
+      };
+      const label = labels[backPath];
+      if (label) setBackOverride({ href: backPath, label });
+    }
+  }, []);
 
   useEffect(() => {
     const stored = localStorage.getItem("album-detail-view-mode") as "cards" | "table" | null;
@@ -166,8 +180,8 @@ export default function AlbumDetailPage() {
             ))
           : undefined
       }
-      backHref={`/library/music/artist/${item.id}`}
-      backLabel={artistName}
+      backHref={backOverride?.href ?? `/library/music/artist/${item.id}`}
+      backLabel={backOverride?.label ?? artistName}
       useParentArt
       posterAspectRatio="1/1"
       playServers={playServers}

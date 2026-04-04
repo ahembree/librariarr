@@ -21,6 +21,7 @@ import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
+import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 
 const GAP = 16;
 const CARD_CONTENT_HEIGHT = 138;
@@ -125,6 +126,33 @@ export default function AllAlbumsPage() {
   const gridContainerRef = useRef<HTMLDivElement>(null);
   const scrollElementRef = useRef<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
+
+  const { markChildNavigation } = useScrollRestoration("/library/music/albums", !loading && albums.length > 0, undefined, undefined, {
+    getFirstVisibleIndex: () => {
+      if (!gridContainerRef.current) return -1;
+      const main = document.querySelector<HTMLElement>("main");
+      if (!main) return -1;
+      const containerWidth = gridContainerRef.current.offsetWidth;
+      const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
+      const rowHeight = Math.round(columnWidth * 1.0 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
+      if (rowHeight <= 0) return -1;
+      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
+      const centerInGrid = main.scrollTop + main.clientHeight / 2 - gridTop;
+      return Math.max(0, Math.floor(centerInGrid / rowHeight)) * actualColumns;
+    },
+    scrollToIndex: (index) => {
+      if (!gridContainerRef.current) return false;
+      const main = document.querySelector<HTMLElement>("main");
+      if (!main) return false;
+      const row = Math.floor(index / actualColumns);
+      const containerWidth = gridContainerRef.current.offsetWidth;
+      const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
+      const rowHeight = Math.round(columnWidth * 1.0 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
+      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
+      main.scrollTo({ top: Math.max(0, gridTop + row * rowHeight + rowHeight / 2 - main.clientHeight / 2), behavior: "instant" });
+      return true;
+    },
+  });
 
   useEffect(() => {
     scrollElementRef.current = document.querySelector<HTMLElement>("main");
@@ -269,7 +297,7 @@ export default function AllAlbumsPage() {
               keyExtractor={(a) => `${a.artistName}::${a.albumTitle}`}
               defaultSortId="albumTitle"
               resizeStorageKey="dt-widths-albums"
-              onRowClick={(a) => router.push(`/library/music/album/${a.mediaItemId}`)}
+              onRowClick={(a) => { markChildNavigation(); sessionStorage.setItem("library-back-path", "/library/music/albums"); router.push(`/library/music/album/${a.mediaItemId}`); }}
               renderHoverContent={(album) => (
                 <MediaHoverPopover
                   imageUrl={`/api/media/${album.mediaItemId}/image?type=season`}
@@ -322,9 +350,11 @@ export default function AllAlbumsPage() {
                             title={album.albumTitle}
                             aspectRatio="square"
                             fallbackIcon="music"
-                            onClick={() =>
-                              router.push(`/library/music/album/${album.mediaItemId}`)
-                            }
+                            onClick={() => {
+                              markChildNavigation();
+                              sessionStorage.setItem("library-back-path", "/library/music/albums");
+                              router.push(`/library/music/album/${album.mediaItemId}`);
+                            }}
                             qualityBar={
                               Object.keys(album.audioCodecCounts).length > 0
                                 ? [

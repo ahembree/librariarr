@@ -19,6 +19,7 @@ import { formatFileSize, formatDuration } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 
 const GAP = 16;
 const CARD_CONTENT_HEIGHT = 138;
@@ -42,6 +43,33 @@ export default function AllTracksPage() {
   const gridContainerRef = useRef<HTMLDivElement>(null);
   const scrollElementRef = useRef<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
+
+  const { markChildNavigation } = useScrollRestoration("/library/music/tracks", !loading && items.length > 0, undefined, undefined, {
+    getFirstVisibleIndex: () => {
+      if (!gridContainerRef.current) return -1;
+      const main = document.querySelector<HTMLElement>("main");
+      if (!main) return -1;
+      const containerWidth = gridContainerRef.current.offsetWidth;
+      const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
+      const rowHeight = Math.round(columnWidth * 1.0 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
+      if (rowHeight <= 0) return -1;
+      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
+      const centerInGrid = main.scrollTop + main.clientHeight / 2 - gridTop;
+      return Math.max(0, Math.floor(centerInGrid / rowHeight)) * actualColumns;
+    },
+    scrollToIndex: (index) => {
+      if (!gridContainerRef.current) return false;
+      const main = document.querySelector<HTMLElement>("main");
+      if (!main) return false;
+      const row = Math.floor(index / actualColumns);
+      const containerWidth = gridContainerRef.current.offsetWidth;
+      const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
+      const rowHeight = Math.round(columnWidth * 1.0 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
+      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
+      main.scrollTo({ top: Math.max(0, gridTop + row * rowHeight + rowHeight / 2 - main.clientHeight / 2), behavior: "instant" });
+      return true;
+    },
+  });
 
   useEffect(() => {
     const stored = localStorage.getItem("tracks-view-mode") as "cards" | "table" | null;
@@ -183,7 +211,7 @@ export default function AllTracksPage() {
       ) : viewMode === "table" ? (
         <MediaTable
           items={items}
-          onItemClick={(item) => router.push(`/library/music/track/${item.id}`)}
+          onItemClick={(item) => { markChildNavigation(); sessionStorage.setItem("library-back-path", "/library/music/tracks"); router.push(`/library/music/track/${item.id}`); }}
           sortBy={sortBy}
           sortOrder={sortOrder}
           onSort={handleSort}
@@ -242,7 +270,7 @@ export default function AllTracksPage() {
                         title={track.title}
                         aspectRatio="square"
                         fallbackIcon="music"
-                        onClick={() => router.push(`/library/music/track/${track.id}`)}
+                        onClick={() => { markChildNavigation(); sessionStorage.setItem("library-back-path", "/library/music/tracks"); router.push(`/library/music/track/${track.id}`); }}
                         qualityBar={
                           track.audioCodec
                             ? [{ color: getHex("audioCodec", track.audioCodec), weight: 1, label: track.audioCodec }]

@@ -26,6 +26,20 @@ export default function EpisodeDetailPage() {
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
   const [loading, setLoading] = useState(true);
+  const [backOverride, setBackOverride] = useState<{ href: string; label: string } | null>(null);
+
+  useEffect(() => {
+    const backPath = sessionStorage.getItem("library-back-path");
+    if (backPath) {
+      sessionStorage.removeItem("library-back-path");
+      const labels: Record<string, string> = {
+        "/library/series/episodes": "All Episodes",
+        "/library/series/seasons": "All Seasons",
+      };
+      const label = labels[backPath];
+      if (label) setBackOverride({ href: backPath, label });
+    }
+  }, []);
 
   useEffect(() => {
     async function fetchItem() {
@@ -125,8 +139,8 @@ export default function EpisodeDetailPage() {
       }
       filePath={item.filePath}
       artUrl={`/api/media/${item.id}/image`}
-      backHref={`/library/series/season/${item.id}`}
-      backLabel={item.seasonNumber != null ? (item.seasonNumber === 0 ? "Specials" : `Season ${item.seasonNumber}`) : "Season"}
+      backHref={backOverride?.href ?? `/library/series/season/${item.id}`}
+      backLabel={backOverride?.label ?? (item.seasonNumber != null ? (item.seasonNumber === 0 ? "Specials" : `Season ${item.seasonNumber}`) : "Season")}
       useParentArt
       playServers={playServers}
     >
