@@ -85,6 +85,10 @@ interface QueryResultItem {
   type: string;
   seasonNumber: number | null;
   episodeNumber: number | null;
+  summary: string | null;
+  contentRating: string | null;
+  rating: number | null;
+  audienceRating: number | null;
   resolution: string | null;
   dynamicRange: string | null;
   videoCodec: string | null;
@@ -93,6 +97,8 @@ interface QueryResultItem {
   container: string | null;
   fileSize: string | null;
   duration: number | null;
+  genres: string[] | null;
+  studio: string | null;
   playCount: number;
   lastPlayedAt: string | null;
   addedAt: string | null;
@@ -1140,11 +1146,17 @@ export default function QueryPage() {
                     data={{
                       title: item.title,
                       year: item.year,
+                      summary: item.summary,
+                      contentRating: item.contentRating,
+                      rating: item.rating,
+                      audienceRating: item.audienceRating,
                       duration: item.duration,
                       resolution: item.resolution,
                       dynamicRange: item.dynamicRange,
                       audioProfile: item.audioProfile,
                       fileSize: item.fileSize,
+                      genres: item.genres,
+                      studio: item.studio,
                       playCount: item.playCount,
                       lastPlayedAt: item.lastPlayedAt,
                       addedAt: item.addedAt,
@@ -1226,11 +1238,17 @@ export default function QueryPage() {
                                   data={{
                                     title: item.title,
                                     year: item.year,
+                                    summary: item.summary,
+                                    contentRating: item.contentRating,
+                                    rating: item.rating,
+                                    audienceRating: item.audienceRating,
                                     duration: item.duration,
                                     resolution: item.resolution,
                                     dynamicRange: item.dynamicRange,
                                     audioProfile: item.audioProfile,
                                     fileSize: item.fileSize,
+                                    genres: item.genres,
+                                    studio: item.studio,
                                     playCount: item.playCount,
                                     lastPlayedAt: item.lastPlayedAt,
                                     addedAt: item.addedAt,

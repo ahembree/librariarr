@@ -57,8 +57,18 @@ interface ExceptionItem {
     type: string;
     year: number | null;
     thumbUrl: string | null;
+    summary: string | null;
+    contentRating: string | null;
+    rating: number | null;
+    audienceRating: number | null;
+    duration: number | null;
     resolution: string | null;
+    dynamicRange: string | null;
+    audioProfile: string | null;
     fileSize: string | null;
+    genres: string[] | null;
+    studio: string | null;
+    playCount: number;
     seasonNumber: number | null;
     lastPlayedAt: string | null;
     addedAt: string | null;
@@ -497,8 +507,18 @@ export default function LifecycleExceptionsPage() {
           data={{
             title: row.displayTitle,
             year: row.year,
+            summary: row.mediaItem.summary,
+            contentRating: row.mediaItem.contentRating,
+            rating: row.mediaItem.rating,
+            audienceRating: row.mediaItem.audienceRating,
+            duration: row.mediaItem.duration,
             resolution: row.mediaItem.resolution,
+            dynamicRange: row.mediaItem.dynamicRange,
+            audioProfile: row.mediaItem.audioProfile,
             fileSize: row.totalSize,
+            genres: row.mediaItem.genres,
+            studio: row.mediaItem.studio,
+            playCount: row.mediaItem.playCount,
             lastPlayedAt: row.lastPlayedAt,
             addedAt: row.addedAt,
             servers: row.servers,

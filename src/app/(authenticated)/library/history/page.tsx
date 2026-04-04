@@ -60,8 +60,18 @@ interface WatchHistoryItem {
     videoCodec: string | null;
     audioCodec: string | null;
     audioChannels: number | null;
+    audioProfile: string | null;
     fileSize: string | null;
     duration: number | null;
+    summary: string | null;
+    contentRating: string | null;
+    rating: number | null;
+    audienceRating: number | null;
+    studio: string | null;
+    playCount: number;
+    lastPlayedAt: string | null;
+    addedAt: string | null;
+    genres: string[] | null;
   };
   server: { id: string; name: string; type: string };
 }
@@ -740,10 +750,20 @@ export default function HistoryPage() {
                         ? `${item.mediaItem.parentTitle} — ${item.mediaItem.title}`
                         : item.mediaItem.title,
                       year: item.mediaItem.year,
+                      summary: item.mediaItem.summary,
+                      contentRating: item.mediaItem.contentRating,
+                      rating: item.mediaItem.rating,
+                      audienceRating: item.mediaItem.audienceRating,
                       duration: item.mediaItem.duration,
                       resolution: item.mediaItem.resolution,
                       dynamicRange: item.mediaItem.dynamicRange,
+                      audioProfile: item.mediaItem.audioProfile,
                       fileSize: item.mediaItem.fileSize,
+                      genres: item.mediaItem.genres,
+                      studio: item.mediaItem.studio,
+                      playCount: item.mediaItem.playCount,
+                      lastPlayedAt: item.mediaItem.lastPlayedAt,
+                      addedAt: item.mediaItem.addedAt,
                       servers: [{ serverId: item.server.id, serverName: item.server.name, serverType: item.server.type }],
                     }}
                   />

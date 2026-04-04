@@ -224,8 +224,18 @@ export async function GET(request: NextRequest) {
     mi_videoCodec: string | null;
     mi_audioCodec: string | null;
     mi_audioChannels: number | null;
+    mi_audioProfile: string | null;
     mi_fileSize: bigint | null;
     mi_duration: number | null;
+    mi_summary: string | null;
+    mi_contentRating: string | null;
+    mi_rating: number | null;
+    mi_audienceRating: number | null;
+    mi_studio: string | null;
+    mi_playCount: number;
+    mi_lastPlayedAt: Date | null;
+    mi_addedAt: Date | null;
+    mi_genres: unknown;
     ms_id: string;
     ms_name: string;
     ms_type: string;
@@ -238,7 +248,13 @@ export async function GET(request: NextRequest) {
       mi."type" AS "mi_type", mi."resolution" AS "mi_resolution",
       mi."dynamicRange" AS "mi_dynamicRange", mi."videoCodec" AS "mi_videoCodec",
       mi."audioCodec" AS "mi_audioCodec", mi."audioChannels" AS "mi_audioChannels",
+      mi."audioProfile" AS "mi_audioProfile",
       mi."fileSize" AS "mi_fileSize", mi."duration" AS "mi_duration",
+      mi."summary" AS "mi_summary", mi."contentRating" AS "mi_contentRating",
+      mi."rating" AS "mi_rating", mi."audienceRating" AS "mi_audienceRating",
+      mi."studio" AS "mi_studio", mi."playCount" AS "mi_playCount",
+      mi."lastPlayedAt" AS "mi_lastPlayedAt", mi."addedAt" AS "mi_addedAt",
+      mi."genres" AS "mi_genres",
       ms."id" AS "ms_id", ms."name" AS "ms_name", ms."type" AS "ms_type"
     ${fromClause}
     ORDER BY ${orderCol} ${orderDir} NULLS LAST
@@ -272,8 +288,18 @@ export async function GET(request: NextRequest) {
       videoCodec: r.mi_videoCodec,
       audioCodec: r.mi_audioCodec,
       audioChannels: r.mi_audioChannels,
+      audioProfile: r.mi_audioProfile,
       fileSize: r.mi_fileSize?.toString() ?? null,
       duration: r.mi_duration,
+      summary: r.mi_summary,
+      contentRating: r.mi_contentRating,
+      rating: r.mi_rating,
+      audienceRating: r.mi_audienceRating,
+      studio: r.mi_studio,
+      playCount: r.mi_playCount,
+      lastPlayedAt: r.mi_lastPlayedAt?.toISOString() ?? null,
+      addedAt: r.mi_addedAt?.toISOString() ?? null,
+      genres: Array.isArray(r.mi_genres) ? r.mi_genres as string[] : null,
     },
     server: {
       id: r.ms_id,

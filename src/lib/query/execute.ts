@@ -706,6 +706,7 @@ const ITEM_SELECT = {
   type: true,
   seasonNumber: true,
   episodeNumber: true,
+  summary: true,
   resolution: true,
   dynamicRange: true,
   videoCodec: true,
@@ -727,6 +728,7 @@ const ITEM_SELECT = {
   rating: true,
   audienceRating: true,
   isWatchlisted: true,
+  genres: true,
   studio: true,
   dedupKey: true,
   library: {
@@ -737,10 +739,9 @@ const ITEM_SELECT = {
   },
 } as const;
 
-/** Full select for in-memory evaluation — includes streams, genres, labels, and externalIds */
+/** Full select for in-memory evaluation — includes streams, labels, and externalIds */
 const ITEM_SELECT_FULL = {
   ...ITEM_SELECT,
-  genres: true,
   labels: true,
   audioSamplingRate: true,
   audioBitrate: true,

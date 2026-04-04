@@ -86,6 +86,7 @@ interface ActionItem {
     playCount?: number;
     lastPlayedAt?: string | null;
     addedAt?: string | null;
+    servers?: Array<{ serverId: string; serverName: string; serverType: string }>;
   };
 }
 
@@ -426,6 +427,7 @@ function VirtualizedActionTable({
                         playCount: action.mediaItem.playCount,
                         lastPlayedAt: action.mediaItem.lastPlayedAt,
                         addedAt: action.mediaItem.addedAt,
+                        servers: action.mediaItem.servers,
                       }}
                     />
                   </HoverCardContent>

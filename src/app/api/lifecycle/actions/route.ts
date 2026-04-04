@@ -23,6 +23,7 @@ interface ActionItemMediaItem {
   playCount: number;
   lastPlayedAt: string | null;
   addedAt: string | null;
+  servers?: Array<{ serverId: string; serverName: string; serverType: string }>;
 }
 
 interface ActionItem {
@@ -67,6 +68,7 @@ const MEDIA_ITEM_SELECT = {
   year: true, summary: true, contentRating: true, rating: true, audienceRating: true,
   duration: true, resolution: true, dynamicRange: true, audioProfile: true, fileSize: true,
   genres: true, studio: true, playCount: true, lastPlayedAt: true, addedAt: true,
+  library: { select: { mediaServer: { select: { id: true, name: true, type: true } } } },
 } as const;
 
 type SelectedMediaItem = {
@@ -77,9 +79,11 @@ type SelectedMediaItem = {
   audioProfile: string | null; fileSize: bigint | null;
   genres: unknown; studio: string | null;
   playCount: number; lastPlayedAt: Date | null; addedAt: Date | null;
+  library: { mediaServer: { id: string; name: string; type: string } | null };
 };
 
 function serializeMediaItem(mi: SelectedMediaItem): ActionItemMediaItem {
+  const ms = mi.library.mediaServer;
   return {
     id: mi.id, title: mi.title, parentTitle: mi.parentTitle, type: mi.type, thumbUrl: mi.thumbUrl,
     year: mi.year, summary: mi.summary, contentRating: mi.contentRating,
@@ -90,6 +94,7 @@ function serializeMediaItem(mi: SelectedMediaItem): ActionItemMediaItem {
     studio: mi.studio, playCount: mi.playCount,
     lastPlayedAt: mi.lastPlayedAt?.toISOString() ?? null,
     addedAt: mi.addedAt?.toISOString() ?? null,
+    servers: ms ? [{ serverId: ms.id, serverName: ms.name, serverType: ms.type }] : undefined,
   };
 }
 
