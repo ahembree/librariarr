@@ -40,7 +40,7 @@ import {
   TableProperties,
 } from "lucide-react";
 import { MediaCard } from "@/components/media-card";
-import { useCardSize } from "@/hooks/use-card-size";
+import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { CardSizeControl } from "@/components/card-size-control";
 import { formatDuration, formatFileSize } from "@/lib/format";
 import { MetadataLine } from "@/components/metadata-line";
@@ -453,6 +453,9 @@ function VirtualizedActionTable({
 
 /* ---------- Card grid for a single group ---------- */
 
+const CARD_GAP = 16;
+const CARD_CONTENT_HEIGHT = 128;
+
 function PendingActionCardGrid({
   items,
   ruleSetType,
@@ -464,84 +467,144 @@ function PendingActionCardGrid({
   onItemClick: (action: ActionItem) => void;
   exceptedItemIds: Set<string>;
 }) {
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const { columns: actualColumns } = useCardSize();
   const isMusic = ruleSetType === "MUSIC";
   const isMovie = ruleSetType === "MOVIE";
   const fallbackIcon = isMovie ? "movie" as const : isMusic ? "music" as const : "series" as const;
   const aspectRatio = isMusic ? "square" as const : "poster" as const;
 
+  const filteredItems = useMemo(
+    () => items.filter((a) => a.mediaItem.id !== null),
+    [items],
+  );
+
+  const rowCount = useMemo(
+    () => (filteredItems.length > 0 ? Math.ceil(filteredItems.length / actualColumns) : 0),
+    [filteredItems.length, actualColumns],
+  );
+
+  const estimateSize = useCallback(() => {
+    const container = scrollContainerRef.current;
+    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
+    const columnWidth = (containerWidth - CARD_GAP * (actualColumns - 1)) / actualColumns;
+    const posterHeight = columnWidth * (isMusic ? 1 : 1.5);
+    return Math.round(posterHeight + CARD_CONTENT_HEIGHT + CARD_GAP);
+  }, [actualColumns, isMusic]);
+
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize,
+    overscan: 5,
+  });
+
+  useEffect(() => {
+    virtualizer.measure();
+  }, [actualColumns, virtualizer]);
+
+  const virtualRows = virtualizer.getVirtualItems();
+
   return (
-    <div
-      style={{
-        display: "grid",
-        gap: "16px",
-        gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))`,
-      }}
-    >
-      {items.map((action) => {
-        const hasMediaItem = action.mediaItem.id !== null;
-        if (!hasMediaItem) return null;
-        const mi = action.mediaItem;
-        return (
-          <div key={action.id} className="relative">
-            {exceptedItemIds.has(mi.id!) && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-orange-500/90 backdrop-blur-sm flex items-center justify-center">
-                      <ShieldOff className="h-3.5 w-3.5 text-white" />
+    <div ref={scrollContainerRef} className="md:max-h-[60vh] overflow-y-auto">
+      <div
+        style={{
+          height: virtualizer.getTotalSize(),
+          width: "100%",
+          position: "relative",
+        }}
+      >
+        {virtualRows.map((virtualRow) => {
+          const rowStart = virtualRow.index * actualColumns;
+          const rowItems = filteredItems.slice(rowStart, rowStart + actualColumns);
+          return (
+            <div
+              key={virtualRow.key}
+              data-index={virtualRow.index}
+              ref={virtualizer.measureElement}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                paddingBottom: CARD_GAP,
+                transform: `translateY(${virtualRow.start}px)`,
+              }}
+            >
+              <div
+                style={{
+                  display: "grid",
+                  gap: `${CARD_GAP}px`,
+                  gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))`,
+                }}
+              >
+                {rowItems.map((action) => {
+                  const mi = action.mediaItem;
+                  return (
+                    <div key={action.id} className="relative">
+                      {exceptedItemIds.has(mi.id!) && (
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-orange-500/90 backdrop-blur-sm flex items-center justify-center">
+                                <ShieldOff className="h-3.5 w-3.5 text-white" />
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent>Excluded from lifecycle actions</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      )}
+                      <MediaCard
+                        imageUrl={`/api/media/${mi.id}/image${!isMovie ? "?type=parent" : ""}`}
+                        title={mi.parentTitle ? `${mi.parentTitle} — ${mi.title}` : mi.title}
+                        fallbackIcon={fallbackIcon}
+                        aspectRatio={aspectRatio}
+                        onClick={() => onItemClick(action)}
+                        hoverContent={
+                          <MediaHoverPopover
+                            imageAspect={aspectRatio}
+                            data={{
+                              title: mi.parentTitle ? `${mi.parentTitle} — ${mi.title}` : mi.title,
+                              year: mi.year,
+                              summary: mi.summary,
+                              contentRating: mi.contentRating,
+                              rating: mi.rating,
+                              audienceRating: mi.audienceRating,
+                              duration: mi.duration,
+                              resolution: mi.resolution,
+                              dynamicRange: mi.dynamicRange,
+                              audioProfile: mi.audioProfile,
+                              fileSize: mi.fileSize,
+                              genres: mi.genres,
+                              studio: mi.studio,
+                              playCount: mi.playCount,
+                              lastPlayedAt: mi.lastPlayedAt,
+                              addedAt: mi.addedAt,
+                              servers: mi.servers,
+                            }}
+                          />
+                        }
+                        metadata={
+                          <MetadataLine>
+                            {mi.year && <span>{mi.year}</span>}
+                            {formatDuration(mi.duration ?? null) && <span>{formatDuration(mi.duration ?? null)}</span>}
+                            {formatFileSize(mi.fileSize ?? null) && <span>{formatFileSize(mi.fileSize ?? null)}</span>}
+                          </MetadataLine>
+                        }
+                        badges={
+                          <ColorChip className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}>
+                            {STATUS_LABELS[action.status] ?? action.status}
+                          </ColorChip>
+                        }
+                      />
                     </div>
-                  </TooltipTrigger>
-                  <TooltipContent>Excluded from lifecycle actions</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            )}
-            <MediaCard
-              imageUrl={`/api/media/${mi.id}/image${!isMovie ? "?type=parent" : ""}`}
-              title={mi.parentTitle ? `${mi.parentTitle} — ${mi.title}` : mi.title}
-              fallbackIcon={fallbackIcon}
-              aspectRatio={aspectRatio}
-              onClick={() => onItemClick(action)}
-              hoverContent={
-                <MediaHoverPopover
-                  imageAspect={aspectRatio}
-                  data={{
-                    title: mi.parentTitle ? `${mi.parentTitle} — ${mi.title}` : mi.title,
-                    year: mi.year,
-                    summary: mi.summary,
-                    contentRating: mi.contentRating,
-                    rating: mi.rating,
-                    audienceRating: mi.audienceRating,
-                    duration: mi.duration,
-                    resolution: mi.resolution,
-                    dynamicRange: mi.dynamicRange,
-                    audioProfile: mi.audioProfile,
-                    fileSize: mi.fileSize,
-                    genres: mi.genres,
-                    studio: mi.studio,
-                    playCount: mi.playCount,
-                    lastPlayedAt: mi.lastPlayedAt,
-                    addedAt: mi.addedAt,
-                    servers: mi.servers,
-                  }}
-                />
-              }
-              metadata={
-                <MetadataLine>
-                  {mi.year && <span>{mi.year}</span>}
-                  {formatDuration(mi.duration ?? null) && <span>{formatDuration(mi.duration ?? null)}</span>}
-                  {formatFileSize(mi.fileSize ?? null) && <span>{formatFileSize(mi.fileSize ?? null)}</span>}
-                </MetadataLine>
-              }
-              badges={
-                <ColorChip className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}>
-                  {STATUS_LABELS[action.status] ?? action.status}
-                </ColorChip>
-              }
-            />
-          </div>
-        );
-      })}
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
