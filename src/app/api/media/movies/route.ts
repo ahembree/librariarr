@@ -71,6 +71,8 @@ export async function GET(request: NextRequest) {
     contentRating: true,
     rating: true,
     audienceRating: true,
+    summary: true,
+    genres: true,
     studio: true,
     dedupKey: true,
     dedupCanonical: true,
