@@ -9,10 +9,20 @@ interface ActionItemMediaItem {
   type: string;
   thumbUrl: string | null;
   year: number | null;
+  summary: string | null;
+  contentRating: string | null;
+  rating: number | null;
+  audienceRating: number | null;
   duration: number | null;
   resolution: string | null;
   dynamicRange: string | null;
+  audioProfile: string | null;
   fileSize: string | null;
+  genres: string[] | null;
+  studio: string | null;
+  playCount: number;
+  lastPlayedAt: string | null;
+  addedAt: string | null;
 }
 
 interface ActionItem {
@@ -54,20 +64,32 @@ interface RuleSetGroup {
  */
 const MEDIA_ITEM_SELECT = {
   id: true, title: true, parentTitle: true, type: true, thumbUrl: true,
-  year: true, duration: true, resolution: true, dynamicRange: true, fileSize: true,
+  year: true, summary: true, contentRating: true, rating: true, audienceRating: true,
+  duration: true, resolution: true, dynamicRange: true, audioProfile: true, fileSize: true,
+  genres: true, studio: true, playCount: true, lastPlayedAt: true, addedAt: true,
 } as const;
 
 type SelectedMediaItem = {
   id: string; title: string; parentTitle: string | null; type: string; thumbUrl: string | null;
-  year: number | null; duration: number | null; resolution: string | null; dynamicRange: string | null;
-  fileSize: bigint | null;
+  year: number | null; summary: string | null; contentRating: string | null;
+  rating: number | null; audienceRating: number | null;
+  duration: number | null; resolution: string | null; dynamicRange: string | null;
+  audioProfile: string | null; fileSize: bigint | null;
+  genres: unknown; studio: string | null;
+  playCount: number; lastPlayedAt: Date | null; addedAt: Date | null;
 };
 
 function serializeMediaItem(mi: SelectedMediaItem): ActionItemMediaItem {
   return {
     id: mi.id, title: mi.title, parentTitle: mi.parentTitle, type: mi.type, thumbUrl: mi.thumbUrl,
-    year: mi.year, duration: mi.duration, resolution: mi.resolution, dynamicRange: mi.dynamicRange,
-    fileSize: mi.fileSize?.toString() ?? null,
+    year: mi.year, summary: mi.summary, contentRating: mi.contentRating,
+    rating: mi.rating, audienceRating: mi.audienceRating,
+    duration: mi.duration, resolution: mi.resolution, dynamicRange: mi.dynamicRange,
+    audioProfile: mi.audioProfile, fileSize: mi.fileSize?.toString() ?? null,
+    genres: (Array.isArray(mi.genres) ? mi.genres : null) as string[] | null,
+    studio: mi.studio, playCount: mi.playCount,
+    lastPlayedAt: mi.lastPlayedAt?.toISOString() ?? null,
+    addedAt: mi.addedAt?.toISOString() ?? null,
   };
 }
 
@@ -91,7 +113,12 @@ function buildActionMediaItem(
   // MediaItem deleted — use denormalized fields
   const title = action.mediaItemTitle ?? "Unknown";
   const parentTitle = action.mediaItemParentTitle ?? null;
-  const nullFields = { thumbUrl: null, year: null, duration: null, resolution: null, dynamicRange: null, fileSize: null };
+  const nullFields = {
+    thumbUrl: null, year: null, summary: null, contentRating: null, rating: null,
+    audienceRating: null, duration: null, resolution: null, dynamicRange: null,
+    audioProfile: null, fileSize: null, genres: null, studio: null,
+    playCount: 0, lastPlayedAt: null, addedAt: null,
+  };
   if (ruleSetType === "SERIES" && parentTitle) {
     return { id: null, title: parentTitle, parentTitle: null, type: ruleSetType, ...nullFields };
   }

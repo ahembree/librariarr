@@ -72,10 +72,20 @@ interface ActionItem {
     parentTitle: string | null;
     type: string;
     year?: number | null;
+    summary?: string | null;
+    contentRating?: string | null;
+    rating?: number | null;
+    audienceRating?: number | null;
     duration?: number | null;
     resolution?: string | null;
     dynamicRange?: string | null;
+    audioProfile?: string | null;
     fileSize?: string | null;
+    genres?: string[] | null;
+    studio?: string | null;
+    playCount?: number;
+    lastPlayedAt?: string | null;
+    addedAt?: string | null;
   };
 }
 
@@ -402,10 +412,20 @@ function VirtualizedActionTable({
                           ? `${action.mediaItem.parentTitle} — ${action.mediaItem.title}`
                           : action.mediaItem.title,
                         year: action.mediaItem.year,
+                        summary: action.mediaItem.summary,
+                        contentRating: action.mediaItem.contentRating,
+                        rating: action.mediaItem.rating,
+                        audienceRating: action.mediaItem.audienceRating,
                         duration: action.mediaItem.duration,
                         resolution: action.mediaItem.resolution,
                         dynamicRange: action.mediaItem.dynamicRange,
+                        audioProfile: action.mediaItem.audioProfile,
                         fileSize: action.mediaItem.fileSize,
+                        genres: action.mediaItem.genres,
+                        studio: action.mediaItem.studio,
+                        playCount: action.mediaItem.playCount,
+                        lastPlayedAt: action.mediaItem.lastPlayedAt,
+                        addedAt: action.mediaItem.addedAt,
                       }}
                     />
                   </HoverCardContent>
