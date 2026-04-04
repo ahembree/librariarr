@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.12.2](https://github.com/ahembree/librariarr/compare/v0.12.1...v0.12.2) (2026-04-04)
+
+
+### Bug Fixes
+
+* disable backdrop-filter blur on mobile to fix scroll lag ([a01a627](https://github.com/ahembree/librariarr/commit/a01a627f58464d9018e881dbeeb38d4ece09b72f))
+* exceptions fixes ([7f555f0](https://github.com/ahembree/librariarr/commit/7f555f0d409df0f686f116c2d1842faab70d496f))
+* exceptions fixes ([77a2a4e](https://github.com/ahembree/librariarr/commit/77a2a4e2e9ba3d0026d00e98939135378b99df3d))
+
+
+### Performance Improvements
+
+* fix mobile scroll lag and virtualize all library pages ([6885483](https://github.com/ahembree/librariarr/commit/6885483800394edf5db2c7f1aa7af755b6a1f1ae))
+* gate expensive hover effects behind [@media](https://github.com/media) (hover: hover) ([11f86f9](https://github.com/ahembree/librariarr/commit/11f86f95a171e86a1f705b82ae6fb1c92fef8bc5))
+* virtualize all seasons, episodes, albums, and tracks pages ([ec1b5b7](https://github.com/ahembree/librariarr/commit/ec1b5b76d0bcaf26f9b7f23e315334ea4af2452b))
+* virtualize lifecycle exceptions and system logs tables ([883dac9](https://github.com/ahembree/librariarr/commit/883dac93731a9113725f3aa2637515180a9d7e65))
+
 ## [0.12.1](https://github.com/ahembree/librariarr/compare/v0.12.0...v0.12.1) (2026-04-04)
 
 
