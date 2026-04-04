@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.1](https://github.com/ahembree/librariarr/compare/v0.12.0...v0.12.1) (2026-04-04)
+
+
+### Bug Fixes
+
+* scrolling bug fixes ([dd32bca](https://github.com/ahembree/librariarr/commit/dd32bca7f6bce0737f0cdef3343a3b6f5eb5ea9e))
+* scrolling fixes ([4613671](https://github.com/ahembree/librariarr/commit/46136712493c402914b8cf45f11eecd671d6af66))
+
 ## [0.12.0](https://github.com/ahembree/librariarr/compare/v0.11.3...v0.12.0) (2026-04-04)
 
 
