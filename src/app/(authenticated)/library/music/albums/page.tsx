@@ -34,6 +34,9 @@ interface AlbumEntry {
   totalSize: string;
   audioCodecCounts: Record<string, number>;
   mediaItemId: string;
+  totalPlayCount: number;
+  lastPlayed: string | null;
+  addedAt: string | null;
   servers: { serverId: string; serverName: string; serverType: string }[];
 }
 
@@ -278,6 +281,10 @@ export default function AllAlbumsPage() {
                     title: album.albumTitle,
                     trackCount: album.trackCount,
                     fileSize: album.totalSize,
+                    playCount: album.totalPlayCount,
+                    lastPlayedAt: album.lastPlayed,
+                    addedAt: album.addedAt,
+                    servers: album.servers,
                   }}
                 />
               )}

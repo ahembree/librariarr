@@ -44,6 +44,9 @@ export async function GET(request: NextRequest) {
       parentTitle: true,
       audioCodec: true,
       fileSize: true,
+      playCount: true,
+      lastPlayedAt: true,
+      addedAt: true,
       parentThumbUrl: true,
       library: {
         select: {
@@ -63,6 +66,9 @@ export async function GET(request: NextRequest) {
       totalSize: bigint;
       audioCodecCounts: Record<string, number>;
       mediaItemId: string;
+      totalPlayCount: number;
+      lastPlayed: Date | null;
+      addedAt: Date | null;
       servers: { serverId: string; serverName: string; serverType: string }[];
     }
   >();
@@ -80,6 +86,9 @@ export async function GET(request: NextRequest) {
         totalSize: BigInt(0),
         audioCodecCounts: {},
         mediaItemId: item.id,
+        totalPlayCount: 0,
+        lastPlayed: null,
+        addedAt: null,
         servers: [],
       };
       albumMap.set(compositeKey, albumGroup);
@@ -89,6 +98,14 @@ export async function GET(request: NextRequest) {
 
     if (item.fileSize) {
       albumGroup.totalSize += item.fileSize;
+    }
+
+    albumGroup.totalPlayCount += item.playCount;
+    if (item.lastPlayedAt && (!albumGroup.lastPlayed || item.lastPlayedAt > albumGroup.lastPlayed)) {
+      albumGroup.lastPlayed = item.lastPlayedAt;
+    }
+    if (item.addedAt && (!albumGroup.addedAt || item.addedAt > albumGroup.addedAt)) {
+      albumGroup.addedAt = item.addedAt;
     }
 
     const codec = item.audioCodec ? item.audioCodec.toUpperCase() : "Unknown";
@@ -113,6 +130,9 @@ export async function GET(request: NextRequest) {
     totalSize: a.totalSize.toString(),
     audioCodecCounts: a.audioCodecCounts,
     mediaItemId: a.mediaItemId,
+    totalPlayCount: a.totalPlayCount,
+    lastPlayed: a.lastPlayed,
+    addedAt: a.addedAt,
     servers: a.servers,
   }));
 

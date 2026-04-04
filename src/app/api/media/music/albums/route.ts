@@ -41,11 +41,14 @@ export async function GET(request: NextRequest) {
       albumTitle: true,
       audioCodec: true,
       fileSize: true,
+      playCount: true,
+      lastPlayedAt: true,
+      addedAt: true,
       thumbUrl: true,
       parentThumbUrl: true,
       library: {
         select: {
-          mediaServer: { select: { id: true } },
+          mediaServer: { select: { id: true, name: true, type: true } },
         },
       },
     },
@@ -60,6 +63,10 @@ export async function GET(request: NextRequest) {
       totalSize: bigint;
       audioCodecCounts: Record<string, number>;
       mediaItemId: string;
+      totalPlayCount: number;
+      lastPlayed: Date | null;
+      addedAt: Date | null;
+      servers: { serverId: string; serverName: string; serverType: string }[];
     }
   >();
 
@@ -74,6 +81,10 @@ export async function GET(request: NextRequest) {
         totalSize: BigInt(0),
         audioCodecCounts: {},
         mediaItemId: item.id,
+        totalPlayCount: 0,
+        lastPlayed: null,
+        addedAt: null,
+        servers: [],
       };
       albumMap.set(normalizedKey, albumGroup);
     }
@@ -84,11 +95,24 @@ export async function GET(request: NextRequest) {
       albumGroup.totalSize += item.fileSize;
     }
 
+    albumGroup.totalPlayCount += item.playCount;
+    if (item.lastPlayedAt && (!albumGroup.lastPlayed || item.lastPlayedAt > albumGroup.lastPlayed)) {
+      albumGroup.lastPlayed = item.lastPlayedAt;
+    }
+    if (item.addedAt && (!albumGroup.addedAt || item.addedAt > albumGroup.addedAt)) {
+      albumGroup.addedAt = item.addedAt;
+    }
+
     const codec = item.audioCodec ? item.audioCodec.toUpperCase() : "Unknown";
     albumGroup.audioCodecCounts[codec] = (albumGroup.audioCodecCounts[codec] || 0) + 1;
 
     if (item.parentThumbUrl) {
       albumGroup.mediaItemId = item.id;
+    }
+
+    const server = item.library.mediaServer;
+    if (server && !albumGroup.servers.some((s) => s.serverId === server.id)) {
+      albumGroup.servers.push({ serverId: server.id, serverName: server.name, serverType: server.type });
     }
   }
 
@@ -99,6 +123,10 @@ export async function GET(request: NextRequest) {
       totalSize: a.totalSize.toString(),
       audioCodecCounts: a.audioCodecCounts,
       mediaItemId: a.mediaItemId,
+      totalPlayCount: a.totalPlayCount,
+      lastPlayed: a.lastPlayed,
+      addedAt: a.addedAt,
+      servers: a.servers,
     }))
     .sort((a, b) => a.albumTitle.localeCompare(b.albumTitle));
 

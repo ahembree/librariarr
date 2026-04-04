@@ -43,10 +43,11 @@ export async function GET(request: NextRequest) {
       thumbUrl: true,
       seasonThumbUrl: true,
       lastPlayedAt: true,
+      addedAt: true,
       playCount: true,
       library: {
         select: {
-          mediaServer: { select: { id: true } },
+          mediaServer: { select: { id: true, name: true, type: true } },
         },
       },
     },
@@ -62,7 +63,9 @@ export async function GET(request: NextRequest) {
       qualityCounts: Record<string, number>;
       mediaItemId: string;
       lastPlayed: Date | null;
+      addedAt: Date | null;
       totalPlayCount: number;
+      servers: { serverId: string; serverName: string; serverType: string }[];
     }
   >();
 
@@ -77,7 +80,9 @@ export async function GET(request: NextRequest) {
         qualityCounts: {},
         mediaItemId: item.id,
         lastPlayed: null,
+        addedAt: null,
         totalPlayCount: 0,
+        servers: [],
       };
       seasonMap.set(sn, season);
     }
@@ -97,10 +102,18 @@ export async function GET(request: NextRequest) {
     ) {
       season.lastPlayed = item.lastPlayedAt;
     }
+    if (item.addedAt && (!season.addedAt || item.addedAt > season.addedAt)) {
+      season.addedAt = item.addedAt;
+    }
     season.totalPlayCount += item.playCount;
 
     if (item.seasonThumbUrl) {
       season.mediaItemId = item.id;
+    }
+
+    const server = item.library.mediaServer;
+    if (server && !season.servers.some((s) => s.serverId === server.id)) {
+      season.servers.push({ serverId: server.id, serverName: server.name, serverType: server.type });
     }
   }
 
@@ -112,7 +125,9 @@ export async function GET(request: NextRequest) {
       qualityCounts: s.qualityCounts,
       mediaItemId: s.mediaItemId,
       lastPlayed: s.lastPlayed,
+      addedAt: s.addedAt,
       totalPlayCount: s.totalPlayCount,
+      servers: s.servers,
     }))
     .sort((a, b) => a.seasonNumber - b.seasonNumber);
 

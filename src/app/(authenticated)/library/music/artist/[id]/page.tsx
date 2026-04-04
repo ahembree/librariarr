@@ -22,6 +22,10 @@ interface AlbumData {
   totalSize: string;
   audioCodecCounts: Record<string, number>;
   mediaItemId: string;
+  totalPlayCount: number;
+  lastPlayed: string | null;
+  addedAt: string | null;
+  servers: { serverId: string; serverName: string; serverType: string }[];
 }
 
 export default function ArtistDetailPage() {
@@ -187,6 +191,10 @@ export default function ArtistDetailPage() {
                       title: a.albumTitle,
                       trackCount: a.trackCount,
                       fileSize: a.totalSize,
+                      playCount: a.totalPlayCount,
+                      lastPlayedAt: a.lastPlayed,
+                      addedAt: a.addedAt,
+                      servers: a.servers,
                     }}
                   />
                 </HoverCardContent>

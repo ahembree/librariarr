@@ -26,7 +26,9 @@ interface SeasonData {
   qualityCounts: Record<string, number>;
   mediaItemId: string;
   lastPlayed: string | null;
+  addedAt: string | null;
   totalPlayCount: number;
+  servers: { serverId: string; serverName: string; serverType: string }[];
 }
 
 export default function SeriesDetailPage() {
@@ -111,6 +113,8 @@ export default function SeriesDetailPage() {
     totalSize: s.totalSize,
     totalPlayCount: s.totalPlayCount,
     lastPlayed: s.lastPlayed,
+    addedAt: s.addedAt,
+    servers: s.servers,
   }));
 
   return (
@@ -229,6 +233,8 @@ export default function SeriesDetailPage() {
                       fileSize: s.totalSize,
                       playCount: s.totalPlayCount,
                       lastPlayedAt: s.lastPlayed,
+                      addedAt: s.addedAt,
+                      servers: s.servers,
                     }}
                   />
                 </HoverCardContent>
