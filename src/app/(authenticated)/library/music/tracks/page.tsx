@@ -13,6 +13,7 @@ import { LibraryToolbar } from "@/components/library-toolbar";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
+import { useServers } from "@/hooks/use-servers";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
@@ -27,7 +28,8 @@ const QUALITY_BAR_HEIGHT = 12;
 export default function AllTracksPage() {
   const router = useRouter();
   const { getHex } = useChipColors();
-  const { show, setVisible, prefs } = useCardDisplay("MUSIC");
+  const { show, showServers, setVisible, prefs } = useCardDisplay("MUSIC_TRACKS");
+  const { servers } = useServers();
   const [items, setItems] = useState<MediaItemWithRelations[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [sortBy, setSortBy] = useState("title");
@@ -165,7 +167,7 @@ export default function AllTracksPage() {
             cardSize={size}
             onCardSizeChange={setSize}
             cardDisplayPrefs={prefs}
-            cardDisplayConfig={TOGGLE_CONFIGS.MUSIC}
+            cardDisplayConfig={TOGGLE_CONFIGS.MUSIC_TRACKS}
             onCardDisplayToggle={setVisible}
           />
         }
@@ -269,6 +271,7 @@ export default function AllTracksPage() {
                             }}
                           />
                         }
+                        servers={showServers && servers.length > 1 ? track.servers : undefined}
                         metadata={
                           <MetadataLine stacked>
                             {track.parentTitle && <MetadataItem icon={<Music />}>{track.parentTitle}</MetadataItem>}
