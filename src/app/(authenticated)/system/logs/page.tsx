@@ -1,14 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { Badge } from "@/components/ui/badge";
 import { ColorChip } from "@/components/color-chip";
 import { Button } from "@/components/ui/button";
@@ -36,11 +29,11 @@ import {
   CircleAlert,
   FileText,
   Info,
+  Loader2,
   RefreshCw,
   TriangleAlert,
   X,
 } from "lucide-react";
-import { LogsTableSkeleton } from "@/components/skeletons";
 import { EmptyState } from "@/components/empty-state";
 
 interface LogEntry {
@@ -186,6 +179,79 @@ export default function LogsPage() {
     });
   }
 
+  const logColumns: DataTableColumn<LogEntry>[] = useMemo(
+    () => [
+      {
+        id: "timestamp",
+        header: "Timestamp",
+        accessor: (log) => (
+          <span className="text-xs text-muted-foreground font-mono whitespace-nowrap">
+            {formatTimestamp(log.createdAt)}
+          </span>
+        ),
+        sortValue: (log) => new Date(log.createdAt).getTime(),
+        sortable: true,
+        defaultWidth: 160,
+      },
+      {
+        id: "level",
+        header: "Level",
+        accessor: (log) => (
+          <ColorChip className={LEVEL_COLORS[log.level] ?? ""}>
+            {log.level}
+          </ColorChip>
+        ),
+        sortValue: (log) => log.level,
+        sortable: true,
+        defaultWidth: 90,
+      },
+      {
+        id: "category",
+        header: "Category",
+        accessor: (log) => (
+          <ColorChip className={`text-xs ${CATEGORY_COLORS[log.category] ?? ""}`}>
+            {log.category}
+          </ColorChip>
+        ),
+        defaultWidth: 100,
+        className: "hidden md:table-cell",
+        headerClassName: "hidden md:table-cell",
+      },
+      {
+        id: "source",
+        header: "Source",
+        accessor: (log) => (
+          <span className="text-sm font-medium">{log.source}</span>
+        ),
+        defaultWidth: 120,
+        className: "hidden md:table-cell",
+        headerClassName: "hidden md:table-cell",
+      },
+      {
+        id: "message",
+        header: "Message",
+        accessor: (log) => (
+          <div className="text-sm text-muted-foreground font-mono">
+            <span className="mb-0.5 flex flex-wrap gap-1 md:hidden">
+              <ColorChip className={`text-xs ${CATEGORY_COLORS[log.category] ?? ""}`}>
+                {log.category}
+              </ColorChip>
+              <span className="text-xs text-muted-foreground/70">{log.source}</span>
+            </span>
+            <span className="block">{log.message}</span>
+            {log.meta && Object.keys(log.meta).length > 0 && (
+              <pre className="mt-1 text-xs text-muted-foreground/70 font-mono whitespace-pre-wrap break-all">
+                {JSON.stringify(log.meta, null, 2)}
+              </pre>
+            )}
+          </div>
+        ),
+        defaultWidth: 400,
+      },
+    ],
+    [],
+  );
+
   return (
     <div className="p-4 sm:p-6 lg:p-8">
       <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -295,67 +361,20 @@ export default function LogsPage() {
       </div>
 
       {/* Log table */}
-      <div className="rounded-lg border overflow-x-auto">
-        <Table>
-          <TableHeader className="sticky top-0 z-10 bg-background">
-            <TableRow>
-              <TableHead className="w-40">Timestamp</TableHead>
-              <TableHead className="w-20">Level</TableHead>
-              <TableHead className="hidden w-24 md:table-cell">Category</TableHead>
-              <TableHead className="hidden w-28 md:table-cell">Source</TableHead>
-              <TableHead>Message</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {loading && logs.length === 0 ? (
-              <LogsTableSkeleton />
-            ) : logs.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={5}>
-                  <EmptyState icon={FileText} title="No log entries found" description="Logs will appear here as activity occurs." />
-                </TableCell>
-              </TableRow>
-            ) : (
-              logs.map((log) => (
-                <TableRow key={log.id}>
-                  <TableCell className="text-xs text-muted-foreground font-mono whitespace-nowrap">
-                    {formatTimestamp(log.createdAt)}
-                  </TableCell>
-                  <TableCell>
-                    <ColorChip
-                      className={LEVEL_COLORS[log.level] ?? ""}
-                    >
-                      {log.level}
-                    </ColorChip>
-                  </TableCell>
-                  <TableCell className="hidden md:table-cell">
-                    <ColorChip
-                      className={`text-xs ${CATEGORY_COLORS[log.category] ?? ""}`}
-                    >
-                      {log.category}
-                    </ColorChip>
-                  </TableCell>
-                  <TableCell className="hidden text-sm font-medium md:table-cell">
-                    {log.source}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground font-mono">
-                    <span className="mb-0.5 flex flex-wrap gap-1 md:hidden">
-                      <ColorChip className={`text-xs ${CATEGORY_COLORS[log.category] ?? ""}`}>{log.category}</ColorChip>
-                      <span className="text-xs text-muted-foreground/70">{log.source}</span>
-                    </span>
-                    <span className="block">{log.message}</span>
-                    {log.meta && Object.keys(log.meta).length > 0 && (
-                      <pre className="mt-1 text-xs text-muted-foreground/70 font-mono whitespace-pre-wrap break-all">
-                        {JSON.stringify(log.meta, null, 2)}
-                      </pre>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
+      {loading && logs.length === 0 ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      ) : logs.length === 0 ? (
+        <EmptyState icon={FileText} title="No log entries found" description="Logs will appear here as activity occurs." />
+      ) : (
+        <DataTable<LogEntry>
+          columns={logColumns}
+          data={logs}
+          keyExtractor={(log) => log.id}
+          resizeStorageKey="dt-widths-logs"
+        />
+      )}
 
       {/* Pagination */}
       {pages > 1 && (

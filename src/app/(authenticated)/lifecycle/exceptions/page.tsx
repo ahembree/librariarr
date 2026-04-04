@@ -28,14 +28,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { Input } from "@/components/ui/input";
 import {
   Loader2,
@@ -106,7 +99,6 @@ export default function LifecycleExceptionsPage() {
   // Media detail panel
   const [selectedItem, setSelectedItem] = useState<MediaItemWithRelations | null>(null);
   const [selectedItemType, setSelectedItemType] = useState<"MOVIE" | "SERIES" | "MUSIC">("MOVIE");
-  const [loadingDetailId, setLoadingDetailId] = useState<string | null>(null);
   const { width: panelWidth, resizeHandleProps } = usePanelResize({
     storageKey: "lifecycle-exceptions-panel-width",
     defaultWidth: 480,
@@ -136,7 +128,7 @@ export default function LifecycleExceptionsPage() {
   const openDetailPanel = async (exception: ExceptionItem) => {
     const mediaType = exception.mediaItem.type as "MOVIE" | "SERIES" | "MUSIC";
     setSelectedItemType(mediaType);
-    setLoadingDetailId(exception.mediaItem.id);
+
     try {
       const response = await fetch(`/api/media/${exception.mediaItem.id}`);
       if (response.ok) {
@@ -146,7 +138,7 @@ export default function LifecycleExceptionsPage() {
     } catch (error) {
       console.error("Failed to fetch media item:", error);
     } finally {
-      setLoadingDetailId(null);
+
     }
   };
 
@@ -245,6 +237,88 @@ export default function LifecycleExceptionsPage() {
     }
   };
 
+  const exceptionColumns: DataTableColumn<ExceptionItem>[] = [
+    {
+      id: "title",
+      header: "Title",
+      defaultWidth: 300,
+      sortable: true,
+      accessor: (e) => (
+        <span className="truncate max-w-xs font-medium">
+          {e.mediaItem.parentTitle
+            ? `${e.mediaItem.parentTitle} — ${e.mediaItem.title}`
+            : e.mediaItem.title}
+        </span>
+      ),
+      sortValue: (e) =>
+        e.mediaItem.parentTitle
+          ? `${e.mediaItem.parentTitle} — ${e.mediaItem.title}`
+          : e.mediaItem.title,
+    },
+    {
+      id: "year",
+      header: "Year",
+      defaultWidth: 80,
+      sortable: true,
+      className: "text-muted-foreground",
+      accessor: (e) => e.mediaItem.year ?? "—",
+      sortValue: (e) => e.mediaItem.year ?? 0,
+    },
+    {
+      id: "reason",
+      header: "Reason",
+      defaultWidth: 200,
+      className: "text-muted-foreground",
+      accessor: (e) => (
+        <span className="truncate max-w-xs block">
+          {e.reason || "—"}
+        </span>
+      ),
+    },
+    {
+      id: "createdAt",
+      header: "Date Added",
+      defaultWidth: 140,
+      sortable: true,
+      className: "text-muted-foreground text-sm",
+      accessor: (e) => new Date(e.createdAt).toLocaleDateString(),
+      sortValue: (e) => new Date(e.createdAt).getTime(),
+    },
+    {
+      id: "actions",
+      header: "",
+      defaultWidth: 100,
+      accessor: (exception) => (
+        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+            onClick={() => {
+              setEditingException(exception);
+              setEditReason(exception.reason || "");
+            }}
+          >
+            <Pencil className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+            onClick={() => setConfirmRemove(exception)}
+            disabled={removing === exception.id}
+          >
+            {removing === exception.id ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4" />
+            )}
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
   const existingMediaItemIds = new Set(exceptions.map((e) => e.mediaItem.id));
 
   return (
@@ -312,78 +386,14 @@ export default function LifecycleExceptionsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Title</TableHead>
-                    <TableHead className="w-20">Year</TableHead>
-                    <TableHead>Reason</TableHead>
-                    <TableHead className="w-36">Date Added</TableHead>
-                    <TableHead className="w-24" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {exceptions.map((exception) => (
-                    <TableRow
-                      key={exception.id}
-                      className={cn(
-                        "cursor-pointer hover:bg-muted/50",
-                        loadingDetailId === exception.mediaItem.id && "opacity-60",
-                      )}
-                      onClick={() => openDetailPanel(exception)}
-                    >
-                      <TableCell className="font-medium">
-                        <div className="flex flex-col">
-                          <span className="truncate max-w-xs">
-                            {exception.mediaItem.parentTitle
-                              ? `${exception.mediaItem.parentTitle} — ${exception.mediaItem.title}`
-                              : exception.mediaItem.title}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {exception.mediaItem.year ?? "—"}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        <span className="truncate max-w-xs block">
-                          {exception.reason || "—"}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-sm">
-                        {new Date(exception.createdAt).toLocaleDateString()}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                            onClick={() => {
-                              setEditingException(exception);
-                              setEditReason(exception.reason || "");
-                            }}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                            onClick={() => setConfirmRemove(exception)}
-                            disabled={removing === exception.id}
-                          >
-                            {removing === exception.id ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-4 w-4" />
-                            )}
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <DataTable<ExceptionItem>
+                columns={exceptionColumns}
+                data={exceptions}
+                keyExtractor={(e) => e.id}
+                defaultSortId="title"
+                resizeStorageKey="dt-widths-exceptions"
+                onRowClick={(exception) => openDetailPanel(exception)}
+              />
             </CardContent>
           </Card>
         )}
