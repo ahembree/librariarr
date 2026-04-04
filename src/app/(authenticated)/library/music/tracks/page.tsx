@@ -38,8 +38,7 @@ export default function AllTracksPage() {
   const { size, setSize, columns: actualColumns } = useCardSize();
 
   const gridContainerRef = useRef<HTMLDivElement>(null);
-  const scrollElementRef = useRef<HTMLDivElement | null>(null);
-  const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
+  const scrollElementRef = useRef<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
 
   useEffect(() => {
@@ -78,24 +77,15 @@ export default function AllTracksPage() {
     return () => clearTimeout(timeout);
   }, [fetchTracks]);
 
-  // Resolve scroll parent and margin
   useEffect(() => {
-    const el = document.querySelector("[data-scroll-region]") as HTMLDivElement | null;
-    if (el) {
-      scrollElementRef.current = el;
-      setScrollElement(el);
-    }
+    scrollElementRef.current = document.querySelector<HTMLElement>("main");
   }, []);
 
   useLayoutEffect(() => {
-    const container = gridContainerRef.current;
-    const scroller = scrollElementRef.current;
-    if (container && scroller) {
-      const containerRect = container.getBoundingClientRect();
-      const scrollerRect = scroller.getBoundingClientRect();
-      setScrollMargin(containerRect.top - scrollerRect.top + scroller.scrollTop);
+    if (gridContainerRef.current) {
+      setScrollMargin(gridContainerRef.current.offsetTop);
     }
-  }, [loading, viewMode, items.length]);
+  }, []);
 
   const rowCount = useMemo(
     () => Math.ceil(items.length / actualColumns),
@@ -113,7 +103,7 @@ export default function AllTracksPage() {
 
   const virtualizer = useVirtualizer({
     count: rowCount,
-    getScrollElement: () => scrollElement,
+    getScrollElement: () => scrollElementRef.current,
     estimateSize,
     scrollMargin,
     overscan: 3,
