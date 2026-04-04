@@ -8,6 +8,11 @@ interface ActionItemMediaItem {
   parentTitle: string | null;
   type: string;
   thumbUrl: string | null;
+  year: number | null;
+  duration: number | null;
+  resolution: string | null;
+  dynamicRange: string | null;
+  fileSize: string | null;
 }
 
 interface ActionItem {
@@ -47,18 +52,37 @@ interface RuleSetGroup {
  * Falls back to denormalized fields when the MediaItem has been deleted (e.g. after a
  * destructive lifecycle action followed by a library sync).
  */
+const MEDIA_ITEM_SELECT = {
+  id: true, title: true, parentTitle: true, type: true, thumbUrl: true,
+  year: true, duration: true, resolution: true, dynamicRange: true, fileSize: true,
+} as const;
+
+type SelectedMediaItem = {
+  id: string; title: string; parentTitle: string | null; type: string; thumbUrl: string | null;
+  year: number | null; duration: number | null; resolution: string | null; dynamicRange: string | null;
+  fileSize: bigint | null;
+};
+
+function serializeMediaItem(mi: SelectedMediaItem): ActionItemMediaItem {
+  return {
+    id: mi.id, title: mi.title, parentTitle: mi.parentTitle, type: mi.type, thumbUrl: mi.thumbUrl,
+    year: mi.year, duration: mi.duration, resolution: mi.resolution, dynamicRange: mi.dynamicRange,
+    fileSize: mi.fileSize?.toString() ?? null,
+  };
+}
+
 function buildActionMediaItem(
   action: {
     mediaItemId: string | null;
     mediaItemTitle: string | null;
     mediaItemParentTitle: string | null;
     ruleSetType: string | null;
-    mediaItem: { id: string; title: string; parentTitle: string | null; type: string; thumbUrl: string | null } | null;
+    mediaItem: SelectedMediaItem | null;
   },
   ruleSetType: string
 ): ActionItemMediaItem {
   if (action.mediaItem) {
-    const mi = action.mediaItem;
+    const mi = serializeMediaItem(action.mediaItem);
     if (ruleSetType === "SERIES" && mi.parentTitle) {
       return { ...mi, title: mi.parentTitle, parentTitle: null };
     }
@@ -67,10 +91,11 @@ function buildActionMediaItem(
   // MediaItem deleted — use denormalized fields
   const title = action.mediaItemTitle ?? "Unknown";
   const parentTitle = action.mediaItemParentTitle ?? null;
+  const nullFields = { thumbUrl: null, year: null, duration: null, resolution: null, dynamicRange: null, fileSize: null };
   if (ruleSetType === "SERIES" && parentTitle) {
-    return { id: null, title: parentTitle, parentTitle: null, type: ruleSetType, thumbUrl: null };
+    return { id: null, title: parentTitle, parentTitle: null, type: ruleSetType, ...nullFields };
   }
-  return { id: null, title, parentTitle, type: action.ruleSetType ?? ruleSetType, thumbUrl: null };
+  return { id: null, title, parentTitle, type: action.ruleSetType ?? ruleSetType, ...nullFields };
 }
 
 export async function GET(request: NextRequest) {
@@ -99,7 +124,7 @@ async function handlePendingGrouped(userId: string) {
     where: { userId, status: "PENDING", ruleSetId: { not: null } },
     include: {
       mediaItem: {
-        select: { id: true, title: true, parentTitle: true, type: true, thumbUrl: true },
+        select: MEDIA_ITEM_SELECT,
       },
       ruleSet: {
         select: {
@@ -146,7 +171,7 @@ async function handlePendingGrouped(userId: string) {
     },
     include: {
       mediaItem: {
-        select: { id: true, title: true, parentTitle: true, type: true, thumbUrl: true },
+        select: MEDIA_ITEM_SELECT,
       },
       ruleSet: {
         select: {
@@ -252,7 +277,7 @@ async function handleStatusGrouped(userId: string, status: string) {
     where,
     include: {
       mediaItem: {
-        select: { id: true, title: true, parentTitle: true, type: true, thumbUrl: true },
+        select: MEDIA_ITEM_SELECT,
       },
       ruleSet: {
         select: {

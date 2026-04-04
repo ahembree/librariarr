@@ -49,6 +49,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { useRealtime } from "@/hooks/use-realtime";
 
@@ -69,6 +71,11 @@ interface ActionItem {
     title: string;
     parentTitle: string | null;
     type: string;
+    year?: number | null;
+    duration?: number | null;
+    resolution?: string | null;
+    dynamicRange?: string | null;
+    fileSize?: string | null;
   };
 }
 
@@ -177,18 +184,18 @@ function VirtualizedActionTable({
       : 0;
 
   return (
-    <div className="rounded-md border">
+    <div className="rounded-lg border">
       <div ref={scrollRef} className="md:max-h-[60vh] overflow-auto">
         <table className="w-full caption-bottom text-sm">
-          <thead className="sticky top-0 z-10 bg-background [&_tr]:border-b">
-            <tr className="border-b transition-colors">
-              <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">Title</th>
-              <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">Action</th>
-              <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">{isPending ? "Scheduled" : "Date"}</th>
-              <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">Status</th>
-              {isPending && <th className="h-10 px-4 w-30 text-left align-middle font-medium text-muted-foreground" />}
+          <thead className="sticky top-0 z-10 bg-background">
+            <tr className="border-b bg-muted/50">
+              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Title</th>
+              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Action</th>
+              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">{isPending ? "Scheduled" : "Date"}</th>
+              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Status</th>
+              {isPending && <th className="h-10 px-4 w-30 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground" />}
               {!isPending && items.some((a) => a.status === "FAILED") && (
-                <th className="h-10 px-4 w-12 text-left align-middle font-medium text-muted-foreground" />
+                <th className="h-10 px-4 w-12 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground" />
               )}
             </tr>
           </thead>
@@ -202,12 +209,12 @@ function VirtualizedActionTable({
               const itemKey = hasMediaItem ? `${ruleSetId}:${action.mediaItem.id}` : "";
               const isItemExecuting = hasMediaItem && executingItems.has(itemKey);
 
-              return (
+              const tableRow = (
                 <tr
                   key={action.id}
                   ref={virtualizer.measureElement}
                   data-index={virtualRow.index}
-                  className={`border-b transition-colors ${hasMediaItem ? "hover:bg-muted/50 cursor-pointer" : ""}`}
+                  className={`transition-colors duration-200 even:bg-white/1.5 ${hasMediaItem ? "hover:bg-white/3 hover:ring-1 hover:ring-primary/20 cursor-pointer" : ""}`}
                   onClick={hasMediaItem ? () => onItemClick(action) : undefined}
                 >
                   <td className="p-4 align-middle">
@@ -377,6 +384,32 @@ function VirtualizedActionTable({
                     </td>
                   )}
                 </tr>
+              );
+
+              if (!hasMediaItem) return tableRow;
+
+              return (
+                <HoverCard key={action.id} openDelay={400} closeDelay={150}>
+                  <HoverCardTrigger asChild>
+                    {tableRow}
+                  </HoverCardTrigger>
+                  <HoverCardContent side="bottom" align="start" sideOffset={4} className="w-72 p-0 duration-200">
+                    <MediaHoverPopover
+                      imageUrl={`/api/media/${action.mediaItem.id}/image${action.mediaItem.type !== "MOVIE" ? "?type=parent" : ""}`}
+                      imageAspect={action.mediaItem.type === "MUSIC" ? "square" : "poster"}
+                      data={{
+                        title: action.mediaItem.parentTitle
+                          ? `${action.mediaItem.parentTitle} — ${action.mediaItem.title}`
+                          : action.mediaItem.title,
+                        year: action.mediaItem.year,
+                        duration: action.mediaItem.duration,
+                        resolution: action.mediaItem.resolution,
+                        dynamicRange: action.mediaItem.dynamicRange,
+                        fileSize: action.mediaItem.fileSize,
+                      }}
+                    />
+                  </HoverCardContent>
+                </HoverCard>
               );
             })}
             {paddingBottom > 0 && (
