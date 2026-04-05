@@ -35,6 +35,7 @@ export async function GET() {
       select: {
         ruleSetId: true,
         ruleSetName: true,
+        ruleSetType: true,
         deletedBytes: true,
       },
     }),
@@ -47,6 +48,7 @@ export async function GET() {
       select: {
         ruleSetId: true,
         ruleSetName: true,
+        ruleSetType: true,
         matchedMediaItemIds: true,
         mediaItem: { select: { fileSize: true } },
       },
@@ -85,21 +87,26 @@ export async function GET() {
   const ruleSetStats = new Map<string, {
     ruleSetId: string | null;
     ruleSetName: string;
+    ruleSetType: string | null;
     deletedBytes: bigint;
     deletedCount: number;
     pendingBytes: bigint;
     pendingCount: number;
   }>();
 
-  const getRuleKey = (ruleSetId: string | null, ruleSetName: string | null) =>
-    ruleSetId ?? `deleted:${ruleSetName ?? "Unknown"}`;
+  // For active rules, key by ID. For deleted rules (ruleSetId=null due to
+  // onDelete:SetNull), key by name+type so stats from different deleted rules
+  // with different names don't merge.
+  const getRuleKey = (ruleSetId: string | null, ruleSetName: string | null, ruleSetType: string | null) =>
+    ruleSetId ?? `deleted:${ruleSetName ?? "Unknown"}:${ruleSetType ?? ""}`;
 
   for (const action of completedActions) {
-    const key = getRuleKey(action.ruleSetId, action.ruleSetName);
+    const key = getRuleKey(action.ruleSetId, action.ruleSetName, action.ruleSetType);
     if (!ruleSetStats.has(key)) {
       ruleSetStats.set(key, {
         ruleSetId: action.ruleSetId,
         ruleSetName: action.ruleSetName ?? "Unknown",
+        ruleSetType: action.ruleSetType,
         deletedBytes: BigInt(0),
         deletedCount: 0,
         pendingBytes: BigInt(0),
@@ -112,11 +119,12 @@ export async function GET() {
   }
 
   for (const action of pendingActions) {
-    const key = getRuleKey(action.ruleSetId, action.ruleSetName);
+    const key = getRuleKey(action.ruleSetId, action.ruleSetName, action.ruleSetType);
     if (!ruleSetStats.has(key)) {
       ruleSetStats.set(key, {
         ruleSetId: action.ruleSetId,
         ruleSetName: action.ruleSetName ?? "Unknown",
+        ruleSetType: action.ruleSetType,
         deletedBytes: BigInt(0),
         deletedCount: 0,
         pendingBytes: BigInt(0),
@@ -140,6 +148,8 @@ export async function GET() {
     .map((s) => ({
       ruleSetId: s.ruleSetId,
       ruleSetName: s.ruleSetName,
+      ruleSetType: s.ruleSetType,
+      deleted: s.ruleSetId === null,
       deletedBytes: s.deletedBytes.toString(),
       deletedCount: s.deletedCount,
       pendingBytes: s.pendingBytes.toString(),

@@ -668,6 +668,8 @@ export default function PendingActionsPage() {
     byRuleSet: Array<{
       ruleSetId: string | null;
       ruleSetName: string;
+      ruleSetType: string | null;
+      deleted: boolean;
       deletedBytes: string;
       deletedCount: number;
       pendingBytes: string;
