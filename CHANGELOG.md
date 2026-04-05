@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.14.1](https://github.com/ahembree/librariarr/compare/v0.14.0...v0.14.1) (2026-04-05)
+
+
+### Bug Fixes
+
+* ui fixes ([eb30d52](https://github.com/ahembree/librariarr/commit/eb30d52b022970ac5bb770968c05ce4569919d2a))
+* **ui:** use Link for card navigation to prevent image loading blocking clicks ([942f70b](https://github.com/ahembree/librariarr/commit/942f70b917c013ec39ddf579e4d3908f20cf9548))
+* **ui:** use Link for remaining card view navigations ([e788f33](https://github.com/ahembree/librariarr/commit/e788f33fce5df8bdeda82846e67d8702a0e08997))
+
 ## [0.14.0](https://github.com/ahembree/librariarr/compare/v0.13.0...v0.14.0) (2026-04-05)
 
 
