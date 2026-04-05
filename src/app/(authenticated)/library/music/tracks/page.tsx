@@ -273,7 +273,8 @@ export default function AllTracksPage() {
                         title={track.title}
                         aspectRatio="square"
                         fallbackIcon="music"
-                        onClick={() => { markChildNavigation(); sessionStorage.setItem("library-back-path", "/library/music/tracks"); router.push(`/library/music/track/${track.id}`); }}
+                        href={`/library/music/track/${track.id}`}
+                        onClick={() => { markChildNavigation(); sessionStorage.setItem("library-back-path", "/library/music/tracks"); }}
                         qualityBar={
                           track.audioCodec
                             ? [{ color: getHex("audioCodec", track.audioCodec), weight: 1, label: track.audioCodec }]

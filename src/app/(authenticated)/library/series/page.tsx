@@ -504,7 +504,8 @@ export default function SeriesPage() {
                             imageUrl={`/api/media/${s.mediaItemId}/image?type=parent`}
                             title={s.parentTitle}
                             fallbackIcon="series"
-                            onClick={() => { markChildNavigation(); router.push(`/library/series/show/${s.mediaItemId}`); }}
+                            href={`/library/series/show/${s.mediaItemId}`}
+                            onClick={() => { markChildNavigation(); }}
                             metadata={
                               <MetadataLine stacked>
                                 {show("metadata", "seasonCount") && s.seasonCount > 0 && (

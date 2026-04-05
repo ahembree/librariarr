@@ -2,6 +2,7 @@
 
 import { useState, memo } from "react";
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 import {
   Card,
@@ -36,12 +37,13 @@ export interface QualitySegment {
 export interface MediaCardProps {
   imageUrl: string;
   title: string;
+  href?: string;
   aspectRatio?: "poster" | "square" | "landscape";
   metadata?: ReactNode;
   badges?: ReactNode;
   qualityBar?: QualitySegment[];
   servers?: ServerPresence[];
-  onClick: () => void;
+  onClick?: () => void;
   onInfo?: () => void;
   fallbackIcon?: FallbackIcon;
   hoverContent?: ReactNode;
@@ -56,6 +58,7 @@ const FALLBACK_ICONS = {
 export const MediaCard = memo(function MediaCard({
   imageUrl,
   title,
+  href,
   aspectRatio = "poster",
   metadata,
   badges,
@@ -71,16 +74,21 @@ export const MediaCard = memo(function MediaCard({
 
   const card = (
     <Card
-      className="group cursor-pointer overflow-hidden py-0 gap-0 rounded-lg transition-all duration-300 ease-out hover:scale-[1.03] hover:shadow-[0_8px_32px_oklch(0_0_0/0.4)] hover:ring-1 hover:ring-white/10 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
-      onClick={onClick}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onClick();
-        }
-      }}
-      role="button"
-      tabIndex={0}
+      className={cn(
+        "group cursor-pointer overflow-hidden py-0 gap-0 rounded-lg transition-all duration-300 ease-out hover:scale-[1.03] hover:shadow-[0_8px_32px_oklch(0_0_0/0.4)] hover:ring-1 hover:ring-white/10",
+        !href && "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
+      )}
+      {...(!href && {
+        onClick,
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClick?.();
+          }
+        },
+        role: "button" as const,
+        tabIndex: 0,
+      })}
       aria-label={title}
     >
       {/* Image */}
@@ -149,6 +157,7 @@ export const MediaCard = memo(function MediaCard({
               aria-label={`View summary for ${title}`}
               onClick={(e) => {
                 e.stopPropagation();
+                e.preventDefault();
                 onInfo();
               }}
             >
@@ -160,11 +169,21 @@ export const MediaCard = memo(function MediaCard({
     </Card>
   );
 
-  if (!hoverContent) return card;
+  const wrappedCard = href ? (
+    <Link
+      href={href}
+      onClick={onClick}
+      className="block rounded-lg focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
+    >
+      {card}
+    </Link>
+  ) : card;
+
+  if (!hoverContent) return wrappedCard;
 
   return (
     <HoverCard openDelay={400} closeDelay={150}>
-      <HoverCardTrigger asChild>{card}</HoverCardTrigger>
+      <HoverCardTrigger asChild>{wrappedCard}</HoverCardTrigger>
       <HoverCardContent
         side="right"
         align="start"
