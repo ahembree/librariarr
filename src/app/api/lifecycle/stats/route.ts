@@ -15,10 +15,11 @@ export async function GET() {
 
   const resetAt = settings?.deletionStatsResetAt ?? null;
 
-  // Aggregate completed actions (after reset point if set)
+  // Aggregate completed delete actions (after reset point if set)
   const completedWhere = {
     userId: session.userId!,
     status: "COMPLETED" as const,
+    actionType: { contains: "DELETE" },
     deletedBytes: { not: null },
     ...(resetAt ? { executedAt: { gte: resetAt } } : {}),
   };
@@ -29,7 +30,7 @@ export async function GET() {
       _sum: { deletedBytes: true },
     }),
     prisma.lifecycleAction.count({ where: completedWhere }),
-    // Fetch completed actions with rule set info for per-rule breakdown
+    // Fetch completed delete actions with rule set info for per-rule breakdown
     prisma.lifecycleAction.findMany({
       where: completedWhere,
       select: {
@@ -39,11 +40,12 @@ export async function GET() {
         deletedBytes: true,
       },
     }),
-    // Fetch pending actions with their media item file sizes and member IDs
+    // Fetch pending delete actions with their media item file sizes and member IDs
     prisma.lifecycleAction.findMany({
       where: {
         userId: session.userId!,
         status: "PENDING",
+        actionType: { contains: "DELETE" },
       },
       select: {
         ruleSetId: true,

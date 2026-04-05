@@ -21,7 +21,7 @@ export async function POST() {
 
   // Fetch current pending stats so they're preserved in the response
   const pendingActions = await prisma.lifecycleAction.findMany({
-    where: { userId: session.userId!, status: "PENDING" },
+    where: { userId: session.userId!, status: "PENDING", actionType: { contains: "DELETE" } },
     select: {
       matchedMediaItemIds: true,
       mediaItem: { select: { fileSize: true } },
