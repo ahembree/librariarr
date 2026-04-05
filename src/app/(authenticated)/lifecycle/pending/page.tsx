@@ -649,7 +649,7 @@ export default function PendingActionsPage() {
   // Media detail panel state
   const [selectedItem, setSelectedItem] = useState<MediaItemWithRelations | null>(null);
   const [selectedItemType, setSelectedItemType] = useState<"MOVIE" | "SERIES" | "MUSIC">("MOVIE");
-  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [, setLoadingDetail] = useState(false);
   const { width: panelWidth, resizeHandleProps } = usePanelResize({
     storageKey: "lifecycle-pending-panel-width",
     defaultWidth: 480,
@@ -885,8 +885,8 @@ export default function PendingActionsPage() {
   const isPending = statusFilter === "PENDING";
 
   return (
-    <div className="flex h-full">
-      <div className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 overflow-auto">
+    <>
+      <div className="p-4 sm:p-6 lg:p-8 overflow-auto h-full">
         <div className="mb-6">
           <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Pending Actions</h1>
           <p className="text-muted-foreground mt-1">Scheduled lifecycle actions awaiting execution, grouped by rule set.</p>
@@ -1143,13 +1143,6 @@ export default function PendingActionsPage() {
         </AlertDialog>
       </div>
 
-      {/* Detail panel loading indicator */}
-      {loadingDetail && !selectedItem && (
-        <div className="w-120 border-l flex items-center justify-center">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </div>
-      )}
-
       {selectedItem && (
         <MediaDetailSidePanel
           item={selectedItem}
@@ -1197,6 +1190,6 @@ export default function PendingActionsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 }

@@ -268,25 +268,27 @@ export function MediaDetailSidePanel({
     );
   }
 
-  // Desktop: side panel with resize handle
+  // Desktop: side panel as fixed overlay
   return (
-    <div
-      className="relative border-l border-white/5 glass flex flex-col h-full overflow-hidden shrink-0"
-      style={{ width, maxWidth: "40vw" }}
-    >
-      {/* Resize handle — wider hit target with grip indicator */}
+    <div className="fixed top-0 right-0 bottom-0 z-40">
       <div
-        role="separator"
-        aria-label="Resize panel"
-        className="group/resize absolute left-0 top-0 bottom-0 w-3 cursor-col-resize z-20 transition-colors touch-none flex items-center justify-center"
-        onMouseDown={resizeHandleProps.onMouseDown}
-        onTouchStart={resizeHandleProps.onTouchStart}
-        onDoubleClick={resizeHandleProps.onDoubleClick}
+        className="relative border-l border-white/5 glass flex flex-col h-full overflow-hidden shrink-0"
+        style={{ width, maxWidth: "40vw" }}
       >
-        <div className="h-8 w-1 rounded-full bg-white/10 group-hover/resize:bg-primary/50 group-active/resize:bg-primary transition-colors" />
+        {/* Resize handle — wider hit target with grip indicator */}
+        <div
+          role="separator"
+          aria-label="Resize panel"
+          className="group/resize absolute left-0 top-0 bottom-0 w-3 cursor-col-resize z-20 transition-colors touch-none flex items-center justify-center"
+          onMouseDown={resizeHandleProps.onMouseDown}
+          onTouchStart={resizeHandleProps.onTouchStart}
+          onDoubleClick={resizeHandleProps.onDoubleClick}
+        >
+          <div className="h-8 w-1 rounded-full bg-white/10 group-hover/resize:bg-primary/50 group-active/resize:bg-primary transition-colors" />
+        </div>
+        {header}
+        {content}
       </div>
-      {header}
-      {content}
     </div>
   );
 }

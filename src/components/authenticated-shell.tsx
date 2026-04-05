@@ -41,7 +41,7 @@ export function AuthenticatedShell({ children }: { children: React.ReactNode }) 
   }, [checkMaintenance]);
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-screen overflow-hidden">
       <Sidebar mobileOpen={mobileOpen} onMobileOpenChange={setMobileOpen} />
       <div className="flex flex-1 flex-col overflow-hidden border-l border-white/3">
         {isMobile && (

@@ -858,8 +858,8 @@ export default function RuleMatchesPage() {
   }
 
   return (
-    <div className="flex h-full">
-      <div className="flex-1 min-w-0 overflow-y-auto">
+    <>
+      <div className="overflow-y-auto h-full">
         <div className="p-4 sm:p-6 lg:p-8">
       <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
@@ -1136,6 +1136,6 @@ export default function RuleMatchesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 }
