@@ -116,6 +116,7 @@ pnpm exec vitest run tests/path/to/file.test.ts  # Run a single test file
 
 - `src/components/ui/` — shadcn/ui primitives (do not edit directly)
 - Custom components: `authenticated-shell.tsx` (app shell with sidebar + global maintenance banner), `sidebar.tsx`, `media-table.tsx`, `media-filters.tsx`, `media-detail-panel.tsx`, `rule-builder.tsx`, `quality-chart.tsx`, `theme-provider.tsx`
+- Hover popovers (`MediaHoverPopover`) must always pass the same universal set of fields regardless of page or view type — documented in `docs/src/content/docs/docs/development/style-guide.mdx` under "Hover Popovers". Table and card views within the same page must always pass identical fields.
 - `src/hooks/` — Custom React hooks:
   - `useVirtualGridAlphabet` / `useTableAlphabet` — alphabet navigation for virtualized grid vs table views (not interchangeable); provide `scrollToLetter`, `activeLetter`, and `availableLetters`
   - `useScrollRestoration` — saves/restores scroll position via sessionStorage

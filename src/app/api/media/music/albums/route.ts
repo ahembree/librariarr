@@ -46,6 +46,15 @@ export async function GET(request: NextRequest) {
       addedAt: true,
       thumbUrl: true,
       parentThumbUrl: true,
+      summary: true,
+      genres: true,
+      studio: true,
+      contentRating: true,
+      rating: true,
+      ratingImage: true,
+      audienceRating: true,
+      audienceRatingImage: true,
+      year: true,
       library: {
         select: {
           mediaServer: { select: { id: true, name: true, type: true } },
@@ -67,6 +76,15 @@ export async function GET(request: NextRequest) {
       lastPlayed: Date | null;
       addedAt: Date | null;
       servers: { serverId: string; serverName: string; serverType: string }[];
+      summary: string | null;
+      genres: string[] | null;
+      studio: string | null;
+      contentRating: string | null;
+      rating: number | null;
+      ratingImage: string | null;
+      audienceRating: number | null;
+      audienceRatingImage: string | null;
+      year: number | null;
     }
   >();
 
@@ -85,6 +103,15 @@ export async function GET(request: NextRequest) {
         lastPlayed: null,
         addedAt: null,
         servers: [],
+        summary: null,
+        genres: null,
+        studio: null,
+        contentRating: null,
+        rating: null,
+        ratingImage: null,
+        audienceRating: null,
+        audienceRatingImage: null,
+        year: null,
       };
       albumMap.set(normalizedKey, albumGroup);
     }
@@ -110,6 +137,16 @@ export async function GET(request: NextRequest) {
       albumGroup.mediaItemId = item.id;
     }
 
+    if (!albumGroup.summary && item.summary) albumGroup.summary = item.summary;
+    if (!albumGroup.genres && item.genres) albumGroup.genres = item.genres as string[];
+    if (!albumGroup.studio && item.studio) albumGroup.studio = item.studio;
+    if (!albumGroup.contentRating && item.contentRating) albumGroup.contentRating = item.contentRating;
+    if (albumGroup.rating == null && item.rating != null) albumGroup.rating = item.rating;
+    if (!albumGroup.ratingImage && item.ratingImage) albumGroup.ratingImage = item.ratingImage;
+    if (albumGroup.audienceRating == null && item.audienceRating != null) albumGroup.audienceRating = item.audienceRating;
+    if (!albumGroup.audienceRatingImage && item.audienceRatingImage) albumGroup.audienceRatingImage = item.audienceRatingImage;
+    if (albumGroup.year == null && item.year != null) albumGroup.year = item.year;
+
     const server = item.library.mediaServer;
     if (server && !albumGroup.servers.some((s) => s.serverId === server.id)) {
       albumGroup.servers.push({ serverId: server.id, serverName: server.name, serverType: server.type });
@@ -127,6 +164,15 @@ export async function GET(request: NextRequest) {
       lastPlayed: a.lastPlayed,
       addedAt: a.addedAt,
       servers: a.servers,
+      summary: a.summary,
+      genres: a.genres,
+      studio: a.studio,
+      contentRating: a.contentRating,
+      rating: a.rating,
+      ratingImage: a.ratingImage,
+      audienceRating: a.audienceRating,
+      audienceRatingImage: a.audienceRatingImage,
+      year: a.year,
     }))
     .sort((a, b) => a.albumTitle.localeCompare(b.albumTitle));
 

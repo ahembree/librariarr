@@ -34,6 +34,15 @@ interface SeasonEntry {
   totalPlayCount: number;
   qualityCounts: Record<string, number>;
   servers: { serverId: string; serverName: string; serverType: string }[];
+  summary?: string | null;
+  genres?: string[] | null;
+  studio?: string | null;
+  contentRating?: string | null;
+  rating?: number | null;
+  ratingImage?: string | null;
+  audienceRating?: number | null;
+  audienceRatingImage?: string | null;
+  year?: number | null;
 }
 
 import { QUALITY_ORDER } from "@/lib/resolution";
@@ -328,7 +337,17 @@ export default function AllSeasonsPage() {
                   imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
                   data={{
                     title: `${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`,
+                    year: season.year,
+                    summary: season.summary,
+                    contentRating: season.contentRating,
+                    rating: season.rating,
+                    ratingImage: season.ratingImage,
+                    audienceRating: season.audienceRating,
+                    audienceRatingImage: season.audienceRatingImage,
+                    genres: season.genres,
+                    studio: season.studio,
                     episodeCount: season.episodeCount,
+                    qualityCounts: season.qualityCounts,
                     fileSize: season.totalSize,
                     playCount: season.totalPlayCount,
                     lastPlayedAt: season.lastPlayed,
@@ -393,6 +412,7 @@ export default function AllSeasonsPage() {
                                 data={{
                                   title: `${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`,
                                   episodeCount: season.episodeCount,
+                                  qualityCounts: season.qualityCounts,
                                   fileSize: season.totalSize,
                                   playCount: season.totalPlayCount,
                                   lastPlayedAt: season.lastPlayed,

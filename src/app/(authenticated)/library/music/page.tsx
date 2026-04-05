@@ -45,6 +45,15 @@ interface GroupedArtist {
   addedAt: string | null;
   audioCodecCounts: Record<string, number>;
   servers?: Array<{ serverId: string; serverName: string; serverType: string }>;
+  summary?: string | null;
+  genres?: string[] | null;
+  studio?: string | null;
+  contentRating?: string | null;
+  rating?: number | null;
+  ratingImage?: string | null;
+  audienceRating?: number | null;
+  audienceRatingImage?: string | null;
+  year?: number | null;
 }
 
 const SORT_OPTIONS = [
@@ -391,8 +400,18 @@ export default function MusicPage() {
                   imageAspect="square"
                   data={{
                     title: a.parentTitle,
+                    year: a.year,
+                    summary: a.summary,
+                    contentRating: a.contentRating,
+                    rating: a.rating,
+                    ratingImage: a.ratingImage,
+                    audienceRating: a.audienceRating,
+                    audienceRatingImage: a.audienceRatingImage,
+                    genres: a.genres,
+                    studio: a.studio,
                     albumCount: a.albumCount,
                     trackCount: a.trackCount,
+                    audioCodecCounts: a.audioCodecCounts,
                     fileSize: a.totalSize,
                     lastPlayedAt: a.lastPlayed,
                     addedAt: a.addedAt,
@@ -474,8 +493,18 @@ export default function MusicPage() {
                               <MediaHoverPopover
                                 data={{
                                   title: a.parentTitle,
+                                  year: a.year,
+                                  summary: a.summary,
+                                  contentRating: a.contentRating,
+                                  rating: a.rating,
+                                  ratingImage: a.ratingImage,
+                                  audienceRating: a.audienceRating,
+                                  audienceRatingImage: a.audienceRatingImage,
+                                  genres: a.genres,
+                                  studio: a.studio,
                                   albumCount: a.albumCount,
                                   trackCount: a.trackCount,
+                                  audioCodecCounts: a.audioCodecCounts,
                                   fileSize: a.totalSize,
                                   lastPlayedAt: a.lastPlayed,
                                   addedAt: a.addedAt,

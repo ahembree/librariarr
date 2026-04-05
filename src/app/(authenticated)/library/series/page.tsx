@@ -41,6 +41,15 @@ interface GroupedSeries {
   addedAt: string | null;
   qualityCounts: Record<string, number>;
   servers?: Array<{ serverId: string; serverName: string; serverType: string }>;
+  summary?: string | null;
+  genres?: string[] | null;
+  studio?: string | null;
+  contentRating?: string | null;
+  rating?: number | null;
+  ratingImage?: string | null;
+  audienceRating?: number | null;
+  audienceRatingImage?: string | null;
+  year?: number | null;
 }
 
 import { QUALITY_ORDER } from "@/lib/resolution";
@@ -436,8 +445,18 @@ export default function SeriesPage() {
                   imageUrl={`/api/media/${s.mediaItemId}/image?type=parent`}
                   data={{
                     title: s.parentTitle,
+                    year: s.year,
+                    summary: s.summary,
+                    contentRating: s.contentRating,
+                    rating: s.rating,
+                    ratingImage: s.ratingImage,
+                    audienceRating: s.audienceRating,
+                    audienceRatingImage: s.audienceRatingImage,
+                    genres: s.genres,
+                    studio: s.studio,
                     seasonCount: s.seasonCount,
                     episodeCount: s.episodeCount,
+                    qualityCounts: s.qualityCounts,
                     fileSize: s.totalSize,
                     lastPlayedAt: s.lastPlayed,
                     addedAt: s.addedAt,
@@ -511,8 +530,18 @@ export default function SeriesPage() {
                               <MediaHoverPopover
                                 data={{
                                   title: s.parentTitle,
+                                  year: s.year,
+                                  summary: s.summary,
+                                  contentRating: s.contentRating,
+                                  rating: s.rating,
+                                  ratingImage: s.ratingImage,
+                                  audienceRating: s.audienceRating,
+                                  audienceRatingImage: s.audienceRatingImage,
+                                  genres: s.genres,
+                                  studio: s.studio,
                                   seasonCount: s.seasonCount,
                                   episodeCount: s.episodeCount,
+                                  qualityCounts: s.qualityCounts,
                                   fileSize: s.totalSize,
                                   lastPlayedAt: s.lastPlayed,
                                   addedAt: s.addedAt,
