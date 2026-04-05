@@ -22,6 +22,19 @@ interface AlbumData {
   totalSize: string;
   audioCodecCounts: Record<string, number>;
   mediaItemId: string;
+  totalPlayCount: number;
+  lastPlayed: string | null;
+  addedAt: string | null;
+  servers: { serverId: string; serverName: string; serverType: string }[];
+  summary?: string | null;
+  genres?: string[] | null;
+  studio?: string | null;
+  contentRating?: string | null;
+  rating?: number | null;
+  ratingImage?: string | null;
+  audienceRating?: number | null;
+  audienceRatingImage?: string | null;
+  year?: number | null;
 }
 
 export default function ArtistDetailPage() {
@@ -185,8 +198,22 @@ export default function ArtistDetailPage() {
                     imageAspect="square"
                     data={{
                       title: a.albumTitle,
+                      year: a.year,
+                      summary: a.summary,
+                      contentRating: a.contentRating,
+                      rating: a.rating,
+                      ratingImage: a.ratingImage,
+                      audienceRating: a.audienceRating,
+                      audienceRatingImage: a.audienceRatingImage,
+                      genres: a.genres,
+                      studio: a.studio,
                       trackCount: a.trackCount,
+                      audioCodecCounts: a.audioCodecCounts,
                       fileSize: a.totalSize,
+                      playCount: a.totalPlayCount,
+                      lastPlayedAt: a.lastPlayed,
+                      addedAt: a.addedAt,
+                      servers: a.servers,
                     }}
                   />
                 </HoverCardContent>

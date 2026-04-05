@@ -65,6 +65,15 @@ export async function GET(request: NextRequest) {
         fileSize: true,
         lastPlayedAt: true,
         addedAt: true,
+        summary: true,
+        genres: true,
+        studio: true,
+        contentRating: true,
+        rating: true,
+        ratingImage: true,
+        audienceRating: true,
+        audienceRatingImage: true,
+        year: true,
         library: {
           select: {
             mediaServer: { select: { id: true, name: true, type: true } },
@@ -91,6 +100,15 @@ export async function GET(request: NextRequest) {
       addedAt: Date | null;
       audioCodecCounts: Record<string, number>;
       servers: Map<string, ServerPresence>;
+      summary: string | null;
+      genres: string[] | null;
+      studio: string | null;
+      contentRating: string | null;
+      rating: number | null;
+      ratingImage: string | null;
+      audienceRating: number | null;
+      audienceRatingImage: string | null;
+      year: number | null;
     }
   >();
 
@@ -110,6 +128,15 @@ export async function GET(request: NextRequest) {
         addedAt: null,
         audioCodecCounts: {},
         servers: new Map(),
+        summary: null,
+        genres: null,
+        studio: null,
+        contentRating: null,
+        rating: null,
+        ratingImage: null,
+        audienceRating: null,
+        audienceRatingImage: null,
+        year: null,
       };
       groupMap.set(normalizedKey, group);
     }
@@ -165,6 +192,17 @@ export async function GET(request: NextRequest) {
       group.mediaItemId = item.id;
     }
 
+    // Pick first non-null metadata (artist-level fields are typically the same across tracks)
+    if (!group.summary && item.summary) group.summary = item.summary;
+    if (!group.genres && item.genres) group.genres = item.genres as string[];
+    if (!group.studio && item.studio) group.studio = item.studio;
+    if (!group.contentRating && item.contentRating) group.contentRating = item.contentRating;
+    if (group.rating == null && item.rating != null) group.rating = item.rating;
+    if (!group.ratingImage && item.ratingImage) group.ratingImage = item.ratingImage;
+    if (group.audienceRating == null && item.audienceRating != null) group.audienceRating = item.audienceRating;
+    if (!group.audienceRatingImage && item.audienceRatingImage) group.audienceRatingImage = item.audienceRatingImage;
+    if (group.year == null && item.year != null) group.year = item.year;
+
     const codec = item.audioCodec ? item.audioCodec.toUpperCase() : "Unknown";
     group.audioCodecCounts[codec] = (group.audioCodecCounts[codec] || 0) + 1;
   }
@@ -187,6 +225,15 @@ export async function GET(request: NextRequest) {
         audioCodecCounts: g.audioCodecCounts,
         thumbUrl: g.thumbUrl,
         servers,
+        summary: g.summary,
+        genres: g.genres,
+        studio: g.studio,
+        contentRating: g.contentRating,
+        rating: g.rating,
+        ratingImage: g.ratingImage,
+        audienceRating: g.audienceRating,
+        audienceRatingImage: g.audienceRatingImage,
+        year: g.year,
       };
     })
     .sort((a, b) => {

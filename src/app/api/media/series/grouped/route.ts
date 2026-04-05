@@ -24,6 +24,15 @@ interface SeriesGroupRow {
   watchedEpisodeCount: number;
   lastEpisodeAiredAt: Date | null;
   isWatchlisted: boolean;
+  summary: string | null;
+  genres: unknown;
+  studio: string | null;
+  contentRating: string | null;
+  rating: number | null;
+  ratingImage: string | null;
+  audienceRating: number | null;
+  audienceRatingImage: string | null;
+  year: number | null;
 }
 
 // SQL resolution normalization matching normalizeResolutionLabel()
@@ -239,12 +248,22 @@ export async function GET(request: NextRequest) {
             mi."thumbUrl",
             mi."parentThumbUrl",
             mi."seasonNumber",
+            mi."episodeNumber",
             mi."fileSize",
             mi."lastPlayedAt",
             mi."addedAt",
             mi."playCount",
             mi."originallyAvailableAt",
             mi."isWatchlisted",
+            mi."summary",
+            mi."genres",
+            mi."studio",
+            mi."contentRating",
+            mi."rating",
+            mi."ratingImage",
+            mi."audienceRating",
+            mi."audienceRatingImage",
+            mi."year",
             l."mediaServerId",
             ${RESOLUTION_CASE} as resolution_label
           FROM "MediaItem" mi
@@ -290,7 +309,16 @@ export async function GET(request: NextRequest) {
             '480P', NULLIF(COUNT(*) FILTER (WHERE resolution_label = '480P'), 0),
             'SD', NULLIF(COUNT(*) FILTER (WHERE resolution_label = 'SD'), 0),
             'Other', NULLIF(COUNT(*) FILTER (WHERE resolution_label = 'Other'), 0)
-          )) as "qualityCounts"
+          )) as "qualityCounts",
+          (array_agg("summary" ORDER BY "seasonNumber", "episodeNumber") FILTER (WHERE "summary" IS NOT NULL))[1] as "summary",
+          (array_agg("genres" ORDER BY "seasonNumber", "episodeNumber") FILTER (WHERE "genres" IS NOT NULL))[1] as "genres",
+          (array_agg("studio" ORDER BY "seasonNumber", "episodeNumber") FILTER (WHERE "studio" IS NOT NULL))[1] as "studio",
+          (array_agg("contentRating" ORDER BY "seasonNumber", "episodeNumber") FILTER (WHERE "contentRating" IS NOT NULL))[1] as "contentRating",
+          (array_agg("rating" ORDER BY "seasonNumber", "episodeNumber") FILTER (WHERE "rating" IS NOT NULL))[1] as "rating",
+          (array_agg("ratingImage" ORDER BY "seasonNumber", "episodeNumber") FILTER (WHERE "ratingImage" IS NOT NULL))[1] as "ratingImage",
+          (array_agg("audienceRating" ORDER BY "seasonNumber", "episodeNumber") FILTER (WHERE "audienceRating" IS NOT NULL))[1] as "audienceRating",
+          (array_agg("audienceRatingImage" ORDER BY "seasonNumber", "episodeNumber") FILTER (WHERE "audienceRatingImage" IS NOT NULL))[1] as "audienceRatingImage",
+          (array_agg("year" ORDER BY "seasonNumber", "episodeNumber") FILTER (WHERE "year" IS NOT NULL))[1] as "year"
         FROM items
         GROUP BY group_key`,
         ...params,
@@ -313,6 +341,15 @@ export async function GET(request: NextRequest) {
       qualityCounts: (g.qualityCounts ?? {}) as Record<string, number>,
       thumbUrl: g.thumbUrl,
       servers: groupServerPresence.get(g.parentTitle.toLowerCase().trim()) ?? [],
+      summary: g.summary,
+      genres: g.genres as string[] | null,
+      studio: g.studio,
+      contentRating: g.contentRating,
+      rating: g.rating,
+      ratingImage: g.ratingImage,
+      audienceRating: g.audienceRating,
+      audienceRatingImage: g.audienceRatingImage,
+      year: g.year,
     }));
 
     // Post-aggregation filters on series-level computed fields
@@ -354,6 +391,7 @@ export async function GET(request: NextRequest) {
       thumbUrl: true,
       parentThumbUrl: true,
       seasonNumber: true,
+      episodeNumber: true,
       resolution: true,
       fileSize: true,
       lastPlayedAt: true,
@@ -361,6 +399,15 @@ export async function GET(request: NextRequest) {
       playCount: true,
       originallyAvailableAt: true,
       isWatchlisted: true,
+      summary: true,
+      genres: true,
+      studio: true,
+      contentRating: true,
+      rating: true,
+      ratingImage: true,
+      audienceRating: true,
+      audienceRatingImage: true,
+      year: true,
       library: {
         select: {
           mediaServer: { select: { id: true, name: true, type: true } },
@@ -385,6 +432,15 @@ export async function GET(request: NextRequest) {
       isWatchlisted: boolean;
       qualityCounts: Record<string, number>;
       servers: Map<string, ServerPresence>;
+      summary: string | null;
+      genres: string[] | null;
+      studio: string | null;
+      contentRating: string | null;
+      rating: number | null;
+      ratingImage: string | null;
+      audienceRating: number | null;
+      audienceRatingImage: string | null;
+      year: number | null;
     }
   >();
 
@@ -407,6 +463,15 @@ export async function GET(request: NextRequest) {
         isWatchlisted: false,
         qualityCounts: {},
         servers: new Map(),
+        summary: null,
+        genres: null,
+        studio: null,
+        contentRating: null,
+        rating: null,
+        ratingImage: null,
+        audienceRating: null,
+        audienceRatingImage: null,
+        year: null,
       };
       groupMap.set(normalizedKey, group);
     }
@@ -451,6 +516,17 @@ export async function GET(request: NextRequest) {
     }
     const label = getResolutionLabel(item.resolution);
     group.qualityCounts[label] = (group.qualityCounts[label] || 0) + 1;
+
+    // Pick first non-null metadata (show-level fields are typically the same across episodes)
+    if (!group.summary && item.summary) group.summary = item.summary;
+    if (!group.genres && item.genres) group.genres = item.genres as string[];
+    if (!group.studio && item.studio) group.studio = item.studio;
+    if (!group.contentRating && item.contentRating) group.contentRating = item.contentRating;
+    if (group.rating == null && item.rating != null) group.rating = item.rating;
+    if (!group.ratingImage && item.ratingImage) group.ratingImage = item.ratingImage;
+    if (group.audienceRating == null && item.audienceRating != null) group.audienceRating = item.audienceRating;
+    if (!group.audienceRatingImage && item.audienceRatingImage) group.audienceRatingImage = item.audienceRatingImage;
+    if (group.year == null && item.year != null) group.year = item.year;
   }
 
   let seriesList = Array.from(groupMap.values()).map((g) => ({
@@ -470,6 +546,15 @@ export async function GET(request: NextRequest) {
     servers: Array.from(g.servers.values()).sort((a, b) =>
       a.serverName.localeCompare(b.serverName),
     ),
+    summary: g.summary,
+    genres: g.genres,
+    studio: g.studio,
+    contentRating: g.contentRating,
+    rating: g.rating,
+    ratingImage: g.ratingImage,
+    audienceRating: g.audienceRating,
+    audienceRatingImage: g.audienceRatingImage,
+    year: g.year,
   }));
 
   // Post-aggregation filters on series-level computed fields

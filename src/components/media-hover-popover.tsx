@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { formatDuration, formatFileSize, formatDate } from "@/lib/format";
 import { normalizeResolutionLabel } from "@/lib/resolution";
+import { getRatingLabel } from "@/lib/rating-labels";
 import { useChipColors } from "@/components/chip-color-provider";
 import { RatingChip } from "@/components/rating-chip";
 import { ServerChips } from "@/components/server-chips";
@@ -14,7 +15,9 @@ export interface MediaHoverData {
   summary?: string | null;
   contentRating?: string | null;
   rating?: number | null;
+  ratingImage?: string | null;
   audienceRating?: number | null;
+  audienceRatingImage?: string | null;
   duration?: number | null;
   resolution?: string | null;
   dynamicRange?: string | null;
@@ -29,6 +32,8 @@ export interface MediaHoverData {
   episodeCount?: number;
   albumCount?: number;
   trackCount?: number;
+  audioCodecCounts?: Record<string, number> | null;
+  qualityCounts?: Record<string, number> | null;
   servers?: Array<{ serverId: string; serverName: string; serverType: string }>;
 }
 
@@ -38,7 +43,7 @@ function Dot() {
 
 function Section({ children }: { children: React.ReactNode }) {
   return (
-    <div className="border-b border-border/30 px-3.5 py-2 space-y-0.5 last:border-b-0">
+    <div className="border-b border-white/6 px-3.5 py-2 space-y-0.5 last:border-b-0">
       {children}
     </div>
   );
@@ -83,10 +88,14 @@ export function MediaHoverPopover({ data, imageUrl, imageAspect = "poster" }: Me
     data.episodeCount != null ||
     data.albumCount != null ||
     data.trackCount != null;
+  const audioCodecs = data.audioCodecCounts ? Object.keys(data.audioCodecCounts) : [];
+  const qualityKeys = data.qualityCounts ? Object.keys(data.qualityCounts).filter((k) => data.qualityCounts![k] > 0) : [];
   const hasChips =
     displayRes ||
     (data.dynamicRange && data.dynamicRange !== "SDR") ||
-    data.audioProfile;
+    data.audioProfile ||
+    audioCodecs.length > 0 ||
+    qualityKeys.length > 0;
   const hasDuration = data.duration && formatDuration(data.duration) !== "-";
   const hasFileSize = data.fileSize && formatFileSize(data.fileSize) !== "-";
   const hasDetails = hasDuration || hasFileSize;
@@ -99,7 +108,7 @@ export function MediaHoverPopover({ data, imageUrl, imageAspect = "poster" }: Me
     <div className="py-1">
       {/* Poster image (table view) */}
       {imageUrl && !imgError && (
-        <div className="flex justify-center bg-muted rounded-t-md">
+        <div className="flex justify-center bg-muted rounded-t-xl">
           <div className={`relative w-1/2 overflow-hidden ${imageAspect === "square" ? "aspect-square" : "aspect-2/3"}`}>
             <FadeImage
               src={imageUrl}
@@ -113,7 +122,7 @@ export function MediaHoverPopover({ data, imageUrl, imageAspect = "poster" }: Me
         </div>
       )}
       {imageUrl && imgError && (
-        <div className="flex items-center justify-center w-full h-24 bg-muted rounded-t-md">
+        <div className="flex items-center justify-center w-full h-24 bg-muted rounded-t-xl">
           <Film className="h-8 w-8 text-muted-foreground" />
         </div>
       )}
@@ -135,7 +144,7 @@ export function MediaHoverPopover({ data, imageUrl, imageAspect = "poster" }: Me
             {data.studio && <span>{data.studio}</span>}
             {data.studio && data.contentRating && <Dot />}
             {data.contentRating && (
-              <span className="rounded border border-border/50 px-1 py-px text-[10px] leading-none">
+              <span className="rounded border border-white/6 px-1 py-px text-[10px] leading-none">
                 {data.contentRating}
               </span>
             )}
@@ -192,6 +201,11 @@ export function MediaHoverPopover({ data, imageUrl, imageAspect = "poster" }: Me
                 {displayRes}
               </ColorChip>
             )}
+            {!displayRes && qualityKeys.map((quality) => (
+              <ColorChip key={quality} style={getBadgeStyle("resolution", quality)}>
+                {quality}<span className="text-muted-foreground/60">: {data.qualityCounts![quality]}</span>
+              </ColorChip>
+            ))}
             {data.dynamicRange && data.dynamicRange !== "SDR" && (
               <ColorChip style={getBadgeStyle("dynamicRange", data.dynamicRange)}>
                 {data.dynamicRange}
@@ -202,6 +216,11 @@ export function MediaHoverPopover({ data, imageUrl, imageAspect = "poster" }: Me
                 {data.audioProfile}
               </ColorChip>
             )}
+            {audioCodecs.map((codec) => (
+              <ColorChip key={codec} style={getBadgeStyle("audioCodec", codec)}>
+                {codec}
+              </ColorChip>
+            ))}
           </div>
         </Section>
       )}
@@ -238,10 +257,10 @@ export function MediaHoverPopover({ data, imageUrl, imageAspect = "poster" }: Me
         <Section>
           <div className="flex items-center gap-1.5 flex-wrap">
             {data.rating != null && (
-              <RatingChip label="Critic" value={data.rating} className="text-[10px] px-2 py-px" />
+              <RatingChip label={getRatingLabel(data.ratingImage, data.servers?.[0]?.serverType, "rating", "Critic")} value={data.rating} className="text-[10px] px-2 py-px" />
             )}
             {data.audienceRating != null && (
-              <RatingChip label="Audience" value={data.audienceRating} className="text-[10px] px-2 py-px" />
+              <RatingChip label={getRatingLabel(data.audienceRatingImage, data.servers?.[0]?.serverType, "audienceRating", "Audience")} value={data.audienceRating} className="text-[10px] px-2 py-px" />
             )}
           </div>
         </Section>

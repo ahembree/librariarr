@@ -36,7 +36,14 @@ import {
   Film,
   Tv,
   Music,
+  LayoutGrid,
+  TableProperties,
 } from "lucide-react";
+import { MediaCard } from "@/components/media-card";
+import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
+import { CardSizeControl } from "@/components/card-size-control";
+import { formatDuration, formatFileSize } from "@/lib/format";
+import { MetadataLine } from "@/components/metadata-line";
 import { TabNav, type TabNavItem } from "@/components/tab-nav";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -49,6 +56,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { useRealtime } from "@/hooks/use-realtime";
 
@@ -69,6 +78,24 @@ interface ActionItem {
     title: string;
     parentTitle: string | null;
     type: string;
+    year?: number | null;
+    summary?: string | null;
+    contentRating?: string | null;
+    rating?: number | null;
+    ratingImage?: string | null;
+    audienceRating?: number | null;
+    audienceRatingImage?: string | null;
+    duration?: number | null;
+    resolution?: string | null;
+    dynamicRange?: string | null;
+    audioProfile?: string | null;
+    fileSize?: string | null;
+    genres?: string[] | null;
+    studio?: string | null;
+    playCount?: number;
+    lastPlayedAt?: string | null;
+    addedAt?: string | null;
+    servers?: Array<{ serverId: string; serverName: string; serverType: string }>;
   };
 }
 
@@ -177,18 +204,18 @@ function VirtualizedActionTable({
       : 0;
 
   return (
-    <div className="rounded-md border">
+    <div className="rounded-lg border">
       <div ref={scrollRef} className="md:max-h-[60vh] overflow-auto">
         <table className="w-full caption-bottom text-sm">
-          <thead className="sticky top-0 z-10 bg-background [&_tr]:border-b">
-            <tr className="border-b transition-colors">
-              <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">Title</th>
-              <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">Action</th>
-              <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">{isPending ? "Scheduled" : "Date"}</th>
-              <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">Status</th>
-              {isPending && <th className="h-10 px-4 w-30 text-left align-middle font-medium text-muted-foreground" />}
+          <thead className="sticky top-0 z-10 bg-background">
+            <tr className="border-b bg-muted/50">
+              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Title</th>
+              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Action</th>
+              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">{isPending ? "Scheduled" : "Date"}</th>
+              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Status</th>
+              {isPending && <th className="h-10 px-4 w-30 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground" />}
               {!isPending && items.some((a) => a.status === "FAILED") && (
-                <th className="h-10 px-4 w-12 text-left align-middle font-medium text-muted-foreground" />
+                <th className="h-10 px-4 w-12 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground" />
               )}
             </tr>
           </thead>
@@ -202,12 +229,12 @@ function VirtualizedActionTable({
               const itemKey = hasMediaItem ? `${ruleSetId}:${action.mediaItem.id}` : "";
               const isItemExecuting = hasMediaItem && executingItems.has(itemKey);
 
-              return (
+              const tableRow = (
                 <tr
                   key={action.id}
                   ref={virtualizer.measureElement}
                   data-index={virtualRow.index}
-                  className={`border-b transition-colors ${hasMediaItem ? "hover:bg-muted/50 cursor-pointer" : ""}`}
+                  className={`transition-colors duration-200 even:bg-white/1.5 ${hasMediaItem ? "hover:bg-white/3 hover:ring-1 hover:ring-primary/20 cursor-pointer" : ""}`}
                   onClick={hasMediaItem ? () => onItemClick(action) : undefined}
                 >
                   <td className="p-4 align-middle">
@@ -378,12 +405,211 @@ function VirtualizedActionTable({
                   )}
                 </tr>
               );
+
+              if (!hasMediaItem) return tableRow;
+
+              return (
+                <HoverCard key={action.id} openDelay={400} closeDelay={150}>
+                  <HoverCardTrigger asChild>
+                    {tableRow}
+                  </HoverCardTrigger>
+                  <HoverCardContent side="bottom" align="start" sideOffset={4} className="w-72 p-0 duration-200">
+                    <MediaHoverPopover
+                      imageUrl={`/api/media/${action.mediaItem.id}/image${action.mediaItem.type !== "MOVIE" ? "?type=parent" : ""}`}
+                      imageAspect={action.mediaItem.type === "MUSIC" ? "square" : "poster"}
+                      data={{
+                        title: action.mediaItem.parentTitle
+                          ? `${action.mediaItem.parentTitle} — ${action.mediaItem.title}`
+                          : action.mediaItem.title,
+                        year: action.mediaItem.year,
+                        summary: action.mediaItem.summary,
+                        contentRating: action.mediaItem.contentRating,
+                        rating: action.mediaItem.rating,
+                        audienceRating: action.mediaItem.audienceRating,
+                        ratingImage: action.mediaItem.ratingImage,
+                        audienceRatingImage: action.mediaItem.audienceRatingImage,
+                        duration: action.mediaItem.duration,
+                        resolution: action.mediaItem.resolution,
+                        dynamicRange: action.mediaItem.dynamicRange,
+                        audioProfile: action.mediaItem.audioProfile,
+                        fileSize: action.mediaItem.fileSize,
+                        genres: action.mediaItem.genres,
+                        studio: action.mediaItem.studio,
+                        playCount: action.mediaItem.playCount,
+                        lastPlayedAt: action.mediaItem.lastPlayedAt,
+                        addedAt: action.mediaItem.addedAt,
+                        servers: action.mediaItem.servers,
+                      }}
+                    />
+                  </HoverCardContent>
+                </HoverCard>
+              );
             })}
             {paddingBottom > 0 && (
               <tr aria-hidden="true"><td style={{ height: paddingBottom }} /></tr>
             )}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Card grid for a single group ---------- */
+
+const CARD_GAP = 16;
+const CARD_CONTENT_HEIGHT = 128;
+
+function PendingActionCardGrid({
+  items,
+  ruleSetType,
+  onItemClick,
+  exceptedItemIds,
+}: {
+  items: ActionItem[];
+  ruleSetType: string;
+  onItemClick: (action: ActionItem) => void;
+  exceptedItemIds: Set<string>;
+}) {
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const { columns: actualColumns } = useCardSize();
+  const isMusic = ruleSetType === "MUSIC";
+  const isMovie = ruleSetType === "MOVIE";
+  const fallbackIcon = isMovie ? "movie" as const : isMusic ? "music" as const : "series" as const;
+  const aspectRatio = isMusic ? "square" as const : "poster" as const;
+
+  const filteredItems = useMemo(
+    () => items.filter((a) => a.mediaItem.id !== null),
+    [items],
+  );
+
+  const rowCount = useMemo(
+    () => (filteredItems.length > 0 ? Math.ceil(filteredItems.length / actualColumns) : 0),
+    [filteredItems.length, actualColumns],
+  );
+
+  const estimateSize = useCallback(() => {
+    const container = scrollContainerRef.current;
+    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
+    const columnWidth = (containerWidth - CARD_GAP * (actualColumns - 1)) / actualColumns;
+    const posterHeight = columnWidth * (isMusic ? 1 : 1.5);
+    return Math.round(posterHeight + CARD_CONTENT_HEIGHT + CARD_GAP);
+  }, [actualColumns, isMusic]);
+
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize,
+    overscan: 5,
+  });
+
+  useEffect(() => {
+    virtualizer.measure();
+  }, [actualColumns, virtualizer]);
+
+  const virtualRows = virtualizer.getVirtualItems();
+
+  return (
+    <div ref={scrollContainerRef} className="md:max-h-[60vh] overflow-y-auto">
+      <div
+        style={{
+          height: virtualizer.getTotalSize(),
+          width: "100%",
+          position: "relative",
+        }}
+      >
+        {virtualRows.map((virtualRow) => {
+          const rowStart = virtualRow.index * actualColumns;
+          const rowItems = filteredItems.slice(rowStart, rowStart + actualColumns);
+          return (
+            <div
+              key={virtualRow.key}
+              data-index={virtualRow.index}
+              ref={virtualizer.measureElement}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                paddingBottom: CARD_GAP,
+                transform: `translateY(${virtualRow.start}px)`,
+              }}
+            >
+              <div
+                style={{
+                  display: "grid",
+                  gap: `${CARD_GAP}px`,
+                  gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))`,
+                }}
+              >
+                {rowItems.map((action) => {
+                  const mi = action.mediaItem;
+                  return (
+                    <div key={action.id} className="relative">
+                      {exceptedItemIds.has(mi.id!) && (
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-orange-500/90 backdrop-blur-sm flex items-center justify-center">
+                                <ShieldOff className="h-3.5 w-3.5 text-white" />
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent>Excluded from lifecycle actions</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      )}
+                      <MediaCard
+                        imageUrl={`/api/media/${mi.id}/image${!isMovie ? "?type=parent" : ""}`}
+                        title={mi.parentTitle ? `${mi.parentTitle} — ${mi.title}` : mi.title}
+                        fallbackIcon={fallbackIcon}
+                        aspectRatio={aspectRatio}
+                        onClick={() => onItemClick(action)}
+                        hoverContent={
+                          <MediaHoverPopover
+                            imageAspect={aspectRatio}
+                            data={{
+                              title: mi.parentTitle ? `${mi.parentTitle} — ${mi.title}` : mi.title,
+                              year: mi.year,
+                              summary: mi.summary,
+                              contentRating: mi.contentRating,
+                              rating: mi.rating,
+                              audienceRating: mi.audienceRating,
+                              ratingImage: mi.ratingImage,
+                              audienceRatingImage: mi.audienceRatingImage,
+                              duration: mi.duration,
+                              resolution: mi.resolution,
+                              dynamicRange: mi.dynamicRange,
+                              audioProfile: mi.audioProfile,
+                              fileSize: mi.fileSize,
+                              genres: mi.genres,
+                              studio: mi.studio,
+                              playCount: mi.playCount,
+                              lastPlayedAt: mi.lastPlayedAt,
+                              addedAt: mi.addedAt,
+                              servers: mi.servers,
+                            }}
+                          />
+                        }
+                        metadata={
+                          <MetadataLine>
+                            {mi.year && <span>{mi.year}</span>}
+                            {formatDuration(mi.duration ?? null) && <span>{formatDuration(mi.duration ?? null)}</span>}
+                            {formatFileSize(mi.fileSize ?? null) && <span>{formatFileSize(mi.fileSize ?? null)}</span>}
+                          </MetadataLine>
+                        }
+                        badges={
+                          <ColorChip className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}>
+                            {STATUS_LABELS[action.status] ?? action.status}
+                          </ColorChip>
+                        }
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -412,6 +638,8 @@ export default function PendingActionsPage() {
   const [groups, setGroups] = useState<RuleSetGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("PENDING");
+  const [viewMode, setViewMode] = useState<"table" | "cards">("table");
+  const { size: cardSize, setSize: setCardSize } = useCardSize();
   const [expandedRules, setExpandedRules] = useState<Set<string>>(new Set());
   const [executingRules, setExecutingRules] = useState<Set<string>>(new Set());
   const [executingItems, setExecutingItems] = useState<Set<string>>(new Set());
@@ -666,18 +894,27 @@ export default function PendingActionsPage() {
 
         <TabNav tabs={MEDIA_TYPE_TABS} activeTab={mediaTypeTab} onTabChange={setMediaTypeTab} className="mb-6" />
 
-        {/* Status filter */}
-        <div className="flex gap-2 mb-4">
-          {STATUS_FILTERS.map((status) => (
-            <Button
-              key={status}
-              variant={statusFilter === status ? "default" : "outline"}
-              size="sm"
-              onClick={() => setStatusFilter(status)}
-            >
-              {STATUS_LABELS[status] ?? status}
-            </Button>
-          ))}
+        {/* Status filter + view toggle */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex gap-2">
+            {STATUS_FILTERS.map((status) => (
+              <Button
+                key={status}
+                variant={statusFilter === status ? "default" : "outline"}
+                size="sm"
+                onClick={() => setStatusFilter(status)}
+              >
+                {STATUS_LABELS[status] ?? status}
+              </Button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            {viewMode === "cards" && <CardSizeControl size={cardSize} onChange={setCardSize} />}
+            <div className="flex rounded-md border">
+              <Button variant={viewMode === "table" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 rounded-r-none" onClick={() => setViewMode("table")}><TableProperties className="h-4 w-4" /></Button>
+              <Button variant={viewMode === "cards" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 rounded-l-none" onClick={() => setViewMode("cards")}><LayoutGrid className="h-4 w-4" /></Button>
+            </div>
+          </div>
         </div>
 
         {loading ? (
@@ -792,21 +1029,30 @@ export default function PendingActionsPage() {
 
                   {isExpanded && group.items.length > 0 && (
                     <CardContent>
-                      <VirtualizedActionTable
-                        items={group.items}
-                        ruleSetId={group.ruleSet.id}
-                        isPending={isPending}
-                        executingItems={executingItems}
-                        retryingItems={retryingItems}
-                        excludingItems={excludingItems}
-                        exceptedItemIds={exceptedItemIds}
-                        onExecuteItem={executeItem}
-                        onRemoveAction={removeAction}
-                        onRetryAction={(action) => retryAction(action)}
-                        onExclude={excludeItem}
-                        onItemClick={openDetailPanel}
-                        isDeletedRuleSet={group.ruleSet.deleted}
-                      />
+                      {viewMode === "table" ? (
+                        <VirtualizedActionTable
+                          items={group.items}
+                          ruleSetId={group.ruleSet.id}
+                          isPending={isPending}
+                          executingItems={executingItems}
+                          retryingItems={retryingItems}
+                          excludingItems={excludingItems}
+                          exceptedItemIds={exceptedItemIds}
+                          onExecuteItem={executeItem}
+                          onRemoveAction={removeAction}
+                          onRetryAction={(action) => retryAction(action)}
+                          onExclude={excludeItem}
+                          onItemClick={openDetailPanel}
+                          isDeletedRuleSet={group.ruleSet.deleted}
+                        />
+                      ) : (
+                        <PendingActionCardGrid
+                          items={group.items}
+                          ruleSetType={group.ruleSet.type}
+                          onItemClick={openDetailPanel}
+                          exceptedItemIds={exceptedItemIds}
+                        />
+                      )}
                     </CardContent>
                   )}
 

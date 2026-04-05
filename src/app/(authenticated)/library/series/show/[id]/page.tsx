@@ -26,7 +26,18 @@ interface SeasonData {
   qualityCounts: Record<string, number>;
   mediaItemId: string;
   lastPlayed: string | null;
+  addedAt: string | null;
   totalPlayCount: number;
+  servers: { serverId: string; serverName: string; serverType: string }[];
+  summary?: string | null;
+  genres?: string[] | null;
+  studio?: string | null;
+  contentRating?: string | null;
+  rating?: number | null;
+  ratingImage?: string | null;
+  audienceRating?: number | null;
+  audienceRatingImage?: string | null;
+  year?: number | null;
 }
 
 export default function SeriesDetailPage() {
@@ -111,6 +122,17 @@ export default function SeriesDetailPage() {
     totalSize: s.totalSize,
     totalPlayCount: s.totalPlayCount,
     lastPlayed: s.lastPlayed,
+    addedAt: s.addedAt,
+    servers: s.servers,
+    year: s.year,
+    summary: s.summary,
+    contentRating: s.contentRating,
+    rating: s.rating,
+    ratingImage: s.ratingImage,
+    audienceRating: s.audienceRating,
+    audienceRatingImage: s.audienceRatingImage,
+    genres: s.genres,
+    studio: s.studio,
   }));
 
   return (
@@ -225,10 +247,22 @@ export default function SeriesDetailPage() {
                     imageUrl={s.imageUrl}
                     data={{
                       title: s.title,
+                      year: s.year,
+                      summary: s.summary,
+                      contentRating: s.contentRating,
+                      rating: s.rating,
+                      ratingImage: s.ratingImage,
+                      audienceRating: s.audienceRating,
+                      audienceRatingImage: s.audienceRatingImage,
+                      genres: s.genres,
+                      studio: s.studio,
                       episodeCount: s.episodeCount,
+                      qualityCounts: s.qualityCounts,
                       fileSize: s.totalSize,
                       playCount: s.totalPlayCount,
                       lastPlayedAt: s.lastPlayed,
+                      addedAt: s.addedAt,
+                      servers: s.servers,
                     }}
                   />
                 </HoverCardContent>

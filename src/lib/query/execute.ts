@@ -706,6 +706,7 @@ const ITEM_SELECT = {
   type: true,
   seasonNumber: true,
   episodeNumber: true,
+  summary: true,
   resolution: true,
   dynamicRange: true,
   videoCodec: true,
@@ -725,8 +726,11 @@ const ITEM_SELECT = {
   originallyAvailableAt: true,
   contentRating: true,
   rating: true,
+  ratingImage: true,
   audienceRating: true,
+  audienceRatingImage: true,
   isWatchlisted: true,
+  genres: true,
   studio: true,
   dedupKey: true,
   library: {
@@ -737,10 +741,9 @@ const ITEM_SELECT = {
   },
 } as const;
 
-/** Full select for in-memory evaluation — includes streams, genres, labels, and externalIds */
+/** Full select for in-memory evaluation — includes streams, labels, and externalIds */
 const ITEM_SELECT_FULL = {
   ...ITEM_SELECT,
-  genres: true,
   labels: true,
   audioSamplingRate: true,
   audioBitrate: true,
@@ -852,6 +855,14 @@ interface SeriesGroupRow {
   serverId: string;
   serverName: string;
   serverType: string;
+  summary: string | null;
+  genres: unknown;
+  studio: string | null;
+  contentRating: string | null;
+  rating: number | null;
+  ratingImage: string | null;
+  audienceRating: number | null;
+  audienceRatingImage: string | null;
 }
 
 /**
@@ -899,7 +910,15 @@ async function groupSeriesEpisodes(
       MAX(mi."playCount")::int as "playCount",
       (array_agg(l."mediaServerId" ORDER BY mi."seasonNumber" NULLS LAST, mi."episodeNumber" NULLS LAST))[1] as "serverId",
       (array_agg(ms.name ORDER BY mi."seasonNumber" NULLS LAST, mi."episodeNumber" NULLS LAST))[1] as "serverName",
-      (array_agg(ms.type ORDER BY mi."seasonNumber" NULLS LAST, mi."episodeNumber" NULLS LAST))[1] as "serverType"
+      (array_agg(ms.type ORDER BY mi."seasonNumber" NULLS LAST, mi."episodeNumber" NULLS LAST))[1] as "serverType",
+      (array_agg(mi."summary" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."summary" IS NOT NULL))[1] as summary,
+      (array_agg(mi."genres" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."genres" IS NOT NULL))[1] as genres,
+      (array_agg(mi."studio" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."studio" IS NOT NULL))[1] as studio,
+      (array_agg(mi."contentRating" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."contentRating" IS NOT NULL))[1] as "contentRating",
+      (array_agg(mi."rating" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."rating" IS NOT NULL))[1] as rating,
+      (array_agg(mi."ratingImage" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."ratingImage" IS NOT NULL))[1] as "ratingImage",
+      (array_agg(mi."audienceRating" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."audienceRating" IS NOT NULL))[1] as "audienceRating",
+      (array_agg(mi."audienceRatingImage" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."audienceRatingImage" IS NOT NULL))[1] as "audienceRatingImage"
     FROM "MediaItem" mi
     JOIN "Library" l ON mi."libraryId" = l.id
     JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
@@ -933,10 +952,14 @@ async function groupSeriesEpisodes(
     lastPlayedAt: r.lastPlayedAt?.toISOString() ?? null,
     addedAt: r.addedAt?.toISOString() ?? null,
     originallyAvailableAt: null,
-    contentRating: null,
-    rating: null,
-    audienceRating: null,
-    studio: null,
+    contentRating: r.contentRating,
+    rating: r.rating,
+    ratingImage: r.ratingImage,
+    audienceRating: r.audienceRating,
+    audienceRatingImage: r.audienceRatingImage,
+    summary: r.summary,
+    genres: r.genres as string[] | null,
+    studio: r.studio,
     dedupKey: null,
     matchedEpisodes: r.matchedEpisodes,
     seasonCount: r.seasonCount,

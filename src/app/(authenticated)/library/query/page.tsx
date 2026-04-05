@@ -85,6 +85,12 @@ interface QueryResultItem {
   type: string;
   seasonNumber: number | null;
   episodeNumber: number | null;
+  summary: string | null;
+  contentRating: string | null;
+  rating: number | null;
+  ratingImage: string | null;
+  audienceRating: number | null;
+  audienceRatingImage: string | null;
   resolution: string | null;
   dynamicRange: string | null;
   videoCodec: string | null;
@@ -93,6 +99,8 @@ interface QueryResultItem {
   container: string | null;
   fileSize: string | null;
   duration: number | null;
+  genres: string[] | null;
+  studio: string | null;
   playCount: number;
   lastPlayedAt: string | null;
   addedAt: string | null;
@@ -1140,11 +1148,21 @@ export default function QueryPage() {
                     data={{
                       title: item.title,
                       year: item.year,
-                      duration: item.duration,
-                      resolution: item.resolution,
-                      dynamicRange: item.dynamicRange,
-                      audioProfile: item.audioProfile,
+                      summary: item.summary,
+                      contentRating: item.contentRating,
+                      rating: item.rating,
+                      audienceRating: item.audienceRating,
+                      ratingImage: item.ratingImage,
+                      audienceRatingImage: item.audienceRatingImage,
+                      duration: item.matchedEpisodes != null ? undefined : item.duration,
+                      resolution: item.matchedEpisodes != null ? undefined : item.resolution,
+                      dynamicRange: item.matchedEpisodes != null ? undefined : item.dynamicRange,
+                      audioProfile: item.matchedEpisodes != null ? undefined : item.audioProfile,
+                      seasonCount: item.matchedEpisodes != null ? item.seasonCount : undefined,
+                      episodeCount: item.matchedEpisodes != null ? item.matchedEpisodes : undefined,
                       fileSize: item.fileSize,
+                      genres: item.genres,
+                      studio: item.studio,
                       playCount: item.playCount,
                       lastPlayedAt: item.lastPlayedAt,
                       addedAt: item.addedAt,
@@ -1226,11 +1244,19 @@ export default function QueryPage() {
                                   data={{
                                     title: item.title,
                                     year: item.year,
+                                    summary: item.summary,
+                                    contentRating: item.contentRating,
+                                    rating: item.rating,
+                                    audienceRating: item.audienceRating,
+                                    ratingImage: item.ratingImage,
+                                    audienceRatingImage: item.audienceRatingImage,
                                     duration: item.duration,
                                     resolution: item.resolution,
                                     dynamicRange: item.dynamicRange,
                                     audioProfile: item.audioProfile,
                                     fileSize: item.fileSize,
+                                    genres: item.genres,
+                                    studio: item.studio,
                                     playCount: item.playCount,
                                     lastPlayedAt: item.lastPlayedAt,
                                     addedAt: item.addedAt,

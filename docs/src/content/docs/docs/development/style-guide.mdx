@@ -323,6 +323,23 @@ Border-bottom style tabs with icon support:
 
 Dialogs use `backdrop-blur-sm` on the overlay and `border-white/6` on the content panel.
 
+### Hover Popovers
+
+Every `MediaHoverPopover` must pass the **same universal set of fields** regardless of page, view type (table or card), or data source. All fields are optional — sections hide gracefully when data is absent. The component renders only what is non-null, so passing all fields is always safe.
+
+**Universal field set:**
+
+`title`, `year`, `summary`, `contentRating`, `rating`, `audienceRating`, `ratingImage`, `audienceRatingImage`, `duration`, `resolution`, `dynamicRange`, `audioProfile`, `fileSize`, `genres`, `studio`, `playCount`, `lastPlayedAt`, `addedAt`, `servers`, `seasonCount`, `episodeCount`, `albumCount`, `trackCount`, `qualityCounts`, `audioCodecCounts`
+
+For grouped data sources (series shows, seasons, music artists, albums), metadata fields (`summary`, `genres`, `studio`, `contentRating`, `rating`, etc.) are aggregated from a representative child item via first-non-null picking in the API.
+
+**Rules:**
+
+- **Table and card views within the same page must always pass identical fields** — no exceptions
+- `imageAspect="square"` for music items; `"poster"` (default) for everything else
+- `audioCodecCounts` is music-only; `qualityCounts` is series-only
+- When an item can be either individual or grouped (e.g. query results), conditionally pass the appropriate fields based on whether it's grouped (e.g. `seasonCount`/`episodeCount` for grouped series, `duration`/`resolution` for individual items)
+
 ---
 
 ## Page Layout Patterns

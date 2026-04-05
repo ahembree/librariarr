@@ -8,6 +8,24 @@ interface ActionItemMediaItem {
   parentTitle: string | null;
   type: string;
   thumbUrl: string | null;
+  year: number | null;
+  summary: string | null;
+  contentRating: string | null;
+  rating: number | null;
+  ratingImage: string | null;
+  audienceRating: number | null;
+  audienceRatingImage: string | null;
+  duration: number | null;
+  resolution: string | null;
+  dynamicRange: string | null;
+  audioProfile: string | null;
+  fileSize: string | null;
+  genres: string[] | null;
+  studio: string | null;
+  playCount: number;
+  lastPlayedAt: string | null;
+  addedAt: string | null;
+  servers?: Array<{ serverId: string; serverName: string; serverType: string }>;
 }
 
 interface ActionItem {
@@ -47,18 +65,55 @@ interface RuleSetGroup {
  * Falls back to denormalized fields when the MediaItem has been deleted (e.g. after a
  * destructive lifecycle action followed by a library sync).
  */
+const MEDIA_ITEM_SELECT = {
+  id: true, title: true, parentTitle: true, type: true, thumbUrl: true,
+  year: true, summary: true, contentRating: true, rating: true, ratingImage: true, audienceRating: true, audienceRatingImage: true,
+  duration: true, resolution: true, dynamicRange: true, audioProfile: true, fileSize: true,
+  genres: true, studio: true, playCount: true, lastPlayedAt: true, addedAt: true,
+  library: { select: { mediaServer: { select: { id: true, name: true, type: true } } } },
+} as const;
+
+type SelectedMediaItem = {
+  id: string; title: string; parentTitle: string | null; type: string; thumbUrl: string | null;
+  year: number | null; summary: string | null; contentRating: string | null;
+  rating: number | null; ratingImage: string | null;
+  audienceRating: number | null; audienceRatingImage: string | null;
+  duration: number | null; resolution: string | null; dynamicRange: string | null;
+  audioProfile: string | null; fileSize: bigint | null;
+  genres: unknown; studio: string | null;
+  playCount: number; lastPlayedAt: Date | null; addedAt: Date | null;
+  library: { mediaServer: { id: string; name: string; type: string } | null };
+};
+
+function serializeMediaItem(mi: SelectedMediaItem): ActionItemMediaItem {
+  const ms = mi.library.mediaServer;
+  return {
+    id: mi.id, title: mi.title, parentTitle: mi.parentTitle, type: mi.type, thumbUrl: mi.thumbUrl,
+    year: mi.year, summary: mi.summary, contentRating: mi.contentRating,
+    rating: mi.rating, ratingImage: mi.ratingImage,
+    audienceRating: mi.audienceRating, audienceRatingImage: mi.audienceRatingImage,
+    duration: mi.duration, resolution: mi.resolution, dynamicRange: mi.dynamicRange,
+    audioProfile: mi.audioProfile, fileSize: mi.fileSize?.toString() ?? null,
+    genres: (Array.isArray(mi.genres) ? mi.genres : null) as string[] | null,
+    studio: mi.studio, playCount: mi.playCount,
+    lastPlayedAt: mi.lastPlayedAt?.toISOString() ?? null,
+    addedAt: mi.addedAt?.toISOString() ?? null,
+    servers: ms ? [{ serverId: ms.id, serverName: ms.name, serverType: ms.type }] : undefined,
+  };
+}
+
 function buildActionMediaItem(
   action: {
     mediaItemId: string | null;
     mediaItemTitle: string | null;
     mediaItemParentTitle: string | null;
     ruleSetType: string | null;
-    mediaItem: { id: string; title: string; parentTitle: string | null; type: string; thumbUrl: string | null } | null;
+    mediaItem: SelectedMediaItem | null;
   },
   ruleSetType: string
 ): ActionItemMediaItem {
   if (action.mediaItem) {
-    const mi = action.mediaItem;
+    const mi = serializeMediaItem(action.mediaItem);
     if (ruleSetType === "SERIES" && mi.parentTitle) {
       return { ...mi, title: mi.parentTitle, parentTitle: null };
     }
@@ -67,10 +122,16 @@ function buildActionMediaItem(
   // MediaItem deleted — use denormalized fields
   const title = action.mediaItemTitle ?? "Unknown";
   const parentTitle = action.mediaItemParentTitle ?? null;
+  const nullFields = {
+    thumbUrl: null, year: null, summary: null, contentRating: null, rating: null, ratingImage: null,
+    audienceRating: null, audienceRatingImage: null, duration: null, resolution: null, dynamicRange: null,
+    audioProfile: null, fileSize: null, genres: null, studio: null,
+    playCount: 0, lastPlayedAt: null, addedAt: null,
+  };
   if (ruleSetType === "SERIES" && parentTitle) {
-    return { id: null, title: parentTitle, parentTitle: null, type: ruleSetType, thumbUrl: null };
+    return { id: null, title: parentTitle, parentTitle: null, type: ruleSetType, ...nullFields };
   }
-  return { id: null, title, parentTitle, type: action.ruleSetType ?? ruleSetType, thumbUrl: null };
+  return { id: null, title, parentTitle, type: action.ruleSetType ?? ruleSetType, ...nullFields };
 }
 
 export async function GET(request: NextRequest) {
@@ -99,7 +160,7 @@ async function handlePendingGrouped(userId: string) {
     where: { userId, status: "PENDING", ruleSetId: { not: null } },
     include: {
       mediaItem: {
-        select: { id: true, title: true, parentTitle: true, type: true, thumbUrl: true },
+        select: MEDIA_ITEM_SELECT,
       },
       ruleSet: {
         select: {
@@ -146,7 +207,7 @@ async function handlePendingGrouped(userId: string) {
     },
     include: {
       mediaItem: {
-        select: { id: true, title: true, parentTitle: true, type: true, thumbUrl: true },
+        select: MEDIA_ITEM_SELECT,
       },
       ruleSet: {
         select: {
@@ -252,7 +313,7 @@ async function handleStatusGrouped(userId: string, status: string) {
     where,
     include: {
       mediaItem: {
-        select: { id: true, title: true, parentTitle: true, type: true, thumbUrl: true },
+        select: MEDIA_ITEM_SELECT,
       },
       ruleSet: {
         select: {

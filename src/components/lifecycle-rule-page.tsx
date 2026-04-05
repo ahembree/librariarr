@@ -69,6 +69,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { PseudocodePanel } from "@/components/builder/pseudocode-panel";
 import { MediaCard } from "@/components/media-card";
+import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
@@ -455,6 +456,32 @@ function PreviewCardGrid({
                         fallbackIcon={fallbackIcon}
                         aspectRatio={aspectRatio}
                         onClick={() => onItemClick(item)}
+                        hoverContent={
+                          <MediaHoverPopover
+                            imageAspect={aspectRatio}
+                            data={{
+                              title: item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title,
+                              year: item.year,
+                              summary: item.summary,
+                              contentRating: item.contentRating,
+                              rating: item.rating,
+                              audienceRating: item.audienceRating,
+                              ratingImage: item.ratingImage,
+                              audienceRatingImage: item.audienceRatingImage,
+                              duration: item.duration,
+                              resolution: item.resolution,
+                              dynamicRange: item.dynamicRange,
+                              audioProfile: item.audioProfile,
+                              fileSize: item.fileSize,
+                              genres: item.genres,
+                              studio: item.studio,
+                              playCount: item.playCount,
+                              lastPlayedAt: item.lastPlayedAt,
+                              addedAt: item.addedAt,
+                              servers: item.servers,
+                            }}
+                          />
+                        }
                         metadata={
                           <MetadataLine stacked>
                             {show("metadata", "year") && item.year && <MetadataItem icon={<Calendar />}>{item.year}</MetadataItem>}
@@ -2185,6 +2212,33 @@ export function LifecycleRulePage({
               onSort={handlePreviewSort}
               mediaType={mediaType}
               exceptedItemIds={exceptedItemIds}
+              renderHoverContent={(item) => (
+                <MediaHoverPopover
+                  imageUrl={`/api/media/${item.id}/image${mediaType !== "MOVIE" ? "?type=parent" : ""}`}
+                  imageAspect={mediaType === "MUSIC" ? "square" : "poster"}
+                  data={{
+                    title: item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title,
+                    year: item.year,
+                    summary: item.summary,
+                    contentRating: item.contentRating,
+                    rating: item.rating,
+                    audienceRating: item.audienceRating,
+                    ratingImage: item.ratingImage,
+                    audienceRatingImage: item.audienceRatingImage,
+                    duration: item.duration,
+                    resolution: item.resolution,
+                    dynamicRange: item.dynamicRange,
+                    audioProfile: item.audioProfile,
+                    fileSize: item.fileSize,
+                    genres: item.genres,
+                    studio: item.studio,
+                    playCount: item.playCount,
+                    lastPlayedAt: item.lastPlayedAt,
+                    addedAt: item.addedAt,
+                    servers: item.servers,
+                  }}
+                />
+              )}
               rowClassName={previewDiffMap.size > 0 ? (item) => {
                 const status = previewDiffMap.get(item.id);
                 if (status === "added") return "border-l-2 border-l-emerald-500/70 bg-emerald-500/5";

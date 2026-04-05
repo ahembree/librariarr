@@ -35,7 +35,19 @@ interface AlbumEntry {
   totalSize: string;
   audioCodecCounts: Record<string, number>;
   mediaItemId: string;
+  totalPlayCount: number;
+  lastPlayed: string | null;
+  addedAt: string | null;
   servers: { serverId: string; serverName: string; serverType: string }[];
+  summary?: string | null;
+  genres?: string[] | null;
+  studio?: string | null;
+  contentRating?: string | null;
+  rating?: number | null;
+  ratingImage?: string | null;
+  audienceRating?: number | null;
+  audienceRatingImage?: string | null;
+  year?: number | null;
 }
 
 const SORT_OPTIONS = [
@@ -304,8 +316,22 @@ export default function AllAlbumsPage() {
                   imageAspect="square"
                   data={{
                     title: album.albumTitle,
+                    year: album.year,
+                    summary: album.summary,
+                    contentRating: album.contentRating,
+                    rating: album.rating,
+                    ratingImage: album.ratingImage,
+                    audienceRating: album.audienceRating,
+                    audienceRatingImage: album.audienceRatingImage,
+                    genres: album.genres,
+                    studio: album.studio,
                     trackCount: album.trackCount,
+                    audioCodecCounts: album.audioCodecCounts,
                     fileSize: album.totalSize,
+                    playCount: album.totalPlayCount,
+                    lastPlayedAt: album.lastPlayed,
+                    addedAt: album.addedAt,
+                    servers: album.servers,
                   }}
                 />
               )}
@@ -381,7 +407,12 @@ export default function AllAlbumsPage() {
                                 data={{
                                   title: album.albumTitle,
                                   trackCount: album.trackCount,
+                                  audioCodecCounts: album.audioCodecCounts,
                                   fileSize: album.totalSize,
+                                  playCount: album.totalPlayCount,
+                                  lastPlayedAt: album.lastPlayed,
+                                  addedAt: album.addedAt,
+                                  servers: album.servers,
                                 }}
                               />
                             }
