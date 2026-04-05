@@ -663,6 +663,8 @@ export default function PendingActionsPage() {
   const [deletionStats, setDeletionStats] = useState<{
     totalBytesDeleted: string;
     actionCount: number;
+    pendingBytes: string;
+    pendingCount: number;
     resetAt: string | null;
   } | null>(null);
   const [resettingStats, setResettingStats] = useState(false);
@@ -684,8 +686,9 @@ export default function PendingActionsPage() {
     fetchDeletionStats();
   }, [fetchDeletionStats]);
 
-  // Refresh stats when actions are executed
+  // Refresh stats when actions are executed or detection runs (pending changes)
   useRealtime("lifecycle:action-executed", fetchDeletionStats);
+  useRealtime("lifecycle:detection-completed", fetchDeletionStats);
 
   const handleResetStats = async () => {
     setResettingStats(true);
@@ -942,19 +945,39 @@ export default function PendingActionsPage() {
         </div>
 
         {/* Deletion stats banner */}
-        {deletionStats && (deletionStats.actionCount > 0 || deletionStats.resetAt) && (
+        {deletionStats && (deletionStats.actionCount > 0 || deletionStats.pendingCount > 0 || deletionStats.resetAt) && (
           <div className="flex items-center gap-4 mb-6 rounded-lg border bg-muted/30 px-4 py-3">
             <Trash2 className="h-4 w-4 text-muted-foreground shrink-0" />
-            <div className="flex items-center gap-4 text-sm">
-              <span>
-                <span className="font-medium">{formatFileSize(deletionStats.totalBytesDeleted)}</span>
-                <span className="text-muted-foreground ml-1">deleted</span>
-              </span>
-              <span className="text-muted-foreground">·</span>
-              <span>
-                <span className="font-medium">{deletionStats.actionCount}</span>
-                <span className="text-muted-foreground ml-1">{deletionStats.actionCount === 1 ? "action" : "actions"}</span>
-              </span>
+            <div className="flex items-center gap-4 text-sm flex-wrap">
+              {deletionStats.pendingCount > 0 && (
+                <>
+                  <span>
+                    <span className="font-medium text-amber-400">{formatFileSize(deletionStats.pendingBytes)}</span>
+                    <span className="text-muted-foreground ml-1">pending</span>
+                  </span>
+                  <span className="text-muted-foreground">·</span>
+                  <span>
+                    <span className="font-medium text-amber-400">{deletionStats.pendingCount}</span>
+                    <span className="text-muted-foreground ml-1">{deletionStats.pendingCount === 1 ? "action" : "actions"} queued</span>
+                  </span>
+                </>
+              )}
+              {deletionStats.pendingCount > 0 && deletionStats.actionCount > 0 && (
+                <span className="text-muted-foreground">|</span>
+              )}
+              {deletionStats.actionCount > 0 && (
+                <>
+                  <span>
+                    <span className="font-medium">{formatFileSize(deletionStats.totalBytesDeleted)}</span>
+                    <span className="text-muted-foreground ml-1">deleted</span>
+                  </span>
+                  <span className="text-muted-foreground">·</span>
+                  <span>
+                    <span className="font-medium">{deletionStats.actionCount}</span>
+                    <span className="text-muted-foreground ml-1">{deletionStats.actionCount === 1 ? "action" : "actions"} completed</span>
+                  </span>
+                </>
+              )}
               {deletionStats.resetAt && (
                 <>
                   <span className="text-muted-foreground">·</span>
