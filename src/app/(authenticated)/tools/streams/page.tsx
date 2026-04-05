@@ -1263,10 +1263,10 @@ export default function StreamManagerPage() {
       </div>
 
       {/* Active Sessions */}
-      <div className="space-y-4">
+      <div className="space-y-4 animate-fade-in-up">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold">Active Sessions</h2>
+            <h2 className="text-xl font-bold font-display">Active Sessions</h2>
             {!loading && (
               <Badge variant="secondary" className="text-xs">
                 {sessions.length}
@@ -1355,7 +1355,7 @@ export default function StreamManagerPage() {
       <div className="grid gap-6 lg:grid-cols-2 min-w-0 animate-fade-in-up">
         {/* Maintenance Mode */}
         <div className="space-y-4 min-w-0">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
+          <h2 className="text-xl font-bold font-display flex items-center gap-2">
             <Shield className="h-5 w-5" />
             Maintenance Mode
           </h2>
@@ -1364,7 +1364,7 @@ export default function StreamManagerPage() {
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="space-y-1 min-w-0">
-                  <CardTitle className="text-base flex items-center gap-2">
+                  <CardTitle className="text-lg flex items-center gap-2">
                     {maintenanceEnabled && (
                       <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
                     )}
@@ -1452,7 +1452,7 @@ export default function StreamManagerPage() {
 
         {/* Transcode Manager */}
         <div className="space-y-4 min-w-0">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
+          <h2 className="text-xl font-bold font-display flex items-center gap-2">
             <Radio className="h-5 w-5" />
             Transcode Manager
           </h2>
@@ -1461,7 +1461,7 @@ export default function StreamManagerPage() {
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="space-y-1 min-w-0">
-                  <CardTitle className="text-base flex items-center gap-2">
+                  <CardTitle className="text-lg flex items-center gap-2">
                     {transcodeEnabled && (
                       <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
                     )}
@@ -1556,9 +1556,9 @@ export default function StreamManagerPage() {
       <Separator />
 
       {/* Blackout Schedules */}
-      <div className="space-y-4">
+      <div className="space-y-4 animate-fade-in-up">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
+          <h2 className="text-xl font-bold font-display flex items-center gap-2">
             <CalendarClock className="h-5 w-5" />
             Blackout Schedules
           </h2>
@@ -1954,7 +1954,7 @@ export default function StreamManagerPage() {
                     {sheetSession.genres && sheetSession.genres.length > 0 && (
                       <div className="flex flex-wrap gap-1">
                         {sheetSession.genres.map(g => (
-                          <ColorChip key={g} className="bg-white/10 text-white/80 border-white/20">{g}</ColorChip>
+                          <Badge key={g} variant="secondary" className="text-[10px]">{g}</Badge>
                         ))}
                       </div>
                     )}
