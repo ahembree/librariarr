@@ -431,11 +431,26 @@ export async function executeLifecycleActions(userId?: string) {
     try {
       await executeAction({ ...action, matchedMediaItemIds: filteredMatchedIds, mediaItem });
 
+      // Compute deleted bytes for stats tracking
+      let deletedBytes: bigint | null = null;
+      if (filteredMatchedIds.length > 0) {
+        // Series/music with episode-level tracking — sum member items' file sizes
+        const memberSizes = await prisma.mediaItem.findMany({
+          where: { id: { in: filteredMatchedIds } },
+          select: { fileSize: true },
+        });
+        const total = memberSizes.reduce((sum, m) => sum + (m.fileSize ?? BigInt(0)), BigInt(0));
+        if (total > BigInt(0)) deletedBytes = total;
+      } else if (mediaItem.fileSize) {
+        deletedBytes = mediaItem.fileSize;
+      }
+
       await prisma.lifecycleAction.update({
         where: { id: action.id },
         data: {
           status: "COMPLETED",
           executedAt: new Date(),
+          deletedBytes,
           // Snapshot title so the record survives media item deletion
           mediaItemTitle: mediaItem.title,
           mediaItemParentTitle: mediaItem.parentTitle,

@@ -38,6 +38,8 @@ import {
   Music,
   LayoutGrid,
   TableProperties,
+  Trash2,
+  RotateCcw,
 } from "lucide-react";
 import { MediaCard } from "@/components/media-card";
 import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
@@ -657,6 +659,53 @@ export default function PendingActionsPage() {
     maxWidth: 800,
   });
 
+  // Deletion stats
+  const [deletionStats, setDeletionStats] = useState<{
+    totalBytesDeleted: string;
+    actionCount: number;
+    resetAt: string | null;
+  } | null>(null);
+  const [resettingStats, setResettingStats] = useState(false);
+  const [confirmResetStats, setConfirmResetStats] = useState(false);
+
+  const fetchDeletionStats = useCallback(async () => {
+    try {
+      const response = await fetch("/api/lifecycle/stats");
+      if (response.ok) {
+        const data = await response.json();
+        setDeletionStats(data);
+      }
+    } catch {
+      // Non-critical — don't block the page
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchDeletionStats();
+  }, [fetchDeletionStats]);
+
+  // Refresh stats when actions are executed
+  useRealtime("lifecycle:action-executed", fetchDeletionStats);
+
+  const handleResetStats = async () => {
+    setResettingStats(true);
+    try {
+      const response = await fetch("/api/lifecycle/stats/reset", { method: "POST" });
+      if (response.ok) {
+        const data = await response.json();
+        setDeletionStats(data);
+        toast.success("Deletion stats reset");
+      } else {
+        toast.error("Failed to reset stats");
+      }
+    } catch {
+      toast.error("Failed to reset stats");
+    } finally {
+      setResettingStats(false);
+      setConfirmResetStats(false);
+    }
+  };
+
   const filteredGroups = useMemo(() => {
     const typeFilter = TAB_TO_TYPE[mediaTypeTab];
     if (!typeFilter) return groups;
@@ -892,6 +941,50 @@ export default function PendingActionsPage() {
           <p className="text-muted-foreground mt-1">Scheduled lifecycle actions awaiting execution, grouped by rule set.</p>
         </div>
 
+        {/* Deletion stats banner */}
+        {deletionStats && (deletionStats.actionCount > 0 || deletionStats.resetAt) && (
+          <div className="flex items-center gap-4 mb-6 rounded-lg border bg-muted/30 px-4 py-3">
+            <Trash2 className="h-4 w-4 text-muted-foreground shrink-0" />
+            <div className="flex items-center gap-4 text-sm">
+              <span>
+                <span className="font-medium">{formatFileSize(deletionStats.totalBytesDeleted)}</span>
+                <span className="text-muted-foreground ml-1">deleted</span>
+              </span>
+              <span className="text-muted-foreground">·</span>
+              <span>
+                <span className="font-medium">{deletionStats.actionCount}</span>
+                <span className="text-muted-foreground ml-1">{deletionStats.actionCount === 1 ? "action" : "actions"}</span>
+              </span>
+              {deletionStats.resetAt && (
+                <>
+                  <span className="text-muted-foreground">·</span>
+                  <span className="text-xs text-muted-foreground">
+                    since {new Date(deletionStats.resetAt).toLocaleDateString()}
+                  </span>
+                </>
+              )}
+            </div>
+            <div className="ml-auto">
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={(e) => { e.stopPropagation(); setConfirmResetStats(true); }}
+                      disabled={resettingStats}
+                    >
+                      <RotateCcw className={`h-3.5 w-3.5 ${resettingStats ? "animate-spin" : ""}`} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Reset deletion stats</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+          </div>
+        )}
+
         <TabNav tabs={MEDIA_TYPE_TABS} activeTab={mediaTypeTab} onTabChange={setMediaTypeTab} className="mb-6" />
 
         {/* Status filter + view toggle */}
@@ -1093,6 +1186,25 @@ export default function PendingActionsPage() {
                 }}
               >
                 Execute
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Reset deletion stats confirmation */}
+        <AlertDialog open={confirmResetStats} onOpenChange={setConfirmResetStats}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Reset Deletion Stats</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will reset the deletion stats counter. Historical action records will not be affected — only the stats display will start counting from now.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={handleResetStats} disabled={resettingStats}>
+                {resettingStats ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                Reset
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

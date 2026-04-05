@@ -254,6 +254,8 @@ The lifecycle system operates in three phases, orchestrated by `src/lib/lifecycl
 - Tag operations execute first (add/remove Arr tags), then main action (delete, unmonitor, etc.)
 - Title validation via `normalizeTitle()` prevents acting on wrong items when resolving Arr records
 - `extractActionError()` extracts meaningful error messages from Arr API responses (HTTP status + response body)
+- Completed actions record `deletedBytes` (from `MediaItem.fileSize` or sum of member items) for deletion stats tracking
+- Deletion stats are aggregated via `GET /api/lifecycle/stats`; reset via `POST /api/lifecycle/stats/reset` (sets `AppSettings.deletionStatsResetAt`)
 
 **Rule set edit behavior**: Any PUT to a rule set clears all `RuleMatch` records and cancels all PENDING `LifecycleAction` records. The next detection run evaluates everything fresh.
 
