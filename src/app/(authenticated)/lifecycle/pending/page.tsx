@@ -665,6 +665,14 @@ export default function PendingActionsPage() {
     actionCount: number;
     pendingBytes: string;
     pendingCount: number;
+    byRuleSet: Array<{
+      ruleSetId: string | null;
+      ruleSetName: string;
+      deletedBytes: string;
+      deletedCount: number;
+      pendingBytes: string;
+      pendingCount: number;
+    }>;
     resetAt: string | null;
   } | null>(null);
   const [resettingStats, setResettingStats] = useState(false);
@@ -714,6 +722,18 @@ export default function PendingActionsPage() {
     if (!typeFilter) return groups;
     return groups.filter((g) => g.ruleSet.type === typeFilter);
   }, [groups, mediaTypeTab]);
+
+  // Per-rule-set stats lookup
+  const ruleSetStatsMap = useMemo(() => {
+    const map = new Map<string, { deletedBytes: string; deletedCount: number; pendingBytes: string; pendingCount: number }>();
+    if (!deletionStats?.byRuleSet) return map;
+    for (const rs of deletionStats.byRuleSet) {
+      if (rs.ruleSetId) {
+        map.set(rs.ruleSetId, rs);
+      }
+    }
+    return map;
+  }, [deletionStats?.byRuleSet]);
 
   const fetchActions = useCallback(async () => {
     setLoading(true);
@@ -1100,6 +1120,25 @@ export default function PendingActionsPage() {
                                 ))}
                               </div>
                             )}
+                            {/* Per-rule deletion stats */}
+                            {(() => {
+                              const rs = ruleSetStatsMap.get(group.ruleSet.id);
+                              if (!rs || (rs.deletedCount === 0 && rs.pendingCount === 0)) return null;
+                              return (
+                                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                  {rs.pendingCount > 0 && (
+                                    <span>
+                                      <span className="text-amber-400">{formatFileSize(rs.pendingBytes)}</span> pending
+                                    </span>
+                                  )}
+                                  {rs.deletedCount > 0 && (
+                                    <span>
+                                      {formatFileSize(rs.deletedBytes)} deleted ({rs.deletedCount})
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
                       </div>
