@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.14.0](https://github.com/ahembree/librariarr/compare/v0.13.0...v0.14.0) (2026-04-05)
+
+
+### Features
+
+* **lifecycle:** add hover popover to pending actions and align table styling ([cb2dd1a](https://github.com/ahembree/librariarr/commit/cb2dd1a841a25c33d4f3d6c138c88bc190206b8d))
+* **lifecycle:** add hover popovers and card view to matches, pending, and rule preview ([13fade6](https://github.com/ahembree/librariarr/commit/13fade64958fc48cff1da37df5690e2d83370e48))
+* **lifecycle:** show full media details in hover popovers ([ab86b7c](https://github.com/ahembree/librariarr/commit/ab86b7c8efdc0d4f98e3ea4a5d4ce4c69ffab0a7))
+* **ui:** use correct rating source labels in hover popovers ([e34e20f](https://github.com/ahembree/librariarr/commit/e34e20f781e8ddb90c208686707937242ec0815b))
+* unify grouped view popovers with full available data ([5357a1d](https://github.com/ahembree/librariarr/commit/5357a1d8617e7cd9c8f0101b0a7cb5f484f63bb7))
+* unify hover popover content across all pages ([b85c721](https://github.com/ahembree/librariarr/commit/b85c721ae3b50d2dc152e65fc8996130d8a6e14e))
+
+
+### Bug Fixes
+
+* add missing fields to album and season card view popovers ([b601340](https://github.com/ahembree/librariarr/commit/b60134018c2f6b143cf299b8a30b648ab19a2118))
+* add summary and genres to movies, series, and music list APIs ([619088d](https://github.com/ahembree/librariarr/commit/619088da2563193bfc18543ecbdea081391f9606))
+* align hover card details ([c455587](https://github.com/ahembree/librariarr/commit/c4555870185e5f143f1ef0dc8ff7ffa619483835))
+* preserve scroll position and active tab on series/music library pages ([0466b2f](https://github.com/ahembree/librariarr/commit/0466b2f77e708f97b2f83e03d54b3aad5a22593d))
+* **ui:** move card hover effects from custom CSS to Tailwind utilities ([368c6b7](https://github.com/ahembree/librariarr/commit/368c6b7f0542881ab26d2114144cdb95117cc6bf))
+
+
+### Performance Improvements
+
+* **lifecycle:** virtualize pending actions card grid ([3c6b85e](https://github.com/ahembree/librariarr/commit/3c6b85eebc550333ed5ff1cf038a26b91ef0ecf8))
+
 ## [0.13.0](https://github.com/ahembree/librariarr/compare/v0.12.2...v0.13.0) (2026-04-04)
 
 
