@@ -291,6 +291,11 @@ export default function AllSeasonsPage() {
     router.push(`/library/series/season/${season.mediaItemId}`);
   };
 
+  const onSeasonCardClick = () => {
+    markChildNavigation();
+    sessionStorage.setItem("library-back-path", "/library/series/seasons");
+  };
+
   return (
     <div className="p-4 sm:p-6 lg:p-8">
       <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight mb-4">Series</h1>
@@ -410,7 +415,8 @@ export default function AllSeasonsPage() {
                             imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
                             title={`${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`}
                             fallbackIcon="series"
-                            onClick={() => navigateToSeason(season)}
+                            href={`/library/series/season/${season.mediaItemId}`}
+                            onClick={onSeasonCardClick}
                             metadata={
                               <MetadataLine stacked>
                                 {show("metadata", "episodeCount") && <MetadataItem icon={<List />}>{season.episodeCount} {season.episodeCount === 1 ? "ep" : "eps"}</MetadataItem>}

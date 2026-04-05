@@ -205,7 +205,7 @@ export default function HistoryPage() {
   const [selectedItem, setSelectedItem] = useState<MediaItemWithRelations | null>(null);
   const [selectedItemType, setSelectedItemType] = useState<"MOVIE" | "SERIES" | "MUSIC">("MOVIE");
   const [selectedDetailUrl, setSelectedDetailUrl] = useState<string>("");
-  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [, setLoadingDetail] = useState(false);
 
   // Pagination
   const [page, setPage] = useState(1);
@@ -569,11 +569,10 @@ export default function HistoryPage() {
   // ── Render ─────────────────────────────────────────────────────
 
   return (
-    <div className="flex h-full">
-      <div className="flex-1 min-w-0 overflow-auto">
-        <div className="p-4 sm:p-6 lg:p-8">
+    <>
+      <div className="p-4 sm:p-6 lg:p-8 overflow-x-clip">
           {/* Header */}
-          <div className="flex items-center justify-between mb-6">
+          <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="flex items-center gap-3">
               <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Watch History</h1>
               {!loading && totalCount > 0 && (
@@ -808,14 +807,6 @@ export default function HistoryPage() {
             </>
           )}
         </div>
-      </div>
-
-      {/* Detail loading indicator */}
-      {loadingDetail && !selectedItem && (
-        <div className="flex items-center justify-center w-120 border-l bg-background">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-        </div>
-      )}
 
       {/* Detail side panel */}
       {selectedItem && (
@@ -828,6 +819,6 @@ export default function HistoryPage() {
           detailUrl={selectedDetailUrl}
         />
       )}
-    </div>
+    </>
   );
 }

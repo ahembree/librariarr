@@ -125,8 +125,13 @@
     outline: none;
     box-shadow: 0 0 0 2px var(--ring), 0 0 12px oklch(0.50 0.15 270 / 0.2);
   }
+  html {
+    overflow: hidden;
+    height: 100%;
+  }
   body {
     @apply bg-background text-foreground;
+    height: 100%;
   }
 }
 

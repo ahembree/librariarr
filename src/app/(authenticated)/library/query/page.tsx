@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
@@ -181,7 +181,6 @@ const GAP = 16;
 const CARD_CONTENT_HEIGHT = 138; // Fixed content area below poster (matches h-34.5 in MediaCard)
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
 const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar (4px) + py-1 padding (8px)
-const CACHE_KEY = "query-page-state";
 
 // ── Component ───────────────────────────────────────────────────
 
@@ -243,58 +242,6 @@ export default function QueryPage() {
 
   // Distinct values for dropdowns
   const [distinctValues, setDistinctValues] = useState<Record<string, string[]>>({});
-
-  // State cache ref for scroll restoration (read at navigation time via ref to keep navigateToItem stable)
-  const cacheRef = useRef({
-    mediaTypes, selectedServerIds, groups, sortBy, sortOrder,
-    includeEpisodes, arrServerIds, results, activeQueryId,
-  });
-  cacheRef.current = {
-    mediaTypes, selectedServerIds, groups, sortBy, sortOrder,
-    includeEpisodes, arrServerIds, results, activeQueryId,
-  };
-
-  // Restore cached state from back navigation
-  const restoredRef = useRef(false);
-  useEffect(() => {
-    if (restoredRef.current) return;
-    restoredRef.current = true;
-    try {
-      const cached = sessionStorage.getItem(CACHE_KEY);
-      if (!cached) return;
-      sessionStorage.removeItem(CACHE_KEY);
-      const data = JSON.parse(cached);
-      if (data.results?.length > 0) {
-        setMediaTypes(data.mediaTypes ?? []);
-        setSelectedServerIds(data.selectedServerIds ?? []);
-        setGroups(data.groups ?? [makeDefaultGroup()]);
-        setSortBy(data.sortBy ?? "title");
-        setSortOrder(data.sortOrder ?? "asc");
-        setIncludeEpisodes(data.includeEpisodes ?? false);
-        setArrServerIds(data.arrServerIds ?? {});
-        setActiveQueryId(data.activeQueryId ?? null);
-        setResults(data.results);
-        setHasRun(true);
-        const scrollTop = data.scrollTop ?? 0;
-        const scrollFraction = data.scrollFraction ?? 0;
-        if (scrollTop > 0) {
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              const main = document.querySelector<HTMLElement>("main");
-              if (main) {
-                if (scrollFraction > 0) {
-                  const maxScroll = main.scrollHeight - main.clientHeight;
-                  main.scrollTo({ top: Math.round(scrollFraction * maxScroll), behavior: "instant" });
-                } else {
-                  main.scrollTo({ top: scrollTop, behavior: "instant" });
-                }
-              }
-            });
-          });
-        }
-      }
-    } catch { /* invalid cache, ignore */ }
-  }, []);
 
   // Load saved queries, distinct values, and Arr instances on mount
   const loadedRef = useRef(false);
@@ -780,29 +727,34 @@ export default function QueryPage() {
 
   // ── Card grid virtualizer ──
 
-  const gridContainerRef = useRef<HTMLDivElement>(null);
+  const [gridNode, setGridNode] = useState<HTMLDivElement | null>(null);
+  const gridContainerRef = useCallback((node: HTMLDivElement | null) => {
+    setGridNode(node);
+  }, []);
   const scrollElementRef = useRef<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
 
   useEffect(() => {
+    if (!gridNode) {
+      scrollElementRef.current = null;
+      setScrollMargin(0);
+      return;
+    }
     // Walk up the DOM to find the nearest scrollable ancestor
-    let el = gridContainerRef.current?.parentElement ?? null;
+    let el: HTMLElement | null = gridNode.parentElement;
     while (el) {
       const style = getComputedStyle(el);
       if (style.overflowY === "auto" || style.overflowY === "scroll") {
         scrollElementRef.current = el;
-        return;
+        break;
       }
       el = el.parentElement;
     }
-    scrollElementRef.current = document.querySelector<HTMLElement>("main");
-  }, []);
-
-  useLayoutEffect(() => {
-    if (gridContainerRef.current) {
-      setScrollMargin(gridContainerRef.current.offsetTop);
+    if (!el) {
+      scrollElementRef.current = document.querySelector<HTMLElement>("main");
     }
-  }, []);
+    setScrollMargin(gridNode.offsetTop);
+  }, [gridNode]);
 
   const rowCount = useMemo(
     () => (results.length > 0 ? Math.ceil(results.length / cardColumns) : 0),
@@ -810,12 +762,11 @@ export default function QueryPage() {
   );
 
   const estimateSize = useCallback(() => {
-    const container = gridContainerRef.current;
-    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
+    const containerWidth = gridNode?.offsetWidth || estimateContentWidth(window.innerWidth);
     const columnWidth = (containerWidth - GAP * (cardColumns - 1)) / cardColumns;
     const posterHeight = columnWidth * 1.5;
     return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-  }, [cardColumns]);
+  }, [cardColumns, gridNode]);
 
   const gridVirtualizer = useVirtualizer({
     count: rowCount,
@@ -841,9 +792,8 @@ export default function QueryPage() {
   };
 
   return (
-    <div className="flex h-full">
-      <div className="flex-1 min-w-0 overflow-y-auto">
-        <div className="space-y-6 p-6">
+    <>
+      <div className="space-y-6 p-4 sm:p-6 md:pr-12">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -1207,10 +1157,11 @@ export default function QueryPage() {
                           {rowItems.map((item) => (
                             <MediaCard
                               key={item.id}
-                              imageUrl={`/api/media/${item.id}/image`}
+                              imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" || item.parentTitle ? "?type=parent" : ""}`}
                               title={item.title}
                               fallbackIcon={FALLBACK_ICONS[item.type] ?? "movie"}
                               onClick={() => navigateToItem(item)}
+                              servers={servers.length > 1 ? item.servers : undefined}
                               metadata={
                                 <MetadataLine stacked>
                                   {item.type !== "SERIES" && item.year && <MetadataItem icon={<Calendar />}>{item.year}</MetadataItem>}
@@ -1250,10 +1201,12 @@ export default function QueryPage() {
                                     audienceRating: item.audienceRating,
                                     ratingImage: item.ratingImage,
                                     audienceRatingImage: item.audienceRatingImage,
-                                    duration: item.duration,
-                                    resolution: item.resolution,
-                                    dynamicRange: item.dynamicRange,
-                                    audioProfile: item.audioProfile,
+                                    duration: item.matchedEpisodes != null ? undefined : item.duration,
+                                    resolution: item.matchedEpisodes != null ? undefined : item.resolution,
+                                    dynamicRange: item.matchedEpisodes != null ? undefined : item.dynamicRange,
+                                    audioProfile: item.matchedEpisodes != null ? undefined : item.audioProfile,
+                                    seasonCount: item.matchedEpisodes != null ? item.seasonCount : undefined,
+                                    episodeCount: item.matchedEpisodes != null ? item.matchedEpisodes : undefined,
                                     fileSize: item.fileSize,
                                     genres: item.genres,
                                     studio: item.studio,
@@ -1282,7 +1235,6 @@ export default function QueryPage() {
           ) : null}
         </div>
       )}
-        </div>
       </div>
 
       {selectedItem && (
@@ -1295,6 +1247,6 @@ export default function QueryPage() {
           detailUrl={getItemDetailUrl(selectedItem)}
         />
       )}
-    </div>
+    </>
   );
 }

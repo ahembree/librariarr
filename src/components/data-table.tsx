@@ -152,7 +152,7 @@ export function DataTable<T>({
     : 0;
 
   return (
-    <div ref={tableContainerRef} className="overflow-x-auto rounded-lg border">
+    <div ref={tableContainerRef} className="relative w-full overflow-x-auto rounded-lg border">
       <table className="w-full text-sm table-fixed" style={{ minWidth: totalWidth }}>
         <thead className="sticky top-0 z-10">
           <tr className="border-b bg-muted/50">

@@ -460,7 +460,8 @@ export default function MusicPage() {
                             title={a.parentTitle}
                             aspectRatio="square"
                             fallbackIcon="music"
-                            onClick={() => { markChildNavigation(); router.push(`/library/music/artist/${a.mediaItemId}`); }}
+                            href={`/library/music/artist/${a.mediaItemId}`}
+                            onClick={() => { markChildNavigation(); }}
                             metadata={
                               <MetadataLine stacked>
                                 {show("metadata", "albumCount") && <MetadataItem icon={<Disc3 />}>{a.albumCount} {a.albumCount === 1 ? "album" : "albums"}</MetadataItem>}

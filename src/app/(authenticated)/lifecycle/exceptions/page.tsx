@@ -702,8 +702,8 @@ export default function LifecycleExceptionsPage() {
         : "Search for an artist or album to exclude from lifecycle actions.";
 
   return (
-    <div className="flex h-full">
-      <div className="flex-1 min-w-0 space-y-6 p-6 overflow-y-auto">
+    <>
+      <div className="space-y-6 p-6 overflow-y-auto h-full">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Lifecycle Exceptions</h1>
@@ -932,6 +932,6 @@ export default function LifecycleExceptionsPage() {
           detailUrl={selectedDetailUrl}
         />
       )}
-    </div>
+    </>
   );
 }

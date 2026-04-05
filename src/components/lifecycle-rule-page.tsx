@@ -1409,8 +1409,8 @@ export function LifecycleRulePage({
   };
 
   return (
-    <div className={`flex ${embedded ? "flex-1 min-h-0" : "h-full"}`}>
-      <div ref={scrollContainerRef} className="flex-1 min-w-0 overflow-y-auto">
+    <>
+    <div className={embedded ? "flex-1 min-h-0 overflow-y-auto" : "h-full overflow-y-auto"} ref={scrollContainerRef}>
         <div className={embedded ? "px-4 sm:px-6 lg:px-8 pb-4 sm:pb-6 lg:pb-8" : "p-4 sm:p-6 lg:p-8"}>
       {!embedded && (
         <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -2817,7 +2817,7 @@ export function LifecycleRulePage({
         </AlertDialogContent>
       </AlertDialog>
         </div>
-      </div>
+    </div>
 
       {selectedItem && (
         <MediaDetailSidePanel
@@ -2832,6 +2832,6 @@ export function LifecycleRulePage({
           allActualValues={selectedItem.actualValues}
         />
       )}
-    </div>
+    </>
   );
 }

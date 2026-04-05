@@ -350,7 +350,8 @@ export default function MoviesPage() {
                             imageUrl={`/api/media/${movie.id}/image`}
                             title={movie.title}
                             fallbackIcon="movie"
-                            onClick={() => { markChildNavigation(); router.push(`/library/movies/${movie.id}`); }}
+                            href={`/library/movies/${movie.id}`}
+                            onClick={() => { markChildNavigation(); }}
                             metadata={
                               <MetadataLine stacked>
                                 {show("metadata", "year") && movie.year && <MetadataItem icon={<Calendar />}>{movie.year}</MetadataItem>}

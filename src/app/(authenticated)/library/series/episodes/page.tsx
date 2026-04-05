@@ -307,7 +307,8 @@ export default function AllEpisodesPage() {
                             title={ep.title}
                             aspectRatio="landscape"
                             fallbackIcon="series"
-                            onClick={() => { markChildNavigation(); sessionStorage.setItem("library-back-path", "/library/series/episodes"); router.push(`/library/series/episode/${ep.id}`); }}
+                            href={`/library/series/episode/${ep.id}`}
+                            onClick={() => { markChildNavigation(); sessionStorage.setItem("library-back-path", "/library/series/episodes"); }}
                             hoverContent={
                               <MediaHoverPopover
                                 data={{
