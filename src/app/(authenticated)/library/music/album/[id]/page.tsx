@@ -275,7 +275,7 @@ export default function AlbumDetailPage() {
                   title={t.title}
                   aspectRatio="square"
                   fallbackIcon="music"
-                  onClick={() => router.push(`/library/music/track/${t.id}`)}
+                  href={`/library/music/track/${t.id}`}
                   hoverContent={
                     <MediaHoverPopover
                       data={{

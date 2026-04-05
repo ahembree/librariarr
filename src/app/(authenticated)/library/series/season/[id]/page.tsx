@@ -285,7 +285,7 @@ export default function SeasonDetailPage() {
                     : ep.title}
                   aspectRatio="landscape"
                   fallbackIcon="series"
-                  onClick={() => router.push(`/library/series/episode/${ep.id}`)}
+                  href={`/library/series/episode/${ep.id}`}
                   hoverContent={
                     <MediaHoverPopover
                       data={{

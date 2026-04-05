@@ -376,10 +376,10 @@ export default function AllAlbumsPage() {
                             title={album.albumTitle}
                             aspectRatio="square"
                             fallbackIcon="music"
+                            href={`/library/music/album/${album.mediaItemId}`}
                             onClick={() => {
                               markChildNavigation();
                               sessionStorage.setItem("library-back-path", "/library/music/albums");
-                              router.push(`/library/music/album/${album.mediaItemId}`);
                             }}
                             qualityBar={
                               Object.keys(album.audioCodecCounts).length > 0
