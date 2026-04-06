@@ -26,7 +26,6 @@ import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { SyncLibraryButton } from "@/components/sync-library-button";
-import { CacheImagesButton } from "@/components/cache-images-button";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useFilterPersistence } from "@/hooks/use-filter-persistence";
@@ -366,7 +365,6 @@ export default function SeriesPage() {
           </div>
         )}
         <SyncLibraryButton libraryType="SERIES" onSyncComplete={fetchSeries} />
-        <CacheImagesButton libraryType="SERIES" />
       </div>
 
       <nav className="mb-6 flex items-center gap-1 border-b overflow-x-auto">

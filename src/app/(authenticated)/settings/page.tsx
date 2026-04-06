@@ -2295,6 +2295,7 @@ export default function SettingsPage() {
             imageCacheStats={imageCacheStats}
             clearingImageCache={clearingImageCache}
             onClearImageCache={handleClearImageCache}
+            onRefreshCacheStats={fetchImageCacheStats}
             releaseNotes={releaseNotes}
             loadingChangelog={loadingChangelog}
           />

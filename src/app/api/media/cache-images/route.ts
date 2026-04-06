@@ -8,7 +8,7 @@ import { logger } from "@/lib/logger";
 
 interface CacheJob {
   userId: string;
-  libraryType: string;
+  libraryTypes: string[];
   status: "RUNNING" | "COMPLETED" | "FAILED";
   totalItems: number;
   processedItems: number;
@@ -16,38 +16,39 @@ interface CacheJob {
   skippedImages: number;
   failedImages: number;
   startedAt: number;
+  /** Updated every time an item is processed — used for stale detection */
+  lastHeartbeat: number;
   error?: string;
 }
 
-// In-memory job state keyed by `${userId}:${libraryType}`
+/** If no heartbeat for this long, the job is considered dead (server restarted). */
+const HEARTBEAT_STALE_MS = 60_000;
+
+// In-memory job state keyed by userId
 const activeJobs = new Map<string, CacheJob>();
 
-function jobKey(userId: string, libraryType: string): string {
-  return `${userId}:${libraryType}`;
+function getJobForUser(userId: string): CacheJob | null {
+  const job = activeJobs.get(userId);
+  if (!job) return null;
+
+  // If the job claims to be running but hasn't heartbeated recently, mark it failed
+  if (job.status === "RUNNING" && Date.now() - job.lastHeartbeat > HEARTBEAT_STALE_MS) {
+    job.status = "FAILED";
+    job.error = "Job interrupted (server may have restarted)";
+    return job;
+  }
+
+  return job;
 }
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   const session = await getSession();
   if (!session.isLoggedIn) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { searchParams } = new URL(request.url);
-  const libraryType = searchParams.get("libraryType");
-
-  if (libraryType) {
-    const job = activeJobs.get(jobKey(session.userId, libraryType));
-    return NextResponse.json({ job: job ?? null });
-  }
-
-  // Return all jobs for the user
-  const jobs: CacheJob[] = [];
-  for (const [key, job] of activeJobs) {
-    if (key.startsWith(session.userId)) {
-      jobs.push(job);
-    }
-  }
-  return NextResponse.json({ jobs });
+  const job = getJobForUser(session.userId);
+  return NextResponse.json({ job: job ? sanitizeJob(job) : null });
 }
 
 export async function POST(request: NextRequest) {
@@ -59,23 +60,22 @@ export async function POST(request: NextRequest) {
   const { data, error } = await validateRequest(request, cacheImagesSchema);
   if (error) return error;
 
-  const { libraryType } = data;
-  const key = jobKey(session.userId, libraryType);
+  const { libraryTypes } = data;
 
   // Check if already running
-  const existing = activeJobs.get(key);
+  const existing = getJobForUser(session.userId);
   if (existing && existing.status === "RUNNING") {
     return NextResponse.json(
-      { error: "Image caching already in progress for this library type" },
+      { error: "Image caching already in progress" },
       { status: 409 },
     );
   }
 
-  // Find all media items with their server info
+  // Find all media items across selected library types
   const items = await prisma.mediaItem.findMany({
     where: {
       library: {
-        type: libraryType,
+        type: { in: libraryTypes },
         mediaServer: { userId: session.userId, enabled: true },
       },
     },
@@ -104,26 +104,28 @@ export async function POST(request: NextRequest) {
 
   if (items.length === 0) {
     return NextResponse.json(
-      { error: "No media items found for this library type" },
+      { error: "No media items found for the selected library types" },
       { status: 404 },
     );
   }
 
+  const now = Date.now();
   const job: CacheJob = {
     userId: session.userId,
-    libraryType,
+    libraryTypes,
     status: "RUNNING",
     totalItems: items.length,
     processedItems: 0,
     cachedImages: 0,
     skippedImages: 0,
     failedImages: 0,
-    startedAt: Date.now(),
+    startedAt: now,
+    lastHeartbeat: now,
   };
-  activeJobs.set(key, job);
+  activeJobs.set(session.userId, job);
 
   // Run caching in background
-  processCacheJob(key, job, items).catch((err) => {
+  processCacheJob(session.userId, job, items).catch((err) => {
     logger.error("ImageCache", "Bulk cache job failed", { error: String(err) });
     job.status = "FAILED";
     job.error = String(err);
@@ -133,6 +135,20 @@ export async function POST(request: NextRequest) {
     message: "Image caching started",
     totalItems: items.length,
   });
+}
+
+function sanitizeJob(job: CacheJob) {
+  return {
+    libraryTypes: job.libraryTypes,
+    status: job.status,
+    totalItems: job.totalItems,
+    processedItems: job.processedItems,
+    cachedImages: job.cachedImages,
+    skippedImages: job.skippedImages,
+    failedImages: job.failedImages,
+    startedAt: job.startedAt,
+    error: job.error,
+  };
 }
 
 type MediaItemForCache = {
@@ -154,17 +170,17 @@ type MediaItemForCache = {
 };
 
 async function processCacheJob(
-  key: string,
+  userId: string,
   job: CacheJob,
   items: MediaItemForCache[],
 ) {
-  // Group items by server to reuse clients
   const serverClients = new Map<string, ReturnType<typeof createMediaServerClient>>();
 
   for (const item of items) {
     const server = item.library.mediaServer;
     if (!server) {
       job.processedItems++;
+      job.lastHeartbeat = Date.now();
       continue;
     }
 
@@ -205,7 +221,6 @@ async function processCacheJob(
 
     for (const { url, maxWidth } of imageUrls) {
       try {
-        // Check if already cached
         const cached = await getCachedImageInfo(url, { maxWidth });
         if (cached) {
           job.skippedImages++;
@@ -224,10 +239,11 @@ async function processCacheJob(
     }
 
     job.processedItems++;
+    job.lastHeartbeat = Date.now();
   }
 
   job.status = "COMPLETED";
-  logger.info("ImageCache", `Bulk cache completed for ${job.libraryType}`, {
+  logger.info("ImageCache", `Bulk cache completed for ${job.libraryTypes.join(", ")}`, {
     totalItems: job.totalItems,
     cachedImages: job.cachedImages,
     skippedImages: job.skippedImages,
@@ -235,11 +251,11 @@ async function processCacheJob(
     durationMs: Date.now() - job.startedAt,
   });
 
-  // Clean up completed jobs after 30 seconds
+  // Clean up completed jobs after 60 seconds
   setTimeout(() => {
-    const current = activeJobs.get(key);
+    const current = activeJobs.get(userId);
     if (current && current.status !== "RUNNING") {
-      activeJobs.delete(key);
+      activeJobs.delete(userId);
     }
-  }, 30_000);
+  }, 60_000);
 }
