@@ -11,11 +11,18 @@ export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const serverId = searchParams.get("serverId");
 
-  const servers = await prisma.mediaServer.findMany({
-    where: { userId: session.userId, enabled: true },
-    select: { id: true },
-  });
+  const [servers, settings] = await Promise.all([
+    prisma.mediaServer.findMany({
+      where: { userId: session.userId, enabled: true },
+      select: { id: true },
+    }),
+    prisma.appSettings.findUnique({
+      where: { userId: session.userId! },
+      select: { dedupStats: true },
+    }),
+  ]);
   let serverIds = servers.map((s) => s.id);
+  const dedupEnabled = (settings?.dedupStats ?? true) && serverIds.length > 1 && !serverId;
 
   if (serverId) {
     if (!serverIds.includes(serverId)) {
@@ -36,6 +43,7 @@ export async function GET(request: NextRequest) {
     ...serverFilter,
     addedAt: { not: null as null },
     ...(type ? { type } : {}),
+    ...(dedupEnabled ? { dedupCanonical: true } : {}),
   };
 
   const [items, total] = await Promise.all([
