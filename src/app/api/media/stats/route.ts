@@ -69,6 +69,9 @@ export async function GET(request: NextRequest) {
 
 async function computeStats(serverIds: string[], dedupEnabled: boolean) {
   const serverFilter = { library: { mediaServerId: { in: serverIds } } };
+  const breakdownFilter = dedupEnabled
+    ? { ...serverFilter, dedupCanonical: true }
+    : serverFilter;
 
   // Run all independent queries in a single parallel batch (genre + grouped counts
   // were previously sequential — now included here for better parallelism)
@@ -100,7 +103,7 @@ async function computeStats(serverIds: string[], dedupEnabled: boolean) {
     }),
     prisma.mediaItem.groupBy({
       by: ["resolution", "type"],
-      where: serverFilter,
+      where: breakdownFilter,
       _count: true,
     }),
     prisma.mediaItem.aggregate({
@@ -147,27 +150,27 @@ async function computeStats(serverIds: string[], dedupEnabled: boolean) {
     }),
     prisma.mediaItem.groupBy({
       by: ["videoCodec", "type"],
-      where: serverFilter,
+      where: breakdownFilter,
       _count: true,
     }),
     prisma.mediaItem.groupBy({
       by: ["audioCodec", "type"],
-      where: serverFilter,
+      where: breakdownFilter,
       _count: true,
     }),
     prisma.mediaItem.groupBy({
       by: ["contentRating", "type"],
-      where: serverFilter,
+      where: breakdownFilter,
       _count: true,
     }),
     prisma.mediaItem.groupBy({
       by: ["dynamicRange", "type"],
-      where: serverFilter,
+      where: breakdownFilter,
       _count: true,
     }),
     prisma.mediaItem.groupBy({
       by: ["audioChannels", "type"],
-      where: serverFilter,
+      where: breakdownFilter,
       _count: true,
     }),
     // Genre breakdown — previously sequential, now parallel
@@ -181,6 +184,7 @@ async function computeStats(serverIds: string[], dedupEnabled: boolean) {
       CROSS JOIN LATERAL jsonb_array_elements_text(mi.genres) AS g(genre)
       WHERE l."mediaServerId" IN (${Prisma.join(serverIds)})
         AND mi.genres IS NOT NULL AND jsonb_typeof(mi.genres) = 'array'
+        ${dedupEnabled ? Prisma.sql`AND mi."dedupCanonical" = true` : Prisma.empty}
       GROUP BY g.genre, mi.type
       ORDER BY "_count" DESC
     `,

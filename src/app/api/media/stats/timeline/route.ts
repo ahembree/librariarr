@@ -88,11 +88,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid bin" }, { status: 400 });
   }
 
-  const servers = await prisma.mediaServer.findMany({
-    where: { userId: session.userId, enabled: true },
-    select: { id: true },
-  });
+  const [servers, settings] = await Promise.all([
+    prisma.mediaServer.findMany({
+      where: { userId: session.userId, enabled: true },
+      select: { id: true },
+    }),
+    prisma.appSettings.findUnique({
+      where: { userId: session.userId! },
+      select: { dedupStats: true },
+    }),
+  ]);
   let serverIds = servers.map((s) => s.id);
+  const dedupEnabled = (settings?.dedupStats ?? true) && serverIds.length > 1 && !serverId;
 
   if (serverId) {
     if (!serverIds.includes(serverId)) {
@@ -113,10 +120,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Cannot use a date dimension as breakdown" }, { status: 400 });
   }
 
-  const cacheKey = `timeline:${dateField}:${bin}:${breakdownDim ?? ""}:${typeFilter ?? ""}:${topN ?? ""}:${serverIds.sort().join(",")}`;
+  const cacheKey = `timeline:${dateField}:${bin}:${breakdownDim ?? ""}:${typeFilter ?? ""}:${topN ?? ""}:${serverIds.sort().join(",")}:${dedupEnabled ? "dedup" : "raw"}`;
 
   const result = await appCache.getOrSet(cacheKey, async () => {
-    return queryTimeline(dateField, bin, breakdownMeta, serverIds, typeFilter, topN);
+    return queryTimeline(dateField, bin, breakdownMeta, serverIds, typeFilter, topN, dedupEnabled);
   }, 60_000);
 
   return NextResponse.json(result);
@@ -247,11 +254,13 @@ async function queryTimeline(
   serverIds: string[],
   typeFilter: string | null,
   topN: number | null,
+  dedupEnabled: boolean,
 ): Promise<{ points: TimelinePoint[]; series: string[] }> {
   const col = `mi."${dateField}"`;
   const bucketExpr = dateBucketExpr(col, bin);
 
   const typeWhere = typeFilter ? ` AND mi.type = '${escapeSqlLiteral(typeFilter)}'` : "";
+  const dedupWhere = dedupEnabled ? ` AND mi."dedupCanonical" = true` : "";
 
   if (!breakdownMeta) {
     // Simple timeline: just date buckets with counts
@@ -260,7 +269,7 @@ async function queryTimeline(
        FROM "MediaItem" mi
        JOIN "Library" l ON mi."libraryId" = l.id
        WHERE l."mediaServerId" = ANY($1)
-         AND ${col} IS NOT NULL${typeWhere}
+         AND ${col} IS NOT NULL${typeWhere}${dedupWhere}
        GROUP BY "date"
        ORDER BY "date" ASC`,
       serverIds,
@@ -279,7 +288,7 @@ async function queryTimeline(
        FROM "MediaItem" mi
        JOIN "Library" l ON mi."libraryId" = l.id
        WHERE l."mediaServerId" = ANY($1)
-         AND ${col} IS NOT NULL${typeWhere}
+         AND ${col} IS NOT NULL${typeWhere}${dedupWhere}
        GROUP BY "date"
        ORDER BY "date" ASC`,
       serverIds,
@@ -294,7 +303,7 @@ async function queryTimeline(
      FROM "MediaItem" mi
      JOIN "Library" l ON mi."libraryId" = l.id
      WHERE l."mediaServerId" = ANY($1)
-       AND ${col} IS NOT NULL${typeWhere}
+       AND ${col} IS NOT NULL${typeWhere}${dedupWhere}
      GROUP BY "date", "bk"
      ORDER BY "date" ASC`,
     serverIds,
