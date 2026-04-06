@@ -423,6 +423,7 @@ export function SystemTab({
   }, [onRefreshCacheStats]);
 
   const pollJobRef = useRef<() => void>();
+  const didRefreshRef = useRef(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -438,12 +439,14 @@ export function SystemTab({
         setCacheJob(j);
 
         if (j && j.status === "RUNNING") {
+          didRefreshRef.current = false;
           pollTimer.current = setTimeout(() => pollJobRef.current?.(), 1500);
           return;
         }
 
-        // Job finished — refresh cache stats
-        if (j && j.status !== "RUNNING") {
+        // Job finished — refresh cache stats once
+        if (j && j.status !== "RUNNING" && !didRefreshRef.current) {
+          didRefreshRef.current = true;
           onRefreshRef.current();
         }
       } catch {
@@ -461,6 +464,7 @@ export function SystemTab({
   }, []);
 
   const handleJobStarted = () => {
+    didRefreshRef.current = false;
     setCacheJob({
       status: "RUNNING",
       totalItems: 0,

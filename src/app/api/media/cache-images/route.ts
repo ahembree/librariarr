@@ -235,12 +235,6 @@ async function processCacheJob(
     if (item.artUrl) urls.push({ url: item.artUrl, maxWidth: CACHE_WIDTH_ART });
     if (item.parentThumbUrl) urls.push({ url: item.parentThumbUrl });
     if (item.seasonThumbUrl) urls.push({ url: item.seasonThumbUrl });
-    if (Array.isArray(item.roles)) {
-      for (const role of item.roles as Array<{ thumb?: string | null }>) {
-        if (role.thumb) urls.push({ url: role.thumb });
-      }
-    }
-
     for (const { url, maxWidth } of urls) {
       const key = computeCacheKey(url, maxWidth);
       if (seen.has(key)) {
