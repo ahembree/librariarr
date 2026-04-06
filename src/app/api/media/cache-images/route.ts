@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
-import { cacheImage, getCachedImageInfo, CACHE_WIDTH_ART } from "@/lib/image-cache/image-cache";
+import { cacheImage, getCachedImageInfo, computeCacheKey, CACHE_WIDTH_ART } from "@/lib/image-cache/image-cache";
 import { validateRequest, cacheImagesSchema } from "@/lib/validation";
 import { logger } from "@/lib/logger";
 
@@ -208,72 +208,98 @@ type MediaItemForCache = {
   };
 };
 
+/** Max concurrent image fetches + optimizations */
+const CONCURRENCY = 10;
+
+interface ImageTask {
+  url: string;
+  maxWidth?: number;
+  serverId: string;
+}
+
 async function processCacheJob(
   userId: string,
   job: CacheJob,
   items: MediaItemForCache[],
 ) {
+  // 1. Build server clients
   const serverClients = new Map<string, ReturnType<typeof createMediaServerClient>>();
+  for (const item of items) {
+    const server = item.library.mediaServer;
+    if (!server || serverClients.has(server.id)) continue;
+    serverClients.set(
+      server.id,
+      createMediaServerClient(server.type, server.url, server.accessToken, {
+        skipTlsVerify: server.tlsSkipVerify,
+      }),
+    );
+  }
+
+  // 2. Collect all unique image tasks, deduplicating by cache key
+  const seen = new Set<string>();
+  const tasks: ImageTask[] = [];
 
   for (const item of items) {
-    if (job.aborted) break;
-
     const server = item.library.mediaServer;
     if (!server) {
       job.processedItems++;
-      job.lastHeartbeat = Date.now();
       continue;
     }
 
-    if (!serverClients.has(server.id)) {
-      serverClients.set(
-        server.id,
-        createMediaServerClient(server.type, server.url, server.accessToken, {
-          skipTlsVerify: server.tlsSkipVerify,
-        }),
-      );
-    }
-    const client = serverClients.get(server.id)!;
-
-    const imageUrls: Array<{ url: string; maxWidth?: number }> = [];
-
-    if (item.thumbUrl) {
-      imageUrls.push({ url: item.thumbUrl });
-    }
-    if (item.artUrl) {
-      imageUrls.push({ url: item.artUrl, maxWidth: CACHE_WIDTH_ART });
-    }
-    if (item.parentThumbUrl) {
-      imageUrls.push({ url: item.parentThumbUrl });
-    }
-    if (item.seasonThumbUrl) {
-      imageUrls.push({ url: item.seasonThumbUrl });
-    }
-
+    const urls: Array<{ url: string; maxWidth?: number }> = [];
+    if (item.thumbUrl) urls.push({ url: item.thumbUrl });
+    if (item.artUrl) urls.push({ url: item.artUrl, maxWidth: CACHE_WIDTH_ART });
+    if (item.parentThumbUrl) urls.push({ url: item.parentThumbUrl });
+    if (item.seasonThumbUrl) urls.push({ url: item.seasonThumbUrl });
     if (Array.isArray(item.roles)) {
       for (const role of item.roles as Array<{ thumb?: string | null }>) {
-        if (role.thumb) {
-          imageUrls.push({ url: role.thumb });
-        }
+        if (role.thumb) urls.push({ url: role.thumb });
       }
     }
 
-    for (const { url, maxWidth } of imageUrls) {
-      if (job.aborted) break;
+    for (const { url, maxWidth } of urls) {
+      const key = computeCacheKey(url, maxWidth);
+      if (seen.has(key)) {
+        // Deduplicated — count as skipped for progress
+        job.skippedImages++;
+        job.processedImages++;
+        continue;
+      }
+      seen.add(key);
+      tasks.push({ url, maxWidth, serverId: server.id });
+    }
+
+    job.processedItems++;
+  }
+
+  // Update totals after dedup
+  job.totalImages = tasks.length + job.processedImages;
+
+  // 3. Process tasks concurrently with a pool
+  let taskIndex = 0;
+
+  const processNext = async (): Promise<void> => {
+    while (taskIndex < tasks.length) {
+      if (job.aborted) return;
+
+      const idx = taskIndex++;
+      const task = tasks[idx];
 
       try {
-        const cached = await getCachedImageInfo(url, { maxWidth });
+        const cached = await getCachedImageInfo(task.url, { maxWidth: task.maxWidth });
         if (cached) {
           job.skippedImages++;
           job.totalCachedBytes += cached.size;
           job.processedImages++;
+          job.lastHeartbeat = Date.now();
           continue;
         }
 
+        const client = serverClients.get(task.serverId)!;
         const result = await cacheImage(
-          url,
-          () => client.fetchImage(url),
-          maxWidth ? { maxWidth } : undefined,
+          task.url,
+          () => client.fetchImage(task.url),
+          task.maxWidth ? { maxWidth: task.maxWidth } : undefined,
         );
         job.cachedImages++;
         job.totalCachedBytes += result.data.length;
@@ -281,11 +307,12 @@ async function processCacheJob(
         job.failedImages++;
       }
       job.processedImages++;
+      job.lastHeartbeat = Date.now();
     }
+  };
 
-    job.processedItems++;
-    job.lastHeartbeat = Date.now();
-  }
+  const workers = Array.from({ length: CONCURRENCY }, () => processNext());
+  await Promise.all(workers);
 
   if (job.aborted) {
     job.status = "CANCELLED";
