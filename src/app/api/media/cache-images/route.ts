@@ -113,19 +113,6 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  let totalImages = 0;
-  for (const item of items) {
-    if (item.thumbUrl) totalImages++;
-    if (item.artUrl) totalImages++;
-    if (item.parentThumbUrl) totalImages++;
-    if (item.seasonThumbUrl) totalImages++;
-    if (Array.isArray(item.roles)) {
-      for (const role of item.roles as Array<{ thumb?: string | null }>) {
-        if (role.thumb) totalImages++;
-      }
-    }
-  }
-
   const now = Date.now();
   const job: CacheJob = {
     userId: session.userId,
@@ -133,7 +120,7 @@ export async function POST(request: NextRequest) {
     status: "RUNNING",
     totalItems: items.length,
     processedItems: 0,
-    totalImages,
+    totalImages: 0,
     processedImages: 0,
     cachedImages: 0,
     skippedImages: 0,
@@ -238,13 +225,11 @@ async function processCacheJob(
   // 2. Collect all unique image tasks, deduplicating by cache key
   const seen = new Set<string>();
   const tasks: ImageTask[] = [];
+  let dedupSkipped = 0;
 
   for (const item of items) {
     const server = item.library.mediaServer;
-    if (!server) {
-      job.processedItems++;
-      continue;
-    }
+    if (!server) continue;
 
     const urls: Array<{ url: string; maxWidth?: number }> = [];
     if (item.thumbUrl) urls.push({ url: item.thumbUrl });
@@ -260,20 +245,17 @@ async function processCacheJob(
     for (const { url, maxWidth } of urls) {
       const key = computeCacheKey(url, maxWidth);
       if (seen.has(key)) {
-        // Deduplicated — count as skipped for progress
-        job.skippedImages++;
-        job.processedImages++;
+        dedupSkipped++;
         continue;
       }
       seen.add(key);
       tasks.push({ url, maxWidth, serverId: server.id });
     }
-
-    job.processedItems++;
   }
 
-  // Update totals after dedup
-  job.totalImages = tasks.length + job.processedImages;
+  // Set totals now that we know the unique image count
+  job.totalImages = tasks.length;
+  job.skippedImages = dedupSkipped;
 
   // 3. Process tasks concurrently with a pool
   let taskIndex = 0;
