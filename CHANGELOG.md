@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.2](https://github.com/ahembree/librariarr/compare/v0.14.1...v0.14.2) (2026-04-06)
+
+
+### Bug Fixes
+
+* apply dedup filtering to recently-added and timeline stats ([253b0c5](https://github.com/ahembree/librariarr/commit/253b0c58bd564170027cd6e908b8cf90ffbf1d4b))
+* apply dedupCanonical filter to dashboard breakdown stats ([3c104bc](https://github.com/ahembree/librariarr/commit/3c104bc6df7811678cd8d074fb4016820c962444))
+
 ## [0.14.1](https://github.com/ahembree/librariarr/compare/v0.14.0...v0.14.1) (2026-04-05)
 
 
