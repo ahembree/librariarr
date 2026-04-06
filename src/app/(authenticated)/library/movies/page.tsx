@@ -24,6 +24,7 @@ import type { MediaItemWithRelations } from "@/lib/types";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { SyncLibraryButton } from "@/components/sync-library-button";
+import { CacheImagesButton } from "@/components/cache-images-button";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useFilterPersistence } from "@/hooks/use-filter-persistence";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -237,6 +238,7 @@ export default function MoviesPage() {
           <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{items.length.toLocaleString()}</span>
         )}
         <SyncLibraryButton libraryType="MOVIE" onSyncComplete={fetchMovies} />
+        <CacheImagesButton libraryType="MOVIE" />
       </div>
 
       <MediaFilters

@@ -25,6 +25,7 @@ import { useTableAlphabet } from "@/hooks/use-table-alphabet";
 import { formatFileSize } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { SyncLibraryButton } from "@/components/sync-library-button";
+import { CacheImagesButton } from "@/components/cache-images-button";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useFilterPersistence } from "@/hooks/use-filter-persistence";
@@ -319,6 +320,7 @@ export default function MusicPage() {
           </div>
         )}
         <SyncLibraryButton libraryType="MUSIC" onSyncComplete={fetchArtists} />
+        <CacheImagesButton libraryType="MUSIC" />
       </div>
 
       <nav className="mb-6 flex items-center gap-1 border-b overflow-x-auto">
