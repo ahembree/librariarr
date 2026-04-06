@@ -34,11 +34,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Cannot cross two stream dimensions" }, { status: 400 });
   }
 
-  const servers = await prisma.mediaServer.findMany({
-    where: { userId: session.userId, enabled: true },
-    select: { id: true },
-  });
+  const [servers, settings] = await Promise.all([
+    prisma.mediaServer.findMany({
+      where: { userId: session.userId, enabled: true },
+      select: { id: true },
+    }),
+    prisma.appSettings.findUnique({
+      where: { userId: session.userId! },
+      select: { dedupStats: true },
+    }),
+  ]);
   let serverIds = servers.map((s) => s.id);
+  const dedupEnabled = (settings?.dedupStats ?? true) && serverIds.length > 1 && !serverId;
 
   if (serverId) {
     if (!serverIds.includes(serverId)) {
@@ -51,12 +58,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ rows: [] });
   }
 
-  const cacheKey = `cross-tab:${dim1Id}:${dim2Id}:${serverIds.sort().join(",")}`;
+  const cacheKey = `cross-tab:${dim1Id}:${dim2Id}:${serverIds.sort().join(",")}:${dedupEnabled ? "dedup" : "raw"}`;
   const expensive = ["json_unnest", "stream_group"];
   const ttl = (expensive.includes(meta1.category) || expensive.includes(meta2.category))
     ? 120_000 : 60_000;
 
-  const rows = await appCache.getOrSet(cacheKey, () => queryCrossTab(meta1, meta2, serverIds), ttl);
+  const rows = await appCache.getOrSet(cacheKey, () => queryCrossTab(meta1, meta2, serverIds, dedupEnabled), ttl);
   return NextResponse.json({ rows });
 }
 
@@ -65,15 +72,16 @@ export async function GET(request: NextRequest) {
 async function queryCrossTab(
   meta1: DimensionMeta,
   meta2: DimensionMeta,
-  serverIds: string[]
+  serverIds: string[],
+  dedupEnabled: boolean
 ): Promise<CrossTabRow[]> {
   // Fast path: both dimensions are simple direct fields on MediaItem
   if (meta1.category === "direct" && meta2.category === "direct") {
-    return queryDirectDirect(meta1.dbField, meta2.dbField, serverIds);
+    return queryDirectDirect(meta1.dbField, meta2.dbField, serverIds, dedupEnabled);
   }
 
   // General path: fetch raw items, resolve labels in JS, cross-tabulate
-  return queryGeneral(meta1, meta2, serverIds);
+  return queryGeneral(meta1, meta2, serverIds, dedupEnabled);
 }
 
 // ── Direct × Direct (pure SQL) ─────────────────────────────────
@@ -81,14 +89,17 @@ async function queryCrossTab(
 async function queryDirectDirect(
   field1: string,
   field2: string,
-  serverIds: string[]
+  serverIds: string[],
+  dedupEnabled: boolean
 ): Promise<CrossTabRow[]> {
+  const dedupClause = dedupEnabled ? `AND mi."dedupCanonical" = true` : "";
   return prisma.$queryRawUnsafe<CrossTabRow[]>(
     `SELECT mi."${field1}"::text AS "dim1", mi."${field2}"::text AS "dim2",
        mi.type::text AS "type", COUNT(*)::int AS "_count"
      FROM "MediaItem" mi
      JOIN "Library" l ON mi."libraryId" = l.id
      WHERE l."mediaServerId" = ANY($1)
+       ${dedupClause}
      GROUP BY mi."${field1}", mi."${field2}", mi.type
      ORDER BY "_count" DESC
      LIMIT 2000`,
@@ -106,9 +117,10 @@ interface RawItem {
 async function queryGeneral(
   meta1: DimensionMeta,
   meta2: DimensionMeta,
-  serverIds: string[]
+  serverIds: string[],
+  dedupEnabled: boolean
 ): Promise<CrossTabRow[]> {
-  const items = await fetchItems(meta1, meta2, serverIds);
+  const items = await fetchItems(meta1, meta2, serverIds, dedupEnabled);
 
   // Cross-tabulate: for each item, resolve labels for both dimensions and count
   const countMap = new Map<string, number>();
@@ -140,7 +152,8 @@ async function queryGeneral(
 async function fetchItems(
   meta1: DimensionMeta,
   meta2: DimensionMeta,
-  serverIds: string[]
+  serverIds: string[],
+  dedupEnabled: boolean
 ): Promise<RawItem[]> {
   // If either dimension is stream_group, we need a JOIN to MediaStream
   const streamMeta = meta1.category === "stream_group" ? meta1
@@ -149,7 +162,7 @@ async function fetchItems(
 
   if (streamMeta) {
     const otherMeta = streamMeta === meta1 ? meta2 : meta1;
-    return fetchWithStreamJoin(streamMeta, otherMeta, streamMeta === meta1, serverIds);
+    return fetchWithStreamJoin(streamMeta, otherMeta, streamMeta === meta1, serverIds, dedupEnabled);
   }
 
   // All other combos: select from MediaItem with both fields
@@ -158,12 +171,14 @@ async function fetchItems(
   addRequiredFields(meta2, fields);
 
   const selectCols = [...fields].map((f) => `mi."${f}"`).join(", ");
+  const dedupClause = dedupEnabled ? `AND mi."dedupCanonical" = true` : "";
 
   return prisma.$queryRawUnsafe<RawItem[]>(
     `SELECT ${selectCols}
      FROM "MediaItem" mi
      JOIN "Library" l ON mi."libraryId" = l.id
-     WHERE l."mediaServerId" = ANY($1)`,
+     WHERE l."mediaServerId" = ANY($1)
+       ${dedupClause}`,
     serverIds
   );
 }
@@ -178,7 +193,8 @@ async function fetchWithStreamJoin(
   streamMeta: DimensionMeta,
   otherMeta: DimensionMeta,
   isStreamDim1: boolean,
-  serverIds: string[]
+  serverIds: string[],
+  dedupEnabled: boolean
 ): Promise<RawItem[]> {
   const otherFields = new Set<string>();
   addRequiredFields(otherMeta, otherFields);
@@ -186,6 +202,7 @@ async function fetchWithStreamJoin(
   const otherCols = [...otherFields].map((f) => `mi."${f}"`).join(", ");
   const streamCol = `ms."${streamMeta.streamField!}"`;
   const streamAlias = isStreamDim1 ? "dim1_stream" : "dim2_stream";
+  const dedupClause = dedupEnabled ? `AND mi."dedupCanonical" = true` : "";
 
   return prisma.$queryRawUnsafe<RawItem[]>(
     `SELECT mi.type::text AS "type", ${otherCols},
@@ -194,7 +211,8 @@ async function fetchWithStreamJoin(
      JOIN "MediaItem" mi ON ms."mediaItemId" = mi.id
      JOIN "Library" l ON mi."libraryId" = l.id
      WHERE l."mediaServerId" = ANY($1)
-       AND ms."streamType" = $2`,
+       AND ms."streamType" = $2
+       ${dedupClause}`,
     serverIds,
     streamMeta.streamType!
   );

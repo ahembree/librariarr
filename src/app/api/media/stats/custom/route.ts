@@ -47,11 +47,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid dimension" }, { status: 400 });
   }
 
-  const servers = await prisma.mediaServer.findMany({
-    where: { userId: session.userId, enabled: true },
-    select: { id: true },
-  });
+  const [servers, settings] = await Promise.all([
+    prisma.mediaServer.findMany({
+      where: { userId: session.userId, enabled: true },
+      select: { id: true },
+    }),
+    prisma.appSettings.findUnique({
+      where: { userId: session.userId! },
+      select: { dedupStats: true },
+    }),
+  ]);
   let serverIds = servers.map((s) => s.id);
+  const dedupEnabled = (settings?.dedupStats ?? true) && serverIds.length > 1 && !serverId;
 
   if (serverId) {
     if (!serverIds.includes(serverId)) {
@@ -64,9 +71,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ breakdown: [] });
   }
 
-  const cacheKey = `custom-stats:${dimensionId}:${serverIds.sort().join(",")}`;
+  const cacheKey = `custom-stats:${dimensionId}:${serverIds.sort().join(",")}:${dedupEnabled ? "dedup" : "raw"}`;
   const breakdown = await appCache.getOrSet(cacheKey, async () => {
-    const serverFilter = { library: { mediaServerId: { in: serverIds } } };
+    const serverFilter = dedupEnabled
+      ? { library: { mediaServerId: { in: serverIds } }, dedupCanonical: true }
+      : { library: { mediaServerId: { in: serverIds } } };
 
     switch (meta.category) {
       case "direct":
@@ -74,13 +83,13 @@ export async function GET(request: NextRequest) {
       case "value_map":
         return queryValueMap(meta.dbField, meta.valueMapFn!, serverFilter);
       case "json_unnest":
-        return queryJsonUnnest(meta.dbField, serverIds);
+        return queryJsonUnnest(meta.dbField, serverIds, dedupEnabled);
       case "numeric_bucket":
-        return queryNumericBucket(meta.dbField, meta.nullLabel, meta.bucketConfig!.ranges, serverIds);
+        return queryNumericBucket(meta.dbField, meta.nullLabel, meta.bucketConfig!.ranges, serverIds, dedupEnabled);
       case "stream_group":
-        return queryStreamGroup(meta.streamType!, meta.streamField!, meta.nullLabel, serverIds);
+        return queryStreamGroup(meta.streamType!, meta.streamField!, meta.nullLabel, serverIds, dedupEnabled);
       case "date_bucket":
-        return queryDateBucket(meta.dbField, meta.nullLabel, meta.dateBucketGranularity!, serverIds);
+        return queryDateBucket(meta.dbField, meta.nullLabel, meta.dateBucketGranularity!, serverIds, dedupEnabled);
     }
   }, 60_000);
 
@@ -91,7 +100,7 @@ type BreakdownRow = { value: string | null; type: string; _count: number };
 
 async function queryDirect(
   dbField: string,
-  serverFilter: { library: { mediaServerId: { in: string[] } } }
+  serverFilter: Record<string, unknown>
 ): Promise<BreakdownRow[]> {
   const grouped = await prisma.mediaItem.groupBy({
     by: [dbField as "resolution", "type"],
@@ -109,7 +118,7 @@ async function queryDirect(
 async function queryValueMap(
   dbField: string,
   mapFn: (raw: string | null) => string,
-  serverFilter: { library: { mediaServerId: { in: string[] } } }
+  serverFilter: Record<string, unknown>
 ): Promise<BreakdownRow[]> {
   const raw = await queryDirect(dbField, serverFilter);
 
@@ -133,7 +142,8 @@ async function queryValueMap(
 
 async function queryJsonUnnest(
   dbField: string,
-  serverIds: string[]
+  serverIds: string[],
+  dedupEnabled: boolean
 ): Promise<BreakdownRow[]> {
   assertAllowedColumn(dbField, ALLOWED_MEDIA_ITEM_COLUMNS);
   return prisma.$queryRaw<BreakdownRow[]>`
@@ -145,6 +155,7 @@ async function queryJsonUnnest(
     WHERE l."mediaServerId" IN (${Prisma.join(serverIds)})
       AND mi.${Prisma.raw(`"${dbField}"`)} IS NOT NULL
       AND jsonb_typeof(mi.${Prisma.raw(`"${dbField}"`)}) = 'array'
+      ${dedupEnabled ? Prisma.sql`AND mi."dedupCanonical" = true` : Prisma.empty}
     GROUP BY g.val, mi.type
     ORDER BY "_count" DESC
   `;
@@ -154,7 +165,8 @@ async function queryNumericBucket(
   dbField: string,
   nullLabel: string,
   ranges: [number | null, number | null, string][],
-  serverIds: string[]
+  serverIds: string[],
+  dedupEnabled: boolean
 ): Promise<BreakdownRow[]> {
   assertAllowedColumn(dbField, ALLOWED_MEDIA_ITEM_COLUMNS);
   const col = `mi."${dbField}"`;
@@ -175,6 +187,7 @@ async function queryNumericBucket(
   }
 
   const caseExpr = `CASE ${caseBranches.join(" ")} END`;
+  const dedupClause = dedupEnabled ? `AND mi."dedupCanonical" = true` : "";
 
   return prisma.$queryRawUnsafe<BreakdownRow[]>(
     `SELECT ${caseExpr} AS "value", mi.type::text AS "type",
@@ -182,6 +195,7 @@ async function queryNumericBucket(
      FROM "MediaItem" mi
      JOIN "Library" l ON mi."libraryId" = l.id
      WHERE l."mediaServerId" = ANY($1)
+       ${dedupClause}
      GROUP BY "value", mi.type
      ORDER BY "_count" DESC`,
     serverIds
@@ -192,10 +206,12 @@ async function queryStreamGroup(
   streamType: number,
   streamField: string,
   nullLabel: string,
-  serverIds: string[]
+  serverIds: string[],
+  dedupEnabled: boolean
 ): Promise<BreakdownRow[]> {
   assertAllowedColumn(streamField, ALLOWED_STREAM_COLUMNS);
   const safeNullLabel = escapeSqlLiteral(nullLabel);
+  const dedupClause = dedupEnabled ? `AND mi."dedupCanonical" = true` : "";
   return prisma.$queryRawUnsafe<BreakdownRow[]>(
     `SELECT COALESCE(ms."${streamField}", '${safeNullLabel}') AS "value",
        mi.type::text AS "type",
@@ -205,6 +221,7 @@ async function queryStreamGroup(
      JOIN "Library" l ON mi."libraryId" = l.id
      WHERE l."mediaServerId" = ANY($1)
        AND ms."streamType" = $2
+       ${dedupClause}
      GROUP BY ms."${streamField}", mi.type
      ORDER BY "_count" DESC`,
     serverIds,
@@ -216,11 +233,13 @@ async function queryDateBucket(
   dbField: string,
   nullLabel: string,
   granularity: "month" | "year",
-  serverIds: string[]
+  serverIds: string[],
+  dedupEnabled: boolean
 ): Promise<BreakdownRow[]> {
   assertAllowedColumn(dbField, ALLOWED_MEDIA_ITEM_COLUMNS);
   const safeNullLabel = escapeSqlLiteral(nullLabel);
   const format = granularity === "month" ? "YYYY-MM" : "YYYY";
+  const dedupClause = dedupEnabled ? `AND mi."dedupCanonical" = true` : "";
   return prisma.$queryRawUnsafe<BreakdownRow[]>(
     `SELECT
        CASE
@@ -232,6 +251,7 @@ async function queryDateBucket(
      FROM "MediaItem" mi
      JOIN "Library" l ON mi."libraryId" = l.id
      WHERE l."mediaServerId" = ANY($1)
+       ${dedupClause}
      GROUP BY "value", mi.type
      ORDER BY "value" DESC`,
     serverIds
