@@ -141,7 +141,6 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({
     message: "Image caching started",
     totalItems: items.length,
-    totalImages,
   });
 }
 
