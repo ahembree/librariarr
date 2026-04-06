@@ -206,9 +206,12 @@ interface CacheJob {
   status: "RUNNING" | "COMPLETED" | "FAILED";
   totalItems: number;
   processedItems: number;
+  totalImages: number;
+  processedImages: number;
   cachedImages: number;
   skippedImages: number;
   failedImages: number;
+  totalCachedBytes: number;
   error?: string;
 }
 
@@ -337,9 +340,12 @@ function CacheImagesDialog({
           status: "RUNNING",
           totalItems: 0,
           processedItems: 0,
+          totalImages: 0,
+          processedImages: 0,
           cachedImages: 0,
           skippedImages: 0,
           failedImages: 0,
+          totalCachedBytes: 0,
         });
         startPolling();
       }
@@ -353,7 +359,18 @@ function CacheImagesDialog({
   const isRunning = job?.status === "RUNNING";
   const isCompleted = job?.status === "COMPLETED";
   const isFailed = job?.status === "FAILED";
-  const pct = job && job.totalItems > 0 ? Math.round((job.processedItems / job.totalItems) * 100) : 0;
+  const pct = job && job.totalImages > 0 ? Math.round((job.processedImages / job.totalImages) * 100) : 0;
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  };
+
+  // Estimate total cache size based on average bytes per processed image
+  const estimatedTotalSize = job && job.processedImages > 0 && job.totalImages > 0
+    ? Math.round((job.totalCachedBytes / job.processedImages) * job.totalImages)
+    : 0;
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!isRunning) onOpenChange(v); }}>
@@ -399,9 +416,17 @@ function CacheImagesDialog({
 
         {isRunning && (
           <div className="space-y-3 py-2">
-            <div className="flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin text-primary" />
-              <span className="text-sm font-medium">Caching images... {pct}%</span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                <span className="text-sm font-medium">Caching images... {pct}%</span>
+              </div>
+              {job && job.totalCachedBytes > 0 && (
+                <span className="text-sm text-muted-foreground">
+                  {formatSize(job.totalCachedBytes)}
+                  {estimatedTotalSize > 0 && <span> / ~{formatSize(estimatedTotalSize)}</span>}
+                </span>
+              )}
             </div>
             <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
               <div
@@ -409,16 +434,18 @@ function CacheImagesDialog({
                 style={{ width: `${pct}%` }}
               />
             </div>
-            {job && job.totalItems > 0 && (
+            {job && job.totalImages > 0 && (
               <p className="text-xs text-muted-foreground">
-                {job.processedItems.toLocaleString()} / {job.totalItems.toLocaleString()} items processed
+                {job.processedImages.toLocaleString()} / {job.totalImages.toLocaleString()} images
+                {" \u00b7 "}
+                {job.processedItems.toLocaleString()} / {job.totalItems.toLocaleString()} items
               </p>
             )}
           </div>
         )}
 
         {isCompleted && job && (
-          <div className="space-y-2 py-2">
+          <div className="space-y-3 py-2">
             <div className="flex items-center gap-2 text-emerald-400">
               <CheckCircle2 className="h-4 w-4" />
               <span className="text-sm font-medium">Caching complete</span>
@@ -437,6 +464,11 @@ function CacheImagesDialog({
                 <p className="text-xs text-muted-foreground">Failed</p>
               </div>
             </div>
+            {job.totalCachedBytes > 0 && (
+              <p className="text-xs text-muted-foreground text-center">
+                Total cache size: {formatSize(job.totalCachedBytes)}
+              </p>
+            )}
           </div>
         )}
 

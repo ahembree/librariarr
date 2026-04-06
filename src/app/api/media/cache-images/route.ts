@@ -12,9 +12,15 @@ interface CacheJob {
   status: "RUNNING" | "COMPLETED" | "FAILED";
   totalItems: number;
   processedItems: number;
+  /** Total number of individual image URLs discovered across all items */
+  totalImages: number;
+  /** Number of images processed so far (cached + skipped + failed) */
+  processedImages: number;
   cachedImages: number;
   skippedImages: number;
   failedImages: number;
+  /** Running total of bytes for all cached/skipped images */
+  totalCachedBytes: number;
   startedAt: number;
   /** Updated every time an item is processed — used for stale detection */
   lastHeartbeat: number;
@@ -109,6 +115,20 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Pre-count total images across all items
+  let totalImages = 0;
+  for (const item of items) {
+    if (item.thumbUrl) totalImages++;
+    if (item.artUrl) totalImages++;
+    if (item.parentThumbUrl) totalImages++;
+    if (item.seasonThumbUrl) totalImages++;
+    if (Array.isArray(item.roles)) {
+      for (const role of item.roles as Array<{ thumb?: string | null }>) {
+        if (role.thumb) totalImages++;
+      }
+    }
+  }
+
   const now = Date.now();
   const job: CacheJob = {
     userId: session.userId,
@@ -116,9 +136,12 @@ export async function POST(request: NextRequest) {
     status: "RUNNING",
     totalItems: items.length,
     processedItems: 0,
+    totalImages,
+    processedImages: 0,
     cachedImages: 0,
     skippedImages: 0,
     failedImages: 0,
+    totalCachedBytes: 0,
     startedAt: now,
     lastHeartbeat: now,
   };
@@ -143,9 +166,12 @@ function sanitizeJob(job: CacheJob) {
     status: job.status,
     totalItems: job.totalItems,
     processedItems: job.processedItems,
+    totalImages: job.totalImages,
+    processedImages: job.processedImages,
     cachedImages: job.cachedImages,
     skippedImages: job.skippedImages,
     failedImages: job.failedImages,
+    totalCachedBytes: job.totalCachedBytes,
     startedAt: job.startedAt,
     error: job.error,
   };
@@ -224,18 +250,22 @@ async function processCacheJob(
         const cached = await getCachedImageInfo(url, { maxWidth });
         if (cached) {
           job.skippedImages++;
+          job.totalCachedBytes += cached.size;
+          job.processedImages++;
           continue;
         }
 
-        await cacheImage(
+        const result = await cacheImage(
           url,
           () => client.fetchImage(url),
           maxWidth ? { maxWidth } : undefined,
         );
         job.cachedImages++;
+        job.totalCachedBytes += result.data.length;
       } catch {
         job.failedImages++;
       }
+      job.processedImages++;
     }
 
     job.processedItems++;
