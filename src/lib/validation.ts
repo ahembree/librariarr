@@ -608,5 +608,6 @@ export const syncByTypeSchema = z.object({
 
 export const cacheImagesSchema = z.object({
   libraryTypes: z.array(z.enum(["MOVIE", "SERIES", "MUSIC"])).min(1),
+  serverIds: z.array(z.string()).optional(),
 });
 

@@ -9,35 +9,30 @@ import { logger } from "@/lib/logger";
 interface CacheJob {
   userId: string;
   libraryTypes: string[];
-  status: "RUNNING" | "COMPLETED" | "FAILED";
+  status: "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
   totalItems: number;
   processedItems: number;
-  /** Total number of individual image URLs discovered across all items */
   totalImages: number;
-  /** Number of images processed so far (cached + skipped + failed) */
   processedImages: number;
   cachedImages: number;
   skippedImages: number;
   failedImages: number;
-  /** Running total of bytes for all cached/skipped images */
   totalCachedBytes: number;
   startedAt: number;
-  /** Updated every time an item is processed — used for stale detection */
   lastHeartbeat: number;
+  /** Set to true to signal the processing loop to stop */
+  aborted: boolean;
   error?: string;
 }
 
-/** If no heartbeat for this long, the job is considered dead (server restarted). */
 const HEARTBEAT_STALE_MS = 60_000;
 
-// In-memory job state keyed by userId
 const activeJobs = new Map<string, CacheJob>();
 
 function getJobForUser(userId: string): CacheJob | null {
   const job = activeJobs.get(userId);
   if (!job) return null;
 
-  // If the job claims to be running but hasn't heartbeated recently, mark it failed
   if (job.status === "RUNNING" && Date.now() - job.lastHeartbeat > HEARTBEAT_STALE_MS) {
     job.status = "FAILED";
     job.error = "Job interrupted (server may have restarted)";
@@ -66,9 +61,8 @@ export async function POST(request: NextRequest) {
   const { data, error } = await validateRequest(request, cacheImagesSchema);
   if (error) return error;
 
-  const { libraryTypes } = data;
+  const { libraryTypes, serverIds } = data;
 
-  // Check if already running
   const existing = getJobForUser(session.userId);
   if (existing && existing.status === "RUNNING") {
     return NextResponse.json(
@@ -77,12 +71,16 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Find all media items across selected library types
+  const serverFilter: Record<string, unknown> = { userId: session.userId, enabled: true };
+  if (serverIds && serverIds.length > 0) {
+    serverFilter.id = { in: serverIds };
+  }
+
   const items = await prisma.mediaItem.findMany({
     where: {
       library: {
         type: { in: libraryTypes },
-        mediaServer: { userId: session.userId, enabled: true },
+        mediaServer: serverFilter,
       },
     },
     select: {
@@ -115,7 +113,6 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Pre-count total images across all items
   let totalImages = 0;
   for (const item of items) {
     if (item.thumbUrl) totalImages++;
@@ -144,10 +141,10 @@ export async function POST(request: NextRequest) {
     totalCachedBytes: 0,
     startedAt: now,
     lastHeartbeat: now,
+    aborted: false,
   };
   activeJobs.set(session.userId, job);
 
-  // Run caching in background
   processCacheJob(session.userId, job, items).catch((err) => {
     logger.error("ImageCache", "Bulk cache job failed", { error: String(err) });
     job.status = "FAILED";
@@ -157,7 +154,23 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({
     message: "Image caching started",
     totalItems: items.length,
+    totalImages,
   });
+}
+
+export async function DELETE() {
+  const session = await getSession();
+  if (!session.isLoggedIn) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const job = activeJobs.get(session.userId);
+  if (!job || job.status !== "RUNNING") {
+    return NextResponse.json({ error: "No running cache job to stop" }, { status: 404 });
+  }
+
+  job.aborted = true;
+  return NextResponse.json({ message: "Cache job stopping" });
 }
 
 function sanitizeJob(job: CacheJob) {
@@ -203,6 +216,8 @@ async function processCacheJob(
   const serverClients = new Map<string, ReturnType<typeof createMediaServerClient>>();
 
   for (const item of items) {
+    if (job.aborted) break;
+
     const server = item.library.mediaServer;
     if (!server) {
       job.processedItems++;
@@ -220,7 +235,6 @@ async function processCacheJob(
     }
     const client = serverClients.get(server.id)!;
 
-    // Collect all image URLs for this item
     const imageUrls: Array<{ url: string; maxWidth?: number }> = [];
 
     if (item.thumbUrl) {
@@ -236,7 +250,6 @@ async function processCacheJob(
       imageUrls.push({ url: item.seasonThumbUrl });
     }
 
-    // Cast/role thumbnails
     if (Array.isArray(item.roles)) {
       for (const role of item.roles as Array<{ thumb?: string | null }>) {
         if (role.thumb) {
@@ -246,6 +259,8 @@ async function processCacheJob(
     }
 
     for (const { url, maxWidth } of imageUrls) {
+      if (job.aborted) break;
+
       try {
         const cached = await getCachedImageInfo(url, { maxWidth });
         if (cached) {
@@ -272,16 +287,25 @@ async function processCacheJob(
     job.lastHeartbeat = Date.now();
   }
 
-  job.status = "COMPLETED";
-  logger.info("ImageCache", `Bulk cache completed for ${job.libraryTypes.join(", ")}`, {
-    totalItems: job.totalItems,
-    cachedImages: job.cachedImages,
-    skippedImages: job.skippedImages,
-    failedImages: job.failedImages,
-    durationMs: Date.now() - job.startedAt,
-  });
+  if (job.aborted) {
+    job.status = "CANCELLED";
+    logger.info("ImageCache", `Bulk cache cancelled for ${job.libraryTypes.join(", ")}`, {
+      totalItems: job.totalItems,
+      processedItems: job.processedItems,
+      cachedImages: job.cachedImages,
+      durationMs: Date.now() - job.startedAt,
+    });
+  } else {
+    job.status = "COMPLETED";
+    logger.info("ImageCache", `Bulk cache completed for ${job.libraryTypes.join(", ")}`, {
+      totalItems: job.totalItems,
+      cachedImages: job.cachedImages,
+      skippedImages: job.skippedImages,
+      failedImages: job.failedImages,
+      durationMs: Date.now() - job.startedAt,
+    });
+  }
 
-  // Clean up completed jobs after 60 seconds
   setTimeout(() => {
     const current = activeJobs.get(userId);
     if (current && current.status !== "RUNNING") {

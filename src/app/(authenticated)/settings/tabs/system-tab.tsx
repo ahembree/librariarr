@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +25,7 @@ import {
   ExternalLink,
   ImageDown,
   Loader2,
+  Square,
   Trash2,
 } from "lucide-react";
 import type { SystemInfo, ImageCacheStats, ReleaseNote } from "../types";
@@ -41,22 +42,12 @@ export interface SystemTabProps {
 
 // ─── Release notes helpers ───
 
-/**
- * Clean a markdown list item for display:
- * - Strip commit hash links: "([abc1234](url))" or "(abc1234)"
- * - Convert bold scopes: "**lifecycle:** msg" → "lifecycle: msg"
- * - Decode HTML entities: "&gt;" → ">"
- */
 function cleanItem(raw: string): string {
   return (
     raw
-      // Remove markdown commit links: ([hash](url))
       .replace(/\s*\(\[?[a-f0-9]{7,40}\]?\([^)]*\)\)/g, "")
-      // Remove bare hash refs: (hash)
       .replace(/\s*\([a-f0-9]{7,40}\)/g, "")
-      // Convert **scope:** to scope:
       .replace(/\*\*([^*]+)\*\*/g, "$1")
-      // Decode common HTML entities from GitHub
       .replace(/&gt;/g, ">")
       .replace(/&lt;/g, "<")
       .replace(/&amp;/g, "&")
@@ -64,10 +55,6 @@ function cleanItem(raw: string): string {
   );
 }
 
-/**
- * Parse a release-please body into grouped sections.
- * Handles the format: ## [version](url) (date) then ### Section headings with * items.
- */
 function parseReleaseBody(body: string): { heading: string; items: string[] }[] {
   const lines = body.split("\n");
   const sections: { heading: string; items: string[] }[] = [];
@@ -75,19 +62,13 @@ function parseReleaseBody(body: string): { heading: string; items: string[] }[] 
 
   for (const line of lines) {
     const trimmed = line.trim();
-
-    // Skip the version header line: ## [0.11.3](url) (date)
     if (/^##\s+\[?\d+\.\d+/.test(trimmed)) continue;
-
-    // Section heading (### Bug Fixes, ### Features, etc.)
     const headingMatch = trimmed.match(/^#{2,3}\s+(.+)/);
     if (headingMatch) {
       current = { heading: headingMatch[1], items: [] };
       sections.push(current);
       continue;
     }
-
-    // List item
     if ((trimmed.startsWith("* ") || trimmed.startsWith("- ")) && current) {
       current.items.push(cleanItem(trimmed.slice(2)));
     }
@@ -194,7 +175,7 @@ function ReleaseNoteCard({ note }: { note: ReleaseNote }) {
   );
 }
 
-// ─── Cache images dialog ───
+// ─── Cache images types & helpers ───
 
 const LIBRARY_TYPE_LABELS: Record<string, string> = {
   MOVIE: "Movies",
@@ -203,7 +184,7 @@ const LIBRARY_TYPE_LABELS: Record<string, string> = {
 };
 
 interface CacheJob {
-  status: "RUNNING" | "COMPLETED" | "FAILED";
+  status: "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
   totalItems: number;
   processedItems: number;
   totalImages: number;
@@ -215,139 +196,120 @@ interface CacheJob {
   error?: string;
 }
 
-function CacheImagesDialog({
+function formatSize(bytes: number) {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+// ─── Library picker dialog (select & start only) ───
+
+interface ServerInfo {
+  id: string;
+  name: string;
+  libraryTypes: string[];
+}
+
+function CacheImagesPickerDialog({
   open,
   onOpenChange,
-  onComplete,
+  onStarted,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onComplete: () => void;
+  onStarted: () => void;
 }) {
-  const [availableTypes, setAvailableTypes] = useState<string[]>([]);
+  const [servers, setServers] = useState<ServerInfo[]>([]);
+  const [selectedServerIds, setSelectedServerIds] = useState<Set<string>>(new Set());
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
-  const [loadingTypes, setLoadingTypes] = useState(false);
-  const [job, setJob] = useState<CacheJob | null>(null);
+  const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
-  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mountedRef = useRef(true);
-  const onCompleteRef = useRef(onComplete);
 
-  useEffect(() => {
-    onCompleteRef.current = onComplete;
-  }, [onComplete]);
-
-  // Fetch available library types when dialog opens
   useEffect(() => {
     if (!open) return;
-    mountedRef.current = true;
-    setJob(null);
     setStarting(false);
 
     (async () => {
-      setLoadingTypes(true);
+      setLoading(true);
       try {
-        const res = await fetch("/api/media/library-types");
+        const res = await fetch("/api/servers");
         if (res.ok) {
           const data = await res.json();
-          const types = data.types as string[];
-          if (mountedRef.current) {
-            setAvailableTypes(types);
-            setSelectedTypes(new Set(types));
+          const serverList: ServerInfo[] = (data.servers ?? [])
+            .filter((s: { enabled: boolean }) => s.enabled)
+            .map((s: { id: string; name: string; libraries: Array<{ type: string; enabled: boolean }> }) => ({
+              id: s.id,
+              name: s.name,
+              libraryTypes: [...new Set(
+                s.libraries
+                  .filter((l) => l.enabled)
+                  .map((l) => l.type),
+              )],
+            }))
+            .filter((s: ServerInfo) => s.libraryTypes.length > 0);
+
+          setServers(serverList);
+          setSelectedServerIds(new Set(serverList.map((s) => s.id)));
+
+          // Derive available library types from all servers
+          const allTypes = new Set<string>();
+          for (const s of serverList) {
+            for (const t of s.libraryTypes) allTypes.add(t);
           }
+          setSelectedTypes(allTypes);
         }
       } catch {
         // ignore
       } finally {
-        if (mountedRef.current) setLoadingTypes(false);
-      }
-
-      // Also check for an existing running job
-      try {
-        const res = await fetch("/api/media/cache-images");
-        if (res.ok) {
-          const data = await res.json();
-          if (data.job && mountedRef.current) {
-            setJob(data.job);
-            if (data.job.status === "RUNNING") {
-              startPolling();
-            }
-          }
-        }
-      } catch {
-        // ignore
+        setLoading(false);
       }
     })();
-
-    return () => {
-      mountedRef.current = false;
-      if (pollTimer.current) clearTimeout(pollTimer.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const poll = useCallback(async () => {
-    try {
-      const res = await fetch("/api/media/cache-images");
-      if (!res.ok) return;
-      const data = await res.json();
-      if (!mountedRef.current) return;
-
-      const j = data.job as CacheJob | null;
-      setJob(j);
-
-      if (!j || j.status !== "RUNNING") {
-        onCompleteRef.current();
-        return;
-      }
-    } catch {
-      // ignore
-    }
-    if (mountedRef.current) {
-      pollTimer.current = setTimeout(poll, 1500);
-    }
-  }, []);
-
-  const startPolling = useCallback(() => {
-    if (pollTimer.current) clearTimeout(pollTimer.current);
-    pollTimer.current = setTimeout(poll, 1500);
-  }, [poll]);
-
-  const toggleType = (type: string) => {
-    setSelectedTypes((prev) => {
+  const toggleServer = (id: string) => {
+    setSelectedServerIds((prev) => {
       const next = new Set(prev);
-      if (next.has(type)) {
-        next.delete(type);
-      } else {
-        next.add(type);
-      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
 
+  const toggleType = (type: string) => {
+    setSelectedTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
+      return next;
+    });
+  };
+
+  // Derive available library types from selected servers
+  const availableTypes = [...new Set(
+    servers
+      .filter((s) => selectedServerIds.has(s.id))
+      .flatMap((s) => s.libraryTypes),
+  )];
+
   const handleStart = async () => {
-    if (selectedTypes.size === 0) return;
+    if (selectedTypes.size === 0 || selectedServerIds.size === 0) return;
     setStarting(true);
-    setJob(null);
     try {
+      const body: Record<string, unknown> = {
+        libraryTypes: Array.from(selectedTypes),
+      };
+      // Only include serverIds if not all servers are selected
+      if (selectedServerIds.size < servers.length) {
+        body.serverIds = Array.from(selectedServerIds);
+      }
       const res = await fetch("/api/media/cache-images", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ libraryTypes: Array.from(selectedTypes) }),
+        body: JSON.stringify(body),
       });
       if (res.ok) {
-        setJob({
-          status: "RUNNING",
-          totalItems: 0,
-          processedItems: 0,
-          totalImages: 0,
-          processedImages: 0,
-          cachedImages: 0,
-          skippedImages: 0,
-          failedImages: 0,
-          totalCachedBytes: 0,
-        });
-        startPolling();
+        onOpenChange(false);
+        onStarted();
       }
     } catch {
       // ignore
@@ -356,161 +318,82 @@ function CacheImagesDialog({
     }
   };
 
-  const isRunning = job?.status === "RUNNING";
-  const isCompleted = job?.status === "COMPLETED";
-  const isFailed = job?.status === "FAILED";
-  const pct = job && job.totalImages > 0 ? Math.round((job.processedImages / job.totalImages) * 100) : 0;
-
-  const formatSize = (bytes: number) => {
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-    return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-  };
-
-  // Estimate total cache size based on average bytes per processed image
-  const estimatedTotalSize = job && job.processedImages > 0 && job.totalImages > 0
-    ? Math.round((job.totalCachedBytes / job.processedImages) * job.totalImages)
-    : 0;
-
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!isRunning) onOpenChange(v); }}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Cache Library Images</DialogTitle>
           <DialogDescription>
-            Download and cache all images (posters, artwork, backgrounds, cast photos) for the selected library types.
+            Select servers and library types to cache. Caching runs in the background.
           </DialogDescription>
         </DialogHeader>
 
-        {!isRunning && !isCompleted && !isFailed && (
-          <div className="space-y-3">
-            {loadingTypes ? (
-              <div className="flex items-center gap-2 py-4 justify-center">
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Loading libraries...</span>
-              </div>
-            ) : availableTypes.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">
-                No enabled libraries found.
-              </p>
-            ) : (
+        {loading ? (
+          <div className="flex items-center gap-2 py-4 justify-center">
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            <span className="text-sm text-muted-foreground">Loading...</span>
+          </div>
+        ) : servers.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">
+            No enabled servers with libraries found.
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {servers.length > 1 && (
               <div className="space-y-2">
-                {availableTypes.map((type) => (
+                <p className="text-sm font-medium">Servers</p>
+                {servers.map((server) => (
                   <label
-                    key={type}
+                    key={server.id}
                     className="flex items-center gap-3 rounded-md border px-3 py-2.5 cursor-pointer hover:bg-muted/50 transition-colors"
                   >
                     <Checkbox
-                      checked={selectedTypes.has(type)}
-                      onCheckedChange={() => toggleType(type)}
+                      checked={selectedServerIds.has(server.id)}
+                      onCheckedChange={() => toggleServer(server.id)}
                     />
-                    <span className="text-sm font-medium">
-                      {LIBRARY_TYPE_LABELS[type] ?? type}
-                    </span>
+                    <span className="text-sm font-medium">{server.name}</span>
                   </label>
                 ))}
               </div>
             )}
-          </div>
-        )}
 
-        {isRunning && (
-          <div className="space-y-3 py-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                <span className="text-sm font-medium">Caching images... {pct}%</span>
-              </div>
-              {job && job.totalCachedBytes > 0 && (
-                <span className="text-sm text-muted-foreground">
-                  {formatSize(job.totalCachedBytes)}
-                  {estimatedTotalSize > 0 && <span> / ~{formatSize(estimatedTotalSize)}</span>}
-                </span>
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Library Types</p>
+              {availableTypes.map((type) => (
+                <label
+                  key={type}
+                  className="flex items-center gap-3 rounded-md border px-3 py-2.5 cursor-pointer hover:bg-muted/50 transition-colors"
+                >
+                  <Checkbox
+                    checked={selectedTypes.has(type)}
+                    onCheckedChange={() => toggleType(type)}
+                  />
+                  <span className="text-sm font-medium">
+                    {LIBRARY_TYPE_LABELS[type] ?? type}
+                  </span>
+                </label>
+              ))}
+              {availableTypes.length === 0 && selectedServerIds.size > 0 && (
+                <p className="text-xs text-muted-foreground">No library types available for selected servers.</p>
               )}
             </div>
-            <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
-              <div
-                className="h-full rounded-full bg-primary transition-all duration-500 ease-out"
-                style={{ width: `${pct}%` }}
-              />
-            </div>
-            {job && job.totalImages > 0 && (
-              <p className="text-xs text-muted-foreground">
-                {job.processedImages.toLocaleString()} / {job.totalImages.toLocaleString()} images
-                {" \u00b7 "}
-                {job.processedItems.toLocaleString()} / {job.totalItems.toLocaleString()} items
-              </p>
-            )}
-          </div>
-        )}
-
-        {isCompleted && job && (
-          <div className="space-y-3 py-2">
-            <div className="flex items-center gap-2 text-emerald-400">
-              <CheckCircle2 className="h-4 w-4" />
-              <span className="text-sm font-medium">Caching complete</span>
-            </div>
-            <div className="grid grid-cols-3 gap-3 text-center">
-              <div className="rounded-md border px-2 py-1.5">
-                <p className="text-lg font-semibold">{job.cachedImages.toLocaleString()}</p>
-                <p className="text-xs text-muted-foreground">Cached</p>
-              </div>
-              <div className="rounded-md border px-2 py-1.5">
-                <p className="text-lg font-semibold">{job.skippedImages.toLocaleString()}</p>
-                <p className="text-xs text-muted-foreground">Already cached</p>
-              </div>
-              <div className="rounded-md border px-2 py-1.5">
-                <p className="text-lg font-semibold">{job.failedImages.toLocaleString()}</p>
-                <p className="text-xs text-muted-foreground">Failed</p>
-              </div>
-            </div>
-            {job.totalCachedBytes > 0 && (
-              <p className="text-xs text-muted-foreground text-center">
-                Total cache size: {formatSize(job.totalCachedBytes)}
-              </p>
-            )}
-          </div>
-        )}
-
-        {isFailed && job && (
-          <div className="space-y-2 py-2">
-            <p className="text-sm text-destructive">
-              {job.error ?? "Image caching failed unexpectedly."}
-            </p>
-            {job.processedItems > 0 && (
-              <p className="text-xs text-muted-foreground">
-                Processed {job.processedItems.toLocaleString()} / {job.totalItems.toLocaleString()} items before failure.
-                {job.cachedImages > 0 && ` ${job.cachedImages.toLocaleString()} images were cached successfully.`}
-              </p>
-            )}
           </div>
         )}
 
         <DialogFooter>
-          {!isRunning && (isCompleted || isFailed) && (
-            <Button variant="outline" onClick={() => { setJob(null); }}>
-              {isFailed ? "Try Again" : "Cache More"}
-            </Button>
-          )}
-          {!isRunning && !isCompleted && !isFailed && (
-            <Button
-              onClick={handleStart}
-              disabled={selectedTypes.size === 0 || starting || loadingTypes}
-            >
-              {starting ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <ImageDown className="mr-2 h-4 w-4" />
-              )}
-              Start Caching
-            </Button>
-          )}
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
           <Button
-            variant={isRunning ? "outline" : "ghost"}
-            onClick={() => onOpenChange(false)}
-            disabled={isRunning}
+            onClick={handleStart}
+            disabled={selectedTypes.size === 0 || selectedServerIds.size === 0 || starting || loading}
           >
-            {isCompleted || isFailed ? "Close" : isRunning ? "Running..." : "Cancel"}
+            {starting ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <ImageDown className="mr-2 h-4 w-4" />
+            )}
+            Start Caching
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -530,6 +413,92 @@ export function SystemTab({
   loadingChangelog,
 }: SystemTabProps) {
   const [cacheDialogOpen, setCacheDialogOpen] = useState(false);
+  const [cacheJob, setCacheJob] = useState<CacheJob | null>(null);
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
+  const onRefreshRef = useRef(onRefreshCacheStats);
+
+  useEffect(() => {
+    onRefreshRef.current = onRefreshCacheStats;
+  }, [onRefreshCacheStats]);
+
+  const pollJobRef = useRef<() => void>();
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    const poll = async () => {
+      try {
+        const res = await fetch("/api/media/cache-images");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!mountedRef.current) return;
+
+        const j = data.job as CacheJob | null;
+        setCacheJob(j);
+
+        if (j && j.status === "RUNNING") {
+          pollTimer.current = setTimeout(() => pollJobRef.current?.(), 1500);
+          return;
+        }
+
+        // Job finished — refresh cache stats
+        if (j && j.status !== "RUNNING") {
+          onRefreshRef.current();
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    pollJobRef.current = poll;
+    poll();
+
+    return () => {
+      mountedRef.current = false;
+      if (pollTimer.current) clearTimeout(pollTimer.current);
+    };
+  }, []);
+
+  const handleJobStarted = () => {
+    setCacheJob({
+      status: "RUNNING",
+      totalItems: 0,
+      processedItems: 0,
+      totalImages: 0,
+      processedImages: 0,
+      cachedImages: 0,
+      skippedImages: 0,
+      failedImages: 0,
+      totalCachedBytes: 0,
+    });
+    if (pollTimer.current) clearTimeout(pollTimer.current);
+    pollTimer.current = setTimeout(() => pollJobRef.current?.(), 1500);
+  };
+
+  const [stopping, setStopping] = useState(false);
+
+  const handleStopJob = async () => {
+    setStopping(true);
+    try {
+      await fetch("/api/media/cache-images", { method: "DELETE" });
+    } catch {
+      // ignore
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  const isRunning = cacheJob?.status === "RUNNING";
+  const isCompleted = cacheJob?.status === "COMPLETED";
+  const isFailed = cacheJob?.status === "FAILED";
+  const isCancelled = cacheJob?.status === "CANCELLED";
+  const pct = cacheJob && cacheJob.totalImages > 0
+    ? Math.round((cacheJob.processedImages / cacheJob.totalImages) * 100)
+    : 0;
+  const estimatedTotalSize = cacheJob && cacheJob.processedImages > 0 && cacheJob.totalImages > 0
+    ? Math.round((cacheJob.totalCachedBytes / cacheJob.processedImages) * cacheJob.totalImages)
+    : 0;
 
   return (
     <div className="space-y-6">
@@ -588,7 +557,7 @@ export function SystemTab({
 
       <h2 className="text-xl font-semibold">Image Cache</h2>
       <Card>
-        <CardContent>
+        <CardContent className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-muted-foreground">Cached Images</p>
@@ -599,18 +568,34 @@ export function SystemTab({
               </p>
             </div>
             <div className="flex items-center gap-2">
+              {isRunning ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleStopJob}
+                  disabled={stopping}
+                >
+                  {stopping ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Square className="mr-2 h-3.5 w-3.5" />
+                  )}
+                  Stop
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCacheDialogOpen(true)}
+                >
+                  <ImageDown className="mr-2 h-4 w-4" />
+                  Cache Images
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setCacheDialogOpen(true)}
-              >
-                <ImageDown className="mr-2 h-4 w-4" />
-                Cache Images
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={clearingImageCache}
+                disabled={clearingImageCache || isRunning}
                 onClick={onClearImageCache}
               >
                 {clearingImageCache ? (
@@ -622,13 +607,78 @@ export function SystemTab({
               </Button>
             </div>
           </div>
+
+          {/* Inline progress bar while job is running */}
+          {isRunning && cacheJob && (
+            <div className="space-y-2">
+              <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-500 ease-out"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>
+                  {cacheJob.totalImages > 0
+                    ? `${cacheJob.processedImages.toLocaleString()} / ${cacheJob.totalImages.toLocaleString()} images`
+                    : "Starting..."}
+                </span>
+                <span>
+                  {cacheJob.totalCachedBytes > 0 && (
+                    <>
+                      {formatSize(cacheJob.totalCachedBytes)}
+                      {estimatedTotalSize > 0 && ` / ~${formatSize(estimatedTotalSize)}`}
+                    </>
+                  )}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Completion summary */}
+          {isCompleted && cacheJob && (
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <div className="flex items-center gap-1.5 text-emerald-400">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                <span>
+                  Cached {cacheJob.cachedImages.toLocaleString()} images
+                  {cacheJob.skippedImages > 0 && `, ${cacheJob.skippedImages.toLocaleString()} already cached`}
+                  {cacheJob.failedImages > 0 && `, ${cacheJob.failedImages.toLocaleString()} failed`}
+                </span>
+              </div>
+              {cacheJob.totalCachedBytes > 0 && (
+                <span>{formatSize(cacheJob.totalCachedBytes)}</span>
+              )}
+            </div>
+          )}
+
+          {/* Cancelled summary */}
+          {isCancelled && cacheJob && (
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>
+                Stopped — cached {cacheJob.cachedImages.toLocaleString()} images
+                {cacheJob.skippedImages > 0 && `, ${cacheJob.skippedImages.toLocaleString()} already cached`}
+              </span>
+              {cacheJob.totalCachedBytes > 0 && (
+                <span>{formatSize(cacheJob.totalCachedBytes)}</span>
+              )}
+            </div>
+          )}
+
+          {/* Failure message */}
+          {isFailed && cacheJob && (
+            <p className="text-xs text-destructive">
+              {cacheJob.error ?? "Image caching failed unexpectedly."}
+              {cacheJob.cachedImages > 0 && ` (${cacheJob.cachedImages.toLocaleString()} images cached before failure)`}
+            </p>
+          )}
         </CardContent>
       </Card>
 
-      <CacheImagesDialog
+      <CacheImagesPickerDialog
         open={cacheDialogOpen}
         onOpenChange={setCacheDialogOpen}
-        onComplete={onRefreshCacheStats}
+        onStarted={handleJobStarted}
       />
 
       <h2 className="text-xl font-semibold">Release Notes</h2>
