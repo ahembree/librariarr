@@ -149,6 +149,28 @@ export async function DELETE(
   await prisma.syncJob.deleteMany({ where: { mediaServerId: server.id } });
   await prisma.mediaServer.delete({ where: { id: server.id } });
 
+  // Remove the deleted server from all lifecycle rule sets' serverIds arrays
+  await prisma.$executeRawUnsafe(
+    `UPDATE "RuleSet" SET "serverIds" = array_remove("serverIds", $1) WHERE $1 = ANY("serverIds") AND "userId" = $2`,
+    server.id,
+    session.userId
+  );
+
+  // Clean up matches and pending actions for rule sets that no longer have any servers
+  const orphanedRuleSets = await prisma.ruleSet.findMany({
+    where: { userId: session.userId, serverIds: { isEmpty: true } },
+    select: { id: true },
+  });
+  if (orphanedRuleSets.length > 0) {
+    const ruleSetIds = orphanedRuleSets.map((rs) => rs.id);
+    await prisma.lifecycleAction.deleteMany({
+      where: { ruleSetId: { in: ruleSetIds }, status: "PENDING" },
+    });
+    await prisma.ruleMatch.deleteMany({
+      where: { ruleSetId: { in: ruleSetIds } },
+    });
+  }
+
   apiLogger.info("Auth", `Media server "${server.name}" removed (deleteData=${deleteData})`);
 
   // Invalidate caches that depend on server/media data

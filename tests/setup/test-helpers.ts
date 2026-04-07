@@ -237,6 +237,7 @@ export async function createTestRuleSet(
     removeArrTags: string[];
     collectionEnabled: boolean;
     collectionName: string;
+    serverIds: string[];
   }>
 ) {
   const prisma = getTestPrisma();
@@ -258,6 +259,7 @@ export async function createTestRuleSet(
       removeArrTags: overrides?.removeArrTags,
       collectionEnabled: overrides?.collectionEnabled,
       collectionName: overrides?.collectionName,
+      serverIds: overrides?.serverIds,
     },
   });
 }
