@@ -7,6 +7,7 @@ import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { Button } from "@/components/ui/button";
 import { ColorChip } from "@/components/color-chip";
 import { ServerChips } from "@/components/server-chips";
+import { getServerDisplayNames } from "@/lib/server-styles";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -900,17 +901,20 @@ export default function QueryPage() {
                   <CommandList>
                     <CommandEmpty>No servers found.</CommandEmpty>
                     <CommandGroup>
-                      {servers.map((s) => {
-                        const isSelected = selectedServerIds.includes(s.id);
-                        return (
-                          <CommandItem key={s.id} onSelect={() => toggleServer(s.id)}>
-                            <div className={`mr-2 flex h-4 w-4 items-center justify-center rounded-sm border ${isSelected ? "bg-primary border-primary text-primary-foreground" : "border-muted-foreground/50"}`}>
-                              {isSelected && <span className="text-xs">✓</span>}
-                            </div>
-                            {s.name}
-                          </CommandItem>
-                        );
-                      })}
+                      {(() => {
+                        const displayNames = getServerDisplayNames(servers);
+                        return servers.map((s) => {
+                          const isSelected = selectedServerIds.includes(s.id);
+                          return (
+                            <CommandItem key={s.id} value={displayNames.get(s.id)} onSelect={() => toggleServer(s.id)}>
+                              <div className={`mr-2 flex h-4 w-4 items-center justify-center rounded-sm border ${isSelected ? "bg-primary border-primary text-primary-foreground" : "border-muted-foreground/50"}`}>
+                                {isSelected && <span className="text-xs">✓</span>}
+                              </div>
+                              {displayNames.get(s.id) ?? s.name}
+                            </CommandItem>
+                          );
+                        });
+                      })()}
                     </CommandGroup>
                   </CommandList>
                   {selectedServerIds.length > 0 && (

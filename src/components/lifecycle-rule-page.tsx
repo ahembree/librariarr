@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { SERVER_TYPE_STYLES } from "@/lib/server-styles";
+import { getServerTypeLabel } from "@/lib/server-styles";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1570,11 +1570,11 @@ export function LifecycleRulePage({
                     <CommandEmpty>No servers found.</CommandEmpty>
                     <CommandGroup>
                       {servers.map((server) => {
-                        const typeLabel = SERVER_TYPE_STYLES[server.type]?.label ?? server.type;
+                        const displayName = `${server.name} (${getServerTypeLabel(server.type)})`;
                         return (
                           <CommandItem
                             key={server.id}
-                            value={`${server.name} ${typeLabel}`}
+                            value={displayName}
                             onSelect={() => {
                               setServerIds((prev) =>
                                 prev.includes(server.id)
@@ -1589,7 +1589,7 @@ export function LifecycleRulePage({
                               }`}
                             />
                             {server.name}
-                            <span className="ml-1.5 text-muted-foreground">({typeLabel})</span>
+                            <span className="ml-1.5 text-muted-foreground">({getServerTypeLabel(server.type)})</span>
                           </CommandItem>
                         );
                       })}
@@ -1602,7 +1602,7 @@ export function LifecycleRulePage({
               <div className="flex flex-wrap gap-1">
                 {serverIds.map((id) => {
                   const server = servers.find((s) => s.id === id);
-                  const typeLabel = server ? (SERVER_TYPE_STYLES[server.type]?.label ?? server.type) : undefined;
+                  const typeLabel = server ? getServerTypeLabel(server.type) : undefined;
                   return (
                     <span
                       key={id}

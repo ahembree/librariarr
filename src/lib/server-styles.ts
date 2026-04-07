@@ -79,6 +79,37 @@ export const SERVER_TYPE_STYLES: Record<string, ServerStyle> = {
   },
 };
 
+/**
+ * Returns the human-readable label for a server type (e.g. "PLEX" → "Plex").
+ */
+export function getServerTypeLabel(type: string): string {
+  return SERVER_TYPE_STYLES[type]?.label ?? type;
+}
+
+/**
+ * Build a display-name map for a list of servers, appending the type label
+ * in parentheses when two or more servers share the same name.
+ * Returns a Map keyed by server id → display string.
+ */
+export function getServerDisplayNames<T extends { id: string; name: string; type?: string }>(
+  servers: T[],
+): Map<string, string> {
+  const nameCounts = new Map<string, number>();
+  for (const s of servers) {
+    nameCounts.set(s.name, (nameCounts.get(s.name) ?? 0) + 1);
+  }
+  const result = new Map<string, string>();
+  for (const s of servers) {
+    const isDuplicate = (nameCounts.get(s.name) ?? 0) > 1;
+    if (isDuplicate && s.type) {
+      result.set(s.id, `${s.name} (${getServerTypeLabel(s.type)})`);
+    } else {
+      result.set(s.id, s.name);
+    }
+  }
+  return result;
+}
+
 export const DEFAULT_SERVER_STYLE: ServerStyle = {
   label: "Unknown",
   classes: "text-muted-foreground bg-muted border-border",

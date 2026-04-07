@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { ColorChip } from "@/components/color-chip";
 import { ServerChips } from "@/components/server-chips";
+import { getServerDisplayNames } from "@/lib/server-styles";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import {
   DropdownMenu,
@@ -610,19 +611,22 @@ export default function HistoryPage() {
             </div>
 
             {/* Server filter */}
-            {servers.length > 1 && (
-              <Select value={selectedServerId} onValueChange={setSelectedServerId}>
-                <SelectTrigger className="w-40 h-9">
-                  <SelectValue placeholder="All Servers" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Servers</SelectItem>
-                  {servers.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
+            {servers.length > 1 && (() => {
+              const displayNames = getServerDisplayNames(servers);
+              return (
+                <Select value={selectedServerId} onValueChange={setSelectedServerId}>
+                  <SelectTrigger className="w-40 h-9">
+                    <SelectValue placeholder="All Servers" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Servers</SelectItem>
+                    {servers.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>{displayNames.get(s.id) ?? s.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              );
+            })()}
 
             {/* Type toggles */}
             <div className="flex items-center rounded-lg border h-9 p-0.5">

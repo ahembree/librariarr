@@ -28,7 +28,7 @@ import {
 import { CustomCardDialog } from "@/components/custom-card-dialog";
 import { Pencil, Check, Server, Film, Tv, Music, LayoutDashboard } from "lucide-react";
 import { generateId } from "@/lib/utils";
-import { SERVER_TYPE_STYLES } from "@/lib/server-styles";
+import { getServerDisplayNames } from "@/lib/server-styles";
 import { TabNav, type TabNavItem } from "@/components/tab-nav";
 import { DashboardSkeleton } from "@/components/skeletons";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -287,10 +287,7 @@ export default function DashboardPage() {
         <div className="flex flex-wrap items-center gap-2">
           <SyncIndicator onSyncComplete={fetchStats} />
           {servers.length > 1 && (() => {
-            const nameCounts = new Map<string, number>();
-            for (const s of servers) {
-              nameCounts.set(s.name, (nameCounts.get(s.name) ?? 0) + 1);
-            }
+            const displayNames = getServerDisplayNames(servers);
             return (
               <Select
                 value={selectedServerId}
@@ -302,18 +299,11 @@ export default function DashboardPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Servers</SelectItem>
-                  {servers.map((server) => {
-                    const isDuplicate = (nameCounts.get(server.name) ?? 0) > 1;
-                    const typeLabel = SERVER_TYPE_STYLES[server.type]?.label ?? server.type;
-                    return (
-                      <SelectItem key={server.id} value={server.id}>
-                        {server.name}
-                        {isDuplicate && (
-                          <span className="ml-1.5 text-muted-foreground">({typeLabel})</span>
-                        )}
-                      </SelectItem>
-                    );
-                  })}
+                  {servers.map((server) => (
+                    <SelectItem key={server.id} value={server.id}>
+                      {displayNames.get(server.id) ?? server.name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             );

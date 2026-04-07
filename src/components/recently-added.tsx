@@ -17,6 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Clock, Film, Tv, Music, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import { formatRelativeDate } from "@/lib/format";
+import { getServerDisplayNames } from "@/lib/server-styles";
 
 interface RecentItem {
   id: string;
@@ -35,7 +36,7 @@ interface RecentlyAddedProps {
   filterType?: "MOVIE" | "SERIES" | "MUSIC";
   lockedFilterType?: boolean;
   serverId?: string;
-  servers?: { id: string; name: string }[];
+  servers?: { id: string; name: string; type?: string }[];
   availableTypes?: string[];
   onMovieClick?: (movieId: string) => void;
   onSeriesClick?: (seriesName: string) => void;
@@ -152,9 +153,12 @@ export function RecentlyAdded({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="default">{serverId ? "Dashboard" : "All Servers"}</SelectItem>
-                  {servers.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                  ))}
+                  {(() => {
+                    const displayNames = getServerDisplayNames(servers);
+                    return servers.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>{displayNames.get(s.id) ?? s.name}</SelectItem>
+                    ));
+                  })()}
                 </SelectContent>
               </Select>
             )}
