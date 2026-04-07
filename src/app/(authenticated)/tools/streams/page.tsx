@@ -25,13 +25,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-} from "@/components/ui/sheet";
+import { usePanelResize } from "@/hooks/use-panel-resize";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 import {
   Dialog,
   DialogContent,
@@ -756,8 +751,339 @@ function SessionCard({
 
 // --- Main Page ---
 
+// --- Stream Detail Side Panel ---
+
+function StreamDetailPanel({
+  session,
+  onClose,
+  width,
+  resizeHandleProps,
+  isMobile,
+  getBadgeStyle,
+}: {
+  session: SessionWithServer;
+  onClose: () => void;
+  width: number;
+  resizeHandleProps: { onMouseDown: (e: React.MouseEvent) => void; onTouchStart: (e: React.TouchEvent) => void; onDoubleClick: () => void };
+  isMobile: boolean;
+  getBadgeStyle: (category: string, value: string) => React.CSSProperties | undefined;
+}) {
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  const artUrl = getSessionArtworkUrl(session);
+  const mediaTypeLabel = session.type === "episode" ? "TV Episode" : session.type === "movie" ? "Movie" : session.type === "track" ? "Track" : session.type;
+  const resolutionLabel = session.videoResolution ? normalizeResolutionLabel(session.videoResolution) : null;
+
+  const header = (
+    <div className="border-b shrink-0 relative overflow-hidden">
+      {/* Ambient blurred artwork background */}
+      {artUrl && (
+        <div className="absolute inset-0 -z-10">
+          <FadeImage
+            src={artUrl}
+            alt=""
+            className="w-full h-full object-cover blur-3xl opacity-20 scale-110"
+          />
+          <div className="absolute inset-0 bg-background/60" />
+        </div>
+      )}
+
+      {/* Close button */}
+      <div className="flex items-center justify-end gap-1 px-3 pt-3 relative">
+        <Button variant="ghost" size="icon-sm" onClick={onClose}>
+          <X className="h-3.5 w-3.5" />
+          <span className="sr-only">Close</span>
+        </Button>
+      </div>
+
+      {/* Poster + Title inline layout */}
+      <div className="flex gap-3 px-4 pb-4 relative">
+        {artUrl && (
+          <div
+            className="w-20 shrink-0 rounded-lg overflow-hidden bg-muted shadow-[0_4px_16px_oklch(0_0_0/0.3)]"
+            style={{ aspectRatio: session.type === "track" ? "1/1" : "2/3" }}
+          >
+            <FadeImage
+              src={artUrl}
+              alt={session.title}
+              loading="lazy"
+              className="w-full h-full object-cover"
+            />
+          </div>
+        )}
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <h3 className="font-display font-semibold text-base leading-tight line-clamp-2">
+            {formatMediaTitle(session)}
+          </h3>
+          <p className="text-xs text-muted-foreground">
+            {[
+              mediaTypeLabel,
+              session.year,
+              session.duration ? formatDurationClock(session.duration) : null,
+            ].filter(Boolean).join(" \u00b7 ")}
+          </p>
+          <div className="flex flex-wrap gap-1">
+            {resolutionLabel && (
+              <ColorChip style={getBadgeStyle("resolution", resolutionLabel)}>
+                {resolutionLabel}
+              </ColorChip>
+            )}
+            {session.audioProfile && (
+              <ColorChip style={getBadgeStyle("audioProfile", session.audioProfile)}>
+                {session.audioProfile}
+              </ColorChip>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  const content = (
+    <div className="flex-1 overflow-y-auto p-4 space-y-5">
+      {/* Overview */}
+      {(session.tagline || session.summary || session.contentRating || session.studio || session.genres) && (
+        <div className="space-y-2">
+          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Overview</h4>
+          {session.tagline && (
+            <p className="text-xs italic text-muted-foreground">{session.tagline}</p>
+          )}
+          {session.summary && (
+            <p className="text-sm text-muted-foreground leading-relaxed">{session.summary}</p>
+          )}
+          <div className="flex flex-wrap gap-1.5">
+            {session.contentRating && (
+              <Badge variant="outline" className="text-[10px]">{session.contentRating}</Badge>
+            )}
+            {session.studio && (
+              <Badge variant="secondary" className="text-[10px]">{session.studio}</Badge>
+            )}
+            {session.rating != null && (
+              <Badge variant="secondary" className="text-[10px]">Rating: {session.rating.toFixed(1)}</Badge>
+            )}
+            {session.audienceRating != null && (
+              <Badge variant="secondary" className="text-[10px]">Audience: {session.audienceRating.toFixed(1)}</Badge>
+            )}
+          </div>
+          {session.genres && session.genres.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {session.genres.map(g => (
+                <Badge key={g} variant="secondary" className="text-[10px]">{g}</Badge>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Stream Info */}
+      <div className="space-y-2">
+        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Stream Info</h4>
+        <div className="flex flex-wrap gap-1.5">
+          <Badge variant="secondary" className="text-[10px] gap-1">
+            <User className="h-2.5 w-2.5" />
+            {session.username}
+          </Badge>
+          <Badge variant="secondary" className="text-[10px]">
+            {session.player.product} on {session.player.platform}
+          </Badge>
+          {session.player.address && (
+            <Badge variant="secondary" className="text-[10px] gap-1">
+              <Globe className="h-2.5 w-2.5" />
+              {session.player.address}
+            </Badge>
+          )}
+          <Badge variant="secondary" className="text-[10px] gap-1">
+            {session.player.local ? <Wifi className="h-2.5 w-2.5" /> : <WifiOff className="h-2.5 w-2.5" />}
+            {session.player.local ? "LAN" : "WAN"}
+          </Badge>
+          {session.session.bandwidth > 0 && (
+            <Badge variant="secondary" className="text-[10px]">
+              {formatBandwidth(session.session.bandwidth)}
+            </Badge>
+          )}
+          <Badge variant="secondary" className="text-[10px] gap-1">
+            <Server className="h-2.5 w-2.5" />
+            {session.serverType !== "PLEX" && (
+              <span className="font-semibold">{session.serverType === "JELLYFIN" ? "JF" : session.serverType === "EMBY" ? "Emby" : ""} &middot;</span>
+            )}
+            {session.serverName}
+          </Badge>
+          {session.startedAt > 0 && (
+            <Badge variant="secondary" className="text-[10px] gap-1">
+              <Clock className="h-2.5 w-2.5" />
+              Started {formatTime(session.startedAt)}
+            </Badge>
+          )}
+          {session.session.location && (
+            <Badge variant="secondary" className="text-[10px]">
+              {session.session.location}
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      {/* Media Info */}
+      {(session.mediaWidth || session.videoCodec || session.audioCodec || session.container) && (
+        <div className="space-y-2">
+          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Media Info</h4>
+          <div className="flex flex-wrap gap-1.5">
+            {session.mediaWidth && session.mediaHeight && (
+              <Badge variant="outline" className="text-[10px]">
+                {session.mediaWidth}x{session.mediaHeight}
+              </Badge>
+            )}
+            {session.videoResolution && (
+              <Badge
+                variant="secondary"
+                className="text-[10px]"
+                style={getBadgeStyle("resolution", normalizeResolutionLabel(session.videoResolution))}
+              >
+                {normalizeResolutionLabel(session.videoResolution)}
+              </Badge>
+            )}
+            {session.aspectRatio && (
+              <Badge variant="secondary" className="text-[10px]">
+                {session.aspectRatio}
+              </Badge>
+            )}
+            {session.videoCodec && (
+              <Badge variant="secondary" className="text-[10px]">
+                Video: {session.videoCodec.toUpperCase()}
+                {session.videoProfile ? ` (${session.videoProfile})` : ""}
+              </Badge>
+            )}
+            {session.audioCodec && (
+              <Badge
+                variant="secondary"
+                className="text-[10px]"
+                style={session.audioProfile ? getBadgeStyle("audioProfile", session.audioProfile) : undefined}
+              >
+                Audio: {session.audioCodec.toUpperCase()}
+                {session.audioProfile ? ` (${session.audioProfile})` : ""}
+              </Badge>
+            )}
+            {session.audioChannels != null && (
+              <Badge variant="secondary" className="text-[10px]">
+                {session.audioChannels}ch
+              </Badge>
+            )}
+            {session.container && (
+              <Badge variant="secondary" className="text-[10px]">
+                {session.container.toUpperCase()}
+              </Badge>
+            )}
+            {session.bitrate != null && (
+              <Badge variant="secondary" className="text-[10px]">
+                {session.bitrate > 1000
+                  ? `${(session.bitrate / 1000).toFixed(1)} Mbps`
+                  : `${session.bitrate} kbps`}
+              </Badge>
+            )}
+            {session.optimizedForStreaming != null && (
+              <Badge variant="secondary" className="text-[10px]">
+                {session.optimizedForStreaming ? "Optimized" : "Not Optimized"}
+              </Badge>
+            )}
+            {session.partSize != null && (
+              <Badge variant="secondary" className="text-[10px]">
+                {session.partSize > 1073741824
+                  ? `${(session.partSize / 1073741824).toFixed(1)} GB`
+                  : `${(session.partSize / 1048576).toFixed(0)} MB`}
+              </Badge>
+            )}
+          </div>
+          {session.partFile && (
+            <p className="text-[11px] text-muted-foreground break-all mt-1">{session.partFile}</p>
+          )}
+        </div>
+      )}
+
+      {/* Transcode Details */}
+      {session.transcoding && (session.transcoding.videoDecision === "transcode" || session.transcoding.audioDecision === "transcode") && (
+        <div className="space-y-2">
+          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Transcode Details</h4>
+          <div className="flex flex-wrap gap-1.5">
+            {session.transcoding.sourceVideoCodec && (
+              <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-400 border-amber-500/30">
+                Video: {session.transcoding.sourceVideoCodec.toUpperCase()} &rarr; {session.transcoding.videoDecision}
+              </Badge>
+            )}
+            {session.transcoding.sourceAudioCodec && (
+              <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-400 border-amber-500/30">
+                Audio: {session.transcoding.sourceAudioCodec.toUpperCase()} &rarr; {session.transcoding.audioDecision}
+              </Badge>
+            )}
+            {session.transcoding.transcodeHwRequested !== undefined && (
+              <Badge variant="secondary" className="text-[10px]">
+                HW Accel: {session.transcoding.transcodeHwRequested ? "Yes" : "No"}
+              </Badge>
+            )}
+            {session.transcoding.speed !== undefined && (
+              <Badge variant="secondary" className="text-[10px]">
+                Speed: {session.transcoding.speed.toFixed(1)}x
+              </Badge>
+            )}
+            <Badge variant="secondary" className="text-[10px]">
+              Throttled: {session.transcoding.throttled ? "Yes" : "No"}
+            </Badge>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  // Mobile: full-screen overlay
+  if (isMobile) {
+    return (
+      <div className="fixed inset-0 z-50 bg-background flex flex-col">
+        {header}
+        {content}
+      </div>
+    );
+  }
+
+  // Desktop: side panel as fixed overlay
+  return (
+    <div className="fixed top-0 right-0 bottom-0 z-40">
+      <div
+        className="relative border-l border-white/5 glass flex flex-col h-full overflow-hidden shrink-0"
+        style={{ width, maxWidth: "40vw" }}
+      >
+        {/* Resize handle */}
+        <div
+          role="separator"
+          aria-label="Resize panel"
+          className="group/resize absolute left-0 top-0 bottom-0 w-3 cursor-col-resize z-20 transition-colors touch-none flex items-center justify-center"
+          onMouseDown={resizeHandleProps.onMouseDown}
+          onTouchStart={resizeHandleProps.onTouchStart}
+          onDoubleClick={resizeHandleProps.onDoubleClick}
+        >
+          <div className="h-8 w-1 rounded-full bg-white/10 group-hover/resize:bg-primary/50 group-active/resize:bg-primary transition-colors" />
+        </div>
+        {header}
+        {content}
+      </div>
+    </div>
+  );
+}
+
+// --- Main Page ---
+
 export default function StreamManagerPage() {
   const { getBadgeStyle } = useChipColors();
+  const isMobile = useIsMobile();
+  const { width: panelWidth, resizeHandleProps } = usePanelResize({
+    storageKey: "stream-detail-panel-width",
+    defaultWidth: 480,
+    minWidth: 360,
+    maxWidth: 800,
+  });
   const [sessions, setSessions] = useState<SessionWithServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [terminating, setTerminating] = useState(false);
@@ -1892,234 +2218,17 @@ export default function StreamManagerPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Media Detail Sheet */}
-      <Sheet open={!!sheetSession} onOpenChange={(open) => { if (!open) setSheetSession(null); }}>
-        <SheetContent side="right" className="overflow-y-auto">
-          {sheetSession && (
-            <>
-              <SheetHeader>
-                <SheetTitle className="wrap-break-word">{formatMediaTitle(sheetSession)}</SheetTitle>
-                <SheetDescription>
-                  {sheetSession.type === "episode" ? "TV Episode" : sheetSession.type === "movie" ? "Movie" : sheetSession.type === "track" ? "Track" : sheetSession.type}
-                  {sheetSession.year ? ` (${sheetSession.year})` : ""}
-                </SheetDescription>
-              </SheetHeader>
-
-              <div className="space-y-5 px-4 pb-4">
-                {/* Large artwork */}
-                {(() => {
-                  const artUrl = getSessionArtworkUrl(sheetSession);
-                  return artUrl ? (
-                    <div className="flex justify-center px-4">
-                      <div className="overflow-hidden rounded-xl">
-                        <FadeImage
-                          src={artUrl}
-                          alt={sheetSession.title}
-                          loading="lazy"
-                          className="block max-w-full"
-                          style={{ maxHeight: "400px" }}
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).style.display = "none";
-                          }}
-                        />
-                      </div>
-                    </div>
-                  ) : null;
-                })()}
-
-                {/* Overview */}
-                {(sheetSession.tagline || sheetSession.summary || sheetSession.contentRating || sheetSession.studio || sheetSession.genres) && (
-                  <div className="space-y-2">
-                    <h4 className="text-sm font-medium">Overview</h4>
-                    {sheetSession.tagline && (
-                      <p className="text-xs italic text-muted-foreground">{sheetSession.tagline}</p>
-                    )}
-                    {sheetSession.summary && (
-                      <p className="text-sm text-muted-foreground leading-relaxed">{sheetSession.summary}</p>
-                    )}
-                    <div className="flex flex-wrap gap-1.5">
-                      {sheetSession.contentRating && (
-                        <Badge variant="outline" className="text-[10px]">{sheetSession.contentRating}</Badge>
-                      )}
-                      {sheetSession.studio && (
-                        <Badge variant="secondary" className="text-[10px]">{sheetSession.studio}</Badge>
-                      )}
-                      {sheetSession.rating != null && (
-                        <Badge variant="secondary" className="text-[10px]">Rating: {sheetSession.rating.toFixed(1)}</Badge>
-                      )}
-                      {sheetSession.audienceRating != null && (
-                        <Badge variant="secondary" className="text-[10px]">Audience: {sheetSession.audienceRating.toFixed(1)}</Badge>
-                      )}
-                    </div>
-                    {sheetSession.genres && sheetSession.genres.length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {sheetSession.genres.map(g => (
-                          <Badge key={g} variant="secondary" className="text-[10px]">{g}</Badge>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Stream Info */}
-                <div className="space-y-2">
-                  <h4 className="text-sm font-medium">Stream Info</h4>
-                  <div className="flex flex-wrap gap-1.5">
-                    <Badge variant="secondary" className="text-[10px] gap-1">
-                      <User className="h-2.5 w-2.5" />
-                      {sheetSession.username}
-                    </Badge>
-                    <Badge variant="secondary" className="text-[10px]">
-                      {sheetSession.player.product} on {sheetSession.player.platform}
-                    </Badge>
-                    {sheetSession.player.address && (
-                      <Badge variant="secondary" className="text-[10px] gap-1">
-                        <Globe className="h-2.5 w-2.5" />
-                        {sheetSession.player.address}
-                      </Badge>
-                    )}
-                    <Badge variant="secondary" className="text-[10px] gap-1">
-                      {sheetSession.player.local ? <Wifi className="h-2.5 w-2.5" /> : <WifiOff className="h-2.5 w-2.5" />}
-                      {sheetSession.player.local ? "LAN" : "WAN"}
-                    </Badge>
-                    {sheetSession.session.bandwidth > 0 && (
-                      <Badge variant="secondary" className="text-[10px]">
-                        {formatBandwidth(sheetSession.session.bandwidth)}
-                      </Badge>
-                    )}
-                    <Badge variant="secondary" className="text-[10px] gap-1">
-                      <Server className="h-2.5 w-2.5" />
-                      {sheetSession.serverType !== "PLEX" && (
-                        <span className="font-semibold">{sheetSession.serverType === "JELLYFIN" ? "JF" : sheetSession.serverType === "EMBY" ? "Emby" : ""} &middot;</span>
-                      )}
-                      {sheetSession.serverName}
-                    </Badge>
-                    {sheetSession.startedAt > 0 && (
-                      <Badge variant="secondary" className="text-[10px] gap-1">
-                        <Clock className="h-2.5 w-2.5" />
-                        Started {formatTime(sheetSession.startedAt)}
-                      </Badge>
-                    )}
-                    {sheetSession.session.location && (
-                      <Badge variant="secondary" className="text-[10px]">
-                        {sheetSession.session.location}
-                      </Badge>
-                    )}
-                  </div>
-                </div>
-
-                {/* Media Info */}
-                {(sheetSession.mediaWidth || sheetSession.videoCodec || sheetSession.audioCodec || sheetSession.container) && (
-                  <div className="space-y-2">
-                    <h4 className="text-sm font-medium">Media Info</h4>
-                    <div className="flex flex-wrap gap-1.5">
-                      {sheetSession.mediaWidth && sheetSession.mediaHeight && (
-                        <Badge variant="outline" className="text-[10px]">
-                          {sheetSession.mediaWidth}x{sheetSession.mediaHeight}
-                        </Badge>
-                      )}
-                      {sheetSession.videoResolution && (
-                        <Badge
-                          variant="secondary"
-                          className="text-[10px]"
-                          style={getBadgeStyle("resolution", normalizeResolutionLabel(sheetSession.videoResolution))}
-                        >
-                          {normalizeResolutionLabel(sheetSession.videoResolution)}
-                        </Badge>
-                      )}
-                      {sheetSession.aspectRatio && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          {sheetSession.aspectRatio}
-                        </Badge>
-                      )}
-                      {sheetSession.videoCodec && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          Video: {sheetSession.videoCodec.toUpperCase()}
-                          {sheetSession.videoProfile ? ` (${sheetSession.videoProfile})` : ""}
-                        </Badge>
-                      )}
-                      {sheetSession.audioCodec && (
-                        <Badge
-                          variant="secondary"
-                          className="text-[10px]"
-                          style={sheetSession.audioProfile ? getBadgeStyle("audioProfile", sheetSession.audioProfile) : undefined}
-                        >
-                          Audio: {sheetSession.audioCodec.toUpperCase()}
-                          {sheetSession.audioProfile ? ` (${sheetSession.audioProfile})` : ""}
-                        </Badge>
-                      )}
-                      {sheetSession.audioChannels != null && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          {sheetSession.audioChannels}ch
-                        </Badge>
-                      )}
-                      {sheetSession.container && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          {sheetSession.container.toUpperCase()}
-                        </Badge>
-                      )}
-                      {sheetSession.bitrate != null && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          {sheetSession.bitrate > 1000
-                            ? `${(sheetSession.bitrate / 1000).toFixed(1)} Mbps`
-                            : `${sheetSession.bitrate} kbps`}
-                        </Badge>
-                      )}
-                      {sheetSession.optimizedForStreaming != null && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          {sheetSession.optimizedForStreaming ? "Optimized" : "Not Optimized"}
-                        </Badge>
-                      )}
-                      {sheetSession.partSize != null && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          {sheetSession.partSize > 1073741824
-                            ? `${(sheetSession.partSize / 1073741824).toFixed(1)} GB`
-                            : `${(sheetSession.partSize / 1048576).toFixed(0)} MB`}
-                        </Badge>
-                      )}
-                    </div>
-                    {sheetSession.partFile && (
-                      <p className="text-[11px] text-muted-foreground break-all mt-1">{sheetSession.partFile}</p>
-                    )}
-                  </div>
-                )}
-
-                {/* Transcode Details */}
-                {sheetSession.transcoding && (sheetSession.transcoding.videoDecision === "transcode" || sheetSession.transcoding.audioDecision === "transcode") && (
-                  <div className="space-y-2">
-                    <h4 className="text-sm font-medium">Transcode Details</h4>
-                    <div className="flex flex-wrap gap-1.5">
-                      {sheetSession.transcoding.sourceVideoCodec && (
-                        <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-400 border-amber-500/30">
-                          Video: {sheetSession.transcoding.sourceVideoCodec.toUpperCase()} &rarr; {sheetSession.transcoding.videoDecision}
-                        </Badge>
-                      )}
-                      {sheetSession.transcoding.sourceAudioCodec && (
-                        <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-400 border-amber-500/30">
-                          Audio: {sheetSession.transcoding.sourceAudioCodec.toUpperCase()} &rarr; {sheetSession.transcoding.audioDecision}
-                        </Badge>
-                      )}
-                      {sheetSession.transcoding.transcodeHwRequested !== undefined && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          HW Accel: {sheetSession.transcoding.transcodeHwRequested ? "Yes" : "No"}
-                        </Badge>
-                      )}
-                      {sheetSession.transcoding.speed !== undefined && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          Speed: {sheetSession.transcoding.speed.toFixed(1)}x
-                        </Badge>
-                      )}
-                      <Badge variant="secondary" className="text-[10px]">
-                        Throttled: {sheetSession.transcoding.throttled ? "Yes" : "No"}
-                      </Badge>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </SheetContent>
-      </Sheet>
+      {/* Media Detail Side Panel */}
+      {sheetSession && (
+        <StreamDetailPanel
+          session={sheetSession}
+          onClose={() => setSheetSession(null)}
+          width={panelWidth}
+          resizeHandleProps={resizeHandleProps}
+          isMobile={isMobile}
+          getBadgeStyle={getBadgeStyle}
+        />
+      )}
     </div>
   );
 }
