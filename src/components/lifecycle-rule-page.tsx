@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import { SERVER_TYPE_STYLES } from "@/lib/server-styles";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -217,6 +218,7 @@ interface RuleSetExport {
 interface MediaServer {
   id: string;
   name: string;
+  type: string;
 }
 
 interface ScopeConfig {
@@ -843,7 +845,7 @@ export function LifecycleRulePage({
     try {
       const response = await fetch("/api/servers");
       const data = await response.json();
-      setServers((data.servers || []).map((s: { id: string; name: string }) => ({ id: s.id, name: s.name })));
+      setServers((data.servers || []).map((s: { id: string; name: string; type: string }) => ({ id: s.id, name: s.name, type: s.type })));
     } catch (error) {
       console.error("Failed to fetch servers:", error);
     }
@@ -1567,26 +1569,30 @@ export function LifecycleRulePage({
                   <CommandList>
                     <CommandEmpty>No servers found.</CommandEmpty>
                     <CommandGroup>
-                      {servers.map((server) => (
-                        <CommandItem
-                          key={server.id}
-                          value={server.name}
-                          onSelect={() => {
-                            setServerIds((prev) =>
-                              prev.includes(server.id)
-                                ? prev.filter((id) => id !== server.id)
-                                : [...prev, server.id]
-                            );
-                          }}
-                        >
-                          <Check
-                            className={`mr-2 h-4 w-4 ${
-                              serverIds.includes(server.id) ? "opacity-100" : "opacity-0"
-                            }`}
-                          />
-                          {server.name}
-                        </CommandItem>
-                      ))}
+                      {servers.map((server) => {
+                        const typeLabel = SERVER_TYPE_STYLES[server.type]?.label ?? server.type;
+                        return (
+                          <CommandItem
+                            key={server.id}
+                            value={`${server.name} ${typeLabel}`}
+                            onSelect={() => {
+                              setServerIds((prev) =>
+                                prev.includes(server.id)
+                                  ? prev.filter((id) => id !== server.id)
+                                  : [...prev, server.id]
+                              );
+                            }}
+                          >
+                            <Check
+                              className={`mr-2 h-4 w-4 ${
+                                serverIds.includes(server.id) ? "opacity-100" : "opacity-0"
+                              }`}
+                            />
+                            {server.name}
+                            <span className="ml-1.5 text-muted-foreground">({typeLabel})</span>
+                          </CommandItem>
+                        );
+                      })}
                     </CommandGroup>
                   </CommandList>
                 </Command>
@@ -1596,12 +1602,14 @@ export function LifecycleRulePage({
               <div className="flex flex-wrap gap-1">
                 {serverIds.map((id) => {
                   const server = servers.find((s) => s.id === id);
+                  const typeLabel = server ? (SERVER_TYPE_STYLES[server.type]?.label ?? server.type) : undefined;
                   return (
                     <span
                       key={id}
                       className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
                     >
                       {server?.name ?? id}
+                      {typeLabel && <span className="text-muted-foreground">({typeLabel})</span>}
                       <button
                         type="button"
                         onClick={() => setServerIds((prev) => prev.filter((sid) => sid !== id))}
