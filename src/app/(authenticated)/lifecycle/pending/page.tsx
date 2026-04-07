@@ -705,8 +705,7 @@ export default function PendingActionsPage() {
     try {
       const response = await fetch("/api/lifecycle/stats/reset", { method: "POST" });
       if (response.ok) {
-        const data = await response.json();
-        setDeletionStats(data);
+        await fetchDeletionStats();
         toast.success("Deletion stats reset");
       } else {
         toast.error("Failed to reset stats");
