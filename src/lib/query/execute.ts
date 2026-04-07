@@ -6,6 +6,7 @@ import {
   isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
 } from "@/lib/rules/types";
+import { normalizeResolutionLabel } from "@/lib/resolution";
 import type { StreamQueryField } from "@/lib/rules/types";
 import { detectStreamAudioProfile, detectStreamDynamicRange } from "@/lib/rules/stream-detection";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
@@ -17,6 +18,15 @@ import type { ArrDataMap, ArrMetadata, SeerrDataMap, SeerrMetadata } from "@/lib
 
 const MB_IN_BYTES = 1024 * 1024;
 const DURATION_MS_PER_MIN = 60_000;
+
+// Map standardized resolution labels to raw DB patterns (mirrors build-where.ts)
+const RESOLUTION_DB_VALUES: Record<string, string[]> = {
+  "4K": ["4k", "2160", "2160p"],
+  "1080P": ["1080", "1080p"],
+  "720P": ["720", "720p"],
+  "480P": ["480", "480p"],
+  "SD": ["sd", "360", "360p"],
+};
 
 /** Batch-fetch cross-system enrichment data for candidate items */
 async function fetchCrossSystemData(
@@ -247,6 +257,47 @@ function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
       case "isNull": clause = { [field]: null }; break;
       case "isNotNull": clause = { [field]: { not: null } }; break;
       default: return {};
+    }
+    return applyNegate(clause, negate);
+  }
+
+  // Resolution field — map display labels (e.g. "480P") to raw DB values (e.g. "480", "480p")
+  if (field === "resolution") {
+    const strVal = String(value);
+    let clause: Prisma.MediaItemWhereInput;
+    switch (operator) {
+      case "equals": {
+        const dbValues = RESOLUTION_DB_VALUES[strVal];
+        if (dbValues) {
+          clause = { resolution: { in: dbValues, mode: "insensitive" } };
+        } else {
+          clause = { resolution: { equals: strVal, mode: "insensitive" } };
+        }
+        break;
+      }
+      case "notEquals": {
+        const dbValues = RESOLUTION_DB_VALUES[strVal];
+        if (dbValues) {
+          clause = { NOT: { resolution: { in: dbValues, mode: "insensitive" } } };
+        } else {
+          clause = { resolution: { not: strVal, mode: "insensitive" } };
+        }
+        break;
+      }
+      case "contains":
+        clause = { resolution: { contains: strVal, mode: "insensitive" } };
+        break;
+      case "notContains":
+        clause = { NOT: { resolution: { contains: strVal, mode: "insensitive" } } };
+        break;
+      case "isNull":
+        clause = { OR: [{ resolution: null }, { resolution: "" }] };
+        break;
+      case "isNotNull":
+        clause = { AND: [{ resolution: { not: null } }, { NOT: { resolution: "" } }] };
+        break;
+      default:
+        return {};
     }
     return applyNegate(clause, negate);
   }
@@ -1576,6 +1627,34 @@ function evaluateQueryRuleInMemory(
     else if (itemVal === null) { result = false; }
     else if (operator === "between") { const [minStr, maxStr] = String(value).split(","); result = itemVal >= Number(minStr) && itemVal <= Number(maxStr); }
     else { result = compareNumeric(itemVal, operator, numVal); }
+    return negate ? !result : result;
+  }
+
+  // Resolution field — normalize DB value to display label before comparing
+  if (field === "resolution") {
+    const itemStr = item[field] != null ? String(item[field]) : null;
+    const normalizedLabel = normalizeResolutionLabel(itemStr);
+    const strVal = String(value);
+    let result: boolean;
+    if (operator === "isNull") {
+      result = itemStr === null || itemStr === "";
+    } else if (operator === "isNotNull") {
+      result = itemStr !== null && itemStr !== "";
+    } else if (itemStr === null) {
+      result = false;
+    } else {
+      const labelLower = normalizedLabel.toLowerCase();
+      const valLower = strVal.toLowerCase();
+      switch (operator) {
+        case "equals": result = labelLower === valLower; break;
+        case "notEquals": result = labelLower !== valLower; break;
+        case "contains": result = labelLower.includes(valLower); break;
+        case "notContains": result = !labelLower.includes(valLower); break;
+        case "matchesWildcard": result = wildcardToRegex(valLower).test(labelLower); break;
+        case "notMatchesWildcard": result = !wildcardToRegex(valLower).test(labelLower); break;
+        default: result = false;
+      }
+    }
     return negate ? !result : result;
   }
 

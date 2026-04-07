@@ -100,14 +100,23 @@ export async function GET(request: NextRequest) {
   }
 
   if (resolution) {
+    const RESOLUTION_DB_VALUES: Record<string, string[]> = {
+      "4K": ["4k", "2160", "2160p"],
+      "1080P": ["1080", "1080p"],
+      "720P": ["720", "720p"],
+      "480P": ["480", "480p"],
+      "SD": ["sd", "360", "360p"],
+    };
     const vals = resolution.split("|").filter(Boolean);
-    if (vals.length === 1) {
-      conditions.push(`mi."resolution" = $${paramIdx++}`);
-      params.push(vals[0]);
-    } else if (vals.length > 1) {
-      const placeholders = vals.map(() => `$${paramIdx++}`).join(",");
-      conditions.push(`mi."resolution" IN (${placeholders})`);
-      params.push(...vals);
+    // Expand display labels to all matching DB values
+    const dbVals = vals.flatMap((v) => RESOLUTION_DB_VALUES[v] ?? [v]);
+    if (dbVals.length === 1) {
+      conditions.push(`LOWER(mi."resolution") = LOWER($${paramIdx++})`);
+      params.push(dbVals[0]);
+    } else if (dbVals.length > 1) {
+      const placeholders = dbVals.map(() => `LOWER($${paramIdx++})`).join(",");
+      conditions.push(`LOWER(mi."resolution") IN (${placeholders})`);
+      params.push(...dbVals);
     }
   }
 

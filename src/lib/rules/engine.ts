@@ -8,10 +8,20 @@ import {
   RULE_FIELDS, STREAM_QUERY_FIELDS, type RuleField,
 } from "./types";
 import { detectStreamAudioProfile, detectStreamDynamicRange } from "./stream-detection";
+import { normalizeResolutionLabel } from "@/lib/resolution";
 import type { Prisma } from "@/generated/prisma/client";
 
 const MB_IN_BYTES = 1024 * 1024;
 const DURATION_MS_PER_MIN = 60_000;
+
+// Map standardized resolution labels to raw DB patterns
+const RESOLUTION_DB_VALUES: Record<string, string[]> = {
+  "4K": ["4k", "2160", "2160p"],
+  "1080P": ["1080", "1080p"],
+  "720P": ["720", "720p"],
+  "480P": ["480", "480p"],
+  "SD": ["sd", "360", "360p"],
+};
 
 const STREAM_COUNT_FIELDS = new Set(["audioStreamCount", "subtitleStreamCount"]);
 
@@ -420,8 +430,49 @@ function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
     return applyNegate(clause, negate);
   }
 
+  // Resolution field — map display labels (e.g. "480P") to raw DB values (e.g. "480", "480p")
+  if (field === "resolution") {
+    const strVal = String(value);
+    let clause: Prisma.MediaItemWhereInput;
+    switch (operator) {
+      case "equals": {
+        const dbValues = RESOLUTION_DB_VALUES[strVal];
+        if (dbValues) {
+          clause = { resolution: { in: dbValues, mode: "insensitive" } };
+        } else {
+          clause = { resolution: { equals: strVal, mode: "insensitive" } };
+        }
+        break;
+      }
+      case "notEquals": {
+        const dbValues = RESOLUTION_DB_VALUES[strVal];
+        if (dbValues) {
+          clause = { NOT: { resolution: { in: dbValues, mode: "insensitive" } } };
+        } else {
+          clause = { resolution: { not: strVal, mode: "insensitive" } };
+        }
+        break;
+      }
+      case "contains":
+        clause = { resolution: { contains: strVal, mode: "insensitive" } };
+        break;
+      case "notContains":
+        clause = { NOT: { resolution: { contains: strVal, mode: "insensitive" } } };
+        break;
+      case "isNull":
+        clause = { OR: [{ resolution: null }, { resolution: "" }] };
+        break;
+      case "isNotNull":
+        clause = { AND: [{ resolution: { not: null } }, { NOT: { resolution: "" } }] };
+        break;
+      default:
+        return {};
+    }
+    return applyNegate(clause, negate);
+  }
+
   // Handle text fields (parentTitle, albumTitle, videoProfile, videoFrameRate, aspectRatio,
-  // scanType, contentRating, studio, resolution, videoCodec, audioCodec, container, etc.)
+  // scanType, contentRating, studio, videoCodec, audioCodec, container, etc.)
   let clause: Prisma.MediaItemWhereInput;
   switch (operator) {
     case "equals":
@@ -1706,6 +1757,30 @@ function evaluateRuleAgainstItem(
       default: result = false;
     }
     return negate ? !result : result;
+  }
+
+  // Resolution field — normalize DB value to display label before comparing
+  if (field === "resolution") {
+    const rawRes = itemValue != null ? String(itemValue) : null;
+    const normalizedLabel = normalizeResolutionLabel(rawRes);
+    const strVal = String(value);
+    let resResult: boolean;
+    if (rawRes === null || rawRes === "") {
+      resResult = false;
+    } else {
+      const labelLower = normalizedLabel.toLowerCase();
+      const valLower = strVal.toLowerCase();
+      switch (operator) {
+        case "equals": resResult = labelLower === valLower; break;
+        case "notEquals": resResult = labelLower !== valLower; break;
+        case "contains": resResult = labelLower.includes(valLower); break;
+        case "notContains": resResult = !labelLower.includes(valLower); break;
+        case "matchesWildcard": resResult = wildcardToRegex(valLower).test(labelLower); break;
+        case "notMatchesWildcard": resResult = !wildcardToRegex(valLower).test(labelLower); break;
+        default: resResult = false;
+      }
+    }
+    return negate ? !resResult : resResult;
   }
 
   // Text fields (case-insensitive to match Prisma behavior)
