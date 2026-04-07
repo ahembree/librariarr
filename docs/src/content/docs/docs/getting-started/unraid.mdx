@@ -71,11 +71,22 @@ Librariarr provides Unraid XML templates for easy installation through the Unrai
 
 If you already run a PostgreSQL server on your network (or in another Docker container on Unraid), you can skip the `librariarr-db` container entirely and use the dedicated external database template.
 
-See the [external database requirements](/docs/getting-started/installation/#database-requirements) for PostgreSQL version and privilege details.
+See the [external database requirements](/docs/getting-started/installation/#database-requirements) for full details on supported PostgreSQL versions and privilege requirements.
 
 <Steps>
 
-1. **Add the external database template**
+1. **Prepare the database**
+
+   On your existing PostgreSQL server, create a dedicated database and user for Librariarr if you haven't already:
+
+   ```sql
+   CREATE USER librariarr WITH PASSWORD 'your-secure-password';
+   CREATE DATABASE librariarr OWNER librariarr;
+   ```
+
+   The user needs full privileges on the database (`CREATE`, `ALTER`, `DROP`, `INSERT`, `UPDATE`, `DELETE`). PostgreSQL 14 or later is required (17+ recommended). No extensions are needed.
+
+2. **Add the external database template**
 
    In the Unraid Docker tab, click **Add Container** and set the **Template Repository** to:
 
@@ -93,7 +104,7 @@ See the [external database requirements](/docs/getting-started/installation/#dat
 
    Click **Apply** to create the container.
 
-2. **Verify the container is running**
+3. **Verify the container is running**
 
    In the Docker tab, confirm `librariarr` shows as started. Navigate to `http://your-unraid-ip:3000` to access the app.
 
