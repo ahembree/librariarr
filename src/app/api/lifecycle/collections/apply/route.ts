@@ -43,7 +43,7 @@ export async function POST(request: Request) {
       if (skipCollectionRemoval) {
         changes.push(`Collection "${previousCollectionName}" kept on Plex`);
       } else {
-        await removePlexCollection(ruleSet.userId, ruleSet.type, previousCollectionName);
+        await removePlexCollection(ruleSet.userId, ruleSet.type, previousCollectionName, ruleSet.id);
         changes.push(`Removed collection "${previousCollectionName}"`);
       }
       return NextResponse.json({ success: true, changes });

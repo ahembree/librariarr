@@ -229,7 +229,8 @@ export async function POST(request: NextRequest) {
         item.ratingKey,
         match.ruleSet.seriesScope && match.ruleSet.type === "SERIES"
           ? (item.parentTitle ?? item.title)
-          : null
+          : null,
+        match.ruleSet.id
       ).catch(() => {
         // Collection removal is best-effort
       });
@@ -322,7 +323,8 @@ async function handleIndividualException(
           fullItem.ratingKey,
           ruleSet.seriesScope && ruleSet.type === "SERIES"
             ? (fullItem.parentTitle ?? fullItem.title)
-            : null
+            : null,
+          ruleSet.id
         ).catch(() => {
           // Collection removal is best-effort; don't fail the exclusion
         });

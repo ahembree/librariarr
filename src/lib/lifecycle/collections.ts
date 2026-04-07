@@ -22,9 +22,52 @@ interface MatchedItem {
 }
 
 /**
+ * Find all other rule sets that share the same collection name, type, and user.
+ * Used to merge matches from multiple rule sets into the same Plex collection.
+ */
+async function getSiblingCollectionItems(
+  ruleSet: CollectionRuleSet,
+): Promise<MatchedItem[]> {
+  const siblingRuleSets = await prisma.ruleSet.findMany({
+    where: {
+      userId: ruleSet.userId,
+      type: ruleSet.type,
+      collectionEnabled: true,
+      collectionName: ruleSet.collectionName,
+      id: { not: ruleSet.id },
+    },
+    select: { id: true, seriesScope: true },
+  });
+
+  if (siblingRuleSets.length === 0) return [];
+
+  const siblingIds = siblingRuleSets.map((s) => s.id);
+  const siblingMatches = await prisma.ruleMatch.findMany({
+    where: { ruleSetId: { in: siblingIds } },
+    select: {
+      mediaItem: {
+        select: { libraryId: true, ratingKey: true, title: true, parentTitle: true },
+      },
+    },
+  });
+
+  return siblingMatches
+    .filter((m) => m.mediaItem !== null)
+    .map((m) => ({
+      libraryId: m.mediaItem!.libraryId,
+      ratingKey: m.mediaItem!.ratingKey,
+      title: m.mediaItem!.title,
+      parentTitle: m.mediaItem!.parentTitle,
+    }));
+}
+
+/**
  * Sync matched lifecycle rule items to a Plex collection.
  * Groups items by library, creates or updates the collection on each
  * Plex server, and manages visibility settings.
+ *
+ * When multiple rule sets share the same collection name, their matches
+ * are merged into a single collection automatically.
  */
 export async function syncPlexCollection(
   ruleSet: CollectionRuleSet,
@@ -34,12 +77,27 @@ export async function syncPlexCollection(
   if (!ruleSet.collectionName) return;
   const collectionName = ruleSet.collectionName;
 
-  // Group matched items by libraryId
+  // Merge items from sibling rule sets sharing the same collection name
+  const siblingItems = await getSiblingCollectionItems(ruleSet);
+  const allItems = [...matchedItems, ...siblingItems];
+
+  // Group matched items by libraryId, deduplicating by ratingKey
   const byLibrary = new Map<string, MatchedItem[]>();
-  for (const item of matchedItems) {
+  for (const item of allItems) {
     const existing = byLibrary.get(item.libraryId) || [];
     existing.push(item);
     byLibrary.set(item.libraryId, existing);
+  }
+
+  // Deduplicate items within each library by ratingKey
+  for (const [libraryId, items] of byLibrary) {
+    const seen = new Set<string>();
+    const deduped = items.filter((item) => {
+      if (seen.has(item.ratingKey)) return false;
+      seen.add(item.ratingKey);
+      return true;
+    });
+    byLibrary.set(libraryId, deduped);
   }
 
   // Also find libraries that might have the collection but no longer have matches.
@@ -225,8 +283,20 @@ async function applyDeletionDateOrder(
 ): Promise<void> {
   if (desiredKeys.length <= 1) return;
 
+  // Query actions from all rule sets sharing this collection name
+  const siblingRuleSetIds = await prisma.ruleSet.findMany({
+    where: {
+      userId: ruleSet.userId,
+      type: ruleSet.type,
+      collectionEnabled: true,
+      collectionName: ruleSet.collectionName,
+    },
+    select: { id: true },
+  });
+  const allRuleSetIds = siblingRuleSetIds.map((s) => s.id);
+
   const actions = await prisma.lifecycleAction.findMany({
-    where: { ruleSetId: ruleSet.id, status: "PENDING" },
+    where: { ruleSetId: { in: allRuleSetIds }, status: "PENDING" },
     select: {
       scheduledFor: true,
       mediaItem: { select: { ratingKey: true, parentTitle: true, title: true } },
@@ -298,16 +368,45 @@ async function applyDeletionDateOrder(
  * Remove a single item from a Plex collection across all matching libraries.
  * Used when a media item is excluded from lifecycle actions.
  *
+ * If the item is still matched by another rule set sharing the same collection
+ * name, it will NOT be removed from the collection.
+ *
  * @param seriesTitle - If provided (for series-scope rules), finds the series
  *   ratingKey by title instead of using the item ratingKey directly.
+ * @param excludeRuleSetId - The rule set triggering the removal. Sibling rule
+ *   sets are checked to see if the item is still matched elsewhere.
  */
 export async function removeItemFromCollections(
   userId: string,
   type: string,
   collectionName: string,
   itemRatingKey: string,
-  seriesTitle: string | null
+  seriesTitle: string | null,
+  excludeRuleSetId?: string
 ) {
+  // Check if the item is still matched by a sibling rule set sharing this collection
+  if (excludeRuleSetId) {
+    const siblingMatch = await prisma.ruleMatch.findFirst({
+      where: {
+        mediaItem: { ratingKey: itemRatingKey },
+        ruleSet: {
+          userId,
+          type,
+          collectionEnabled: true,
+          collectionName,
+          id: { not: excludeRuleSetId },
+        },
+      },
+    });
+    if (siblingMatch) {
+      logger.debug(
+        "Lifecycle",
+        `Skipping removal of item from collection "${collectionName}" — still matched by another rule set`
+      );
+      return;
+    }
+  }
+
   const libraryType = type as "MOVIE" | "SERIES" | "MUSIC";
   const userLibraries = await prisma.library.findMany({
     where: {
@@ -374,12 +473,38 @@ export async function removeItemFromCollections(
 /**
  * Remove a Plex collection by name across all libraries for a user.
  * Used when collection sync is disabled on a rule set.
+ *
+ * If other rule sets still share this collection name, the collection
+ * is NOT removed — it will be re-synced by those rule sets instead.
+ *
+ * @param excludeRuleSetId - The rule set being disabled. Other rule sets
+ *   sharing the same collection name are checked to decide if removal is safe.
  */
 export async function removePlexCollection(
   userId: string,
   type: string,
-  collectionName: string
+  collectionName: string,
+  excludeRuleSetId?: string
 ) {
+  // Check if other rule sets still use this collection name
+  const siblingCount = await prisma.ruleSet.count({
+    where: {
+      userId,
+      type,
+      collectionEnabled: true,
+      collectionName,
+      ...(excludeRuleSetId ? { id: { not: excludeRuleSetId } } : {}),
+    },
+  });
+
+  if (siblingCount > 0) {
+    logger.info(
+      "Lifecycle",
+      `Skipping removal of collection "${collectionName}" — ${siblingCount} other rule set(s) still use it`
+    );
+    return;
+  }
+
   const libraryType = type as "MOVIE" | "SERIES" | "MUSIC";
   const userLibraries = await prisma.library.findMany({
     where: {

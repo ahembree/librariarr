@@ -135,7 +135,7 @@ export async function DELETE(
   // Clean up Plex collection if one was configured
   if (ruleSet.collectionName && session.userId) {
     try {
-      await removePlexCollection(session.userId, ruleSet.type, ruleSet.collectionName);
+      await removePlexCollection(session.userId, ruleSet.type, ruleSet.collectionName, ruleSet.id);
     } catch {
       // Best-effort cleanup — don't block deletion if Plex is unreachable
     }

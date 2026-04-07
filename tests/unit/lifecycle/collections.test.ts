@@ -3,6 +3,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const mockPrisma = vi.hoisted(() => ({
   library: { findMany: vi.fn() },
   lifecycleAction: { findMany: vi.fn() },
+  ruleSet: { findMany: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(0) },
+  ruleMatch: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(null) },
 }));
 
 const mockPlexClient = vi.hoisted(() => ({
@@ -225,6 +227,9 @@ describe("syncPlexCollection", () => {
     mockPlexClient.updateCollectionVisibility.mockResolvedValue(undefined);
     mockPlexClient.moveCollectionItem.mockResolvedValue(undefined);
 
+    // Return current rule set for deletion date ordering query
+    mockPrisma.ruleSet.findMany.mockResolvedValue([{ id: "rs1" }]);
+
     mockPrisma.lifecycleAction.findMany.mockResolvedValue([
       {
         scheduledFor: new Date("2025-01-10"),
@@ -331,6 +336,58 @@ describe("syncPlexCollection", () => {
     // Second library should still be processed
     expect(mockPlexClient.createCollection).toHaveBeenCalled();
   });
+
+  it("merges items from sibling rule sets sharing the same collection name", async () => {
+    // Sibling rule set returns matched items
+    mockPrisma.ruleSet.findMany.mockResolvedValue([{ id: "rs2", seriesScope: false }]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([
+      { mediaItem: { libraryId: "lib1", ratingKey: "rk_sibling", title: "Sibling Movie", parentTitle: null } },
+    ]);
+
+    mockPrisma.library.findMany.mockResolvedValue([
+      { id: "lib1", key: "1", title: "Movies", mediaServer: defaultServer, mediaServerId: "s1" },
+    ]);
+    mockPlexClient.getCollections.mockResolvedValue([]);
+    mockPlexClient.createCollection.mockResolvedValue({ ratingKey: "col1", title: "Test Collection" });
+    mockPlexClient.editCollectionSortTitle.mockResolvedValue(undefined);
+    mockPlexClient.editCollectionSort.mockResolvedValue(undefined);
+    mockPlexClient.updateCollectionVisibility.mockResolvedValue(undefined);
+
+    await syncPlexCollection(makeRuleSet(), [
+      { libraryId: "lib1", ratingKey: "rk1", title: "Movie 1", parentTitle: null },
+    ]);
+
+    // Collection should contain both the current rule set's item and the sibling's item
+    expect(mockPlexClient.createCollection).toHaveBeenCalledWith(
+      "1", "Test Collection", "machine1", ["rk1", "rk_sibling"], 1,
+    );
+  });
+
+  it("deduplicates items when sibling rule set matches the same item", async () => {
+    // Sibling returns the same item as the current rule set
+    mockPrisma.ruleSet.findMany.mockResolvedValue([{ id: "rs2", seriesScope: false }]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([
+      { mediaItem: { libraryId: "lib1", ratingKey: "rk1", title: "Movie 1", parentTitle: null } },
+    ]);
+
+    mockPrisma.library.findMany.mockResolvedValue([
+      { id: "lib1", key: "1", title: "Movies", mediaServer: defaultServer, mediaServerId: "s1" },
+    ]);
+    mockPlexClient.getCollections.mockResolvedValue([]);
+    mockPlexClient.createCollection.mockResolvedValue({ ratingKey: "col1", title: "Test Collection" });
+    mockPlexClient.editCollectionSortTitle.mockResolvedValue(undefined);
+    mockPlexClient.editCollectionSort.mockResolvedValue(undefined);
+    mockPlexClient.updateCollectionVisibility.mockResolvedValue(undefined);
+
+    await syncPlexCollection(makeRuleSet(), [
+      { libraryId: "lib1", ratingKey: "rk1", title: "Movie 1", parentTitle: null },
+    ]);
+
+    // Should only have one copy of rk1, not two
+    expect(mockPlexClient.createCollection).toHaveBeenCalledWith(
+      "1", "Test Collection", "machine1", ["rk1"], 1,
+    );
+  });
 });
 
 describe("removePlexCollection", () => {
@@ -390,5 +447,18 @@ describe("removePlexCollection", () => {
 
     // Second library should still be processed
     expect(mockPlexClient.deleteCollection).toHaveBeenCalledWith("col2");
+  });
+
+  it("skips removal when other rule sets still share the collection name", async () => {
+    mockPrisma.ruleSet.count.mockResolvedValue(1); // 1 sibling still uses this collection
+
+    mockPrisma.library.findMany.mockResolvedValue([
+      { id: "lib1", key: "1", title: "Movies", mediaServer: defaultServer },
+    ]);
+
+    await removePlexCollection("u1", "MOVIE", "Shared Collection", "rs1");
+
+    // Should NOT delete since a sibling still uses it
+    expect(mockPlexClient.deleteCollection).not.toHaveBeenCalled();
   });
 });

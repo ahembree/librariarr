@@ -698,6 +698,17 @@ export function LifecycleRulePage({
     );
   }, [snapshotVersion, groups, seriesScope, serverIds]);
 
+  // Sibling rule sets sharing the same collection name (for merge hint)
+  const collectionSiblings = useMemo(() => {
+    if (!collectionEnabled || !collectionName?.trim()) return [];
+    return savedRuleSets.filter(
+      (rs) =>
+        rs.id !== activeRuleSetId &&
+        rs.collectionEnabled &&
+        rs.collectionName === collectionName.trim()
+    );
+  }, [collectionEnabled, collectionName, savedRuleSets, activeRuleSetId]);
+
   // Post-save match search prompt
   const [showSaveOptions, setShowSaveOptions] = useState(false);
   const [showNewSaveOptions, setShowNewSaveOptions] = useState(false);
@@ -1969,6 +1980,14 @@ export function LifecycleRulePage({
                       onChange={(e) => setCollectionName(e.target.value)}
                       className={`mt-1.5${!collectionName?.trim() ? " border-destructive" : ""}`}
                     />
+                    {collectionSiblings.length > 0 && (
+                      <p className="mt-1 text-xs text-blue-400">
+                        Merged with {collectionSiblings.length === 1
+                          ? `"${collectionSiblings[0].name}"`
+                          : `${collectionSiblings.length} other rule sets`}
+                        {" "}&mdash; matches will be combined into one collection
+                      </p>
+                    )}
                   </div>
                   <div>
                     <Label htmlFor="collection-sort-name">Sort name (optional)</Label>

@@ -468,7 +468,7 @@ describe("processLifecycleRules", () => {
 
     await processLifecycleRules();
 
-    expect(mockRemovePlexCollection).toHaveBeenCalledWith("u1", "MOVIE", "Old Collection");
+    expect(mockRemovePlexCollection).toHaveBeenCalledWith("u1", "MOVIE", "Old Collection", "rs1");
     expect(mockPrisma.ruleSet.update).toHaveBeenCalledWith({
       where: { id: "rs1" },
       data: { collectionName: null },

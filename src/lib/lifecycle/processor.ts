@@ -297,7 +297,7 @@ export async function processLifecycleRules(userId?: string) {
   for (const rs of disabledCollectionRuleSets) {
     if (!rs.collectionName) continue;
     try {
-      await removePlexCollection(rs.userId, rs.type, rs.collectionName);
+      await removePlexCollection(rs.userId, rs.type, rs.collectionName, rs.id);
       // Clear the collection name so we don't try to remove it again
       await prisma.ruleSet.update({
         where: { id: rs.id },

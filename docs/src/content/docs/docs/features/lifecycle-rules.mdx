@@ -194,6 +194,20 @@ Each action links a rule set to an *arr instance:
   The **Delete** action permanently removes files from your *arr instance and, optionally, from disk. Preview your matches carefully before enabling deletion rules.
 </Aside>
 
+### Plex Collection Sync
+
+Each rule set can optionally sync its matched items to a **Plex collection**. Enable this in the collection section of the rule editor, then provide a collection name.
+
+**Merging collections:** If two or more rule sets use the **same collection name** (and target the same media type), their matches are automatically merged into a single Plex collection. This lets you combine different rules into one collection — for example, a "Cleanup Candidates" collection fed by both an "old unwatched movies" rule and a "low quality duplicates" rule.
+
+When a rule set with a shared collection name is disabled or deleted, the collection is preserved as long as at least one other rule set still uses it.
+
+Collection options:
+
+- **Sort name** — Controls where the collection appears in Plex's alphabetical list (e.g., `!001` to pin it at the top)
+- **Sort order** — Alphabetical, release date, or deletion date (items sorted by their scheduled action date)
+- **Display on home screens** / **Display in library recommended** — Controls Plex visibility settings
+
 ## How Rules Are Evaluated
 
 Rules are evaluated in two steps:
