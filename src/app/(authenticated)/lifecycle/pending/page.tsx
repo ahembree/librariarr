@@ -212,6 +212,7 @@ function VirtualizedActionTable({
           <thead className="sticky top-0 z-10 bg-background">
             <tr className="border-b bg-muted/50">
               <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Title</th>
+              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Size</th>
               <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Action</th>
               <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">{isPending ? "Scheduled" : "Date"}</th>
               <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Status</th>
@@ -260,6 +261,9 @@ function VirtualizedActionTable({
                         </p>
                       )}
                     </div>
+                  </td>
+                  <td className="p-4 align-middle text-sm text-muted-foreground">
+                    {action.mediaItem.fileSize ? formatFileSize(action.mediaItem.fileSize) : "—"}
                   </td>
                   <td className="p-4 align-middle">
                     <div className="space-y-1">
