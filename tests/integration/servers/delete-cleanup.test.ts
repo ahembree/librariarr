@@ -82,7 +82,7 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
     expect(updated!.serverIds).toEqual([server2.id]);
   });
 
-  it("cleans up matches and pending actions when rule set loses all servers", async () => {
+  it("cleans up matches and pending actions when rule set loses all servers (deleteData=false)", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
     const library = await createTestLibrary(server.id);
@@ -116,8 +116,8 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
       },
     });
 
-    // Create a completed action (should NOT be deleted)
-    await prisma.lifecycleAction.create({
+    // Create a completed action (should be preserved — only PENDING actions are cleaned)
+    const completedAction = await prisma.lifecycleAction.create({
       data: {
         userId: user.id,
         mediaItemId: item.id,
@@ -132,10 +132,11 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
 
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
+    // deleteData=false: items preserved, but server removed
     const response = await callRouteWithParams(
       DELETE,
       { id: server.id },
-      { url: `/api/servers/${server.id}?deleteData=true`, method: "DELETE" }
+      { url: `/api/servers/${server.id}`, method: "DELETE" }
     );
     await expectJson(response, 200);
 
@@ -156,9 +157,76 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
       where: { ruleSetId: ruleSet.id, status: "PENDING" },
     });
     expect(pendingActions).toHaveLength(0);
+
+    // Completed action should be preserved
+    const preserved = await prisma.lifecycleAction.findUnique({
+      where: { id: completedAction.id },
+    });
+    expect(preserved).not.toBeNull();
+    expect(preserved!.status).toBe("COMPLETED");
   });
 
-  it("preserves rule set serverIds for other servers", async () => {
+  it("cleans up with deleteData=true via cascade and explicit deletes", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id);
+    const item = await createTestMediaItem(library.id);
+
+    const ruleSet = await createTestRuleSet(user.id, {
+      serverIds: [server.id],
+      actionEnabled: true,
+      actionType: "DELETE",
+    });
+
+    await prisma.ruleMatch.create({
+      data: {
+        ruleSetId: ruleSet.id,
+        mediaItemId: item.id,
+        itemData: {},
+      },
+    });
+
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id,
+        mediaItemId: item.id,
+        ruleSetId: ruleSet.id,
+        ruleSetName: ruleSet.name,
+        actionType: "DELETE",
+        status: "PENDING",
+        scheduledFor: new Date(Date.now() + 86400000),
+      },
+    });
+
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const response = await callRouteWithParams(
+      DELETE,
+      { id: server.id },
+      { url: `/api/servers/${server.id}?deleteData=true`, method: "DELETE" }
+    );
+    await expectJson(response, 200);
+
+    // Rule set should have empty serverIds
+    const updated = await prisma.ruleSet.findUnique({
+      where: { id: ruleSet.id },
+    });
+    expect(updated!.serverIds).toEqual([]);
+
+    // Matches cleaned (cascade from media item deletion)
+    const matches = await prisma.ruleMatch.findMany({
+      where: { ruleSetId: ruleSet.id },
+    });
+    expect(matches).toHaveLength(0);
+
+    // Actions cleaned (explicit delete before media item deletion)
+    const actions = await prisma.lifecycleAction.findMany({
+      where: { ruleSetId: ruleSet.id },
+    });
+    expect(actions).toHaveLength(0);
+  });
+
+  it("preserves rule set serverIds and matches for other servers", async () => {
     const user = await createTestUser();
     const server1 = await createTestServer(user.id);
     const server2 = await createTestServer(user.id);
@@ -183,7 +251,7 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
     const response = await callRouteWithParams(
       DELETE,
       { id: server1.id },
-      { url: `/api/servers/${server1.id}?deleteData=true`, method: "DELETE" }
+      { url: `/api/servers/${server1.id}`, method: "DELETE" }
     );
     await expectJson(response, 200);
 
