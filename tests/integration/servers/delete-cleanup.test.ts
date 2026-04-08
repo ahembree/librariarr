@@ -226,15 +226,41 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
     expect(actions).toHaveLength(0);
   });
 
-  it("preserves rule set serverIds and matches for other servers", async () => {
+  it("cleans stale matches from deleted server but preserves other servers' matches", async () => {
     const user = await createTestUser();
     const server1 = await createTestServer(user.id);
     const server2 = await createTestServer(user.id);
+    const library1 = await createTestLibrary(server1.id);
     const library2 = await createTestLibrary(server2.id);
+    const item1 = await createTestMediaItem(library1.id);
     const item2 = await createTestMediaItem(library2.id);
 
     const ruleSet = await createTestRuleSet(user.id, {
       serverIds: [server1.id, server2.id],
+      actionEnabled: true,
+      actionType: "DELETE",
+    });
+
+    // Match for item on server1 (should be cleaned)
+    await prisma.ruleMatch.create({
+      data: {
+        ruleSetId: ruleSet.id,
+        mediaItemId: item1.id,
+        itemData: {},
+      },
+    });
+
+    // Pending action for item on server1 (should be cleaned)
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id,
+        mediaItemId: item1.id,
+        ruleSetId: ruleSet.id,
+        ruleSetName: ruleSet.name,
+        actionType: "DELETE",
+        status: "PENDING",
+        scheduledFor: new Date(Date.now() + 86400000),
+      },
     });
 
     // Match for item on server2 (should be preserved)
@@ -248,6 +274,7 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
 
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
+    // Delete server1 WITHOUT deleteData — items preserved but server gone
     const response = await callRouteWithParams(
       DELETE,
       { id: server1.id },
@@ -261,10 +288,17 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
     });
     expect(updated!.serverIds).toEqual([server2.id]);
 
-    // Match for server2's item should be preserved
+    // Match for server1's item should be cleaned
     const matches = await prisma.ruleMatch.findMany({
       where: { ruleSetId: ruleSet.id },
     });
     expect(matches).toHaveLength(1);
+    expect(matches[0].mediaItemId).toBe(item2.id);
+
+    // Pending action for server1's item should be cleaned
+    const pendingActions = await prisma.lifecycleAction.findMany({
+      where: { ruleSetId: ruleSet.id, status: "PENDING" },
+    });
+    expect(pendingActions).toHaveLength(0);
   });
 });
