@@ -97,15 +97,25 @@ export async function scheduleActionsForRuleSet(
 
     const matchedItemIds = matchedItems.map((item) => item.id as string);
 
-    // Skip items that already have a PENDING action to prevent duplicates.
-    // COMPLETED and FAILED actions are historical — they must not block
-    // re-scheduling when an item still matches (e.g. the Arr deleted its
-    // record but the file remained on disk due to a permissions issue).
+    // Skip items that already have:
+    // - A PENDING action (prevents duplicates)
+    // - A COMPLETED or FAILED non-delete action (prevents infinite loop —
+    //   unmonitor/do-nothing items always still exist after execution)
+    // Allow re-scheduling past completed DELETE actions: if the item still
+    // matches after a "completed" deletion, the deletion likely failed
+    // silently (e.g. Arr removed its record but the file remained on disk
+    // due to permissions).
     const existingActions = await prisma.lifecycleAction.findMany({
       where: {
         ruleSetId: ruleSet.id,
-        status: "PENDING",
         mediaItemId: { in: matchedItemIds },
+        OR: [
+          { status: "PENDING" },
+          {
+            status: { in: ["COMPLETED", "FAILED"] },
+            actionType: { not: { contains: "DELETE" } },
+          },
+        ],
       },
       select: { mediaItemId: true },
     });
