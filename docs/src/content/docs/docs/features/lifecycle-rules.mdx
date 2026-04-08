@@ -215,6 +215,14 @@ Lifecycle processing runs on two independent schedules (configured in **Settings
 
 Both can be run manually via the **Run Now** button at any time.
 
+## Deletion Stats
+
+The **Pending Actions** page displays a running total of data deleted by lifecycle actions — including the total bytes removed and the number of completed actions. This gives you visibility into how much storage the lifecycle system has reclaimed.
+
+- Stats are computed from completed actions that have recorded file sizes
+- Click the **reset** button to start counting from zero — historical action records are unaffected
+- After a reset, only actions completed after the reset point are included in the totals
+
 ## Limitations
 
 - *arr actions require the corresponding integration to be configured and reachable

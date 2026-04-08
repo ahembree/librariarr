@@ -97,12 +97,25 @@ export async function scheduleActionsForRuleSet(
 
     const matchedItemIds = matchedItems.map((item) => item.id as string);
 
-    // Skip items that already have a PENDING, COMPLETED, or FAILED action.
+    // Skip items that already have:
+    // - A PENDING action (prevents duplicates)
+    // - A COMPLETED or FAILED non-delete action (prevents infinite loop —
+    //   unmonitor/do-nothing items always still exist after execution)
+    // Allow re-scheduling past completed DELETE actions: if the item still
+    // matches after a "completed" deletion, the deletion likely failed
+    // silently (e.g. Arr removed its record but the file remained on disk
+    // due to permissions).
     const existingActions = await prisma.lifecycleAction.findMany({
       where: {
         ruleSetId: ruleSet.id,
-        status: { in: ["PENDING", "COMPLETED", "FAILED"] },
         mediaItemId: { in: matchedItemIds },
+        OR: [
+          { status: "PENDING" },
+          {
+            status: { in: ["COMPLETED", "FAILED"] },
+            actionType: { not: { contains: "DELETE" } },
+          },
+        ],
       },
       select: { mediaItemId: true },
     });
@@ -431,11 +444,28 @@ export async function executeLifecycleActions(userId?: string) {
     try {
       await executeAction({ ...action, matchedMediaItemIds: filteredMatchedIds, mediaItem });
 
+      // Compute deleted bytes for stats tracking (only for delete actions)
+      let deletedBytes: bigint | null = null;
+      if (action.actionType.includes("DELETE")) {
+        if (filteredMatchedIds.length > 0) {
+          // Series/music with episode-level tracking — sum member items' file sizes
+          const memberSizes = await prisma.mediaItem.findMany({
+            where: { id: { in: filteredMatchedIds } },
+            select: { fileSize: true },
+          });
+          const total = memberSizes.reduce((sum, m) => sum + (m.fileSize ?? BigInt(0)), BigInt(0));
+          if (total > BigInt(0)) deletedBytes = total;
+        } else if (mediaItem.fileSize) {
+          deletedBytes = mediaItem.fileSize;
+        }
+      }
+
       await prisma.lifecycleAction.update({
         where: { id: action.id },
         data: {
           status: "COMPLETED",
           executedAt: new Date(),
+          deletedBytes,
           // Snapshot title so the record survives media item deletion
           mediaItemTitle: mediaItem.title,
           mediaItemParentTitle: mediaItem.parentTitle,

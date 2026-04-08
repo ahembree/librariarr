@@ -38,6 +38,8 @@ import {
   Music,
   LayoutGrid,
   TableProperties,
+  Trash2,
+  RotateCcw,
 } from "lucide-react";
 import { MediaCard } from "@/components/media-card";
 import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
@@ -210,6 +212,7 @@ function VirtualizedActionTable({
           <thead className="sticky top-0 z-10 bg-background">
             <tr className="border-b bg-muted/50">
               <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Title</th>
+              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Size</th>
               <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Action</th>
               <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">{isPending ? "Scheduled" : "Date"}</th>
               <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Status</th>
@@ -258,6 +261,9 @@ function VirtualizedActionTable({
                         </p>
                       )}
                     </div>
+                  </td>
+                  <td className="p-4 align-middle text-sm text-muted-foreground">
+                    {action.mediaItem.fileSize ? formatFileSize(action.mediaItem.fileSize) : "—"}
                   </td>
                   <td className="p-4 align-middle">
                     <div className="space-y-1">
@@ -657,11 +663,82 @@ export default function PendingActionsPage() {
     maxWidth: 800,
   });
 
+  // Deletion stats
+  const [deletionStats, setDeletionStats] = useState<{
+    totalBytesDeleted: string;
+    actionCount: number;
+    pendingBytes: string;
+    pendingCount: number;
+    byRuleSet: Array<{
+      ruleSetId: string | null;
+      ruleSetName: string;
+      ruleSetType: string | null;
+      deleted: boolean;
+      deletedBytes: string;
+      deletedCount: number;
+      pendingBytes: string;
+      pendingCount: number;
+    }>;
+    resetAt: string | null;
+  } | null>(null);
+  const [resettingStats, setResettingStats] = useState(false);
+  const [confirmResetStats, setConfirmResetStats] = useState(false);
+
+  const fetchDeletionStats = useCallback(async () => {
+    try {
+      const response = await fetch("/api/lifecycle/stats");
+      if (response.ok) {
+        const data = await response.json();
+        setDeletionStats(data);
+      }
+    } catch {
+      // Non-critical — don't block the page
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchDeletionStats();
+  }, [fetchDeletionStats]);
+
+  // Refresh stats when actions are executed or detection runs (pending changes)
+  useRealtime("lifecycle:action-executed", fetchDeletionStats);
+  useRealtime("lifecycle:detection-completed", fetchDeletionStats);
+
+  const handleResetStats = async () => {
+    setResettingStats(true);
+    try {
+      const response = await fetch("/api/lifecycle/stats/reset", { method: "POST" });
+      if (response.ok) {
+        await fetchDeletionStats();
+        toast.success("Deletion stats reset");
+      } else {
+        toast.error("Failed to reset stats");
+      }
+    } catch {
+      toast.error("Failed to reset stats");
+    } finally {
+      setResettingStats(false);
+      setConfirmResetStats(false);
+    }
+  };
+
   const filteredGroups = useMemo(() => {
     const typeFilter = TAB_TO_TYPE[mediaTypeTab];
     if (!typeFilter) return groups;
     return groups.filter((g) => g.ruleSet.type === typeFilter);
   }, [groups, mediaTypeTab]);
+
+  // Per-rule-set stats lookup
+  const ruleSetStatsMap = useMemo(() => {
+    const map = new Map<string, { deletedBytes: string; deletedCount: number; pendingBytes: string; pendingCount: number }>();
+    if (!deletionStats?.byRuleSet) return map;
+    for (const rs of deletionStats.byRuleSet) {
+      if (rs.ruleSetId) {
+        map.set(rs.ruleSetId, rs);
+      }
+    }
+    return map;
+  }, [deletionStats?.byRuleSet]);
 
   const fetchActions = useCallback(async () => {
     setLoading(true);
@@ -892,6 +969,70 @@ export default function PendingActionsPage() {
           <p className="text-muted-foreground mt-1">Scheduled lifecycle actions awaiting execution, grouped by rule set.</p>
         </div>
 
+        {/* Deletion stats banner */}
+        {deletionStats && (deletionStats.actionCount > 0 || deletionStats.pendingCount > 0 || deletionStats.resetAt) && (
+          <div className="flex items-center gap-4 mb-6 rounded-lg border bg-muted/30 px-4 py-3">
+            <Trash2 className="h-4 w-4 text-muted-foreground shrink-0" />
+            <div className="flex items-center gap-4 text-sm flex-wrap">
+              {deletionStats.pendingCount > 0 && (
+                <>
+                  <span>
+                    <span className="font-medium text-amber-400">{formatFileSize(deletionStats.pendingBytes)}</span>
+                    <span className="text-muted-foreground ml-1">pending</span>
+                  </span>
+                  <span className="text-muted-foreground">·</span>
+                  <span>
+                    <span className="font-medium text-amber-400">{deletionStats.pendingCount}</span>
+                    <span className="text-muted-foreground ml-1">{deletionStats.pendingCount === 1 ? "action" : "actions"} queued</span>
+                  </span>
+                </>
+              )}
+              {deletionStats.pendingCount > 0 && deletionStats.actionCount > 0 && (
+                <span className="text-muted-foreground">|</span>
+              )}
+              {deletionStats.actionCount > 0 && (
+                <>
+                  <span>
+                    <span className="font-medium">{formatFileSize(deletionStats.totalBytesDeleted)}</span>
+                    <span className="text-muted-foreground ml-1">deleted</span>
+                  </span>
+                  <span className="text-muted-foreground">·</span>
+                  <span>
+                    <span className="font-medium">{deletionStats.actionCount}</span>
+                    <span className="text-muted-foreground ml-1">{deletionStats.actionCount === 1 ? "action" : "actions"} completed</span>
+                  </span>
+                </>
+              )}
+              {deletionStats.resetAt && (
+                <>
+                  <span className="text-muted-foreground">·</span>
+                  <span className="text-xs text-muted-foreground">
+                    since {new Date(deletionStats.resetAt).toLocaleDateString()}
+                  </span>
+                </>
+              )}
+            </div>
+            <div className="ml-auto">
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={(e) => { e.stopPropagation(); setConfirmResetStats(true); }}
+                      disabled={resettingStats}
+                    >
+                      <RotateCcw className={`h-3.5 w-3.5 ${resettingStats ? "animate-spin" : ""}`} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Reset deletion stats</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+          </div>
+        )}
+
         <TabNav tabs={MEDIA_TYPE_TABS} activeTab={mediaTypeTab} onTabChange={setMediaTypeTab} className="mb-6" />
 
         {/* Status filter + view toggle */}
@@ -984,6 +1125,25 @@ export default function PendingActionsPage() {
                                 ))}
                               </div>
                             )}
+                            {/* Per-rule deletion stats */}
+                            {(() => {
+                              const rs = ruleSetStatsMap.get(group.ruleSet.id);
+                              if (!rs || (rs.deletedCount === 0 && rs.pendingCount === 0)) return null;
+                              return (
+                                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                  {rs.pendingCount > 0 && (
+                                    <span>
+                                      <span className="text-amber-400">{formatFileSize(rs.pendingBytes)}</span> pending
+                                    </span>
+                                  )}
+                                  {rs.deletedCount > 0 && (
+                                    <span>
+                                      {formatFileSize(rs.deletedBytes)} deleted ({rs.deletedCount})
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
                       </div>
@@ -1093,6 +1253,25 @@ export default function PendingActionsPage() {
                 }}
               >
                 Execute
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Reset deletion stats confirmation */}
+        <AlertDialog open={confirmResetStats} onOpenChange={setConfirmResetStats}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Reset Deletion Stats</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will reset the deletion stats counter. Historical action records will not be affected — only the stats display will start counting from now.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={handleResetStats} disabled={resettingStats}>
+                {resettingStats ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                Reset
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

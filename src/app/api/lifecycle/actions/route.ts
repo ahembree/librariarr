@@ -186,9 +186,24 @@ async function handlePendingGrouped(userId: string) {
     );
   }
 
-  // Build set of (ruleSetId, mediaItemId) pairs that should NOT appear as estimated.
+  // Build set of (ruleSetId, mediaItemId) pairs that should NOT appear as
+  // estimated. Suppress when:
+  // - A PENDING action exists (already scheduled)
+  // - A COMPLETED/FAILED non-delete action exists (item will always still
+  //   exist after unmonitor/do-nothing, so re-scheduling would loop)
+  // Allow estimated rows for completed DELETE actions — if the item still
+  // matches, the deletion likely failed silently on disk.
   const existingActions = await prisma.lifecycleAction.findMany({
-    where: { userId, status: { in: ["PENDING", "COMPLETED", "FAILED"] } },
+    where: {
+      userId,
+      OR: [
+        { status: "PENDING" },
+        {
+          status: { in: ["COMPLETED", "FAILED"] },
+          actionType: { not: { contains: "DELETE" } },
+        },
+      ],
+    },
     select: { ruleSetId: true, mediaItemId: true },
   });
   const actionedPairs = new Set(

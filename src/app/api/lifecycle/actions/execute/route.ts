@@ -179,6 +179,22 @@ export async function POST(request: NextRequest) {
         where: { ruleSetId: ruleSet.id, mediaItemId: item.id },
       });
 
+      // Compute deleted bytes for stats tracking (only for delete actions)
+      const actionType = ruleSet.actionType ?? "DO_NOTHING";
+      let deletedBytes: bigint | null = null;
+      if (actionType.includes("DELETE")) {
+        if (matchedMediaItemIds.length > 0) {
+          const memberSizes = await prisma.mediaItem.findMany({
+            where: { id: { in: matchedMediaItemIds } },
+            select: { fileSize: true },
+          });
+          const total = memberSizes.reduce((sum, m) => sum + (m.fileSize ?? BigInt(0)), BigInt(0));
+          if (total > BigInt(0)) deletedBytes = total;
+        } else if (item.fileSize) {
+          deletedBytes = item.fileSize;
+        }
+      }
+
       // Create a completed action record
       await prisma.lifecycleAction.create({
         data: {
@@ -196,6 +212,7 @@ export async function POST(request: NextRequest) {
           scheduledFor: new Date(),
           executedAt: new Date(),
           status: "COMPLETED",
+          deletedBytes,
           arrInstanceId: ruleSet.arrInstanceId,
         },
       });

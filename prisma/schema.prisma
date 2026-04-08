@@ -78,6 +78,8 @@ model AppSettings {
   dedupStats                    Boolean   @default(true)
   // Retention
   actionHistoryRetentionDays    Int       @default(30)
+  // Deletion stats
+  deletionStatsResetAt          DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 }
@@ -436,6 +438,7 @@ model LifecycleAction {
   addArrTags           String[]              @default([])
   removeArrTags        String[]              @default([])
   externalMediaId      Int?
+  deletedBytes         BigInt?
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
 
