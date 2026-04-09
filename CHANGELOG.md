@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.1](https://github.com/ahembree/librariarr/compare/v0.15.0...v0.15.1) (2026-04-09)
+
+
+### Bug Fixes
+
+* **db:** always run db push after migrate deploy to apply schema-only columns ([c900d76](https://github.com/ahembree/librariarr/commit/c900d76ef661a347e1579db7b0dd873827529bc2))
+* **lifecycle:** schedule actions during manual re-evaluation and guard null actionType ([a74397c](https://github.com/ahembree/librariarr/commit/a74397c5d59f930f9454c8ae1f1bb3cf73b263f1))
+
 ## [0.15.0](https://github.com/ahembree/librariarr/compare/v0.14.2...v0.15.0) (2026-04-09)
 
 
