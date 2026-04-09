@@ -17,6 +17,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Clock, Film, Tv, Music, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import { formatRelativeDate } from "@/lib/format";
+import { getDuplicateServerNames } from "@/lib/server-styles";
+import { ServerTypeChip } from "@/components/server-type-chip";
 
 interface RecentItem {
   id: string;
@@ -35,7 +37,7 @@ interface RecentlyAddedProps {
   filterType?: "MOVIE" | "SERIES" | "MUSIC";
   lockedFilterType?: boolean;
   serverId?: string;
-  servers?: { id: string; name: string }[];
+  servers?: { id: string; name: string; type?: string }[];
   availableTypes?: string[];
   onMovieClick?: (movieId: string) => void;
   onSeriesClick?: (seriesName: string) => void;
@@ -152,9 +154,17 @@ export function RecentlyAdded({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="default">{serverId ? "Dashboard" : "All Servers"}</SelectItem>
-                  {servers.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                  ))}
+                  {(() => {
+                    const dupeNames = getDuplicateServerNames(servers);
+                    return servers.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        <span className="inline-flex items-center gap-1.5">
+                          {s.name}
+                          {dupeNames.has(s.name) && s.type && <ServerTypeChip type={s.type} />}
+                        </span>
+                      </SelectItem>
+                    ));
+                  })()}
                 </SelectContent>
               </Select>
             )}

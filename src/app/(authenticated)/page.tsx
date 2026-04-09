@@ -28,6 +28,8 @@ import {
 import { CustomCardDialog } from "@/components/custom-card-dialog";
 import { Pencil, Check, Server, Film, Tv, Music, LayoutDashboard } from "lucide-react";
 import { generateId } from "@/lib/utils";
+import { getDuplicateServerNames } from "@/lib/server-styles";
+import { ServerTypeChip } from "@/components/server-type-chip";
 import { TabNav, type TabNavItem } from "@/components/tab-nav";
 import { DashboardSkeleton } from "@/components/skeletons";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -115,7 +117,7 @@ export default function DashboardPage() {
   const [layout, setLayout] = useState<DashboardLayout | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [activeTab, setActiveTab] = useState<DashboardTab>(getInitialDashboardTab);
-  const [servers, setServers] = useState<{ id: string; name: string }[]>([]);
+  const [servers, setServers] = useState<{ id: string; name: string; type: string }[]>([]);
   const [selectedServerId, setSelectedServerId] = useState<string>("all");
   const [selectedMediaType, setSelectedMediaType] = useState<string>("all");
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
@@ -149,9 +151,10 @@ export default function DashboardPage() {
       if (serversRes.ok) {
         const serversData = await serversRes.json();
         setServers(
-          (serversData.servers ?? []).map((s: { id: string; name: string }) => ({
+          (serversData.servers ?? []).map((s: { id: string; name: string; type: string }) => ({
             id: s.id,
             name: s.name,
+            type: s.type,
           }))
         );
       }
@@ -284,25 +287,33 @@ export default function DashboardPage() {
         <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Dashboard</h1>
         <div className="flex flex-wrap items-center gap-2">
           <SyncIndicator onSyncComplete={fetchStats} />
-          {servers.length > 1 && (
-            <Select
-              value={selectedServerId}
-              onValueChange={setSelectedServerId}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-50 text-sm">
-                <Server className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-                <SelectValue placeholder="All Servers" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Servers</SelectItem>
-                {servers.map((server) => (
-                  <SelectItem key={server.id} value={server.id}>
-                    {server.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
+          {servers.length > 1 && (() => {
+            const dupeNames = getDuplicateServerNames(servers);
+            return (
+              <Select
+                value={selectedServerId}
+                onValueChange={setSelectedServerId}
+              >
+                <SelectTrigger className="h-9 w-full sm:w-50 text-sm">
+                  <Server className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                  <SelectValue placeholder="All Servers" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Servers</SelectItem>
+                  {servers.map((server) => (
+                    <SelectItem key={server.id} value={server.id}>
+                      <span className="inline-flex items-center gap-1.5">
+                        {server.name}
+                        {dupeNames.has(server.name) && (
+                          <ServerTypeChip type={server.type} />
+                        )}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            );
+          })()}
           {activeTab === "main" && (availableTypes.length === 0 || availableTypes.length > 1) && (
             <Select
               value={selectedMediaType}

@@ -39,18 +39,6 @@ export async function POST(request: NextRequest) {
 
   const { name, url, accessToken, machineId, tlsSkipVerify, type } = data;
 
-  if (name) {
-    const duplicate = await prisma.mediaServer.findFirst({
-      where: { userId: session.userId!, name: { equals: name.trim(), mode: "insensitive" } },
-    });
-    if (duplicate) {
-      return NextResponse.json(
-        { error: "A server with this name already exists" },
-        { status: 409 }
-      );
-    }
-  }
-
   // Test connection before saving
   const serverType = (type as MediaServerType) ?? "PLEX";
   const client = createMediaServerClient(serverType, url, accessToken, {

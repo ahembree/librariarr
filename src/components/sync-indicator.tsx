@@ -10,11 +10,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { CheckCircle, XCircle, Loader2 } from "lucide-react";
-import { ColorChip } from "@/components/color-chip";
-import {
-  SERVER_TYPE_STYLES,
-  DEFAULT_SERVER_STYLE,
-} from "@/lib/server-styles";
+import { ServerTypeChip } from "@/components/server-type-chip";
 
 interface SyncJob {
   id: string;
@@ -40,11 +36,6 @@ function formatTimeAgo(date: Date): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
-}
-
-function ServerTypeChip({ type }: { type: string }) {
-  const style = SERVER_TYPE_STYLES[type] ?? DEFAULT_SERVER_STYLE;
-  return <ColorChip className={style.classes}>{style.label}</ColorChip>;
 }
 
 function formatEta(startedAt: string, processed: number, total: number): string | null {

@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import { getServerTypeLabel } from "@/lib/server-styles";
+import { ServerTypeChip } from "@/components/server-type-chip";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -217,6 +219,7 @@ interface RuleSetExport {
 interface MediaServer {
   id: string;
   name: string;
+  type: string;
 }
 
 interface ScopeConfig {
@@ -843,7 +846,7 @@ export function LifecycleRulePage({
     try {
       const response = await fetch("/api/servers");
       const data = await response.json();
-      setServers((data.servers || []).map((s: { id: string; name: string }) => ({ id: s.id, name: s.name })));
+      setServers((data.servers || []).map((s: { id: string; name: string; type: string }) => ({ id: s.id, name: s.name, type: s.type })));
     } catch (error) {
       console.error("Failed to fetch servers:", error);
     }
@@ -1567,26 +1570,30 @@ export function LifecycleRulePage({
                   <CommandList>
                     <CommandEmpty>No servers found.</CommandEmpty>
                     <CommandGroup>
-                      {servers.map((server) => (
-                        <CommandItem
-                          key={server.id}
-                          value={server.name}
-                          onSelect={() => {
-                            setServerIds((prev) =>
-                              prev.includes(server.id)
-                                ? prev.filter((id) => id !== server.id)
-                                : [...prev, server.id]
-                            );
-                          }}
-                        >
-                          <Check
-                            className={`mr-2 h-4 w-4 ${
-                              serverIds.includes(server.id) ? "opacity-100" : "opacity-0"
-                            }`}
-                          />
-                          {server.name}
-                        </CommandItem>
-                      ))}
+                      {servers.map((server) => {
+                        const displayName = `${server.name} (${getServerTypeLabel(server.type)})`;
+                        return (
+                          <CommandItem
+                            key={server.id}
+                            value={displayName}
+                            onSelect={() => {
+                              setServerIds((prev) =>
+                                prev.includes(server.id)
+                                  ? prev.filter((id) => id !== server.id)
+                                  : [...prev, server.id]
+                              );
+                            }}
+                          >
+                            <Check
+                              className={`mr-2 h-4 w-4 ${
+                                serverIds.includes(server.id) ? "opacity-100" : "opacity-0"
+                              }`}
+                            />
+                            {server.name}
+                            <ServerTypeChip type={server.type} className="ml-1.5" />
+                          </CommandItem>
+                        );
+                      })}
                     </CommandGroup>
                   </CommandList>
                 </Command>
@@ -1602,6 +1609,7 @@ export function LifecycleRulePage({
                       className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
                     >
                       {server?.name ?? id}
+                      {server && <ServerTypeChip type={server.type} />}
                       <button
                         type="button"
                         onClick={() => setServerIds((prev) => prev.filter((sid) => sid !== id))}

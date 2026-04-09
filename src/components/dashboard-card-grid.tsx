@@ -121,7 +121,7 @@ interface DashboardCardGridProps {
   filterType?: "MOVIE" | "SERIES" | "MUSIC";
   lockedFilterType?: boolean;
   serverId?: string;
-  servers?: { id: string; name: string }[];
+  servers?: { id: string; name: string; type?: string }[];
   availableTypes?: string[];
   onLayoutChange: (cards: CardEntry[]) => void;
   onMovieClick: (movieId: string) => void;

@@ -36,6 +36,8 @@ import {
   getChipBadgeStyle,
 } from "@/lib/theme/chip-colors";
 import type { ChipColorMap, ChipColorCategory, MediaServer, BackupEntry } from "../types";
+import { getDuplicateServerNames } from "@/lib/server-styles";
+import { ServerTypeChip } from "@/components/server-type-chip";
 
 export interface GeneralTabProps {
   // Accent color
@@ -589,59 +591,68 @@ export function GeneralTab({
         </Card>
       </section>
 
-      {servers.length > 1 && (
-        <div className="space-y-4">
-          <h2 className="text-xl font-semibold">Library Display</h2>
-          <Card>
-            <CardContent className="space-y-4">
-              <div>
-                <Label htmlFor="title-preference">Preferred Title Source</Label>
-                <p className="text-sm text-muted-foreground mb-2">
-                  When the same media exists on multiple servers, use titles from this server.
-                </p>
-                <Select
-                  value={preferredTitleServerId ?? "none"}
-                  onValueChange={onSavePreferredTitleServer}
-                >
-                  <SelectTrigger id="title-preference" className="w-full sm:w-60">
-                    <SelectValue placeholder="No preference" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">No preference</SelectItem>
-                    {servers.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>
-                        {s.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label htmlFor="artwork-preference">Preferred Artwork Source</Label>
-                <p className="text-sm text-muted-foreground mb-2">
-                  When the same media exists on multiple servers, use artwork from this server.
-                </p>
-                <Select
-                  value={preferredArtworkServerId ?? "none"}
-                  onValueChange={onSavePreferredArtworkServer}
-                >
-                  <SelectTrigger id="artwork-preference" className="w-full sm:w-60">
-                    <SelectValue placeholder="No preference" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">No preference</SelectItem>
-                    {servers.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>
-                        {s.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+      {servers.length > 1 && (() => {
+        const dupeNames = getDuplicateServerNames(servers);
+        return (
+          <div className="space-y-4">
+            <h2 className="text-xl font-semibold">Library Display</h2>
+            <Card>
+              <CardContent className="space-y-4">
+                <div>
+                  <Label htmlFor="title-preference">Preferred Title Source</Label>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    When the same media exists on multiple servers, use titles from this server.
+                  </p>
+                  <Select
+                    value={preferredTitleServerId ?? "none"}
+                    onValueChange={onSavePreferredTitleServer}
+                  >
+                    <SelectTrigger id="title-preference" className="w-full sm:w-60">
+                      <SelectValue placeholder="No preference" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No preference</SelectItem>
+                      {servers.map((s) => (
+                        <SelectItem key={s.id} value={s.id}>
+                          <span className="inline-flex items-center gap-1.5">
+                            {s.name}
+                            {dupeNames.has(s.name) && <ServerTypeChip type={s.type} />}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="artwork-preference">Preferred Artwork Source</Label>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    When the same media exists on multiple servers, use artwork from this server.
+                  </p>
+                  <Select
+                    value={preferredArtworkServerId ?? "none"}
+                    onValueChange={onSavePreferredArtworkServer}
+                  >
+                    <SelectTrigger id="artwork-preference" className="w-full sm:w-60">
+                      <SelectValue placeholder="No preference" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No preference</SelectItem>
+                      {servers.map((s) => (
+                        <SelectItem key={s.id} value={s.id}>
+                          <span className="inline-flex items-center gap-1.5">
+                            {s.name}
+                            {dupeNames.has(s.name) && <ServerTypeChip type={s.type} />}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        );
+      })()}
     </div>
   );
 }

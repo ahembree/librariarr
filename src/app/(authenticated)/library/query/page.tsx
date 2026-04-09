@@ -7,6 +7,7 @@ import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { Button } from "@/components/ui/button";
 import { ColorChip } from "@/components/color-chip";
 import { ServerChips } from "@/components/server-chips";
+import { ServerTypeChip } from "@/components/server-type-chip";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -908,6 +909,7 @@ export default function QueryPage() {
                               {isSelected && <span className="text-xs">✓</span>}
                             </div>
                             {s.name}
+                            {s.type && <ServerTypeChip type={s.type} className="ml-1.5" />}
                           </CommandItem>
                         );
                       })}

@@ -24,6 +24,7 @@ interface SortOption {
 interface ServerInfo {
   id: string;
   name: string;
+  type?: string;
 }
 
 export interface LibraryToolbarProps {

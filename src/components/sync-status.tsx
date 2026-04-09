@@ -15,10 +15,7 @@ import {
   Loader2,
   Database,
 } from "lucide-react";
-import {
-  SERVER_TYPE_STYLES,
-  DEFAULT_SERVER_STYLE,
-} from "@/lib/server-styles";
+import { ServerTypeChip } from "@/components/server-type-chip";
 
 interface SyncJob {
   id: string;
@@ -30,11 +27,6 @@ interface SyncJob {
   totalItems: number;
   currentLibrary: string | null;
   mediaServer: { name: string; type: string };
-}
-
-function ServerTypeChip({ type }: { type: string }) {
-  const style = SERVER_TYPE_STYLES[type] ?? DEFAULT_SERVER_STYLE;
-  return <ColorChip className={style.classes}>{style.label}</ColorChip>;
 }
 
 interface SyncStatusProps {

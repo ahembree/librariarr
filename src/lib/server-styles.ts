@@ -79,6 +79,31 @@ export const SERVER_TYPE_STYLES: Record<string, ServerStyle> = {
   },
 };
 
+/**
+ * Returns the human-readable label for a server type (e.g. "PLEX" → "Plex").
+ */
+export function getServerTypeLabel(type: string): string {
+  return SERVER_TYPE_STYLES[type]?.label ?? type;
+}
+
+/**
+ * Returns a Set of server names that appear more than once in the list.
+ * Used by UI components to decide whether to show a type chip for disambiguation.
+ */
+export function getDuplicateServerNames<T extends { name: string }>(
+  servers: T[],
+): Set<string> {
+  const counts = new Map<string, number>();
+  for (const s of servers) {
+    counts.set(s.name, (counts.get(s.name) ?? 0) + 1);
+  }
+  const dupes = new Set<string>();
+  for (const [name, count] of counts) {
+    if (count > 1) dupes.add(name);
+  }
+  return dupes;
+}
+
 export const DEFAULT_SERVER_STYLE: ServerStyle = {
   label: "Unknown",
   classes: "text-muted-foreground bg-muted border-border",
