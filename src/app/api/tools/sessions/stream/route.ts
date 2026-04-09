@@ -12,6 +12,8 @@ interface SessionWithServer extends MediaSession {
   serverName: string;
   serverType: MediaServerType;
   startedAt: number;
+  mediaItemId?: string;
+  mediaItemType?: string;
 }
 
 const POLL_INTERVAL = 5000;
@@ -60,6 +62,38 @@ async function fetchAllSessions(userId: string): Promise<SessionWithServer[]> {
   for (const key of sessionFirstSeen.keys()) {
     if (!activeKeys.has(key)) {
       sessionFirstSeen.delete(key);
+    }
+  }
+
+  // Resolve ratingKeys to mediaItemIds via batch DB lookup
+  const ratingKeyPairs = allSessions
+    .filter((s) => s.ratingKey)
+    .map((s) => ({ serverId: s.serverId, ratingKey: s.ratingKey! }));
+
+  if (ratingKeyPairs.length > 0) {
+    const serverIds = [...new Set(ratingKeyPairs.map((p) => p.serverId))];
+    const ratingKeys = [...new Set(ratingKeyPairs.map((p) => p.ratingKey))];
+
+    const items = await prisma.mediaItem.findMany({
+      where: {
+        ratingKey: { in: ratingKeys },
+        library: { mediaServerId: { in: serverIds } },
+      },
+      select: { id: true, type: true, ratingKey: true, library: { select: { mediaServerId: true } } },
+    });
+
+    const lookup = new Map(
+      items.map((i) => [`${i.library.mediaServerId}:${i.ratingKey}`, { id: i.id, type: i.type }]),
+    );
+
+    for (const s of allSessions) {
+      if (s.ratingKey) {
+        const match = lookup.get(`${s.serverId}:${s.ratingKey}`);
+        if (match) {
+          s.mediaItemId = match.id;
+          s.mediaItemType = match.type;
+        }
+      }
     }
   }
 

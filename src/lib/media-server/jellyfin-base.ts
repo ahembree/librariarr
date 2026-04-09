@@ -776,6 +776,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
 
     return {
       sessionId: s.Id,
+      ratingKey: item.Id,
       userId: s.UserId,
       username: s.UserName,
       userThumb: "",

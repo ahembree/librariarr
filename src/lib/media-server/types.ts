@@ -219,6 +219,7 @@ export interface MediaCollection {
 
 export interface MediaSession {
   sessionId: string;
+  ratingKey?: string;
   userId: string;
   username: string;
   userThumb: string;

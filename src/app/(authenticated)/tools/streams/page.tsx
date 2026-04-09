@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import Link from "next/link";
 import {
   Card,
   CardContent,
@@ -85,6 +86,7 @@ import {
   Check,
   ChevronsUpDown,
   X,
+  ExternalLink,
 } from "lucide-react";
 import { FadeImage } from "@/components/ui/fade-image";
 import { useChipColors } from "@/components/chip-color-provider";
@@ -125,6 +127,8 @@ interface SessionWithServer {
   serverName: string;
   serverType: string;
   sessionId: string;
+  mediaItemId?: string;
+  mediaItemType?: string;
   userId: string;
   username: string;
   userThumb: string;
@@ -780,6 +784,15 @@ function StreamDetailPanel({
   const mediaTypeLabel = session.type === "episode" ? "TV Episode" : session.type === "movie" ? "Movie" : session.type === "track" ? "Track" : session.type;
   const resolutionLabel = session.videoResolution ? normalizeResolutionLabel(session.videoResolution) : null;
 
+  // Build library detail URL from resolved mediaItemId
+  const detailUrl = session.mediaItemId && session.mediaItemType
+    ? session.mediaItemType === "MOVIE"
+      ? `/library/movies/${session.mediaItemId}`
+      : session.mediaItemType === "SERIES"
+        ? `/library/series/episode/${session.mediaItemId}`
+        : `/library/music/track/${session.mediaItemId}`
+    : null;
+
   const header = (
     <div className="border-b shrink-0 relative overflow-hidden">
       {/* Ambient blurred artwork background */}
@@ -794,8 +807,16 @@ function StreamDetailPanel({
         </div>
       )}
 
-      {/* Close button */}
+      {/* Close / Open detail page buttons */}
       <div className="flex items-center justify-end gap-1 px-3 pt-3 relative">
+        {detailUrl && (
+          <Button variant="ghost" size="icon-sm" asChild>
+            <Link href={detailUrl}>
+              <ExternalLink className="h-3.5 w-3.5" />
+              <span className="sr-only">Open in library</span>
+            </Link>
+          </Button>
+        )}
         <Button variant="ghost" size="icon-sm" onClick={onClose}>
           <X className="h-3.5 w-3.5" />
           <span className="sr-only">Close</span>
