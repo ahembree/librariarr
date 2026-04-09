@@ -454,21 +454,15 @@ function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
         break;
       }
       case "contains": {
-        const dbValues = RESOLUTION_DB_VALUES[strVal];
-        if (dbValues) {
-          clause = { OR: dbValues.map((v) => ({ resolution: { contains: v, mode: "insensitive" as const } })) };
-        } else {
-          clause = { resolution: { contains: strVal, mode: "insensitive" } };
-        }
+        const parts = strVal.split("|").filter(Boolean);
+        const allDbValues = parts.flatMap((p) => RESOLUTION_DB_VALUES[p] ?? [p]);
+        clause = { OR: allDbValues.map((v) => ({ resolution: { contains: v, mode: "insensitive" as const } })) };
         break;
       }
       case "notContains": {
-        const dbValues = RESOLUTION_DB_VALUES[strVal];
-        if (dbValues) {
-          clause = { AND: dbValues.map((v) => ({ NOT: { resolution: { contains: v, mode: "insensitive" as const } } })) };
-        } else {
-          clause = { NOT: { resolution: { contains: strVal, mode: "insensitive" } } };
-        }
+        const parts = strVal.split("|").filter(Boolean);
+        const allDbValues = parts.flatMap((p) => RESOLUTION_DB_VALUES[p] ?? [p]);
+        clause = { AND: allDbValues.map((v) => ({ NOT: { resolution: { contains: v, mode: "insensitive" as const } } })) };
         break;
       }
       case "isNull":
@@ -1785,8 +1779,16 @@ function evaluateRuleAgainstItem(
       switch (operator) {
         case "equals": resResult = labelLower === valLower; break;
         case "notEquals": resResult = labelLower !== valLower; break;
-        case "contains": resResult = labelLower.includes(valLower); break;
-        case "notContains": resResult = !labelLower.includes(valLower); break;
+        case "contains": {
+          const parts = valLower.split("|").filter(Boolean);
+          resResult = parts.some((p) => labelLower.includes(p));
+          break;
+        }
+        case "notContains": {
+          const parts = valLower.split("|").filter(Boolean);
+          resResult = !parts.some((p) => labelLower.includes(p));
+          break;
+        }
         case "matchesWildcard": resResult = wildcardToRegex(valLower).test(labelLower); break;
         case "notMatchesWildcard": resResult = !wildcardToRegex(valLower).test(labelLower); break;
         default: resResult = false;
