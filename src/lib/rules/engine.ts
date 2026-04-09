@@ -190,12 +190,24 @@ function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
       case "notEquals":
         clause = { NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: String(value), mode: "insensitive" } } } } };
         break;
-      case "contains":
-        clause = { streams: { some: { streamType, ...knownLangFilter, [streamField]: { contains: String(value), mode: "insensitive" } } } };
+      case "contains": {
+        const parts = String(value).split("|").filter(Boolean);
+        if (parts.length > 1) {
+          clause = { OR: parts.map((v) => ({ streams: { some: { streamType, ...knownLangFilter, [streamField]: { contains: v, mode: "insensitive" as const } } } })) };
+        } else {
+          clause = { streams: { some: { streamType, ...knownLangFilter, [streamField]: { contains: String(value), mode: "insensitive" } } } };
+        }
         break;
-      case "notContains":
-        clause = { NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { contains: String(value), mode: "insensitive" } } } } };
+      }
+      case "notContains": {
+        const parts = String(value).split("|").filter(Boolean);
+        if (parts.length > 1) {
+          clause = { AND: parts.map((v) => ({ NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { contains: v, mode: "insensitive" as const } } } } })) };
+        } else {
+          clause = { NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { contains: String(value), mode: "insensitive" } } } } };
+        }
         break;
+      }
       case "isNull": {
         // "Is Empty" — no stream of this type has a known value
         const hasValueFilter = isLangField
