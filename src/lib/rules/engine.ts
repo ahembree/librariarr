@@ -974,7 +974,7 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
           break;
         }
         default:
-          result = true;
+          result = false;
       }
       break;
     }
@@ -1008,7 +1008,7 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
           break;
         }
         default:
-          result = true;
+          result = false;
       }
       break;
     }
@@ -1022,7 +1022,7 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
           result = meta.monitored !== boolVal;
           break;
         default:
-          result = true;
+          result = false;
       }
       break;
     }
@@ -1261,12 +1261,12 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
           break;
         }
         default:
-          result = true;
+          result = false;
       }
       break;
     }
     default:
-      result = true;
+      result = false;
   }
 
   return negate ? !result : result;
@@ -1298,7 +1298,7 @@ function evaluateSeerrRule(rule: Rule, meta: SeerrMetadata | undefined): boolean
           result = m.requested !== boolVal;
           break;
         default:
-          result = true;
+          result = false;
       }
       break;
     }
@@ -1324,7 +1324,7 @@ function evaluateSeerrRule(rule: Rule, meta: SeerrMetadata | undefined): boolean
           result = m.requestCount <= numVal;
           break;
         default:
-          result = true;
+          result = false;
       }
       break;
     }
@@ -1406,12 +1406,12 @@ function evaluateSeerrRule(rule: Rule, meta: SeerrMetadata | undefined): boolean
           break;
         }
         default:
-          result = true;
+          result = false;
       }
       break;
     }
     default:
-      result = true;
+      result = false;
   }
 
   return negate ? !result : result;
