@@ -636,12 +636,12 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
   });
 
-  // -- default operator behavior (unsupported operators return true) ----------
+  // -- default operator behavior (unsupported operators return false for safety) --
 
   describe("default operator behavior", () => {
-    it("unsupported operator for seerrRequested returns true (match)", () => {
+    it("unsupported operator for seerrRequested returns false (no match)", () => {
       // "contains" is not a valid operator for seerrRequested (boolean field)
-      // The switch default returns result = true
+      // The switch default returns result = false to prevent matching everything
       const rules: Rule[] = [
         { id: "r1", field: "seerrRequested", operator: "contains", value: "true", condition: "AND" },
       ];
@@ -649,10 +649,10 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
       const seerrData = makeSeerrData("50", { requested: true });
 
       const result = getMatchedCriteriaForItems(items, rules, "MOVIE", undefined, seerrData);
-      expect(result.get("item1")!).toHaveLength(1);
+      expect(result.get("item1")!).toHaveLength(0);
     });
 
-    it("unsupported operator for seerrRequestCount returns true (match)", () => {
+    it("unsupported operator for seerrRequestCount returns false (no match)", () => {
       // "contains" is not valid for numeric fields
       const rules: Rule[] = [
         { id: "r1", field: "seerrRequestCount", operator: "contains", value: "5", condition: "AND" },
@@ -661,7 +661,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
       const seerrData = makeSeerrData("50", { requestCount: 5 });
 
       const result = getMatchedCriteriaForItems(items, rules, "MOVIE", undefined, seerrData);
-      expect(result.get("item1")!).toHaveLength(1);
+      expect(result.get("item1")!).toHaveLength(0);
     });
   });
 });

@@ -596,3 +596,107 @@ describe("evaluateAllRulesInMemory — safety defaults", () => {
     expect(evaluateAllRulesInMemory(groups, dummyItem)).toBe(true);
   });
 });
+
+describe("evaluateAllRulesInMemory — invalid operators default to false", () => {
+  const dummyItem: Record<string, unknown> = {
+    id: "item1",
+    title: "Test Movie",
+    playCount: 5,
+    externalIds: [{ source: "TMDB", externalId: "12345" }],
+  };
+
+  const arrMeta = {
+    arrId: 1,
+    tags: ["lifecycle"],
+    qualityProfile: "HD-1080p",
+    monitored: true,
+    rating: 7.5,
+    tmdbRating: null,
+    rtCriticRating: null,
+    dateAdded: null,
+    path: "/movies/test",
+    sizeOnDisk: null,
+    originalLanguage: null,
+    releaseDate: null,
+    inCinemasDate: null,
+    runtime: null,
+    qualityName: null,
+    qualityCutoffMet: null,
+    downloadDate: null,
+    firstAired: null,
+    seasonCount: null,
+    episodeCount: null,
+    status: null,
+    ended: null,
+    seriesType: null,
+    hasUnaired: null,
+    monitoredSeasonCount: null,
+    monitoredEpisodeCount: null,
+  };
+
+  const seerrMeta = {
+    requested: true,
+    requestCount: 2,
+    requestDate: "2024-01-01",
+    requestedBy: ["user1"],
+    approvalDate: null,
+    declineDate: null,
+  };
+
+  it("returns false for an Arr field with an invalid operator", () => {
+    const groups: RuleGroup[] = [{
+      id: "g1", condition: "AND",
+      rules: [{ id: "1", field: "arrTag", operator: "INVALID_OP" as never, value: "test", condition: "AND" }],
+      groups: [],
+    }];
+    expect(evaluateAllRulesInMemory(groups, dummyItem, arrMeta)).toBe(false);
+  });
+
+  it("returns false for arrMonitored with an unsupported operator", () => {
+    const groups: RuleGroup[] = [{
+      id: "g1", condition: "AND",
+      rules: [{ id: "1", field: "arrMonitored", operator: "contains" as never, value: "true", condition: "AND" }],
+      groups: [],
+    }];
+    expect(evaluateAllRulesInMemory(groups, dummyItem, arrMeta)).toBe(false);
+  });
+
+  it("returns false for an unknown Arr field", () => {
+    const groups: RuleGroup[] = [{
+      id: "g1", condition: "AND",
+      rules: [{ id: "1", field: "arrNonExistentField" as never, operator: "equals", value: "x", condition: "AND" }],
+      groups: [],
+    }];
+    expect(evaluateAllRulesInMemory(groups, dummyItem, arrMeta)).toBe(false);
+  });
+
+  it("returns false for a Seerr field with an invalid operator", () => {
+    const groups: RuleGroup[] = [{
+      id: "g1", condition: "AND",
+      rules: [{ id: "1", field: "seerrRequested", operator: "INVALID" as never, value: "true", condition: "AND" }],
+      groups: [],
+    }];
+    expect(evaluateAllRulesInMemory(groups, dummyItem, undefined, seerrMeta)).toBe(false);
+  });
+
+  it("returns false for an unknown Seerr field", () => {
+    const groups: RuleGroup[] = [{
+      id: "g1", condition: "AND",
+      rules: [{ id: "1", field: "seerrFakeField" as never, operator: "equals", value: "x", condition: "AND" }],
+      groups: [],
+    }];
+    expect(evaluateAllRulesInMemory(groups, dummyItem, undefined, seerrMeta)).toBe(false);
+  });
+
+  it("does not match all items when only Arr rules have invalid operators", () => {
+    const groups: RuleGroup[] = [{
+      id: "g1", condition: "AND",
+      rules: [
+        { id: "1", field: "arrTag", operator: "INVALID" as never, value: "x", condition: "AND" },
+        { id: "2", field: "arrMonitored", operator: "INVALID" as never, value: "true", condition: "AND" },
+      ],
+      groups: [],
+    }];
+    expect(evaluateAllRulesInMemory(groups, dummyItem, arrMeta)).toBe(false);
+  });
+});
