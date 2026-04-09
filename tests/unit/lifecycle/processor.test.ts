@@ -144,6 +144,34 @@ describe("scheduleActionsForRuleSet", () => {
     expect(mockPrisma.lifecycleAction.createMany).not.toHaveBeenCalled();
   });
 
+  it("deletes pending actions and returns early when actionType is null", async () => {
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 2 });
+
+    await scheduleActionsForRuleSet(
+      {
+        id: "rs1",
+        userId: "u1",
+        name: "Test",
+        type: "MOVIE",
+        actionEnabled: true,
+        actionType: null,
+        actionDelayDays: 0,
+        arrInstanceId: null,
+        addImportExclusion: false,
+        searchAfterDelete: false,
+        addArrTags: [],
+        removeArrTags: [],
+      },
+      [{ id: "item1", title: "Movie" }],
+      new Map(),
+    );
+
+    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({
+      where: { ruleSetId: "rs1", status: "PENDING" },
+    });
+    expect(mockPrisma.lifecycleAction.createMany).not.toHaveBeenCalled();
+  });
+
   it("deletes stale pending actions for items no longer matching", async () => {
     // First deleteMany for disabled check won't be reached (actionEnabled = true)
     // findMany returns previous pending

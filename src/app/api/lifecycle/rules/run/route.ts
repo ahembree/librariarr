@@ -17,13 +17,22 @@ export async function POST(request: NextRequest) {
   const results = await runDetection(session.userId!, data.ruleSetId, data.fullReEval ?? false);
 
   // Immediately schedule/cancel actions instead of waiting for next scheduler cycle
-  if (data.processActions && data.ruleSetId) {
-    const ruleSet = await prisma.ruleSet.findFirst({
-      where: { id: data.ruleSetId, userId: session.userId },
-    });
-    if (ruleSet) {
-      const result = results.find((r) => r.ruleSet.id === data.ruleSetId);
-      if (result) {
+  if (data.processActions) {
+    // Determine which rule set IDs to process
+    const ruleSetIds = data.ruleSetId
+      ? [data.ruleSetId]
+      : results.map((r) => r.ruleSet.id);
+
+    if (ruleSetIds.length > 0) {
+      const ruleSets = await prisma.ruleSet.findMany({
+        where: { id: { in: ruleSetIds }, userId: session.userId },
+      });
+      const ruleSetMap = new Map(ruleSets.map((rs) => [rs.id, rs]));
+
+      for (const result of results) {
+        const ruleSet = ruleSetMap.get(result.ruleSet.id);
+        if (!ruleSet) continue;
+
         // Rebuild episodeIdMap from matched items
         const episodeIdMap = new Map<string, string[]>();
         for (const item of result.items) {

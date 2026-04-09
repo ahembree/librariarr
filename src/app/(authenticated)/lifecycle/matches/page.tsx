@@ -765,7 +765,7 @@ export default function RuleMatchesPage() {
       const response = await fetch("/api/lifecycle/rules/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ruleSetId, fullReEval }),
+        body: JSON.stringify({ ruleSetId, fullReEval, processActions: true }),
       });
       const data = await response.json();
       if (data.ruleMatches) {
@@ -797,7 +797,7 @@ export default function RuleMatchesPage() {
       const response = await fetch("/api/lifecycle/rules/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fullReEval: true }),
+        body: JSON.stringify({ fullReEval: true, processActions: true }),
       });
       const data = await response.json();
       if (data.ruleMatches) {
