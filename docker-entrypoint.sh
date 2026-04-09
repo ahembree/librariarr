@@ -78,19 +78,24 @@ echo "==> Applying schema..."
 export NODE_PATH=/opt/prisma/node_modules
 PRISMA="node /opt/prisma/node_modules/prisma/build/index.js"
 
-# 1. Try migrate deploy first (handles projects with migration files).
-#    Fall back to db push if migrations fail (e.g. tables already exist
-#    from a previous db-push-only install).
+# 1. Try migrate deploy (applies pending migration files).
 if su-exec "$APP_USER" $PRISMA migrate deploy --schema ./prisma/schema.prisma 2>&1; then
   echo "    Migrations applied successfully."
 else
-  echo "    Migrate deploy failed, falling back to prisma db push..."
+  echo "    Migrate deploy failed (expected on first run from db-push installs)."
 fi
 
-# 2. Always run db push to apply schema-only column additions that aren't
-#    covered by migration files. This is non-destructive: it only adds
-#    missing columns and indexes without dropping or recreating tables.
-su-exec "$APP_USER" $PRISMA db push --skip-generate --schema ./prisma/schema.prisma 2>&1
+# 2. Always run db push to reconcile schema-only changes (columns, indexes)
+#    that aren't covered by migration files. Without this, upgrades that add
+#    new columns without a migration file leave the DB out of sync — Prisma
+#    queries then fail with "column does not exist".
+#    This is non-destructive: it only adds missing columns/indexes.
+#    Failure is fatal — the app must not start with a broken schema.
+if ! su-exec "$APP_USER" $PRISMA db push --schema ./prisma/schema.prisma 2>&1; then
+  echo "    ERROR: prisma db push failed — database schema is out of sync."
+  echo "    The application cannot start safely. Check the error above."
+  exit 1
+fi
 echo "    Schema is up to date."
 
 # --expose-gc: makes global.gc() available so the sync engine can force
