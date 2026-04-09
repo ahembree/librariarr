@@ -200,7 +200,7 @@ When users connect multiple servers, dedup prevents duplicate items from appeari
 - Always import Prisma as `import { prisma } from "@/lib/db"` (singleton pattern on globalThis)
 - Prisma client generated to `src/generated/prisma` (custom output path, not the default)
 - `fileSize` is stored as `BigInt` in PostgreSQL — serialize to string in API responses, convert back to number on frontend
-- Production migration: `prisma migrate deploy` with fallback to `prisma db push`
+- Production migration: `prisma migrate deploy` then `prisma db push` (entrypoint always runs both — `migrate deploy` applies migration files, `db push` applies schema-only column additions)
 - Dev migration: `prisma db push` (no migration files needed)
 
 ### Styling

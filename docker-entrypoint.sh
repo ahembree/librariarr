@@ -78,16 +78,20 @@ echo "==> Applying schema..."
 export NODE_PATH=/opt/prisma/node_modules
 PRISMA="node /opt/prisma/node_modules/prisma/build/index.js"
 
-# Try migrate deploy first (handles projects with migration files).
-# Fall back to db push which reconciles the schema non-destructively
-# (works for fresh databases and projects without migration files).
+# 1. Try migrate deploy first (handles projects with migration files).
+#    Fall back to db push if migrations fail (e.g. tables already exist
+#    from a previous db-push-only install).
 if su-exec "$APP_USER" $PRISMA migrate deploy --schema ./prisma/schema.prisma 2>&1; then
   echo "    Migrations applied successfully."
 else
   echo "    Migrate deploy failed, falling back to prisma db push..."
-  su-exec "$APP_USER" $PRISMA db push --schema ./prisma/schema.prisma
-  echo "    Schema pushed successfully."
 fi
+
+# 2. Always run db push to apply schema-only column additions that aren't
+#    covered by migration files. This is non-destructive: it only adds
+#    missing columns and indexes without dropping or recreating tables.
+su-exec "$APP_USER" $PRISMA db push --skip-generate --schema ./prisma/schema.prisma 2>&1
+echo "    Schema is up to date."
 
 # --expose-gc: makes global.gc() available so the sync engine can force
 #   collection between pages instead of letting V8 defer it indefinitely.
