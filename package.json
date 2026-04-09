@@ -74,7 +74,7 @@
     "embla-carousel-react": "^8.6.0",
     "iron-session": "^8.0.4",
     "lucide-react": "^1.7.0",
-    "next": "16.2.1",
+    "next": "16.2.3",
     "node-cron": "^4.2.1",
     "pg": "^8.20.0",
     "radix-ui": "^1.4.3",
