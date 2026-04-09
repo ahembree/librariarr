@@ -453,12 +453,24 @@ function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
         }
         break;
       }
-      case "contains":
-        clause = { resolution: { contains: strVal, mode: "insensitive" } };
+      case "contains": {
+        const dbValues = RESOLUTION_DB_VALUES[strVal];
+        if (dbValues) {
+          clause = { OR: dbValues.map((v) => ({ resolution: { contains: v, mode: "insensitive" as const } })) };
+        } else {
+          clause = { resolution: { contains: strVal, mode: "insensitive" } };
+        }
         break;
-      case "notContains":
-        clause = { NOT: { resolution: { contains: strVal, mode: "insensitive" } } };
+      }
+      case "notContains": {
+        const dbValues = RESOLUTION_DB_VALUES[strVal];
+        if (dbValues) {
+          clause = { AND: dbValues.map((v) => ({ NOT: { resolution: { contains: v, mode: "insensitive" as const } } })) };
+        } else {
+          clause = { NOT: { resolution: { contains: strVal, mode: "insensitive" } } };
+        }
         break;
+      }
       case "isNull":
         clause = { OR: [{ resolution: null }, { resolution: "" }] };
         break;
