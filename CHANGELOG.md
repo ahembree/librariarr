@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.15.0](https://github.com/ahembree/librariarr/compare/v0.14.2...v0.15.0) (2026-04-09)
+
+
+### Features
+
+* **lifecycle:** add file size column to pending actions table ([7984ce1](https://github.com/ahembree/librariarr/commit/7984ce1d85debed7978dec729e4f62622bc62abd))
+* **unraid:** add external database template for existing PostgreSQL users ([9114930](https://github.com/ahembree/librariarr/commit/9114930e9352663481845d7062706a834d342fff))
+
+
+### Bug Fixes
+
+* allow duplicate server names and disambiguate in UI ([624554f](https://github.com/ahembree/librariarr/commit/624554ffc41e8958e124018e4c5e958faf6748a1))
+* disambiguate server names in dashboard and lifecycle rule picker ([63b9d21](https://github.com/ahembree/librariarr/commit/63b9d215fcf578df5be1ac566768e77ead35d38c))
+* **history:** map resolution display labels to DB values in watch history route ([301cdcc](https://github.com/ahembree/librariarr/commit/301cdccd060b4ad118684cdcdbf190433917c0bb))
+* **lifecycle:** address remaining bugs in server deletion cleanup ([f6aadf5](https://github.com/ahembree/librariarr/commit/f6aadf5c1e6991af9a8a21a381b5eb5bbceac66d))
+* **lifecycle:** allow re-scheduling actions for previously actioned items ([d364a61](https://github.com/ahembree/librariarr/commit/d364a611684a4e068966c01d892c03c622944fd0))
+* **lifecycle:** clean up orphaned rule set serverIds and pending actions on server deletion ([35e22de](https://github.com/ahembree/librariarr/commit/35e22de8cd4c245b20116825c6415e50cd6a74f4))
+* **lifecycle:** include upcoming matches in pending deletion stats ([85e2779](https://github.com/ahembree/librariarr/commit/85e2779d89d6456a7f1eed35b1ce6cbaac6bf1e6))
+* **lifecycle:** only allow re-scheduling for completed delete actions ([6ae32e1](https://github.com/ahembree/librariarr/commit/6ae32e1a8830d1cdfe8853787d6749562b29bd86))
+* **query:** map resolution display labels to DB values in query engine ([9ad007e](https://github.com/ahembree/librariarr/commit/9ad007ed8c70b387b8ec84767dffb40325a33fa7))
+* **rules:** default to false for unsupported operators in Arr/Seerr evaluation ([b142fcf](https://github.com/ahembree/librariarr/commit/b142fcf2383913e8c52f30b796daf8fd26dd3563))
+* **rules:** map resolution display labels to DB values in lifecycle rule engine ([4d44d84](https://github.com/ahembree/librariarr/commit/4d44d846b9814a5055a78924235074b34e9beec7))
+* **test:** correct server deletion cleanup tests to exercise new code ([23cb250](https://github.com/ahembree/librariarr/commit/23cb250a41518ecdbdc598f275b709b52a97b4b1))
+* use ServerTypeChip in servers settings tab ([2bb08d9](https://github.com/ahembree/librariarr/commit/2bb08d976e75768ed061f0fe5b125e50694808b7))
+
 ## [0.14.2](https://github.com/ahembree/librariarr/compare/v0.14.1...v0.14.2) (2026-04-06)
 
 
