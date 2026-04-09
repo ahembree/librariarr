@@ -8,7 +8,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { getServerDisplayNames } from "@/lib/server-styles";
+import { ServerTypeChip } from "@/components/server-type-chip";
+import { getDuplicateServerNames } from "@/lib/server-styles";
 
 interface ServerInfo {
   id: string;
@@ -25,7 +26,7 @@ interface ServerFilterProps {
 export function ServerFilter({ servers, value, onChange }: ServerFilterProps) {
   if (servers.length <= 1) return null;
 
-  const displayNames = getServerDisplayNames(servers);
+  const dupeNames = getDuplicateServerNames(servers);
 
   return (
     <Select value={value} onValueChange={onChange}>
@@ -37,7 +38,12 @@ export function ServerFilter({ servers, value, onChange }: ServerFilterProps) {
         <SelectItem value="all">All Servers</SelectItem>
         {servers.map((server) => (
           <SelectItem key={server.id} value={server.id}>
-            {displayNames.get(server.id) ?? server.name}
+            <span className="inline-flex items-center gap-1.5">
+              {server.name}
+              {dupeNames.has(server.name) && server.type && (
+                <ServerTypeChip type={server.type} />
+              )}
+            </span>
           </SelectItem>
         ))}
       </SelectContent>

@@ -3,6 +3,7 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { getServerTypeLabel } from "@/lib/server-styles";
+import { ServerTypeChip } from "@/components/server-type-chip";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1589,7 +1590,7 @@ export function LifecycleRulePage({
                               }`}
                             />
                             {server.name}
-                            <span className="ml-1.5 text-muted-foreground">({getServerTypeLabel(server.type)})</span>
+                            <ServerTypeChip type={server.type} className="ml-1.5" />
                           </CommandItem>
                         );
                       })}
@@ -1602,14 +1603,13 @@ export function LifecycleRulePage({
               <div className="flex flex-wrap gap-1">
                 {serverIds.map((id) => {
                   const server = servers.find((s) => s.id === id);
-                  const typeLabel = server ? getServerTypeLabel(server.type) : undefined;
                   return (
                     <span
                       key={id}
                       className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
                     >
                       {server?.name ?? id}
-                      {typeLabel && <span className="text-muted-foreground">({typeLabel})</span>}
+                      {server && <ServerTypeChip type={server.type} />}
                       <button
                         type="button"
                         onClick={() => setServerIds((prev) => prev.filter((sid) => sid !== id))}

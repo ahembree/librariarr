@@ -87,27 +87,21 @@ export function getServerTypeLabel(type: string): string {
 }
 
 /**
- * Build a display-name map for a list of servers, appending the type label
- * in parentheses when two or more servers share the same name.
- * Returns a Map keyed by server id → display string.
+ * Returns a Set of server names that appear more than once in the list.
+ * Used by UI components to decide whether to show a type chip for disambiguation.
  */
-export function getServerDisplayNames<T extends { id: string; name: string; type?: string }>(
+export function getDuplicateServerNames<T extends { name: string }>(
   servers: T[],
-): Map<string, string> {
-  const nameCounts = new Map<string, number>();
+): Set<string> {
+  const counts = new Map<string, number>();
   for (const s of servers) {
-    nameCounts.set(s.name, (nameCounts.get(s.name) ?? 0) + 1);
+    counts.set(s.name, (counts.get(s.name) ?? 0) + 1);
   }
-  const result = new Map<string, string>();
-  for (const s of servers) {
-    const isDuplicate = (nameCounts.get(s.name) ?? 0) > 1;
-    if (isDuplicate && s.type) {
-      result.set(s.id, `${s.name} (${getServerTypeLabel(s.type)})`);
-    } else {
-      result.set(s.id, s.name);
-    }
+  const dupes = new Set<string>();
+  for (const [name, count] of counts) {
+    if (count > 1) dupes.add(name);
   }
-  return result;
+  return dupes;
 }
 
 export const DEFAULT_SERVER_STYLE: ServerStyle = {

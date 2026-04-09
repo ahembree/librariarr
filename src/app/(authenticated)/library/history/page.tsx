@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { ColorChip } from "@/components/color-chip";
 import { ServerChips } from "@/components/server-chips";
-import { getServerDisplayNames } from "@/lib/server-styles";
+import { getDuplicateServerNames } from "@/lib/server-styles";
+import { ServerTypeChip } from "@/components/server-type-chip";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import {
   DropdownMenu,
@@ -612,7 +613,7 @@ export default function HistoryPage() {
 
             {/* Server filter */}
             {servers.length > 1 && (() => {
-              const displayNames = getServerDisplayNames(servers);
+              const dupeNames = getDuplicateServerNames(servers);
               return (
                 <Select value={selectedServerId} onValueChange={setSelectedServerId}>
                   <SelectTrigger className="w-40 h-9">
@@ -621,7 +622,12 @@ export default function HistoryPage() {
                   <SelectContent>
                     <SelectItem value="all">All Servers</SelectItem>
                     {servers.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>{displayNames.get(s.id) ?? s.name}</SelectItem>
+                      <SelectItem key={s.id} value={s.id}>
+                        <span className="inline-flex items-center gap-1.5">
+                          {s.name}
+                          {dupeNames.has(s.name) && s.type && <ServerTypeChip type={s.type} />}
+                        </span>
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

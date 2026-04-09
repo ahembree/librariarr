@@ -17,7 +17,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Clock, Film, Tv, Music, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import { formatRelativeDate } from "@/lib/format";
-import { getServerDisplayNames } from "@/lib/server-styles";
+import { getDuplicateServerNames } from "@/lib/server-styles";
+import { ServerTypeChip } from "@/components/server-type-chip";
 
 interface RecentItem {
   id: string;
@@ -154,9 +155,14 @@ export function RecentlyAdded({
                 <SelectContent>
                   <SelectItem value="default">{serverId ? "Dashboard" : "All Servers"}</SelectItem>
                   {(() => {
-                    const displayNames = getServerDisplayNames(servers);
+                    const dupeNames = getDuplicateServerNames(servers);
                     return servers.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>{displayNames.get(s.id) ?? s.name}</SelectItem>
+                      <SelectItem key={s.id} value={s.id}>
+                        <span className="inline-flex items-center gap-1.5">
+                          {s.name}
+                          {dupeNames.has(s.name) && s.type && <ServerTypeChip type={s.type} />}
+                        </span>
+                      </SelectItem>
                     ));
                   })()}
                 </SelectContent>

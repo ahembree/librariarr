@@ -28,7 +28,8 @@ import {
 import { CustomCardDialog } from "@/components/custom-card-dialog";
 import { Pencil, Check, Server, Film, Tv, Music, LayoutDashboard } from "lucide-react";
 import { generateId } from "@/lib/utils";
-import { getServerDisplayNames } from "@/lib/server-styles";
+import { getDuplicateServerNames } from "@/lib/server-styles";
+import { ServerTypeChip } from "@/components/server-type-chip";
 import { TabNav, type TabNavItem } from "@/components/tab-nav";
 import { DashboardSkeleton } from "@/components/skeletons";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -287,7 +288,7 @@ export default function DashboardPage() {
         <div className="flex flex-wrap items-center gap-2">
           <SyncIndicator onSyncComplete={fetchStats} />
           {servers.length > 1 && (() => {
-            const displayNames = getServerDisplayNames(servers);
+            const dupeNames = getDuplicateServerNames(servers);
             return (
               <Select
                 value={selectedServerId}
@@ -301,7 +302,12 @@ export default function DashboardPage() {
                   <SelectItem value="all">All Servers</SelectItem>
                   {servers.map((server) => (
                     <SelectItem key={server.id} value={server.id}>
-                      {displayNames.get(server.id) ?? server.name}
+                      <span className="inline-flex items-center gap-1.5">
+                        {server.name}
+                        {dupeNames.has(server.name) && (
+                          <ServerTypeChip type={server.type} />
+                        )}
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>

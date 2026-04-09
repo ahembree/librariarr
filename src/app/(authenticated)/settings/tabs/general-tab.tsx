@@ -36,7 +36,8 @@ import {
   getChipBadgeStyle,
 } from "@/lib/theme/chip-colors";
 import type { ChipColorMap, ChipColorCategory, MediaServer, BackupEntry } from "../types";
-import { getServerDisplayNames } from "@/lib/server-styles";
+import { getDuplicateServerNames } from "@/lib/server-styles";
+import { ServerTypeChip } from "@/components/server-type-chip";
 
 export interface GeneralTabProps {
   // Accent color
@@ -591,7 +592,7 @@ export function GeneralTab({
       </section>
 
       {servers.length > 1 && (() => {
-        const displayNames = getServerDisplayNames(servers);
+        const dupeNames = getDuplicateServerNames(servers);
         return (
           <div className="space-y-4">
             <h2 className="text-xl font-semibold">Library Display</h2>
@@ -613,7 +614,10 @@ export function GeneralTab({
                       <SelectItem value="none">No preference</SelectItem>
                       {servers.map((s) => (
                         <SelectItem key={s.id} value={s.id}>
-                          {displayNames.get(s.id) ?? s.name}
+                          <span className="inline-flex items-center gap-1.5">
+                            {s.name}
+                            {dupeNames.has(s.name) && <ServerTypeChip type={s.type} />}
+                          </span>
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -635,7 +639,10 @@ export function GeneralTab({
                       <SelectItem value="none">No preference</SelectItem>
                       {servers.map((s) => (
                         <SelectItem key={s.id} value={s.id}>
-                          {displayNames.get(s.id) ?? s.name}
+                          <span className="inline-flex items-center gap-1.5">
+                            {s.name}
+                            {dupeNames.has(s.name) && <ServerTypeChip type={s.type} />}
+                          </span>
                         </SelectItem>
                       ))}
                     </SelectContent>
