@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.2](https://github.com/ahembree/librariarr/compare/v0.15.1...v0.15.2) (2026-04-09)
+
+
+### Bug Fixes
+
+* **db:** fix db push invocation and add schema validation guard ([1440347](https://github.com/ahembree/librariarr/commit/1440347b1d5fae11c1db14cf1d52e1147fa4ceee))
+
 ## [0.15.1](https://github.com/ahembree/librariarr/compare/v0.15.0...v0.15.1) (2026-04-09)
 
 
