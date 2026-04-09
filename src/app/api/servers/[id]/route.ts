@@ -115,32 +115,33 @@ export async function DELETE(
 
   const { searchParams } = new URL(request.url);
   const deleteData = searchParams.get("deleteData") === "true";
+  const userId = session.userId!;
 
-  if (deleteData) {
+  // Query libraries before server deletion (needed for lifecycle cleanup in both paths;
+  // after deletion the SetNull cascade clears mediaServerId so we can't identify them)
+  const libraries = await prisma.library.findMany({
+    where: { mediaServerId: server.id },
+    select: { id: true },
+  });
+  const libraryIds = libraries.map((l) => l.id);
+
+  if (deleteData && libraryIds.length > 0) {
     // Delete all synced data: libraries, media items, and related records
-    const libraries = await prisma.library.findMany({
-      where: { mediaServerId: server.id },
-      select: { id: true },
+    await prisma.lifecycleAction.deleteMany({
+      where: { mediaItem: { libraryId: { in: libraryIds } } },
     });
-    const libraryIds = libraries.map((l) => l.id);
-
-    if (libraryIds.length > 0) {
-      await prisma.lifecycleAction.deleteMany({
-        where: { mediaItem: { libraryId: { in: libraryIds } } },
-      });
-      await prisma.mediaStream.deleteMany({
-        where: { mediaItem: { libraryId: { in: libraryIds } } },
-      });
-      await prisma.mediaItemExternalId.deleteMany({
-        where: { mediaItem: { libraryId: { in: libraryIds } } },
-      });
-      await prisma.mediaItem.deleteMany({
-        where: { libraryId: { in: libraryIds } },
-      });
-      await prisma.library.deleteMany({
-        where: { id: { in: libraryIds } },
-      });
-    }
+    await prisma.mediaStream.deleteMany({
+      where: { mediaItem: { libraryId: { in: libraryIds } } },
+    });
+    await prisma.mediaItemExternalId.deleteMany({
+      where: { mediaItem: { libraryId: { in: libraryIds } } },
+    });
+    await prisma.mediaItem.deleteMany({
+      where: { libraryId: { in: libraryIds } },
+    });
+    await prisma.library.deleteMany({
+      where: { id: { in: libraryIds } },
+    });
   }
 
   // Delete sync jobs and the server record.
@@ -148,6 +149,40 @@ export async function DELETE(
   // if deleteData was false, preserving the library and media item data.
   await prisma.syncJob.deleteMany({ where: { mediaServerId: server.id } });
   await prisma.mediaServer.delete({ where: { id: server.id } });
+
+  // Remove the deleted server from all lifecycle rule sets' serverIds arrays
+  await prisma.$executeRawUnsafe(
+    `UPDATE "RuleSet" SET "serverIds" = array_remove("serverIds", $1) WHERE $1 = ANY("serverIds") AND "userId" = $2`,
+    server.id,
+    userId
+  );
+
+  // Clean up stale matches and pending actions for items from the deleted server's libraries
+  // (covers both orphaned rule sets and multi-server rule sets that still have other servers)
+  if (libraryIds.length > 0 && !deleteData) {
+    await prisma.lifecycleAction.deleteMany({
+      where: { mediaItem: { libraryId: { in: libraryIds } }, status: "PENDING" },
+    });
+    await prisma.ruleMatch.deleteMany({
+      where: { mediaItem: { libraryId: { in: libraryIds } } },
+    });
+  }
+
+  // For rule sets that lost ALL servers, also clean up any remaining matches/actions
+  // (catches edge cases like actions with null mediaItemId from prior orphaning)
+  const orphanedRuleSets = await prisma.ruleSet.findMany({
+    where: { userId, serverIds: { equals: [] } },
+    select: { id: true },
+  });
+  if (orphanedRuleSets.length > 0) {
+    const ruleSetIds = orphanedRuleSets.map((rs) => rs.id);
+    await prisma.lifecycleAction.deleteMany({
+      where: { ruleSetId: { in: ruleSetIds }, status: "PENDING" },
+    });
+    await prisma.ruleMatch.deleteMany({
+      where: { ruleSetId: { in: ruleSetIds } },
+    });
+  }
 
   apiLogger.info("Auth", `Media server "${server.name}" removed (deleteData=${deleteData})`);
 
@@ -157,7 +192,7 @@ export async function DELETE(
   appCache.invalidatePrefix("stats:");
 
   // Recompute canonical flags for remaining items
-  await recomputeCanonical(session.userId!);
+  await recomputeCanonical(userId);
 
   return NextResponse.json({ success: true });
 }
