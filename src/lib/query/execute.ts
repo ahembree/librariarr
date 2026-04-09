@@ -284,12 +284,18 @@ function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
         }
         break;
       }
-      case "contains":
-        clause = { resolution: { contains: strVal, mode: "insensitive" } };
+      case "contains": {
+        const parts = strVal.split("|").filter(Boolean);
+        const allDbValues = parts.flatMap((p) => RESOLUTION_DB_VALUES[p] ?? [p]);
+        clause = { OR: allDbValues.map((v) => ({ resolution: { contains: v, mode: "insensitive" as const } })) };
         break;
-      case "notContains":
-        clause = { NOT: { resolution: { contains: strVal, mode: "insensitive" } } };
+      }
+      case "notContains": {
+        const parts = strVal.split("|").filter(Boolean);
+        const allDbValues = parts.flatMap((p) => RESOLUTION_DB_VALUES[p] ?? [p]);
+        clause = { AND: allDbValues.map((v) => ({ NOT: { resolution: { contains: v, mode: "insensitive" as const } } })) };
         break;
+      }
       case "isNull":
         clause = { OR: [{ resolution: null }, { resolution: "" }] };
         break;
@@ -385,16 +391,28 @@ function handleStreamField(
         NOT: { streams: { some: { streamType, ...knownLangFilter, [columnName]: { equals: value, mode: "insensitive" } } } },
       };
       break;
-    case "contains":
-      clause = {
-        streams: { some: { streamType, ...knownLangFilter, [columnName]: { contains: value, mode: "insensitive" } } },
-      };
+    case "contains": {
+      const parts = value.split("|").filter(Boolean);
+      if (parts.length > 1) {
+        clause = { OR: parts.map((v) => ({ streams: { some: { streamType, ...knownLangFilter, [columnName]: { contains: v, mode: "insensitive" as const } } } })) };
+      } else {
+        clause = {
+          streams: { some: { streamType, ...knownLangFilter, [columnName]: { contains: value, mode: "insensitive" } } },
+        };
+      }
       break;
-    case "notContains":
-      clause = {
-        NOT: { streams: { some: { streamType, ...knownLangFilter, [columnName]: { contains: value, mode: "insensitive" } } } },
-      };
+    }
+    case "notContains": {
+      const parts = value.split("|").filter(Boolean);
+      if (parts.length > 1) {
+        clause = { AND: parts.map((v) => ({ NOT: { streams: { some: { streamType, ...knownLangFilter, [columnName]: { contains: v, mode: "insensitive" as const } } } } })) };
+      } else {
+        clause = {
+          NOT: { streams: { some: { streamType, ...knownLangFilter, [columnName]: { contains: value, mode: "insensitive" } } } },
+        };
+      }
       break;
+    }
     case "isNull": {
       // "Is Empty" — no stream of this type has a known value
       const hasValueFilter = isLangField
@@ -1322,12 +1340,16 @@ function evaluateStreamRuleInMemory(
     case "notEquals":
       result = !knownStreams.some(s => s[columnName]!.toLowerCase() === value.toLowerCase());
       break;
-    case "contains":
-      result = knownStreams.some(s => s[columnName]!.toLowerCase().includes(value.toLowerCase()));
+    case "contains": {
+      const parts = value.toLowerCase().split("|").filter(Boolean);
+      result = parts.some(v => knownStreams.some(s => s[columnName]!.toLowerCase().includes(v)));
       break;
-    case "notContains":
-      result = !knownStreams.some(s => s[columnName]!.toLowerCase().includes(value.toLowerCase()));
+    }
+    case "notContains": {
+      const parts = value.toLowerCase().split("|").filter(Boolean);
+      result = !parts.some(v => knownStreams.some(s => s[columnName]!.toLowerCase().includes(v)));
       break;
+    }
     case "matchesWildcard": {
       const re = wildcardToRegex(value.toLowerCase());
       result = knownStreams.some(s => re.test(s[columnName]!.toLowerCase()));
@@ -1648,8 +1670,16 @@ function evaluateQueryRuleInMemory(
       switch (operator) {
         case "equals": result = labelLower === valLower; break;
         case "notEquals": result = labelLower !== valLower; break;
-        case "contains": result = labelLower.includes(valLower); break;
-        case "notContains": result = !labelLower.includes(valLower); break;
+        case "contains": {
+          const parts = valLower.split("|").filter(Boolean);
+          result = parts.some((p) => labelLower.includes(p));
+          break;
+        }
+        case "notContains": {
+          const parts = valLower.split("|").filter(Boolean);
+          result = !parts.some((p) => labelLower.includes(p));
+          break;
+        }
         case "matchesWildcard": result = wildcardToRegex(valLower).test(labelLower); break;
         case "notMatchesWildcard": result = !wildcardToRegex(valLower).test(labelLower); break;
         default: result = false;

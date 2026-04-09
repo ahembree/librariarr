@@ -190,12 +190,24 @@ function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
       case "notEquals":
         clause = { NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: String(value), mode: "insensitive" } } } } };
         break;
-      case "contains":
-        clause = { streams: { some: { streamType, ...knownLangFilter, [streamField]: { contains: String(value), mode: "insensitive" } } } };
+      case "contains": {
+        const parts = String(value).split("|").filter(Boolean);
+        if (parts.length > 1) {
+          clause = { OR: parts.map((v) => ({ streams: { some: { streamType, ...knownLangFilter, [streamField]: { contains: v, mode: "insensitive" as const } } } })) };
+        } else {
+          clause = { streams: { some: { streamType, ...knownLangFilter, [streamField]: { contains: String(value), mode: "insensitive" } } } };
+        }
         break;
-      case "notContains":
-        clause = { NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { contains: String(value), mode: "insensitive" } } } } };
+      }
+      case "notContains": {
+        const parts = String(value).split("|").filter(Boolean);
+        if (parts.length > 1) {
+          clause = { AND: parts.map((v) => ({ NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { contains: v, mode: "insensitive" as const } } } } })) };
+        } else {
+          clause = { NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { contains: String(value), mode: "insensitive" } } } } };
+        }
         break;
+      }
       case "isNull": {
         // "Is Empty" — no stream of this type has a known value
         const hasValueFilter = isLangField
@@ -453,12 +465,18 @@ function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
         }
         break;
       }
-      case "contains":
-        clause = { resolution: { contains: strVal, mode: "insensitive" } };
+      case "contains": {
+        const parts = strVal.split("|").filter(Boolean);
+        const allDbValues = parts.flatMap((p) => RESOLUTION_DB_VALUES[p] ?? [p]);
+        clause = { OR: allDbValues.map((v) => ({ resolution: { contains: v, mode: "insensitive" as const } })) };
         break;
-      case "notContains":
-        clause = { NOT: { resolution: { contains: strVal, mode: "insensitive" } } };
+      }
+      case "notContains": {
+        const parts = strVal.split("|").filter(Boolean);
+        const allDbValues = parts.flatMap((p) => RESOLUTION_DB_VALUES[p] ?? [p]);
+        clause = { AND: allDbValues.map((v) => ({ NOT: { resolution: { contains: v, mode: "insensitive" as const } } })) };
         break;
+      }
       case "isNull":
         clause = { OR: [{ resolution: null }, { resolution: "" }] };
         break;
@@ -1773,8 +1791,16 @@ function evaluateRuleAgainstItem(
       switch (operator) {
         case "equals": resResult = labelLower === valLower; break;
         case "notEquals": resResult = labelLower !== valLower; break;
-        case "contains": resResult = labelLower.includes(valLower); break;
-        case "notContains": resResult = !labelLower.includes(valLower); break;
+        case "contains": {
+          const parts = valLower.split("|").filter(Boolean);
+          resResult = parts.some((p) => labelLower.includes(p));
+          break;
+        }
+        case "notContains": {
+          const parts = valLower.split("|").filter(Boolean);
+          resResult = !parts.some((p) => labelLower.includes(p));
+          break;
+        }
         case "matchesWildcard": resResult = wildcardToRegex(valLower).test(labelLower); break;
         case "notMatchesWildcard": resResult = !wildcardToRegex(valLower).test(labelLower); break;
         default: resResult = false;
