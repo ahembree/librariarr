@@ -97,6 +97,7 @@ interface ActionItem {
     playCount?: number;
     lastPlayedAt?: string | null;
     addedAt?: string | null;
+    matchedEpisodes?: number | null;
     servers?: Array<{ serverId: string; serverName: string; serverType: string }>;
   };
 }
@@ -434,7 +435,7 @@ function VirtualizedActionTable({
                         audienceRating: action.mediaItem.audienceRating,
                         ratingImage: action.mediaItem.ratingImage,
                         audienceRatingImage: action.mediaItem.audienceRatingImage,
-                        duration: action.mediaItem.duration,
+                        duration: action.mediaItem.matchedEpisodes ? undefined : action.mediaItem.duration,
                         resolution: action.mediaItem.resolution,
                         dynamicRange: action.mediaItem.dynamicRange,
                         audioProfile: action.mediaItem.audioProfile,
@@ -444,6 +445,8 @@ function VirtualizedActionTable({
                         playCount: action.mediaItem.playCount,
                         lastPlayedAt: action.mediaItem.lastPlayedAt,
                         addedAt: action.mediaItem.addedAt,
+                        episodeCount: action.mediaItem.type === "SERIES" ? action.mediaItem.matchedEpisodes ?? undefined : undefined,
+                        trackCount: action.mediaItem.type === "MUSIC" ? action.mediaItem.matchedEpisodes ?? undefined : undefined,
                         servers: action.mediaItem.servers,
                       }}
                     />
@@ -582,7 +585,7 @@ function PendingActionCardGrid({
                               audienceRating: mi.audienceRating,
                               ratingImage: mi.ratingImage,
                               audienceRatingImage: mi.audienceRatingImage,
-                              duration: mi.duration,
+                              duration: mi.matchedEpisodes ? undefined : mi.duration,
                               resolution: mi.resolution,
                               dynamicRange: mi.dynamicRange,
                               audioProfile: mi.audioProfile,
@@ -592,6 +595,8 @@ function PendingActionCardGrid({
                               playCount: mi.playCount,
                               lastPlayedAt: mi.lastPlayedAt,
                               addedAt: mi.addedAt,
+                              episodeCount: mi.type === "SERIES" ? mi.matchedEpisodes ?? undefined : undefined,
+                              trackCount: mi.type === "MUSIC" ? mi.matchedEpisodes ?? undefined : undefined,
                               servers: mi.servers,
                             }}
                           />
@@ -955,7 +960,21 @@ export default function PendingActionsPage() {
       const response = await fetch(`/api/media/${action.mediaItem.id}`);
       if (response.ok) {
         const data = await response.json();
-        setSelectedItem(data.item ?? data);
+        const item = data.item ?? data;
+        // For series/music with aggregated data, overlay series-level values
+        // so the detail panel shows totals instead of single-episode data
+        if (action.mediaItem.matchedEpisodes) {
+          item.fileSize = action.mediaItem.fileSize ? BigInt(action.mediaItem.fileSize) : item.fileSize;
+          item.playCount = action.mediaItem.playCount ?? item.playCount;
+          item.lastPlayedAt = action.mediaItem.lastPlayedAt ?? item.lastPlayedAt;
+          item.matchedEpisodes = action.mediaItem.matchedEpisodes;
+          // Use series title instead of episode title
+          if (item.parentTitle) {
+            item.title = item.parentTitle;
+            item.parentTitle = null;
+          }
+        }
+        setSelectedItem(item);
       }
     } catch (error) {
       console.error("Failed to fetch media item:", error);
