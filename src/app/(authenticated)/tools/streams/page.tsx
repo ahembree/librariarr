@@ -849,191 +849,195 @@ function StreamDetailPanel({
     <div className="flex-1 overflow-y-auto p-4 space-y-5">
       {/* Overview */}
       {(session.tagline || session.summary || session.contentRating || session.studio || session.genres) && (
-        <div className="space-y-2">
-          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Overview</h4>
+        <section>
+          <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            <Film className="h-3.5 w-3.5" />
+            Overview
+          </h3>
           {session.tagline && (
             <p className="text-xs italic text-muted-foreground">{session.tagline}</p>
           )}
           {session.summary && (
-            <p className="text-sm text-muted-foreground leading-relaxed">{session.summary}</p>
+            <p className="text-sm text-muted-foreground leading-relaxed mt-1">{session.summary}</p>
           )}
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap gap-1.5 mt-2">
             {session.contentRating && (
-              <Badge variant="outline" className="text-[10px]">{session.contentRating}</Badge>
+              <ColorChip className="border-border">{session.contentRating}</ColorChip>
             )}
             {session.studio && (
-              <Badge variant="secondary" className="text-[10px]">{session.studio}</Badge>
+              <ColorChip className="bg-secondary text-secondary-foreground">{session.studio}</ColorChip>
             )}
             {session.rating != null && (
-              <Badge variant="secondary" className="text-[10px]">Rating: {session.rating.toFixed(1)}</Badge>
+              <ColorChip className="bg-secondary text-secondary-foreground">Rating: {session.rating.toFixed(1)}</ColorChip>
             )}
             {session.audienceRating != null && (
-              <Badge variant="secondary" className="text-[10px]">Audience: {session.audienceRating.toFixed(1)}</Badge>
+              <ColorChip className="bg-secondary text-secondary-foreground">Audience: {session.audienceRating.toFixed(1)}</ColorChip>
             )}
           </div>
           {session.genres && session.genres.length > 0 && (
-            <div className="flex flex-wrap gap-1">
+            <div className="flex flex-wrap gap-1 mt-2">
               {session.genres.map(g => (
-                <Badge key={g} variant="secondary" className="text-[10px]">{g}</Badge>
+                <ColorChip key={g} className="bg-secondary text-secondary-foreground">{g}</ColorChip>
               ))}
             </div>
           )}
-        </div>
+        </section>
       )}
 
       {/* Stream Info */}
-      <div className="space-y-2">
-        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Stream Info</h4>
+      <section>
+        <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          <Radio className="h-3.5 w-3.5" />
+          Stream Info
+        </h3>
         <div className="flex flex-wrap gap-1.5">
-          <Badge variant="secondary" className="text-[10px] gap-1">
+          <ColorChip className="bg-secondary text-secondary-foreground gap-1">
             <User className="h-2.5 w-2.5" />
             {session.username}
-          </Badge>
-          <Badge variant="secondary" className="text-[10px]">
+          </ColorChip>
+          <ColorChip className="bg-secondary text-secondary-foreground">
             {session.player.product} on {session.player.platform}
-          </Badge>
+          </ColorChip>
           {session.player.address && (
-            <Badge variant="secondary" className="text-[10px] gap-1">
+            <ColorChip className="bg-secondary text-secondary-foreground gap-1">
               <Globe className="h-2.5 w-2.5" />
               {session.player.address}
-            </Badge>
+            </ColorChip>
           )}
-          <Badge variant="secondary" className="text-[10px] gap-1">
+          <ColorChip className="bg-secondary text-secondary-foreground gap-1">
             {session.player.local ? <Wifi className="h-2.5 w-2.5" /> : <WifiOff className="h-2.5 w-2.5" />}
             {session.player.local ? "LAN" : "WAN"}
-          </Badge>
+          </ColorChip>
           {session.session.bandwidth > 0 && (
-            <Badge variant="secondary" className="text-[10px]">
+            <ColorChip className="bg-secondary text-secondary-foreground">
               {formatBandwidth(session.session.bandwidth)}
-            </Badge>
+            </ColorChip>
           )}
-          <Badge variant="secondary" className="text-[10px] gap-1">
+          <ColorChip className={`gap-1 ${(SERVER_TYPE_STYLES[session.serverType] ?? DEFAULT_SERVER_STYLE).classes}`}>
             <Server className="h-2.5 w-2.5" />
-            {session.serverType !== "PLEX" && (
-              <span className="font-semibold">{session.serverType === "JELLYFIN" ? "JF" : session.serverType === "EMBY" ? "Emby" : ""} &middot;</span>
-            )}
             {session.serverName}
-          </Badge>
+          </ColorChip>
           {session.startedAt > 0 && (
-            <Badge variant="secondary" className="text-[10px] gap-1">
+            <ColorChip className="bg-secondary text-secondary-foreground gap-1">
               <Clock className="h-2.5 w-2.5" />
               Started {formatTime(session.startedAt)}
-            </Badge>
+            </ColorChip>
           )}
           {session.session.location && (
-            <Badge variant="secondary" className="text-[10px]">
+            <ColorChip className="bg-secondary text-secondary-foreground">
               {session.session.location}
-            </Badge>
+            </ColorChip>
           )}
         </div>
-      </div>
+      </section>
 
       {/* Media Info */}
       {(session.mediaWidth || session.videoCodec || session.audioCodec || session.container) && (
-        <div className="space-y-2">
-          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Media Info</h4>
+        <section>
+          <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            <Monitor className="h-3.5 w-3.5" />
+            Media Info
+          </h3>
           <div className="flex flex-wrap gap-1.5">
             {session.mediaWidth && session.mediaHeight && (
-              <Badge variant="outline" className="text-[10px]">
+              <ColorChip className="border-border">
                 {session.mediaWidth}x{session.mediaHeight}
-              </Badge>
+              </ColorChip>
             )}
             {session.videoResolution && (
-              <Badge
-                variant="secondary"
-                className="text-[10px]"
-                style={getBadgeStyle("resolution", normalizeResolutionLabel(session.videoResolution))}
-              >
+              <ColorChip style={getBadgeStyle("resolution", normalizeResolutionLabel(session.videoResolution))}>
                 {normalizeResolutionLabel(session.videoResolution)}
-              </Badge>
+              </ColorChip>
             )}
             {session.aspectRatio && (
-              <Badge variant="secondary" className="text-[10px]">
+              <ColorChip className="bg-secondary text-secondary-foreground">
                 {session.aspectRatio}
-              </Badge>
+              </ColorChip>
             )}
             {session.videoCodec && (
-              <Badge variant="secondary" className="text-[10px]">
+              <ColorChip className="bg-secondary text-secondary-foreground">
                 Video: {session.videoCodec.toUpperCase()}
                 {session.videoProfile ? ` (${session.videoProfile})` : ""}
-              </Badge>
+              </ColorChip>
             )}
             {session.audioCodec && (
-              <Badge
-                variant="secondary"
-                className="text-[10px]"
+              <ColorChip
                 style={session.audioProfile ? getBadgeStyle("audioProfile", session.audioProfile) : undefined}
+                className={session.audioProfile ? undefined : "bg-secondary text-secondary-foreground"}
               >
                 Audio: {session.audioCodec.toUpperCase()}
                 {session.audioProfile ? ` (${session.audioProfile})` : ""}
-              </Badge>
+              </ColorChip>
             )}
             {session.audioChannels != null && (
-              <Badge variant="secondary" className="text-[10px]">
+              <ColorChip className="bg-secondary text-secondary-foreground">
                 {session.audioChannels}ch
-              </Badge>
+              </ColorChip>
             )}
             {session.container && (
-              <Badge variant="secondary" className="text-[10px]">
+              <ColorChip className="bg-secondary text-secondary-foreground">
                 {session.container.toUpperCase()}
-              </Badge>
+              </ColorChip>
             )}
             {session.bitrate != null && (
-              <Badge variant="secondary" className="text-[10px]">
+              <ColorChip className="bg-secondary text-secondary-foreground">
                 {session.bitrate > 1000
                   ? `${(session.bitrate / 1000).toFixed(1)} Mbps`
                   : `${session.bitrate} kbps`}
-              </Badge>
+              </ColorChip>
             )}
             {session.optimizedForStreaming != null && (
-              <Badge variant="secondary" className="text-[10px]">
+              <ColorChip className="bg-secondary text-secondary-foreground">
                 {session.optimizedForStreaming ? "Optimized" : "Not Optimized"}
-              </Badge>
+              </ColorChip>
             )}
             {session.partSize != null && (
-              <Badge variant="secondary" className="text-[10px]">
+              <ColorChip className="bg-secondary text-secondary-foreground">
                 {session.partSize > 1073741824
                   ? `${(session.partSize / 1073741824).toFixed(1)} GB`
                   : `${(session.partSize / 1048576).toFixed(0)} MB`}
-              </Badge>
+              </ColorChip>
             )}
           </div>
           {session.partFile && (
             <p className="text-[11px] text-muted-foreground break-all mt-1">{session.partFile}</p>
           )}
-        </div>
+        </section>
       )}
 
       {/* Transcode Details */}
       {session.transcoding && (session.transcoding.videoDecision === "transcode" || session.transcoding.audioDecision === "transcode") && (
-        <div className="space-y-2">
-          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Transcode Details</h4>
+        <section>
+          <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            <Cpu className="h-3.5 w-3.5" />
+            Transcode Details
+          </h3>
           <div className="flex flex-wrap gap-1.5">
             {session.transcoding.sourceVideoCodec && (
-              <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-400 border-amber-500/30">
+              <ColorChip className="bg-amber-500/10 text-amber-400 border-amber-500/30">
                 Video: {session.transcoding.sourceVideoCodec.toUpperCase()} &rarr; {session.transcoding.videoDecision}
-              </Badge>
+              </ColorChip>
             )}
             {session.transcoding.sourceAudioCodec && (
-              <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-400 border-amber-500/30">
+              <ColorChip className="bg-amber-500/10 text-amber-400 border-amber-500/30">
                 Audio: {session.transcoding.sourceAudioCodec.toUpperCase()} &rarr; {session.transcoding.audioDecision}
-              </Badge>
+              </ColorChip>
             )}
             {session.transcoding.transcodeHwRequested !== undefined && (
-              <Badge variant="secondary" className="text-[10px]">
+              <ColorChip className="bg-secondary text-secondary-foreground">
                 HW Accel: {session.transcoding.transcodeHwRequested ? "Yes" : "No"}
-              </Badge>
+              </ColorChip>
             )}
             {session.transcoding.speed !== undefined && (
-              <Badge variant="secondary" className="text-[10px]">
+              <ColorChip className="bg-secondary text-secondary-foreground">
                 Speed: {session.transcoding.speed.toFixed(1)}x
-              </Badge>
+              </ColorChip>
             )}
-            <Badge variant="secondary" className="text-[10px]">
+            <ColorChip className="bg-secondary text-secondary-foreground">
               Throttled: {session.transcoding.throttled ? "Yes" : "No"}
-            </Badge>
+            </ColorChip>
           </div>
-        </div>
+        </section>
       )}
     </div>
   );
