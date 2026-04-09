@@ -45,13 +45,14 @@ export async function scheduleActionsForRuleSet(
   matchedItems: Record<string, unknown>[],
   episodeIdMap: Map<string, string[]>,
 ): Promise<void> {
-  // If actions are disabled, delete all pending actions and return early
-  if (!ruleSet.actionEnabled) {
+  // If actions are disabled or no action type is configured, delete all pending actions and return early
+  if (!ruleSet.actionEnabled || !ruleSet.actionType) {
     const deleted = await prisma.lifecycleAction.deleteMany({
       where: { ruleSetId: ruleSet.id, status: "PENDING" },
     });
     if (deleted.count > 0) {
-      logger.info("Lifecycle", `Deleted ${deleted.count} pending actions for rule set "${ruleSet.name}" (actions disabled)`);
+      const reason = !ruleSet.actionEnabled ? "actions disabled" : "no action type configured";
+      logger.info("Lifecycle", `Deleted ${deleted.count} pending actions for rule set "${ruleSet.name}" (${reason})`);
     }
     return;
   }
@@ -73,84 +74,81 @@ export async function scheduleActionsForRuleSet(
     logger.info("Lifecycle", `Deleted ${stalePendingIds.length} pending actions for items no longer matching rule set "${ruleSet.name}"`);
   }
 
-  // Create lifecycle actions (only when actionEnabled)
-  if (ruleSet.actionEnabled) {
-    // Deduplicate: clean up any duplicate PENDING actions (from concurrent runs)
-    const allPending = await prisma.lifecycleAction.findMany({
-      where: { ruleSetId: ruleSet.id, status: "PENDING" },
-      orderBy: { createdAt: "asc" },
-      select: { id: true, mediaItemId: true },
-    });
-    const seenItems = new Set<string>();
-    const duplicateIds: string[] = [];
-    for (const action of allPending) {
-      if (!action.mediaItemId) continue;
-      if (seenItems.has(action.mediaItemId)) {
-        duplicateIds.push(action.id);
-      }
-      seenItems.add(action.mediaItemId);
+  // Deduplicate: clean up any duplicate PENDING actions (from concurrent runs)
+  const allPending = await prisma.lifecycleAction.findMany({
+    where: { ruleSetId: ruleSet.id, status: "PENDING" },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, mediaItemId: true },
+  });
+  const seenItems = new Set<string>();
+  const duplicateIds: string[] = [];
+  for (const action of allPending) {
+    if (!action.mediaItemId) continue;
+    if (seenItems.has(action.mediaItemId)) {
+      duplicateIds.push(action.id);
     }
-    if (duplicateIds.length > 0) {
-      await prisma.lifecycleAction.deleteMany({ where: { id: { in: duplicateIds } } });
-      logger.info("Lifecycle", `Removed ${duplicateIds.length} duplicate pending actions for rule set "${ruleSet.name}"`);
-    }
+    seenItems.add(action.mediaItemId);
+  }
+  if (duplicateIds.length > 0) {
+    await prisma.lifecycleAction.deleteMany({ where: { id: { in: duplicateIds } } });
+    logger.info("Lifecycle", `Removed ${duplicateIds.length} duplicate pending actions for rule set "${ruleSet.name}"`);
+  }
 
-    const matchedItemIds = matchedItems.map((item) => item.id as string);
+  const matchedItemIds = matchedItems.map((item) => item.id as string);
 
-    // Skip items that already have:
-    // - A PENDING action (prevents duplicates)
-    // - A COMPLETED or FAILED non-delete action (prevents infinite loop —
-    //   unmonitor/do-nothing items always still exist after execution)
-    // Allow re-scheduling past completed DELETE actions: if the item still
-    // matches after a "completed" deletion, the deletion likely failed
-    // silently (e.g. Arr removed its record but the file remained on disk
-    // due to permissions).
-    const existingActions = await prisma.lifecycleAction.findMany({
-      where: {
+  // Skip items that already have:
+  // - A PENDING action (prevents duplicates)
+  // - A COMPLETED or FAILED non-delete action (prevents infinite loop —
+  //   unmonitor/do-nothing items always still exist after execution)
+  // Allow re-scheduling past completed DELETE actions: if the item still
+  // matches after a "completed" deletion, the deletion likely failed
+  // silently (e.g. Arr removed its record but the file remained on disk
+  // due to permissions).
+  const existingActions = await prisma.lifecycleAction.findMany({
+    where: {
+      ruleSetId: ruleSet.id,
+      mediaItemId: { in: matchedItemIds },
+      OR: [
+        { status: "PENDING" },
+        {
+          status: { in: ["COMPLETED", "FAILED"] },
+          actionType: { not: { contains: "DELETE" } },
+        },
+      ],
+    },
+    select: { mediaItemId: true },
+  });
+  const existingItemIds = new Set(existingActions.map((a) => a.mediaItemId));
+
+  const newItems = matchedItems.filter((item) => !existingItemIds.has(item.id as string));
+
+  if (newItems.length > 0) {
+    const scheduledFor = new Date();
+    scheduledFor.setDate(scheduledFor.getDate() + ruleSet.actionDelayDays);
+
+    await prisma.lifecycleAction.createMany({
+      data: newItems.map((item) => ({
+        userId: ruleSet.userId,
+        mediaItemId: item.id as string,
+        mediaItemTitle: (item.title as string) ?? null,
+        mediaItemParentTitle: (item.parentTitle as string | null) ?? null,
         ruleSetId: ruleSet.id,
-        mediaItemId: { in: matchedItemIds },
-        OR: [
-          { status: "PENDING" },
-          {
-            status: { in: ["COMPLETED", "FAILED"] },
-            actionType: { not: { contains: "DELETE" } },
-          },
-        ],
-      },
-      select: { mediaItemId: true },
+        ruleSetName: ruleSet.name,
+        ruleSetType: ruleSet.type,
+        actionType: ruleSet.actionType!,
+        addImportExclusion: ruleSet.addImportExclusion,
+        searchAfterDelete: ruleSet.searchAfterDelete,
+        matchedMediaItemIds: episodeIdMap.get(item.id as string) ?? [],
+        addArrTags: ruleSet.addArrTags,
+        removeArrTags: ruleSet.removeArrTags,
+        scheduledFor,
+        arrInstanceId: ruleSet.arrInstanceId,
+      })),
+      skipDuplicates: true,
     });
-    const existingItemIds = new Set(existingActions.map((a) => a.mediaItemId));
 
-    const newItems = matchedItems.filter((item) => !existingItemIds.has(item.id as string));
-
-    if (newItems.length > 0) {
-      const scheduledFor = new Date();
-      scheduledFor.setDate(scheduledFor.getDate() + ruleSet.actionDelayDays);
-
-      await prisma.lifecycleAction.createMany({
-        data: newItems.map((item) => ({
-          userId: ruleSet.userId,
-          mediaItemId: item.id as string,
-          mediaItemTitle: (item.title as string) ?? null,
-          mediaItemParentTitle: (item.parentTitle as string | null) ?? null,
-          ruleSetId: ruleSet.id,
-          ruleSetName: ruleSet.name,
-          ruleSetType: ruleSet.type,
-          actionType: ruleSet.actionType!,
-          addImportExclusion: ruleSet.addImportExclusion,
-          searchAfterDelete: ruleSet.searchAfterDelete,
-          matchedMediaItemIds: episodeIdMap.get(item.id as string) ?? [],
-          addArrTags: ruleSet.addArrTags,
-          removeArrTags: ruleSet.removeArrTags,
-          scheduledFor,
-          arrInstanceId: ruleSet.arrInstanceId,
-        })),
-        skipDuplicates: true,
-      });
-
-      for (const item of newItems) {
-        logger.info("Lifecycle", `Scheduled ${ruleSet.actionType} for "${item.title}" on ${scheduledFor.toISOString()}`);
-      }
+    for (const item of newItems) {
+      logger.info("Lifecycle", `Scheduled ${ruleSet.actionType} for "${item.title}" on ${scheduledFor.toISOString()}`);
     }
   }
 }

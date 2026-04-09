@@ -1,12 +1,16 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
-import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
+import { callRoute, expectJson, createTestUser, createTestRuleSet } from "../../setup/test-helpers";
 
 // Mock the lifecycle processor
 const mockRunDetection = vi.hoisted(() => vi.fn());
+const mockScheduleActionsForRuleSet = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/lifecycle/detect-matches", () => ({
   runDetection: mockRunDetection,
+}));
+vi.mock("@/lib/lifecycle/processor", () => ({
+  scheduleActionsForRuleSet: mockScheduleActionsForRuleSet,
 }));
 
 // Critical: redirect prisma to test database
@@ -107,5 +111,109 @@ describe("POST /api/lifecycle/rules/run", () => {
     expect(body.ruleMatches).toEqual([]);
 
     expect(mockRunDetection).toHaveBeenCalledWith(user.id, undefined, false);
+  });
+
+  it("schedules actions for a specific rule set when processActions is true", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    const ruleSet = await createTestRuleSet(user.id, {
+      actionEnabled: true,
+      actionType: "DELETE_RADARR",
+    });
+
+    mockRunDetection.mockResolvedValue([
+      {
+        ruleSet: { id: ruleSet.id, name: ruleSet.name },
+        items: [{ id: "item1", title: "Movie 1" }],
+        count: 1,
+      },
+    ]);
+    mockScheduleActionsForRuleSet.mockResolvedValue(undefined);
+
+    const response = await callRoute(POST, {
+      url: "/api/lifecycle/rules/run",
+      method: "POST",
+      body: { ruleSetId: ruleSet.id, processActions: true },
+    });
+    await expectJson(response, 200);
+
+    expect(mockScheduleActionsForRuleSet).toHaveBeenCalledTimes(1);
+    expect(mockScheduleActionsForRuleSet).toHaveBeenCalledWith(
+      expect.objectContaining({ id: ruleSet.id }),
+      expect.arrayContaining([expect.objectContaining({ id: "item1" })]),
+      expect.any(Map),
+    );
+  });
+
+  it("schedules actions for all rule sets when processActions is true without ruleSetId", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    const ruleSet1 = await createTestRuleSet(user.id, {
+      name: "Rule 1",
+      actionEnabled: true,
+      actionType: "DELETE_RADARR",
+    });
+    const ruleSet2 = await createTestRuleSet(user.id, {
+      name: "Rule 2",
+      actionEnabled: true,
+      actionType: "UNMONITOR_RADARR",
+    });
+
+    mockRunDetection.mockResolvedValue([
+      {
+        ruleSet: { id: ruleSet1.id, name: "Rule 1" },
+        items: [{ id: "item1", title: "Movie 1" }],
+        count: 1,
+      },
+      {
+        ruleSet: { id: ruleSet2.id, name: "Rule 2" },
+        items: [{ id: "item2", title: "Movie 2" }],
+        count: 1,
+      },
+    ]);
+    mockScheduleActionsForRuleSet.mockResolvedValue(undefined);
+
+    const response = await callRoute(POST, {
+      url: "/api/lifecycle/rules/run",
+      method: "POST",
+      body: { fullReEval: true, processActions: true },
+    });
+    await expectJson(response, 200);
+
+    expect(mockScheduleActionsForRuleSet).toHaveBeenCalledTimes(2);
+    expect(mockScheduleActionsForRuleSet).toHaveBeenCalledWith(
+      expect.objectContaining({ id: ruleSet1.id }),
+      expect.arrayContaining([expect.objectContaining({ id: "item1" })]),
+      expect.any(Map),
+    );
+    expect(mockScheduleActionsForRuleSet).toHaveBeenCalledWith(
+      expect.objectContaining({ id: ruleSet2.id }),
+      expect.arrayContaining([expect.objectContaining({ id: "item2" })]),
+      expect.any(Map),
+    );
+  });
+
+  it("does not schedule actions when processActions is false", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    mockRunDetection.mockResolvedValue([
+      {
+        ruleSet: { id: "rs1", name: "Rule 1" },
+        items: [{ id: "item1", title: "Movie 1" }],
+        count: 1,
+      },
+    ]);
+
+    const response = await callRoute(POST, {
+      url: "/api/lifecycle/rules/run",
+      method: "POST",
+      body: { ruleSetId: "rs1" },
+    });
+    await expectJson(response, 200);
+
+    expect(mockScheduleActionsForRuleSet).not.toHaveBeenCalled();
   });
 });
