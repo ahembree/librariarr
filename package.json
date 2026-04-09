@@ -73,7 +73,7 @@
     "cron-parser": "^5.5.0",
     "embla-carousel-react": "^8.6.0",
     "iron-session": "^8.0.4",
-    "lucide-react": "^1.7.0",
+    "lucide-react": "^1.8.0",
     "next": "16.2.1",
     "node-cron": "^4.2.1",
     "pg": "^8.20.0",
