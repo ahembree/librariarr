@@ -9,6 +9,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ColorChip } from "@/components/color-chip";
+import { ServerTypeChip } from "@/components/server-type-chip";
 import { Input } from "@/components/ui/input";
 import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
@@ -475,9 +476,7 @@ export function ServersTab({
                         <CardTitle className="flex flex-wrap items-center gap-2">
                           <Server className="h-5 w-5 shrink-0" />
                           <span className="truncate">{server.name}</span>
-                          <ColorChip className="shrink-0 text-xs font-normal border-border text-muted-foreground">
-                            {server.type === "PLEX" ? "Plex" : server.type === "JELLYFIN" ? "Jellyfin" : server.type === "EMBY" ? "Emby" : server.type}
-                          </ColorChip>
+                          <ServerTypeChip type={server.type} className="shrink-0" />
                           {!server.enabled && (
                             <ColorChip className="shrink-0 text-xs font-normal bg-amber-500/20 text-amber-400">
                               Disabled
