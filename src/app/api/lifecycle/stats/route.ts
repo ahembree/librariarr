@@ -80,10 +80,25 @@ export async function GET() {
     }),
   ]);
 
-  // Build set of (ruleSetId:mediaItemId) that already have an action to avoid double-counting
+  // Build set of (ruleSetId:mediaItemId) that already have an action to avoid double-counting.
+  // Include PENDING delete actions plus COMPLETED/FAILED non-delete actions — the latter
+  // won't be re-scheduled (items still exist after unmonitor/do-nothing), so their
+  // RuleMatch entries should not inflate the pending count.
   const actionedPairs = new Set(
     pendingActions.map((a) => `${a.ruleSetId}:${a.mediaItemId}`),
   );
+
+  const completedNonDeleteActions = await prisma.lifecycleAction.findMany({
+    where: {
+      userId: session.userId!,
+      status: { in: ["COMPLETED", "FAILED"] },
+      actionType: { not: { contains: "DELETE" } },
+    },
+    select: { ruleSetId: true, mediaItemId: true },
+  });
+  for (const a of completedNonDeleteActions) {
+    actionedPairs.add(`${a.ruleSetId}:${a.mediaItemId}`);
+  }
 
   // Compute pending deletion bytes from actual PENDING actions + upcoming matches
   // Collect all member IDs that need size lookups

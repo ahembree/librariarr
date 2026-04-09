@@ -776,6 +776,7 @@ export default function PendingActionsPage() {
     try {
       await fetch(`/api/lifecycle/actions/${id}`, { method: "DELETE" });
       await fetchActions();
+      void fetchDeletionStats();
     } catch (error) {
       console.error("Failed to remove action:", error);
     }
@@ -800,6 +801,7 @@ export default function PendingActionsPage() {
       const params = retrySkipTitle ? "?skipTitleValidation=true" : "";
       await fetch(`/api/lifecycle/actions/${action.id}${params}`, { method: "POST" });
       await fetchActions();
+      void fetchDeletionStats();
     } catch (error) {
       console.error("Failed to retry action:", error);
     } finally {
@@ -844,6 +846,7 @@ export default function PendingActionsPage() {
         toast.error(data.error || "Failed to execute actions");
       }
       await fetchActions();
+      void fetchDeletionStats();
     } catch (error) {
       setExecuteResults((prev) => ({
         ...prev,
@@ -876,6 +879,7 @@ export default function PendingActionsPage() {
         });
       }
       await fetchActions();
+      void fetchDeletionStats();
     } catch (error) {
       console.error("Failed to execute item:", error);
     } finally {
@@ -924,6 +928,7 @@ export default function PendingActionsPage() {
       if (response.ok) {
         setExceptedItemIds((prev) => new Set(prev).add(mediaItemId));
         await fetchActions();
+        void fetchDeletionStats();
       }
     } catch (error) {
       console.error("Failed to exclude item:", error);
@@ -1125,18 +1130,21 @@ export default function PendingActionsPage() {
                                 ))}
                               </div>
                             )}
-                            {/* Per-rule deletion stats */}
+                            {/* Per-rule deletion stats — contextual to active tab */}
                             {(() => {
                               const rs = ruleSetStatsMap.get(group.ruleSet.id);
                               if (!rs || (rs.deletedCount === 0 && rs.pendingCount === 0)) return null;
+                              const showPending = statusFilter === "PENDING" || statusFilter === "ALL";
+                              const showDeleted = statusFilter !== "PENDING";
+                              if ((!showPending || rs.pendingCount === 0) && (!showDeleted || rs.deletedCount === 0)) return null;
                               return (
                                 <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                                  {rs.pendingCount > 0 && (
+                                  {showPending && rs.pendingCount > 0 && (
                                     <span>
                                       <span className="text-amber-400">{formatFileSize(rs.pendingBytes)}</span> pending
                                     </span>
                                   )}
-                                  {rs.deletedCount > 0 && (
+                                  {showDeleted && rs.deletedCount > 0 && (
                                     <span>
                                       {formatFileSize(rs.deletedBytes)} deleted ({rs.deletedCount})
                                     </span>
