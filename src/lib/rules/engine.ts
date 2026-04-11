@@ -2434,6 +2434,7 @@ export async function evaluateSeriesScope(
       latestEpisodeViewDate: Date | null;
       lastEpisodeAddedAt: Date | null;
       lastEpisodeAiredAt: Date | null;
+      memberIds: string[];
     }
   > = [];
 
@@ -2502,6 +2503,7 @@ export async function evaluateSeriesScope(
       lastEpisodeAddedAt: latestEpisodeAdded,
       lastEpisodeAiredAt: latestEpisodeAired,
       allStreams,
+      memberIds: episodes.map((ep) => ep.id),
     });
   }
 
@@ -2566,6 +2568,7 @@ export async function evaluateSeriesScope(
     ...item,
     fileSize: item.fileSize ?? null,
     matchedEpisodes: item.episodeCount,
+    memberIds: item.memberIds,
     // Expose computed fields so getMatchedCriteriaForItems can evaluate
     // series-scope rules (these only exist on the enriched evaluation object,
     // not on the raw aggregated series record)
@@ -2626,7 +2629,7 @@ export async function evaluateMusicScope(
   // Aggregate each artist into a single record for rule evaluation
   type TrackRow = (typeof allTracks)[0];
   const aggregated: Array<
-    Omit<TrackRow, "fileSize"> & { trackCount: number; fileSize: string | null; allStreams?: unknown[] }
+    Omit<TrackRow, "fileSize"> & { trackCount: number; fileSize: string | null; allStreams?: unknown[]; memberIds: string[] }
   > = [];
 
   for (const [, tracks] of artistMap) {
@@ -2668,6 +2671,7 @@ export async function evaluateMusicScope(
       addedAt: earliestAdded,
       trackCount: tracks.length,
       allStreams,
+      memberIds: tracks.map((t) => t.id),
     });
   }
 
@@ -2706,6 +2710,7 @@ export async function evaluateMusicScope(
     ...item,
     fileSize: item.fileSize ?? null,
     matchedEpisodes: item.trackCount,
+    memberIds: item.memberIds,
     // Expose allStreams as streams so getMatchedCriteriaForItems can evaluate
     // stream-based rules against the aggregated artist record
     streams: item.allStreams ?? [],

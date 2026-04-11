@@ -25,6 +25,7 @@ interface ActionItemMediaItem {
   playCount: number;
   lastPlayedAt: string | null;
   addedAt: string | null;
+  matchedEpisodes: number | null;
   servers?: Array<{ serverId: string; serverName: string; serverType: string }>;
 }
 
@@ -98,6 +99,7 @@ function serializeMediaItem(mi: SelectedMediaItem): ActionItemMediaItem {
     studio: mi.studio, playCount: mi.playCount,
     lastPlayedAt: mi.lastPlayedAt?.toISOString() ?? null,
     addedAt: mi.addedAt?.toISOString() ?? null,
+    matchedEpisodes: null,
     servers: ms ? [{ serverId: ms.id, serverName: ms.name, serverType: ms.type }] : undefined,
   };
 }
@@ -126,7 +128,7 @@ function buildActionMediaItem(
     thumbUrl: null, year: null, summary: null, contentRating: null, rating: null, ratingImage: null,
     audienceRating: null, audienceRatingImage: null, duration: null, resolution: null, dynamicRange: null,
     audioProfile: null, fileSize: null, genres: null, studio: null,
-    playCount: 0, lastPlayedAt: null, addedAt: null,
+    playCount: 0, lastPlayedAt: null, addedAt: null, matchedEpisodes: null,
   };
   if (ruleSetType === "SERIES" && parentTitle) {
     return { id: null, title: parentTitle, parentTitle: null, type: ruleSetType, ...nullFields };
@@ -240,6 +242,46 @@ async function handlePendingGrouped(userId: string) {
     (m) => !actionedPairs.has(`${m.ruleSetId}:${m.mediaItemId}`)
   );
 
+  // Pre-aggregate series/music member data so response has series-level totals
+  // instead of single-episode data for the representative item
+  const allMemberIds = [
+    ...pendingActions.flatMap((a) => a.matchedMediaItemIds),
+    ...filteredUpcoming.flatMap((m) => {
+      const data = m.itemData as Record<string, unknown> | null;
+      return (data?.memberIds as string[] | undefined) ?? [];
+    }),
+  ];
+  let memberDataMap = new Map<string, { fileSize: bigint; playCount: number; lastPlayedAt: Date | null }>();
+  if (allMemberIds.length > 0) {
+    const members = await prisma.mediaItem.findMany({
+      where: { id: { in: allMemberIds } },
+      select: { id: true, fileSize: true, playCount: true, lastPlayedAt: true },
+    });
+    memberDataMap = new Map(members.map((m) => [m.id, { fileSize: m.fileSize ?? BigInt(0), playCount: m.playCount, lastPlayedAt: m.lastPlayedAt }]));
+  }
+
+  /** Overlay aggregated series/music data onto the media item response */
+  function applyGroupAggregation(mi: ActionItemMediaItem, memberIds: string[]): ActionItemMediaItem {
+    if (memberIds.length === 0) return mi;
+    let totalSize = BigInt(0);
+    let totalPlays = 0;
+    let latest: Date | null = null;
+    for (const id of memberIds) {
+      const d = memberDataMap.get(id);
+      if (!d) continue;
+      totalSize += d.fileSize;
+      totalPlays += d.playCount;
+      if (d.lastPlayedAt && (!latest || d.lastPlayedAt > latest)) latest = d.lastPlayedAt;
+    }
+    return {
+      ...mi,
+      fileSize: totalSize > BigInt(0) ? totalSize.toString() : mi.fileSize,
+      playCount: totalPlays > 0 ? totalPlays : mi.playCount,
+      lastPlayedAt: latest?.toISOString() ?? mi.lastPlayedAt,
+      matchedEpisodes: memberIds.length,
+    };
+  }
+
   // 3. Group by rule set
   const groupMap = new Map<string, RuleSetGroup>();
 
@@ -249,6 +291,7 @@ async function handlePendingGrouped(userId: string) {
       groupMap.set(a.ruleSetId!, { ruleSet: a.ruleSet!, items: [], count: 0 });
     }
     const group = groupMap.get(a.ruleSetId!)!;
+    const mi = buildActionMediaItem(a, a.ruleSet!.type);
     group.items.push({
       id: a.id,
       actionType: a.actionType,
@@ -261,7 +304,7 @@ async function handlePendingGrouped(userId: string) {
       error: a.error,
       createdAt: a.createdAt.toISOString(),
       estimated: false,
-      mediaItem: buildActionMediaItem(a, a.ruleSet!.type),
+      mediaItem: applyGroupAggregation(mi, a.matchedMediaItemIds),
     });
     group.count++;
   }
@@ -274,6 +317,15 @@ async function handlePendingGrouped(userId: string) {
     const group = groupMap.get(m.ruleSetId)!;
     const estimatedDate = new Date(m.detectedAt);
     estimatedDate.setDate(estimatedDate.getDate() + m.ruleSet.actionDelayDays);
+    const mi = buildActionMediaItem({
+      mediaItemId: m.mediaItemId,
+      mediaItemTitle: m.mediaItem.title,
+      mediaItemParentTitle: m.mediaItem.parentTitle,
+      ruleSetType: m.ruleSet.type,
+      mediaItem: m.mediaItem,
+    }, m.ruleSet.type);
+    const data = m.itemData as Record<string, unknown> | null;
+    const memberIds = (data?.memberIds as string[] | undefined) ?? [];
 
     group.items.push({
       id: `rm_${m.id}`,
@@ -287,13 +339,7 @@ async function handlePendingGrouped(userId: string) {
       error: null,
       createdAt: m.detectedAt.toISOString(),
       estimated: true,
-      mediaItem: buildActionMediaItem({
-        mediaItemId: m.mediaItemId,
-        mediaItemTitle: m.mediaItem.title,
-        mediaItemParentTitle: m.mediaItem.parentTitle,
-        ruleSetType: m.ruleSet.type,
-        mediaItem: m.mediaItem,
-      }, m.ruleSet.type),
+      mediaItem: applyGroupAggregation(mi, memberIds),
     });
     group.count++;
   }
@@ -372,6 +418,17 @@ async function handleStatusGrouped(userId: string, status: string) {
     return true;
   });
 
+  // Pre-aggregate series/music member data for actions with matchedMediaItemIds
+  const statusMemberIds = deduped.flatMap((a) => a.matchedMediaItemIds);
+  let statusMemberMap = new Map<string, { fileSize: bigint; playCount: number; lastPlayedAt: Date | null }>();
+  if (statusMemberIds.length > 0) {
+    const members = await prisma.mediaItem.findMany({
+      where: { id: { in: statusMemberIds } },
+      select: { id: true, fileSize: true, playCount: true, lastPlayedAt: true },
+    });
+    statusMemberMap = new Map(members.map((m) => [m.id, { fileSize: m.fileSize ?? BigInt(0), playCount: m.playCount, lastPlayedAt: m.lastPlayedAt }]));
+  }
+
   const groupMap = new Map<string, RuleSetGroup>();
 
   for (const a of deduped) {
@@ -396,6 +453,33 @@ async function handleStatusGrouped(userId: string, status: string) {
       groupMap.set(groupKey, { ruleSet: ruleSetData, items: [], count: 0 });
     }
     const group = groupMap.get(groupKey)!;
+    let mi = buildActionMediaItem(a, ruleSetData.type);
+
+    // Apply series/music aggregation from member items
+    if (a.matchedMediaItemIds.length > 0) {
+      let totalSize = BigInt(0);
+      let totalPlays = 0;
+      let latest: Date | null = null;
+      for (const id of a.matchedMediaItemIds) {
+        const d = statusMemberMap.get(id);
+        if (!d) continue;
+        totalSize += d.fileSize;
+        totalPlays += d.playCount;
+        if (d.lastPlayedAt && (!latest || d.lastPlayedAt > latest)) latest = d.lastPlayedAt;
+      }
+      // For completed delete actions, prefer deletedBytes (items may no longer exist in DB)
+      const useDeletedBytes = a.status === "COMPLETED" && a.deletedBytes;
+      mi = {
+        ...mi,
+        fileSize: useDeletedBytes
+          ? a.deletedBytes!.toString()
+          : totalSize > BigInt(0) ? totalSize.toString() : mi.fileSize,
+        playCount: totalPlays > 0 ? totalPlays : mi.playCount,
+        lastPlayedAt: latest?.toISOString() ?? mi.lastPlayedAt,
+        matchedEpisodes: a.matchedMediaItemIds.length,
+      };
+    }
+
     group.items.push({
       id: a.id,
       actionType: a.actionType,
@@ -408,7 +492,7 @@ async function handleStatusGrouped(userId: string, status: string) {
       error: a.error,
       createdAt: a.createdAt.toISOString(),
       estimated: false,
-      mediaItem: buildActionMediaItem(a, ruleSetData.type),
+      mediaItem: mi,
     });
     group.count++;
   }

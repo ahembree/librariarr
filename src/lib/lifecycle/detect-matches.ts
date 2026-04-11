@@ -79,8 +79,22 @@ export async function detectAndSaveMatches(
   const episodeIdMap = new Map<string, string[]>();
   if (ruleSet.type === "SERIES" && ruleSet.seriesScope) {
     matched = await evaluateSeriesScope(rules, serverIds, arrData, seerrData);
+    // Build episode ID map so actions track individual episodes for file size calculation
+    for (const m of matched) {
+      const ids = (m as unknown as { memberIds?: string[] }).memberIds;
+      if (ids && ids.length > 0) {
+        episodeIdMap.set(m.id, ids);
+      }
+    }
   } else if (ruleSet.type === "MUSIC" && ruleSet.seriesScope) {
     matched = await evaluateMusicScope(rules, serverIds, arrData);
+    // Build track ID map so actions track individual tracks for file size calculation
+    for (const m of matched) {
+      const ids = (m as unknown as { memberIds?: string[] }).memberIds;
+      if (ids && ids.length > 0) {
+        episodeIdMap.set(m.id, ids);
+      }
+    }
   } else {
     const rawItems = await evaluateRules(rules, ruleSet.type, serverIds, arrData, seerrData);
     if (ruleSet.type === "SERIES") {
