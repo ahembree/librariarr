@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.15.3](https://github.com/ahembree/librariarr/compare/v0.15.2...v0.15.3) (2026-04-11)
+
+
+### Bug Fixes
+
+* **lifecycle:** include memberIds for series/music scope so stats compute file sizes ([3d72c25](https://github.com/ahembree/librariarr/commit/3d72c25ec1d2a917d306380c7bcc9dddb2e71ac7))
+* **lifecycle:** make deletion tracker stats contextual to active tab ([f27877c](https://github.com/ahembree/librariarr/commit/f27877c0c38bc30ea22874c5b4f8175f7efefcdb))
+* **lifecycle:** show aggregated series/music data in pending actions page ([4f5192e](https://github.com/ahembree/librariarr/commit/4f5192e1b1e1343bde6537f339a4bace445f4f2e))
+* **query:** map resolution display labels for contains/notContains in query builder ([200e708](https://github.com/ahembree/librariarr/commit/200e708be83d69bd18539f1381f85b6eccd25019))
+* **rules,query:** support pipe-separated multi-select for resolution contains/notContains ([4be1992](https://github.com/ahembree/librariarr/commit/4be1992524b5d0d732d378c03ad090cef124ab81))
+* **rules,query:** support pipe-separated multi-select for stream field contains/notContains ([e7a1940](https://github.com/ahembree/librariarr/commit/e7a1940d0634bdffc431077b6b07883de071805d))
+* **rules:** map resolution display labels for contains/notContains operators ([9a312e4](https://github.com/ahembree/librariarr/commit/9a312e4c692fdf93de4df6f765384a740ebf8e02))
+* **rules:** map resolution display labels for contains/notContains operators ([989a5bc](https://github.com/ahembree/librariarr/commit/989a5bcba98d62f2bb9f61efd037e3a05da8a550))
+
 ## [0.15.2](https://github.com/ahembree/librariarr/compare/v0.15.1...v0.15.2) (2026-04-09)
 
 
