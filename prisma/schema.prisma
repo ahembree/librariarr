@@ -204,6 +204,7 @@ model MediaItem {
   thumbUrl         String?
   artUrl           String?
   parentThumbUrl   String?
+  parentSummary    String?
   seasonThumbUrl   String?
   parentTitle      String?
   albumTitle       String?

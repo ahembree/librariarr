@@ -256,6 +256,7 @@ export async function GET(request: NextRequest) {
             mi."originallyAvailableAt",
             mi."isWatchlisted",
             mi."summary",
+            mi."parentSummary",
             mi."genres",
             mi."studio",
             mi."contentRating",
@@ -310,7 +311,10 @@ export async function GET(request: NextRequest) {
             'SD', NULLIF(COUNT(*) FILTER (WHERE resolution_label = 'SD'), 0),
             'Other', NULLIF(COUNT(*) FILTER (WHERE resolution_label = 'Other'), 0)
           )) as "qualityCounts",
-          (array_agg("summary" ORDER BY "seasonNumber", "episodeNumber") FILTER (WHERE "summary" IS NOT NULL))[1] as "summary",
+          COALESCE(
+            (array_agg("parentSummary" ORDER BY "seasonNumber", "episodeNumber") FILTER (WHERE "parentSummary" IS NOT NULL))[1],
+            (array_agg("summary" ORDER BY "seasonNumber", "episodeNumber") FILTER (WHERE "summary" IS NOT NULL))[1]
+          ) as "summary",
           (array_agg("genres" ORDER BY "seasonNumber", "episodeNumber") FILTER (WHERE "genres" IS NOT NULL))[1] as "genres",
           (array_agg("studio" ORDER BY "seasonNumber", "episodeNumber") FILTER (WHERE "studio" IS NOT NULL))[1] as "studio",
           (array_agg("contentRating" ORDER BY "seasonNumber", "episodeNumber") FILTER (WHERE "contentRating" IS NOT NULL))[1] as "contentRating",
@@ -400,6 +404,7 @@ export async function GET(request: NextRequest) {
       originallyAvailableAt: true,
       isWatchlisted: true,
       summary: true,
+      parentSummary: true,
       genres: true,
       studio: true,
       contentRating: true,
@@ -518,7 +523,7 @@ export async function GET(request: NextRequest) {
     group.qualityCounts[label] = (group.qualityCounts[label] || 0) + 1;
 
     // Pick first non-null metadata (show-level fields are typically the same across episodes)
-    if (!group.summary && item.summary) group.summary = item.summary;
+    if (!group.summary && (item.parentSummary || item.summary)) group.summary = item.parentSummary || item.summary;
     if (!group.genres && item.genres) group.genres = item.genres as string[];
     if (!group.studio && item.studio) group.studio = item.studio;
     if (!group.contentRating && item.contentRating) group.contentRating = item.contentRating;

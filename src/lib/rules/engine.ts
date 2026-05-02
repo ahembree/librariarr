@@ -2489,6 +2489,8 @@ export async function evaluateSeriesScope(
       ...representative,
       // Use series name as title so "title" rules match against the series
       title: representative.parentTitle ?? representative.title,
+      // Use series-level summary instead of episode summary
+      summary: representative.parentSummary ?? representative.summary,
       // Clear episode-specific fields — this is a series-level aggregate
       parentTitle: null,
       seasonNumber: null,

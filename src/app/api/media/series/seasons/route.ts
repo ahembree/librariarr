@@ -46,6 +46,7 @@ export async function GET(request: NextRequest) {
       addedAt: true,
       playCount: true,
       summary: true,
+      parentSummary: true,
       genres: true,
       studio: true,
       contentRating: true,
@@ -138,7 +139,7 @@ export async function GET(request: NextRequest) {
       season.mediaItemId = item.id;
     }
 
-    if (!season.summary && item.summary) season.summary = item.summary;
+    if (!season.summary && (item.parentSummary || item.summary)) season.summary = item.parentSummary || item.summary;
     if (!season.genres && item.genres) season.genres = item.genres as string[];
     if (!season.studio && item.studio) season.studio = item.studio;
     if (!season.contentRating && item.contentRating) season.contentRating = item.contentRating;

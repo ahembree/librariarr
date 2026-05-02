@@ -980,7 +980,10 @@ async function groupSeriesEpisodes(
       (array_agg(l."mediaServerId" ORDER BY mi."seasonNumber" NULLS LAST, mi."episodeNumber" NULLS LAST))[1] as "serverId",
       (array_agg(ms.name ORDER BY mi."seasonNumber" NULLS LAST, mi."episodeNumber" NULLS LAST))[1] as "serverName",
       (array_agg(ms.type ORDER BY mi."seasonNumber" NULLS LAST, mi."episodeNumber" NULLS LAST))[1] as "serverType",
-      (array_agg(mi."summary" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."summary" IS NOT NULL))[1] as summary,
+      COALESCE(
+        (array_agg(mi."parentSummary" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."parentSummary" IS NOT NULL))[1],
+        (array_agg(mi."summary" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."summary" IS NOT NULL))[1]
+      ) as summary,
       (array_agg(mi."genres" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."genres" IS NOT NULL))[1] as genres,
       (array_agg(mi."studio" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."studio" IS NOT NULL))[1] as studio,
       (array_agg(mi."contentRating" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."contentRating" IS NOT NULL))[1] as "contentRating",

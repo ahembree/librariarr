@@ -68,7 +68,7 @@ interface RuleSetGroup {
  */
 const MEDIA_ITEM_SELECT = {
   id: true, title: true, parentTitle: true, type: true, thumbUrl: true,
-  year: true, summary: true, contentRating: true, rating: true, ratingImage: true, audienceRating: true, audienceRatingImage: true,
+  year: true, summary: true, parentSummary: true, contentRating: true, rating: true, ratingImage: true, audienceRating: true, audienceRatingImage: true,
   duration: true, resolution: true, dynamicRange: true, audioProfile: true, fileSize: true,
   genres: true, studio: true, playCount: true, lastPlayedAt: true, addedAt: true,
   library: { select: { mediaServer: { select: { id: true, name: true, type: true } } } },
@@ -76,7 +76,7 @@ const MEDIA_ITEM_SELECT = {
 
 type SelectedMediaItem = {
   id: string; title: string; parentTitle: string | null; type: string; thumbUrl: string | null;
-  year: number | null; summary: string | null; contentRating: string | null;
+  year: number | null; summary: string | null; parentSummary: string | null; contentRating: string | null;
   rating: number | null; ratingImage: string | null;
   audienceRating: number | null; audienceRatingImage: string | null;
   duration: number | null; resolution: string | null; dynamicRange: string | null;
@@ -90,7 +90,7 @@ function serializeMediaItem(mi: SelectedMediaItem): ActionItemMediaItem {
   const ms = mi.library.mediaServer;
   return {
     id: mi.id, title: mi.title, parentTitle: mi.parentTitle, type: mi.type, thumbUrl: mi.thumbUrl,
-    year: mi.year, summary: mi.summary, contentRating: mi.contentRating,
+    year: mi.year, summary: mi.parentTitle ? (mi.parentSummary ?? mi.summary) : mi.summary, contentRating: mi.contentRating,
     rating: mi.rating, ratingImage: mi.ratingImage,
     audienceRating: mi.audienceRating, audienceRatingImage: mi.audienceRatingImage,
     duration: mi.duration, resolution: mi.resolution, dynamicRange: mi.dynamicRange,
