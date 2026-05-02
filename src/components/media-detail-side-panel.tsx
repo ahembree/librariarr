@@ -111,7 +111,12 @@ export function MediaDetailSidePanel({
   }, [allActualValues, matchedCriteria]);
 
   const isAggregate = !!item.matchedEpisodes;
-  const detailUrl = detailUrlOverride ?? getDetailPageUrl(mediaType, item.id);
+  const detailUrl = detailUrlOverride
+    ?? (isAggregate && mediaType === "SERIES"
+      ? `/library/series/show/${item.id}`
+      : isAggregate && mediaType === "MUSIC"
+        ? `/library/music/artist/${item.id}`
+        : getDetailPageUrl(mediaType, item.id));
   // Aggregated items (series/artist scope) use parentTitle=null but still need the parent image
   const imageUrl = `/api/media/${item.id}/image${item.parentTitle || isAggregate ? "?type=parent" : ""}`;
   const displayTitle = item.parentTitle

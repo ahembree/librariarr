@@ -279,34 +279,6 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
     }
   }, [item.id, isAggregate, fetchItemDetail, fetchHistory]);
 
-  // Aggregate items (series/artist scope): show only matched criteria + aggregate stats
-  if (isAggregate) {
-    return (
-      <div className="mt-6 space-y-6">
-        {/* Matched criteria */}
-        {matchedCriteriaSection}
-
-        {/* Aggregate stats */}
-        <section>
-          <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground"><Play className="h-3.5 w-3.5" />Playback</h3>
-          <div className="text-sm">
-            <DetailRow
-              label="Total Play Count"
-              value={
-                <span className={merged.playCount > 0 ? "text-green-400" : "text-muted-foreground"}>
-                  {merged.playCount}
-                </span>
-              }
-            />
-            <DetailRow label="Last Played" value={formatDate(merged.lastPlayedAt, "Never")} />
-            <DetailRow label="Added" value={formatDate(merged.addedAt)} />
-            {merged.fileSize && <DetailRow label="Total Size" value={formatFileSize(merged.fileSize)} />}
-          </div>
-        </section>
-      </div>
-    );
-  }
-
   return (
     <div className="mt-6 space-y-6">
       {/* Server chips + correlation */}
@@ -424,8 +396,28 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
       {/* Arr Controls */}
       {!isAggregate && <ArrSection itemId={item.id} mediaType={merged.type} />}
 
-      {/* ── Detail columns ──────────────────────────────────── */}
-      <div className={compact ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 stagger-children"}>
+      {/* Aggregate items: simplified playback stats (no episode-level detail columns) */}
+      {isAggregate && (
+        <div className="rounded-xl border bg-muted/30 p-5 space-y-3">
+          <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground"><Play className="h-3.5 w-3.5" />Playback</h3>
+          <div className="text-sm">
+            <DetailRow
+              label="Total Play Count"
+              value={
+                <span className={merged.playCount > 0 ? "text-green-400" : "text-muted-foreground"}>
+                  {merged.playCount}
+                </span>
+              }
+            />
+            <DetailRow label="Last Played" value={formatDate(merged.lastPlayedAt, "Never")} />
+            <DetailRow label="Added" value={formatDate(merged.addedAt)} />
+            {merged.fileSize && <DetailRow label="Total Size" value={formatFileSize(merged.fileSize)} />}
+          </div>
+        </div>
+      )}
+
+      {/* ── Detail columns (individual items only) ─────────── */}
+      {!isAggregate && <div className={compact ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 stagger-children"}>
         {/* Column 1: Watch/Listen History */}
         <div className="rounded-xl border bg-muted/30 p-5 space-y-3">
           <div className="flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
@@ -814,7 +806,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
             </CollapsibleContent>
           </Collapsible>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }
