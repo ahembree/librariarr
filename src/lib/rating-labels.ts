@@ -1,13 +1,18 @@
-const IMAGE_TO_LABEL: [RegExp, string][] = [
-  [/^rottentomatoes:\/\//, "Rotten Tomatoes"],
+const IMAGE_TO_SOURCE: [RegExp, string][] = [
+  [/^rottentomatoes:\/\//, "RT"],
   [/^imdb:\/\//, "IMDb"],
   [/^themoviedb:\/\//, "TMDB"],
   [/^metacritic:\/\//, "Metacritic"],
 ];
 
+const FIELD_SUFFIX: Record<string, string> = {
+  rating: "Critics",
+  audienceRating: "Audience",
+};
+
 const JELLYFIN_EMBY_DEFAULTS: Record<string, string> = {
   rating: "TMDB",
-  audienceRating: "Rotten Tomatoes",
+  audienceRating: "RT Audience",
 };
 
 /**
@@ -24,10 +29,13 @@ export function getRatingLabel(
   field: "rating" | "audienceRating",
   fallback: string,
 ): string {
-  // If we have a ratingImage string (Plex), parse the source
+  // If we have a ratingImage string (Plex), parse the source and append type
   if (ratingImage) {
-    for (const [pattern, label] of IMAGE_TO_LABEL) {
-      if (pattern.test(ratingImage)) return label;
+    for (const [pattern, source] of IMAGE_TO_SOURCE) {
+      if (pattern.test(ratingImage)) {
+        const suffix = FIELD_SUFFIX[field];
+        return suffix ? `${source} ${suffix}` : source;
+      }
     }
   }
 
