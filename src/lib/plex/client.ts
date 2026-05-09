@@ -1,6 +1,13 @@
 import axios, { type AxiosInstance } from "axios";
 import https from "https";
 import { configureRetry } from "@/lib/http-retry";
+import {
+  isUnreachable,
+  markUnreachable,
+  clearUnreachable,
+  getLastFailureMessage,
+  ServerUnreachableError,
+} from "@/lib/media-server/health-cache";
 import type {
   PlexLibrarySection,
   PlexMetadataItem,
@@ -42,7 +49,13 @@ export class PlexClient implements MediaServerClient {
 
     this.client = axios.create(axiosConfig);
 
+    const baseURLForHealth = this.baseURL;
     this.client.interceptors.request.use((config) => {
+      if (isUnreachable(baseURLForHealth)) {
+        return Promise.reject(
+          new ServerUnreachableError(baseURLForHealth, getLastFailureMessage(baseURLForHealth)),
+        ) as never;
+      }
       (config as unknown as Record<string, unknown>).__startTime = Date.now();
       if (!config.url?.includes("/library/metadata/")) {
         logger.debug("Plex", `${config.method?.toUpperCase()} ${config.url}`);
@@ -52,6 +65,7 @@ export class PlexClient implements MediaServerClient {
 
     this.client.interceptors.response.use(
       (response) => {
+        clearUnreachable(baseURLForHealth);
         const start = (response.config as unknown as Record<string, unknown>).__startTime as number;
         const duration = start ? Date.now() - start : 0;
         if (!response.config.url?.includes("/library/metadata/")) {
@@ -69,7 +83,9 @@ export class PlexClient implements MediaServerClient {
       }
     );
 
-    configureRetry(this.client, "Plex", logger);
+    configureRetry(this.client, "Plex", logger, {
+      onTerminalNetworkError: (error) => markUnreachable(baseURLForHealth, error),
+    });
   }
 
   async getLibraries(): Promise<PlexLibrarySection[]> {

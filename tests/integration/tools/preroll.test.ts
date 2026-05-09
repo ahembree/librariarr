@@ -38,6 +38,7 @@ import {
   GET as getPreroll,
   POST as postPreroll,
 } from "@/app/api/tools/preroll/route";
+import { GET as getPrerollCurrent } from "@/app/api/tools/preroll/current/route";
 import {
   GET as getPresets,
   POST as postPreset,
@@ -75,40 +76,67 @@ describe("GET /api/tools/preroll", () => {
     await expectJson(res, 401);
   });
 
-  it("returns overview with no servers", async () => {
+  it("returns DB-only overview with no servers", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
 
     const res = await callRoute(getPreroll);
     const body = await expectJson<{
-      currentPreroll: string;
       presets: unknown[];
       schedules: unknown[];
       hasPlexServers: boolean;
     }>(res);
 
-    expect(body.currentPreroll).toBe("");
     expect(body.presets).toEqual([]);
     expect(body.schedules).toEqual([]);
     expect(body.hasPlexServers).toBe(false);
+  });
+
+  it("does not call the media server", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    void server;
+
+    const { PlexClient } = await import("@/lib/plex/client");
+    const res = await callRoute(getPreroll);
+    await expectJson(res, 200);
+
+    expect(PlexClient).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/tools/preroll/current  (live current preroll path from Plex)
+// ---------------------------------------------------------------------------
+describe("GET /api/tools/preroll/current", () => {
+  it("returns 401 without auth", async () => {
+    const res = await callRoute(getPrerollCurrent);
+    await expectJson(res, 401);
+  });
+
+  it("returns empty when no servers configured", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+
+    const res = await callRoute(getPrerollCurrent);
+    const body = await expectJson<{ currentPreroll: string; available: boolean }>(res);
+
+    expect(body.currentPreroll).toBe("");
+    expect(body.available).toBe(false);
   });
 
   it("returns current preroll from Plex server", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
     setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
-
-    // We need the server to be created so PlexClient is instantiated
     void server;
 
-    const res = await callRoute(getPreroll);
-    const body = await expectJson<{
-      currentPreroll: string;
-      hasPlexServers: boolean;
-    }>(res);
+    const res = await callRoute(getPrerollCurrent);
+    const body = await expectJson<{ currentPreroll: string; available: boolean }>(res);
 
     expect(body.currentPreroll).toBe("/movies/preroll.mp4");
-    expect(body.hasPlexServers).toBe(true);
+    expect(body.available).toBe(true);
   });
 });
 

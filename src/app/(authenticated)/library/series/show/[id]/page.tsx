@@ -63,16 +63,11 @@ export default function SeriesDetailPage() {
         ]));
 
         const parentTitle = itemData.item.parentTitle || itemData.item.title;
-        const [seasonsRes, summaryRes] = await Promise.all([
-          fetch(`/api/media/series/seasons?parentTitle=${encodeURIComponent(parentTitle)}`),
-          fetch(`/api/media/${id}/series-summary`),
-        ]);
+        const seasonsRes = await fetch(
+          `/api/media/series/seasons?parentTitle=${encodeURIComponent(parentTitle)}`
+        );
         const seasonsData = await seasonsRes.json();
         setSeasons(seasonsData.seasons || []);
-        if (summaryRes.ok) {
-          const summaryData = await summaryRes.json();
-          if (summaryData.summary) setSeriesSummary(summaryData.summary);
-        }
       } catch {
         // Failed to load
       } finally {
@@ -80,6 +75,23 @@ export default function SeriesDetailPage() {
       }
     }
     fetchData();
+  }, [id]);
+
+  // Series summary comes from the live media server — fetch independently so it
+  // never blocks the page render when the server is unreachable.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/media/${id}/series-summary`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.summary) setSeriesSummary(data.summary);
+      })
+      .catch(() => {
+        // Server unreachable — page still renders DB data fine.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
   if (loading) {

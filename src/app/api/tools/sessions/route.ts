@@ -12,6 +12,12 @@ export interface SessionWithServer extends MediaSession {
   startedAt: number;
 }
 
+export interface UnreachableServer {
+  id: string;
+  name: string;
+  type: MediaServerType;
+}
+
 export async function GET() {
   const session = await getSession();
   if (!session.isLoggedIn) {
@@ -23,22 +29,34 @@ export async function GET() {
     select: { id: true, name: true, url: true, accessToken: true, tlsSkipVerify: true, type: true },
   });
 
-  const allSessions: SessionWithServer[] = [];
   const now = Date.now();
+  const unreachableServers: UnreachableServer[] = [];
 
-  for (const server of servers) {
-    try {
+  const results = await Promise.allSettled(
+    servers.map(async (server) => {
       const client = createMediaServerClient(server.type, server.url, server.accessToken, {
         skipTlsVerify: server.tlsSkipVerify,
       });
       const sessions = await client.getSessions();
-      for (const s of sessions) {
-        allSessions.push({ ...s, serverId: server.id, serverName: server.name, serverType: server.type, startedAt: now });
-      }
-    } catch {
-      // Skip unreachable servers
-    }
-  }
+      return sessions.map<SessionWithServer>((s) => ({
+        ...s,
+        serverId: server.id,
+        serverName: server.name,
+        serverType: server.type,
+        startedAt: now,
+      }));
+    }),
+  );
 
-  return NextResponse.json({ sessions: allSessions });
+  const allSessions: SessionWithServer[] = [];
+  results.forEach((result, idx) => {
+    if (result.status === "fulfilled") {
+      allSessions.push(...result.value);
+    } else {
+      const server = servers[idx];
+      unreachableServers.push({ id: server.id, name: server.name, type: server.type });
+    }
+  });
+
+  return NextResponse.json({ sessions: allSessions, unreachableServers });
 }

@@ -1,6 +1,13 @@
 import axios, { type AxiosInstance } from "axios";
 import https from "https";
 import { configureRetry } from "@/lib/http-retry";
+import {
+  isUnreachable,
+  markUnreachable,
+  clearUnreachable,
+  getLastFailureMessage,
+  ServerUnreachableError,
+} from "./health-cache";
 import type { MediaServerClient, MediaServerClientOptions, LibraryItemType } from "./client";
 import type {
   MediaSession,
@@ -140,9 +147,15 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
 
     this.client = axios.create(axiosConfig);
 
+    const baseURLForHealth = this.baseURL;
     // Auth headers added via interceptor — safe because requests only fire
     // after the subclass constructor has completed.
     this.client.interceptors.request.use((config) => {
+      if (isUnreachable(baseURLForHealth)) {
+        return Promise.reject(
+          new ServerUnreachableError(baseURLForHealth, getLastFailureMessage(baseURLForHealth)),
+        ) as never;
+      }
       Object.assign(config.headers, this.getAuthHeaders());
       (config as unknown as Record<string, unknown>).__startTime = Date.now();
       logger.debug(
@@ -154,6 +167,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
 
     this.client.interceptors.response.use(
       (response) => {
+        clearUnreachable(baseURLForHealth);
         const start = (
           response.config as unknown as Record<string, unknown>
         ).__startTime as number;
@@ -180,7 +194,9 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       }
     );
 
-    configureRetry(this.client, () => this.logPrefix, logger);
+    configureRetry(this.client, () => this.logPrefix, logger, {
+      onTerminalNetworkError: (error) => markUnreachable(baseURLForHealth, error),
+    });
   }
 
   // ----------------------------------------------------------------

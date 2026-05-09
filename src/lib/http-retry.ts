@@ -32,6 +32,20 @@ function isRetryable(error: AxiosError): boolean {
   return false;
 }
 
+function isNetworkError(error: AxiosError): boolean {
+  // No HTTP response was received — request never completed at the protocol level.
+  return !error.response;
+}
+
+export interface ConfigureRetryOptions {
+  /**
+   * Called when a network-level error is final — either retries are exhausted,
+   * or the error is a non-retryable network error (e.g., ECONNREFUSED, ENOTFOUND).
+   * Use to mark a server as unreachable in a health cache.
+   */
+  onTerminalNetworkError?: (error: AxiosError) => void;
+}
+
 /**
  * Adds automatic retry for transient network/TLS errors to an axios instance.
  * Retries up to 3 times with linear backoff (1s, 2s, 3s).
@@ -40,14 +54,31 @@ export function configureRetry(
   instance: AxiosInstance,
   logPrefix: string | (() => string),
   log: { warn: (prefix: string, msg: string) => void },
+  options?: ConfigureRetryOptions,
 ): void {
   instance.interceptors.response.use(undefined, async (error: AxiosError) => {
+    // Circuit-breaker rejections from a request interceptor never reached the
+    // network — propagate without retrying or refreshing the failure timestamp.
+    if ((error as unknown as { code?: string }).code === "SERVER_UNREACHABLE") {
+      throw error;
+    }
+
+    // Mark unreachable on the *first* network error, not just after retries are
+    // exhausted. The retry will go through the request interceptor and short-circuit
+    // via the breaker, so concurrent in-flight requests fail at ~15s (single timeout)
+    // instead of ~51s (full retry cycle). The breaker self-clears on the next success.
+    if (isNetworkError(error)) options?.onTerminalNetworkError?.(error);
+
     const config = error.config;
-    if (!config || !isRetryable(error)) throw error;
+    if (!config || !isRetryable(error)) {
+      throw error;
+    }
 
     const meta = config as unknown as Record<string, unknown>;
     const retryCount = ((meta.__retryCount as number) ?? 0) + 1;
-    if (retryCount > MAX_RETRIES) throw error;
+    if (retryCount > MAX_RETRIES) {
+      throw error;
+    }
 
     meta.__retryCount = retryCount;
     const delay = retryCount * 1000;

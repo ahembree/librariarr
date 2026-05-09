@@ -11,10 +11,17 @@ import { BackToTop } from "@/components/back-to-top";
 import { findScrollContainer } from "@/lib/scroll-utils";
 import { useScrollToTop } from "@/hooks/use-scroll-to-top";
 
+interface UnreachableServer {
+  id: string;
+  name: string;
+  type: string;
+}
+
 export function AuthenticatedShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const isMobile = useIsMobile();
   const [maintenanceActive, setMaintenanceActive] = useState(false);
+  const [unreachableServers, setUnreachableServers] = useState<UnreachableServer[]>([]);
   useScrollToTop();
 
   const checkMaintenance = useCallback(() => {
@@ -34,9 +41,16 @@ export function AuthenticatedShell({ children }: { children: React.ReactNode }) 
     };
     window.addEventListener("maintenance-changed", onMaintenanceChanged);
 
+    const onServerHealthChanged = (e: Event) => {
+      const detail = (e as CustomEvent<{ unreachable: UnreachableServer[] }>).detail;
+      setUnreachableServers(detail.unreachable ?? []);
+    };
+    window.addEventListener("server-health-changed", onServerHealthChanged);
+
     return () => {
       clearInterval(interval);
       window.removeEventListener("maintenance-changed", onMaintenanceChanged);
+      window.removeEventListener("server-health-changed", onServerHealthChanged);
     };
   }, [checkMaintenance]);
 
@@ -63,6 +77,19 @@ export function AuthenticatedShell({ children }: { children: React.ReactNode }) 
               <span className="text-lg font-semibold font-display tracking-tight">Librariarr</span>
             </button>
           </header>
+        )}
+        {unreachableServers.length > 0 && (
+          <Link
+            href="/settings#servers"
+            className="flex shrink-0 items-center justify-center gap-2 bg-destructive/15 border-b border-destructive/30 px-4 py-1.5 text-sm text-destructive hover:bg-destructive/20 transition-colors"
+          >
+            <AlertTriangle className="h-3.5 w-3.5" />
+            <span>
+              {unreachableServers.length === 1
+                ? `${unreachableServers[0].name} is unreachable`
+                : `${unreachableServers.length} servers are unreachable`}
+            </span>
+          </Link>
         )}
         {maintenanceActive && (
           <Link

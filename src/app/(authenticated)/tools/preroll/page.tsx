@@ -375,7 +375,6 @@ export default function PrerollManagerPage() {
       const res = await fetch("/api/tools/preroll");
       if (res.ok) {
         const data = await res.json();
-        setCurrentPreroll(data.currentPreroll ?? "");
         setPresets(data.presets ?? []);
         setSchedules(data.schedules ?? []);
         setHasPlexServers(data.hasPlexServers ?? false);
@@ -387,9 +386,24 @@ export default function PrerollManagerPage() {
     }
   }, []);
 
+  // Live "currently set" preroll comes from Plex — fetch separately so the page
+  // renders DB data immediately even when the media server is unreachable.
+  const fetchCurrentPreroll = useCallback(async () => {
+    try {
+      const res = await fetch("/api/tools/preroll/current");
+      if (res.ok) {
+        const data = await res.json();
+        setCurrentPreroll(data.currentPreroll ?? "");
+      }
+    } catch {
+      // Server unreachable — leave currentPreroll blank.
+    }
+  }, []);
+
   useEffect(() => {
     fetchData();
-  }, [fetchData]);
+    fetchCurrentPreroll();
+  }, [fetchData, fetchCurrentPreroll]);
 
   // Auto-clear page messages
   useEffect(() => {
