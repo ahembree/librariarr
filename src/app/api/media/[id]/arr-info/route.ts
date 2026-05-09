@@ -51,7 +51,7 @@ export async function GET(
   try {
     if (item.type === "MOVIE") {
       const tmdbId = item.externalIds.find((e) => e.source === "TMDB");
-      if (!tmdbId) return NextResponse.json({ matches, plexRatingKey: item.ratingKey });
+      if (!tmdbId) return NextResponse.json({ matches });
 
       const radarrInstances = await prisma.radarrInstance.findMany({
         where: { userId: session.userId! },
@@ -92,7 +92,7 @@ export async function GET(
       }
     } else if (item.type === "MUSIC") {
       const mbId = item.externalIds.find((e) => e.source === "MUSICBRAINZ");
-      if (!mbId) return NextResponse.json({ matches, plexRatingKey: item.ratingKey });
+      if (!mbId) return NextResponse.json({ matches });
 
       const lidarrInstances = await prisma.lidarrInstance.findMany({
         where: { userId: session.userId! },
@@ -131,7 +131,7 @@ export async function GET(
       }
     } else {
       const tvdbId = item.externalIds.find((e) => e.source === "TVDB");
-      if (!tvdbId) return NextResponse.json({ matches, plexRatingKey: item.ratingKey });
+      if (!tvdbId) return NextResponse.json({ matches });
 
       const sonarrInstances = await prisma.sonarrInstance.findMany({
         where: { userId: session.userId! },
@@ -177,5 +177,5 @@ export async function GET(
     apiLogger.error("Media", "Failed to fetch arr info", { error: String(error) });
   }
 
-  return NextResponse.json({ matches, plexRatingKey: item.ratingKey });
+  return NextResponse.json({ matches });
 }

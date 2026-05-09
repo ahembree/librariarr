@@ -20,9 +20,146 @@ import {
   Trash2,
   Save,
   Pencil,
+  Boxes,
+  Inbox,
+  AlertCircle,
+  Link2,
+  ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ArrInstance, SeerrInstance, TestResult } from "../types";
+
+// ─── Type styling: matches the colored dots used on the media-detail Arr cards ───
+
+interface IntegrationTypeStyle {
+  text: string;
+  dot: string;
+  tile: string;
+  border: string;
+}
+
+const INTEGRATION_TYPE_STYLES: Record<string, IntegrationTypeStyle> = {
+  sonarr: {
+    text: "text-sky-400",
+    dot: "bg-sky-400 shadow-[0_0_6px] shadow-sky-400/60",
+    tile: "bg-sky-500/10",
+    border: "border-sky-500/30",
+  },
+  radarr: {
+    text: "text-amber-400",
+    dot: "bg-amber-400 shadow-[0_0_6px] shadow-amber-400/60",
+    tile: "bg-amber-500/10",
+    border: "border-amber-500/30",
+  },
+  lidarr: {
+    text: "text-emerald-400",
+    dot: "bg-emerald-400 shadow-[0_0_6px] shadow-emerald-400/60",
+    tile: "bg-emerald-500/10",
+    border: "border-emerald-500/30",
+  },
+  seerr: {
+    text: "text-violet-400",
+    dot: "bg-violet-400 shadow-[0_0_6px] shadow-violet-400/60",
+    tile: "bg-violet-500/10",
+    border: "border-violet-500/30",
+  },
+};
+
+// ─── Shared sub-components ───
+
+function TestResultBadge({ result }: { result: TestResult }) {
+  const Icon = result.ok ? CheckCircle : AlertCircle;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium",
+        result.ok
+          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+          : "border-red-500/30 bg-red-500/10 text-red-400",
+      )}
+    >
+      <Icon className="h-3 w-3 shrink-0" />
+      {result.ok
+        ? `Connected${result.appName ? ` to ${result.appName}` : ""}${result.version ? ` v${result.version}` : ""}`
+        : `Failed: ${result.error}`}
+    </span>
+  );
+}
+
+function SectionHeader({
+  title,
+  icon: IconComp,
+  style,
+  count,
+  disabledCount,
+  showAddButton,
+  onShowForm,
+}: {
+  title: string;
+  icon: React.ComponentType<{ className?: string }>;
+  style: IntegrationTypeStyle;
+  count: number;
+  disabledCount: number;
+  showAddButton: boolean;
+  onShowForm: () => void;
+}) {
+  return (
+    <div className="mb-4 flex items-center justify-between gap-3">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border", style.tile, style.border)}>
+          <IconComp className={cn("h-4 w-4", style.text)} />
+        </div>
+        <div className="min-w-0">
+          <h2 className="truncate text-xl font-semibold leading-tight">{title}</h2>
+          {count > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {count} {count === 1 ? "instance" : "instances"}
+              {disabledCount > 0 && ` · ${disabledCount} disabled`}
+            </p>
+          )}
+        </div>
+      </div>
+      {showAddButton && (
+        <Button variant="outline" size="sm" onClick={onShowForm} className="shrink-0">
+          <Plus className="mr-2 h-4 w-4" />
+          Add Instance
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function EmptyState({
+  title,
+  icon: IconComp,
+  style,
+  description,
+  onAdd,
+}: {
+  title: string;
+  icon: React.ComponentType<{ className?: string }>;
+  style: IntegrationTypeStyle;
+  description: string;
+  onAdd: () => void;
+}) {
+  return (
+    <Card className="border-dashed">
+      <CardContent className="flex flex-col items-center justify-center gap-4 py-10 text-center">
+        <div className={cn("flex h-12 w-12 items-center justify-center rounded-xl border", style.tile, style.border)}>
+          <IconComp className={cn("h-6 w-6", style.text)} />
+        </div>
+        <div className="space-y-1">
+          <p className="font-medium">No {title} instances yet</p>
+          <p className="text-xs text-muted-foreground">{description}</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={onAdd}>
+          <Plus className="mr-2 h-4 w-4" />
+          Add {title} Instance
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
 
 // ─── Props ───
 
@@ -183,24 +320,29 @@ function ArrSection({
   onEditTest,
   onToggleEnabled,
 }: ArrSectionRendererProps) {
+  const style = INTEGRATION_TYPE_STYLES[idPrefix] ?? INTEGRATION_TYPE_STYLES.sonarr;
+  const disabledCount = instances.filter((i) => !i.enabled).length;
+  const hasInstances = instances.length > 0;
+
   return (
     <section>
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold">{title}</h2>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onShowForm(!showForm)}
-        >
-          <Plus className="mr-2 h-4 w-4" />
-          Add Instance
-        </Button>
-      </div>
+      <SectionHeader
+        title={title}
+        icon={Boxes}
+        style={style}
+        count={instances.length}
+        disabledCount={disabledCount}
+        showAddButton={hasInstances && !showForm}
+        onShowForm={() => onShowForm(!showForm)}
+      />
 
       {showForm && (
-        <Card className="mb-4">
+        <Card className={cn("mb-4 border-l-2", style.border)}>
           <CardHeader>
-            <CardTitle className="text-base">Add {title} Instance</CardTitle>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Plus className={cn("h-4 w-4", style.text)} />
+              Add {title} Instance
+            </CardTitle>
             <CardDescription>
               Connection will be tested before saving.
             </CardDescription>
@@ -294,28 +436,24 @@ function ArrSection({
               >
                 Cancel
               </Button>
-              {testResult && (
-                <span className={`text-sm ${testResult.ok ? "text-green-400" : "text-red-400"}`}>
-                  {testResult.ok ? `Connected${testResult.appName ? ` to ${testResult.appName}` : ""}${testResult.version ? ` v${testResult.version}` : ""}` : `Failed: ${testResult.error}`}
-                </span>
-              )}
+              {testResult && <TestResultBadge result={testResult} />}
             </div>
           </CardContent>
         </Card>
       )}
 
       {instances.length === 0 && !showForm ? (
-        <Card>
-          <CardContent className="py-8 text-center">
-            <p className="text-muted-foreground">
-              No {title} instances configured.
-            </p>
-          </CardContent>
-        </Card>
+        <EmptyState
+          title={title}
+          icon={Boxes}
+          style={style}
+          description={`Connect your ${title} server to enable lifecycle matching and tag sync.`}
+          onAdd={() => onShowForm(true)}
+        />
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-2">
           {instances.map((instance) => (
-            <Card key={instance.id}>
+            <Card key={instance.id} className="overflow-hidden transition-colors hover:bg-muted/20">
               <CardContent className="py-4">
                 {editing.id === instance.id ? (
                   <div className="space-y-3">
@@ -390,52 +528,63 @@ function ArrSection({
                       >
                         Cancel
                       </Button>
-                      {editing.testResult && (
-                        <span className={`text-sm ${editing.testResult.ok ? "text-green-400" : "text-red-400"}`}>
-                          {editing.testResult.ok ? `Connected${editing.testResult.appName ? ` to ${editing.testResult.appName}` : ""}${editing.testResult.version ? ` v${editing.testResult.version}` : ""}` : `Failed: ${editing.testResult.error}`}
-                        </span>
-                      )}
+                      {editing.testResult && <TestResultBadge result={editing.testResult} />}
                     </div>
                   </div>
                 ) : (
-                  <div className="flex items-center justify-between">
-                    <div className={cn("flex-1", !instance.enabled && "opacity-50")}>
-                      <div className="flex items-center gap-2">
-                        <p className="font-medium">{instance.name}</p>
-                        {!instance.enabled && (
-                          <ColorChip className="text-xs font-normal bg-amber-500/20 text-amber-400">
-                            Disabled
-                          </ColorChip>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
+                      <span
+                        className={cn(
+                          "h-2 w-2 shrink-0 rounded-full",
+                          style.dot,
+                          !instance.enabled && "opacity-30 shadow-none",
+                        )}
+                        aria-hidden
+                      />
+                      <div className={cn("min-w-0 flex-1 space-y-0.5", !instance.enabled && "opacity-60")}>
+                        <div className="flex items-center gap-2">
+                          <p className="truncate font-medium">{instance.name}</p>
+                          {!instance.enabled && (
+                            <ColorChip className="border-amber-500/30 bg-amber-500/15 text-[10px] font-medium text-amber-400">
+                              Disabled
+                            </ColorChip>
+                          )}
+                        </div>
+                        <p className="flex items-center gap-1.5 truncate text-sm text-muted-foreground">
+                          <Link2 className="h-3 w-3 shrink-0" />
+                          <span className="truncate font-mono text-xs">{instance.url}</span>
+                        </p>
+                        {instance.externalUrl && (
+                          <p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground/70">
+                            <ExternalLink className="h-3 w-3 shrink-0" />
+                            <span className="truncate font-mono">{instance.externalUrl}</span>
+                          </p>
                         )}
                       </div>
-                      <p className="text-sm text-muted-foreground">
-                        {instance.url}
-                      </p>
-                      {instance.externalUrl && (
-                        <p className="text-xs text-muted-foreground/70">
-                          External: {instance.externalUrl}
-                        </p>
-                      )}
                     </div>
-                    <div className="flex items-center gap-1">
+                    <div className="flex shrink-0 items-center gap-1">
                       <Switch
                         checked={instance.enabled}
                         onCheckedChange={(checked) => onToggleEnabled(instance.id, checked)}
                       />
+                      <div className="mx-1 h-6 w-px bg-border" aria-hidden />
                       <Button
                         variant="ghost"
-                        size="sm"
+                        size="icon-sm"
                         onClick={() => onStartEdit(instance)}
+                        title="Edit instance"
                       >
-                        <Pencil className="h-4 w-4" />
+                        <Pencil className="h-3.5 w-3.5" />
                       </Button>
                       <Button
                         variant="ghost"
-                        size="sm"
-                        className="text-red-400 hover:text-red-300"
+                        size="icon-sm"
+                        className="text-red-400 hover:bg-red-500/10 hover:text-red-300"
                         onClick={() => onDelete(instance.id)}
+                        title="Delete instance"
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </div>
                   </div>
@@ -472,24 +621,29 @@ function SeerrSection({
   onEditTest,
   onToggleEnabled,
 }: SeerrSectionProps) {
+  const style = INTEGRATION_TYPE_STYLES.seerr;
+  const disabledCount = instances.filter((i) => !i.enabled).length;
+  const hasInstances = instances.length > 0;
+
   return (
     <section>
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold">Seerr</h2>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onShowForm(!showForm)}
-        >
-          <Plus className="mr-2 h-4 w-4" />
-          Add Instance
-        </Button>
-      </div>
+      <SectionHeader
+        title="Seerr"
+        icon={Inbox}
+        style={style}
+        count={instances.length}
+        disabledCount={disabledCount}
+        showAddButton={hasInstances && !showForm}
+        onShowForm={() => onShowForm(!showForm)}
+      />
 
       {showForm && (
-        <Card className="mb-4">
+        <Card className={cn("mb-4 border-l-2", style.border)}>
           <CardHeader>
-            <CardTitle className="text-base">Add Seerr Instance</CardTitle>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Plus className={cn("h-4 w-4", style.text)} />
+              Add Seerr Instance
+            </CardTitle>
             <CardDescription>
               Manage request integration instances.
             </CardDescription>
@@ -569,28 +723,24 @@ function SeerrSection({
               >
                 Cancel
               </Button>
-              {testResult && (
-                <span className={`text-sm ${testResult.ok ? "text-green-400" : "text-red-400"}`}>
-                  {testResult.ok ? `Connected${testResult.appName ? ` to ${testResult.appName}` : ""}${testResult.version ? ` v${testResult.version}` : ""}` : `Failed: ${testResult.error}`}
-                </span>
-              )}
+              {testResult && <TestResultBadge result={testResult} />}
             </div>
           </CardContent>
         </Card>
       )}
 
       {instances.length === 0 && !showForm ? (
-        <Card>
-          <CardContent className="py-8 text-center">
-            <p className="text-muted-foreground">
-              No Seerr instances configured.
-            </p>
-          </CardContent>
-        </Card>
+        <EmptyState
+          title="Seerr"
+          icon={Inbox}
+          style={style}
+          description="Connect Overseerr or Jellyseerr to surface request data alongside your library."
+          onAdd={() => onShowForm(true)}
+        />
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-2">
           {instances.map((instance) => (
-            <Card key={instance.id}>
+            <Card key={instance.id} className="overflow-hidden transition-colors hover:bg-muted/20">
               <CardContent className="py-4">
                 {editing.id === instance.id ? (
                   <div className="space-y-3">
@@ -654,45 +804,57 @@ function SeerrSection({
                       >
                         Cancel
                       </Button>
-                      {editing.testResult && (
-                        <span className={`text-sm ${editing.testResult.ok ? "text-green-400" : "text-red-400"}`}>
-                          {editing.testResult.ok ? `Connected${editing.testResult.appName ? ` to ${editing.testResult.appName}` : ""}${editing.testResult.version ? ` v${editing.testResult.version}` : ""}` : `Failed: ${editing.testResult.error}`}
-                        </span>
-                      )}
+                      {editing.testResult && <TestResultBadge result={editing.testResult} />}
                     </div>
                   </div>
                 ) : (
-                  <div className="flex items-center justify-between">
-                    <div className={cn("flex items-center gap-2 flex-1", !instance.enabled && "opacity-50")}>
-                      <p className="font-medium">{instance.name}</p>
-                      {!instance.enabled && (
-                        <ColorChip className="text-xs font-normal bg-amber-500/20 text-amber-400">
-                          Disabled
-                        </ColorChip>
-                      )}
-                      <p className="text-sm text-muted-foreground">
-                        {instance.url}
-                      </p>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
+                      <span
+                        className={cn(
+                          "h-2 w-2 shrink-0 rounded-full",
+                          style.dot,
+                          !instance.enabled && "opacity-30 shadow-none",
+                        )}
+                        aria-hidden
+                      />
+                      <div className={cn("min-w-0 flex-1 space-y-0.5", !instance.enabled && "opacity-60")}>
+                        <div className="flex items-center gap-2">
+                          <p className="truncate font-medium">{instance.name}</p>
+                          {!instance.enabled && (
+                            <ColorChip className="border-amber-500/30 bg-amber-500/15 text-[10px] font-medium text-amber-400">
+                              Disabled
+                            </ColorChip>
+                          )}
+                        </div>
+                        <p className="flex items-center gap-1.5 truncate text-sm text-muted-foreground">
+                          <Link2 className="h-3 w-3 shrink-0" />
+                          <span className="truncate font-mono text-xs">{instance.url}</span>
+                        </p>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1">
+                    <div className="flex shrink-0 items-center gap-1">
                       <Switch
                         checked={instance.enabled}
                         onCheckedChange={(checked) => onToggleEnabled(instance.id, checked)}
                       />
+                      <div className="mx-1 h-6 w-px bg-border" aria-hidden />
                       <Button
                         variant="ghost"
-                        size="sm"
+                        size="icon-sm"
                         onClick={() => onStartEdit(instance)}
+                        title="Edit instance"
                       >
-                        <Pencil className="h-4 w-4" />
+                        <Pencil className="h-3.5 w-3.5" />
                       </Button>
                       <Button
                         variant="ghost"
-                        size="sm"
-                        className="text-red-400 hover:text-red-300"
+                        size="icon-sm"
+                        className="text-red-400 hover:bg-red-500/10 hover:text-red-300"
                         onClick={() => onDelete(instance.id)}
+                        title="Delete instance"
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </div>
                   </div>

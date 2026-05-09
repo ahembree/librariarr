@@ -19,7 +19,7 @@ import {
   CarouselNext,
   CarouselPrevious,
 } from "@/components/ui/carousel";
-import { ArrSection } from "@/components/arr-link-button";
+import { IntegrationsSection } from "@/components/integrations-section";
 import { ServerChips } from "@/components/server-chips";
 import { formatFileSize, formatDuration, formatDate } from "@/lib/format";
 import { SERVER_TYPE_STYLES, DEFAULT_SERVER_STYLE } from "@/lib/server-styles";
@@ -393,12 +393,12 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
       {/* Page-specific children (e.g., horizontal media lists) */}
       {children}
 
-      {/* Arr Controls */}
-      {!isAggregate && <ArrSection itemId={item.id} mediaType={merged.type} />}
+      {/* Integrations: Arr (Sonarr/Radarr/Lidarr) + Seerr in a single area */}
+      {!isAggregate && <IntegrationsSection itemId={item.id} mediaType={merged.type} compact={compact} />}
 
       {/* Aggregate items: simplified playback stats (no episode-level detail columns) */}
       {isAggregate && (
-        <div className="rounded-xl border bg-muted/30 p-5 space-y-3">
+        <div className="rounded-xl border border-white/6 bg-muted/30 p-5 shadow-[inset_0_1px_0_oklch(1_0_0/3%)] space-y-3">
           <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground"><Play className="h-3.5 w-3.5" />Playback</h3>
           <div className="text-sm">
             <DetailRow
@@ -419,7 +419,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
       {/* ── Detail columns (individual items only) ─────────── */}
       {!isAggregate && <div className={compact ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 stagger-children"}>
         {/* Column 1: Watch/Listen History */}
-        <div className="rounded-xl border bg-muted/30 p-5 space-y-3">
+        <div className="rounded-xl border border-white/6 bg-muted/30 p-5 shadow-[inset_0_1px_0_oklch(1_0_0/3%)] space-y-3">
           <div className="flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
             <History className="h-3.5 w-3.5" />
             {merged.type === "MUSIC" ? "Listen History" : "Watch History"}
@@ -430,14 +430,24 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
             )}
           </div>
           {historyLoading ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Loading...
+            <div className="space-y-2">
+              {[0, 1].map((i) => (
+                <div key={i} className="flex animate-pulse items-center justify-between rounded-lg bg-muted/50 px-3 py-2.5">
+                  <div className="space-y-1.5">
+                    <div className="h-3 w-20 rounded bg-muted-foreground/20" />
+                    <div className="h-2 w-28 rounded bg-muted-foreground/10" />
+                  </div>
+                  <div className="h-2.5 w-12 rounded bg-muted-foreground/10" />
+                </div>
+              ))}
             </div>
           ) : history.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              {merged.type === "MUSIC" ? "No listen history available." : "No watch history available."}
-            </p>
+            <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-white/5 bg-muted/30 px-3 py-6 text-center">
+              <History className="h-5 w-5 text-muted-foreground/50" />
+              <p className="text-xs text-muted-foreground">
+                {merged.type === "MUSIC" ? "No listen history yet" : "No watch history yet"}
+              </p>
+            </div>
           ) : serverHistories.length > 1 ? (
             <div className="space-y-4">
               {serverHistories.filter((sh) => sh.users.length > 0).map((sh) => (
@@ -485,7 +495,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
         </div>
 
         {/* Column 2: File, Playback, Subtitles, Metadata */}
-        <div className="rounded-xl border bg-muted/30 p-5 space-y-5">
+        <div className="rounded-xl border border-white/6 bg-muted/30 p-5 shadow-[inset_0_1px_0_oklch(1_0_0/3%)] space-y-5">
           {/* File Section */}
           <section>
             <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground"><FileText className="h-3.5 w-3.5" />File</h3>
@@ -493,9 +503,12 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
               <DetailRow label="Size" value={formatFileSize(merged.fileSize)} />
               <DetailRow label="Duration" value={formatDuration(merged.duration)} />
               {merged.filePath && (
-                <div className="mt-1.5">
-                  <span className="text-muted-foreground">Path</span>
-                  <p className="mt-1 break-all rounded bg-muted/50 px-2 py-1 text-xs font-mono">
+                <div className="mt-2 space-y-1">
+                  <span className="text-xs uppercase tracking-wide text-muted-foreground">Path</span>
+                  <p
+                    className="wrap-break-word rounded-md border border-white/5 bg-muted/50 px-2.5 py-1.5 text-xs font-mono leading-relaxed text-foreground/80"
+                    title={merged.filePath}
+                  >
                     {merged.filePath}
                   </p>
                 </div>
@@ -640,7 +653,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
 
         {/* Column 3: Video */}
         {!hideVideo && merged.type !== "MUSIC" && (
-          <div className="rounded-xl border bg-muted/30 p-5 space-y-3">
+          <div className="rounded-xl border border-white/6 bg-muted/30 p-5 shadow-[inset_0_1px_0_oklch(1_0_0/3%)] space-y-3">
             <Collapsible open={videoOpen} onOpenChange={setVideoOpen}>
               <CollapsibleTrigger asChild>
                 <button className="flex w-full items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors">
@@ -659,7 +672,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                   {videoStreams.length > 0 ? (
                     <div className="space-y-3">
                       {videoStreams.map((vs, i) => (
-                        <div key={vs.id} className={cn(videoStreams.length > 1 && "rounded-lg bg-muted/30 p-3")}>
+                        <div key={vs.id} className={cn(videoStreams.length > 1 && "rounded-lg border border-white/5 bg-muted/50 p-3")}>
                           {videoStreams.length > 1 && (
                             <p className="mb-1 text-xs font-medium text-muted-foreground">
                               Stream {i + 1}{vs.isDefault ? " (Default)" : ""}
@@ -738,7 +751,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
         )}
 
         {/* Column 4: Audio */}
-        <div className="rounded-xl border bg-muted/30 p-5 space-y-3">
+        <div className="rounded-xl border border-white/6 bg-muted/30 p-5 shadow-[inset_0_1px_0_oklch(1_0_0/3%)] space-y-3">
           <Collapsible open={audioOpen} onOpenChange={setAudioOpen}>
             <CollapsibleTrigger asChild>
               <button className="flex w-full items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors">
@@ -757,7 +770,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                 {audioStreams.length > 0 ? (
                   <div className="space-y-3">
                     {audioStreams.map((as, i) => (
-                      <div key={as.id} className={cn(audioStreams.length > 1 && "rounded-lg bg-muted/30 p-3")}>
+                      <div key={as.id} className={cn(audioStreams.length > 1 && "rounded-lg border border-white/5 bg-muted/50 p-3")}>
                         {audioStreams.length > 1 && (
                           <p className="mb-1 text-xs font-medium text-muted-foreground">
                             Stream {i + 1}{as.isDefault ? " (Default)" : ""}{as.language ? ` — ${as.language}` : ""}

@@ -104,7 +104,6 @@ describe("GET /api/media/[id]/arr-info", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.matches).toEqual([]);
-    expect(body.plexRatingKey).toBeDefined();
   });
 
   it("matches movie via TMDB ID to Radarr", async () => {
