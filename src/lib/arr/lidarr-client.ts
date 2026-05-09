@@ -46,6 +46,11 @@ export interface LidarrExclusion {
   artistName: string;
 }
 
+export interface LidarrMediaManagementConfig {
+  recycleBin: string | null;
+  recycleBinCleanupDays: number;
+}
+
 export class LidarrClient {
   private client: AxiosInstance;
 
@@ -192,5 +197,12 @@ export class LidarrClient {
       foreignId,
       artistName,
     });
+  }
+
+  async getMediaManagementConfig(): Promise<LidarrMediaManagementConfig> {
+    const { data } = await this.client.get<LidarrMediaManagementConfig>(
+      "/api/v1/config/mediamanagement"
+    );
+    return data;
   }
 }

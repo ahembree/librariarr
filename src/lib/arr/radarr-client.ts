@@ -52,6 +52,11 @@ export interface RadarrExclusion {
   movieYear: number;
 }
 
+export interface RadarrMediaManagementConfig {
+  recycleBin: string | null;
+  recycleBinCleanupDays: number;
+}
+
 export class RadarrClient {
   private client: AxiosInstance;
 
@@ -208,6 +213,13 @@ export class RadarrClient {
   async getLanguages(): Promise<{ id: number; name: string }[]> {
     const { data } = await this.client.get<{ id: number; name: string }[]>(
       "/api/v3/language"
+    );
+    return data;
+  }
+
+  async getMediaManagementConfig(): Promise<RadarrMediaManagementConfig> {
+    const { data } = await this.client.get<RadarrMediaManagementConfig>(
+      "/api/v3/config/mediamanagement"
     );
     return data;
   }

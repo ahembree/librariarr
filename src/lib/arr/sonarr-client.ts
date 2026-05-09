@@ -59,6 +59,11 @@ export interface SonarrExclusion {
   title: string;
 }
 
+export interface SonarrMediaManagementConfig {
+  recycleBin: string | null;
+  recycleBinCleanupDays: number;
+}
+
 export class SonarrClient {
   private client: AxiosInstance;
 
@@ -225,6 +230,13 @@ export class SonarrClient {
   async getLanguages(): Promise<{ id: number; name: string }[]> {
     const { data } = await this.client.get<{ id: number; name: string }[]>(
       "/api/v3/language"
+    );
+    return data;
+  }
+
+  async getMediaManagementConfig(): Promise<SonarrMediaManagementConfig> {
+    const { data } = await this.client.get<SonarrMediaManagementConfig>(
+      "/api/v3/config/mediamanagement"
     );
     return data;
   }
