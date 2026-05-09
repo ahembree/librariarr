@@ -393,8 +393,12 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
       {/* Page-specific children (e.g., horizontal media lists) */}
       {children}
 
-      {/* Integrations: Arr (Sonarr/Radarr/Lidarr) + Seerr in a single area */}
-      {!isAggregate && <IntegrationsSection itemId={item.id} mediaType={merged.type} compact={compact} />}
+      {/* Integrations: Arr (Sonarr/Radarr/Lidarr) + Seerr in a single area.
+          Aggregate series/season views also render: episode records carry show-level
+          TVDB/TMDB IDs (propagated by sync), so per-media Arr/Seerr lookups resolve. */}
+      {(!isAggregate || merged.type === "SERIES") && (
+        <IntegrationsSection itemId={item.id} mediaType={merged.type} compact={compact} />
+      )}
 
       {/* Aggregate items: simplified playback stats (no episode-level detail columns) */}
       {isAggregate && (

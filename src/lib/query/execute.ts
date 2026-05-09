@@ -15,6 +15,7 @@ import { evaluateQuerySeerrRule } from "./seerr-filter";
 import { fetchArrDataForQuery } from "./fetch-arr-data";
 import { fetchSeerrDataForQuery } from "./fetch-seerr-data";
 import type { ArrDataMap, ArrMetadata, SeerrDataMap, SeerrMetadata } from "@/lib/rules/engine";
+import { lookupSeerrMeta } from "@/lib/rules/engine";
 
 const MB_IN_BYTES = 1024 * 1024;
 const DURATION_MS_PER_MIN = 60_000;
@@ -1092,7 +1093,7 @@ export async function executeQuery(
 
   // Determine if we need unified in-memory evaluation
   const hasCrossSystem = hasCrossSystemRules(groups);
-  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem;
+  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups);
 
   // Check if we need to group series
   const seriesInScope = mediaTypes.length === 0 || mediaTypes.includes("SERIES");
@@ -1223,7 +1224,7 @@ async function executeUngrouped(
 ): Promise<QueryResult> {
   // When any in-memory evaluation is needed (external rules, wildcards, stream query computed fields), fetch all items
   const hasCrossSystem = hasCrossSystemRules(groups);
-  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem;
+  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups);
   const useInMemoryPagination = needsFullInMemoryEval;
   const selectToUse = needsFullInMemoryEval ? ITEM_SELECT_FULL : ITEM_SELECT;
 
@@ -1933,10 +1934,7 @@ function lookupExternalMeta(
 
   let seerrMeta: SeerrMetadata | undefined;
   if (seerrDataByType) {
-    const seerrSource = itemType === "MOVIE" ? "TMDB" : "TVDB";
-    const seerrExtId = externalIds.find(e => e.source === seerrSource);
-    const seerrData = seerrDataByType[itemType];
-    seerrMeta = seerrExtId && seerrData ? seerrData[seerrExtId.externalId] : undefined;
+    seerrMeta = lookupSeerrMeta(externalIds, seerrDataByType[itemType], itemType);
   }
 
   return { arrMeta, seerrMeta };

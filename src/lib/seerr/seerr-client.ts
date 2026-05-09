@@ -59,6 +59,7 @@ export interface SeerrMovieDetails {
   backdropPath: string | null;
   overview: string;
   releaseDate: string;
+  mediaInfo?: SeerrMediaInfo;
 }
 
 export interface SeerrTvDetails {
@@ -69,6 +70,7 @@ export interface SeerrTvDetails {
   backdropPath: string | null;
   overview: string;
   firstAirDate: string;
+  mediaInfo?: SeerrMediaInfo;
 }
 
 export class SeerrClient {

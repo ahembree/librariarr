@@ -187,44 +187,54 @@ describe("Seerr external ID source per type", () => {
 
   it("MOVIE Seerr lookup uses TMDB ID", () => {
     const items = [{ id: "1", externalIds: [{ source: "TMDB", externalId: "tmdb-100" }] }];
-    const seerrData: SeerrDataMap = { "tmdb-100": seerrMeta };
+    const seerrData: SeerrDataMap = { "TMDB:tmdb-100": seerrMeta };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "MOVIE", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("MOVIE Seerr lookup does NOT use TVDB ID", () => {
     const items = [{ id: "1", externalIds: [{ source: "TVDB", externalId: "tvdb-100" }] }];
-    const seerrData: SeerrDataMap = { "tvdb-100": seerrMeta };
+    const seerrData: SeerrDataMap = { "TVDB:tvdb-100": seerrMeta };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "MOVIE", undefined, seerrData).get("1")).toHaveLength(0);
   });
 
   it("SERIES Seerr lookup uses TVDB ID", () => {
     const items = [{ id: "1", externalIds: [{ source: "TVDB", externalId: "tvdb-200" }] }];
-    const seerrData: SeerrDataMap = { "tvdb-200": seerrMeta };
+    const seerrData: SeerrDataMap = { "TVDB:tvdb-200": seerrMeta };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
-  it("SERIES Seerr lookup does NOT use TMDB ID", () => {
+  it("SERIES Seerr lookup falls back to TMDB ID when TVDB is unavailable", () => {
     const items = [{ id: "1", externalIds: [{ source: "TMDB", externalId: "tmdb-200" }] }];
-    const seerrData: SeerrDataMap = { "tmdb-200": seerrMeta };
+    const seerrData: SeerrDataMap = { "TMDB:tmdb-200": seerrMeta };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
-    expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")).toHaveLength(0);
+    expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
-  it("MUSIC Seerr lookup uses TVDB ID (not MUSICBRAINZ)", () => {
-    const items = [{ id: "1", externalIds: [{ source: "TVDB", externalId: "tvdb-300" }] }];
-    const seerrData: SeerrDataMap = { "tvdb-300": seerrMeta };
+  it("SERIES key namespace prevents TMDB-vs-TVDB integer collisions", () => {
+    // Item B has only TVDB=12345; an unrelated request from another series
+    // happens to have TMDB=12345. Without namespacing, B would falsely match.
+    const items = [{ id: "B", externalIds: [{ source: "TVDB", externalId: "12345" }] }];
+    const seerrData: SeerrDataMap = { "TMDB:12345": seerrMeta };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
-    expect(matched(items, rules, "MUSIC", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
+    expect(matched(items, rules, "SERIES", undefined, seerrData).get("B")).toHaveLength(0);
   });
 
-  it("MUSIC Seerr lookup does NOT use MUSICBRAINZ ID", () => {
-    const items = [{ id: "1", externalIds: [{ source: "MUSICBRAINZ", externalId: "mb-300" }] }];
-    const seerrData: SeerrDataMap = { "mb-300": seerrMeta };
+  it("MUSIC items never resolve Seerr metadata (Seerr does not support music)", () => {
+    const items = [
+      { id: "T", externalIds: [{ source: "TVDB", externalId: "tvdb-300" }] },
+      { id: "M", externalIds: [{ source: "MUSICBRAINZ", externalId: "mb-300" }] },
+    ];
+    const seerrData: SeerrDataMap = {
+      "TVDB:tvdb-300": seerrMeta,
+      "MUSICBRAINZ:mb-300": seerrMeta,
+    };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
-    expect(matched(items, rules, "MUSIC", undefined, seerrData).get("1")).toHaveLength(0);
+    const result = matched(items, rules, "MUSIC", undefined, seerrData);
+    expect(result.get("T")).toHaveLength(0);
+    expect(result.get("M")).toHaveLength(0);
   });
 });
 
@@ -237,61 +247,61 @@ describe("Seerr fields with SERIES type", () => {
   const items = [{ id: "1", externalIds: [{ source: "TVDB", externalId: tvdbId }] }];
 
   it("seerrRequested equals true matches", () => {
-    const seerrData: SeerrDataMap = { [tvdbId]: makeSeerrMeta({ requested: true }) };
+    const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requested: true }) };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrRequested equals false matches when not requested", () => {
-    const seerrData: SeerrDataMap = { [tvdbId]: makeSeerrMeta({ requested: false }) };
+    const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requested: false }) };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "false" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrRequestDate before matches", () => {
-    const seerrData: SeerrDataMap = { [tvdbId]: makeSeerrMeta({ requestDate: "2024-01-15T00:00:00Z" }) };
+    const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requestDate: "2024-01-15T00:00:00Z" }) };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestDate", operator: "before", value: "2024-06-01" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrRequestDate after matches", () => {
-    const seerrData: SeerrDataMap = { [tvdbId]: makeSeerrMeta({ requestDate: "2024-08-01T00:00:00Z" }) };
+    const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requestDate: "2024-08-01T00:00:00Z" }) };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestDate", operator: "after", value: "2024-06-01" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrRequestCount greaterThan matches", () => {
-    const seerrData: SeerrDataMap = { [tvdbId]: makeSeerrMeta({ requestCount: 5 }) };
+    const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requestCount: 5 }) };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestCount", operator: "greaterThan", value: 3 })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrRequestCount lessThan does not match", () => {
-    const seerrData: SeerrDataMap = { [tvdbId]: makeSeerrMeta({ requestCount: 5 }) };
+    const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requestCount: 5 }) };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestCount", operator: "lessThan", value: 3 })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")).toHaveLength(0);
   });
 
   it("seerrRequestedBy contains matches", () => {
-    const seerrData: SeerrDataMap = { [tvdbId]: makeSeerrMeta({ requestedBy: ["alice", "bob"] }) };
+    const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requestedBy: ["alice", "bob"] }) };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestedBy", operator: "contains", value: "alice" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrRequestedBy notContains matches when user not present", () => {
-    const seerrData: SeerrDataMap = { [tvdbId]: makeSeerrMeta({ requestedBy: ["alice"] }) };
+    const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requestedBy: ["alice"] }) };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestedBy", operator: "notContains", value: "charlie" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrApprovalDate equals matches same date", () => {
-    const seerrData: SeerrDataMap = { [tvdbId]: makeSeerrMeta({ approvalDate: "2024-05-10T14:00:00Z" }) };
+    const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ approvalDate: "2024-05-10T14:00:00Z" }) };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrApprovalDate", operator: "equals", value: "2024-05-10" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrDeclineDate before matches", () => {
-    const seerrData: SeerrDataMap = { [tvdbId]: makeSeerrMeta({ declineDate: "2024-02-01T00:00:00Z" }) };
+    const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ declineDate: "2024-02-01T00:00:00Z" }) };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrDeclineDate", operator: "before", value: "2024-06-01" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
@@ -302,62 +312,37 @@ describe("Seerr fields with SERIES type", () => {
   });
 
   it("seerrRequestDate returns false when date is null", () => {
-    const seerrData: SeerrDataMap = { [tvdbId]: makeSeerrMeta({ requestDate: null }) };
+    const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requestDate: null }) };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestDate", operator: "before", value: "2024-06-01" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")).toHaveLength(0);
   });
 });
 
 describe("Seerr fields with MUSIC type", () => {
-  // Seerr uses TVDB for MUSIC (not MUSICBRAINZ) since Seerr doesn't handle music
-  const tvdbId = "tvdb-m1";
-  const items = [{ id: "1", externalIds: [{ source: "TVDB", externalId: tvdbId }] }];
+  // Seerr does not support music (Overseerr/Jellyseerr handle only movies and TV).
+  // The lifecycle processor skips Seerr lookups for MUSIC rule sets, and the rule
+  // engine returns undefined Seerr metadata for MUSIC items regardless of source.
 
-  it("seerrRequested equals true matches via TVDB lookup", () => {
-    const seerrData: SeerrDataMap = { [tvdbId]: makeSeerrMeta({ requested: true }) };
+  it("does not match seerrRequested=true even with seerrData populated", () => {
+    const items = [
+      { id: "T", externalIds: [{ source: "TVDB", externalId: "tvdb-m1" }] },
+      { id: "M", externalIds: [{ source: "MUSICBRAINZ", externalId: "mb-m1" }] },
+      { id: "X", externalIds: [{ source: "TMDB", externalId: "tmdb-m1" }] },
+    ];
+    const seerrData: SeerrDataMap = {
+      "TVDB:tvdb-m1": makeSeerrMeta({ requested: true }),
+      "MUSICBRAINZ:mb-m1": makeSeerrMeta({ requested: true }),
+      "TMDB:tmdb-m1": makeSeerrMeta({ requested: true }),
+    };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
-    expect(matched(items, rules, "MUSIC", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
-  });
-
-  it("seerrRequestCount equals matches via TVDB lookup", () => {
-    const seerrData: SeerrDataMap = { [tvdbId]: makeSeerrMeta({ requestCount: 3 }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestCount", operator: "equals", value: 3 })])];
-    expect(matched(items, rules, "MUSIC", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
-  });
-
-  it("seerrRequestDate after matches via TVDB lookup", () => {
-    const seerrData: SeerrDataMap = { [tvdbId]: makeSeerrMeta({ requestDate: "2024-09-01T00:00:00Z" }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestDate", operator: "after", value: "2024-06-01" })])];
-    expect(matched(items, rules, "MUSIC", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
-  });
-
-  it("seerrRequestedBy equals matches via TVDB lookup", () => {
-    const seerrData: SeerrDataMap = { [tvdbId]: makeSeerrMeta({ requestedBy: ["dave"] }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestedBy", operator: "equals", value: "dave" })])];
-    expect(matched(items, rules, "MUSIC", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
-  });
-
-  it("seerrApprovalDate notEquals matches different date via TVDB", () => {
-    const seerrData: SeerrDataMap = { [tvdbId]: makeSeerrMeta({ approvalDate: "2024-04-01T00:00:00Z" }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrApprovalDate", operator: "notEquals", value: "2024-07-01" })])];
-    expect(matched(items, rules, "MUSIC", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
-  });
-
-  it("seerrDeclineDate equals matches same date via TVDB", () => {
-    const seerrData: SeerrDataMap = { [tvdbId]: makeSeerrMeta({ declineDate: "2024-11-15T10:00:00Z" }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrDeclineDate", operator: "equals", value: "2024-11-15" })])];
-    expect(matched(items, rules, "MUSIC", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
-  });
-
-  it("does not find data keyed by MUSICBRAINZ ID", () => {
-    const mbId = "mb-999";
-    const musicItems = [{ id: "1", externalIds: [{ source: "MUSICBRAINZ", externalId: mbId }] }];
-    const seerrData: SeerrDataMap = { [mbId]: makeSeerrMeta({ requested: true }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
-    expect(matched(musicItems, rules, "MUSIC", undefined, seerrData).get("1")).toHaveLength(0);
+    const result = matched(items, rules, "MUSIC", undefined, seerrData);
+    expect(result.get("T")).toHaveLength(0);
+    expect(result.get("M")).toHaveLength(0);
+    expect(result.get("X")).toHaveLength(0);
   });
 
   it("returns false when no seerr data provided", () => {
+    const items = [{ id: "1", externalIds: [{ source: "TVDB", externalId: "tvdb-m1" }] }];
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "MUSIC", undefined, undefined).get("1")).toHaveLength(0);
   });

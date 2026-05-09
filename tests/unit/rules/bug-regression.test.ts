@@ -222,28 +222,28 @@ describe("Bug 4: Seerr date notEquals evaluation", () => {
   const items = [{ id: "1", externalIds: [{ source: "TMDB", externalId: extId }] }];
 
   it("seerrRequestDate notEquals matches when dates differ", () => {
-    const seerrData: SeerrDataMap = { [extId]: makeSeerrMeta({ requestDate: "2024-03-01T00:00:00Z" }) };
+    const seerrData: SeerrDataMap = { [`TMDB:${extId}`]: makeSeerrMeta({ requestDate: "2024-03-01T00:00:00Z" }) };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestDate", operator: "notEquals", value: "2024-06-01" })])];
     const result = matched(items, rules, "MOVIE", undefined, seerrData);
     expect(result.get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrRequestDate notEquals does NOT match same date", () => {
-    const seerrData: SeerrDataMap = { [extId]: makeSeerrMeta({ requestDate: "2024-03-01T10:00:00Z" }) };
+    const seerrData: SeerrDataMap = { [`TMDB:${extId}`]: makeSeerrMeta({ requestDate: "2024-03-01T10:00:00Z" }) };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestDate", operator: "notEquals", value: "2024-03-01" })])];
     const result = matched(items, rules, "MOVIE", undefined, seerrData);
     expect(result.get("1")).toHaveLength(0);
   });
 
   it("seerrApprovalDate notEquals does NOT match same date", () => {
-    const seerrData: SeerrDataMap = { [extId]: makeSeerrMeta({ approvalDate: "2024-04-10T00:00:00Z" }) };
+    const seerrData: SeerrDataMap = { [`TMDB:${extId}`]: makeSeerrMeta({ approvalDate: "2024-04-10T00:00:00Z" }) };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrApprovalDate", operator: "notEquals", value: "2024-04-10" })])];
     const result = matched(items, rules, "MOVIE", undefined, seerrData);
     expect(result.get("1")).toHaveLength(0);
   });
 
   it("seerrDeclineDate notEquals matches when dates differ", () => {
-    const seerrData: SeerrDataMap = { [extId]: makeSeerrMeta({ declineDate: "2024-05-20T00:00:00Z" }) };
+    const seerrData: SeerrDataMap = { [`TMDB:${extId}`]: makeSeerrMeta({ declineDate: "2024-05-20T00:00:00Z" }) };
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrDeclineDate", operator: "notEquals", value: "2024-12-25" })])];
     const result = matched(items, rules, "MOVIE", undefined, seerrData);
     expect(result.get("1")!.length).toBeGreaterThan(0);

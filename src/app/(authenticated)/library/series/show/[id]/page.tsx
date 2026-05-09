@@ -17,7 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize } from "@/lib/format";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
-import { ArrSection } from "@/components/arr-link-button";
+import { IntegrationsSection } from "@/components/integrations-section";
 
 interface SeasonData {
   seasonNumber: number;
@@ -200,7 +200,7 @@ export default function SeriesDetailPage() {
       )}
 
       <div className="mt-6">
-        <ArrSection itemId={item.id} mediaType="SERIES" />
+        <IntegrationsSection itemId={item.id} mediaType="SERIES" />
       </div>
 
       {seasonItems.length > 0 && (

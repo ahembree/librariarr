@@ -33,10 +33,48 @@ function summarizeRequester(req: SeerrRequest): string {
   return req.requestedBy?.plexUsername || req.requestedBy?.username || req.requestedBy?.email || "Unknown";
 }
 
-function pickHighestMediaStatus(requests: SeerrRequest[]): number | null {
-  // SeerrMediaInfo.status: 1=UNKNOWN, 2=PENDING, 3=PROCESSING, 4=PARTIAL, 5=AVAILABLE, 6=DELETED
-  // The same media object is referenced by every request for that item, so any req.media.status will do.
-  return requests[0]?.media?.status ?? null;
+function toSummary(req: SeerrRequest): SeerrRequestSummary {
+  return {
+    id: req.id,
+    status: req.status,
+    is4k: req.is4k,
+    requestedBy: summarizeRequester(req),
+    createdAt: req.createdAt,
+    updatedAt: req.updatedAt,
+  };
+}
+
+/**
+ * Paginated fallback used when no TMDB ID is available (rare: series with only TVDB).
+ * Walks /api/v1/request in pages of 100 until exhausted, filtering by external IDs.
+ */
+async function findRequestsByPagination(
+  client: SeerrClient,
+  mediaType: "movie" | "tv",
+  tmdbId: string | null,
+  tvdbId: string | null,
+): Promise<{ requests: SeerrRequest[]; mediaStatus: number | null }> {
+  const matching: SeerrRequest[] = [];
+  let mediaStatus: number | null = null;
+  let skip = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const response = await client.getRequests({ take: REQUEST_PAGE_SIZE, skip, mediaType });
+    for (const req of response.results) {
+      const tmdbMatch = tmdbId !== null && String(req.media.tmdbId) === tmdbId;
+      const tvdbMatch =
+        mediaType === "tv" && tvdbId !== null && req.media.tvdbId !== null && String(req.media.tvdbId) === tvdbId;
+      if (tmdbMatch || tvdbMatch) {
+        matching.push(req);
+        if (mediaStatus === null && req.media?.status != null) mediaStatus = req.media.status;
+      }
+    }
+    hasMore = response.results.length === REQUEST_PAGE_SIZE;
+    skip += REQUEST_PAGE_SIZE;
+  }
+
+  return { requests: matching, mediaStatus };
 }
 
 export async function GET(
@@ -68,7 +106,6 @@ export async function GET(
 
   const empty: SeerrInfoResponse = { matches: [] };
 
-  // Seerr does not handle music
   if (item.type === "MUSIC") {
     return NextResponse.json(empty);
   }
@@ -80,8 +117,7 @@ export async function GET(
     return NextResponse.json(empty);
   }
 
-  const mediaType = item.type === "MOVIE" ? "movie" : "tv";
-
+  const mediaType: "movie" | "tv" = item.type === "MOVIE" ? "movie" : "tv";
   const matchedVia: "TMDB" | "TVDB" = item.type === "MOVIE" ? "TMDB" : tvdbId ? "TVDB" : "TMDB";
   const externalId = item.type === "MOVIE" ? tmdbId! : (tvdbId ?? tmdbId)!;
 
@@ -94,19 +130,31 @@ export async function GET(
   for (const instance of seerrInstances) {
     try {
       const client = new SeerrClient(instance.url, instance.apiKey);
-      const response = await client.getRequests({ take: REQUEST_PAGE_SIZE, mediaType });
 
-      const matching = response.results.filter((req) => {
-        if (item.type === "MOVIE") {
-          return tmdbId !== null && String(req.media.tmdbId) === tmdbId;
+      let requests: SeerrRequest[] = [];
+      let mediaStatus: number | null = null;
+
+      // Fast path: per-media endpoint returns all associated requests in one call.
+      // Both /movie/{id} and /tv/{id} are TMDB-based, so we need a TMDB ID to use it.
+      if (tmdbId) {
+        const tmdbNum = Number(tmdbId);
+        if (Number.isFinite(tmdbNum)) {
+          const details = mediaType === "movie"
+            ? await client.getMovie(tmdbNum)
+            : await client.getTvShow(tmdbNum);
+          requests = details.mediaInfo?.requests ?? [];
+          mediaStatus = details.mediaInfo?.status ?? null;
         }
-        // SERIES: prefer TVDB, fall back to TMDB
-        if (tvdbId && req.media.tvdbId !== null && String(req.media.tvdbId) === tvdbId) return true;
-        if (tmdbId && String(req.media.tmdbId) === tmdbId) return true;
-        return false;
-      });
+      }
 
-      if (matching.length === 0) continue;
+      // Fallback: TVDB-only series — walk /request to find matches.
+      if (requests.length === 0 && !tmdbId && tvdbId) {
+        const result = await findRequestsByPagination(client, mediaType, tmdbId, tvdbId);
+        requests = result.requests;
+        mediaStatus = result.mediaStatus;
+      }
+
+      if (requests.length === 0) continue;
 
       const baseUrl = (instance.url || "").replace(/\/+$/, "");
       const seerrUrl = tmdbId ? `${baseUrl}/${mediaType}/${tmdbId}` : null;
@@ -117,15 +165,8 @@ export async function GET(
         matchedVia,
         externalId,
         seerrUrl,
-        mediaStatus: pickHighestMediaStatus(matching),
-        requests: matching.map((req) => ({
-          id: req.id,
-          status: req.status,
-          is4k: req.is4k,
-          requestedBy: summarizeRequester(req),
-          createdAt: req.createdAt,
-          updatedAt: req.updatedAt,
-        })),
+        mediaStatus,
+        requests: requests.map(toSummary),
       });
     } catch (error) {
       apiLogger.error("Media", `Failed to query Seerr instance ${instance.name}`, { error: String(error) });

@@ -204,7 +204,7 @@ function makeItem(id: string, tmdbId: string, overrides?: Record<string, unknown
 
 function makeSeerrData(tmdbId: string, meta: Partial<SeerrMetadata>): SeerrDataMap {
   return {
-    [tmdbId]: {
+    [`TMDB:${tmdbId}`]: {
       requested: false,
       requestCount: 0,
       requestDate: null,
@@ -619,9 +619,9 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
           ],
         },
       ];
-      // Seerr data keyed by TVDB ID for series
+      // Seerr data keyed by namespaced TVDB ID for series
       const seerrData: SeerrDataMap = {
-        "tvdb-123": {
+        "TVDB:tvdb-123": {
           requested: true,
           requestCount: 2,
           requestDate: "2024-06-01T00:00:00Z",

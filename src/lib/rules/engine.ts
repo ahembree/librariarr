@@ -146,8 +146,31 @@ export interface SeerrMetadata {
   declineDate: string | null;
 }
 
-/** Lookup keyed by TMDB ID (string) for movies, or TVDB ID for series */
+/**
+ * Lookup keyed by `${source}:${externalId}` — e.g. `"TMDB:603"`, `"TVDB:81189"`.
+ * The source prefix is required to avoid TMDB↔TVDB integer-ID collisions across the same map.
+ */
 export type SeerrDataMap = Record<string, SeerrMetadata>;
+
+/**
+ * Look up Seerr metadata for a media item, trying source IDs in priority order.
+ * Movies look up by TMDB only; series prefer TVDB but fall back to TMDB.
+ */
+export function lookupSeerrMeta(
+  externalIds: Array<{ source: string; externalId: string }>,
+  seerrData: SeerrDataMap | undefined,
+  type: string,
+): SeerrMetadata | undefined {
+  if (!seerrData) return undefined;
+  const sources = type === "MOVIE" ? ["TMDB"] : type === "SERIES" ? ["TVDB", "TMDB"] : [];
+  for (const source of sources) {
+    const ext = externalIds.find((e) => e.source === source);
+    if (!ext) continue;
+    const meta = seerrData[`${source}:${ext.externalId}`];
+    if (meta) return meta;
+  }
+  return undefined;
+}
 
 function applyNegate(clause: Prisma.MediaItemWhereInput, negate?: boolean): Prisma.MediaItemWhereInput {
   if (!negate) return clause;
@@ -2069,7 +2092,6 @@ export function getMatchedCriteriaForItems(
     ...STREAM_QUERY_FIELDS.map((f) => [f.value, f.label] as const),
   ]);
   const arrIdSource = type === "MOVIE" ? "TMDB" : type === "MUSIC" ? "MUSICBRAINZ" : "TVDB";
-  const seerrIdSource = type === "MOVIE" ? "TMDB" : "TVDB";
   const allRulesWithGroup = collectAllRulesWithGroup(rules);
   const streamQueryGroups = collectStreamQueryGroups(rules);
   const result = new Map<string, MatchedCriterion[]>();
@@ -2079,8 +2101,7 @@ export function getMatchedCriteriaForItems(
     const externalIds = (item.externalIds ?? []) as Array<{ source: string; externalId: string }>;
     const arrExtId = externalIds.find((e) => e.source === arrIdSource);
     const arrMeta = arrData && arrExtId ? arrData[arrExtId.externalId] : undefined;
-    const seerrExtId = externalIds.find((e) => e.source === seerrIdSource);
-    const seerrMeta = seerrData && seerrExtId ? seerrData[seerrExtId.externalId] : undefined;
+    const seerrMeta = lookupSeerrMeta(externalIds, seerrData, type);
 
     for (const { rule, groupName } of allRulesWithGroup) {
       if (evaluateRuleAgainstItem(rule, item, arrMeta, seerrMeta)) {
@@ -2139,7 +2160,6 @@ export function getActualValuesForAllRules(
   seerrData?: SeerrDataMap
 ): Map<string, Map<string, string>> {
   const arrIdSource = type === "MOVIE" ? "TMDB" : type === "MUSIC" ? "MUSICBRAINZ" : "TVDB";
-  const seerrIdSource = type === "MOVIE" ? "TMDB" : "TVDB";
   const allRulesWithGroup = collectAllRulesWithGroup(rules);
   const result = new Map<string, Map<string, string>>();
 
@@ -2148,8 +2168,7 @@ export function getActualValuesForAllRules(
     const externalIds = (item.externalIds ?? []) as Array<{ source: string; externalId: string }>;
     const arrExtId = externalIds.find((e) => e.source === arrIdSource);
     const arrMeta = arrData && arrExtId ? arrData[arrExtId.externalId] : undefined;
-    const seerrExtId = externalIds.find((e) => e.source === seerrIdSource);
-    const seerrMeta = seerrData && seerrExtId ? seerrData[seerrExtId.externalId] : undefined;
+    const seerrMeta = lookupSeerrMeta(externalIds, seerrData, type);
 
     for (const { rule } of allRulesWithGroup) {
       const actual = getActualValueForField(rule.field, item, arrMeta, seerrMeta);
@@ -2556,10 +2575,7 @@ export async function evaluateSeriesScope(
     );
     const arrMeta = arrData && extId ? arrData[extId.externalId] : undefined;
 
-    const seerrExtId = series.externalIds?.find(
-      (e) => e.source === "TVDB"
-    );
-    const seerrMeta = seerrData && seerrExtId ? seerrData[seerrExtId.externalId] : undefined;
+    const seerrMeta = lookupSeerrMeta(series.externalIds ?? [], seerrData, "SERIES");
 
     if (evaluateAllRulesInMemory(rules, item, arrMeta, seerrMeta)) {
       matching.push(series);
@@ -2795,7 +2811,6 @@ export async function evaluateRules(
   // AND/OR logic between groups with mixed field types is correctly enforced.
   if (needsFullReeval) {
     const arrIdSource = type === "MOVIE" ? "TMDB" : type === "MUSIC" ? "MUSICBRAINZ" : "TVDB";
-    const seerrIdSource = type === "MOVIE" ? "TMDB" : "TVDB";
 
     // Batch-fetch cross-system data if needed
     let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }> | undefined;
@@ -2809,8 +2824,7 @@ export async function evaluateRules(
         : [];
       const arrExtId = externalIds.find((e) => e.source === arrIdSource);
       const itemArrMeta = arrData && arrExtId ? arrData[arrExtId.externalId] : undefined;
-      const seerrExtId = externalIds.find((e) => e.source === seerrIdSource);
-      const itemSeerrMeta = seerrData && seerrExtId ? seerrData[seerrExtId.externalId] : undefined;
+      const itemSeerrMeta = lookupSeerrMeta(externalIds, seerrData, type);
 
       const crossData = crossSystemData?.get(item.id);
       const serialized: Record<string, unknown> = {

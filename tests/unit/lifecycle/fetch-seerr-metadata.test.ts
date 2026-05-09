@@ -44,13 +44,13 @@ describe("fetchSeerrMetadata", () => {
 
     const result = await fetchSeerrMetadata("u1", "MOVIE");
 
-    expect(result["550"]).toBeDefined();
-    expect(result["550"].requested).toBe(true);
-    expect(result["550"].requestCount).toBe(1);
-    expect(result["550"].requestedBy).toEqual(["john"]);
-    expect(result["550"].requestDate).toBe("2024-01-15");
-    expect(result["550"].approvalDate).toBe("2024-01-16");
-    expect(result["550"].declineDate).toBeNull();
+    expect(result["TMDB:550"]).toBeDefined();
+    expect(result["TMDB:550"].requested).toBe(true);
+    expect(result["TMDB:550"].requestCount).toBe(1);
+    expect(result["TMDB:550"].requestedBy).toEqual(["john"]);
+    expect(result["TMDB:550"].requestDate).toBe("2024-01-15");
+    expect(result["TMDB:550"].approvalDate).toBe("2024-01-16");
+    expect(result["TMDB:550"].declineDate).toBeNull();
   });
 
   it("fetches TV requests keyed by both TVDB and TMDB ID", async () => {
@@ -71,11 +71,11 @@ describe("fetchSeerrMetadata", () => {
 
     const result = await fetchSeerrMetadata("u1", "SERIES");
 
-    // Should be keyed by both TVDB ID and TMDB ID
-    expect(result["2000"]).toBeDefined();
-    expect(result["1000"]).toBeDefined();
-    expect(result["2000"].requestedBy).toEqual(["jane"]);
-    expect(result["1000"].requestedBy).toEqual(["jane"]);
+    // Should be keyed by both namespaced TVDB and TMDB IDs
+    expect(result["TVDB:2000"]).toBeDefined();
+    expect(result["TMDB:1000"]).toBeDefined();
+    expect(result["TVDB:2000"].requestedBy).toEqual(["jane"]);
+    expect(result["TMDB:1000"].requestedBy).toEqual(["jane"]);
   });
 
   it("merges multiple requests for the same TMDB ID", async () => {
@@ -103,12 +103,12 @@ describe("fetchSeerrMetadata", () => {
 
     const result = await fetchSeerrMetadata("u1", "MOVIE");
 
-    expect(result["550"].requestCount).toBe(2);
-    expect(result["550"].requestedBy).toEqual(["john", "jane"]);
+    expect(result["TMDB:550"].requestCount).toBe(2);
+    expect(result["TMDB:550"].requestedBy).toEqual(["john", "jane"]);
     // Should use earliest request date
-    expect(result["550"].requestDate).toBe("2024-01-10");
+    expect(result["TMDB:550"].requestDate).toBe("2024-01-10");
     // Should use earliest approval date
-    expect(result["550"].approvalDate).toBe("2024-01-16");
+    expect(result["TMDB:550"].approvalDate).toBe("2024-01-16");
   });
 
   it("does not duplicate the same username in requestedBy", async () => {
@@ -136,7 +136,7 @@ describe("fetchSeerrMetadata", () => {
 
     const result = await fetchSeerrMetadata("u1", "MOVIE");
 
-    expect(result["550"].requestedBy).toEqual(["john"]);
+    expect(result["TMDB:550"].requestedBy).toEqual(["john"]);
   });
 
   it("tracks decline date for status 3", async () => {
@@ -157,8 +157,8 @@ describe("fetchSeerrMetadata", () => {
 
     const result = await fetchSeerrMetadata("u1", "MOVIE");
 
-    expect(result["100"].declineDate).toBe("2024-03-05");
-    expect(result["100"].approvalDate).toBeNull();
+    expect(result["TMDB:100"].declineDate).toBe("2024-03-05");
+    expect(result["TMDB:100"].approvalDate).toBeNull();
   });
 
   it("falls back to 'Unknown' when no user identifiers are present", async () => {
@@ -179,8 +179,8 @@ describe("fetchSeerrMetadata", () => {
 
     const result = await fetchSeerrMetadata("u1", "MOVIE");
 
-    expect(result["999"].requestedBy).toEqual(["Unknown"]);
-    expect(result["999"].requestDate).toBeNull();
+    expect(result["TMDB:999"].requestedBy).toEqual(["Unknown"]);
+    expect(result["TMDB:999"].requestDate).toBeNull();
   });
 
   it("paginates through all results", async () => {
@@ -263,7 +263,7 @@ describe("fetchSeerrMetadata", () => {
 
     const result = await fetchSeerrMetadata("u1", "MOVIE");
 
-    expect(result["100"]).toBeDefined();
-    expect(result["200"]).toBeDefined();
+    expect(result["TMDB:100"]).toBeDefined();
+    expect(result["TMDB:200"]).toBeDefined();
   });
 });

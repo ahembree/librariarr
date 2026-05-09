@@ -20,7 +20,7 @@ import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
-import { ArrSection } from "@/components/arr-link-button";
+import { IntegrationsSection } from "@/components/integrations-section";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 
 function formatResolution(resolution: string | null): string {
@@ -193,7 +193,7 @@ export default function SeasonDetailPage() {
       playServers={playServers}
     >
       <div className="mt-6">
-        <ArrSection itemId={item.id} mediaType="SERIES" hideQualityProfile />
+        <IntegrationsSection itemId={item.id} mediaType="SERIES" hideQualityProfile />
       </div>
 
       {episodes.length > 0 && (

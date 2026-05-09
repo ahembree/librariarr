@@ -25,17 +25,13 @@ export async function fetchSeerrMetadata(
       const response = await client.getRequests({ take, skip, mediaType });
 
       for (const req of response.results) {
-        // Key by TMDB ID for movies, TVDB ID (if available) or TMDB ID for series
+        // Namespace keys with source prefix so TMDB and TVDB IDs can't collide in the same map
         const keys: string[] = [];
         if (type === "MOVIE") {
-          keys.push(String(req.media.tmdbId));
+          if (req.media.tmdbId != null) keys.push(`TMDB:${req.media.tmdbId}`);
         } else {
-          // For series, prefer TVDB ID since that's what Librariarr uses for series correlation
-          if (req.media.tvdbId) {
-            keys.push(String(req.media.tvdbId));
-          }
-          // Also key by TMDB ID as fallback
-          keys.push(String(req.media.tmdbId));
+          if (req.media.tvdbId != null) keys.push(`TVDB:${req.media.tvdbId}`);
+          if (req.media.tmdbId != null) keys.push(`TMDB:${req.media.tmdbId}`);
         }
 
         const username = req.requestedBy?.plexUsername || req.requestedBy?.username || req.requestedBy?.email || "Unknown";
