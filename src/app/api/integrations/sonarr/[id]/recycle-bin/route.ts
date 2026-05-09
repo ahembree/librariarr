@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { SonarrClient } from "@/lib/arr/sonarr-client";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
 export async function GET(
   _request: NextRequest,
@@ -34,7 +35,8 @@ export async function GET(
       arrUrl: instance.url,
     });
   } catch (error: unknown) {
-    const msg = error instanceof Error ? error.message : "Failed to query Sonarr";
+    const raw = error instanceof Error ? error.message : "Failed to query Sonarr";
+    const msg = sanitizeErrorDetail(raw) ?? "Failed to query Sonarr";
     return NextResponse.json({ enabled: null, error: msg, arrUrl: instance.url });
   }
 }

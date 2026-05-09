@@ -308,9 +308,14 @@ export async function detectAndSaveMatches(
       where: { ruleSetId: ruleSet.id, mediaItemId: { in: staleIds } },
     });
 
-    // Fetch current state of stale items to determine which criteria changed
+    // Fetch current state of stale items to determine which criteria changed.
+    // Scope by the rule set's serverIds so logs can never refer to items outside
+    // the rule set's intended library scope.
     const staleItems = await prisma.mediaItem.findMany({
-      where: { id: { in: staleIds } },
+      where: {
+        id: { in: staleIds },
+        library: { mediaServerId: { in: serverIds } },
+      },
       include: {
         externalIds: true,
         streams: true,

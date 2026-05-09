@@ -635,6 +635,12 @@ export function LifecycleRulePage({
   const [showRecycleBinModal, setShowRecycleBinModal] = useState(false);
   const [recycleBinAcknowledged, setRecycleBinAcknowledged] = useState(false);
   const pendingSaveOptionsRef = useRef<{ clearMatches?: boolean; runDetection?: boolean; processActions?: boolean } | undefined>(undefined);
+  // Increments on every loadRuleSet / newRuleSet call. Async paths inside loadRuleSet
+  // capture the token at start and bail if the active rule set has changed since.
+  const loadTokenRef = useRef(0);
+  // Same pattern for preview — rapid Preview clicks would otherwise let an earlier
+  // response overwrite the result of a later one.
+  const previewTokenRef = useRef(0);
 
   // Collection config
   const [collectionEnabled, setCollectionEnabled] = useState(false);
@@ -1063,6 +1069,7 @@ export function LifecycleRulePage({
 
   const handlePreview = async () => {
     if (countAllRules(groups) === 0) return;
+    const token = ++previewTokenRef.current;
     setPreviewing(true);
     try {
       const previewBody: Record<string, unknown> = { rules: groups, type: mediaType, serverIds };
@@ -1093,6 +1100,8 @@ export function LifecycleRulePage({
       let mergedItems = previewData.items as PreviewItem[];
 
       // Process diff data if available
+      let nextDiffMap: Map<string, "added" | "removed" | "retained"> | null = null;
+      let nextDiffCounts: DiffData["counts"] | null = null;
       if (diffResponse?.ok) {
         const diff = await diffResponse.json() as DiffData & { removedItems?: PreviewItem[] };
         const statusMap = new Map<string, "added" | "removed" | "retained">();
@@ -1105,8 +1114,16 @@ export function LifecycleRulePage({
           mergedItems = [...mergedItems, ...diff.removedItems];
         }
 
-        setPreviewDiffMap(statusMap);
-        setPreviewDiffCounts(diff.counts);
+        nextDiffMap = statusMap;
+        nextDiffCounts = diff.counts;
+      }
+
+      // Bail if a newer Preview was kicked off (or we navigated away) while we awaited.
+      if (previewTokenRef.current !== token) return;
+
+      if (nextDiffMap) {
+        setPreviewDiffMap(nextDiffMap);
+        setPreviewDiffCounts(nextDiffCounts);
       } else {
         setPreviewDiffMap(new Map());
         setPreviewDiffCounts(null);
@@ -1123,7 +1140,11 @@ export function LifecycleRulePage({
     } catch (error) {
       console.error("Failed to preview:", error);
     } finally {
-      setPreviewing(false);
+      // Only clear the previewing flag if this is still the latest call;
+      // otherwise the newer call owns the spinner.
+      if (previewTokenRef.current === token) {
+        setPreviewing(false);
+      }
     }
   };
 
@@ -1245,6 +1266,7 @@ export function LifecycleRulePage({
   });
 
   const loadRuleSet = async (ruleSet: SavedRuleSet) => {
+    const token = ++loadTokenRef.current;
     setName(ruleSet.name);
     setGroups(legacyToGroups(ruleSet.rules));
     setActiveRuleSetId(ruleSet.id);
@@ -1293,6 +1315,9 @@ export function LifecycleRulePage({
         // Fall back to DB values
       }
     }
+    // Bail if the user navigated away (loaded a different rule set, or clicked
+    // "New Rule Set") while the visibility fetch was in flight.
+    if (loadTokenRef.current !== token) return;
     setCollectionHomeScreen(homeScreen);
     setCollectionRecommended(recommended);
     setCollectionSort(ruleSet.collectionSort ?? "ALPHABETICAL");
@@ -1356,6 +1381,8 @@ export function LifecycleRulePage({
   };
 
   const newRuleSet = () => {
+    // Bump token to invalidate any in-flight loadRuleSet visibility fetches.
+    loadTokenRef.current++;
     setName("");
     setGroups([]);
     setActiveRuleSetId(null);
@@ -1368,6 +1395,8 @@ export function LifecycleRulePage({
     setActionDelayDays(7);
     setArrInstanceId("");
     setAddImportExclusion(false);
+    setSearchAfterDelete(false);
+    setStickyMatches(false);
     setAddArrTags([]);
     setRemoveArrTags([]);
     setManageTagsEnabled(false);

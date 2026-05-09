@@ -86,8 +86,11 @@ export async function syncPlexCollection(
       } else if (ruleSet.type === "SERIES" && ruleSet.seriesScope) {
         // For series-scope rules, items are episodes grouped by parentTitle.
         // We need series-level ratingKeys from Plex.
+        // Match titles with whitespace-trimmed, case-insensitive comparison
+        // because casing can drift between Plex re-indexes and stored metadata.
+        const normalize = (s: string) => s.trim().toLowerCase();
         const seriesTitles = new Set(
-          items.map((i) => i.parentTitle ?? i.title)
+          items.map((i) => normalize(i.parentTitle ?? i.title))
         );
         let plexSeries: Array<{ title: string; ratingKey: string }>;
         if (plexItemsCache?.has(library.key)) {
@@ -97,7 +100,7 @@ export async function syncPlexCollection(
           plexItemsCache?.set(library.key, plexSeries);
         }
         desiredKeys = plexSeries
-          .filter((s) => seriesTitles.has(s.title))
+          .filter((s) => seriesTitles.has(normalize(s.title)))
           .map((s) => s.ratingKey);
       } else {
         desiredKeys = items.map((i) => i.ratingKey);
