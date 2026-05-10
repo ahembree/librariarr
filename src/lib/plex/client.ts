@@ -711,9 +711,10 @@ export class PlexClient implements MediaServerClient {
       responseType: "arraybuffer",
       timeout: 15000,
     });
+    const contentType = response.headers["content-type"];
     return {
       data: Buffer.from(response.data),
-      contentType: response.headers["content-type"] || "image/jpeg",
+      contentType: typeof contentType === "string" ? contentType : "image/jpeg",
     };
   }
 
