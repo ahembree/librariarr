@@ -136,23 +136,25 @@ async function processPrerollSchedules() {
 
       if (cached === desiredPath) continue; // No change needed
 
-      for (const server of servers) {
-        try {
-          const client = createMediaServerClient(server.type, server.url, server.accessToken, {
-            skipTlsVerify: server.tlsSkipVerify,
-          });
+      await Promise.allSettled(
+        servers.map(async (server) => {
+          try {
+            const client = createMediaServerClient(server.type, server.url, server.accessToken, {
+              skipTlsVerify: server.tlsSkipVerify,
+            });
 
-          if (desiredPath) {
-            await client.setPrerollPath?.(desiredPath);
-            logger.info("Enforcer", `Preroll: set to "${desiredPath}" for schedule "${activeSchedule!.name}"`);
-          } else {
-            await client.clearPreroll?.();
-            logger.info("Enforcer", "Preroll: cleared (no active schedule)");
+            if (desiredPath) {
+              await client.setPrerollPath?.(desiredPath);
+              logger.info("Enforcer", `Preroll: set to "${desiredPath}" for schedule "${activeSchedule!.name}"`);
+            } else {
+              await client.clearPreroll?.();
+              logger.info("Enforcer", "Preroll: cleared (no active schedule)");
+            }
+          } catch (error) {
+            logger.error("Enforcer", "Preroll: could not update server", { error: String(error) });
           }
-        } catch (error) {
-          logger.error("Enforcer", "Preroll: could not update server", { error: String(error) });
-        }
-      }
+        }),
+      );
 
       lastPrerollPath.set(userId, desiredPath);
     }
@@ -173,17 +175,19 @@ async function processPrerollSchedules() {
             },
           });
           if (user) {
-            for (const server of user.mediaServers) {
-              try {
-                const client = createMediaServerClient(server.type, server.url, server.accessToken, {
-                  skipTlsVerify: server.tlsSkipVerify,
-                });
-                await client.clearPreroll?.();
-                logger.info("Enforcer", "Preroll: cleared (no more enabled schedules)");
-              } catch (error) {
-                logger.debug("Enforcer", "Preroll: could not clear on server", { error: String(error) });
-              }
-            }
+            await Promise.allSettled(
+              user.mediaServers.map(async (server) => {
+                try {
+                  const client = createMediaServerClient(server.type, server.url, server.accessToken, {
+                    skipTlsVerify: server.tlsSkipVerify,
+                  });
+                  await client.clearPreroll?.();
+                  logger.info("Enforcer", "Preroll: cleared (no more enabled schedules)");
+                } catch (error) {
+                  logger.debug("Enforcer", "Preroll: could not clear on server", { error: String(error) });
+                }
+              }),
+            );
           }
           lastPrerollPath.set(userId, "");
         }
@@ -241,7 +245,7 @@ export async function runEnforcerTick() {
             remoteTranscoding: false,
           };
 
-          for (const server of settings.user.mediaServers) {
+          await Promise.allSettled(settings.user.mediaServers.map(async (server) => {
             try {
               const client = createMediaServerClient(server.type, server.url, server.accessToken, {
                 skipTlsVerify: server.tlsSkipVerify,
@@ -307,7 +311,7 @@ export async function runEnforcerTick() {
                 { error: String(error) }
               );
             }
-          }
+          }));
         }
 
         // Prune entries for sessions that no longer exist
@@ -342,7 +346,7 @@ export async function runEnforcerTick() {
           if (active) {
             const blackoutMsg = schedule.message || "Stream terminated due to scheduled blackout period.";
 
-            for (const server of schedule.user.mediaServers) {
+            await Promise.allSettled(schedule.user.mediaServers.map(async (server) => {
               try {
                 const client = createMediaServerClient(server.type, server.url, server.accessToken, {
                   skipTlsVerify: server.tlsSkipVerify,
@@ -441,7 +445,7 @@ export async function runEnforcerTick() {
                   { error: String(error) }
                 );
               }
-            }
+            }));
           } else {
             // Blackout not active — clean up known sessions if entry exists
             if (knownBlackoutSessions.has(blackoutKey)) {

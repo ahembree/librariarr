@@ -238,7 +238,7 @@ function formatDuration(ms: number): string {
 const MEDIA_ITEM_COLUMNS = [
   "id", "libraryId", "ratingKey", "parentRatingKey", "grandparentRatingKey", "type",
   "title", "year", "summary", "thumbUrl", "artUrl",
-  "parentThumbUrl", "seasonThumbUrl", "parentTitle", "albumTitle",
+  "parentThumbUrl", "parentSummary", "seasonThumbUrl", "parentTitle", "albumTitle",
   "seasonNumber", "episodeNumber",
   "contentRating", "rating", "audienceRating", "userRating",
   "studio", "tagline", "originalTitle", "originallyAvailableAt", "viewOffset",
@@ -262,9 +262,9 @@ const COLS_PER_ROW = MEDIA_ITEM_COLUMNS.length;
 // Indices of columns needing explicit SQL type casts
 const COLUMN_CASTS: Record<number, string> = {
   5: '::"LibraryType"',
-  26: "::jsonb", 27: "::jsonb", 28: "::jsonb", 29: "::jsonb", 30: "::jsonb",
-  52: "::bigint",
-  67: "::jsonb",
+  27: "::jsonb", 28: "::jsonb", 29: "::jsonb", 30: "::jsonb", 31: "::jsonb",
+  53: "::bigint",
+  68: "::jsonb",
 };
 
 // JSON columns use COALESCE on update to preserve existing values when the
@@ -307,8 +307,9 @@ function buildRowParams(
   showGuidsMap: Map<string, Array<{ id: string }>> | undefined,
   now: Date,
   watchlistGuids?: Set<string>,
+  showSummaryMap?: Map<string, string>,
 ): unknown[] {
-  const d = buildItemData(item, libraryType, watchCounts, showGenreMap);
+  const d = buildItemData(item, libraryType, watchCounts, showGenreMap, showSummaryMap);
 
   // Parse external IDs from Guid for dedupKey computation.
   // For series episodes, prefer show-level Guids (series-level TVDB/TMDB)
@@ -363,6 +364,7 @@ function buildRowParams(
     d.thumbUrl ?? null,
     d.artUrl ?? null,
     d.parentThumbUrl ?? null,
+    d.parentSummary ?? null,
     d.seasonThumbUrl ?? null,
     d.parentTitle ?? null,
     d.albumTitle ?? null,
@@ -442,6 +444,7 @@ async function processBatch(
   showGenreMap?: Map<string, string[]>,
   showGuidsMap?: Map<string, Array<{ id: string }>>,
   watchlistGuids?: Set<string>,
+  showSummaryMap?: Map<string, string>,
 ): Promise<void> {
   if (items.length === 0) return;
 
@@ -450,7 +453,7 @@ async function processBatch(
   const now = new Date();
   const params: unknown[] = [];
   for (const item of items) {
-    params.push(...buildRowParams(item, libraryId, libraryType, watchCounts, showGenreMap, showGuidsMap, now, watchlistGuids));
+    params.push(...buildRowParams(item, libraryId, libraryType, watchCounts, showGenreMap, showGuidsMap, now, watchlistGuids, showSummaryMap));
   }
   const upsertResults = await withDeadlockRetry("processBatch upsert", () =>
     prisma.$queryRawUnsafe<{ id: string; ratingKey: string }[]>(
@@ -732,20 +735,24 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       const fetchType = lib.type === "show" ? "episode" as const : lib.type === "artist" ? "track" as const : "movie" as const;
       let showGenreMap: Map<string, string[]> | undefined;
       let showGuidsMap: Map<string, Array<{ id: string }>> | undefined;
+      let showSummaryMap: Map<string, string> | undefined;
 
       // For TV shows, fetch show-level data (small dataset, not paginated):
       // - genres (not available on episodes)
       // - external IDs (series-level TVDB/TMDB/IMDB for Arr correlation —
       //   episodes from Emby/Jellyfin only have episode-level ProviderIds)
+      // - summary (show-level summary for hover popovers)
       if (lib.type === "show") {
         const shows = await client.getLibraryShows(lib.key);
         showGenreMap = new Map<string, string[]>();
         showGuidsMap = new Map<string, Array<{ id: string }>>();
+        showSummaryMap = new Map<string, string>();
         for (const show of shows) {
           if (show.title) {
             const showGenres = show.Genre?.map((g) => g.tag) ?? [];
             if (showGenres.length > 0) showGenreMap.set(show.title, showGenres);
             if (show.Guid && show.Guid.length > 0) showGuidsMap.set(show.title, show.Guid);
+            if (show.summary) showSummaryMap.set(show.title, show.summary);
           }
         }
       }
@@ -850,7 +857,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
               // Enrich only changed/new items — keeps peak memory low and
               // avoids unnecessary per-item API calls.
               await enrichBatch(client, toEnrich);
-              await processBatch(toEnrich, library.id, libraryType, watchCounts, existingThumbUrls, showGenreMap, showGuidsMap, watchlistGuids);
+              await processBatch(toEnrich, library.id, libraryType, watchCounts, existingThumbUrls, showGenreMap, showGuidsMap, watchlistGuids, showSummaryMap);
             }
 
             // Touch updatedAt for unchanged items so stale-item detection
@@ -864,7 +871,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
             }
           } else {
             // No enrichment needed (Jellyfin/Emby) — process all items directly.
-            await processBatch(batch, library.id, libraryType, watchCounts, existingThumbUrls, showGenreMap, showGuidsMap, watchlistGuids);
+            await processBatch(batch, library.id, libraryType, watchCounts, existingThumbUrls, showGenreMap, showGuidsMap, watchlistGuids, showSummaryMap);
           }
 
           processedItems += batch.length;
@@ -945,6 +952,19 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
         logger.info("Sync", `Removed ${staleItems.length} stale item(s) from library "${lib.title}"`);
       }
 
+      // Bulk-update parentSummary for all episodes in this TV library.
+      // This covers unchanged items that were skipped during enrichment
+      // (only updatedAt was touched, not the full upsert).
+      if (showSummaryMap && showSummaryMap.size > 0) {
+        for (const [showTitle, summary] of showSummaryMap) {
+          await prisma.$queryRawUnsafe(
+            `UPDATE "MediaItem" SET "parentSummary"=$1 WHERE "libraryId"=$2 AND "parentTitle"=$3 AND ("parentSummary" IS DISTINCT FROM $1)`,
+            summary, library.id, showTitle,
+          );
+        }
+        logger.info("Sync", `Library "${lib.title}": updated parentSummary for ${showSummaryMap.size} shows`);
+      }
+
       await prisma.$queryRawUnsafe(
         `UPDATE "Library" SET "lastSyncedAt"=$1 WHERE "id"=$2`,
         new Date(), library.id,
@@ -959,6 +979,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       // Release show maps between libraries and force GC
       showGenreMap = undefined;
       showGuidsMap = undefined;
+      showSummaryMap = undefined;
       logHeapAndCollect("between libraries");
     }
 
@@ -1039,7 +1060,8 @@ function buildItemData(
   item: MediaMetadataItem,
   libraryType: "MOVIE" | "SERIES" | "MUSIC",
   watchCounts: Map<string, { count: number; lastWatchedAt: number }>,
-  showGenreMap?: Map<string, string[]>
+  showGenreMap?: Map<string, string[]>,
+  showSummaryMap?: Map<string, string>
 ) {
   const media = item.Media?.[0];
   const part = media?.Part?.[0];
@@ -1076,6 +1098,7 @@ function buildItemData(
     thumbUrl: item.thumb,
     artUrl: item.art ?? null,
     parentThumbUrl: item.grandparentThumb ?? null,
+    parentSummary: (showSummaryMap && parentTitle ? showSummaryMap.get(parentTitle) : null) ?? null,
     seasonThumbUrl: item.parentThumb ?? null,
     parentTitle,
     albumTitle,

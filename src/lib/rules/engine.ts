@@ -9,19 +9,13 @@ import {
 } from "./types";
 import { detectStreamAudioProfile, detectStreamDynamicRange } from "./stream-detection";
 import { normalizeResolutionLabel } from "@/lib/resolution";
+import {
+  MB_IN_BYTES,
+  DURATION_MS_PER_MIN,
+  RESOLUTION_DB_VALUES,
+  wildcardToRegex,
+} from "@/lib/conditions";
 import type { Prisma } from "@/generated/prisma/client";
-
-const MB_IN_BYTES = 1024 * 1024;
-const DURATION_MS_PER_MIN = 60_000;
-
-// Map standardized resolution labels to raw DB patterns
-const RESOLUTION_DB_VALUES: Record<string, string[]> = {
-  "4K": ["4k", "2160", "2160p"],
-  "1080P": ["1080", "1080p"],
-  "720P": ["720", "720p"],
-  "480P": ["480", "480p"],
-  "SD": ["sd", "360", "360p"],
-};
 
 const STREAM_COUNT_FIELDS = new Set(["audioStreamCount", "subtitleStreamCount"]);
 
@@ -95,13 +89,6 @@ async function fetchCrossSystemData(
 const STREAM_LANG_CODEC_FIELDS = new Set(["audioLanguage", "subtitleLanguage", "streamAudioCodec"]);
 const STREAM_LANGUAGE_FIELDS = new Set(["audioLanguage", "subtitleLanguage"]);
 
-/** Convert a glob-style wildcard pattern (* = any chars, ? = single char) to a RegExp */
-function wildcardToRegex(pattern: string): RegExp {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  const regex = escaped.replace(/\*/g, ".*").replace(/\?/g, ".");
-  return new RegExp(`^${regex}$`, "i");
-}
-
 export interface ArrMetadata {
   arrId: number;
   tags: string[];
@@ -146,8 +133,31 @@ export interface SeerrMetadata {
   declineDate: string | null;
 }
 
-/** Lookup keyed by TMDB ID (string) for movies, or TVDB ID for series */
+/**
+ * Lookup keyed by `${source}:${externalId}` — e.g. `"TMDB:603"`, `"TVDB:81189"`.
+ * The source prefix is required to avoid TMDB↔TVDB integer-ID collisions across the same map.
+ */
 export type SeerrDataMap = Record<string, SeerrMetadata>;
+
+/**
+ * Look up Seerr metadata for a media item, trying source IDs in priority order.
+ * Movies look up by TMDB only; series prefer TVDB but fall back to TMDB.
+ */
+export function lookupSeerrMeta(
+  externalIds: Array<{ source: string; externalId: string }>,
+  seerrData: SeerrDataMap | undefined,
+  type: string,
+): SeerrMetadata | undefined {
+  if (!seerrData) return undefined;
+  const sources = type === "MOVIE" ? ["TMDB"] : type === "SERIES" ? ["TVDB", "TMDB"] : [];
+  for (const source of sources) {
+    const ext = externalIds.find((e) => e.source === source);
+    if (!ext) continue;
+    const meta = seerrData[`${source}:${ext.externalId}`];
+    if (meta) return meta;
+  }
+  return undefined;
+}
 
 function applyNegate(clause: Prisma.MediaItemWhereInput, negate?: boolean): Prisma.MediaItemWhereInput {
   if (!negate) return clause;
@@ -230,17 +240,18 @@ function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
     return applyNegate(clause, negate);
   }
 
-  // Genre (JSON array field)
-  if (field === "genre") {
+  // Genre / Labels (JSON array fields)
+  if (field === "genre" || field === "labels") {
+    const column = field === "labels" ? "labels" : "genres";
     let clause: Prisma.MediaItemWhereInput;
     switch (operator) {
       case "equals":
       case "contains":
-        clause = { genres: { array_contains: String(value) } };
+        clause = { [column]: { array_contains: String(value) } };
         break;
       case "notEquals":
       case "notContains":
-        clause = { NOT: { genres: { array_contains: String(value) } } };
+        clause = { NOT: { [column]: { array_contains: String(value) } } };
         break;
       default:
         return {};
@@ -401,7 +412,7 @@ function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
   const numericFields = new Set([
     "playCount", "videoBitrate", "audioChannels", "year",
     "videoBitDepth", "audioSamplingRate", "audioBitrate",
-    "rating", "audienceRating",
+    "rating", "audienceRating", "ratingCount",
   ]);
   if (numericFields.has(field)) {
     const numValue = Number(value);
@@ -1536,30 +1547,31 @@ function evaluateRuleAgainstItem(
     return negate ? !result : result;
   }
 
-  // Genre (JSON array)
-  if (field === "genre") {
-    const genreArr = Array.isArray(item.genres) ? (item.genres as string[]).map((g) => g.toLowerCase()) : [];
+  // Genre / Labels (JSON array fields)
+  if (field === "genre" || field === "labels") {
+    const sourceCol = field === "labels" ? "labels" : "genres";
+    const arr = Array.isArray(item[sourceCol]) ? (item[sourceCol] as string[]).map((g) => g.toLowerCase()) : [];
     const strValue = String(value).toLowerCase();
     let result: boolean;
     switch (operator) {
       case "equals":
       case "contains":
-        result = genreArr.some((g) => g === strValue);
+        result = arr.some((g) => g === strValue);
         break;
       case "notContains":
-        result = !genreArr.some((g) => g === strValue);
+        result = !arr.some((g) => g === strValue);
         break;
       case "notEquals":
-        result = !genreArr.some((g) => g === strValue);
+        result = !arr.some((g) => g === strValue);
         break;
       case "matchesWildcard": {
         const re = wildcardToRegex(strValue);
-        result = genreArr.some((g) => re.test(g));
+        result = arr.some((g) => re.test(g));
         break;
       }
       case "notMatchesWildcard": {
         const re = wildcardToRegex(strValue);
-        result = !genreArr.some((g) => re.test(g));
+        result = !arr.some((g) => re.test(g));
         break;
       }
       default: result = false;
@@ -1753,7 +1765,7 @@ function evaluateRuleAgainstItem(
   const numericFields = new Set([
     "playCount", "videoBitrate", "audioChannels", "year",
     "videoBitDepth", "audioSamplingRate", "audioBitrate",
-    "rating", "audienceRating",
+    "rating", "audienceRating", "ratingCount",
     "availableEpisodeCount", "watchedEpisodeCount", "watchedEpisodePercentage",
   ]);
   if (numericFields.has(field)) {
@@ -2001,10 +2013,11 @@ function getActualValueForField(
     return null;
   }
 
-  // Genre
-  if (field === "genre") {
-    const genreArr = Array.isArray(item.genres) ? (item.genres as string[]) : [];
-    return genreArr.length > 0 ? genreArr.join(", ") : "none";
+  // Genre / Labels (JSON array fields)
+  if (field === "genre" || field === "labels") {
+    const sourceCol = field === "labels" ? "labels" : "genres";
+    const arr = Array.isArray(item[sourceCol]) ? (item[sourceCol] as string[]) : [];
+    return arr.length > 0 ? arr.join(", ") : "none";
   }
 
   // Has External ID
@@ -2043,7 +2056,7 @@ function getActualValueForField(
   const numericFields = new Set([
     "playCount", "videoBitrate", "audioChannels", "year",
     "videoBitDepth", "audioSamplingRate", "audioBitrate",
-    "rating", "audienceRating",
+    "rating", "audienceRating", "ratingCount",
     "availableEpisodeCount", "watchedEpisodeCount", "watchedEpisodePercentage",
   ]);
   if (numericFields.has(field)) {
@@ -2069,7 +2082,6 @@ export function getMatchedCriteriaForItems(
     ...STREAM_QUERY_FIELDS.map((f) => [f.value, f.label] as const),
   ]);
   const arrIdSource = type === "MOVIE" ? "TMDB" : type === "MUSIC" ? "MUSICBRAINZ" : "TVDB";
-  const seerrIdSource = type === "MOVIE" ? "TMDB" : "TVDB";
   const allRulesWithGroup = collectAllRulesWithGroup(rules);
   const streamQueryGroups = collectStreamQueryGroups(rules);
   const result = new Map<string, MatchedCriterion[]>();
@@ -2079,8 +2091,7 @@ export function getMatchedCriteriaForItems(
     const externalIds = (item.externalIds ?? []) as Array<{ source: string; externalId: string }>;
     const arrExtId = externalIds.find((e) => e.source === arrIdSource);
     const arrMeta = arrData && arrExtId ? arrData[arrExtId.externalId] : undefined;
-    const seerrExtId = externalIds.find((e) => e.source === seerrIdSource);
-    const seerrMeta = seerrData && seerrExtId ? seerrData[seerrExtId.externalId] : undefined;
+    const seerrMeta = lookupSeerrMeta(externalIds, seerrData, type);
 
     for (const { rule, groupName } of allRulesWithGroup) {
       if (evaluateRuleAgainstItem(rule, item, arrMeta, seerrMeta)) {
@@ -2139,7 +2150,6 @@ export function getActualValuesForAllRules(
   seerrData?: SeerrDataMap
 ): Map<string, Map<string, string>> {
   const arrIdSource = type === "MOVIE" ? "TMDB" : type === "MUSIC" ? "MUSICBRAINZ" : "TVDB";
-  const seerrIdSource = type === "MOVIE" ? "TMDB" : "TVDB";
   const allRulesWithGroup = collectAllRulesWithGroup(rules);
   const result = new Map<string, Map<string, string>>();
 
@@ -2148,8 +2158,7 @@ export function getActualValuesForAllRules(
     const externalIds = (item.externalIds ?? []) as Array<{ source: string; externalId: string }>;
     const arrExtId = externalIds.find((e) => e.source === arrIdSource);
     const arrMeta = arrData && arrExtId ? arrData[arrExtId.externalId] : undefined;
-    const seerrExtId = externalIds.find((e) => e.source === seerrIdSource);
-    const seerrMeta = seerrData && seerrExtId ? seerrData[seerrExtId.externalId] : undefined;
+    const seerrMeta = lookupSeerrMeta(externalIds, seerrData, type);
 
     for (const { rule } of allRulesWithGroup) {
       const actual = getActualValueForField(rule.field, item, arrMeta, seerrMeta);
@@ -2489,6 +2498,8 @@ export async function evaluateSeriesScope(
       ...representative,
       // Use series name as title so "title" rules match against the series
       title: representative.parentTitle ?? representative.title,
+      // Use series-level summary instead of episode summary
+      summary: representative.parentSummary ?? representative.summary,
       // Clear episode-specific fields — this is a series-level aggregate
       parentTitle: null,
       seasonNumber: null,
@@ -2554,10 +2565,7 @@ export async function evaluateSeriesScope(
     );
     const arrMeta = arrData && extId ? arrData[extId.externalId] : undefined;
 
-    const seerrExtId = series.externalIds?.find(
-      (e) => e.source === "TVDB"
-    );
-    const seerrMeta = seerrData && seerrExtId ? seerrData[seerrExtId.externalId] : undefined;
+    const seerrMeta = lookupSeerrMeta(series.externalIds ?? [], seerrData, "SERIES");
 
     if (evaluateAllRulesInMemory(rules, item, arrMeta, seerrMeta)) {
       matching.push(series);
@@ -2793,7 +2801,6 @@ export async function evaluateRules(
   // AND/OR logic between groups with mixed field types is correctly enforced.
   if (needsFullReeval) {
     const arrIdSource = type === "MOVIE" ? "TMDB" : type === "MUSIC" ? "MUSICBRAINZ" : "TVDB";
-    const seerrIdSource = type === "MOVIE" ? "TMDB" : "TVDB";
 
     // Batch-fetch cross-system data if needed
     let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }> | undefined;
@@ -2807,8 +2814,7 @@ export async function evaluateRules(
         : [];
       const arrExtId = externalIds.find((e) => e.source === arrIdSource);
       const itemArrMeta = arrData && arrExtId ? arrData[arrExtId.externalId] : undefined;
-      const seerrExtId = externalIds.find((e) => e.source === seerrIdSource);
-      const itemSeerrMeta = seerrData && seerrExtId ? seerrData[seerrExtId.externalId] : undefined;
+      const itemSeerrMeta = lookupSeerrMeta(externalIds, seerrData, type);
 
       const crossData = crossSystemData?.get(item.id);
       const serialized: Record<string, unknown> = {

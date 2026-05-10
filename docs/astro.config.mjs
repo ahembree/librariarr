@@ -75,6 +75,10 @@ export default defineConfig({
               slug: "docs/features/lifecycle-rules",
             },
             {
+              label: "Deletion Safety",
+              slug: "docs/features/deletion-safety",
+            },
+            {
               label: "Stream Manager",
               slug: "docs/features/stream-manager",
             },

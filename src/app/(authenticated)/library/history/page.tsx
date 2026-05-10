@@ -22,12 +22,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  RefreshCw,
-  Loader2,
-  Search,
-  Columns3,
   ChevronLeft,
   ChevronRight,
+  Columns3,
+  History,
+  Loader2,
+  RefreshCw,
+  Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
@@ -574,20 +575,26 @@ export default function HistoryPage() {
     <>
       <div className="p-4 sm:p-6 lg:p-8 overflow-x-clip">
           {/* Header */}
-          <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Watch History</h1>
-              {!loading && totalCount > 0 && (
-                <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
-                  {totalCount.toLocaleString()} {totalCount === 1 ? "play" : "plays"}
-                </span>
-              )}
+          <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="flex items-center gap-3">
+                <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Watch History</h1>
+                {!loading && totalCount > 0 && (
+                  <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
+                    {totalCount.toLocaleString()} {totalCount === 1 ? "play" : "plays"}
+                  </span>
+                )}
+              </div>
+              <p className="text-muted-foreground mt-1">
+                Play events across your connected media servers — filter by user, platform, server, or media type.
+              </p>
             </div>
             <Button
               variant="outline"
               size="sm"
               onClick={handleSync}
               disabled={syncing}
+              className="shrink-0"
             >
               {syncing ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -739,8 +746,24 @@ export default function HistoryPage() {
             </div>
           ) : items.length === 0 && totalCount === 0 ? (
             <EmptyState
+              icon={History}
               title="No watch history"
-              description="Watch history is synced automatically during server sync. You can also click 'Refresh' to sync now."
+              description="Watch history is synced automatically during server sync. You can also sync now to fetch the latest plays."
+              action={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleSync}
+                  disabled={syncing}
+                >
+                  {syncing ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                  )}
+                  {syncing ? "Syncing..." : "Sync Now"}
+                </Button>
+              }
             />
           ) : (
             <>
@@ -785,7 +808,7 @@ export default function HistoryPage() {
 
               {/* Pagination */}
               {totalCount > 0 && (
-                <div className="flex items-center justify-between mt-4 text-sm text-muted-foreground">
+                <div className="flex items-center justify-between mt-6 text-sm text-muted-foreground">
                   <span>
                     {rangeStart.toLocaleString()}-{rangeEnd.toLocaleString()} of {totalCount.toLocaleString()}
                   </span>

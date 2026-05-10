@@ -37,12 +37,10 @@ export async function fetchSeerrDataForQuery(
       for (const req of response.results) {
         const keys: string[] = [];
         if (type === "MOVIE") {
-          keys.push(String(req.media.tmdbId));
+          if (req.media.tmdbId != null) keys.push(`TMDB:${req.media.tmdbId}`);
         } else {
-          if (req.media.tvdbId) {
-            keys.push(String(req.media.tvdbId));
-          }
-          keys.push(String(req.media.tmdbId));
+          if (req.media.tvdbId != null) keys.push(`TVDB:${req.media.tvdbId}`);
+          if (req.media.tmdbId != null) keys.push(`TMDB:${req.media.tmdbId}`);
         }
 
         const username = req.requestedBy?.plexUsername || req.requestedBy?.username || req.requestedBy?.email || "Unknown";

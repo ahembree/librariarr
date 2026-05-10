@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
+import { IntegrationError } from "@/lib/integration-error";
 
 export interface LidarrArtist {
   id: number;
@@ -46,6 +47,11 @@ export interface LidarrExclusion {
   artistName: string;
 }
 
+export interface LidarrMediaManagementConfig {
+  recycleBin: string | null;
+  recycleBinCleanupDays: number;
+}
+
 export class LidarrClient {
   private client: AxiosInstance;
 
@@ -74,6 +80,7 @@ export class LidarrClient {
           logger.debug("Lidarr", `ERROR ${error.response?.status ?? "NETWORK"} ${error.config?.url}${duration}`, {
             message: error.message,
           });
+          return Promise.reject(new IntegrationError("Lidarr", error));
         }
         return Promise.reject(error);
       }
@@ -192,5 +199,12 @@ export class LidarrClient {
       foreignId,
       artistName,
     });
+  }
+
+  async getMediaManagementConfig(): Promise<LidarrMediaManagementConfig> {
+    const { data } = await this.client.get<LidarrMediaManagementConfig>(
+      "/api/v1/config/mediamanagement"
+    );
+    return data;
   }
 }

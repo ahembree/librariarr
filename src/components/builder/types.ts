@@ -53,6 +53,16 @@ export interface SectionDef {
 export interface FieldContext {
   arrConnected?: boolean;
   seerrConnected?: boolean;
+  /** Configured-but-currently-unreachable Arr integration. Used to show a
+   * per-row badge on rules that depend on Arr connectivity. */
+  arrUnreachable?: boolean;
+  seerrUnreachable?: boolean;
+  /** Singular library type — used by the rule builder. */
+  libraryType?: "MOVIE" | "SERIES" | "MUSIC";
+  /** Selected media types — used by the query builder (which is multi-type). */
+  mediaTypes?: ("MOVIE" | "SERIES" | "MUSIC")[];
+  /** Whether the query is in episode mode (skips series grouping). */
+  includeEpisodes?: boolean;
   [key: string]: unknown;
 }
 
@@ -65,6 +75,13 @@ export interface BuilderConfig<R extends BaseRule, G extends BaseGroup<R>> {
   createGroup: (condition?: RuleCondition) => G;
   isFieldDisabled: (field: string, ctx: FieldContext) => boolean;
   getDisabledTooltip: (field: string, ctx: FieldContext) => string | null;
+  /**
+   * Returns a tooltip string when the rule's required integration is
+   * configured but currently unreachable. The base builder renders a small
+   * warning badge next to the field name when this returns non-null. Should
+   * return null when the field doesn't depend on an unreachable integration.
+   */
+  getFieldUnreachableTooltip?: (field: string, ctx: FieldContext) => string | null;
   isSectionHidden?: (sectionKey: string, ctx: FieldContext) => boolean;
   isValuelessOperator?: (op: string) => boolean;
   /** Stream query support — when provided, "Add Stream Query" button appears */

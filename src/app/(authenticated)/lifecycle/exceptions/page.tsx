@@ -5,12 +5,7 @@ import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,16 +26,18 @@ import {
 } from "@/components/ui/dialog";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
+  Check,
+  Film,
   Loader2,
-  ShieldOff,
-  Trash2,
+  Music,
   Pencil,
   Plus,
   Search,
-  Film,
+  ShieldOff,
+  Trash2,
   Tv,
-  Music,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { MediaItemWithRelations } from "@/lib/types";
@@ -701,22 +698,24 @@ export default function LifecycleExceptionsPage() {
         ? "Search for a series to exclude all its episodes from lifecycle actions."
         : "Search for an artist or album to exclude from lifecycle actions.";
 
+  const openAddDialog = () => {
+    setShowAddDialog(true);
+    setSearchQuery("");
+    setSearchResults([]);
+    setAddReason("");
+  };
+
   return (
     <>
-      <div className="space-y-6 p-6 overflow-y-auto h-full">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div className="space-y-6 p-4 sm:p-6 lg:p-8 overflow-y-auto h-full">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Lifecycle Exceptions</h1>
-            <p className="text-muted-foreground">
+            <p className="text-muted-foreground mt-1">
               Media items excluded from lifecycle actions. These items will not be matched or actioned by any rule set.
             </p>
           </div>
-          <Button onClick={() => {
-            setShowAddDialog(true);
-            setSearchQuery("");
-            setSearchResults([]);
-            setAddReason("");
-          }}>
+          <Button onClick={openAddDialog} className="shrink-0">
             <Plus className="h-4 w-4 mr-2" />
             Add Exception
           </Button>
@@ -750,35 +749,42 @@ export default function LifecycleExceptionsPage() {
           </div>
         ) : groupedRows.length === 0 ? (
           <Card>
-            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-              <ShieldOff className="h-12 w-12 text-muted-foreground/50 mb-4" />
-              <CardTitle className="text-lg mb-2">No exceptions</CardTitle>
-              <p className="text-muted-foreground text-sm">
-                No {TABS.find((t) => t.value === activeTab)?.label.toLowerCase()} are excluded from lifecycle actions.
-              </p>
+            <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+              <div className="rounded-full bg-muted p-4">
+                <ShieldOff className="h-8 w-8 text-muted-foreground" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-base font-medium">No exceptions</p>
+                <p className="text-sm text-muted-foreground">
+                  No {TABS.find((t) => t.value === activeTab)?.label.toLowerCase()} are excluded from lifecycle actions.
+                </p>
+              </div>
+              <Button variant="outline" size="sm" className="mt-2" onClick={openAddDialog}>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Exception
+              </Button>
             </CardContent>
           </Card>
         ) : (
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <ShieldOff className="h-4 w-4" />
+              <span>
                 {groupedRows.length} excluded {groupedRows.length === 1
                   ? (activeTab === "MOVIE" ? "movie" : activeTab === "SERIES" ? "series" : "item")
                   : (activeTab === "MOVIE" ? "movies" : activeTab === "SERIES" ? "series" : "items")}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
-              <DataTable<GroupedExceptionRow>
-                columns={exceptionColumns}
-                data={groupedRows}
-                keyExtractor={(row) => row.id}
-                defaultSortId="title"
-                resizeStorageKey="dt-widths-exceptions"
-                onRowClick={(row) => openDetailPanel(row)}
-                renderHoverContent={renderHoverContent}
-              />
-            </CardContent>
-          </Card>
+              </span>
+            </div>
+            <DataTable<GroupedExceptionRow>
+              columns={exceptionColumns}
+              data={groupedRows}
+              keyExtractor={(row) => row.id}
+              defaultSortId="title"
+              resizeStorageKey="dt-widths-exceptions"
+              onRowClick={(row) => openDetailPanel(row)}
+              renderHoverContent={renderHoverContent}
+            />
+          </div>
         )}
 
         {/* Confirm removal dialog */}
@@ -814,14 +820,19 @@ export default function LifecycleExceptionsPage() {
                 Update the reason for excluding &quot;{editingGroup?.displayTitle}&quot;.
               </DialogDescription>
             </DialogHeader>
-            <Input
-              placeholder="Reason (optional)"
-              value={editReason}
-              onChange={(e) => setEditReason(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleEditReason();
-              }}
-            />
+            <div className="space-y-2">
+              <Label htmlFor="edit-reason">Reason</Label>
+              <Input
+                id="edit-reason"
+                placeholder="Optional — e.g. “Favorite show, never delete”"
+                value={editReason}
+                onChange={(e) => setEditReason(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleEditReason();
+                }}
+                autoFocus
+              />
+            </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setEditingGroup(null)}>
                 Cancel
@@ -844,21 +855,29 @@ export default function LifecycleExceptionsPage() {
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <div className="space-y-2">
+                <Label htmlFor="exception-search">Search</Label>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="exception-search"
+                    placeholder={searchPlaceholder}
+                    className="pl-9"
+                    value={searchQuery}
+                    onChange={(e) => handleSearchInput(e.target.value)}
+                    autoFocus
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="exception-reason">Reason</Label>
                 <Input
-                  placeholder={searchPlaceholder}
-                  className="pl-9"
-                  value={searchQuery}
-                  onChange={(e) => handleSearchInput(e.target.value)}
-                  autoFocus
+                  id="exception-reason"
+                  placeholder="Optional — applied to anything you add below"
+                  value={addReason}
+                  onChange={(e) => setAddReason(e.target.value)}
                 />
               </div>
-              <Input
-                placeholder="Reason (optional)"
-                value={addReason}
-                onChange={(e) => setAddReason(e.target.value)}
-              />
               <div className="max-h-64 overflow-y-auto rounded-md border">
                 {searching ? (
                   <div className="flex items-center justify-center py-8">
@@ -902,7 +921,10 @@ export default function LifecycleExceptionsPage() {
                             {addingItemId === item.id ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
                             ) : alreadyExcluded ? (
-                              "Excluded"
+                              <>
+                                <Check className="h-3.5 w-3.5 mr-1 text-emerald-400" />
+                                Excluded
+                              </>
                             ) : (
                               <>
                                 <Plus className="h-3.5 w-3.5 mr-1" />

@@ -127,6 +127,8 @@ interface DashboardCardGridProps {
   onMovieClick: (movieId: string) => void;
   onSeriesClick: (seriesName: string) => void;
   onArtistClick: (mediaItemId: string) => void;
+  onEpisodeClick: (episodeId: string) => void;
+  onTrackClick: (trackId: string) => void;
   onSyncComplete: () => void;
   onConfigChange?: (cardId: string, config: CustomCardConfig) => void;
 }
@@ -144,6 +146,8 @@ export function DashboardCardGrid({
   onMovieClick,
   onSeriesClick,
   onArtistClick,
+  onEpisodeClick,
+  onTrackClick,
   onSyncComplete,
   onConfigChange,
 }: DashboardCardGridProps) {
@@ -244,6 +248,7 @@ export function DashboardCardGrid({
         return (
           <BreakdownChart
             title="Video Codec Breakdown"
+            icon={getCardDefinition("video-codec")?.icon}
             breakdown={stats.videoCodecBreakdown
               .filter((b) => b.type !== "MUSIC")
               .map((b) => ({
@@ -261,6 +266,7 @@ export function DashboardCardGrid({
         return (
           <BreakdownChart
             title="Audio Codec Breakdown"
+            icon={getCardDefinition("audio-codec")?.icon}
             breakdown={stats.audioCodecBreakdown.map((b) => ({
               value: b.audioCodec,
               type: b.type,
@@ -276,6 +282,7 @@ export function DashboardCardGrid({
         return (
           <BreakdownChart
             title="Content Rating Breakdown"
+            icon={getCardDefinition("content-rating")?.icon}
             breakdown={stats.contentRatingBreakdown
               .filter((b) => b.type !== "MUSIC")
               .map((b) => ({
@@ -305,6 +312,7 @@ export function DashboardCardGrid({
         return (
           <BreakdownChart
             title="Dynamic Range Breakdown"
+            icon={getCardDefinition("dynamic-range")?.icon}
             breakdown={(stats.dynamicRangeBreakdown ?? [])
               .filter((b) => b.type !== "MUSIC")
               .map((b) => ({
@@ -323,6 +331,7 @@ export function DashboardCardGrid({
         return (
           <BreakdownChart
             title="Audio Channels Breakdown"
+            icon={getCardDefinition("audio-channels")?.icon}
             breakdown={(stats.audioChannelsBreakdown ?? []).map((b) => ({
               value: formatChannels(b.audioChannels),
               type: b.type,
@@ -338,6 +347,7 @@ export function DashboardCardGrid({
         return (
           <BreakdownChart
             title="Genre Breakdown"
+            icon={getCardDefinition("genre")?.icon}
             breakdown={stats.genreBreakdown ?? []}
             nullLabel="Unknown"
             filterType={filterType}
@@ -355,7 +365,8 @@ export function DashboardCardGrid({
             servers={servers}
             availableTypes={availableTypes}
             onMovieClick={onMovieClick}
-            onSeriesClick={onSeriesClick}
+            onEpisodeClick={onEpisodeClick}
+            onTrackClick={onTrackClick}
           />
         );
       default:

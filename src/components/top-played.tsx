@@ -7,6 +7,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Film, Tv, Music, Play } from "lucide-react";
+import { LazyMediaHoverPopover } from "@/components/lazy-media-hover-popover";
+import type { MediaHoverData } from "@/components/media-hover-popover";
 
 interface TopMovie {
   id: string;
@@ -64,9 +66,13 @@ export function TopPlayed({ topMovies, topSeries, topMusic, filterType, onMovieC
             {topMovies.map((movie, i) => {
               const maxPlays = topMovies[0].playCount;
               const pct = maxPlays > 0 ? (movie.playCount / maxPlays) * 100 : 0;
-              return (
+              const placeholder: MediaHoverData = {
+                title: movie.title,
+                year: movie.year,
+                playCount: movie.playCount,
+              };
+              const row = (
                 <div
-                  key={movie.id}
                   className="group relative flex items-center gap-3 rounded-md px-2 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors"
                   onClick={() => onMovieClick?.(movie.id)}
                 >
@@ -90,6 +96,18 @@ export function TopPlayed({ topMovies, topSeries, topMusic, filterType, onMovieC
                     {movie.playCount.toLocaleString()}
                   </span>
                 </div>
+              );
+              return (
+                <LazyMediaHoverPopover
+                  key={movie.id}
+                  fetchUrl={`/api/media/${movie.id}`}
+                  extractData={(json) => (json as { item: MediaHoverData }).item}
+                  placeholder={placeholder}
+                  imageUrl={`/api/media/${movie.id}/image`}
+                  imageAspect="poster"
+                >
+                  {row}
+                </LazyMediaHoverPopover>
               );
             })}
           </div>
@@ -117,9 +135,12 @@ export function TopPlayed({ topMovies, topSeries, topMusic, filterType, onMovieC
               const maxPlays = topSeries[0].totalPlays;
               const pct =
                 maxPlays > 0 ? (series.totalPlays / maxPlays) * 100 : 0;
-              return (
+              const placeholder: MediaHoverData = {
+                title: series.parentTitle,
+                playCount: series.totalPlays,
+              };
+              const row = (
                 <div
-                  key={series.parentTitle}
                   className="group relative flex items-center gap-3 rounded-md px-2 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors"
                   onClick={() => onSeriesClick?.(series.parentTitle, series.mediaItemId ?? undefined)}
                 >
@@ -138,6 +159,21 @@ export function TopPlayed({ topMovies, topSeries, topMusic, filterType, onMovieC
                     {series.totalPlays.toLocaleString()}
                   </span>
                 </div>
+              );
+              if (!series.mediaItemId) {
+                return <div key={series.parentTitle}>{row}</div>;
+              }
+              return (
+                <LazyMediaHoverPopover
+                  key={series.parentTitle}
+                  fetchUrl={`/api/media/${series.mediaItemId}/group-summary?type=SERIES`}
+                  extractData={(json) => json as MediaHoverData}
+                  placeholder={placeholder}
+                  imageUrl={`/api/media/${series.mediaItemId}/image?type=parent`}
+                  imageAspect="poster"
+                >
+                  {row}
+                </LazyMediaHoverPopover>
               );
             })}
           </div>
@@ -165,9 +201,12 @@ export function TopPlayed({ topMovies, topSeries, topMusic, filterType, onMovieC
               const maxPlays = topMusic[0].totalPlays;
               const pct =
                 maxPlays > 0 ? (artist.totalPlays / maxPlays) * 100 : 0;
-              return (
+              const placeholder: MediaHoverData = {
+                title: artist.parentTitle,
+                playCount: artist.totalPlays,
+              };
+              const row = (
                 <div
-                  key={artist.parentTitle}
                   className="group relative flex items-center gap-3 rounded-md px-2 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors"
                   onClick={() => artist.mediaItemId && onArtistClick?.(artist.mediaItemId)}
                 >
@@ -186,6 +225,21 @@ export function TopPlayed({ topMovies, topSeries, topMusic, filterType, onMovieC
                     {artist.totalPlays.toLocaleString()}
                   </span>
                 </div>
+              );
+              if (!artist.mediaItemId) {
+                return <div key={artist.parentTitle}>{row}</div>;
+              }
+              return (
+                <LazyMediaHoverPopover
+                  key={artist.parentTitle}
+                  fetchUrl={`/api/media/${artist.mediaItemId}/group-summary?type=MUSIC`}
+                  extractData={(json) => json as MediaHoverData}
+                  placeholder={placeholder}
+                  imageUrl={`/api/media/${artist.mediaItemId}/image?type=parent`}
+                  imageAspect="square"
+                >
+                  {row}
+                </LazyMediaHoverPopover>
               );
             })}
           </div>

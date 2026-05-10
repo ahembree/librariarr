@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { apiLogger } from "@/lib/logger";
 import { appCache } from "@/lib/cache/memory-cache";
+import { isUnreachable } from "@/lib/media-server/health-cache";
 import {
   cacheImage,
   getCachedImageInfo,
@@ -12,6 +13,7 @@ import {
 } from "@/lib/image-cache/image-cache";
 
 const IMAGE_META_TTL = 5 * 60 * 1000; // 5 minutes
+const IMAGE_FAIL_TTL = 60 * 1000; // negative cache for fetch failures
 
 export async function GET(
   request: NextRequest,
@@ -116,6 +118,22 @@ export async function GET(
 
   // Cache miss — fetch from media server, optimize, and cache
   const server = item.library.mediaServer;
+
+  // Skip the round-trip entirely if the breaker is open. The HTTP connection pool
+  // queues axios requests behind a small concurrency window, so checking the breaker
+  // *here* (before dispatching) prevents the queued requests from each paying the
+  // first-attempt timeout once the breaker has been tripped by an in-flight peer.
+  if (isUnreachable(server.url)) {
+    return NextResponse.json({ error: "Server unreachable" }, { status: 502 });
+  }
+
+  // Short-lived negative cache: when an upstream fetch fails for a specific thumbPath
+  // for a non-server-unreachable reason, avoid re-attempting that exact thumb.
+  const failKey = `image-fail:${server.url}:${thumbPath}`;
+  if (appCache.get(failKey)) {
+    return NextResponse.json({ error: "Failed to fetch image" }, { status: 502 });
+  }
+
   const client = createMediaServerClient(server.type, server.url, server.accessToken, {
     skipTlsVerify: server.tlsSkipVerify,
   });
@@ -137,6 +155,7 @@ export async function GET(
     });
   } catch (error) {
     apiLogger.error("Media", "Failed to proxy image", { error: String(error) });
+    appCache.set(failKey, true, IMAGE_FAIL_TTL);
     return NextResponse.json(
       { error: "Failed to fetch image" },
       { status: 502 }

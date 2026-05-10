@@ -17,15 +17,17 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { BarChart3, PieChartIcon, ChevronLeft, ChevronRight, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import {
   PieChart,
   Pie,
   Tooltip as RechartsTooltip,
-  ResponsiveContainer,
 } from "recharts";
+import { useElementSize } from "@/hooks/use-element-size";
 
 interface BreakdownChartProps {
   title: string;
+  icon?: LucideIcon;
   breakdown: {
     value: string | null;
     type: string;
@@ -101,6 +103,7 @@ function SortIcon({ column, activeColumn, direction }: { column: SortColumn; act
 
 export function BreakdownChart({
   title,
+  icon: Icon,
   breakdown,
   hexColors,
   nullLabel = "Unknown",
@@ -116,6 +119,7 @@ export function BreakdownChart({
   const [sortColumn, setSortColumn] = useState<SortColumn | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [hiddenItems, setHiddenItems] = useState<Set<string>>(new Set());
+  const [pieRef, pieSize] = useElementSize<HTMLDivElement>();
 
   const toggleHidden = (label: string) => {
     setHiddenItems((prev) => {
@@ -253,14 +257,17 @@ export function BreakdownChart({
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <CardTitle>{title}</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              {Icon && <Icon className="h-4 w-4 text-muted-foreground" />}
+              {title}
+            </CardTitle>
             <div className="flex items-center gap-2">
               {!lockedFilterType && (
                 <Select
                   value={localType ?? "all"}
                   onValueChange={(v) => setLocalType(v === "all" ? undefined : v as "MOVIE" | "SERIES" | "MUSIC")}
                 >
-                  <SelectTrigger className="h-7 w-24 text-xs">
+                  <SelectTrigger size="sm" className="w-24 text-xs">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -299,14 +306,17 @@ export function BreakdownChart({
     <Card className="h-full flex flex-col">
       <CardHeader>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-          <CardTitle>{title}</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            {Icon && <Icon className="h-4 w-4 text-muted-foreground" />}
+            {title}
+          </CardTitle>
           <div className="flex flex-wrap items-center gap-2">
             {!lockedFilterType && (
               <Select
                 value={localType ?? "all"}
                 onValueChange={(v) => setLocalType(v === "all" ? undefined : v as "MOVIE" | "SERIES" | "MUSIC")}
               >
-                <SelectTrigger className="h-7 w-24 text-xs">
+                <SelectTrigger size="sm" className="w-24 text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -327,7 +337,7 @@ export function BreakdownChart({
               value={topN === null ? "all" : String(topN)}
               onValueChange={(v) => setTopN(v === "all" ? null : Number(v))}
             >
-              <SelectTrigger className="h-7 w-22 text-xs">
+              <SelectTrigger size="sm" className="w-22 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -338,23 +348,31 @@ export function BreakdownChart({
                 <SelectItem value="all">All</SelectItem>
               </SelectContent>
             </Select>
-            <div className="flex rounded-md border">
-              <Button
-                variant={chartType === "bar" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-7 w-7 rounded-r-none"
+            <div className="flex h-8 items-stretch rounded-md border overflow-hidden">
+              <button
+                type="button"
                 onClick={() => setChartType("bar")}
+                aria-label="Bar chart"
+                className={`flex w-8 items-center justify-center transition-colors ${
+                  chartType === "bar"
+                    ? "bg-secondary text-secondary-foreground"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                }`}
               >
                 <BarChart3 className="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant={chartType === "pie" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-7 w-7 rounded-l-none"
+              </button>
+              <button
+                type="button"
                 onClick={() => setChartType("pie")}
+                aria-label="Pie chart"
+                className={`flex w-8 items-center justify-center transition-colors ${
+                  chartType === "pie"
+                    ? "bg-secondary text-secondary-foreground"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                }`}
               >
                 <PieChartIcon className="h-3.5 w-3.5" />
-              </Button>
+              </button>
             </div>
           </div>
         </div>
@@ -403,9 +421,9 @@ export function BreakdownChart({
         ) : (
           /* Pie chart */
           <div className="mb-6 flex flex-1 min-h-48 justify-center">
-            <div className="w-full max-w-xs">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
+            <div ref={pieRef} className="w-full max-w-xs">
+              {pieSize && (
+                <PieChart width={pieSize.width} height={pieSize.height}>
                   <Pie
                     data={pieData}
                     dataKey="value"
@@ -417,7 +435,7 @@ export function BreakdownChart({
                   />
                   <RechartsTooltip content={<PieTooltip />} />
                 </PieChart>
-              </ResponsiveContainer>
+              )}
             </div>
           </div>
         )}

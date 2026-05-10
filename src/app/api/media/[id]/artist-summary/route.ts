@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
+import { isUnreachable } from "@/lib/media-server/health-cache";
 
 export async function GET(
   _request: NextRequest,
@@ -35,8 +36,20 @@ export async function GET(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  const server = item.library.mediaServer;
+
+  // Skip the live fetch when the breaker is open — fall back to track-level data.
+  if (isUnreachable(server.url)) {
+    return NextResponse.json({
+      summary: item.summary,
+      genres: item.genres ?? [],
+      studio: item.studio,
+      contentRating: item.contentRating,
+      year: item.year,
+    });
+  }
+
   try {
-    const server = item.library.mediaServer;
     const client = createMediaServerClient(server.type, server.url, server.accessToken, {
       skipTlsVerify: server.tlsSkipVerify,
     });

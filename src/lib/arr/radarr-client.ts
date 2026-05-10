@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
+import { IntegrationError } from "@/lib/integration-error";
 
 export interface RadarrMovie {
   id: number;
@@ -52,6 +53,11 @@ export interface RadarrExclusion {
   movieYear: number;
 }
 
+export interface RadarrMediaManagementConfig {
+  recycleBin: string | null;
+  recycleBinCleanupDays: number;
+}
+
 export class RadarrClient {
   private client: AxiosInstance;
 
@@ -80,6 +86,7 @@ export class RadarrClient {
           logger.debug("Radarr", `ERROR ${error.response?.status ?? "NETWORK"} ${error.config?.url}${duration}`, {
             message: error.message,
           });
+          return Promise.reject(new IntegrationError("Radarr", error));
         }
         return Promise.reject(error);
       }
@@ -208,6 +215,13 @@ export class RadarrClient {
   async getLanguages(): Promise<{ id: number; name: string }[]> {
     const { data } = await this.client.get<{ id: number; name: string }[]>(
       "/api/v3/language"
+    );
+    return data;
+  }
+
+  async getMediaManagementConfig(): Promise<RadarrMediaManagementConfig> {
+    const { data } = await this.client.get<RadarrMediaManagementConfig>(
+      "/api/v3/config/mediamanagement"
     );
     return data;
   }

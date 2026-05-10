@@ -171,14 +171,6 @@ export async function POST(request: NextRequest) {
         mediaItem: item,
       });
 
-      // Delete any existing PENDING action for this item and remove from matches
-      await prisma.lifecycleAction.deleteMany({
-        where: { ruleSetId: ruleSet.id, mediaItemId: item.id, status: "PENDING" },
-      });
-      await prisma.ruleMatch.deleteMany({
-        where: { ruleSetId: ruleSet.id, mediaItemId: item.id },
-      });
-
       // Compute deleted bytes for stats tracking (only for delete actions)
       const actionType = ruleSet.actionType ?? "DO_NOTHING";
       let deletedBytes: bigint | null = null;
@@ -195,27 +187,36 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Create a completed action record
-      await prisma.lifecycleAction.create({
-        data: {
-          userId: session.userId!,
-          mediaItemId: item.id,
-          ruleSetId: ruleSet.id,
-          ruleSetName: ruleSet.name,
-          ruleSetType: ruleSet.type,
-          actionType: ruleSet.actionType ?? "DO_NOTHING",
-          addImportExclusion: ruleSet.addImportExclusion,
-          searchAfterDelete: ruleSet.searchAfterDelete,
-          matchedMediaItemIds,
-          addArrTags: ruleSet.addArrTags,
-          removeArrTags: ruleSet.removeArrTags,
-          scheduledFor: new Date(),
-          executedAt: new Date(),
-          status: "COMPLETED",
-          deletedBytes,
-          arrInstanceId: ruleSet.arrInstanceId,
-        },
-      });
+      // Atomically swap the PENDING/match records for the COMPLETED record
+      // so an interrupted process can't lose the audit trail.
+      await prisma.$transaction([
+        prisma.lifecycleAction.deleteMany({
+          where: { ruleSetId: ruleSet.id, mediaItemId: item.id, status: "PENDING" },
+        }),
+        prisma.ruleMatch.deleteMany({
+          where: { ruleSetId: ruleSet.id, mediaItemId: item.id },
+        }),
+        prisma.lifecycleAction.create({
+          data: {
+            userId: session.userId!,
+            mediaItemId: item.id,
+            ruleSetId: ruleSet.id,
+            ruleSetName: ruleSet.name,
+            ruleSetType: ruleSet.type,
+            actionType: ruleSet.actionType ?? "DO_NOTHING",
+            addImportExclusion: ruleSet.addImportExclusion,
+            searchAfterDelete: ruleSet.searchAfterDelete,
+            matchedMediaItemIds,
+            addArrTags: ruleSet.addArrTags,
+            removeArrTags: ruleSet.removeArrTags,
+            scheduledFor: new Date(),
+            executedAt: new Date(),
+            status: "COMPLETED",
+            deletedBytes,
+            arrInstanceId: ruleSet.arrInstanceId,
+          },
+        }),
+      ]);
 
       executed++;
     } catch (error) {

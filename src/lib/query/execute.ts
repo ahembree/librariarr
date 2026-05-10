@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { QueryRule, QueryGroup, QueryDefinition, RuleCondition } from "./types";
-import { STREAM_FIELDS, GENRE_FIELD, LABELS_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, hasArrRules, hasSeerrRules, hasCrossSystemRules } from "./types";
+import { STREAM_FIELDS, GENRE_FIELD, LABELS_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules } from "./types";
 import {
   isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
@@ -15,18 +15,16 @@ import { evaluateQuerySeerrRule } from "./seerr-filter";
 import { fetchArrDataForQuery } from "./fetch-arr-data";
 import { fetchSeerrDataForQuery } from "./fetch-seerr-data";
 import type { ArrDataMap, ArrMetadata, SeerrDataMap, SeerrMetadata } from "@/lib/rules/engine";
-
-const MB_IN_BYTES = 1024 * 1024;
-const DURATION_MS_PER_MIN = 60_000;
-
-// Map standardized resolution labels to raw DB patterns (mirrors build-where.ts)
-const RESOLUTION_DB_VALUES: Record<string, string[]> = {
-  "4K": ["4k", "2160", "2160p"],
-  "1080P": ["1080", "1080p"],
-  "720P": ["720", "720p"],
-  "480P": ["480", "480p"],
-  "SD": ["sd", "360", "360p"],
-};
+import { lookupSeerrMeta } from "@/lib/rules/engine";
+import {
+  MB_IN_BYTES,
+  DURATION_MS_PER_MIN,
+  RESOLUTION_DB_VALUES,
+  wildcardToRegex,
+  aggregateEpisodesIntoSeries,
+  serializeSeriesAggregateForEval,
+  type AggregableEpisode,
+} from "@/lib/conditions";
 
 /** Batch-fetch cross-system enrichment data for candidate items */
 async function fetchCrossSystemData(
@@ -88,13 +86,6 @@ async function fetchCrossSystemData(
   return result;
 }
 
-/** Convert a glob-style wildcard pattern to a RegExp */
-function wildcardToRegex(pattern: string): RegExp {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  const regex = escaped.replace(/\*/g, ".*").replace(/\?/g, ".");
-  return new RegExp(`^${regex}$`, "i");
-}
-
 function applyNegate(clause: Prisma.MediaItemWhereInput, negate?: boolean): Prisma.MediaItemWhereInput {
   if (!negate) return clause;
   return { NOT: clause };
@@ -114,6 +105,9 @@ function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
 
   // Skip cross-system fields — enriched before Phase 2
   if (isCrossSystemQueryField(field)) return {};
+
+  // Skip series-aggregate fields — computed in dedicated series-scope path
+  if (isSeriesAggregateField(field)) return {};
 
   // Stream relation fields
   if (STREAM_FIELDS.has(field)) {
@@ -817,6 +811,8 @@ const ITEM_SELECT_FULL = {
   audioSamplingRate: true,
   audioBitrate: true,
   ratingCount: true,
+  libraryId: true,
+  parentSummary: true,
   streams: {
     select: {
       streamType: true, language: true, languageCode: true, codec: true,
@@ -980,7 +976,10 @@ async function groupSeriesEpisodes(
       (array_agg(l."mediaServerId" ORDER BY mi."seasonNumber" NULLS LAST, mi."episodeNumber" NULLS LAST))[1] as "serverId",
       (array_agg(ms.name ORDER BY mi."seasonNumber" NULLS LAST, mi."episodeNumber" NULLS LAST))[1] as "serverName",
       (array_agg(ms.type ORDER BY mi."seasonNumber" NULLS LAST, mi."episodeNumber" NULLS LAST))[1] as "serverType",
-      (array_agg(mi."summary" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."summary" IS NOT NULL))[1] as summary,
+      COALESCE(
+        (array_agg(mi."parentSummary" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."parentSummary" IS NOT NULL))[1],
+        (array_agg(mi."summary" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."summary" IS NOT NULL))[1]
+      ) as summary,
       (array_agg(mi."genres" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."genres" IS NOT NULL))[1] as genres,
       (array_agg(mi."studio" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."studio" IS NOT NULL))[1] as studio,
       (array_agg(mi."contentRating" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."contentRating" IS NOT NULL))[1] as "contentRating",
@@ -1089,7 +1088,7 @@ export async function executeQuery(
 
   // Determine if we need unified in-memory evaluation
   const hasCrossSystem = hasCrossSystemRules(groups);
-  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem;
+  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups);
 
   // Check if we need to group series
   const seriesInScope = mediaTypes.length === 0 || mediaTypes.includes("SERIES");
@@ -1112,8 +1111,11 @@ export async function executeQuery(
   const flatWhere: Prisma.MediaItemWhereInput = { ...where, type: { in: [...flatTypes] } };
 
   // For grouped series with external/wildcard filtering: use unified evaluation
+  // For series-aggregate rules: aggregate episodes into series first, then evaluate
   let groupedShowsPromise: Promise<Array<Record<string, unknown>>>;
-  if (needsFullInMemoryEval) {
+  if (hasSeriesAggregateRules(groups)) {
+    groupedShowsPromise = aggregateSeriesAndFilter(effectiveServerIds, groups, arrDataByType, seerrDataByType);
+  } else if (needsFullInMemoryEval) {
     groupedShowsPromise = filterAndGroupSeriesEpisodes(where, groups, arrDataByType, seerrDataByType);
   } else {
     groupedShowsPromise = groupSeriesEpisodes(where);
@@ -1165,6 +1167,59 @@ export async function executeQuery(
     items: paged,
     pagination: { page, limit, hasMore, total },
   };
+}
+
+/**
+ * For grouped series queries that reference series-aggregate fields
+ * (`watchedEpisodePercentage`, `availableEpisodeCount`, etc.): fetch ALL
+ * episodes for the relevant SERIES libraries (with NO rule-level WHERE),
+ * aggregate into one record per series, then evaluate every rule against
+ * the aggregate. This matches the rule engine's `evaluateSeriesScope`
+ * semantics — aggregates must be computed over every episode of a series,
+ * not over the subset that happens to satisfy other rules, otherwise
+ * counts and percentages are skewed.
+ *
+ * Episode-level fields (year, fileSize, etc.) are evaluated against the
+ * representative episode's value via the aggregated record.
+ */
+async function aggregateSeriesAndFilter(
+  effectiveServerIds: string[],
+  groups: QueryGroup[],
+  arrDataByType?: Record<string, ArrDataMap>,
+  seerrDataByType?: Record<string, SeerrDataMap>,
+): Promise<Array<Record<string, unknown>>> {
+  const seriesWhere: Prisma.MediaItemWhereInput = {
+    type: "SERIES",
+    parentTitle: { not: null },
+    library: { mediaServerId: { in: effectiveServerIds } },
+  };
+
+  const episodes = await prisma.mediaItem.findMany({
+    where: seriesWhere,
+    select: ITEM_SELECT_FULL,
+  });
+
+  if (episodes.length === 0) return [];
+
+  const aggregates = aggregateEpisodesIntoSeries(
+    episodes as unknown as AggregableEpisode[],
+    { includeStreams: true },
+  );
+
+  const survivingIds: string[] = [];
+  for (const series of aggregates) {
+    const item = serializeSeriesAggregateForEval(series);
+    const { arrMeta, seerrMeta } = lookupExternalMeta(
+      item, arrDataByType, seerrDataByType,
+    );
+    if (evaluateAllQueryRulesInMemory(groups, item, arrMeta, seerrMeta)) {
+      survivingIds.push(...series.memberIds);
+    }
+  }
+
+  if (survivingIds.length === 0) return [];
+
+  return groupSeriesEpisodes(seriesWhere, survivingIds);
 }
 
 /**
@@ -1220,7 +1275,7 @@ async function executeUngrouped(
 ): Promise<QueryResult> {
   // When any in-memory evaluation is needed (external rules, wildcards, stream query computed fields), fetch all items
   const hasCrossSystem = hasCrossSystemRules(groups);
-  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem;
+  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups);
   const useInMemoryPagination = needsFullInMemoryEval;
   const selectToUse = needsFullInMemoryEval ? ITEM_SELECT_FULL : ITEM_SELECT;
 
@@ -1930,10 +1985,7 @@ function lookupExternalMeta(
 
   let seerrMeta: SeerrMetadata | undefined;
   if (seerrDataByType) {
-    const seerrSource = itemType === "MOVIE" ? "TMDB" : "TVDB";
-    const seerrExtId = externalIds.find(e => e.source === seerrSource);
-    const seerrData = seerrDataByType[itemType];
-    seerrMeta = seerrExtId && seerrData ? seerrData[seerrExtId.externalId] : undefined;
+    seerrMeta = lookupSeerrMeta(externalIds, seerrDataByType[itemType], itemType);
   }
 
   return { arrMeta, seerrMeta };

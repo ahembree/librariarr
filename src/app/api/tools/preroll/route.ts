@@ -11,10 +11,12 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // DB-only payload — never blocks on the media server. The live "currently set"
+  // preroll value is fetched separately via /api/tools/preroll/current.
   const [servers, presets, schedules] = await Promise.all([
     prisma.mediaServer.findMany({
       where: { userId: session.userId!, type: "PLEX", enabled: true },
-      select: { id: true, url: true, accessToken: true, tlsSkipVerify: true },
+      select: { id: true },
     }),
     prisma.prerollPreset.findMany({
       where: { userId: session.userId! },
@@ -26,19 +28,7 @@ export async function GET() {
     }),
   ]);
 
-  let currentPreroll = "";
-  if (servers.length > 0) {
-    try {
-      const client = new PlexClient(servers[0].url, servers[0].accessToken, {
-        skipTlsVerify: servers[0].tlsSkipVerify,
-      });
-      currentPreroll = await client.getPrerollSetting();
-    } catch {
-      /* ignore */
-    }
-  }
-
-  return NextResponse.json({ currentPreroll, presets, schedules, hasPlexServers: servers.length > 0 });
+  return NextResponse.json({ presets, schedules, hasPlexServers: servers.length > 0 });
 }
 
 export async function POST(request: NextRequest) {

@@ -2,19 +2,29 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { Separator } from "@/components/ui/separator";
 import {
   ArrowUpCircle,
   CheckCircle2,
   ChevronDown,
   ExternalLink,
+  HardDrive,
+  Info,
   Loader2,
+  Newspaper,
   Trash2,
 } from "lucide-react";
 import type { SystemInfo, ImageCacheStats, ReleaseNote } from "../types";
@@ -95,88 +105,80 @@ function formatDate(dateStr: string): string {
   }
 }
 
-function ReleaseNoteCard({ note }: { note: ReleaseNote }) {
+function ReleaseNoteRow({ note }: { note: ReleaseNote }) {
   const [open, setOpen] = useState(note.isLatest && !note.isCurrent);
   const sections = parseReleaseBody(note.body);
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <Card>
-        <CollapsibleTrigger asChild>
-          <button className="w-full text-left">
-            <CardContent className="flex items-center justify-between py-3">
-              <div className="flex items-center gap-3">
-                <span className="font-medium font-mono text-sm">
-                  v{note.version}
-                </span>
-                <div className="flex items-center gap-1.5">
-                  {note.isCurrent && (
-                    <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                      Current
-                    </Badge>
-                  )}
-                  {note.isLatest && !note.isCurrent && (
-                    <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/20 text-[10px] px-1.5 py-0">
-                      Latest
-                    </Badge>
-                  )}
-                </div>
-                {note.publishedAt && (
-                  <span className="text-xs text-muted-foreground">
-                    {formatDate(note.publishedAt)}
-                  </span>
-                )}
-              </div>
-              <ChevronDown
-                className={`h-4 w-4 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
-              />
-            </CardContent>
-          </button>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <div className="border-t border-border px-6 pb-4 pt-3">
-            {sections.length > 0 ? (
-              <div className="space-y-3">
-                {sections.map((section) => (
-                  <div key={section.heading}>
-                    <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
-                      {section.heading}
-                    </h4>
-                    <ul className="space-y-1">
-                      {section.items.map((item, i) => (
-                        <li
-                          key={i}
-                          className="text-sm text-foreground/80 flex gap-2"
-                        >
-                          <span className="text-muted-foreground mt-1 shrink-0">
-                            &bull;
-                          </span>
-                          <span>{item}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground italic">
-                No release notes available.
-              </p>
-            )}
-            {note.url && (
-              <a
-                href={note.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-3 inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-              >
-                View on GitHub
-                <ExternalLink className="h-3 w-3" />
-              </a>
+      <CollapsibleTrigger asChild>
+        <button className="w-full flex items-center justify-between gap-3 py-3 text-left -mx-6 px-6 hover:bg-muted/30 transition-colors">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="font-medium font-mono text-sm">v{note.version}</span>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {note.isCurrent && (
+                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                  Current
+                </Badge>
+              )}
+              {note.isLatest && !note.isCurrent && (
+                <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/20 text-[10px] px-1.5 py-0">
+                  Latest
+                </Badge>
+              )}
+            </div>
+            {note.publishedAt && (
+              <span className="text-xs text-muted-foreground truncate">
+                {formatDate(note.publishedAt)}
+              </span>
             )}
           </div>
-        </CollapsibleContent>
-      </Card>
+          <ChevronDown
+            className={`h-4 w-4 text-muted-foreground transition-transform shrink-0 ${open ? "rotate-180" : ""}`}
+          />
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="pt-1 pb-3 space-y-3">
+          {sections.length > 0 ? (
+            sections.map((section) => (
+              <div key={section.heading}>
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                  {section.heading}
+                </h4>
+                <ul className="space-y-1">
+                  {section.items.map((item, i) => (
+                    <li
+                      key={i}
+                      className="text-sm text-foreground/80 flex gap-2"
+                    >
+                      <span className="text-muted-foreground mt-1 shrink-0">
+                        &bull;
+                      </span>
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))
+          ) : (
+            <p className="text-sm text-muted-foreground italic">
+              No release notes available.
+            </p>
+          )}
+          {note.url && (
+            <a
+              href={note.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              View on GitHub
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
+        </div>
+      </CollapsibleContent>
     </Collapsible>
   );
 }
@@ -191,8 +193,24 @@ export function SystemTab({
 }: SystemTabProps) {
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-semibold">System Information</h2>
+      <div className="space-y-1">
+        <h2 className="text-xl font-semibold">System</h2>
+        <p className="text-sm text-muted-foreground">
+          Application status, storage, and release history.
+        </p>
+      </div>
+
+      {/* System Information */}
       <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Info className="h-4 w-4" />
+            System Information
+          </CardTitle>
+          <CardDescription>
+            Version, database, and library statistics.
+          </CardDescription>
+        </CardHeader>
         <CardContent>
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
             <div>
@@ -244,10 +262,19 @@ export function SystemTab({
         </CardContent>
       </Card>
 
-      <h2 className="text-xl font-semibold">Image Cache</h2>
+      {/* Image Cache */}
       <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <HardDrive className="h-4 w-4" />
+            Image Cache
+          </CardTitle>
+          <CardDescription>
+            Cached artwork from your media servers — clear to free disk space.
+          </CardDescription>
+        </CardHeader>
         <CardContent>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <div>
               <p className="text-sm text-muted-foreground">Cached Images</p>
               <p className="font-medium">
@@ -273,29 +300,39 @@ export function SystemTab({
         </CardContent>
       </Card>
 
-      <h2 className="text-xl font-semibold">Release Notes</h2>
-      {loadingChangelog ? (
-        <Card>
-          <CardContent className="flex items-center justify-center py-8">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            <span className="ml-2 text-sm text-muted-foreground">Loading release notes...</span>
-          </CardContent>
-        </Card>
-      ) : releaseNotes.length > 0 ? (
-        <div className="space-y-2">
-          {releaseNotes.map((note) => (
-            <ReleaseNoteCard key={note.version} note={note} />
-          ))}
-        </div>
-      ) : (
-        <Card>
-          <CardContent className="py-8 text-center">
-            <p className="text-sm text-muted-foreground">
+      {/* Release Notes */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Newspaper className="h-4 w-4" />
+            Release Notes
+          </CardTitle>
+          <CardDescription>
+            Recent changes to Librariarr — click any version to expand.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {loadingChangelog ? (
+            <div className="flex items-center justify-center py-6">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <span className="ml-2 text-sm text-muted-foreground">Loading release notes...</span>
+            </div>
+          ) : releaseNotes.length > 0 ? (
+            <div>
+              {releaseNotes.map((note, i) => (
+                <div key={note.version}>
+                  {i > 0 && <Separator />}
+                  <ReleaseNoteRow note={note} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="py-6 text-center text-sm text-muted-foreground">
               Unable to load release notes. Version information may be unavailable.
             </p>
-          </CardContent>
-        </Card>
-      )}
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

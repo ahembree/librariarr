@@ -28,31 +28,33 @@ async function fetchAllSessions(userId: string): Promise<SessionWithServer[]> {
     select: { id: true, name: true, url: true, accessToken: true, tlsSkipVerify: true, type: true },
   });
 
-  const allSessions: SessionWithServer[] = [];
   const now = Date.now();
 
-  for (const server of servers) {
-    try {
+  const results = await Promise.allSettled(
+    servers.map(async (server) => {
       const client = createMediaServerClient(server.type, server.url, server.accessToken, {
         skipTlsVerify: server.tlsSkipVerify,
       });
       const sessions = await client.getSessions();
-      for (const s of sessions) {
+      return sessions.map<SessionWithServer>((s) => {
         const key = `${server.id}:${s.sessionId}`;
         if (!sessionFirstSeen.has(key)) {
           sessionFirstSeen.set(key, now);
         }
-        allSessions.push({
+        return {
           ...s,
           serverId: server.id,
           serverName: server.name,
           serverType: server.type,
           startedAt: sessionFirstSeen.get(key)!,
-        });
-      }
-    } catch {
-      // Skip unreachable servers
-    }
+        };
+      });
+    }),
+  );
+
+  const allSessions: SessionWithServer[] = [];
+  for (const result of results) {
+    if (result.status === "fulfilled") allSessions.push(...result.value);
   }
 
   // Prune entries for sessions that no longer exist

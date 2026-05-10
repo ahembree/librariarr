@@ -30,8 +30,15 @@ export async function PUT(
   } = data;
 
   if (name !== undefined) {
+    const current = await prisma.ruleSet.findFirst({
+      where: { id, userId: session.userId },
+      select: { type: true },
+    });
+    if (!current) {
+      return NextResponse.json({ error: "Rule set not found" }, { status: 404 });
+    }
     const existing = await prisma.ruleSet.findFirst({
-      where: { userId: session.userId, name, id: { not: id } },
+      where: { userId: session.userId, name, type: current.type, id: { not: id } },
     });
     if (existing) {
       return NextResponse.json(

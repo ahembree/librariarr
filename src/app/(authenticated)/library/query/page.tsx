@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Separator } from "@/components/ui/separator";
 import {
   Popover,
   PopoverContent,
@@ -51,11 +52,14 @@ import {
   Clock,
   HardDrive,
   Layers,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { QueryBuilder, queryBuilderConfig, countAllRules, validateAllRules } from "@/components/query-builder";
 import { BuilderWithPseudocode } from "@/components/builder/builder-with-pseudocode";
-import type { QueryGroup, QueryDefinition } from "@/lib/query/types";
+import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
+import { useIntegrationsHealth, deriveIntegrationsStatus, arrTypeForMediaType, type ArrType } from "@/hooks/use-integrations-health";
+import { hasArrRules, hasSeerrRules, type QueryGroup, type QueryDefinition } from "@/lib/query/types";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { MediaCard } from "@/components/media-card";
@@ -214,6 +218,33 @@ export default function QueryPage() {
 
   // Seerr integration status
   const [seerrConnected, setSeerrConnected] = useState(false);
+  const [seerrInstanceId, setSeerrInstanceId] = useState<string | null>(null);
+
+  // Integration reachability (configured but currently online?)
+  const { health: integrationsHealth } = useIntegrationsHealth();
+  const relevantArrTypes = useMemo<readonly ArrType[]>(() => {
+    if (mediaTypes.length === 0) return ["sonarr", "radarr", "lidarr"];
+    return mediaTypes.map((t) => arrTypeForMediaType(t as "MOVIE" | "SERIES" | "MUSIC"));
+  }, [mediaTypes]);
+  // Only check the specific Arr server IDs the query references.
+  const arrInstanceIds = useMemo<readonly string[]>(
+    () => [arrServerIds.radarr, arrServerIds.sonarr, arrServerIds.lidarr].filter(
+      (id): id is string => Boolean(id),
+    ),
+    [arrServerIds.radarr, arrServerIds.sonarr, arrServerIds.lidarr],
+  );
+  const seerrInstanceIds = useMemo<readonly string[]>(
+    () => (seerrInstanceId ? [seerrInstanceId] : []),
+    [seerrInstanceId],
+  );
+  const integrationsStatus = useMemo(
+    () => deriveIntegrationsStatus(integrationsHealth, {
+      relevantArrTypes,
+      arrInstanceIds,
+      seerrInstanceIds,
+    }),
+    [integrationsHealth, relevantArrTypes, arrInstanceIds, seerrInstanceIds],
+  );
 
   // Results state
   const [results, setResults] = useState<QueryResultItem[]>([]);
@@ -283,6 +314,7 @@ export default function QueryPage() {
       .then((data) => {
         const instances = data?.instances ?? [];
         setSeerrConnected(instances.length > 0);
+        setSeerrInstanceId(instances.length > 0 ? instances[0].id : null);
         if (instances.length > 0) {
           fetch(`/api/integrations/seerr/${instances[0].id}/metadata`)
             .then((r) => r.ok ? r.json() : null)
@@ -588,6 +620,13 @@ export default function QueryPage() {
   const ruleCount = useMemo(() => countAllRules(groups), [groups]);
 
   const hasAnyArrServer = !!(arrServerIds.radarr || arrServerIds.sonarr || arrServerIds.lidarr);
+  const hasAnyArrInstanceAvailable = arrInstances.radarr.length > 0 || arrInstances.sonarr.length > 0 || arrInstances.lidarr.length > 0;
+  const orphanArrRules = useMemo(() => hasArrRules(groups) && !hasAnyArrServer, [groups, hasAnyArrServer]);
+  const orphanSeerrRules = useMemo(() => hasSeerrRules(groups) && !seerrConnected, [groups, seerrConnected]);
+  const seerrWithMusic = useMemo(
+    () => hasSeerrRules(groups) && seerrConnected && (mediaTypes.length === 0 || mediaTypes.includes("MUSIC")),
+    [groups, seerrConnected, mediaTypes],
+  );
 
   const runQuery = useCallback(
     async () => {
@@ -605,6 +644,7 @@ export default function QueryPage() {
           sortOrder,
           includeEpisodes,
           ...(Object.keys(cleanedArrServerIds).length > 0 && { arrServerIds: cleanedArrServerIds }),
+          ...(seerrInstanceId && { seerrInstanceId }),
         };
 
         const resp = await fetch("/api/query", {
@@ -622,7 +662,7 @@ export default function QueryPage() {
         setLoading(false);
       }
     },
-    [mediaTypes, selectedServerIds, groups, sortBy, sortOrder, includeEpisodes, arrServerIds],
+    [mediaTypes, selectedServerIds, groups, sortBy, sortOrder, includeEpisodes, arrServerIds, seerrInstanceId],
   );
 
   // ── Save/Load/Delete handlers ──
@@ -638,6 +678,7 @@ export default function QueryPage() {
       serverIds: selectedServerIds,
       groups, sortBy, sortOrder, includeEpisodes,
       ...(Object.keys(cleanedArrServerIds).length > 0 && { arrServerIds: cleanedArrServerIds }),
+      ...(seerrInstanceId && { seerrInstanceId }),
     };
     try {
       if (activeQueryId) {
@@ -794,13 +835,13 @@ export default function QueryPage() {
 
   return (
     <>
-      <div className="space-y-6 p-4 sm:p-6 md:pr-12">
+      <div className="space-y-6 p-4 sm:p-6 lg:p-8">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Query Builder</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Search across all media types, servers, and metadata
+          <p className="text-muted-foreground mt-1">
+            Build ad-hoc queries across your media library.
           </p>
         </div>
       </div>
@@ -905,9 +946,12 @@ export default function QueryPage() {
                         const isSelected = selectedServerIds.includes(s.id);
                         return (
                           <CommandItem key={s.id} onSelect={() => toggleServer(s.id)}>
-                            <div className={`mr-2 flex h-4 w-4 items-center justify-center rounded-sm border ${isSelected ? "bg-primary border-primary text-primary-foreground" : "border-muted-foreground/50"}`}>
-                              {isSelected && <span className="text-xs">✓</span>}
-                            </div>
+                            <Checkbox
+                              checked={isSelected}
+                              onCheckedChange={() => toggleServer(s.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="mr-2"
+                            />
                             {s.name}
                             {s.type && <ServerTypeChip type={s.type} className="ml-1.5" />}
                           </CommandItem>
@@ -916,11 +960,14 @@ export default function QueryPage() {
                     </CommandGroup>
                   </CommandList>
                   {selectedServerIds.length > 0 && (
-                    <div className="border-t p-1">
-                      <Button variant="ghost" size="sm" className="w-full text-xs" onClick={() => setSelectedServerIds([])}>
-                        Clear all
-                      </Button>
-                    </div>
+                    <>
+                      <Separator />
+                      <div className="p-1">
+                        <Button variant="ghost" size="sm" className="w-full text-xs" onClick={() => setSelectedServerIds([])}>
+                          Clear all
+                        </Button>
+                      </div>
+                    </>
                   )}
                 </Command>
               </PopoverContent>
@@ -992,9 +1039,58 @@ export default function QueryPage() {
         })()}
       </div>
 
+      {/* Connectivity warning: rules reference an integration that's configured but currently down */}
+      <IntegrationUnreachableBanner
+        health={integrationsHealth}
+        hasArrRules={hasArrRules(groups)}
+        hasSeerrRules={hasSeerrRules(groups)}
+        relevantArrTypes={relevantArrTypes}
+        arrInstanceIds={arrInstanceIds}
+        seerrInstanceIds={seerrInstanceIds}
+        subjectLabel="This query"
+      />
+
+      {/* Hint: orphaned Arr/Seerr rules with no integration to evaluate them */}
+      {(orphanArrRules || orphanSeerrRules || seerrWithMusic) && (
+        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+          <AlertTriangle className="h-4 w-4 mt-0.5 text-amber-400 shrink-0" />
+          <div className="space-y-1">
+            <p className="font-medium text-amber-400">Some criteria can&apos;t be evaluated</p>
+            {orphanArrRules && (
+              <p className="text-muted-foreground">
+                This query uses Arr criteria but no Arr server is{" "}
+                {hasAnyArrInstanceAvailable
+                  ? "selected above for the relevant media type. Pick one to evaluate Arr rules — otherwise no items will match."
+                  : "configured. Connect Radarr, Sonarr, or Lidarr in Settings → Integrations — otherwise no items will match these rules."}
+              </p>
+            )}
+            {orphanSeerrRules && (
+              <p className="text-muted-foreground">
+                This query uses Seerr criteria but no Seerr instance is configured. Connect Overseerr or Jellyseerr in Settings → Integrations — otherwise no items will match these rules.
+              </p>
+            )}
+            {seerrWithMusic && (
+              <p className="text-muted-foreground">
+                Seerr does not support music — music items will never match Seerr criteria, even when Seerr is connected.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Query builder */}
       <BuilderWithPseudocode groups={groups} config={queryBuilderConfig}>
-        <QueryBuilder groups={groups} onChange={setGroups} distinctValues={distinctValues} arrConnected={hasAnyArrServer} seerrConnected={seerrConnected} />
+        <QueryBuilder
+          groups={groups}
+          onChange={setGroups}
+          distinctValues={distinctValues}
+          arrConnected={hasAnyArrServer}
+          arrUnreachable={integrationsStatus.arrUnreachable}
+          seerrConnected={seerrConnected}
+          seerrUnreachable={integrationsStatus.seerrUnreachable}
+          mediaTypes={mediaTypes as ("MOVIE" | "SERIES" | "MUSIC")[]}
+          includeEpisodes={includeEpisodes}
+        />
       </BuilderWithPseudocode>
 
       {/* Run + view controls */}

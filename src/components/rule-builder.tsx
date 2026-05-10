@@ -1,21 +1,19 @@
 "use client";
 
 import {
-  type Rule,
-  type RuleGroup,
-  type RuleField,
-  type RuleCondition,
-  type StreamQueryStreamType,
-  RULE_FIELDS,
-  RULE_OPERATORS,
-  FIELD_SECTIONS,
+  CONDITION_FIELDS,
+  CONDITION_OPERATORS,
+  CONDITION_SECTIONS,
   STREAM_QUERY_FIELDS,
   STREAM_QUERY_SECTIONS,
-  ARR_FIELDS,
-  SEERR_FIELDS,
-  isSeriesAggregateField,
   getStreamQueryFieldsForType,
-} from "@/lib/rules/types";
+  getConditionField,
+  type Condition,
+  type ConditionGroup,
+  type ConditionLogic,
+  type LibraryType,
+  type StreamQueryStreamType,
+} from "@/lib/conditions";
 import { generateId } from "@/lib/utils";
 import { BaseBuilder } from "./builder/base-builder";
 import type { BuilderConfig, FieldContext } from "./builder/types";
@@ -23,6 +21,10 @@ import {
   countAllRules as _countAllRules,
   validateAllRules as _validateAllRules,
 } from "./builder/tree-utils";
+
+// Backward-compat type aliases for existing callers
+export type Rule = Condition;
+export type RuleGroup = ConditionGroup;
 
 // ─── Re-exports for backward compatibility ──────────────────────────────────
 
@@ -34,7 +36,7 @@ export function validateAllRules(groups: RuleGroup[]): boolean {
   return _validateAllRules(
     groups,
     (field) =>
-      RULE_FIELDS.find((f) => f.value === field)?.type
+      CONDITION_FIELDS.find((f) => f.value === field)?.type
       ?? STREAM_QUERY_FIELDS.find((f) => f.value === field)?.type
       ?? "text",
     (op) => op === "isNull" || op === "isNotNull",
@@ -46,20 +48,20 @@ export function validateAllRules(groups: RuleGroup[]): boolean {
 function createRule(): Rule {
   return {
     id: generateId(),
-    field: "playCount" as RuleField,
+    field: "playCount",
     operator: "equals",
     value: "",
-    condition: "OR" as RuleCondition,
+    condition: "OR" as ConditionLogic,
   };
 }
 
 export const ruleBuilderConfig: BuilderConfig<Rule, RuleGroup> = {
-  fields: RULE_FIELDS,
-  operators: RULE_OPERATORS,
-  sections: FIELD_SECTIONS,
+  fields: CONDITION_FIELDS,
+  operators: CONDITION_OPERATORS,
+  sections: CONDITION_SECTIONS,
 
   createRule,
-  createGroup: (condition: RuleCondition = "AND") => ({
+  createGroup: (condition: ConditionLogic = "AND") => ({
     id: generateId(),
     condition,
     rules: [createRule()],
@@ -67,48 +69,49 @@ export const ruleBuilderConfig: BuilderConfig<Rule, RuleGroup> = {
   }),
 
   isFieldDisabled: (field, ctx) => {
-    if (ARR_FIELDS.includes(field as RuleField) && ctx.arrConnected === false)
+    const def = getConditionField(field);
+    if (!def) return false;
+    if (def.requiresArr && ctx.arrConnected === false) return true;
+    if (def.requiresSeerr && ctx.seerrConnected === false) return true;
+    if (def.isSeriesAggregate && ctx.libraryType !== "SERIES") return true;
+    if (def.invalidForLibraryType && ctx.libraryType
+      && def.invalidForLibraryType.includes(ctx.libraryType as LibraryType)) {
       return true;
-    if (
-      SEERR_FIELDS.includes(field as RuleField) &&
-      ctx.seerrConnected === false
-    )
-      return true;
-    if (
-      isSeriesAggregateField(field as RuleField) &&
-      ctx.libraryType !== "SERIES"
-    )
-      return true;
-    if (
-      (field === "arrTmdbRating" || field === "arrRtCriticRating") &&
-      ctx.libraryType === "MUSIC"
-    )
-      return true;
+    }
     return false;
   },
 
   getDisabledTooltip: (field, ctx) => {
-    if (ARR_FIELDS.includes(field as RuleField) && ctx.arrConnected === false)
+    const def = getConditionField(field);
+    if (!def) return null;
+    if (def.requiresArr && ctx.arrConnected === false)
       return "Select an Arr server above to use Arr criteria";
-    if (
-      SEERR_FIELDS.includes(field as RuleField) &&
-      ctx.seerrConnected === false
-    )
+    if (def.requiresSeerr && ctx.seerrConnected === false)
       return "Configure a Seerr instance in Settings to use Seerr criteria";
-    if (
-      isSeriesAggregateField(field as RuleField) &&
-      ctx.libraryType !== "SERIES"
-    )
+    if (def.isSeriesAggregate && ctx.libraryType !== "SERIES")
       return "Series criteria are only available for series lifecycle rules";
-    if (
-      (field === "arrTmdbRating" || field === "arrRtCriticRating") &&
-      ctx.libraryType === "MUSIC"
-    )
-      return "TMDB and RT ratings are not available for music";
+    if (def.invalidForLibraryType && ctx.libraryType
+      && def.invalidForLibraryType.includes(ctx.libraryType as LibraryType)) {
+      return `${def.label} is not available for ${String(ctx.libraryType).toLowerCase()}`;
+    }
     return null;
   },
 
   isValuelessOperator: (op) => op === "isNull" || op === "isNotNull",
+
+  getFieldUnreachableTooltip: (field, ctx) => {
+    const def = getConditionField(field);
+    if (!def) return null;
+    // arrUnreachable / seerrUnreachable mean "configured but currently
+    // unreachable" — already gated on configuration in the hook. Don't
+    // additionally require ctx.arrConnected (which is the rule-set's
+    // selected instance, not the user's overall Arr presence).
+    if (def.requiresArr && ctx.arrUnreachable)
+      return "The configured Arr integration is currently unreachable. This rule won't evaluate correctly until connectivity is restored.";
+    if (def.requiresSeerr && ctx.seerrUnreachable)
+      return "The configured Seerr integration is currently unreachable. This rule won't evaluate correctly until connectivity is restored.";
+    return null;
+  },
 
   isSectionHidden: (sectionKey, ctx) => {
     if (sectionKey.startsWith("arr") && !ctx.arrConnected) return true;
@@ -122,7 +125,7 @@ export const ruleBuilderConfig: BuilderConfig<Rule, RuleGroup> = {
   streamQuerySections: STREAM_QUERY_SECTIONS,
   getStreamQueryFieldsForType: (streamType) =>
     getStreamQueryFieldsForType(streamType as StreamQueryStreamType),
-  createStreamQueryGroup: (streamType, condition: RuleCondition = "AND") => {
+  createStreamQueryGroup: (streamType, condition: ConditionLogic = "AND") => {
     const sqFields = getStreamQueryFieldsForType(streamType as StreamQueryStreamType);
     const defaultField = sqFields.length > 0 ? sqFields[0].value : "sqCodec";
     return {
@@ -130,10 +133,10 @@ export const ruleBuilderConfig: BuilderConfig<Rule, RuleGroup> = {
       condition,
       rules: [{
         id: generateId(),
-        field: defaultField as RuleField,
-        operator: "equals" as const,
+        field: defaultField,
+        operator: "equals",
         value: "",
-        condition: "AND" as RuleCondition,
+        condition: "AND" as ConditionLogic,
       }],
       groups: [],
       streamQuery: { streamType: streamType as StreamQueryStreamType },
@@ -148,8 +151,10 @@ interface RuleBuilderProps {
   onChange: (groups: RuleGroup[]) => void;
   distinctValues?: Record<string, string[]>;
   arrConnected?: boolean;
+  arrUnreachable?: boolean;
   seerrConnected?: boolean;
-  libraryType?: "MOVIE" | "SERIES" | "MUSIC";
+  seerrUnreachable?: boolean;
+  libraryType?: LibraryType;
 }
 
 export function RuleBuilder({
@@ -157,10 +162,18 @@ export function RuleBuilder({
   onChange,
   distinctValues,
   arrConnected,
+  arrUnreachable,
   seerrConnected,
+  seerrUnreachable,
   libraryType,
 }: RuleBuilderProps) {
-  const fieldContext: FieldContext = { arrConnected, seerrConnected, libraryType };
+  const fieldContext: FieldContext = {
+    arrConnected,
+    arrUnreachable,
+    seerrConnected,
+    seerrUnreachable,
+    libraryType,
+  };
   return (
     <BaseBuilder<Rule, RuleGroup>
       groups={groups}

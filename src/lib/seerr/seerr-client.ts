@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
+import { IntegrationError } from "@/lib/integration-error";
 
 export interface SeerrUser {
   id: number;
@@ -59,6 +60,7 @@ export interface SeerrMovieDetails {
   backdropPath: string | null;
   overview: string;
   releaseDate: string;
+  mediaInfo?: SeerrMediaInfo;
 }
 
 export interface SeerrTvDetails {
@@ -69,6 +71,7 @@ export interface SeerrTvDetails {
   backdropPath: string | null;
   overview: string;
   firstAirDate: string;
+  mediaInfo?: SeerrMediaInfo;
 }
 
 export class SeerrClient {
@@ -101,6 +104,7 @@ export class SeerrClient {
             `ERROR ${error.response?.status ?? "NETWORK"} ${error.config?.url}${duration}`,
             { message: error.message }
           );
+          return Promise.reject(new IntegrationError("Seerr", error));
         }
         return Promise.reject(error);
       }

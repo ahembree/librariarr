@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useElementSize } from "@/hooks/use-element-size";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
@@ -31,7 +32,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { getDimensionMeta } from "@/lib/dashboard/custom-dimensions";
-import { HEATMAP_GRADIENTS, type CustomCardConfig } from "@/lib/dashboard/card-registry";
+import { CUSTOM_CARD_ICONS, HEATMAP_GRADIENTS, type CustomCardConfig } from "@/lib/dashboard/card-registry";
 import { useChipColors } from "@/components/chip-color-provider";
 import type { ChipColorCategory } from "@/lib/theme/chip-colors";
 
@@ -214,7 +215,13 @@ export function CustomChartCard({
   return (
     <Card className="h-full flex flex-col">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-base font-semibold">{cardTitle}</CardTitle>
+        <CardTitle className="flex items-center gap-2 text-base font-semibold">
+          {config.icon && CUSTOM_CARD_ICONS[config.icon] && (() => {
+            const Icon = CUSTOM_CARD_ICONS[config.icon];
+            return <Icon className="h-4 w-4 text-muted-foreground" />;
+          })()}
+          {cardTitle}
+        </CardTitle>
         <div className="flex items-center gap-2">
           {/* Type filter (only if not locked) */}
           {!lockedFilterType && availableTypes && availableTypes.length > 1 && (
@@ -826,7 +833,7 @@ function TimelineChart({ data, hiddenItems }: { data: TimelineData; hiddenItems:
   return (
     <div className="flex flex-col h-full">
       <div className="min-h-48 flex-1">
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minHeight={200}>
           <AreaChart data={chartData} margin={margin}>
             <defs>
               {hasSeries ? (
@@ -916,13 +923,37 @@ function TimelineChart({ data, hiddenItems }: { data: TimelineData; hiddenItems:
 
 // ── Chart renderer ───────────────────────────────────────────────
 
+function CustomPieChart({ data }: { data: ChartDatum[] }) {
+  const [ref, size] = useElementSize<HTMLDivElement>();
+  return (
+    <div className="flex h-full justify-center">
+      <div ref={ref} className="w-full max-w-xs">
+        {size && (
+          <PieChart width={size.width} height={size.height}>
+            <Pie
+              data={data}
+              dataKey="count"
+              nameKey="label"
+              cx="50%"
+              cy="50%"
+              innerRadius="30%"
+              outerRadius="80%"
+            />
+            <RechartsTooltip content={<CustomTooltip />} />
+          </PieChart>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function renderChart(chartType: string, data: ChartDatum[]) {
   const margin = { top: 5, right: 10, bottom: 5, left: 10 };
 
   switch (chartType) {
     case "bar":
       return (
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minHeight={200}>
           <BarChart data={data} margin={margin}>
             <XAxis
               dataKey="label"
@@ -947,26 +978,11 @@ function renderChart(chartType: string, data: ChartDatum[]) {
       );
 
     case "pie":
-      return (
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
-            <Pie
-              data={data}
-              dataKey="count"
-              nameKey="label"
-              innerRadius={40}
-              outerRadius={100}
-              paddingAngle={2}
-              stroke="none"
-            />
-            <RechartsTooltip content={<CustomTooltip />} />
-          </PieChart>
-        </ResponsiveContainer>
-      );
+      return <CustomPieChart data={data} />;
 
     case "line":
       return (
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minHeight={200}>
           <LineChart data={data} margin={margin}>
             <XAxis
               dataKey="label"
@@ -999,7 +1015,7 @@ function renderChart(chartType: string, data: ChartDatum[]) {
 
     case "area":
       return (
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minHeight={200}>
           <AreaChart data={data} margin={margin}>
             <defs>
               <linearGradient id="customAreaGrad" x1="0" y1="0" x2="0" y2="1">
@@ -1037,7 +1053,7 @@ function renderChart(chartType: string, data: ChartDatum[]) {
 
     case "radar":
       return (
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minHeight={200}>
           <RadarChart data={data} cx="50%" cy="50%" outerRadius="75%">
             <PolarGrid stroke="#333333" />
             <PolarAngleAxis
@@ -1063,7 +1079,7 @@ function renderChart(chartType: string, data: ChartDatum[]) {
         fill: d.fill,
       }));
       return (
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minHeight={200}>
           <Treemap
             data={treemapData}
             dataKey="size"

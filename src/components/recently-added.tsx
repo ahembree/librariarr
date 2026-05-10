@@ -19,6 +19,8 @@ import { Clock, Film, Tv, Music, ChevronLeft, ChevronRight, Loader2 } from "luci
 import { formatRelativeDate } from "@/lib/format";
 import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
+import { LazyMediaHoverPopover } from "@/components/lazy-media-hover-popover";
+import type { MediaHoverData } from "@/components/media-hover-popover";
 
 interface RecentItem {
   id: string;
@@ -40,7 +42,8 @@ interface RecentlyAddedProps {
   servers?: { id: string; name: string; type?: string }[];
   availableTypes?: string[];
   onMovieClick?: (movieId: string) => void;
-  onSeriesClick?: (seriesName: string) => void;
+  onEpisodeClick?: (episodeId: string) => void;
+  onTrackClick?: (trackId: string) => void;
 }
 
 const PAGE_SIZE = 10;
@@ -64,7 +67,8 @@ export function RecentlyAdded({
   servers,
   availableTypes,
   onMovieClick,
-  onSeriesClick,
+  onEpisodeClick,
+  onTrackClick,
 }: RecentlyAddedProps) {
   const [items, setItems] = useState<RecentItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -197,14 +201,21 @@ export function RecentlyAdded({
                 const handleClick = () => {
                   if (item.type === "MOVIE") {
                     onMovieClick?.(item.id);
-                  } else if (item.parentTitle) {
-                    onSeriesClick?.(item.parentTitle);
+                  } else if (item.type === "SERIES") {
+                    onEpisodeClick?.(item.id);
+                  } else if (item.type === "MUSIC") {
+                    onTrackClick?.(item.id);
                   }
                 };
 
-                return (
+                const placeholder: MediaHoverData = {
+                  title: formatEpisode(item),
+                  year: item.year,
+                  addedAt: item.addedAt,
+                };
+
+                const row = (
                   <div
-                    key={item.id}
                     className="flex items-center gap-3 rounded-md px-2 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors"
                     onClick={handleClick}
                   >
@@ -224,6 +235,24 @@ export function RecentlyAdded({
                       </span>
                     )}
                   </div>
+                );
+
+                return (
+                  <LazyMediaHoverPopover
+                    key={item.id}
+                    fetchUrl={`/api/media/${item.id}`}
+                    extractData={(json) => {
+                      const data = (json as { item: MediaHoverData }).item;
+                      return item.type === "MOVIE"
+                        ? data
+                        : { ...data, title: formatEpisode(item) };
+                    }}
+                    placeholder={placeholder}
+                    imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" ? "?type=parent" : ""}`}
+                    imageAspect={item.type === "MUSIC" ? "square" : "poster"}
+                  >
+                    {row}
+                  </LazyMediaHoverPopover>
                 );
               })}
             </div>

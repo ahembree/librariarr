@@ -1,0 +1,304 @@
+---
+title: Deletion Safety
+description: How Librariarr prevents lifecycle rules from deleting unintended or unrelated media.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Lifecycle rules can delete media. This page explains, in plain language, every check that stands between a rule firing and a file being removed. If you're worried about handing your library over to an automated tool, read this end-to-end.
+
+<Aside type="tip">
+  Every safeguard described here is covered by automated tests — currently 1,694 unit tests and 1,124 integration tests. If you want to verify the claims yourself, the [For developers and reviewers](#for-developers-and-reviewers) section at the bottom links every claim to the exact source code and test files.
+</Aside>
+
+## What we're trying to prevent
+
+The single concrete failure mode that this entire system is designed to make impossible:
+
+> You create or edit a rule, intending it to match a small number of items, and the system instead matches every item in your library and queues all of it for deletion.
+
+Every check below exists because of a specific way that scenario could happen — a typo in a rule, a misconfigured action, a metadata change in your *arr instance, an item you forgot you'd added. None of these can, on their own, cause unintended data loss. The system has to be wrong in **four independent places** simultaneously for an item to be deleted by accident.
+
+## The four-layer model
+
+| Layer | When it happens | What it stops |
+|-|-|-|
+| 1. When you save | While you're building or editing a rule | Saving a destructive rule without a recycle bin or explicit acknowledgement |
+| 2. When matches are detected | When the engine looks for items to act on | An empty, broken, or all-disabled rule from matching the entire library |
+| 3. After matches are found | Before any action is queued | Stale or excluded items getting queued for deletion |
+| 4. When the action runs | The moment before each individual deletion | Acting on the wrong item due to renames or metadata drift |
+
+The rest of this page walks through each layer in user terms.
+
+## Layer 1 — When you save
+
+Before a rule even runs, the rule editor has several built-in checks.
+
+### Preview before you save
+
+Every rule has a **Preview** panel. As you build the rule, it shows you exactly which items match — using the same engine that the real lifecycle process uses, so what you see in preview is what will happen for real.
+
+If the preview shows more items than you expected, **stop and adjust the rule**. Don't save yet.
+
+### "Action enabled" is a separate switch
+
+Rule sets have two different toggles:
+
+- **Enabled** — turns detection on or off. When off, no matches are tracked.
+- **Action enabled** — when off, matches are still detected and shown to you, but **no deletions are ever scheduled**, no matter how the rules are configured.
+
+This means you can build a rule, save it, watch which items it matches over a few detection cycles, and only then arm it by turning **Action enabled** on.
+
+<Aside type="caution">
+  Saving any change to a rule set clears its current list of matched items. This is on purpose — it prevents stale matches from sticking around after you've changed the rule. If you save and want to see the matches again, click **Re-evaluate** in the Rule Matches view.
+
+  The trade-off is that the match list is always a snapshot of the most recent detection run, not a long-lived record. If you want to keep a record before saving, take a screenshot.
+</Aside>
+
+### Recycle bin requirement for destructive actions
+
+When you pick an action type whose name contains "Delete" — that's "Delete from Radarr/Sonarr/Lidarr", "Delete Files Only", "Unmonitor & Delete Files", and "Monitor & Delete Files" — Librariarr checks the *arr instance you're targeting to see whether it has a Recycle Bin Path configured.
+
+- **If the recycle bin is set up**: deleted files go there first. *arr keeps them for its configured cleanup retention period (typically 7 days, configurable), so you have a recovery window if anything goes wrong.
+- **If the recycle bin is missing**: deletions are immediate and permanent.
+
+If the recycle bin is missing, you cannot save the rule silently. The save flow:
+
+1. Shows an inline amber warning under the action type dropdown: *"Recycle bin is disabled on this Sonarr/Radarr/Lidarr instance. Deletes will be permanent."*
+2. Pops up a confirmation dialog you have to read and tick: *"I understand that deletes will be permanent and unrecoverable."*
+3. Provides a direct link to the *arr instance's Media Management settings so you can configure a recycle bin without losing your work in progress.
+
+The acknowledgement is remembered per *arr instance for the duration of your session — once you've ticked through it for that instance, you won't be re-prompted on the next save.
+
+<Aside type="note">
+  The recycle bin check is best-effort. If the *arr instance is unreachable when you save (network blip, service down), the save is allowed to proceed rather than block on a transient error. The save-time check is a usability safeguard, not the actual mechanism that protects your files — that's the *arr instance's recycle bin configuration itself.
+</Aside>
+
+### Malformed rules are rejected before saving
+
+The structural validator that runs on every save guarantees:
+
+- Each rule has both a `field` and an `operator`, both as non-empty strings.
+- Each rule group has a `condition` of `"AND"` or `"OR"` and an array of rules.
+- Stream-query groups declare a valid `streamType` (`audio`, `video`, or `subtitle`).
+- The serialized rule set is at most 50 KB and at most 100 top-level rules.
+
+A rule set that fails any of these checks is rejected with an HTTP 400 error and never reaches the database.
+
+The validator does **not** check that operator values or field names are recognized by the engine — a rule with a typo'd operator like `"equlas"` will be saved successfully. That class of error is caught later, by the engine's safety net at detection time (see [Check 3 below](#check-3--a-final-safety-net-for-unrecognized-rules)).
+
+## Layer 2 — When matches are detected
+
+This is the most important layer. When the scheduler runs (or when you click **Run Now**), the engine has to figure out which items match the rule. A bug here would be the most dangerous, so the engine has **three independent checks** that all have to pass.
+
+### Check 1 — Empty or all-disabled rules can't match anything
+
+Before the engine touches your library, it checks whether the rule actually has at least one enabled rule somewhere inside it. If the rule is empty, or every group is disabled, or every individual rule is disabled, the engine returns an empty list immediately. **No database query runs. No matches are recorded. No actions are scheduled.**
+
+This means it's impossible for a "blank" rule (one you've turned off, or accidentally cleared, or never finished writing) to match anything.
+
+### Check 2 — Rules that depend on external systems can't accidentally match everything
+
+Some rule fields can be checked directly in your library database — things like resolution, file size, year, play count. The engine handles these fast.
+
+Other rule fields need information from outside the database — for example, whether *arr considers an item "monitored", or whether someone requested it via Seerr, or whether a wildcard pattern matches a stream language. The engine can't translate those into a database query, so it has to fetch a list of candidates first and then check each one in memory.
+
+The danger here is subtle: if the engine had a bug where one of these "outside" fields produced no constraint at all, the database query could return your entire library, and a missing follow-up check could let everything through. The engine is built so this can't happen — when it sees a rule it can't translate to a database query, it explicitly marks it as "must be checked in memory" and propagates that marker through the rule's AND/OR logic. The result is that the database query is always at least as broad as the final answer, and the in-memory pass that follows always narrows it down. There is no path where an outside-system rule lets your whole library through.
+
+### Check 3 — A final safety net for unrecognized rules
+
+Even if checks 1 and 2 had a bug, there's a third check at the bottom of the engine. After translating every rule, it asks itself: *"Did all of these rules produce nothing the database can act on, and is there no in-memory follow-up planned?"*
+
+If the answer is yes, it returns an empty list and stops. The library is not queried. This is the explicit guard against:
+
+- A rule that accidentally references a field name with a typo.
+- A rule that uses an operator the engine doesn't recognize.
+- A rule that, because of some future change to the codebase, can't be evaluated at all.
+
+In all of these cases, **the engine refuses to match anything** rather than risk matching everything. The block is marked with a code comment so anyone editing the engine knows it's load-bearing, and the integration test suite that runs the full lifecycle pipeline against a real database would fail if it were broken.
+
+### When the in-memory pass also runs
+
+Some rule sets have an additional in-memory verification pass after the database query. It runs whenever the rule set contains any of: a wildcard pattern (`*` or `?`), an Arr-dependent field, a Seerr-dependent field, a cross-system field, a stream-count field, or a stream-query computed field. In those cases, every candidate the database returns is re-checked against every rule in memory before being marked as a match.
+
+For rule sets that only use simple database-expressible fields (resolution, year, file size, dates, play count, etc.), the database query alone is the final answer — there is no second pass, because the database has already enforced every condition exactly. Defenses 1–3 above are what guarantees this is safe.
+
+## Layer 3 — After matches are found, before actions are queued
+
+Once the engine has identified which items match a rule, those matches don't immediately turn into deletions. Several things happen between "this item matched" and "an action is scheduled":
+
+### A cooling-off period before any deletion runs
+
+Every rule set has a **Delay (days)** setting. When a match becomes a pending action, it's scheduled to run that many days in the future, not immediately. The default is **7 days**, and we strongly recommend keeping that or longer.
+
+The delay gives you time to:
+
+- Open the **Pending Actions** page and see what's queued up.
+- Add items you want to keep to the **Lifecycle Exceptions** list.
+- Disable or edit the rule if it matched things it shouldn't have.
+- Receive a Discord notification (if you've configured one) when actions are scheduled.
+
+Setting the delay to 0 disables this safety window entirely. Don't do that until you've run the rule for at least one full cycle with a delay and verified it's matching what you expect.
+
+### Stale matches are cancelled automatically (unless you opt out)
+
+By default, the scheduler checks on every detection run whether previously-matched items still match. If they don't (because the rule changed, the item's metadata changed, or the item is no longer in your library), the match is removed and any pending action queued for it is cancelled before it runs. You won't get a deletion for an item that has stopped being a match by the time the delay expires.
+
+This auto-cleanup is the default and is the safer choice for almost everyone.
+
+#### The "Sticky matches" toggle
+
+Each rule set has a **Sticky matches** toggle. When you turn it on, the auto-cleanup described above is disabled:
+
+- Items that previously matched stay in the match list even if they no longer meet the rule's criteria.
+- Their pending actions are **not** cancelled — they will execute when the delay expires.
+- The only way to remove a stale match is to click **Re-evaluate** in the Rule Matches view manually.
+
+The trade-off is intentional. With sticky off (the default), a brief change in your library — a play count incrementing, a metadata refresh in *arr, a temporary file size change — can pull an item out of a rule's match list and protect it from deletion automatically. With sticky on, you get a stronger guarantee that "once an item matches, it gets actioned", at the cost of giving up that automatic protection.
+
+<Aside type="caution">
+  Turn on **Sticky matches** only when you're sure you want it. The most common reason to enable it is play-count-based rules, where you don't want a single quick replay during the action delay to cancel a deletion. For example: a rule like "delete movies with 0 plays added more than 365 days ago" will, by default, drop an item out of the match list (and cancel its pending deletion) the moment someone watches it during the cooling-off period. If you'd rather the deletion proceed once the item has been flagged — on the basis that you'd already decided to remove it — turn sticky matches on. If you'd rather a last-minute play save the item, leave it off.
+</Aside>
+
+### Editing a rule starts everything over
+
+If you edit a rule at all — even something innocuous like the action type or the delay — the existing matches and pending actions for that rule are wiped, and the next detection run rebuilds the list from scratch. This is what the caution in Layer 1 is about. The cost is that you have to **Re-evaluate** to see the matches again. The benefit is that no leftover state from before your edit can result in an unintended deletion.
+
+### Lifecycle Exceptions are honored at every step
+
+Any item you've added to your **Lifecycle Exceptions** list:
+
+- Is excluded from new matches when detection runs.
+- Has any existing pending action on it cancelled before execution.
+- Is logged when it's skipped, so you can see in System Logs that the protection worked.
+
+For series rules that target individual episodes, the system tracks each episode separately. If you've excepted some episodes of a show but not others, only the non-excepted ones can be acted on. If you've excepted every targeted episode of a show, the entire action is cancelled.
+
+## Layer 4 — When the action runs
+
+Even after all the previous layers approve, there are still checks the moment before each individual deletion happens.
+
+### One last check that the item still matches
+
+Stale-match cancellation actually happens in two places, both as belt-and-braces protection:
+
+1. **Right after detection runs**: when matches are produced, the scheduler walks through any pending actions for the rule set and deletes any whose item is no longer in the current match set. This is what catches items that dropped out of the match list because of a metadata change.
+
+2. **Right before each action executes**: just before the deletion is sent to *arr, the system re-checks whether the item is still in the rule's match list (and whether the item still exists at all). If the answer is no on either count, the action is deleted instead of executed, with a "no longer a match" entry in System Logs.
+
+Together these mean an item has to be a current match at both scheduling time and execution time for the action to actually run.
+
+### Title validation against *arr
+
+This is a subtle but important protection. Imagine you have a rule that's about to delete a movie called "The Matrix". In between when the action was scheduled and when it runs, your library refreshes and the *arr record for that TMDB ID has been renamed (because the metadata source corrected itself, or because you manually renamed it). The system now has a TMDB ID pointing at one title in your library and a different title in *arr.
+
+To prevent acting on the wrong record, Librariarr compares both titles before sending the delete to *arr. The comparison normalizes for:
+
+- **Case** ("The Matrix" / "the matrix")
+- **Article placement** ("The Matrix" / "Matrix, The")
+- **Year suffixes in parentheses** ("Avatar (2009)" / "Avatar")
+- **Punctuation and ampersands** ("Fish & Chips" / "Fish and Chips")
+- **Whitespace differences**
+
+After normalization, if the titles match exactly, the action proceeds. If they don't, there's a partial-match fallback that allows things like "Agents of SHIELD" / "Marvel's Agents of SHIELD" through — but only when both titles are at least 4 characters and the shorter is at least 50% the length of the longer (so short-title collisions like "It" / "It Follows" are still blocked).
+
+If neither check passes, the action is rejected with an error logged to System Logs and surfaced in the Pending Actions page. The action moves to "Failed" status — it does not execute against the unverified record.
+
+When you retry a failed action manually from the Pending Actions page, you have the option to skip title validation if you've inspected the mismatch and confirmed it's safe (for example, a legitimate rename you've already verified).
+
+### Recoverability depends on *arr's recycle bin, not on Librariarr
+
+There's a common mental model that's worth being explicit about: the recycle bin is a **feature of your *arr instance**, not of Librariarr. When Librariarr tells *arr to delete an item, *arr decides whether to move the file to its configured recycle bin path or to hard-delete it, based on its own settings.
+
+The save-time recycle bin check ([Layer 1](#layer-1--when-you-save)) is what makes sure you've configured the recycle bin in *arr before you arm a destructive rule. Once an action runs, the *arr instance is the only thing protecting you. If the recycle bin was disabled or removed in *arr after you saved the rule, Librariarr will not catch that — *arr will hard-delete and you'll be relying on filesystem snapshots or backups instead.
+
+This is why the save-time acknowledgement matters and why we recommend treating it as a real check rather than a click-through.
+
+### One failure doesn't cascade into many
+
+Each individual action runs independently. If one fails — because *arr is down, the network blipped, the title check failed, anything — that single failure is recorded with an error message in the **Pending Actions** page (the action moves to "Failed" status), logged to System Logs, optionally announced via Discord, and **does not affect the other actions in the same run**. There's no retry that could quietly turn a transient failure into a persistent one. Failed actions sit there until you decide what to do with them.
+
+## What to do if something goes wrong
+
+If you've looked at the Pending Actions page and you don't like what you see, you have several options. They're listed least-destructive first.
+
+<Aside type="note">
+  Pending actions cannot be deleted directly from the Pending Actions page — only Failed actions have a delete button. This is a deliberate protection against accidental clicks. To stop a pending action from running, use one of the options below.
+</Aside>
+
+### Option A — Protect specific items (least destructive)
+
+Add the affected items to **Lifecycle Exceptions**. There are three ways to do this:
+
+- From the **Pending Actions** page — find the queued action and use the per-row Add to Exceptions button.
+- From the **Rule Matches** page — find the matched item and use the per-row Add to Exceptions button.
+- From the **Lifecycle Exceptions** page directly — click **Add Exception** and search for the item.
+
+On the next scheduled run, or the next time you click Execute:
+
+- Any pending action on that item is cancelled before it runs (and logged to System Logs).
+- The item is excluded from future detection, so the rule won't match it again even if it would otherwise.
+- The rule's match list and all the other pending actions are unaffected.
+
+Use this when only a few items are wrong, or when you want to keep the rule running for the rest of your library.
+
+### Option B — Stop deletions for the entire rule set
+
+Open the rule set, turn **Action enabled** off, click Save. This:
+
+- Cancels every pending action for that rule set immediately.
+- Stops new pending actions from being created on the next detection runs.
+- Also wipes the current match list as a side effect of saving (if you want a record of what matched, take a screenshot first).
+
+You can turn **Action enabled** back on later when you've fixed the rule. The next detection run will rebuild the match list from scratch.
+
+Use this when you want to halt the entire rule set while you investigate.
+
+### Option C — Disable the rule set entirely
+
+Same as Option B, but turn **Enabled** off as well. The rule set is now ignored — no detection, no actions — until you re-enable it. Use this when you want to keep the rule set's configuration around for later but pause it indefinitely.
+
+### Option D — Fix the rule so the unintended items no longer match
+
+If you've identified a logic error in the rule, edit it and save. The existing match list and pending actions are cleared by the save (Layer 1's safety choice), and the next detection run re-evaluates with your corrected rule. Items that no longer match the corrected rule simply aren't picked up.
+
+### Recovering files that have already been deleted
+
+If a deletion has already run, recovery depends on whether the *arr instance had a recycle bin configured:
+
+- **With a recycle bin**: the files are in your *arr's configured recycle bin path, and will stay there until the cleanup retention period elapses (typically 7 days, configurable per *arr instance under Settings → Media Management → File Management). Move them out before then.
+- **Without a recycle bin**: the files were deleted immediately. Recovery is limited to whatever your filesystem provides — snapshots, backups, or other storage-level mechanisms.
+
+This is exactly why the save flow forces the recycle bin acknowledgement (see [Layer 1](#layer-1--when-you-save)). If you skipped it, you skipped your safety net.
+
+## For developers and reviewers
+
+If you want to verify the safety claims above by reading the code, the codebase is open and every claim is anchored to a specific location.
+
+| Claim | Where to look |
+|-|-|
+| Empty / disabled rule sets can't match | `hasAnyActiveRules` in `src/lib/rules/engine.ts` (early return at the top of `evaluateRules`, `evaluateSeriesScope`, `evaluateMusicScope`, and the `/api/lifecycle/rules/preview` route) |
+| External-field rules can't broaden the database query | `evaluateGroupPreFilter` and `combinePreFilter` in `src/lib/rules/engine.ts`. The `EXTERNAL_RULE` sentinel propagates through AND/OR; pre-filter is only used when `needsFullReeval=true` |
+| The empty-WHERE safety net | The block tagged `// Safety net: if all rules produced empty WHERE clauses` near the top of `evaluateRules` in `src/lib/rules/engine.ts` |
+| Action scheduling skipped when actions disabled | `scheduleActionsForRuleSet` in `src/lib/lifecycle/processor.ts` (early-deletes pending actions when `actionEnabled=false` or no `actionType`) |
+| Stale matches cancelled at scheduling time | `scheduleActionsForRuleSet` in `src/lib/lifecycle/processor.ts` (after detection, deletes pending actions whose item isn't in the new match set) |
+| Stale matches cancelled at execute time | The pending-actions loop in `processLifecycleRules` in `src/lib/lifecycle/processor.ts` (re-checks `matchSet` immediately before `executeAction`) |
+| Lifecycle Exceptions honored before execution | The same loop — exception set built from `prisma.lifecycleException.findMany` and checked per action |
+| Title validation before deleting in *arr | `validateArrItem` and `normalizeTitle` in `src/lib/lifecycle/actions.ts`. Called from each `resolveRadarrMovie` / `resolveSonarrSeries` / `resolveLidarrArtist` helper |
+| Pending actions cannot be deleted directly | The DELETE handler in `src/app/api/lifecycle/actions/[id]/route.ts` (only `FAILED` is permitted; pending actions return HTTP 400) |
+| Saving wipes matches by default | The PUT handler in `src/app/api/lifecycle/rules/[id]/route.ts`. The `clearMatches` query param defaults to `"true"`. The frontend's `executeSave` defaults `clearMatches: true` and only opts out for collection-disable confirmations |
+| Schema and structure validation | `validateRuleStructure` in `src/lib/validation.ts`. Checks structural shape only — does not enforce known field/operator names |
+| Save-time recycle bin check | `isDestructiveAction` and the `recycleBinAcknowledgedRef` flow in `src/components/lifecycle-rule-page.tsx`. Reads from `/api/integrations/{type}/{id}/recycle-bin`. Tolerates fetch errors (proceeds with save) |
+| Action delay default | `actionDelayDays Int @default(7)` in `prisma/schema.prisma` |
+
+Tests asserting these invariants:
+
+- `tests/unit/rules/deletion-safety.test.ts` — the three Layer 2 defenses.
+- `tests/unit/rules/bug-regression.test.ts` — historical bug fixes anchored to this layer model.
+- `tests/unit/rules/group-logic.test.ts` — AND / OR / NOT / nested-group correctness.
+- `tests/integration/lifecycle/actions.test.ts` — Layer 4 end-to-end against a real database.
+- `tests/integration/lifecycle/exceptions.test.ts` — Layer 3 exception handling.
+- `tests/integration/lifecycle/rules-run.test.ts` — full pipeline.
+- `tests/integration/lifecycle/matches.test.ts` — match detection and stale cleanup.
+
+If you find a case where any of the safeguards above failed, please file an issue at https://github.com/ahembree/librariarr/issues with the rule set's JSON and a description of the unexpected behavior. Failures of these invariants are treated as the highest-priority class of bug.

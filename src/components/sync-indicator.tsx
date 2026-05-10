@@ -234,8 +234,8 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="flex h-9 items-center gap-1.5 rounded-md border border-red-500/30 bg-red-500/10 px-3 text-sm text-muted-foreground">
-              <XCircle className="h-4 w-4 text-red-400" />
+            <div className="flex h-9 items-center gap-1.5 rounded-md border border-destructive/30 bg-destructive/10 px-3 text-sm text-muted-foreground">
+              <XCircle className="h-4 w-4 text-destructive" />
               <ServerTypeChip type={recentFailed.mediaServer.type} />
               <span>
                 Sync failed
@@ -245,7 +245,7 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
           </TooltipTrigger>
           <TooltipContent>
             <p className="font-medium">{recentFailed.mediaServer.name}</p>
-            <p className="text-xs text-red-400">
+            <p className="text-xs text-destructive">
               {recentFailed.error || "Unknown error"}
             </p>
           </TooltipContent>

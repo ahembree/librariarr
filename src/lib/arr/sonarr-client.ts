@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
+import { IntegrationError } from "@/lib/integration-error";
 
 export interface SonarrSeries {
   id: number;
@@ -59,6 +60,11 @@ export interface SonarrExclusion {
   title: string;
 }
 
+export interface SonarrMediaManagementConfig {
+  recycleBin: string | null;
+  recycleBinCleanupDays: number;
+}
+
 export class SonarrClient {
   private client: AxiosInstance;
 
@@ -87,6 +93,11 @@ export class SonarrClient {
           logger.debug("Sonarr", `ERROR ${error.response?.status ?? "NETWORK"} ${error.config?.url}${duration}`, {
             message: error.message,
           });
+          // Re-throw as a concise IntegrationError so unhandled errors in
+          // API routes don't produce a multi-page AxiosError dump. The
+          // original AxiosError is attached as `cause` for callers that
+          // still need its properties (e.g. extractActionError).
+          return Promise.reject(new IntegrationError("Sonarr", error));
         }
         return Promise.reject(error);
       }
@@ -225,6 +236,13 @@ export class SonarrClient {
   async getLanguages(): Promise<{ id: number; name: string }[]> {
     const { data } = await this.client.get<{ id: number; name: string }[]>(
       "/api/v3/language"
+    );
+    return data;
+  }
+
+  async getMediaManagementConfig(): Promise<SonarrMediaManagementConfig> {
+    const { data } = await this.client.get<SonarrMediaManagementConfig>(
+      "/api/v3/config/mediamanagement"
     );
     return data;
   }

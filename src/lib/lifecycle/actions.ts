@@ -10,10 +10,21 @@ export { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES } from "@/l
 
 /** Extract a meaningful error message from Arr API failures, including the response body. */
 export function extractActionError(error: unknown): string {
+  // Clients now wrap axios errors in IntegrationError, which exposes the
+  // status / detail directly and keeps the original AxiosError as `cause`.
+  if (error && typeof error === "object" && "name" in error && (error as { name: unknown }).name === "IntegrationError") {
+    const ie = error as unknown as { status: number | null; detail: string | null; message: string };
+    if (ie.status !== null) {
+      return ie.detail
+        ? `HTTP ${ie.status}: ${ie.detail}`
+        : `HTTP ${ie.status}: ${ie.message}`;
+    }
+    return ie.message;
+  }
+  // Backward-compat: raw AxiosError (in case some path bypasses the wrapper)
   if (axios.isAxiosError(error) && error.response) {
     const status = error.response.status;
     const data = error.response.data;
-    // Arr services return errors as { message: "..." } or plain strings
     const detail =
       typeof data === "string"
         ? data
@@ -196,6 +207,7 @@ async function executeTagOperations(action: ActionRecord): Promise<void> {
   if (isRadarr) return executeRadarrTagOps(action);
   if (isSonarr) return executeSonarrTagOps(action);
   if (isLidarr) return executeLidarrTagOps(action);
+  throw new Error(`Unsupported actionType for tag operations: ${actionType}`);
 }
 
 async function executeRadarrTagOps(action: ActionRecord): Promise<void> {
@@ -472,16 +484,34 @@ async function deleteMatchedEpisodeFiles(
   });
 
   if (episodes.length !== matchedMediaItemIds.length) {
-    logger.warn("Lifecycle", `Episode lookup mismatch: requested ${matchedMediaItemIds.length} IDs, found ${episodes.length} in DB`);
+    // Some matched IDs no longer exist in the DB (likely removed by a sync between
+    // scheduling and execution). Proceed with what's still there — the missing
+    // items can't be deleted via Sonarr because we can't resolve their season/episode.
+    logger.warn(
+      "Lifecycle",
+      `Episode lookup mismatch: requested ${matchedMediaItemIds.length} IDs, found ${episodes.length} in DB`
+    );
+  }
+
+  // Build keys only from episodes that have both season and episode numbers.
+  // A null season/episode would produce "null:null" and either match nothing
+  // or accidentally match unrelated Sonarr episodes that happen to also have
+  // nulls — both are unsafe. Skip and warn rather than guess.
+  const matchSet = new Set<string>();
+  for (const e of episodes) {
+    if (e.seasonNumber === null || e.episodeNumber === null) {
+      logger.warn(
+        "Lifecycle",
+        `Skipping episode with null seasonNumber or episodeNumber in matched set for Sonarr series ${seriesId}`
+      );
+      continue;
+    }
+    matchSet.add(`${e.seasonNumber}:${e.episodeNumber}`);
   }
 
   // Get all Sonarr episodes for the series
   const sonarrEpisodes = await client.getEpisodes(seriesId);
 
-  // Find file IDs for matched episodes
-  const matchSet = new Set(
-    episodes.map((e) => `${e.seasonNumber}:${e.episodeNumber}`)
-  );
   const fileIds = [
     ...new Set(
       sonarrEpisodes

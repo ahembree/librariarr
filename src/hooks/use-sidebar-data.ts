@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import type { LucideIcon } from "lucide-react";
 import {
   LayoutDashboard,
@@ -137,11 +138,42 @@ export function useSidebarData() {
       .catch(() => {});
   }, []);
 
+  const previousUnreachableRef = useRef<Map<string, string>>(new Map());
+
   const fetchSessionCount = useCallback(() => {
     fetch("/api/tools/sessions")
       .then((res) => res.json())
-      .then((data) => {
+      .then((data: { sessions?: unknown[]; unreachableServers?: { id: string; name: string; type: string }[] }) => {
         if (data.sessions) setActiveSessionCount(data.sessions.length);
+
+        const current = new Map<string, string>(
+          (data.unreachableServers ?? []).map((s) => [s.id, s.name]),
+        );
+        const previous = previousUnreachableRef.current;
+
+        for (const [id, name] of current) {
+          if (!previous.has(id)) {
+            toast.error(`${name} is unreachable`, {
+              id: `server-down-${id}`,
+              description: "Check the server's connection in Settings.",
+              duration: 8000,
+            });
+          }
+        }
+        for (const [id, name] of previous) {
+          if (!current.has(id)) {
+            toast.success(`${name} is back online`, {
+              id: `server-up-${id}`,
+            });
+          }
+        }
+
+        previousUnreachableRef.current = current;
+        window.dispatchEvent(
+          new CustomEvent("server-health-changed", {
+            detail: { unreachable: data.unreachableServers ?? [] },
+          }),
+        );
       })
       .catch((e) => console.error("Failed to fetch session count", e));
   }, []);

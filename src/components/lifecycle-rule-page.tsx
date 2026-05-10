@@ -16,6 +16,9 @@ import {
 } from "@/components/ui/card";
 import { RuleBuilder, ruleBuilderConfig, countAllRules, validateAllRules } from "@/components/rule-builder";
 import { BuilderWithPseudocode } from "@/components/builder/builder-with-pseudocode";
+import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
+import { useIntegrationsHealth, deriveIntegrationsStatus, arrTypeForMediaType } from "@/hooks/use-integrations-health";
+import { hasArrRules, hasSeerrRules } from "@/lib/conditions";
 import { MediaTable } from "@/components/media-table";
 import { MediaDetailSidePanel, type MatchedCriterion } from "@/components/media-detail-side-panel";
 import { usePanelResize } from "@/hooks/use-panel-resize";
@@ -29,7 +32,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Popover,
   PopoverContent,
@@ -43,7 +48,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { Loader2, Save, Eye, Trash2, FileText, Upload, ClipboardPaste, Copy, Check, ChevronsUpDown, X, FlaskConical, Search, LayoutGrid, TableProperties, ShieldOff, Calendar, Clock, HardDrive } from "lucide-react";
+import { AlertTriangle, Calendar, Check, ChevronsUpDown, ClipboardPaste, Clock, Copy, ExternalLink, Eye, FileText, FlaskConical, HardDrive, LayoutGrid, Loader2, Save, Search, ShieldOff, SlidersHorizontal, TableProperties, Trash2, Upload, X } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -153,6 +158,10 @@ interface SavedRuleSet {
   stickyMatches?: boolean;
   serverIds: string[];
   createdAt: string;
+}
+
+function isDestructiveAction(actionType: string): boolean {
+  return actionType.includes("DELETE");
 }
 
 function legacyToGroups(rules: Rule[] | RuleGroup[]): RuleGroup[] {
@@ -621,6 +630,44 @@ export function LifecycleRulePage({
   const [arrInstances, setArrInstances] = useState<ArrInstance[]>([]);
   const [seerrConnected, setSeerrConnected] = useState(false);
 
+  const { health: integrationsHealth } = useIntegrationsHealth();
+  const relevantArrTypes = useMemo(
+    () => [arrTypeForMediaType(mediaType)] as const,
+    [mediaType],
+  );
+  // Only the rule set's selected Arr instance matters for reachability.
+  // If none is selected, pass an empty array so the banner stays silent
+  // (nothing to be unreachable about until the user picks an instance).
+  const arrInstanceIds = useMemo<readonly string[]>(
+    () => (arrInstanceId ? [arrInstanceId] : []),
+    [arrInstanceId],
+  );
+  const integrationsStatus = useMemo(
+    () => deriveIntegrationsStatus(integrationsHealth, {
+      relevantArrTypes,
+      arrInstanceIds,
+    }),
+    [integrationsHealth, relevantArrTypes, arrInstanceIds],
+  );
+  const ruleUsesArr = useMemo(() => hasArrRules(groups), [groups]);
+  const ruleUsesSeerr = useMemo(() => hasSeerrRules(groups), [groups]);
+
+  // Recycle bin safety check
+  const [recycleBinStatus, setRecycleBinStatus] = useState<{
+    enabled: boolean | null;
+    arrUrl: string | null;
+  } | null>(null);
+  const recycleBinAcknowledgedRef = useRef<Set<string>>(new Set());
+  const [showRecycleBinModal, setShowRecycleBinModal] = useState(false);
+  const [recycleBinAcknowledged, setRecycleBinAcknowledged] = useState(false);
+  const pendingSaveOptionsRef = useRef<{ clearMatches?: boolean; runDetection?: boolean; processActions?: boolean } | undefined>(undefined);
+  // Increments on every loadRuleSet / newRuleSet call. Async paths inside loadRuleSet
+  // capture the token at start and bail if the active rule set has changed since.
+  const loadTokenRef = useRef(0);
+  // Same pattern for preview — rapid Preview clicks would otherwise let an earlier
+  // response overwrite the result of a later one.
+  const previewTokenRef = useRef(0);
+
   // Collection config
   const [collectionEnabled, setCollectionEnabled] = useState(false);
   const [collectionName, setCollectionName] = useState("");
@@ -770,6 +817,30 @@ export function LifecycleRulePage({
     }
   }, [arrInstanceId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Fetch Arr recycle bin status when destructive action + Arr instance are selected
+  useEffect(() => {
+    if (!arrInstanceId || !actionEnabled || !isDestructiveAction(actionType)) {
+      setRecycleBinStatus(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/integrations/${arrApiPath}/${arrInstanceId}/recycle-bin`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        setRecycleBinStatus({
+          enabled: data.enabled ?? null,
+          arrUrl: data.arrUrl ?? null,
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setRecycleBinStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [arrInstanceId, actionType, actionEnabled, arrApiPath]);
+
   const fetchDistinctValues = async () => {
     try {
       const response = await fetch("/api/media/distinct-values");
@@ -853,6 +924,31 @@ export function LifecycleRulePage({
   };
 
   const handleSave = async (options?: { clearMatches?: boolean; runDetection?: boolean; processActions?: boolean }) => {
+    const needsCheck =
+      actionEnabled &&
+      isDestructiveAction(actionType) &&
+      !!arrInstanceId &&
+      !recycleBinAcknowledgedRef.current.has(arrInstanceId);
+
+    if (needsCheck) {
+      try {
+        const r = await fetch(`/api/integrations/${arrApiPath}/${arrInstanceId}/recycle-bin`);
+        const data = await r.json();
+        if (data.enabled === false) {
+          setRecycleBinStatus({ enabled: false, arrUrl: data.arrUrl ?? null });
+          pendingSaveOptionsRef.current = options;
+          setRecycleBinAcknowledged(false);
+          setShowRecycleBinModal(true);
+          return;
+        }
+      } catch {
+        // If the check fails, proceed — don't block save on transient errors
+      }
+    }
+    return executeSave(options);
+  };
+
+  const executeSave = async (options?: { clearMatches?: boolean; runDetection?: boolean; processActions?: boolean }) => {
     if (!name || countAllRules(groups) === 0) return;
     const clearMatches = options?.clearMatches ?? true;
     const runDetection = options?.runDetection ?? false;
@@ -999,6 +1095,7 @@ export function LifecycleRulePage({
 
   const handlePreview = async () => {
     if (countAllRules(groups) === 0) return;
+    const token = ++previewTokenRef.current;
     setPreviewing(true);
     try {
       const previewBody: Record<string, unknown> = { rules: groups, type: mediaType, serverIds };
@@ -1029,6 +1126,8 @@ export function LifecycleRulePage({
       let mergedItems = previewData.items as PreviewItem[];
 
       // Process diff data if available
+      let nextDiffMap: Map<string, "added" | "removed" | "retained"> | null = null;
+      let nextDiffCounts: DiffData["counts"] | null = null;
       if (diffResponse?.ok) {
         const diff = await diffResponse.json() as DiffData & { removedItems?: PreviewItem[] };
         const statusMap = new Map<string, "added" | "removed" | "retained">();
@@ -1041,8 +1140,16 @@ export function LifecycleRulePage({
           mergedItems = [...mergedItems, ...diff.removedItems];
         }
 
-        setPreviewDiffMap(statusMap);
-        setPreviewDiffCounts(diff.counts);
+        nextDiffMap = statusMap;
+        nextDiffCounts = diff.counts;
+      }
+
+      // Bail if a newer Preview was kicked off (or we navigated away) while we awaited.
+      if (previewTokenRef.current !== token) return;
+
+      if (nextDiffMap) {
+        setPreviewDiffMap(nextDiffMap);
+        setPreviewDiffCounts(nextDiffCounts);
       } else {
         setPreviewDiffMap(new Map());
         setPreviewDiffCounts(null);
@@ -1059,7 +1166,11 @@ export function LifecycleRulePage({
     } catch (error) {
       console.error("Failed to preview:", error);
     } finally {
-      setPreviewing(false);
+      // Only clear the previewing flag if this is still the latest call;
+      // otherwise the newer call owns the spinner.
+      if (previewTokenRef.current === token) {
+        setPreviewing(false);
+      }
     }
   };
 
@@ -1181,6 +1292,7 @@ export function LifecycleRulePage({
   });
 
   const loadRuleSet = async (ruleSet: SavedRuleSet) => {
+    const token = ++loadTokenRef.current;
     setName(ruleSet.name);
     setGroups(legacyToGroups(ruleSet.rules));
     setActiveRuleSetId(ruleSet.id);
@@ -1229,6 +1341,9 @@ export function LifecycleRulePage({
         // Fall back to DB values
       }
     }
+    // Bail if the user navigated away (loaded a different rule set, or clicked
+    // "New Rule Set") while the visibility fetch was in flight.
+    if (loadTokenRef.current !== token) return;
     setCollectionHomeScreen(homeScreen);
     setCollectionRecommended(recommended);
     setCollectionSort(ruleSet.collectionSort ?? "ALPHABETICAL");
@@ -1292,6 +1407,8 @@ export function LifecycleRulePage({
   };
 
   const newRuleSet = () => {
+    // Bump token to invalidate any in-flight loadRuleSet visibility fetches.
+    loadTokenRef.current++;
     setName("");
     setGroups([]);
     setActiveRuleSetId(null);
@@ -1304,6 +1421,8 @@ export function LifecycleRulePage({
     setActionDelayDays(7);
     setArrInstanceId("");
     setAddImportExclusion(false);
+    setSearchAfterDelete(false);
+    setStickyMatches(false);
     setAddArrTags([]);
     setRemoveArrTags([]);
     setManageTagsEnabled(false);
@@ -1437,7 +1556,10 @@ export function LifecycleRulePage({
       {savedRuleSets.length > 0 && (
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle>Saved Rule Sets</CardTitle>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <FileText className="h-4 w-4" />
+              Saved Rule Sets
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid gap-2">
@@ -1520,11 +1642,12 @@ export function LifecycleRulePage({
       {/* Rule Builder */}
       <Card>
         <CardHeader>
-          <CardTitle>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <SlidersHorizontal className="h-4 w-4" />
             {activeRuleSetId ? "Edit Rule Set" : "Create Rule Set"}
           </CardTitle>
           <CardDescription>
-            Define criteria to find {ruleDescription} matching specific conditions
+            Define criteria to find {ruleDescription} matching specific conditions.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -1686,13 +1809,24 @@ export function LifecycleRulePage({
             </div>
           )}
 
+          <IntegrationUnreachableBanner
+            health={integrationsHealth}
+            hasArrRules={ruleUsesArr}
+            hasSeerrRules={ruleUsesSeerr}
+            relevantArrTypes={relevantArrTypes}
+            arrInstanceIds={arrInstanceIds}
+            subjectLabel="This rule set"
+          />
+
           <BuilderWithPseudocode groups={groups} config={ruleBuilderConfig}>
             <RuleBuilder
               groups={groups}
               onChange={setGroups}
               distinctValues={distinctValues}
               arrConnected={!!arrInstanceId}
+              arrUnreachable={integrationsStatus.arrUnreachable}
               seerrConnected={mediaType === "MUSIC" ? undefined : seerrConnected}
+              seerrUnreachable={integrationsStatus.seerrUnreachable}
               libraryType={mediaType}
             />
           </BuilderWithPseudocode>
@@ -1752,6 +1886,12 @@ export function LifecycleRulePage({
                         })}
                       </SelectContent>
                     </Select>
+                    {recycleBinStatus?.enabled === false && isDestructiveAction(actionType) && (
+                      <p className="mt-2 text-xs text-amber-500 flex items-center gap-1.5">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        Recycle bin is disabled on this {arrServiceName} instance. Deletes will be permanent.
+                      </p>
+                    )}
                   </div>
 
                   <div>
@@ -1813,8 +1953,10 @@ export function LifecycleRulePage({
                   </div>
                 </div>
 
+                <Separator />
+
                 {/* Manage Tags */}
-                <div className="space-y-3 border-t pt-3">
+                <div className="space-y-3">
                   <div className="flex items-center gap-3">
                     <Switch
                       id="manage-tags"
@@ -2138,7 +2280,7 @@ export function LifecycleRulePage({
           </div>
 
           {saveError && (
-            <p className="text-sm text-red-500">{saveError}</p>
+            <p className="text-sm text-destructive">{saveError}</p>
           )}
         </CardContent>
       </Card>
@@ -2525,11 +2667,9 @@ export function LifecycleRulePage({
                       This rule set adds tags [{deleteConfirmAddTags.join(", ")}] to items.
                     </p>
                     <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={deleteConfirmCleanupTags}
-                        onChange={(e) => setDeleteConfirmCleanupTags(e.target.checked)}
-                        className="h-4 w-4 rounded border-gray-300"
+                        onCheckedChange={(v) => setDeleteConfirmCleanupTags(v === true)}
                       />
                       <span>Remove these tags from all items and delete the tag definitions</span>
                     </label>
@@ -2820,6 +2960,72 @@ export function LifecycleRulePage({
               }}
             >
               Yes, reschedule
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={showRecycleBinModal} onOpenChange={setShowRecycleBinModal}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              Recycle Bin Disabled
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  The selected {arrServiceName} instance has no recycle bin configured.
+                  Files removed by this lifecycle rule will be permanently deleted with no
+                  way to recover them.
+                </p>
+                {recycleBinStatus?.arrUrl && (
+                  <p>
+                    You can configure a recycle bin path in{" "}
+                    <a
+                      href={`${recycleBinStatus.arrUrl.replace(/\/+$/, "")}/settings/mediamanagement`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline inline-flex items-center gap-1"
+                    >
+                      {arrServiceName} settings <ExternalLink className="h-3 w-3" />
+                    </a>
+                    .
+                  </p>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <label className="flex items-center gap-2 cursor-pointer py-2">
+            <Checkbox
+              checked={recycleBinAcknowledged}
+              onCheckedChange={(c) => setRecycleBinAcknowledged(c === true)}
+            />
+            <span className="text-sm">
+              I understand that deletes will be permanent and unrecoverable.
+            </span>
+          </label>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                pendingSaveOptionsRef.current = undefined;
+                setRecycleBinAcknowledged(false);
+              }}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={!recycleBinAcknowledged}
+              onClick={() => {
+                if (arrInstanceId) recycleBinAcknowledgedRef.current.add(arrInstanceId);
+                const opts = pendingSaveOptionsRef.current;
+                pendingSaveOptionsRef.current = undefined;
+                setRecycleBinAcknowledged(false);
+                setShowRecycleBinModal(false);
+                executeSave(opts);
+              }}
+            >
+              Save anyway
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
