@@ -1,18 +1,90 @@
 import {
-  BarChart3,
-  RefreshCw,
-  Layers,
-  MonitorPlay,
+  Activity,
+  Award,
   AudioLines,
-  Shield,
-  Trophy,
-  Sun,
-  Speaker,
-  Tags,
+  BarChart3,
+  Box,
+  Calendar,
   Clock,
+  Database,
+  Eye,
+  Film,
+  Folder,
+  HardDrive,
+  Hash,
+  Headphones,
+  Heart,
+  Image,
   LayoutDashboard,
+  Layers,
+  LineChart,
+  MonitorPlay,
+  Music,
+  PieChart,
+  Play,
+  RefreshCw,
+  Server,
+  Shield,
+  Sparkles,
+  Speaker,
+  Star,
+  Tags,
+  Target,
+  Timer,
+  TrendingUp,
+  Trophy,
+  Tv,
+  Users,
+  Video,
+  Sun,
+  Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+
+/** Curated set of icons available for custom dashboard cards. Storing the name (string)
+ *  in the config serializes cleanly across reload; the runtime maps name → component. */
+export const CUSTOM_CARD_ICONS = {
+  BarChart3,
+  PieChart,
+  LineChart,
+  TrendingUp,
+  Activity,
+  Hash,
+  Layers,
+  Box,
+  Film,
+  Tv,
+  Music,
+  Video,
+  Image,
+  Play,
+  Headphones,
+  AudioLines,
+  Speaker,
+  MonitorPlay,
+  Clock,
+  Calendar,
+  Timer,
+  Star,
+  Trophy,
+  Award,
+  Sparkles,
+  Shield,
+  Heart,
+  Tags,
+  Target,
+  Eye,
+  Users,
+  Zap,
+  HardDrive,
+  Database,
+  Server,
+  Folder,
+} as const satisfies Record<string, LucideIcon>;
+
+export type CustomCardIconName = keyof typeof CUSTOM_CARD_ICONS;
+
+const VALID_CUSTOM_ICONS = new Set<string>(Object.keys(CUSTOM_CARD_ICONS));
 
 export type DashboardTab = "main" | "movies" | "series" | "music";
 
@@ -36,6 +108,7 @@ export interface CustomCardConfig {
   dimension: CustomDimension;
   dimension2?: CustomDimension;
   title?: string;
+  icon?: CustomCardIconName;
   topN?: number | null;
   heatmapGradient?: string;
   countValues?: string[];
@@ -246,6 +319,7 @@ function isValidCustomConfig(config: unknown): config is CustomCardConfig {
   if (!VALID_CHART_TYPES.has(c.chartType as string)) return false;
   if (!VALID_DIMENSIONS.has(c.dimension as string)) return false;
   if (c.title !== undefined && typeof c.title !== "string") return false;
+  if (c.icon !== undefined && !VALID_CUSTOM_ICONS.has(c.icon as string)) return false;
   if (c.topN !== undefined && c.topN !== null && (typeof c.topN !== "number" || c.topN < 1)) return false;
   if (c.heatmapGradient !== undefined && !VALID_HEATMAP_GRADIENT_IDS.has(c.heatmapGradient as string)) return false;
   if (c.countValues !== undefined && (!Array.isArray(c.countValues) || !c.countValues.every((v: unknown) => typeof v === "string"))) return false;

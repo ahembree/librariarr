@@ -31,7 +31,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { getDimensionMeta } from "@/lib/dashboard/custom-dimensions";
-import { HEATMAP_GRADIENTS, type CustomCardConfig } from "@/lib/dashboard/card-registry";
+import { CUSTOM_CARD_ICONS, HEATMAP_GRADIENTS, type CustomCardConfig } from "@/lib/dashboard/card-registry";
 import { useChipColors } from "@/components/chip-color-provider";
 import type { ChipColorCategory } from "@/lib/theme/chip-colors";
 
@@ -214,7 +214,13 @@ export function CustomChartCard({
   return (
     <Card className="h-full flex flex-col">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-base font-semibold">{cardTitle}</CardTitle>
+        <CardTitle className="flex items-center gap-2 text-base font-semibold">
+          {config.icon && CUSTOM_CARD_ICONS[config.icon] && (() => {
+            const Icon = CUSTOM_CARD_ICONS[config.icon];
+            return <Icon className="h-4 w-4 text-muted-foreground" />;
+          })()}
+          {cardTitle}
+        </CardTitle>
         <div className="flex items-center gap-2">
           {/* Type filter (only if not locked) */}
           {!lockedFilterType && availableTypes && availableTypes.length > 1 && (
@@ -954,8 +960,10 @@ function renderChart(chartType: string, data: ChartDatum[]) {
               data={data}
               dataKey="count"
               nameKey="label"
-              innerRadius={40}
-              outerRadius={100}
+              cx="50%"
+              cy="50%"
+              innerRadius="30%"
+              outerRadius="80%"
               paddingAngle={2}
               stroke="none"
             />

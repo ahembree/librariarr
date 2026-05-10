@@ -34,8 +34,10 @@ import {
 } from "lucide-react";
 import { getDimensionsByGroup, DATE_DIMENSION_IDS } from "@/lib/dashboard/custom-dimensions";
 import {
+  CUSTOM_CARD_ICONS,
   HEATMAP_GRADIENTS,
   type CustomCardConfig,
+  type CustomCardIconName,
   type CustomChartType,
   type CustomDimension,
   type TimelineBin,
@@ -113,6 +115,9 @@ function CustomCardDialogContent({
   const [timelineBin, setTimelineBin] = useState<TimelineBin>(
     initialConfig?.timelineBin ?? "month"
   );
+  const [icon, setIcon] = useState<CustomCardIconName | undefined>(
+    initialConfig?.icon
+  );
   const [fetchedValues, setFetchedValues] = useState<{ key: string; values: string[] } | null>(null);
 
   const valuesKey = chartType === "count" && dimension ? dimension : "";
@@ -155,6 +160,7 @@ function CustomCardDialogContent({
       ...(chartType !== "count" ? { topN } : {}),
       ...(chartType === "count" && countValues.size > 0 ? { countValues: Array.from(countValues) } : {}),
       ...(isTimeline ? { timelineBin } : {}),
+      ...(icon ? { icon } : {}),
     });
   }
 
@@ -395,6 +401,44 @@ function CustomCardDialogContent({
             placeholder="Auto-generated from dimension"
             maxLength={100}
           />
+        </div>
+
+        {/* Optional icon */}
+        <div className="space-y-2">
+          <Label>
+            Icon <span className="text-muted-foreground font-normal">(optional)</span>
+          </Label>
+          <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto rounded-md border bg-muted/20 p-2">
+            <button
+              type="button"
+              onClick={() => setIcon(undefined)}
+              aria-label="No icon"
+              title="No icon"
+              className={`flex h-8 w-8 items-center justify-center rounded-md border text-xs transition-colors ${
+                icon === undefined
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-transparent text-muted-foreground hover:border-muted-foreground/40 hover:text-foreground"
+              }`}
+            >
+              —
+            </button>
+            {(Object.entries(CUSTOM_CARD_ICONS) as [CustomCardIconName, typeof CUSTOM_CARD_ICONS[CustomCardIconName]][]).map(([name, Icon]) => (
+              <button
+                key={name}
+                type="button"
+                onClick={() => setIcon(name)}
+                aria-label={name}
+                title={name}
+                className={`flex h-8 w-8 items-center justify-center rounded-md border transition-colors ${
+                  icon === name
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-transparent text-muted-foreground hover:border-muted-foreground/40 hover:text-foreground"
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

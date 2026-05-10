@@ -26,7 +26,8 @@ import {
   type CustomCardConfig,
 } from "@/lib/dashboard/card-registry";
 import { CustomCardDialog } from "@/components/custom-card-dialog";
-import { Pencil, Check, Server, Film, Tv, Music, LayoutDashboard } from "lucide-react";
+import { AlertCircle, Check, Film, LayoutDashboard, Music, Pencil, Server, Tv } from "lucide-react";
+import { EmptyState } from "@/components/empty-state";
 import { generateId } from "@/lib/utils";
 import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
@@ -238,6 +239,14 @@ export default function DashboardPage() {
     router.push(`/library/music/artist/${mediaItemId}`);
   }, [router]);
 
+  const handleEpisodeClick = useCallback((episodeId: string) => {
+    router.push(`/library/series/episode/${episodeId}`);
+  }, [router]);
+
+  const handleTrackClick = useCallback((trackId: string) => {
+    router.push(`/library/music/track/${trackId}`);
+  }, [router]);
+
   const handleAddCustom = useCallback(
     (config: CustomCardConfig) => {
       const id = `custom-${generateId()}`;
@@ -275,17 +284,31 @@ export default function DashboardPage() {
 
   if (!stats) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <p className="text-muted-foreground">Failed to load stats.</p>
+      <div className="p-4 sm:p-6 lg:p-8">
+        <EmptyState
+          icon={AlertCircle}
+          title="Failed to load dashboard"
+          description="We couldn't fetch your library statistics. Check the server connection or try again."
+          action={
+            <Button variant="outline" size="sm" onClick={() => { setLoading(true); fetchData(); }}>
+              Retry
+            </Button>
+          }
+        />
       </div>
     );
   }
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 sm:mb-8">
-        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Dashboard</h1>
-        <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-col gap-4 mb-6 sm:mb-8 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Dashboard</h1>
+          <p className="text-muted-foreground mt-1">
+            Library statistics and activity at a glance — customize the layout per tab in edit mode.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
           <SyncIndicator onSyncComplete={fetchStats} />
           {servers.length > 1 && (() => {
             const dupeNames = getDuplicateServerNames(servers);
@@ -407,6 +430,8 @@ export default function DashboardPage() {
             onMovieClick={handleMovieClick}
             onSeriesClick={handleSeriesClick}
             onArtistClick={handleArtistClick}
+            onEpisodeClick={handleEpisodeClick}
+            onTrackClick={handleTrackClick}
             onSyncComplete={fetchStats}
             onConfigChange={handleConfigChange}
           />
@@ -427,6 +452,8 @@ export default function DashboardPage() {
               onMovieClick={handleMovieClick}
               onSeriesClick={handleSeriesClick}
               onArtistClick={handleArtistClick}
+              onEpisodeClick={handleEpisodeClick}
+              onTrackClick={handleTrackClick}
               onSyncComplete={fetchStats}
               onConfigChange={handleConfigChange}
             />
@@ -448,6 +475,8 @@ export default function DashboardPage() {
               onMovieClick={handleMovieClick}
               onSeriesClick={handleSeriesClick}
               onArtistClick={handleArtistClick}
+              onEpisodeClick={handleEpisodeClick}
+              onTrackClick={handleTrackClick}
               onSyncComplete={fetchStats}
               onConfigChange={handleConfigChange}
             />
@@ -469,6 +498,8 @@ export default function DashboardPage() {
               onMovieClick={handleMovieClick}
               onSeriesClick={handleSeriesClick}
               onArtistClick={handleArtistClick}
+              onEpisodeClick={handleEpisodeClick}
+              onTrackClick={handleTrackClick}
               onSyncComplete={fetchStats}
               onConfigChange={handleConfigChange}
             />

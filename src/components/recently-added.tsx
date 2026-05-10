@@ -42,7 +42,8 @@ interface RecentlyAddedProps {
   servers?: { id: string; name: string; type?: string }[];
   availableTypes?: string[];
   onMovieClick?: (movieId: string) => void;
-  onSeriesClick?: (seriesName: string) => void;
+  onEpisodeClick?: (episodeId: string) => void;
+  onTrackClick?: (trackId: string) => void;
 }
 
 const PAGE_SIZE = 10;
@@ -66,7 +67,8 @@ export function RecentlyAdded({
   servers,
   availableTypes,
   onMovieClick,
-  onSeriesClick,
+  onEpisodeClick,
+  onTrackClick,
 }: RecentlyAddedProps) {
   const [items, setItems] = useState<RecentItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -199,8 +201,10 @@ export function RecentlyAdded({
                 const handleClick = () => {
                   if (item.type === "MOVIE") {
                     onMovieClick?.(item.id);
-                  } else if (item.parentTitle) {
-                    onSeriesClick?.(item.parentTitle);
+                  } else if (item.type === "SERIES") {
+                    onEpisodeClick?.(item.id);
+                  } else if (item.type === "MUSIC") {
+                    onTrackClick?.(item.id);
                   }
                 };
 

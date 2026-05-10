@@ -18,7 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { BarChart3, PieChartIcon, ChevronLeft, ChevronRight, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { BarChart3, PieChartIcon, ChevronLeft, ChevronRight, ArrowUp, ArrowDown, ArrowUpDown, Layers } from "lucide-react";
 import {
   PieChart,
   Pie,
@@ -221,14 +221,17 @@ export function QualityChart({ breakdown, onQualityClick, filterType, lockedFilt
       <Card className="h-full flex flex-col">
         <CardHeader>
           <div className="flex items-center justify-between">
-            <CardTitle>Quality Breakdown</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <Layers className="h-4 w-4 text-muted-foreground" />
+              Quality Breakdown
+            </CardTitle>
             <div className="flex items-center gap-2">
               {!lockedFilterType && (
                 <Select
                   value={localType ?? "all"}
                   onValueChange={(v) => setLocalType(v === "all" ? undefined : v as "MOVIE" | "SERIES" | "MUSIC")}
                 >
-                  <SelectTrigger className="h-7 w-24 text-xs">
+                  <SelectTrigger size="sm" className="w-24 text-xs">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -269,14 +272,17 @@ export function QualityChart({ breakdown, onQualityClick, filterType, lockedFilt
     <Card className="h-full flex flex-col">
       <CardHeader>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-          <CardTitle>Quality Breakdown</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <Layers className="h-4 w-4 text-muted-foreground" />
+            Quality Breakdown
+          </CardTitle>
           <div className="flex flex-wrap items-center gap-2">
             {!lockedFilterType && (
               <Select
                 value={localType ?? "all"}
                 onValueChange={(v) => setLocalType(v === "all" ? undefined : v as "MOVIE" | "SERIES" | "MUSIC")}
               >
-                <SelectTrigger className="h-7 w-24 text-xs">
+                <SelectTrigger size="sm" className="w-24 text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -297,7 +303,7 @@ export function QualityChart({ breakdown, onQualityClick, filterType, lockedFilt
               value={topN === null ? "all" : String(topN)}
               onValueChange={(v) => setTopN(v === "all" ? null : Number(v))}
             >
-              <SelectTrigger className="h-7 w-22 text-xs">
+              <SelectTrigger size="sm" className="w-22 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -308,23 +314,31 @@ export function QualityChart({ breakdown, onQualityClick, filterType, lockedFilt
                 <SelectItem value="all">All</SelectItem>
               </SelectContent>
             </Select>
-            <div className="flex rounded-md border">
-              <Button
-                variant={chartType === "bar" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-7 w-7 rounded-r-none"
+            <div className="flex h-8 items-stretch rounded-md border overflow-hidden">
+              <button
+                type="button"
                 onClick={() => setChartType("bar")}
+                aria-label="Bar chart"
+                className={`flex w-8 items-center justify-center transition-colors ${
+                  chartType === "bar"
+                    ? "bg-secondary text-secondary-foreground"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                }`}
               >
                 <BarChart3 className="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant={chartType === "pie" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-7 w-7 rounded-l-none"
+              </button>
+              <button
+                type="button"
                 onClick={() => setChartType("pie")}
+                aria-label="Pie chart"
+                className={`flex w-8 items-center justify-center transition-colors ${
+                  chartType === "pie"
+                    ? "bg-secondary text-secondary-foreground"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                }`}
               >
                 <PieChartIcon className="h-3.5 w-3.5" />
-              </Button>
+              </button>
             </div>
           </div>
         </div>
