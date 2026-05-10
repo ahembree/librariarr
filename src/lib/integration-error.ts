@@ -1,4 +1,4 @@
-import axios, { type AxiosError } from "axios";
+import { type AxiosError } from "axios";
 
 /**
  * A clean Error type that *arr / Seerr clients throw on any axios failure.
@@ -35,7 +35,12 @@ export class IntegrationError extends Error {
     if (status !== null) {
       const data = error.response?.data;
       if (typeof data === "string" && data.trim().length > 0) {
-        detail = data.trim().slice(0, 200);
+        const trimmed = data.trim();
+        // Skip HTML error pages (reverse-proxy 502s, etc.) — they bloat the
+        // log without adding signal. Only surface short text bodies.
+        if (!trimmed.startsWith("<") && trimmed.length <= 500) {
+          detail = trimmed.slice(0, 200);
+        }
       } else if (data && typeof data === "object") {
         const obj = data as Record<string, unknown>;
         if (typeof obj.message === "string") detail = obj.message.slice(0, 200);
@@ -55,15 +60,4 @@ export class IntegrationError extends Error {
     this.code = code;
     this.url = url;
   }
-}
-
-/**
- * If the error is an axios error, wrap it in an `IntegrationError` so the
- * thrown rejection prints concisely. Otherwise pass it through unchanged.
- */
-export function wrapAxiosError(service: string, error: unknown): unknown {
-  if (axios.isAxiosError(error)) {
-    return new IntegrationError(service, error);
-  }
-  return error;
 }
