@@ -308,16 +308,23 @@ export default function MusicPage() {
   };
 
   return (
-    <div className="p-4 sm:p-6 md:pr-12">
-      <div className="flex items-center gap-3 mb-6">
-        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Music</h1>
-        {!loading && artistList.length > 0 && (
-          <div className="flex items-center gap-1.5">
-            <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{artistList.length.toLocaleString()} artists</span>
-            <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{artistList.reduce((sum, a) => sum + a.albumCount, 0).toLocaleString()} albums</span>
-            <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{artistList.reduce((sum, a) => sum + a.trackCount, 0).toLocaleString()} songs</span>
+    <div className="p-4 sm:p-6 lg:p-8">
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Music</h1>
+            {!loading && artistList.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{artistList.length.toLocaleString()} artists</span>
+                <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{artistList.reduce((sum, a) => sum + a.albumCount, 0).toLocaleString()} albums</span>
+                <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{artistList.reduce((sum, a) => sum + a.trackCount, 0).toLocaleString()} songs</span>
+              </div>
+            )}
           </div>
-        )}
+          <p className="text-muted-foreground mt-1">
+            Browse your music library — grouped by artist, with deep links to albums and individual tracks.
+          </p>
+        </div>
         <SyncLibraryButton libraryType="MUSIC" onSyncComplete={fetchArtists} />
       </div>
 
@@ -381,10 +388,6 @@ export default function MusicPage() {
         />
       ) : (
         <>
-          <p className="mb-3 text-sm text-muted-foreground">
-            {artistList.length} artists
-          </p>
-
           {viewMode === "table" ? (
             <DataTable<GroupedArtist>
               columns={artistTableColumns(getHex)}

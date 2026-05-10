@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Separator } from "@/components/ui/separator";
 import {
   Popover,
   PopoverContent,
@@ -834,13 +835,13 @@ export default function QueryPage() {
 
   return (
     <>
-      <div className="space-y-6 p-4 sm:p-6 md:pr-12">
+      <div className="space-y-6 p-4 sm:p-6 lg:p-8">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Query Builder</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Search across all media types, servers, and metadata
+          <p className="text-muted-foreground mt-1">
+            Build ad-hoc queries across your media library.
           </p>
         </div>
       </div>
@@ -945,9 +946,12 @@ export default function QueryPage() {
                         const isSelected = selectedServerIds.includes(s.id);
                         return (
                           <CommandItem key={s.id} onSelect={() => toggleServer(s.id)}>
-                            <div className={`mr-2 flex h-4 w-4 items-center justify-center rounded-sm border ${isSelected ? "bg-primary border-primary text-primary-foreground" : "border-muted-foreground/50"}`}>
-                              {isSelected && <span className="text-xs">✓</span>}
-                            </div>
+                            <Checkbox
+                              checked={isSelected}
+                              onCheckedChange={() => toggleServer(s.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="mr-2"
+                            />
                             {s.name}
                             {s.type && <ServerTypeChip type={s.type} className="ml-1.5" />}
                           </CommandItem>
@@ -956,11 +960,14 @@ export default function QueryPage() {
                     </CommandGroup>
                   </CommandList>
                   {selectedServerIds.length > 0 && (
-                    <div className="border-t p-1">
-                      <Button variant="ghost" size="sm" className="w-full text-xs" onClick={() => setSelectedServerIds([])}>
-                        Clear all
-                      </Button>
-                    </div>
+                    <>
+                      <Separator />
+                      <div className="p-1">
+                        <Button variant="ghost" size="sm" className="w-full text-xs" onClick={() => setSelectedServerIds([])}>
+                          Clear all
+                        </Button>
+                      </div>
+                    </>
                   )}
                 </Command>
               </PopoverContent>

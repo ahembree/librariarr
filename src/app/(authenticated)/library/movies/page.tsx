@@ -230,12 +230,21 @@ export default function MoviesPage() {
   const virtualRows = virtualizer.getVirtualItems();
 
   return (
-    <div className="p-4 sm:p-6 md:pr-12">
-      <div className="flex items-center gap-3 mb-6">
-        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Movies</h1>
-        {!loading && items.length > 0 && (
-          <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{items.length.toLocaleString()}</span>
-        )}
+    <div className="p-4 sm:p-6 lg:p-8">
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Movies</h1>
+            {!loading && items.length > 0 && (
+              <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
+                {items.length.toLocaleString()} {items.length === 1 ? "movie" : "movies"}
+              </span>
+            )}
+          </div>
+          <p className="text-muted-foreground mt-1">
+            Browse your movie library — filter by quality, year, genre, and more.
+          </p>
+        </div>
         <SyncLibraryButton libraryType="MOVIE" onSyncComplete={fetchMovies} />
       </div>
 
