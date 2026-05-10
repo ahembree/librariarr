@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import Link from "next/link";
 import { useColumnResize } from "@/hooks/use-column-resize";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
@@ -27,17 +28,18 @@ import { formatFileSize, formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { MediaItemWithRelations } from "@/lib/types";
 import {
-  Loader2,
   ChevronDown,
   ChevronRight,
-  RefreshCw,
-  LayoutGrid,
-  TableProperties,
   Columns3,
-  ShieldOff,
   Film,
-  Tv,
+  Inbox,
+  LayoutGrid,
+  Loader2,
   Music,
+  RefreshCw,
+  ShieldOff,
+  TableProperties,
+  Tv,
 } from "lucide-react";
 import { TabNav, type TabNavItem } from "@/components/tab-nav";
 import { Badge } from "@/components/ui/badge";
@@ -970,10 +972,19 @@ export default function RuleMatchesPage() {
 
       {filteredRuleMatches.length === 0 && (
         <Card>
-          <CardContent className="py-12 text-center">
-            <p className="text-muted-foreground">
-              No enabled rule sets found. Create and enable a rule set to start matching media.
-            </p>
+          <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+            <div className="rounded-full bg-muted p-4">
+              <Inbox className="h-8 w-8 text-muted-foreground" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-base font-medium">No enabled rule sets</p>
+              <p className="text-sm text-muted-foreground">
+                Create and enable a rule set to start matching media.
+              </p>
+            </div>
+            <Button asChild variant="outline" size="sm" className="mt-2">
+              <Link href="/lifecycle/rules">Manage Rules</Link>
+            </Button>
           </CardContent>
         </Card>
       )}
@@ -1092,8 +1103,9 @@ export default function RuleMatchesPage() {
 
               {isExpanded && match.items.length === 0 && (
                 <CardContent>
-                  <p className="text-center text-muted-foreground py-4">
-                    No matches yet. Click &quot;Re-evaluate&quot; to search.
+                  <p className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+                    <Inbox className="h-4 w-4" />
+                    No matches yet. Click &ldquo;Re-evaluate&rdquo; to search.
                   </p>
                 </CardContent>
               )}

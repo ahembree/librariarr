@@ -258,6 +258,12 @@ const DEFAULT_BLACKOUT_FORM = {
 
 // --- Helpers ---
 
+/** Format a Date as a datetime-local input value using the browser's local timezone. */
+function toDatetimeLocalValue(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 function formatBlackoutScheduleDescription(schedule: BlackoutSchedule): string {
   if (schedule.scheduleType === "one_time") {
     const start = schedule.startDate
@@ -950,8 +956,14 @@ export default function StreamManagerPage() {
       const payload = {
         name: blackoutForm.name,
         scheduleType: blackoutForm.scheduleType,
-        startDate: blackoutForm.scheduleType === "one_time" ? blackoutForm.startDate || null : null,
-        endDate: blackoutForm.scheduleType === "one_time" ? blackoutForm.endDate || null : null,
+        startDate:
+          blackoutForm.scheduleType === "one_time" && blackoutForm.startDate
+            ? new Date(blackoutForm.startDate).toISOString()
+            : null,
+        endDate:
+          blackoutForm.scheduleType === "one_time" && blackoutForm.endDate
+            ? new Date(blackoutForm.endDate).toISOString()
+            : null,
         daysOfWeek: blackoutForm.scheduleType === "recurring" ? blackoutForm.daysOfWeek : null,
         startTime: blackoutForm.scheduleType === "recurring" ? blackoutForm.startTime || null : null,
         endTime: blackoutForm.scheduleType === "recurring" ? blackoutForm.endTime || null : null,
@@ -1031,8 +1043,8 @@ export default function StreamManagerPage() {
     setBlackoutForm({
       name: schedule.name,
       scheduleType: schedule.scheduleType,
-      startDate: schedule.startDate ?? "",
-      endDate: schedule.endDate ?? "",
+      startDate: schedule.startDate ? toDatetimeLocalValue(new Date(schedule.startDate)) : "",
+      endDate: schedule.endDate ? toDatetimeLocalValue(new Date(schedule.endDate)) : "",
       daysOfWeek: schedule.daysOfWeek ?? [],
       startTime: schedule.startTime ?? "",
       endTime: schedule.endTime ?? "",
@@ -1594,21 +1606,20 @@ export default function StreamManagerPage() {
                     <div className="flex-1 min-w-0 space-y-1">
                       <div className="flex items-center gap-2">
                         <span className="font-medium text-sm">{schedule.name}</span>
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                        <ColorChip className="text-slate-300 bg-slate-500/15 border-slate-500/30">
                           {schedule.scheduleType === "one_time" ? "One-Time" : "Recurring"}
-                        </Badge>
-                        <Badge
-                          variant="outline"
-                          className={`text-[10px] px-1.5 py-0 ${
+                        </ColorChip>
+                        <ColorChip
+                          className={
                             schedule.action === "terminate_immediate"
-                              ? "border-destructive/50 text-destructive"
+                              ? "text-red-400 bg-red-500/15 border-red-500/30"
                               : schedule.action === "warn_then_terminate"
-                                ? "border-amber-500/50 text-amber-400"
-                                : "border-blue-500/50 text-blue-400"
-                          }`}
+                                ? "text-amber-400 bg-amber-500/15 border-amber-500/30"
+                                : "text-blue-400 bg-blue-500/15 border-blue-500/30"
+                          }
                         >
                           {BLACKOUT_ACTION_LABELS[schedule.action] ?? schedule.action}
-                        </Badge>
+                        </ColorChip>
                       </div>
                       <p className="text-xs text-muted-foreground">
                         {formatBlackoutScheduleDescription(schedule)}
@@ -1717,15 +1728,15 @@ export default function StreamManagerPage() {
               <>
                 <div className="space-y-1.5">
                   <Label>Days of Week</Label>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex flex-wrap gap-2">
                     {DAY_LABELS.map((label, idx) => (
                       <button
                         key={idx}
                         onClick={() => toggleBlackoutDay(idx)}
-                        className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors border ${
+                        className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors border ${
                           blackoutForm.daysOfWeek.includes(idx)
-                            ? "border-primary bg-primary/15 text-primary"
-                            : "border-border bg-muted/50 text-muted-foreground hover:bg-muted"
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-muted bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
                         }`}
                       >
                         {label}

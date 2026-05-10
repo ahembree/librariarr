@@ -32,6 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -47,7 +48,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { Loader2, Save, Eye, Trash2, FileText, Upload, ClipboardPaste, Copy, Check, ChevronsUpDown, X, FlaskConical, Search, LayoutGrid, TableProperties, ShieldOff, Calendar, Clock, HardDrive, AlertTriangle, ExternalLink } from "lucide-react";
+import { AlertTriangle, Calendar, Check, ChevronsUpDown, ClipboardPaste, Clock, Copy, ExternalLink, Eye, FileText, FlaskConical, HardDrive, LayoutGrid, Loader2, Save, Search, ShieldOff, SlidersHorizontal, TableProperties, Trash2, Upload, X } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -1555,7 +1556,10 @@ export function LifecycleRulePage({
       {savedRuleSets.length > 0 && (
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle>Saved Rule Sets</CardTitle>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <FileText className="h-4 w-4" />
+              Saved Rule Sets
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid gap-2">
@@ -1638,11 +1642,12 @@ export function LifecycleRulePage({
       {/* Rule Builder */}
       <Card>
         <CardHeader>
-          <CardTitle>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <SlidersHorizontal className="h-4 w-4" />
             {activeRuleSetId ? "Edit Rule Set" : "Create Rule Set"}
           </CardTitle>
           <CardDescription>
-            Define criteria to find {ruleDescription} matching specific conditions
+            Define criteria to find {ruleDescription} matching specific conditions.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -1948,8 +1953,10 @@ export function LifecycleRulePage({
                   </div>
                 </div>
 
+                <Separator />
+
                 {/* Manage Tags */}
-                <div className="space-y-3 border-t pt-3">
+                <div className="space-y-3">
                   <div className="flex items-center gap-3">
                     <Switch
                       id="manage-tags"
@@ -2273,7 +2280,7 @@ export function LifecycleRulePage({
           </div>
 
           {saveError && (
-            <p className="text-sm text-red-500">{saveError}</p>
+            <p className="text-sm text-destructive">{saveError}</p>
           )}
         </CardContent>
       </Card>
@@ -2660,11 +2667,9 @@ export function LifecycleRulePage({
                       This rule set adds tags [{deleteConfirmAddTags.join(", ")}] to items.
                     </p>
                     <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={deleteConfirmCleanupTags}
-                        onChange={(e) => setDeleteConfirmCleanupTags(e.target.checked)}
-                        className="h-4 w-4 rounded border-gray-300"
+                        onCheckedChange={(v) => setDeleteConfirmCleanupTags(v === true)}
                       />
                       <span>Remove these tags from all items and delete the tag definitions</span>
                     </label>

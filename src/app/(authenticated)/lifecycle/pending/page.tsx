@@ -27,21 +27,22 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
-  Loader2,
-  XCircle,
-  Play,
+  AlertTriangle,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
-  CheckCircle2,
-  AlertTriangle,
-  ShieldOff,
   Film,
-  Tv,
-  Music,
+  Inbox,
   LayoutGrid,
+  Loader2,
+  Music,
+  Play,
+  RotateCcw,
+  ShieldOff,
   TableProperties,
   Trash2,
-  RotateCcw,
+  Tv,
+  XCircle,
 } from "lucide-react";
 import { MediaCard } from "@/components/media-card";
 import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
@@ -1034,7 +1035,7 @@ export default function PendingActionsPage() {
                 </>
               )}
               {deletionStats.pendingCount > 0 && deletionStats.actionCount > 0 && (
-                <span className="text-muted-foreground">|</span>
+                <span className="text-muted-foreground">·</span>
               )}
               {deletionStats.actionCount > 0 && (
                 <>
@@ -1109,9 +1110,37 @@ export default function PendingActionsPage() {
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
         ) : filteredGroups.length === 0 ? (
-          <p className="text-center py-12 text-muted-foreground">
-            No {(STATUS_LABELS[statusFilter] ?? statusFilter).toLowerCase()} actions found.
-          </p>
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+              <div className="rounded-full bg-muted p-4">
+                {statusFilter === "FAILED" ? (
+                  <CheckCircle2 className="h-8 w-8 text-muted-foreground" />
+                ) : (
+                  <Inbox className="h-8 w-8 text-muted-foreground" />
+                )}
+              </div>
+              <div className="space-y-1">
+                <p className="text-base font-medium">
+                  {statusFilter === "FAILED"
+                    ? "No failed actions"
+                    : statusFilter === "COMPLETED"
+                      ? "No completed actions yet"
+                      : statusFilter === "PENDING"
+                        ? "No pending actions"
+                        : "No actions"}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  {statusFilter === "FAILED"
+                    ? "Everything ran cleanly. Failed actions will appear here if any rule execution fails."
+                    : statusFilter === "COMPLETED"
+                      ? "Completed actions will appear here once your rules start running."
+                      : statusFilter === "PENDING"
+                        ? "Lifecycle rules will queue up actions here when items match."
+                        : "No actions matching this filter."}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
         ) : (
           <div className="space-y-4">
             {filteredGroups.map((group) => {
@@ -1267,7 +1296,8 @@ export default function PendingActionsPage() {
 
                   {isExpanded && group.items.length === 0 && (
                     <CardContent>
-                      <p className="text-center text-muted-foreground py-4">
+                      <p className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+                        <Inbox className="h-4 w-4" />
                         No items in this group.
                       </p>
                     </CardContent>
