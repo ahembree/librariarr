@@ -16,6 +16,9 @@ import {
 } from "@/components/ui/card";
 import { RuleBuilder, ruleBuilderConfig, countAllRules, validateAllRules } from "@/components/rule-builder";
 import { BuilderWithPseudocode } from "@/components/builder/builder-with-pseudocode";
+import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
+import { useIntegrationsHealth, deriveIntegrationsStatus, arrTypeForMediaType } from "@/hooks/use-integrations-health";
+import { hasArrRules, hasSeerrRules } from "@/lib/conditions";
 import { MediaTable } from "@/components/media-table";
 import { MediaDetailSidePanel, type MatchedCriterion } from "@/components/media-detail-side-panel";
 import { usePanelResize } from "@/hooks/use-panel-resize";
@@ -625,6 +628,28 @@ export function LifecycleRulePage({
   const [tagMode, setTagMode] = useState<"add" | "remove">("add");
   const [arrInstances, setArrInstances] = useState<ArrInstance[]>([]);
   const [seerrConnected, setSeerrConnected] = useState(false);
+
+  const { health: integrationsHealth } = useIntegrationsHealth();
+  const relevantArrTypes = useMemo(
+    () => [arrTypeForMediaType(mediaType)] as const,
+    [mediaType],
+  );
+  // Only the rule set's selected Arr instance matters for reachability.
+  // If none is selected, pass an empty array so the banner stays silent
+  // (nothing to be unreachable about until the user picks an instance).
+  const arrInstanceIds = useMemo<readonly string[]>(
+    () => (arrInstanceId ? [arrInstanceId] : []),
+    [arrInstanceId],
+  );
+  const integrationsStatus = useMemo(
+    () => deriveIntegrationsStatus(integrationsHealth, {
+      relevantArrTypes,
+      arrInstanceIds,
+    }),
+    [integrationsHealth, relevantArrTypes, arrInstanceIds],
+  );
+  const ruleUsesArr = useMemo(() => hasArrRules(groups), [groups]);
+  const ruleUsesSeerr = useMemo(() => hasSeerrRules(groups), [groups]);
 
   // Recycle bin safety check
   const [recycleBinStatus, setRecycleBinStatus] = useState<{
@@ -1779,13 +1804,24 @@ export function LifecycleRulePage({
             </div>
           )}
 
+          <IntegrationUnreachableBanner
+            health={integrationsHealth}
+            hasArrRules={ruleUsesArr}
+            hasSeerrRules={ruleUsesSeerr}
+            relevantArrTypes={relevantArrTypes}
+            arrInstanceIds={arrInstanceIds}
+            subjectLabel="This rule set"
+          />
+
           <BuilderWithPseudocode groups={groups} config={ruleBuilderConfig}>
             <RuleBuilder
               groups={groups}
               onChange={setGroups}
               distinctValues={distinctValues}
               arrConnected={!!arrInstanceId}
+              arrUnreachable={integrationsStatus.arrUnreachable}
               seerrConnected={mediaType === "MUSIC" ? undefined : seerrConnected}
+              seerrUnreachable={integrationsStatus.seerrUnreachable}
               libraryType={mediaType}
             />
           </BuilderWithPseudocode>

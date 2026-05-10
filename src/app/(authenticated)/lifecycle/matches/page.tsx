@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useColumnResize } from "@/hooks/use-column-resize";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
+import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
+import { useIntegrationsHealth } from "@/hooks/use-integrations-health";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Button } from "@/components/ui/button";
 import {
@@ -645,6 +647,15 @@ export default function RuleMatchesPage() {
   const [selectedItem, setSelectedItem] = useState<MatchedMediaItem | null>(null);
   const [selectedItemType, setSelectedItemType] = useState<"MOVIE" | "SERIES" | "MUSIC">("MOVIE");
   const [ruleMatches, setRuleMatches] = useState<RuleSetMatch[]>([]);
+  const { health: integrationsHealth } = useIntegrationsHealth();
+  const arrInstanceIds = useMemo<readonly string[]>(
+    () => Array.from(new Set(
+      ruleMatches
+        .map((m) => m.ruleSet.arrInstanceId)
+        .filter((id): id is string => !!id),
+    )),
+    [ruleMatches],
+  );
   const [loading, setLoading] = useState(true);
   const [expandedRules, setExpandedRules] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<"cards" | "table">("table");
@@ -947,7 +958,15 @@ export default function RuleMatchesPage() {
         </div>
       </div>
 
-      <TabNav tabs={MEDIA_TYPE_TABS} activeTab={mediaTypeTab} onTabChange={setMediaTypeTab} className="mb-6" />
+      <IntegrationUnreachableBanner
+        health={integrationsHealth}
+        hasArrRules={arrInstanceIds.length > 0}
+        hasSeerrRules={false}
+        arrInstanceIds={arrInstanceIds}
+        subjectLabel="Some matched rule sets"
+      />
+
+      <TabNav tabs={MEDIA_TYPE_TABS} activeTab={mediaTypeTab} onTabChange={setMediaTypeTab} className="mb-6 mt-6" />
 
       {filteredRuleMatches.length === 0 && (
         <Card>

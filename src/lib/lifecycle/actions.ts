@@ -10,10 +10,21 @@ export { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES } from "@/l
 
 /** Extract a meaningful error message from Arr API failures, including the response body. */
 export function extractActionError(error: unknown): string {
+  // Clients now wrap axios errors in IntegrationError, which exposes the
+  // status / detail directly and keeps the original AxiosError as `cause`.
+  if (error && typeof error === "object" && "name" in error && (error as { name: unknown }).name === "IntegrationError") {
+    const ie = error as unknown as { status: number | null; detail: string | null; message: string };
+    if (ie.status !== null) {
+      return ie.detail
+        ? `HTTP ${ie.status}: ${ie.detail}`
+        : `HTTP ${ie.status}: ${ie.message}`;
+    }
+    return ie.message;
+  }
+  // Backward-compat: raw AxiosError (in case some path bypasses the wrapper)
   if (axios.isAxiosError(error) && error.response) {
     const status = error.response.status;
     const data = error.response.data;
-    // Arr services return errors as { message: "..." } or plain strings
     const detail =
       typeof data === "string"
         ? data

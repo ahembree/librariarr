@@ -5,6 +5,8 @@ import { toast } from "sonner";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
+import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
+import { useIntegrationsHealth } from "@/hooks/use-integrations-health";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ColorChip } from "@/components/color-chip";
@@ -648,6 +650,15 @@ export default function PendingActionsPage() {
   const [mediaTypeTab, setMediaTypeTab] = useState<MediaTypeTab>("all");
   const [groups, setGroups] = useState<RuleSetGroup[]>([]);
   const [loading, setLoading] = useState(true);
+  const { health: integrationsHealth } = useIntegrationsHealth();
+  const arrInstanceIds = useMemo<readonly string[]>(
+    () => Array.from(new Set(
+      groups
+        .map((g) => g.ruleSet.arrInstanceId)
+        .filter((id): id is string => !!id),
+    )),
+    [groups],
+  );
   const [statusFilter, setStatusFilter] = useState("PENDING");
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
   const { size: cardSize, setSize: setCardSize } = useCardSize();
@@ -991,6 +1002,17 @@ export default function PendingActionsPage() {
         <div className="mb-6">
           <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Pending Actions</h1>
           <p className="text-muted-foreground mt-1">Scheduled lifecycle actions awaiting execution, grouped by rule set.</p>
+        </div>
+
+        {/* Integration connectivity warning — pending actions that depend on Arr will fail until reachable */}
+        <div className="mb-6">
+          <IntegrationUnreachableBanner
+            health={integrationsHealth}
+            hasArrRules={arrInstanceIds.length > 0}
+            hasSeerrRules={false}
+            arrInstanceIds={arrInstanceIds}
+            subjectLabel="Pending actions"
+          />
         </div>
 
         {/* Deletion stats banner */}

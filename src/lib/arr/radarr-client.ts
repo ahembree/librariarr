@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
+import { IntegrationError } from "@/lib/integration-error";
 
 export interface RadarrMovie {
   id: number;
@@ -85,6 +86,7 @@ export class RadarrClient {
           logger.debug("Radarr", `ERROR ${error.response?.status ?? "NETWORK"} ${error.config?.url}${duration}`, {
             message: error.message,
           });
+          return Promise.reject(new IntegrationError("Radarr", error));
         }
         return Promise.reject(error);
       }

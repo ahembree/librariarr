@@ -9,19 +9,13 @@ import {
 } from "./types";
 import { detectStreamAudioProfile, detectStreamDynamicRange } from "./stream-detection";
 import { normalizeResolutionLabel } from "@/lib/resolution";
+import {
+  MB_IN_BYTES,
+  DURATION_MS_PER_MIN,
+  RESOLUTION_DB_VALUES,
+  wildcardToRegex,
+} from "@/lib/conditions";
 import type { Prisma } from "@/generated/prisma/client";
-
-const MB_IN_BYTES = 1024 * 1024;
-const DURATION_MS_PER_MIN = 60_000;
-
-// Map standardized resolution labels to raw DB patterns
-const RESOLUTION_DB_VALUES: Record<string, string[]> = {
-  "4K": ["4k", "2160", "2160p"],
-  "1080P": ["1080", "1080p"],
-  "720P": ["720", "720p"],
-  "480P": ["480", "480p"],
-  "SD": ["sd", "360", "360p"],
-};
 
 const STREAM_COUNT_FIELDS = new Set(["audioStreamCount", "subtitleStreamCount"]);
 
@@ -94,13 +88,6 @@ async function fetchCrossSystemData(
 
 const STREAM_LANG_CODEC_FIELDS = new Set(["audioLanguage", "subtitleLanguage", "streamAudioCodec"]);
 const STREAM_LANGUAGE_FIELDS = new Set(["audioLanguage", "subtitleLanguage"]);
-
-/** Convert a glob-style wildcard pattern (* = any chars, ? = single char) to a RegExp */
-function wildcardToRegex(pattern: string): RegExp {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  const regex = escaped.replace(/\*/g, ".*").replace(/\?/g, ".");
-  return new RegExp(`^${regex}$`, "i");
-}
 
 export interface ArrMetadata {
   arrId: number;
@@ -253,17 +240,18 @@ function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
     return applyNegate(clause, negate);
   }
 
-  // Genre (JSON array field)
-  if (field === "genre") {
+  // Genre / Labels (JSON array fields)
+  if (field === "genre" || field === "labels") {
+    const column = field === "labels" ? "labels" : "genres";
     let clause: Prisma.MediaItemWhereInput;
     switch (operator) {
       case "equals":
       case "contains":
-        clause = { genres: { array_contains: String(value) } };
+        clause = { [column]: { array_contains: String(value) } };
         break;
       case "notEquals":
       case "notContains":
-        clause = { NOT: { genres: { array_contains: String(value) } } };
+        clause = { NOT: { [column]: { array_contains: String(value) } } };
         break;
       default:
         return {};
@@ -424,7 +412,7 @@ function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
   const numericFields = new Set([
     "playCount", "videoBitrate", "audioChannels", "year",
     "videoBitDepth", "audioSamplingRate", "audioBitrate",
-    "rating", "audienceRating",
+    "rating", "audienceRating", "ratingCount",
   ]);
   if (numericFields.has(field)) {
     const numValue = Number(value);
@@ -1559,30 +1547,31 @@ function evaluateRuleAgainstItem(
     return negate ? !result : result;
   }
 
-  // Genre (JSON array)
-  if (field === "genre") {
-    const genreArr = Array.isArray(item.genres) ? (item.genres as string[]).map((g) => g.toLowerCase()) : [];
+  // Genre / Labels (JSON array fields)
+  if (field === "genre" || field === "labels") {
+    const sourceCol = field === "labels" ? "labels" : "genres";
+    const arr = Array.isArray(item[sourceCol]) ? (item[sourceCol] as string[]).map((g) => g.toLowerCase()) : [];
     const strValue = String(value).toLowerCase();
     let result: boolean;
     switch (operator) {
       case "equals":
       case "contains":
-        result = genreArr.some((g) => g === strValue);
+        result = arr.some((g) => g === strValue);
         break;
       case "notContains":
-        result = !genreArr.some((g) => g === strValue);
+        result = !arr.some((g) => g === strValue);
         break;
       case "notEquals":
-        result = !genreArr.some((g) => g === strValue);
+        result = !arr.some((g) => g === strValue);
         break;
       case "matchesWildcard": {
         const re = wildcardToRegex(strValue);
-        result = genreArr.some((g) => re.test(g));
+        result = arr.some((g) => re.test(g));
         break;
       }
       case "notMatchesWildcard": {
         const re = wildcardToRegex(strValue);
-        result = !genreArr.some((g) => re.test(g));
+        result = !arr.some((g) => re.test(g));
         break;
       }
       default: result = false;
@@ -1776,7 +1765,7 @@ function evaluateRuleAgainstItem(
   const numericFields = new Set([
     "playCount", "videoBitrate", "audioChannels", "year",
     "videoBitDepth", "audioSamplingRate", "audioBitrate",
-    "rating", "audienceRating",
+    "rating", "audienceRating", "ratingCount",
     "availableEpisodeCount", "watchedEpisodeCount", "watchedEpisodePercentage",
   ]);
   if (numericFields.has(field)) {
@@ -2024,10 +2013,11 @@ function getActualValueForField(
     return null;
   }
 
-  // Genre
-  if (field === "genre") {
-    const genreArr = Array.isArray(item.genres) ? (item.genres as string[]) : [];
-    return genreArr.length > 0 ? genreArr.join(", ") : "none";
+  // Genre / Labels (JSON array fields)
+  if (field === "genre" || field === "labels") {
+    const sourceCol = field === "labels" ? "labels" : "genres";
+    const arr = Array.isArray(item[sourceCol]) ? (item[sourceCol] as string[]) : [];
+    return arr.length > 0 ? arr.join(", ") : "none";
   }
 
   // Has External ID
@@ -2066,7 +2056,7 @@ function getActualValueForField(
   const numericFields = new Set([
     "playCount", "videoBitrate", "audioChannels", "year",
     "videoBitDepth", "audioSamplingRate", "audioBitrate",
-    "rating", "audienceRating",
+    "rating", "audienceRating", "ratingCount",
     "availableEpisodeCount", "watchedEpisodeCount", "watchedEpisodePercentage",
   ]);
   if (numericFields.has(field)) {

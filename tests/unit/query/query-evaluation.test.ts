@@ -274,3 +274,61 @@ describe("evaluateAllQueryRulesInMemory — standard fields", () => {
     expect(evaluateAllQueryRulesInMemory(groups, { playCount: 2 }, undefined, undefined)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Series-aggregate fields against non-aggregated items
+//
+// In paths where the query engine doesn't aggregate episodes into series
+// (executeUngrouped, the flat-types portion of executeQuery), series-aggregate
+// fields fall through to the text-default branch in evaluateQueryRuleInMemory.
+// They MUST evaluate to false rather than silently passing — otherwise the
+// query would treat them as no-ops and return false-positive results.
+// ---------------------------------------------------------------------------
+
+describe("Series-aggregate fields against non-series items (safety)", () => {
+  it("watchedEpisodePercentage on a movie evaluates to false", () => {
+    const groups: QueryGroup[] = [{
+      id: "g1", condition: "AND", groups: [],
+      rules: [makeRule({ field: "watchedEpisodePercentage", operator: "greaterThan", value: "80" })],
+    }];
+    const movie = { id: "m1", type: "MOVIE", title: "Some Movie" };
+    expect(evaluateAllQueryRulesInMemory(groups, movie, undefined, undefined)).toBe(false);
+  });
+
+  it("availableEpisodeCount on an episode evaluates to false", () => {
+    const groups: QueryGroup[] = [{
+      id: "g1", condition: "AND", groups: [],
+      rules: [makeRule({ field: "availableEpisodeCount", operator: "greaterThan", value: "10" })],
+    }];
+    const episode = { id: "e1", type: "SERIES", title: "S01E01", parentTitle: "Some Show" };
+    expect(evaluateAllQueryRulesInMemory(groups, episode, undefined, undefined)).toBe(false);
+  });
+
+  it("series-aggregate combined with another rule (AND) still evaluates to false", () => {
+    const groups: QueryGroup[] = [{
+      id: "g1", condition: "AND", groups: [],
+      rules: [
+        makeRule({ field: "year", operator: "greaterThan", value: "2020", id: "r1" }),
+        makeRule({ field: "watchedEpisodePercentage", operator: "greaterThan", value: "80", id: "r2", condition: "AND" }),
+      ],
+    }];
+    // Even when the year rule passes, the series-aggregate rule fails for a movie
+    const movie = { id: "m1", type: "MOVIE", year: 2024, title: "Modern Movie" };
+    expect(evaluateAllQueryRulesInMemory(groups, movie, undefined, undefined)).toBe(false);
+  });
+
+  it("series-aggregate with OR logic still requires the other rule to pass alone", () => {
+    const groups: QueryGroup[] = [{
+      id: "g1", condition: "AND", groups: [],
+      rules: [
+        makeRule({ field: "year", operator: "greaterThan", value: "2020", id: "r1" }),
+        makeRule({ field: "watchedEpisodePercentage", operator: "greaterThan", value: "80", id: "r2", condition: "OR" }),
+      ],
+    }];
+    // The series-aggregate rule fails on a movie; OR means the year rule alone determines the outcome
+    const matchingMovie = { id: "m1", type: "MOVIE", year: 2024 };
+    const oldMovie = { id: "m2", type: "MOVIE", year: 1999 };
+    expect(evaluateAllQueryRulesInMemory(groups, matchingMovie, undefined, undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(groups, oldMovie, undefined, undefined)).toBe(false);
+  });
+});

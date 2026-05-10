@@ -88,6 +88,7 @@ import {
   Tv,
   Calculator,
   Network,
+  AlertTriangle,
   type LucideIcon,
 } from "lucide-react";
 import type { RuleCondition } from "@/lib/rules/types";
@@ -248,7 +249,35 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
           <DropdownMenuTrigger asChild>
             <Button variant="outline" className="flex-1 sm:flex-none sm:w-45 justify-between font-normal">
               <span className="truncate">{fieldDef?.label ?? rule.field}</span>
-              <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+              {(() => {
+                const unreachableTooltip =
+                  config.getFieldUnreachableTooltip?.(rule.field, fieldContext);
+                if (!unreachableTooltip) {
+                  return (
+                    <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  );
+                }
+                return (
+                  <>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span
+                            className="ml-2 inline-flex shrink-0"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <AlertTriangle className="h-4 w-4 text-amber-400" />
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">
+                          {unreachableTooltip}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                    <ChevronDown className="ml-1 h-4 w-4 shrink-0 opacity-50" />
+                  </>
+                );
+              })()}
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56 max-w-[90vw] max-h-(--radix-dropdown-menu-content-available-height) overflow-y-auto">

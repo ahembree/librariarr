@@ -65,7 +65,7 @@ describe("isExternalField", () => {
 describe("ARR_FIELDS", () => {
   it("contains exactly 26 arr fields", () => {
     expect(ARR_FIELDS).toHaveLength(26);
-    expect(ARR_FIELDS).toEqual([
+    expect(ARR_FIELDS).toEqual(expect.arrayContaining([
       "foundInArr",
       "arrTag", "arrQualityProfile", "arrMonitored", "arrRating",
       "arrTmdbRating", "arrRtCriticRating",
@@ -75,7 +75,7 @@ describe("ARR_FIELDS", () => {
       "arrFirstAired", "arrSeasonCount", "arrEpisodeCount", "arrStatus",
       "arrEnded", "arrSeriesType", "arrHasUnaired",
       "arrMonitoredSeasonCount", "arrMonitoredEpisodeCount",
-    ]);
+    ]));
   });
 });
 

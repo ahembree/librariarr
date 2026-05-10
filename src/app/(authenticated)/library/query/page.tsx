@@ -56,6 +56,8 @@ import {
 import { cn } from "@/lib/utils";
 import { QueryBuilder, queryBuilderConfig, countAllRules, validateAllRules } from "@/components/query-builder";
 import { BuilderWithPseudocode } from "@/components/builder/builder-with-pseudocode";
+import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
+import { useIntegrationsHealth, deriveIntegrationsStatus, arrTypeForMediaType, type ArrType } from "@/hooks/use-integrations-health";
 import { hasArrRules, hasSeerrRules, type QueryGroup, type QueryDefinition } from "@/lib/query/types";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
@@ -216,6 +218,32 @@ export default function QueryPage() {
   // Seerr integration status
   const [seerrConnected, setSeerrConnected] = useState(false);
   const [seerrInstanceId, setSeerrInstanceId] = useState<string | null>(null);
+
+  // Integration reachability (configured but currently online?)
+  const { health: integrationsHealth } = useIntegrationsHealth();
+  const relevantArrTypes = useMemo<readonly ArrType[]>(() => {
+    if (mediaTypes.length === 0) return ["sonarr", "radarr", "lidarr"];
+    return mediaTypes.map((t) => arrTypeForMediaType(t as "MOVIE" | "SERIES" | "MUSIC"));
+  }, [mediaTypes]);
+  // Only check the specific Arr server IDs the query references.
+  const arrInstanceIds = useMemo<readonly string[]>(
+    () => [arrServerIds.radarr, arrServerIds.sonarr, arrServerIds.lidarr].filter(
+      (id): id is string => Boolean(id),
+    ),
+    [arrServerIds.radarr, arrServerIds.sonarr, arrServerIds.lidarr],
+  );
+  const seerrInstanceIds = useMemo<readonly string[]>(
+    () => (seerrInstanceId ? [seerrInstanceId] : []),
+    [seerrInstanceId],
+  );
+  const integrationsStatus = useMemo(
+    () => deriveIntegrationsStatus(integrationsHealth, {
+      relevantArrTypes,
+      arrInstanceIds,
+      seerrInstanceIds,
+    }),
+    [integrationsHealth, relevantArrTypes, arrInstanceIds, seerrInstanceIds],
+  );
 
   // Results state
   const [results, setResults] = useState<QueryResultItem[]>([]);
@@ -1004,6 +1032,17 @@ export default function QueryPage() {
         })()}
       </div>
 
+      {/* Connectivity warning: rules reference an integration that's configured but currently down */}
+      <IntegrationUnreachableBanner
+        health={integrationsHealth}
+        hasArrRules={hasArrRules(groups)}
+        hasSeerrRules={hasSeerrRules(groups)}
+        relevantArrTypes={relevantArrTypes}
+        arrInstanceIds={arrInstanceIds}
+        seerrInstanceIds={seerrInstanceIds}
+        subjectLabel="This query"
+      />
+
       {/* Hint: orphaned Arr/Seerr rules with no integration to evaluate them */}
       {(orphanArrRules || orphanSeerrRules || seerrWithMusic) && (
         <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
@@ -1034,7 +1073,17 @@ export default function QueryPage() {
 
       {/* Query builder */}
       <BuilderWithPseudocode groups={groups} config={queryBuilderConfig}>
-        <QueryBuilder groups={groups} onChange={setGroups} distinctValues={distinctValues} arrConnected={hasAnyArrServer} seerrConnected={seerrConnected} />
+        <QueryBuilder
+          groups={groups}
+          onChange={setGroups}
+          distinctValues={distinctValues}
+          arrConnected={hasAnyArrServer}
+          arrUnreachable={integrationsStatus.arrUnreachable}
+          seerrConnected={seerrConnected}
+          seerrUnreachable={integrationsStatus.seerrUnreachable}
+          mediaTypes={mediaTypes as ("MOVIE" | "SERIES" | "MUSIC")[]}
+          includeEpisodes={includeEpisodes}
+        />
       </BuilderWithPseudocode>
 
       {/* Run + view controls */}

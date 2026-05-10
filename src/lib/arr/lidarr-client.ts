@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
+import { IntegrationError } from "@/lib/integration-error";
 
 export interface LidarrArtist {
   id: number;
@@ -79,6 +80,7 @@ export class LidarrClient {
           logger.debug("Lidarr", `ERROR ${error.response?.status ?? "NETWORK"} ${error.config?.url}${duration}`, {
             message: error.message,
           });
+          return Promise.reject(new IntegrationError("Lidarr", error));
         }
         return Promise.reject(error);
       }
