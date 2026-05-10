@@ -19,6 +19,8 @@ import { Clock, Film, Tv, Music, ChevronLeft, ChevronRight, Loader2 } from "luci
 import { formatRelativeDate } from "@/lib/format";
 import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
+import { LazyMediaHoverPopover } from "@/components/lazy-media-hover-popover";
+import type { MediaHoverData } from "@/components/media-hover-popover";
 
 interface RecentItem {
   id: string;
@@ -202,9 +204,14 @@ export function RecentlyAdded({
                   }
                 };
 
-                return (
+                const placeholder: MediaHoverData = {
+                  title: formatEpisode(item),
+                  year: item.year,
+                  addedAt: item.addedAt,
+                };
+
+                const row = (
                   <div
-                    key={item.id}
                     className="flex items-center gap-3 rounded-md px-2 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors"
                     onClick={handleClick}
                   >
@@ -224,6 +231,24 @@ export function RecentlyAdded({
                       </span>
                     )}
                   </div>
+                );
+
+                return (
+                  <LazyMediaHoverPopover
+                    key={item.id}
+                    fetchUrl={`/api/media/${item.id}`}
+                    extractData={(json) => {
+                      const data = (json as { item: MediaHoverData }).item;
+                      return item.type === "MOVIE"
+                        ? data
+                        : { ...data, title: formatEpisode(item) };
+                    }}
+                    placeholder={placeholder}
+                    imageUrl={`/api/media/${item.id}/image`}
+                    imageAspect={item.type === "MUSIC" ? "square" : "poster"}
+                  >
+                    {row}
+                  </LazyMediaHoverPopover>
                 );
               })}
             </div>
