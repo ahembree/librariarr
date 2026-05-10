@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.16.0](https://github.com/ahembree/librariarr/compare/v0.15.3...v0.16.0) (2026-05-10)
+
+
+### Features
+
+* **dashboard:** add hover popover cards ([6718234](https://github.com/ahembree/librariarr/commit/6718234e48d8f512f5ed85e5b29d6c454339733a))
+* improve UI/UX for dashboard and cards ([963d27d](https://github.com/ahembree/librariarr/commit/963d27d830b029bb7e19912613afc372bebd3f6a))
+* improve UI/UX for integrations ([21833d9](https://github.com/ahembree/librariarr/commit/21833d91a5390b7868fb1fa7a2238233f2a54a4a))
+* improve UI/UX for integrations ([dac47df](https://github.com/ahembree/librariarr/commit/dac47df4556ebde291cea18b581f38defccac5f4))
+* improve UI/UX for library pages ([7c6fa36](https://github.com/ahembree/librariarr/commit/7c6fa36e591a83f4fa2a01cb619933f68b58cc25))
+* improve UI/UX for lifecycle pages ([cbc253a](https://github.com/ahembree/librariarr/commit/cbc253afbc39bd1dfbf0e662c98c1d997ca53c60))
+* improve UI/UX for system pages ([d2e1e41](https://github.com/ahembree/librariarr/commit/d2e1e41b2d6843caa237618d554f65bc29d26244))
+* improve UI/UX for tools pages ([8e834bf](https://github.com/ahembree/librariarr/commit/8e834bfdf3bf3af940a7ba5cba012fc8b5cab55f))
+* recycle bin check for destructive actions ([5480c91](https://github.com/ahembree/librariarr/commit/5480c91f49a4e634e6ab051f71bc58b1e0ab2a18))
+* unify query and rule builder, add arr precheck ([34c2094](https://github.com/ahembree/librariarr/commit/34c209457219258c71bdddbbc5bfe148ad9634fa))
+
+
+### Bug Fixes
+
+* ai gaslight bug fixes ([d25151d](https://github.com/ahembree/librariarr/commit/d25151d53e04ba5fcdd146478abacb771d46e6c0))
+* ai gaslighting bug hunt ([bed7e57](https://github.com/ahembree/librariarr/commit/bed7e57867d357f3a03bce7b4a59b8a7448f59f4))
+* breaker if media server unreachable ([9b85330](https://github.com/ahembree/librariarr/commit/9b853303e3b36c8afa8a28ff2f3c6832b4170f0c))
+* cards and build error ([da0f8b2](https://github.com/ahembree/librariarr/commit/da0f8b287a3704d4219401e09d0706b516631fe6))
+* **dashboard:** fix series hover to use series artwork and not episode ([fdbc50b](https://github.com/ahembree/librariarr/commit/fdbc50bcd0ce70509498dd240eee4d0d117ea711))
+* fix media detail items ([be4b2b2](https://github.com/ahembree/librariarr/commit/be4b2b2b1765d162f820af44e3d733a59204a7ed))
+* fix rating labels ([92973fb](https://github.com/ahembree/librariarr/commit/92973fbac981572fd2ba38a892bed2d594ffaa5f))
+* **lifecycle:** fix rule saving with same name across different media type ([01cc8cd](https://github.com/ahembree/librariarr/commit/01cc8cdb22313f9a75134f7a2f80d37f6842e255))
+* **series:** fix series summaries ([071419e](https://github.com/ahembree/librariarr/commit/071419e740ab1ea9c8d73890219c663ac5345d2d))
+* **types:** narrow axios response header type for content-type read ([ab738d7](https://github.com/ahembree/librariarr/commit/ab738d736b6207404b7cb63e10b47b142cc6b502))
+
 ## [0.15.3](https://github.com/ahembree/librariarr/compare/v0.15.2...v0.15.3) (2026-04-11)
 
 
