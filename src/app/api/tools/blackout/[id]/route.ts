@@ -63,7 +63,7 @@ export async function PUT(
       scheduleType,
       startDate: scheduleType === "one_time" ? new Date(startDate!) : null,
       endDate: scheduleType === "one_time" ? new Date(endDate!) : null,
-      daysOfWeek: scheduleType === "recurring" ? daysOfWeek : undefined,
+      daysOfWeek: scheduleType === "recurring" && Array.isArray(daysOfWeek) ? daysOfWeek : undefined,
       startTime: scheduleType === "recurring" ? startTime : null,
       endTime: scheduleType === "recurring" ? endTime : null,
       action,

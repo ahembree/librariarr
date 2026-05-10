@@ -22,8 +22,8 @@ import {
   PieChart,
   Pie,
   Tooltip as RechartsTooltip,
-  ResponsiveContainer,
 } from "recharts";
+import { useElementSize } from "@/hooks/use-element-size";
 
 interface BreakdownChartProps {
   title: string;
@@ -119,6 +119,7 @@ export function BreakdownChart({
   const [sortColumn, setSortColumn] = useState<SortColumn | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [hiddenItems, setHiddenItems] = useState<Set<string>>(new Set());
+  const [pieRef, pieSize] = useElementSize<HTMLDivElement>();
 
   const toggleHidden = (label: string) => {
     setHiddenItems((prev) => {
@@ -420,9 +421,9 @@ export function BreakdownChart({
         ) : (
           /* Pie chart */
           <div className="mb-6 flex flex-1 min-h-48 justify-center">
-            <div className="w-full max-w-xs">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
+            <div ref={pieRef} className="w-full max-w-xs">
+              {pieSize && (
+                <PieChart width={pieSize.width} height={pieSize.height}>
                   <Pie
                     data={pieData}
                     dataKey="value"
@@ -434,7 +435,7 @@ export function BreakdownChart({
                   />
                   <RechartsTooltip content={<PieTooltip />} />
                 </PieChart>
-              </ResponsiveContainer>
+              )}
             </div>
           </div>
         )}
