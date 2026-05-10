@@ -12,6 +12,7 @@ import { ColorChip } from "@/components/color-chip";
 import { Input } from "@/components/ui/input";
 import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import {
   Loader2,
@@ -75,7 +76,7 @@ function TestResultBadge({ result }: { result: TestResult }) {
         "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium",
         result.ok
           ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
-          : "border-red-500/30 bg-red-500/10 text-red-400",
+          : "border-destructive/30 bg-destructive/10 text-destructive",
       )}
     >
       <Icon className="h-3 w-3 shrink-0" />
@@ -110,7 +111,7 @@ function SectionHeader({
           <IconComp className={cn("h-4 w-4", style.text)} />
         </div>
         <div className="min-w-0">
-          <h2 className="truncate text-xl font-semibold leading-tight">{title}</h2>
+          <h3 className="truncate text-lg font-semibold leading-tight">{title}</h3>
           {count > 0 && (
             <p className="text-xs text-muted-foreground">
               {count} {count === 1 ? "instance" : "instances"}
@@ -254,7 +255,14 @@ export function IntegrationsTab({
   seerr,
 }: IntegrationsTabProps) {
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
+      <div className="space-y-1">
+        <h2 className="text-xl font-semibold">Integrations</h2>
+        <p className="text-sm text-muted-foreground">
+          Connect Sonarr, Radarr, Lidarr, and Overseerr/Jellyseerr for lifecycle rule matching and request data.
+        </p>
+      </div>
+
       {/* Sonarr */}
       <ArrSection
         title="Sonarr"
@@ -398,7 +406,7 @@ function ArrSection({
               </div>
             </div>
             {error && (
-              <p className="mt-2 text-sm text-red-400">{error}</p>
+              <p className="mt-2 text-sm text-destructive">{error}</p>
             )}
             <div className="mt-4 flex items-center gap-2">
               <Button
@@ -493,7 +501,7 @@ function ArrSection({
                       </div>
                     </div>
                     {editing.error && (
-                      <p className="text-sm text-red-400">{editing.error}</p>
+                      <p className="text-sm text-destructive">{editing.error}</p>
                     )}
                     <div className="flex items-center gap-2">
                       <Button
@@ -568,7 +576,7 @@ function ArrSection({
                         checked={instance.enabled}
                         onCheckedChange={(checked) => onToggleEnabled(instance.id, checked)}
                       />
-                      <div className="mx-1 h-6 w-px bg-border" aria-hidden />
+                      <Separator orientation="vertical" className="mx-1 h-6" />
                       <Button
                         variant="ghost"
                         size="icon-sm"
@@ -580,7 +588,7 @@ function ArrSection({
                       <Button
                         variant="ghost"
                         size="icon-sm"
-                        className="text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                         onClick={() => onDelete(instance.id)}
                         title="Delete instance"
                       >
@@ -685,7 +693,7 @@ function SeerrSection({
               </div>
             </div>
             {error && (
-              <p className="mt-2 text-sm text-red-400">{error}</p>
+              <p className="mt-2 text-sm text-destructive">{error}</p>
             )}
             <div className="mt-4 flex items-center gap-2">
               <Button
@@ -769,7 +777,7 @@ function SeerrSection({
                       </div>
                     </div>
                     {editing.error && (
-                      <p className="text-sm text-red-400">{editing.error}</p>
+                      <p className="text-sm text-destructive">{editing.error}</p>
                     )}
                     <div className="flex items-center gap-2">
                       <Button
@@ -838,7 +846,7 @@ function SeerrSection({
                         checked={instance.enabled}
                         onCheckedChange={(checked) => onToggleEnabled(instance.id, checked)}
                       />
-                      <div className="mx-1 h-6 w-px bg-border" aria-hidden />
+                      <Separator orientation="vertical" className="mx-1 h-6" />
                       <Button
                         variant="ghost"
                         size="icon-sm"
@@ -850,7 +858,7 @@ function SeerrSection({
                       <Button
                         variant="ghost"
                         size="icon-sm"
-                        className="text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                         onClick={() => onDelete(instance.id)}
                         title="Delete instance"
                       >

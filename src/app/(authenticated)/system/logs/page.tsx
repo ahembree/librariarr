@@ -30,7 +30,10 @@ import {
   FileText,
   Info,
   Loader2,
+  Pause,
+  Play,
   RefreshCw,
+  Search,
   TriangleAlert,
   X,
 } from "lucide-react";
@@ -254,28 +257,35 @@ export default function LogsPage() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Logs</h1>
-        <div className="flex items-center gap-2">
+      <div className="mb-6 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Logs</h1>
+          <p className="text-muted-foreground mt-1">
+            Application activity from the backend, API requests, and database operations.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
           <Button
             variant={autoRefresh ? "default" : "outline"}
             size="sm"
             onClick={() => setAutoRefresh(!autoRefresh)}
           >
-            <RefreshCw
-              className={`mr-1 h-3.5 w-3.5 ${autoRefresh ? "animate-spin" : ""}`}
-            />
+            {autoRefresh ? (
+              <Pause className="mr-1.5 h-3.5 w-3.5" />
+            ) : (
+              <Play className="mr-1.5 h-3.5 w-3.5" />
+            )}
             {autoRefresh ? "Live" : "Auto-refresh"}
           </Button>
-          <Button variant="outline" size="sm" onClick={fetchLogs}>
-            <RefreshCw className="mr-1 h-3.5 w-3.5" />
+          <Button variant="outline" size="sm" onClick={fetchLogs} disabled={loading}>
+            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
             Refresh
           </Button>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="mb-4 flex flex-wrap items-center gap-3">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         {/* Log level dropdown */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -339,26 +349,53 @@ export default function LogsPage() {
         )}
 
         {/* Search */}
-        <div className="flex min-w-0 flex-1 gap-2 sm:flex-initial">
+        <div className="relative min-w-0 flex-1 sm:w-64 sm:flex-initial">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder="Search messages..."
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            className="min-w-0 flex-1 sm:w-64 sm:flex-initial"
+            className="pl-8 pr-8"
           />
-          <Button onClick={handleSearch} variant="secondary" size="default">
-            Search
-          </Button>
+          {searchInput && (
+            <button
+              type="button"
+              onClick={() => { setSearchInput(""); if (search) { setSearch(""); setPage(1); } }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+              aria-label="Clear search"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
+        <Button onClick={handleSearch} variant="secondary" size="default" disabled={searchInput === search}>
+          Search
+        </Button>
 
         {hasFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters}>
             <X className="mr-1 h-4 w-4" />
-            Clear
+            Clear all
           </Button>
         )}
       </div>
+
+      {/* Result count */}
+      {!loading && logs.length > 0 && (
+        <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+          <span>
+            {total.toLocaleString()} {total === 1 ? "entry" : "entries"}
+            {hasFilters && " matching filters"}
+          </span>
+          {autoRefresh && (
+            <span className="flex items-center gap-1.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span>Live · refreshing every 5s</span>
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Log table */}
       {loading && logs.length === 0 ? (
@@ -378,31 +415,26 @@ export default function LogsPage() {
 
       {/* Pagination */}
       {pages > 1 && (
-        <div className="mt-4 flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">
-            {total} log {total === 1 ? "entry" : "entries"}
-          </p>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page <= 1}
-              onClick={() => setPage(page - 1)}
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <span className="text-sm text-muted-foreground">
-              Page {page} of {pages}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page >= pages}
-              onClick={() => setPage(page + 1)}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <span className="text-sm text-muted-foreground mr-2">
+            Page {page} of {pages}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={page <= 1}
+            onClick={() => setPage(page - 1)}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={page >= pages}
+            onClick={() => setPage(page + 1)}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
         </div>
       )}
     </div>

@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
@@ -20,12 +21,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Loader2,
-  CheckCircle,
-  XCircle,
-  Save,
-  Lock,
   AlertCircle,
+  CheckCircle,
+  KeyRound,
+  Link2,
+  Loader2,
+  Lock,
+  Save,
+  XCircle,
 } from "lucide-react";
 import type { AuthInfo } from "../types";
 
@@ -85,16 +88,22 @@ export function AuthenticationTab({
 }: AuthenticationTabProps) {
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-semibold">Authentication</h2>
+      <div className="space-y-1">
+        <h2 className="text-xl font-semibold">Authentication</h2>
+        <p className="text-sm text-muted-foreground">
+          Manage how you sign into Librariarr — Plex OAuth, local username/password, or both.
+        </p>
+      </div>
 
       {/* Plex Connection */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
+            <Link2 className="h-4 w-4" />
             Plex Connection
           </CardTitle>
           <CardDescription>
-            Link your Plex account for server discovery and Plex OAuth login
+            Link your Plex account for server discovery and Plex OAuth login.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -129,18 +138,19 @@ export function AuthenticationTab({
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
+            <KeyRound className="h-4 w-4" />
             Local Authentication
           </CardTitle>
           <CardDescription>
-            Enable username/password login in addition to Plex
+            Enable username/password login in addition to Plex.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between">
-            <div>
+            <div className="space-y-0.5">
               <p className="text-sm font-medium">Enable Local Login</p>
               <p className="text-xs text-muted-foreground">
-                Allow signing in with username and password
+                Allow signing in with username and password.
               </p>
             </div>
             <Switch
@@ -152,7 +162,7 @@ export function AuthenticationTab({
           {!authInfo?.plexConnected && !authInfo?.localAuthEnabled && (
             <div className="flex items-center gap-2 rounded-md bg-muted p-3 text-sm text-muted-foreground">
               <AlertCircle className="h-4 w-4 shrink-0" />
-              Connect a Plex account before disabling local auth to avoid losing access
+              Connect a Plex account before disabling local auth to avoid losing access.
             </div>
           )}
           {authInfo?.hasPassword && (
@@ -162,7 +172,9 @@ export function AuthenticationTab({
                 Local username: <strong>{authInfo.localUsername}</strong>
               </div>
 
-              <div className="border-t pt-4 space-y-3">
+              <Separator />
+
+              <div className="space-y-3">
                 <h4 className="text-sm font-medium">Change Credentials</h4>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="space-y-1">

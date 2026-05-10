@@ -12,9 +12,10 @@ import { Input } from "@/components/ui/input";
 import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
 import {
+  CheckCircle,
   Loader2,
   Save,
-  CheckCircle,
+  Webhook,
   XCircle,
 } from "lucide-react";
 import type { TestResult } from "../types";
@@ -47,82 +48,89 @@ export function NotificationsTab({
   onTestDiscordWebhook,
 }: NotificationsTabProps) {
   return (
-    <div className="space-y-8">
-      <section>
-        <h2 className="text-xl font-semibold mb-4">Discord Notifications</h2>
-        <Card>
-          <CardHeader>
-            <CardTitle>Discord Webhook</CardTitle>
-            <CardDescription>
-              Send notifications to a Discord channel via webhook. Configure the webhook URL from your Discord server&apos;s integration settings.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="space-y-2">
-              <Label htmlFor="discord-webhook-url">Webhook URL</Label>
-              <SecretInput
-                id="discord-webhook-url"
-                placeholder="https://discord.com/api/webhooks/..."
-                value={discordWebhookUrl}
-                onChange={(e) => onDiscordWebhookUrlChange(e.target.value)}
-              />
-            </div>
+    <div className="space-y-6">
+      <div className="space-y-1">
+        <h2 className="text-xl font-semibold">Notifications</h2>
+        <p className="text-sm text-muted-foreground">
+          Configure how Librariarr notifies you about important events like lifecycle actions and maintenance changes.
+        </p>
+      </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="discord-webhook-username">Custom Username (optional)</Label>
-              <Input
-                id="discord-webhook-username"
-                placeholder="Librariarr"
-                value={discordWebhookUsername}
-                onChange={(e) => onDiscordWebhookUsernameChange(e.target.value)}
-              />
-            </div>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Webhook className="h-4 w-4" />
+            Discord Webhook
+          </CardTitle>
+          <CardDescription>
+            Send notifications to a Discord channel via webhook. Copy the webhook URL from your Discord server&apos;s integration settings.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="space-y-2">
+            <Label htmlFor="discord-webhook-url">Webhook URL</Label>
+            <SecretInput
+              id="discord-webhook-url"
+              placeholder="https://discord.com/api/webhooks/..."
+              value={discordWebhookUrl}
+              onChange={(e) => onDiscordWebhookUrlChange(e.target.value)}
+            />
+          </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="discord-webhook-avatar">Custom Avatar URL (optional)</Label>
-              <Input
-                id="discord-webhook-avatar"
-                type="url"
-                placeholder="https://example.com/avatar.png"
-                value={discordWebhookAvatarUrl}
-                onChange={(e) => onDiscordWebhookAvatarUrlChange(e.target.value)}
-              />
-            </div>
+          <div className="space-y-2">
+            <Label htmlFor="discord-webhook-username">Custom Username (optional)</Label>
+            <Input
+              id="discord-webhook-username"
+              placeholder="Librariarr"
+              value={discordWebhookUsername}
+              onChange={(e) => onDiscordWebhookUsernameChange(e.target.value)}
+            />
+          </div>
 
-            <div className="flex items-center gap-3">
-              <Button onClick={onSaveDiscordSettings} disabled={discordSaving}>
-                {discordSaving ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Save className="mr-2 h-4 w-4" />
-                )}
-                Save
-              </Button>
-              <Button
-                variant="outline"
-                onClick={onTestDiscordWebhook}
-                disabled={discordTesting || !discordWebhookUrl}
-              >
-                {discordTesting ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : null}
-                Test Webhook
-              </Button>
-              {discordTestResult && (
-                discordTestResult.ok ? (
-                  <span className="flex items-center gap-1 text-sm text-green-500">
-                    <CheckCircle className="h-4 w-4" /> Success
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-1 text-sm text-red-500">
-                    <XCircle className="h-4 w-4" /> {discordTestResult.error || "Failed"}
-                  </span>
-                )
+          <div className="space-y-2">
+            <Label htmlFor="discord-webhook-avatar">Custom Avatar URL (optional)</Label>
+            <Input
+              id="discord-webhook-avatar"
+              type="url"
+              placeholder="https://example.com/avatar.png"
+              value={discordWebhookAvatarUrl}
+              onChange={(e) => onDiscordWebhookAvatarUrlChange(e.target.value)}
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <Button onClick={onSaveDiscordSettings} disabled={discordSaving}>
+              {discordSaving ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="mr-2 h-4 w-4" />
               )}
-            </div>
-          </CardContent>
-        </Card>
-      </section>
+              Save
+            </Button>
+            <Button
+              variant="outline"
+              onClick={onTestDiscordWebhook}
+              disabled={discordTesting || !discordWebhookUrl}
+            >
+              {discordTesting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
+              Test Webhook
+            </Button>
+            {discordTestResult && (
+              discordTestResult.ok ? (
+                <span className="flex items-center gap-1 text-sm text-green-500">
+                  <CheckCircle className="h-4 w-4" /> Success
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-sm text-destructive">
+                  <XCircle className="h-4 w-4" /> {discordTestResult.error || "Failed"}
+                </span>
+              )
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

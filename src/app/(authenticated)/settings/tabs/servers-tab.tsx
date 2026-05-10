@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/card";
 import { ColorChip } from "@/components/color-chip";
 import { ServerTypeChip } from "@/components/server-type-chip";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
@@ -141,7 +142,7 @@ function getSyncStatusBadge(status: string) {
       );
     case "FAILED":
       return (
-        <ColorChip className="bg-red-500/20 text-red-400">
+        <ColorChip className="bg-red-500/20 text-destructive">
           <XCircle className="mr-1 h-3 w-3" />
           Failed
         </ColorChip>
@@ -373,12 +374,56 @@ export function ServersTab({
     return plex?.connections ?? [];
   };
 
+  const addServerMenu = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm">
+          <Plus className="mr-2 h-4 w-4" />
+          Add Server
+          <ChevronDown className="ml-2 h-3 w-3" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={() => {
+          if (authInfo?.plexConnected) {
+            window.location.href = "/onboarding";
+            return;
+          }
+          onStartPlexOAuth();
+        }}>
+          Plex
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => {
+          setAddServerDialog({ open: true, type: "JELLYFIN", step: "details" });
+          setAddServerForm({ name: "", url: "", apiKey: "", tlsSkipVerify: false });
+          setAddServerError("");
+          setAddServerTestResult(null);
+        }}>
+          Jellyfin
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => {
+          setAddServerDialog({ open: true, type: "EMBY", step: "details" });
+          setAddServerForm({ name: "", url: "", apiKey: "", tlsSkipVerify: false });
+          setAddServerError("");
+          setAddServerTestResult(null);
+        }}>
+          Emby
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
   return (
     <>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <h2 className="text-xl font-semibold">Media Servers</h2>
-          <div className="flex items-center gap-2">
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-1">
+            <h2 className="text-xl font-semibold">Media Servers</h2>
+            <p className="text-sm text-muted-foreground">
+              Connect Plex, Jellyfin, or Emby servers and manage which libraries are synced.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
             {servers.length > 1 && (
               <Button
                 variant="outline"
@@ -394,53 +439,17 @@ export function ServersTab({
                 Sync All
               </Button>
             )}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm">
-                <Plus className="mr-2 h-4 w-4" />
-                Add Server
-                <ChevronDown className="ml-2 h-3 w-3" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => {
-                if (authInfo?.plexConnected) {
-                  window.location.href = "/onboarding";
-                  return;
-                }
-                onStartPlexOAuth();
-              }}>
-                Plex
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => {
-                setAddServerDialog({ open: true, type: "JELLYFIN", step: "details" });
-                setAddServerForm({ name: "", url: "", apiKey: "", tlsSkipVerify: false });
-                setAddServerError("");
-                setAddServerTestResult(null);
-              }}>
-                Jellyfin
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => {
-                setAddServerDialog({ open: true, type: "EMBY", step: "details" });
-                setAddServerForm({ name: "", url: "", apiKey: "", tlsSkipVerify: false });
-                setAddServerError("");
-                setAddServerTestResult(null);
-              }}>
-                Emby
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+            {addServerMenu}
           </div>
         </div>
 
         {plexLinking && (
-          <div className="flex items-center gap-2 rounded-lg border p-3 text-sm">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            <span>Waiting for Plex authentication... A popup should have opened.</span>
+          <div className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
+            <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
+            <span className="flex-1">Waiting for Plex authentication... A popup should have opened.</span>
             <Button
               variant="ghost"
               size="sm"
-              className="ml-auto"
               onClick={onCancelPlexOAuth}
             >
               Cancel
@@ -450,14 +459,17 @@ export function ServersTab({
 
         {servers.length === 0 ? (
           <Card>
-            <CardContent className="py-12 text-center">
-              <Server className="mx-auto h-12 w-12 text-muted-foreground" />
-              <p className="mt-4 text-muted-foreground">
-                No media servers connected.
-              </p>
-              <p className="text-sm text-muted-foreground">
-                Use the &ldquo;Add Server&rdquo; button above to connect Plex, Jellyfin, or Emby.
-              </p>
+            <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+              <div className="rounded-full bg-muted p-4">
+                <Server className="h-8 w-8 text-muted-foreground" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-base font-medium">No media servers connected</p>
+                <p className="text-sm text-muted-foreground">
+                  Connect Plex, Jellyfin, or Emby to start syncing your libraries.
+                </p>
+              </div>
+              <div className="mt-2">{addServerMenu}</div>
             </CardContent>
           </Card>
         ) : (
@@ -610,11 +622,10 @@ export function ServersTab({
                           </div>
                         ) : null}
                         <label className="flex items-start gap-2 cursor-pointer pt-1">
-                          <input
-                            type="checkbox"
+                          <Checkbox
+                            className="mt-0.5"
                             checked={editServerTlsSkip}
-                            onChange={(e) => setEditServerTlsSkip(e.target.checked)}
-                            className="mt-0.5 rounded border-muted-foreground"
+                            onCheckedChange={(v) => setEditServerTlsSkip(v === true)}
                           />
                           <div>
                             <span className="flex items-center gap-1 text-xs font-medium">
@@ -652,7 +663,7 @@ export function ServersTab({
                           </Button>
                         </div>
                         {editServerError && (
-                          <p className="text-xs text-red-400">{editServerError}</p>
+                          <p className="text-xs text-destructive">{editServerError}</p>
                         )}
                       </div>
                     ) : (
@@ -768,7 +779,7 @@ export function ServersTab({
                           )}
                         </div>
                         {latestSync.error && (
-                          <p className="mt-2 text-xs text-red-400">
+                          <p className="mt-2 text-xs text-destructive">
                             {latestSync.error}
                           </p>
                         )}
