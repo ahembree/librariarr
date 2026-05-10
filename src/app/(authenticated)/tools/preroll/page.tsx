@@ -1001,7 +1001,10 @@ export default function PrerollManagerPage() {
       {/* Section 3: Saved Presets */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Saved Presets</h2>
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <Clapperboard className="h-5 w-5" />
+            Saved Presets
+          </h2>
           <Button
             size="sm"
             onClick={() => {
@@ -1119,7 +1122,9 @@ export default function PrerollManagerPage() {
               <Card
                 key={schedule.id}
                 className={cn(
-                  !schedule.enabled && "opacity-60"
+                  "relative",
+                  !schedule.enabled && "opacity-60",
+                  isScheduleCurrentlyActive(schedule) && "border-l-2 border-l-emerald-500"
                 )}
               >
                 <CardContent className="p-4">
@@ -1134,7 +1139,8 @@ export default function PrerollManagerPage() {
                           Priority: {schedule.priority}
                         </Badge>
                         {isScheduleCurrentlyActive(schedule) && (
-                          <Badge className="text-[10px] px-1.5 bg-emerald-600 hover:bg-emerald-600">
+                          <Badge className="text-[10px] px-1.5 border-emerald-500/30 bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/20">
+                            <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
                             Active
                           </Badge>
                         )}

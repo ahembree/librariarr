@@ -1266,7 +1266,10 @@ export default function StreamManagerPage() {
       <div className="space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold">Active Sessions</h2>
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <Monitor className="h-5 w-5" />
+              Active Sessions
+            </h2>
             {!loading && (
               <Badge variant="secondary" className="text-xs">
                 {sessions.length}
@@ -1598,7 +1601,7 @@ export default function StreamManagerPage() {
                           variant="outline"
                           className={`text-[10px] px-1.5 py-0 ${
                             schedule.action === "terminate_immediate"
-                              ? "border-red-500/50 text-red-400"
+                              ? "border-destructive/50 text-destructive"
                               : schedule.action === "warn_then_terminate"
                                 ? "border-amber-500/50 text-amber-400"
                                 : "border-blue-500/50 text-blue-400"
