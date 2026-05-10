@@ -194,6 +194,10 @@ Each action links a rule set to an *arr instance:
   The **Delete** action permanently removes files from your *arr instance and, optionally, from disk. Preview your matches carefully before enabling deletion rules.
 </Aside>
 
+<Aside type="tip">
+  See [Deletion Safety](/docs/features/deletion-safety/) for an in-depth, layer-by-layer description of every check that stands between a rule firing and a file being deleted, including the exact source locations and tests that enforce each one.
+</Aside>
+
 ### Recycle Bin Safety Check
 
 When you configure a destructive action (Delete, Delete Files, Unmonitor & Delete Files, Monitor & Delete Files) for an *arr instance, Librariarr queries that instance for its **Recycle Bin Path** (Settings → Media Management in Sonarr/Radarr/Lidarr).
