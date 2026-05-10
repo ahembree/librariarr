@@ -244,7 +244,7 @@ export function RecentlyAdded({
                         : { ...data, title: formatEpisode(item) };
                     }}
                     placeholder={placeholder}
-                    imageUrl={`/api/media/${item.id}/image`}
+                    imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" ? "?type=parent" : ""}`}
                     imageAspect={item.type === "MUSIC" ? "square" : "poster"}
                   >
                     {row}
