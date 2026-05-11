@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.1](https://github.com/ahembree/librariarr/compare/v0.16.0...v0.16.1) (2026-05-11)
+
+
+### Bug Fixes
+
+* ai gaslight bug hunt ([6873ceb](https://github.com/ahembree/librariarr/commit/6873cebc8f7e9817bd61a871b3126ad131efd154))
+* fix eslint issues and bump eslint-config-next ([009d5e8](https://github.com/ahembree/librariarr/commit/009d5e82e64de4c9278063b51749a7502e265ec2))
+
 ## [0.16.0](https://github.com/ahembree/librariarr/compare/v0.15.3...v0.16.0) (2026-05-10)
 
 
