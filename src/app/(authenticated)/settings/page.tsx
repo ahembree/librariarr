@@ -594,26 +594,29 @@ export default function SettingsPage() {
   // ─── Initial data loading ───
 
   useEffect(() => {
-    Promise.all([
-      fetchServers(),
-      fetchSettings(),
-      fetchSonarrInstances(),
-      fetchRadarrInstances(),
-      fetchLidarrInstances(),
-      fetchSeerrInstances(),
-      fetchSystemInfo(),
-      fetchAccentColor(),
-      fetchChipColors(),
-      fetchLogRetention(),
-      fetchActionRetention(),
-      fetchBackupSettings(),
-      fetchLifecycleSchedule(),
-      fetchScheduleInfo(),
-      fetchDiscordSettings(),
-      fetchDedupSetting(),
-      fetchImageCacheStats(),
-      fetchChangelog(),
-    ]).finally(() => setLoading(false));
+    void (async () => {
+      await Promise.all([
+        fetchServers(),
+        fetchSettings(),
+        fetchSonarrInstances(),
+        fetchRadarrInstances(),
+        fetchLidarrInstances(),
+        fetchSeerrInstances(),
+        fetchSystemInfo(),
+        fetchAccentColor(),
+        fetchChipColors(),
+        fetchLogRetention(),
+        fetchActionRetention(),
+        fetchBackupSettings(),
+        fetchLifecycleSchedule(),
+        fetchScheduleInfo(),
+        fetchDiscordSettings(),
+        fetchDedupSetting(),
+        fetchImageCacheStats(),
+        fetchChangelog(),
+      ]);
+      setLoading(false);
+    })();
     // Fetch auth info separately (non-blocking)
     fetch("/api/settings/auth").then((r) => r.json()).then(setAuthInfo).catch(() => {});
     // Fetch display preferences separately (non-blocking)

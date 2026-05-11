@@ -127,7 +127,7 @@ export default function LogsPage() {
   }, []);
 
   useEffect(() => {
-    fetchLogs();
+    void (async () => { await fetchLogs(); })();
   }, [fetchLogs]);
 
   useEffect(() => {

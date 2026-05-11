@@ -235,7 +235,7 @@ export default function AllEpisodesPage() {
           {viewMode === "table" ? (
             <MediaTable
               items={items}
-              onItemClick={(item) => { markChildNavigation(); sessionStorage.setItem("library-back-path", "/library/series/episodes"); router.push(`/library/series/episode/${item.id}`); }}
+              onItemClick={(item) => { markChildNavigation(); router.push(`/library/series/episode/${item.id}?from=${encodeURIComponent("/library/series/episodes")}`); }}
               sortBy={sortBy}
               sortOrder={sortOrder}
               onSort={handleSort}
@@ -307,8 +307,8 @@ export default function AllEpisodesPage() {
                             title={ep.title}
                             aspectRatio="landscape"
                             fallbackIcon="series"
-                            href={`/library/series/episode/${ep.id}`}
-                            onClick={() => { markChildNavigation(); sessionStorage.setItem("library-back-path", "/library/series/episodes"); }}
+                            href={`/library/series/episode/${ep.id}?from=${encodeURIComponent("/library/series/episodes")}`}
+                            onClick={markChildNavigation}
                             hoverContent={
                               <MediaHoverPopover
                                 data={{

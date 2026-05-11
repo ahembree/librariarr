@@ -79,7 +79,7 @@ export default function LifecycleRulesPage() {
           ruleDescription="movies"
           arrServiceName="Radarr"
           arrApiPath="radarr"
-          defaultActionType="DELETE_RADARR"
+          defaultActionType="DO_NOTHING"
           actionTypes={MOVIE_ACTION_TYPES}
           importErrorMessage="This is a series rule set. Import it on the Series tab."
           embedded
@@ -92,7 +92,7 @@ export default function LifecycleRulesPage() {
           ruleDescription="series"
           arrServiceName="Sonarr"
           arrApiPath="sonarr"
-          defaultActionType="DELETE_SONARR"
+          defaultActionType="DO_NOTHING"
           actionTypes={SERIES_ACTION_TYPES}
           importErrorMessage="This is a movie rule set. Import it on the Movies tab."
           scopeConfig={{
@@ -113,7 +113,7 @@ export default function LifecycleRulesPage() {
           ruleDescription="music"
           arrServiceName="Lidarr"
           arrApiPath="lidarr"
-          defaultActionType="DELETE_LIDARR"
+          defaultActionType="DO_NOTHING"
           actionTypes={MUSIC_ACTION_TYPES}
           importErrorMessage="This rule set is not for music. Import it on the correct tab."
           scopeConfig={{

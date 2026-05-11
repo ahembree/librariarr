@@ -169,23 +169,27 @@ export function SeerrInstanceCard({ match }: { match: SeerrMatch }) {
 }
 
 export function SeerrSection({ itemId, mediaType }: { itemId: string; mediaType?: string }) {
-  const [data, setData] = useState<SeerrInfoResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Keyed by itemId so a stale response from a previous id doesn't render against the new one.
+  const [fetchState, setFetchState] = useState<{ forId: string; data: SeerrInfoResponse | null } | null>(null);
+  const data = fetchState && fetchState.forId === itemId ? fetchState.data : null;
+  const loading = !fetchState || fetchState.forId !== itemId;
 
   useEffect(() => {
-    setData(null);
-    setLoading(true);
-    (async () => {
+    let cancelled = false;
+    void (async () => {
       try {
         const response = await fetch(`/api/media/${itemId}/seerr-info`);
         const body: SeerrInfoResponse = await response.json();
-        setData(body);
+        if (cancelled) return;
+        setFetchState({ forId: itemId, data: body });
       } catch {
-        setData(null);
-      } finally {
-        setLoading(false);
+        if (cancelled) return;
+        setFetchState({ forId: itemId, data: null });
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [itemId]);
 
   // Seerr does not handle music — skip the section entirely

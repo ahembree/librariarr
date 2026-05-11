@@ -181,7 +181,7 @@ export function CustomChartCard({
   }, [config.dimension, config.dimension2, config.timelineBin, config.topN, isHeatmap, isTimeline, serverId, filterType]);
 
   useEffect(() => {
-    fetchData();
+    void (async () => { await fetchData(); })();
   }, [fetchData]);
 
   // Heatmap data processing

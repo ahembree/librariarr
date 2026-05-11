@@ -309,7 +309,7 @@ export default function AllAlbumsPage() {
               keyExtractor={(a) => `${a.artistName}::${a.albumTitle}`}
               defaultSortId="albumTitle"
               resizeStorageKey="dt-widths-albums"
-              onRowClick={(a) => { markChildNavigation(); sessionStorage.setItem("library-back-path", "/library/music/albums"); router.push(`/library/music/album/${a.mediaItemId}`); }}
+              onRowClick={(a) => { markChildNavigation(); router.push(`/library/music/album/${a.mediaItemId}?from=${encodeURIComponent("/library/music/albums")}`); }}
               renderHoverContent={(album) => (
                 <MediaHoverPopover
                   imageUrl={`/api/media/${album.mediaItemId}/image?type=season`}
@@ -376,11 +376,8 @@ export default function AllAlbumsPage() {
                             title={album.albumTitle}
                             aspectRatio="square"
                             fallbackIcon="music"
-                            href={`/library/music/album/${album.mediaItemId}`}
-                            onClick={() => {
-                              markChildNavigation();
-                              sessionStorage.setItem("library-back-path", "/library/music/albums");
-                            }}
+                            href={`/library/music/album/${album.mediaItemId}?from=${encodeURIComponent("/library/music/albums")}`}
+                            onClick={markChildNavigation}
                             qualityBar={
                               Object.keys(album.audioCodecCounts).length > 0
                                 ? [

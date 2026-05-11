@@ -164,7 +164,7 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
   useRealtime("sync:failed", fetchStatus);
 
   useEffect(() => {
-    fetchStatus();
+    void (async () => { await fetchStatus(); })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll: fast when active, slow when idle

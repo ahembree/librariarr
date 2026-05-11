@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useLocalStorage } from "@/hooks/use-local-storage";
 import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel, QUALITY_ORDER } from "@/lib/resolution";
 import { cn } from "@/lib/utils";
@@ -39,33 +40,23 @@ export default function SeasonDetailPage() {
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
   const [episodes, setEpisodes] = useState<MediaItemWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
+  const [viewMode, handleViewModeChange] = useLocalStorage<"cards" | "table">(
+    "season-detail-view-mode",
+    "cards",
+  );
   const [sortBy, setSortBy] = useState("episodeNumber");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
-  const [backOverride, setBackOverride] = useState<{ href: string; label: string } | null>(null);
-
-  useEffect(() => {
-    const backPath = sessionStorage.getItem("library-back-path");
-    if (backPath) {
-      sessionStorage.removeItem("library-back-path");
-      const labels: Record<string, string> = {
-        "/library/series/seasons": "All Seasons",
-        "/library/series/episodes": "All Episodes",
-      };
-      const label = labels[backPath];
-      if (label) setBackOverride({ href: backPath, label });
-    }
-  }, []);
-
-  useEffect(() => {
-    const stored = localStorage.getItem("season-detail-view-mode") as "cards" | "table" | null;
-    if (stored) setViewMode(stored);
-  }, []);
-
-  const handleViewModeChange = (mode: "cards" | "table") => {
-    setViewMode(mode);
-    localStorage.setItem("season-detail-view-mode", mode);
-  };
+  const searchParams = useSearchParams();
+  const backOverride = useMemo(() => {
+    const from = searchParams.get("from");
+    if (!from) return null;
+    const labels: Record<string, string> = {
+      "/library/series/seasons": "All Seasons",
+      "/library/series/episodes": "All Episodes",
+    };
+    const label = labels[from];
+    return label ? { href: from, label } : null;
+  }, [searchParams]);
 
   const handleSort = useCallback(
     (field: string) => {

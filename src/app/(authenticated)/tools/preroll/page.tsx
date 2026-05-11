@@ -401,8 +401,7 @@ export default function PrerollManagerPage() {
   }, []);
 
   useEffect(() => {
-    fetchData();
-    fetchCurrentPreroll();
+    void (async () => { await Promise.all([fetchData(), fetchCurrentPreroll()]); })();
   }, [fetchData, fetchCurrentPreroll]);
 
   // Auto-clear page messages

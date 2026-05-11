@@ -548,7 +548,7 @@ export function LifecycleRulePage({
     minWidth: 360,
     maxWidth: 800,
   });
-  const [selectedItem, setSelectedItem] = useState<PreviewItem | null>(null);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
@@ -557,6 +557,10 @@ export function LifecycleRulePage({
   const [copied, setCopied] = useState(false);
   const [groups, setGroups] = useState<RuleGroup[]>([]);
   const [preview, setPreview] = useState<PreviewItem[]>([]);
+  const selectedItem = useMemo(
+    () => (selectedItemId ? preview.find((p) => p.id === selectedItemId) ?? null : null),
+    [preview, selectedItemId],
+  );
   const [savedRuleSets, setSavedRuleSets] = useState<SavedRuleSet[]>([]);
   const [activeRuleSetId, setActiveRuleSetId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -587,18 +591,21 @@ export function LifecycleRulePage({
 
   // Exception tracking for preview indicator
   const [exceptedItemIds, setExceptedItemIds] = useState<Set<string>>(new Set());
-  const fetchExceptions = useCallback(async () => {
-    try {
-      const response = await fetch("/api/lifecycle/exceptions");
-      if (response.ok) {
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch("/api/lifecycle/exceptions");
+        if (!response.ok || cancelled) return;
         const data = await response.json();
+        if (cancelled) return;
         setExceptedItemIds(new Set((data.exceptions || []).map((e: { mediaItem: { id: string } }) => e.mediaItem.id)));
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
-    }
+    })();
+    return () => { cancelled = true; };
   }, []);
-  useEffect(() => { fetchExceptions(); }, [fetchExceptions]);
   const [distinctValues, setDistinctValues] = useState<
     Record<string, string[]>
   >({});
@@ -692,44 +699,36 @@ export function LifecycleRulePage({
   const router = useRouter();
 
   // Dirty tracking — snapshot of last-saved/loaded state
-  const snapshotRef = useRef<RuleSetSnapshot | null>(null);
-  const [snapshotVersion, setSnapshotVersion] = useState(0);
-
-  const updateSnapshot = useCallback((snap: RuleSetSnapshot | null) => {
-    snapshotRef.current = snap;
-    setSnapshotVersion((v) => v + 1);
-  }, []);
+  const [snapshot, setSnapshot] = useState<RuleSetSnapshot | null>(null);
 
   const isDirty = useMemo(() => {
-    void snapshotVersion; // dependency to recompute when snapshot changes
-    const snap = snapshotRef.current;
-    if (!snap) return true; // New rule set — always allow saving
+    if (!snapshot) return true; // New rule set — always allow saving
     return (
-      snap.name !== name ||
-      snap.groups !== JSON.stringify(groups) ||
-      snap.enabled !== enabled ||
-      snap.seriesScope !== seriesScope ||
-      snap.actionEnabled !== actionEnabled ||
-      snap.actionType !== actionType ||
-      snap.actionDelayDays !== actionDelayDays ||
-      snap.arrInstanceId !== arrInstanceId ||
-      snap.addImportExclusion !== addImportExclusion ||
-      snap.searchAfterDelete !== searchAfterDelete ||
-      snap.addArrTags !== JSON.stringify([...addArrTags].sort()) ||
-      snap.removeArrTags !== JSON.stringify([...removeArrTags].sort()) ||
-      snap.collectionEnabled !== collectionEnabled ||
-      snap.collectionName !== collectionName ||
-      snap.collectionSortName !== collectionSortName ||
-      snap.collectionHomeScreen !== collectionHomeScreen ||
-      snap.collectionRecommended !== collectionRecommended ||
-      snap.collectionSort !== collectionSort ||
-      snap.discordNotifyOnAction !== discordNotifyOnAction ||
-      snap.discordNotifyOnMatch !== discordNotifyOnMatch ||
-      snap.stickyMatches !== stickyMatches ||
-      snap.serverIds !== JSON.stringify([...serverIds].sort())
+      snapshot.name !== name ||
+      snapshot.groups !== JSON.stringify(groups) ||
+      snapshot.enabled !== enabled ||
+      snapshot.seriesScope !== seriesScope ||
+      snapshot.actionEnabled !== actionEnabled ||
+      snapshot.actionType !== actionType ||
+      snapshot.actionDelayDays !== actionDelayDays ||
+      snapshot.arrInstanceId !== arrInstanceId ||
+      snapshot.addImportExclusion !== addImportExclusion ||
+      snapshot.searchAfterDelete !== searchAfterDelete ||
+      snapshot.addArrTags !== JSON.stringify([...addArrTags].sort()) ||
+      snapshot.removeArrTags !== JSON.stringify([...removeArrTags].sort()) ||
+      snapshot.collectionEnabled !== collectionEnabled ||
+      snapshot.collectionName !== collectionName ||
+      snapshot.collectionSortName !== collectionSortName ||
+      snapshot.collectionHomeScreen !== collectionHomeScreen ||
+      snapshot.collectionRecommended !== collectionRecommended ||
+      snapshot.collectionSort !== collectionSort ||
+      snapshot.discordNotifyOnAction !== discordNotifyOnAction ||
+      snapshot.discordNotifyOnMatch !== discordNotifyOnMatch ||
+      snapshot.stickyMatches !== stickyMatches ||
+      snapshot.serverIds !== JSON.stringify([...serverIds].sort())
     );
   }, [
-    snapshotVersion,
+    snapshot,
     name, groups, enabled, seriesScope, actionEnabled, actionType, actionDelayDays,
     arrInstanceId, addImportExclusion, searchAfterDelete, addArrTags, removeArrTags,
     collectionEnabled, collectionName, collectionSortName, collectionHomeScreen,
@@ -738,15 +737,13 @@ export function LifecycleRulePage({
 
   // Whether rule logic (rules/scope/servers) changed vs only config fields
   const rulesChanged = useMemo(() => {
-    void snapshotVersion;
-    const snap = snapshotRef.current;
-    if (!snap) return true;
+    if (!snapshot) return true;
     return (
-      snap.groups !== JSON.stringify(groups) ||
-      snap.seriesScope !== seriesScope ||
-      snap.serverIds !== JSON.stringify([...serverIds].sort())
+      snapshot.groups !== JSON.stringify(groups) ||
+      snapshot.seriesScope !== seriesScope ||
+      snapshot.serverIds !== JSON.stringify([...serverIds].sort())
     );
-  }, [snapshotVersion, groups, seriesScope, serverIds]);
+  }, [snapshot, groups, seriesScope, serverIds]);
 
   // Post-save match search prompt
   const [showSaveOptions, setShowSaveOptions] = useState(false);
@@ -772,7 +769,7 @@ export function LifecycleRulePage({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Track previous collection state for Plex diff on save
-  const prevCollectionRef = useRef<{
+  const [prevCollection, setPrevCollection] = useState<{
     enabled: boolean;
     name: string | null;
   }>({ enabled: false, name: null });
@@ -789,58 +786,6 @@ export function LifecycleRulePage({
   const [testMediaResult, setTestMediaResult] = useState<{ matches: boolean; matchedCriteria: MatchedCriterion[]; actualValues: Record<string, string> } | null>(null);
   const testMediaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    fetchRuleSets();
-    fetchArrInstances();
-    fetchSeerrInstances();
-    fetchDistinctValues();
-    fetchServers();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Clear selected item when preview results change
-  useEffect(() => {
-    setSelectedItem(null);
-  }, [preview]);
-
-  useEffect(() => {
-    if (arrInstanceId) {
-      fetchArrMetadata(arrInstanceId);
-    } else {
-      setDistinctValues((prev) => ({ ...prev, arrTag: [], arrQualityProfile: [] }));
-      setManageTagsEnabled(false);
-      setAddArrTags([]);
-      setRemoveArrTags([]);
-      // Reset action type to DO_NOTHING since other actions require an Arr server
-      if (actionType !== "DO_NOTHING") {
-        setActionType("DO_NOTHING");
-      }
-    }
-  }, [arrInstanceId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Fetch Arr recycle bin status when destructive action + Arr instance are selected
-  useEffect(() => {
-    if (!arrInstanceId || !actionEnabled || !isDestructiveAction(actionType)) {
-      setRecycleBinStatus(null);
-      return;
-    }
-    let cancelled = false;
-    fetch(`/api/integrations/${arrApiPath}/${arrInstanceId}/recycle-bin`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled) return;
-        setRecycleBinStatus({
-          enabled: data.enabled ?? null,
-          arrUrl: data.arrUrl ?? null,
-        });
-      })
-      .catch(() => {
-        if (!cancelled) setRecycleBinStatus(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [arrInstanceId, actionType, actionEnabled, arrApiPath]);
-
   const fetchDistinctValues = async () => {
     try {
       const response = await fetch("/api/media/distinct-values");
@@ -848,22 +793,6 @@ export function LifecycleRulePage({
       setDistinctValues(data);
     } catch (error) {
       console.error("Failed to fetch distinct values:", error);
-    }
-  };
-
-  const fetchArrMetadata = async (instanceId: string) => {
-    if (!instanceId) return;
-    try {
-      const res = await fetch(`/api/integrations/${arrApiPath}/${instanceId}/metadata`);
-      const data = await res.json();
-      setDistinctValues((prev) => ({
-        ...prev,
-        arrTag: data.tags?.map((t: { label: string }) => t.label) ?? [],
-        arrQualityProfile: data.qualityProfiles?.map((p: { name: string }) => p.name) ?? [],
-        arrOriginalLanguage: data.languages ?? [],
-      }));
-    } catch {
-      // Silent failure
     }
   };
 
@@ -922,6 +851,83 @@ export function LifecycleRulePage({
       console.error("Failed to fetch servers:", error);
     }
   };
+
+  useEffect(() => {
+    void (async () => {
+      await Promise.all([
+        fetchRuleSets(),
+        fetchArrInstances(),
+        fetchSeerrInstances(),
+        fetchDistinctValues(),
+        fetchServers(),
+      ]);
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch arr-specific metadata (tags, quality profiles, languages) when an instance is selected.
+  // The "reset when arrInstanceId is cleared" half of this lives in handleArrInstanceChange below
+  // — keeping it in the change handler avoids the set-state-in-effect anti-pattern.
+  useEffect(() => {
+    if (!arrInstanceId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/integrations/${arrApiPath}/${arrInstanceId}/metadata`);
+        if (cancelled || !res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setDistinctValues((prev) => ({
+          ...prev,
+          arrTag: data.tags?.map((t: { label: string }) => t.label) ?? [],
+          arrQualityProfile: data.qualityProfiles?.map((p: { name: string }) => p.name) ?? [],
+          arrOriginalLanguage: data.languages ?? [],
+        }));
+      } catch {
+        // Silent failure
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [arrInstanceId, arrApiPath]);
+
+  const handleArrInstanceChange = (newId: string) => {
+    setArrInstanceId(newId);
+    if (!newId) {
+      setDistinctValues((prev) => ({ ...prev, arrTag: [], arrQualityProfile: [] }));
+      setManageTagsEnabled(false);
+      setAddArrTags([]);
+      setRemoveArrTags([]);
+      if (actionType !== "DO_NOTHING") {
+        setActionType("DO_NOTHING");
+      }
+    }
+  };
+
+  // Fetch Arr recycle bin status when destructive action + Arr instance are selected.
+  // The early-return path used to call setRecycleBinStatus(null); removed because consumers
+  // (recycle-bin banner at the bottom of the destructive-action card and the save-time modal)
+  // are already gated by isDestructiveAction(actionType) / modal-open state, so stale data
+  // can never render when conditions are off.
+  useEffect(() => {
+    if (!arrInstanceId || !actionEnabled || !isDestructiveAction(actionType)) return;
+    let cancelled = false;
+    fetch(`/api/integrations/${arrApiPath}/${arrInstanceId}/recycle-bin`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        setRecycleBinStatus({
+          enabled: data.enabled ?? null,
+          arrUrl: data.arrUrl ?? null,
+        });
+      })
+      .catch(() => {
+        // Leave previous status untouched on transient errors.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [arrInstanceId, actionType, actionEnabled, arrApiPath]);
 
   const handleSave = async (options?: { clearMatches?: boolean; runDetection?: boolean; processActions?: boolean }) => {
     const needsCheck =
@@ -1013,7 +1019,7 @@ export function LifecycleRulePage({
       await fetchRuleSets();
 
       // Apply Plex collection changes only for disable or rename (not item sync)
-      const prev = prevCollectionRef.current;
+      const prev = prevCollection;
       const collectionDisabled = prev.enabled && !collectionEnabled;
       const collectionRenamed =
         prev.enabled && collectionEnabled &&
@@ -1049,19 +1055,19 @@ export function LifecycleRulePage({
         }
       }
 
-      prevCollectionRef.current = {
+      setPrevCollection({
         enabled: collectionEnabled,
         name: collectionName || null,
-      };
+      });
       setSkipCollectionRemoval(false);
 
       toast.success("Rule set saved");
 
       // Check if actionDelayDays changed — prompt to reschedule pending actions
-      const prevDelay = snapshotRef.current?.actionDelayDays;
+      const prevDelay = snapshot?.actionDelayDays;
       const delayChanged = prevDelay !== undefined && prevDelay !== actionDelayDays && savedRuleSetId;
 
-      updateSnapshot(takeSnapshot());
+      setSnapshot(takeSnapshot());
       setJustSaved(true);
       setTimeout(() => setJustSaved(false), 3000);
 
@@ -1315,10 +1321,10 @@ export function LifecycleRulePage({
     setCollectionSortName(ruleSet.collectionSortName ?? "");
     setPreview([]);
 
-    prevCollectionRef.current = {
+    setPrevCollection({
       enabled: ruleSet.collectionEnabled ?? false,
       name: ruleSet.collectionName ?? null,
-    };
+    });
 
     setDiscordNotifyOnAction(ruleSet.discordNotifyOnAction ?? false);
     setDiscordNotifyOnMatch(ruleSet.discordNotifyOnMatch ?? false);
@@ -1349,7 +1355,7 @@ export function LifecycleRulePage({
     setCollectionSort(ruleSet.collectionSort ?? "ALPHABETICAL");
 
     // Capture snapshot from rule set data (state not yet updated)
-    updateSnapshot({
+    setSnapshot({
       name: ruleSet.name,
       groups: JSON.stringify(legacyToGroups(ruleSet.rules)),
       enabled: ruleSet.enabled ?? true,
@@ -1437,8 +1443,8 @@ export function LifecycleRulePage({
     setDiscordNotifyOnMatch(false);
     setServerIds([]);
     setPreview([]);
-    prevCollectionRef.current = { enabled: false, name: null };
-    updateSnapshot(null);
+    setPrevCollection({ enabled: false, name: null });
+    setSnapshot(null);
   };
 
   const exportRuleSet = () => {
@@ -1751,21 +1757,42 @@ export function LifecycleRulePage({
           <div className="flex flex-wrap items-center gap-4">
             <Label className="text-sm whitespace-nowrap">{arrServiceName} Server</Label>
             {arrInstances.length > 0 ? (
-              <Select
-                value={arrInstanceId}
-                onValueChange={setArrInstanceId}
-              >
-                <SelectTrigger className={`w-64${!arrInstanceId && (actionType !== "DO_NOTHING" || addArrTags.length > 0 || removeArrTags.length > 0) ? " border-destructive" : ""}`}>
-                  <SelectValue placeholder="Select instance" />
-                </SelectTrigger>
-                <SelectContent>
-                  {arrInstances.map((inst) => (
-                    <SelectItem key={inst.id} value={inst.id}>
-                      {inst.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="flex items-center gap-1">
+                <Select
+                  value={arrInstanceId}
+                  onValueChange={handleArrInstanceChange}
+                >
+                  <SelectTrigger className={`w-64${!arrInstanceId && ((actionEnabled && (actionType !== "DO_NOTHING" || addArrTags.length > 0 || removeArrTags.length > 0)) || ruleUsesArr) ? " border-destructive" : ""}`}>
+                    <SelectValue placeholder="Select instance" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {arrInstances.map((inst) => (
+                      <SelectItem key={inst.id} value={inst.id}>
+                        {inst.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {arrInstanceId && (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                          onClick={() => handleArrInstanceChange("")}
+                          aria-label={`Clear ${arrServiceName} instance`}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Clear {arrServiceName} instance</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
+              </div>
             ) : (
               <TooltipProvider>
                 <Tooltip>
@@ -2102,7 +2129,7 @@ export function LifecycleRulePage({
               <Label htmlFor="collection-enabled" className="font-medium">
                 Sync matches to Plex collection
               </Label>
-              {!collectionEnabled && prevCollectionRef.current.enabled && prevCollectionRef.current.name && (
+              {!collectionEnabled && prevCollection.enabled && prevCollection.name && (
                 <span className="text-xs text-amber-500">Pending disable on save</span>
               )}
             </div>
@@ -2205,10 +2232,25 @@ export function LifecycleRulePage({
             </p>
           </div>
 
+          {ruleUsesArr && !arrInstanceId && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+              <AlertTriangle className="h-4 w-4 mt-0.5 text-amber-400 shrink-0" />
+              <div className="space-y-1">
+                <p className="font-medium text-amber-400">
+                  {arrServiceName} instance required
+                </p>
+                <p className="text-muted-foreground">
+                  This rule set uses {arrServiceName} criteria but no instance is selected.
+                  Pick one above so Preview, Test Media, and Save can evaluate those criteria.
+                </p>
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-wrap gap-2 pt-2">
             <Button
               onClick={handlePreview}
-              disabled={groups.length === 0 || !validateAllRules(groups) || previewing || serverIds.length === 0}
+              disabled={groups.length === 0 || !validateAllRules(groups) || previewing || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId)}
               variant="secondary"
             >
               {previewing ? (
@@ -2226,7 +2268,7 @@ export function LifecycleRulePage({
                 setTestMediaResult(null);
                 setShowTestMediaDialog(true);
               }}
-              disabled={groups.length === 0 || !validateAllRules(groups) || serverIds.length === 0}
+              disabled={groups.length === 0 || !validateAllRules(groups) || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId)}
               variant="secondary"
             >
               <FlaskConical className="mr-2 h-4 w-4" />
@@ -2234,7 +2276,7 @@ export function LifecycleRulePage({
             </Button>
             <Button
               onClick={() => {
-                const collectionPendingDisable = prevCollectionRef.current.enabled && !collectionEnabled && !!prevCollectionRef.current.name;
+                const collectionPendingDisable = prevCollection.enabled && !collectionEnabled && !!prevCollection.name;
                 if (collectionPendingDisable) {
                   setShowCollectionDisableDialog(true);
                 } else if (activeRuleSetId && !rulesChanged) {
@@ -2246,7 +2288,7 @@ export function LifecycleRulePage({
                   setShowNewSaveOptions(true);
                 }
               }}
-              disabled={!isDirty || justSaved || !name || groups.length === 0 || !validateAllRules(groups) || loading || serverIds.length === 0 || (actionEnabled && (actionType !== "DO_NOTHING" || addArrTags.length > 0 || removeArrTags.length > 0) && !arrInstanceId) || (collectionEnabled && !collectionName?.trim())}
+              disabled={!isDirty || justSaved || !name || groups.length === 0 || !validateAllRules(groups) || loading || serverIds.length === 0 || (actionEnabled && (actionType !== "DO_NOTHING" || addArrTags.length > 0 || removeArrTags.length > 0) && !arrInstanceId) || (collectionEnabled && !collectionName?.trim()) || (ruleUsesArr && !arrInstanceId)}
               className={justSaved ? "bg-green-600 hover:bg-green-600 text-white" : ""}
             >
               {loading ? (
@@ -2356,7 +2398,7 @@ export function LifecycleRulePage({
           {previewViewMode === "table" ? (
             <MediaTable
               items={sortedPreview}
-              onItemClick={(item) => setSelectedItem(item)}
+              onItemClick={(item) => setSelectedItemId(item.id)}
               sortBy={previewSortBy}
               sortOrder={previewSortOrder}
               onSort={handlePreviewSort}
@@ -2400,7 +2442,7 @@ export function LifecycleRulePage({
             <PreviewCardGrid
               items={sortedPreview}
               mediaType={mediaType}
-              onItemClick={(item) => setSelectedItem(item)}
+              onItemClick={(item) => setSelectedItemId(item.id)}
               diffMap={previewDiffMap}
               exceptedItemIds={exceptedItemIds}
               show={showCardField}
@@ -2699,7 +2741,7 @@ export function LifecycleRulePage({
           <AlertDialogHeader>
             <AlertDialogTitle>Disable Collection Sync?</AlertDialogTitle>
             <AlertDialogDescription>
-              The collection &ldquo;{prevCollectionRef.current.name}&rdquo; currently exists on Plex.
+              The collection &ldquo;{prevCollection.name}&rdquo; currently exists on Plex.
               Would you like to also delete it from Plex, or keep it?
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -3037,7 +3079,7 @@ export function LifecycleRulePage({
         <MediaDetailSidePanel
           item={selectedItem}
           mediaType={mediaType}
-          onClose={() => setSelectedItem(null)}
+          onClose={() => setSelectedItemId(null)}
           width={panelWidth}
           resizeHandleProps={resizeHandleProps}
           matchedCriteria={selectedItem.matchedCriteria}

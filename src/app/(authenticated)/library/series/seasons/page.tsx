@@ -285,15 +285,10 @@ export default function AllSeasonsPage() {
     }
   };
 
+  const SEASONS_FROM = `?from=${encodeURIComponent("/library/series/seasons")}`;
   const navigateToSeason = (season: SeasonEntry) => {
     markChildNavigation();
-    sessionStorage.setItem("library-back-path", "/library/series/seasons");
-    router.push(`/library/series/season/${season.mediaItemId}`);
-  };
-
-  const onSeasonCardClick = () => {
-    markChildNavigation();
-    sessionStorage.setItem("library-back-path", "/library/series/seasons");
+    router.push(`/library/series/season/${season.mediaItemId}${SEASONS_FROM}`);
   };
 
   return (
@@ -415,8 +410,8 @@ export default function AllSeasonsPage() {
                             imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
                             title={`${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`}
                             fallbackIcon="series"
-                            href={`/library/series/season/${season.mediaItemId}`}
-                            onClick={onSeasonCardClick}
+                            href={`/library/series/season/${season.mediaItemId}${SEASONS_FROM}`}
+                            onClick={markChildNavigation}
                             metadata={
                               <MetadataLine stacked>
                                 {show("metadata", "episodeCount") && <MetadataItem icon={<List />}>{season.episodeCount} {season.episodeCount === 1 ? "ep" : "eps"}</MetadataItem>}

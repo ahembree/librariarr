@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useLocalStorage } from "@/hooks/use-local-storage";
 import { cn } from "@/lib/utils";
 import { useChipColors } from "@/components/chip-color-provider";
 import { AUDIO_CODEC_ORDER } from "@/lib/theme/chip-colors";
@@ -32,33 +33,23 @@ export default function AlbumDetailPage() {
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
   const [tracks, setTracks] = useState<MediaItemWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<"cards" | "table">("table");
+  const [viewMode, handleViewModeChange] = useLocalStorage<"cards" | "table">(
+    "album-detail-view-mode",
+    "table",
+  );
   const [sortBy, setSortBy] = useState("episodeNumber");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
-  const [backOverride, setBackOverride] = useState<{ href: string; label: string } | null>(null);
-
-  useEffect(() => {
-    const backPath = sessionStorage.getItem("library-back-path");
-    if (backPath) {
-      sessionStorage.removeItem("library-back-path");
-      const labels: Record<string, string> = {
-        "/library/music/albums": "All Albums",
-        "/library/music/tracks": "All Tracks",
-      };
-      const label = labels[backPath];
-      if (label) setBackOverride({ href: backPath, label });
-    }
-  }, []);
-
-  useEffect(() => {
-    const stored = localStorage.getItem("album-detail-view-mode") as "cards" | "table" | null;
-    if (stored) setViewMode(stored);
-  }, []);
-
-  const handleViewModeChange = (mode: "cards" | "table") => {
-    setViewMode(mode);
-    localStorage.setItem("album-detail-view-mode", mode);
-  };
+  const searchParams = useSearchParams();
+  const backOverride = useMemo(() => {
+    const from = searchParams.get("from");
+    if (!from) return null;
+    const labels: Record<string, string> = {
+      "/library/music/albums": "All Albums",
+      "/library/music/tracks": "All Tracks",
+    };
+    const label = labels[from];
+    return label ? { href: from, label } : null;
+  }, [searchParams]);
 
   const handleSort = useCallback(
     (field: string) => {
