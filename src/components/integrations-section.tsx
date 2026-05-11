@@ -20,13 +20,14 @@ interface IntegrationsData {
 }
 
 export function IntegrationsSection({ itemId, mediaType, hideQualityProfile, compact }: IntegrationsSectionProps) {
-  const [data, setData] = useState<IntegrationsData | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Keyed by itemId so a stale response from a previous id doesn't render against the new one.
+  const [fetchState, setFetchState] = useState<{ forId: string; data: IntegrationsData | null } | null>(null);
+  const data = fetchState && fetchState.forId === itemId ? fetchState.data : null;
+  const loading = !fetchState || fetchState.forId !== itemId;
 
   useEffect(() => {
-    setData(null);
-    setLoading(true);
-    (async () => {
+    let cancelled = false;
+    void (async () => {
       try {
         const isMusic = mediaType === "MUSIC";
         const [arrRes, seerrRes] = await Promise.all([
@@ -39,17 +40,22 @@ export function IntegrationsSection({ itemId, mediaType, hideQualityProfile, com
                 .then((r) => r.json() as Promise<SeerrInfoResponse>)
                 .catch(() => ({ matches: [] as SeerrMatch[] })),
         ]);
-
-        setData({
-          arrMatches: arrRes.matches ?? [],
-          seerrMatches: seerrRes.matches ?? [],
+        if (cancelled) return;
+        setFetchState({
+          forId: itemId,
+          data: {
+            arrMatches: arrRes.matches ?? [],
+            seerrMatches: seerrRes.matches ?? [],
+          },
         });
       } catch {
-        setData(null);
-      } finally {
-        setLoading(false);
+        if (cancelled) return;
+        setFetchState({ forId: itemId, data: null });
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [itemId, mediaType]);
 
   const arrMatches = data?.arrMatches ?? [];

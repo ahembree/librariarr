@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useParams } from "next/navigation";
+import { useState, useEffect, useMemo } from "react";
+import { useParams, useSearchParams } from "next/navigation";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { MediaDetailContent } from "@/components/media-detail-content";
 import { ColorChip } from "@/components/color-chip";
@@ -15,20 +15,17 @@ export default function TrackDetailPage() {
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
   const [loading, setLoading] = useState(true);
-  const [backOverride, setBackOverride] = useState<{ href: string; label: string } | null>(null);
-
-  useEffect(() => {
-    const backPath = sessionStorage.getItem("library-back-path");
-    if (backPath) {
-      sessionStorage.removeItem("library-back-path");
-      const labels: Record<string, string> = {
-        "/library/music/tracks": "All Tracks",
-        "/library/music/albums": "All Albums",
-      };
-      const label = labels[backPath];
-      if (label) setBackOverride({ href: backPath, label });
-    }
-  }, []);
+  const searchParams = useSearchParams();
+  const backOverride = useMemo(() => {
+    const from = searchParams.get("from");
+    if (!from) return null;
+    const labels: Record<string, string> = {
+      "/library/music/tracks": "All Tracks",
+      "/library/music/albums": "All Albums",
+    };
+    const label = labels[from];
+    return label ? { href: from, label } : null;
+  }, [searchParams]);
 
   useEffect(() => {
     async function fetchItem() {

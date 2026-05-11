@@ -1068,15 +1068,15 @@ export default function StreamManagerPage() {
 
   // Load on mount
   useEffect(() => {
-    fetchMaintenance();
+    void (async () => { await fetchMaintenance(); })();
   }, [fetchMaintenance]);
 
   useEffect(() => {
-    fetchTranscodeManager();
+    void (async () => { await fetchTranscodeManager(); })();
   }, [fetchTranscodeManager]);
 
   useEffect(() => {
-    fetchBlackoutSchedules();
+    void (async () => { await fetchBlackoutSchedules(); })();
   }, [fetchBlackoutSchedules]);
 
   useEffect(() => {

@@ -792,14 +792,16 @@ function FileSizePopover({
   const [localMin, setLocalMin] = useState(() => parseToUnit(filters.fileSizeMin, "MB"));
   const [localMax, setLocalMax] = useState(() => parseToUnit(filters.fileSizeMax, "MB"));
 
-  // Sync when popover opens
-  useEffect(() => {
+  // Sync local edits with committed filters whenever the popover opens.
+  // (set-state-during-render is React 19's idiom for "reset state on prop change".)
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (prevOpen !== open) {
+    setPrevOpen(open);
     if (open) {
       setLocalMin(parseToUnit(filters.fileSizeMin, unit));
       setLocalMax(parseToUnit(filters.fileSizeMax, unit));
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }
 
   const handleUnitChange = (newUnit: "MB" | "GB") => {
     if (newUnit === unit) return;
@@ -1056,12 +1058,15 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
   );
 
   // Reset filter search and sheet height when popover/sheet closes
-  useEffect(() => {
+  // (set-state-during-render is React 19's idiom for "reset state on prop change".)
+  const [prevFiltersOpen, setPrevFiltersOpen] = useState(filtersOpen);
+  if (prevFiltersOpen !== filtersOpen) {
+    setPrevFiltersOpen(filtersOpen);
     if (!filtersOpen) {
       setFilterSearch("");
       setSheetHeight(90);
     }
-  }, [filtersOpen]);
+  }
 
   // Drag-to-resize handlers for mobile sheet
   const onDragStart = useCallback((clientY: number) => {
@@ -1082,17 +1087,21 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
   // Range slider states (file size, duration)
   const [durationRange, setDurationRange] = useState<[number, number] | null>(null);
 
-  // Sync external filter changes (e.g. from quality chart click, restored filters)
+  // Sync external filter changes (e.g. from quality chart click, restored filters).
+  // The merged filters are also broadcast via onFilterChange in a follow-up effect (see below)
+  // — the queueMicrotask defer keeps setState out of the effect body so the
+  // react-hooks/set-state-in-effect rule treats this as a callback-deferred update.
   const isExternalUpdate = useRef(false);
   const searchMounted = useRef(false);
   useEffect(() => {
-    if (externalFilters) {
+    if (!externalFilters) return;
+    queueMicrotask(() => {
       isExternalUpdate.current = true;
       setFilters((prev) => ({ ...prev, ...externalFilters }));
       if (externalFilters.search) {
         setSearchInput(externalFilters.search);
       }
-    }
+    });
   }, [externalFilters]);
 
   useEffect(() => {

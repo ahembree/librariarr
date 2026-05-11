@@ -53,6 +53,19 @@ export async function POST(
     // No body or invalid JSON — sync all enabled libraries
   }
 
+  if (libraryKey) {
+    const library = await prisma.library.findFirst({
+      where: { key: libraryKey, mediaServerId: server.id },
+      select: { id: true },
+    });
+    if (!library) {
+      return NextResponse.json(
+        { error: "Library not found on this server" },
+        { status: 400 },
+      );
+    }
+  }
+
   // Mark the user's sync schedule as just-ran so the scheduler doesn't
   // fire a redundant sync at the next 15-minute mark (e.g. right after onboarding).
   await prisma.appSettings.upsert({

@@ -14,14 +14,20 @@ export async function acquireSyncSlot(): Promise<void> {
     activeSyncs++;
     return;
   }
+  // The releaser will hand off the slot directly — we inherit its count and
+  // do NOT increment activeSyncs again on resume. This avoids a race where
+  // a fresh caller observes activeSyncs=0 in the microtask gap between
+  // release decrementing and the queued waiter resuming.
   await new Promise<void>((resolve) => {
     waitQueue.push(resolve);
   });
-  activeSyncs++;
 }
 
 export function releaseSyncSlot(): void {
-  activeSyncs--;
   const next = waitQueue.shift();
-  if (next) next();
+  if (next) {
+    next();
+  } else {
+    activeSyncs--;
+  }
 }

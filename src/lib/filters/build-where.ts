@@ -172,8 +172,8 @@ export function applyCommonFilters(
     const days = parseInt(lastPlayedAtDays);
     if (!isNaN(days) && days > 0) {
       const since = new Date();
-      since.setDate(since.getDate() - days);
-      since.setHours(0, 0, 0, 0);
+      since.setUTCDate(since.getUTCDate() - days);
+      since.setUTCHours(0, 0, 0, 0);
       where.lastPlayedAt = { gte: since };
     }
   } else if (lastPlayedAtMin || lastPlayedAtMax) {
@@ -181,7 +181,7 @@ export function applyCommonFilters(
     if (lastPlayedAtMin) (where.lastPlayedAt as Record<string, Date>).gte = new Date(lastPlayedAtMin);
     if (lastPlayedAtMax) {
       const maxDate = new Date(lastPlayedAtMax);
-      maxDate.setHours(23, 59, 59, 999);
+      maxDate.setUTCHours(23, 59, 59, 999);
       (where.lastPlayedAt as Record<string, Date>).lte = maxDate;
     }
   }
@@ -194,8 +194,8 @@ export function applyCommonFilters(
     const days = parseInt(addedAtDays);
     if (!isNaN(days) && days > 0) {
       const since = new Date();
-      since.setDate(since.getDate() - days);
-      since.setHours(0, 0, 0, 0);
+      since.setUTCDate(since.getUTCDate() - days);
+      since.setUTCHours(0, 0, 0, 0);
       where.addedAt = { gte: since };
     }
   } else if (addedAtMin || addedAtMax) {
@@ -203,7 +203,7 @@ export function applyCommonFilters(
     if (addedAtMin) (where.addedAt as Record<string, Date>).gte = new Date(addedAtMin);
     if (addedAtMax) {
       const maxDate = new Date(addedAtMax);
-      maxDate.setHours(23, 59, 59, 999);
+      maxDate.setUTCHours(23, 59, 59, 999);
       (where.addedAt as Record<string, Date>).lte = maxDate;
     }
   }
@@ -216,8 +216,8 @@ export function applyCommonFilters(
     const days = parseInt(originallyAvailableAtDays);
     if (!isNaN(days) && days > 0) {
       const since = new Date();
-      since.setDate(since.getDate() - days);
-      since.setHours(0, 0, 0, 0);
+      since.setUTCDate(since.getUTCDate() - days);
+      since.setUTCHours(0, 0, 0, 0);
       where.originallyAvailableAt = { gte: since };
     }
   } else if (originallyAvailableAtMin || originallyAvailableAtMax) {
@@ -225,7 +225,7 @@ export function applyCommonFilters(
     if (originallyAvailableAtMin) (where.originallyAvailableAt as Record<string, Date>).gte = new Date(originallyAvailableAtMin);
     if (originallyAvailableAtMax) {
       const maxDate = new Date(originallyAvailableAtMax);
-      maxDate.setHours(23, 59, 59, 999);
+      maxDate.setUTCHours(23, 59, 59, 999);
       (where.originallyAvailableAt as Record<string, Date>).lte = maxDate;
     }
   }

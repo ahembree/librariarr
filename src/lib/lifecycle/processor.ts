@@ -458,24 +458,26 @@ export async function executeLifecycleActions(userId?: string) {
         }
       }
 
-      await prisma.lifecycleAction.update({
-        where: { id: action.id },
-        data: {
-          status: "COMPLETED",
-          executedAt: new Date(),
-          deletedBytes,
-          // Snapshot title so the record survives media item deletion
-          mediaItemTitle: mediaItem.title,
-          mediaItemParentTitle: mediaItem.parentTitle,
-        },
-      });
+      // Mark the action complete and remove the match atomically so we never
+      // leave a "completed but still matched" ghost on the Matches page if
+      // one write succeeds and the other fails.
+      await prisma.$transaction([
+        prisma.lifecycleAction.update({
+          where: { id: action.id },
+          data: {
+            status: "COMPLETED",
+            executedAt: new Date(),
+            deletedBytes,
+            mediaItemTitle: mediaItem.title,
+            mediaItemParentTitle: mediaItem.parentTitle,
+          },
+        }),
+        prisma.ruleMatch.deleteMany({
+          where: { ruleSetId: action.ruleSetId!, mediaItemId: action.mediaItemId },
+        }),
+      ]);
 
       logger.info("Lifecycle", `Executed ${action.actionType} for "${mediaItem.parentTitle ?? mediaItem.title}" in rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
-
-      // Remove the match so completed items don't linger on the matches page
-      await prisma.ruleMatch.deleteMany({
-        where: { ruleSetId: action.ruleSetId!, mediaItemId: action.mediaItemId },
-      });
 
       // Queue a targeted library sync for destructive actions
       if (action.actionType.includes("DELETE") && mediaItem.library?.mediaServerId) {
@@ -537,13 +539,26 @@ export async function executeLifecycleActions(userId?: string) {
     }
   }
 
+  // Batch-load Discord webhook settings for every user with notifications to send
+  const notifyUserIds = new Set<string>([
+    ...[...successesByRuleSet.values()].map((s) => s.userId),
+    ...[...failuresByRuleSet.values()].map((f) => f.userId),
+  ]);
+  const settingsByUserId = new Map<string, { discordWebhookUrl: string | null; discordWebhookUsername: string | null; discordWebhookAvatarUrl: string | null }>();
+  if (notifyUserIds.size > 0) {
+    const allSettings = await prisma.appSettings.findMany({
+      where: { userId: { in: [...notifyUserIds] } },
+      select: { userId: true, discordWebhookUrl: true, discordWebhookUsername: true, discordWebhookAvatarUrl: true },
+    });
+    for (const s of allSettings) {
+      settingsByUserId.set(s.userId, s);
+    }
+  }
+
   // Send batched success notifications to Discord
   for (const [, ruleSuccesses] of successesByRuleSet) {
     try {
-      const settings = await prisma.appSettings.findUnique({
-        where: { userId: ruleSuccesses.userId },
-        select: { discordWebhookUrl: true, discordWebhookUsername: true, discordWebhookAvatarUrl: true },
-      });
+      const settings = settingsByUserId.get(ruleSuccesses.userId);
       if (settings?.discordWebhookUrl) {
         await sendDiscordNotification(settings.discordWebhookUrl, {
           username: settings.discordWebhookUsername || "Librariarr",
@@ -559,10 +574,7 @@ export async function executeLifecycleActions(userId?: string) {
   // Send batched failure notifications to Discord
   for (const [, ruleFailures] of failuresByRuleSet) {
     try {
-      const settings = await prisma.appSettings.findUnique({
-        where: { userId: ruleFailures.userId },
-        select: { discordWebhookUrl: true, discordWebhookUsername: true, discordWebhookAvatarUrl: true },
-      });
+      const settings = settingsByUserId.get(ruleFailures.userId);
       if (settings?.discordWebhookUrl) {
         await sendDiscordNotification(settings.discordWebhookUrl, {
           username: settings.discordWebhookUsername || "Librariarr",

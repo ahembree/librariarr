@@ -211,7 +211,7 @@ export default function AllTracksPage() {
       ) : viewMode === "table" ? (
         <MediaTable
           items={items}
-          onItemClick={(item) => { markChildNavigation(); sessionStorage.setItem("library-back-path", "/library/music/tracks"); router.push(`/library/music/track/${item.id}`); }}
+          onItemClick={(item) => { markChildNavigation(); router.push(`/library/music/track/${item.id}?from=${encodeURIComponent("/library/music/tracks")}`); }}
           sortBy={sortBy}
           sortOrder={sortOrder}
           onSort={handleSort}
@@ -273,8 +273,8 @@ export default function AllTracksPage() {
                         title={track.title}
                         aspectRatio="square"
                         fallbackIcon="music"
-                        href={`/library/music/track/${track.id}`}
-                        onClick={() => { markChildNavigation(); sessionStorage.setItem("library-back-path", "/library/music/tracks"); }}
+                        href={`/library/music/track/${track.id}?from=${encodeURIComponent("/library/music/tracks")}`}
+                        onClick={markChildNavigation}
                         qualityBar={
                           track.audioCodec
                             ? [{ color: getHex("audioCodec", track.audioCodec), weight: 1, label: track.audioCodec }]

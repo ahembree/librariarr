@@ -18,8 +18,11 @@ export async function PUT(
   const { name, path } = data;
 
   // Verify ownership
-  const existing = await prisma.prerollPreset.findUnique({ where: { id } });
-  if (!existing || existing.userId !== session.userId) {
+  const existing = await prisma.prerollPreset.findFirst({
+    where: { id, userId: session.userId! },
+    select: { id: true },
+  });
+  if (!existing) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
@@ -46,8 +49,11 @@ export async function DELETE(
   const { id } = await params;
 
   // Verify ownership
-  const existing = await prisma.prerollPreset.findUnique({ where: { id } });
-  if (!existing || existing.userId !== session.userId) {
+  const existing = await prisma.prerollPreset.findFirst({
+    where: { id, userId: session.userId! },
+    select: { id: true },
+  });
+  if (!existing) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 

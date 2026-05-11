@@ -265,18 +265,25 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
     }
   }, []);
 
-  useEffect(() => {
+  // Reset cached detail/history/metadata when the underlying item changes.
+  // (set-state-during-render is React 19's idiom for "reset state on prop change" — see
+  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-state-when-a-prop-changes)
+  const [prevItemId, setPrevItemId] = useState(item.id);
+  if (prevItemId !== item.id) {
+    setPrevItemId(item.id);
     setDetailData(null);
     setStreams([]);
     setHistory([]);
     setMetadataMap({});
     setMetadataLoadingMap({});
     setMetadataOpenMap({});
-    // Aggregate items (series/artist scope) don't have a meaningful single item to fetch
-    if (!isAggregate) {
-      fetchItemDetail(item.id);
-      fetchHistory(item.id);
-    }
+  }
+
+  useEffect(() => {
+    if (isAggregate) return;
+    void (async () => {
+      await Promise.all([fetchItemDetail(item.id), fetchHistory(item.id)]);
+    })();
   }, [item.id, isAggregate, fetchItemDetail, fetchHistory]);
 
   return (

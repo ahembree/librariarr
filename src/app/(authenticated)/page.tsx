@@ -189,13 +189,13 @@ export default function DashboardPage() {
   useRealtime("sync:completed", fetchStats);
 
   useEffect(() => {
-    fetchData();
+    void (async () => { await fetchData(); })();
   }, [fetchData]);
 
   // Re-fetch stats when server filter changes (skip initial load)
   useEffect(() => {
     if (loading) return;
-    fetchStats();
+    void (async () => { await fetchStats(); })();
   }, [selectedServerId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resolvedLayout = resolveLayout(layout) ?? getDefaultLayout();

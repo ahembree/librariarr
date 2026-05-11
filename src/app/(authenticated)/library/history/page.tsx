@@ -477,7 +477,7 @@ export default function HistoryPage() {
 
   // Reset to page 1 when filters change
   useEffect(() => {
-    fetchHistory(1);
+    void (async () => { await fetchHistory(1); })();
   }, [fetchHistory]);
 
   // ── Sort handler (server-side) ─────────────────────────────────

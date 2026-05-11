@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useLocalStorage, useLocalStorageJSON } from "@/hooks/use-local-storage";
 import Link from "next/link";
 import { useColumnResize } from "@/hooks/use-column-resize";
 import { usePanelResize } from "@/hooks/use-panel-resize";
@@ -147,21 +148,13 @@ function getDefaultMatchColumnVisibility(): Record<string, boolean> {
   return vis;
 }
 
-function loadMatchColumnVisibility(): Record<string, boolean> {
+function mergeColumnVisibility(stored: Record<string, boolean> | null): Record<string, boolean> {
   const defaults = getDefaultMatchColumnVisibility();
-  try {
-    const stored = localStorage.getItem(MATCH_COLUMN_STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored) as Record<string, boolean>;
-      // Merge: use stored values for known columns, defaults for new ones
-      for (const col of ALL_MATCH_COLUMNS) {
-        if (col.id in parsed && !col.alwaysVisible) {
-          defaults[col.id] = parsed[col.id];
-        }
-      }
+  if (!stored) return defaults;
+  for (const col of ALL_MATCH_COLUMNS) {
+    if (col.id in stored && !col.alwaysVisible) {
+      defaults[col.id] = stored[col.id];
     }
-  } catch {
-    // use defaults
   }
   return defaults;
 }
@@ -660,13 +653,20 @@ export default function RuleMatchesPage() {
   );
   const [loading, setLoading] = useState(true);
   const [expandedRules, setExpandedRules] = useState<Set<string>>(new Set());
-  const [viewMode, setViewMode] = useState<"cards" | "table">("table");
+  const [viewMode, handleViewModeChange] = useLocalStorage<"cards" | "table">("matches-view-mode", "table");
   const [runningRules, setRunningRules] = useState<Set<string>>(new Set());
   const [reEvalRunning, setReEvalRunning] = useState(false);
   const { size, setSize } = useCardSize();
   const { getHex } = useChipColors();
   const { show, setVisible, prefs } = useCardDisplay("MOVIE");
-  const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(getDefaultMatchColumnVisibility);
+  const [storedColumnVisibility, setColumnVisibility] = useLocalStorageJSON<Record<string, boolean> | null>(
+    MATCH_COLUMN_STORAGE_KEY,
+    null,
+  );
+  const columnVisibility = useMemo(
+    () => mergeColumnVisibility(storedColumnVisibility),
+    [storedColumnVisibility],
+  );
 
   const filteredRuleMatches = useMemo(() => {
     const typeFilter = TAB_TO_TYPE[mediaTypeTab];
@@ -674,31 +674,11 @@ export default function RuleMatchesPage() {
     return ruleMatches.filter((m) => m.ruleSet.type === typeFilter);
   }, [ruleMatches, mediaTypeTab]);
 
-  // Load column visibility from localStorage on mount
-  useEffect(() => {
-    setColumnVisibility(loadMatchColumnVisibility());
-  }, []);
-
   const toggleColumn = useCallback((colId: string, checked: boolean) => {
-    setColumnVisibility((prev) => {
-      const next = { ...prev, [colId]: checked };
-      localStorage.setItem(MATCH_COLUMN_STORAGE_KEY, JSON.stringify(next));
-      return next;
-    });
-  }, []);
-
-  useEffect(() => {
-    const stored = localStorage.getItem("matches-view-mode") as "cards" | "table" | null;
-    if (stored) setViewMode(stored);
-  }, []);
-
-  const handleViewModeChange = (mode: "cards" | "table") => {
-    setViewMode(mode);
-    localStorage.setItem("matches-view-mode", mode);
-  };
+    setColumnVisibility({ ...columnVisibility, [colId]: checked });
+  }, [columnVisibility, setColumnVisibility]);
 
   const fetchMatches = useCallback(async () => {
-    setLoading(true);
     try {
       const response = await fetch("/api/lifecycle/rules/matches");
       const data = await response.json();
@@ -713,7 +693,7 @@ export default function RuleMatchesPage() {
   useRealtime("lifecycle:detection-completed", fetchMatches);
 
   useEffect(() => {
-    fetchMatches();
+    void (async () => { await fetchMatches(); })();
   }, [fetchMatches]);
 
   // Track which items have lifecycle exceptions
@@ -732,7 +712,7 @@ export default function RuleMatchesPage() {
   }, []);
 
   useEffect(() => {
-    fetchExceptions();
+    void (async () => { await fetchExceptions(); })();
   }, [fetchExceptions]);
 
   const [excludingItems, setExcludingItems] = useState<Set<string>>(new Set());

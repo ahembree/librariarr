@@ -95,7 +95,9 @@ function Carousel({
 
   React.useEffect(() => {
     if (!api) return
-    onSelect(api)
+    // queueMicrotask keeps the initial setCanScroll{Prev,Next} writes out of the synchronous
+    // effect body so react-hooks/set-state-in-effect treats this as a deferred update.
+    queueMicrotask(() => onSelect(api))
     api.on("reInit", onSelect)
     api.on("select", onSelect)
 

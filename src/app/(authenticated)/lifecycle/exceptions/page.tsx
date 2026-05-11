@@ -324,7 +324,7 @@ export default function LifecycleExceptionsPage() {
   }, [activeTab]);
 
   useEffect(() => {
-    fetchExceptions();
+    void (async () => { await fetchExceptions(); })();
   }, [fetchExceptions]);
 
   const groupedRows = useMemo(

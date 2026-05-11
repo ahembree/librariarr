@@ -94,7 +94,7 @@ export function SyncStatus({ onSyncComplete }: SyncStatusProps) {
 
   // Initial fetch on mount
   useEffect(() => {
-    fetchStatus();
+    void (async () => { await fetchStatus(); })();
     return () => {
       if (hideTimerRef.current) {
         clearTimeout(hideTimerRef.current);

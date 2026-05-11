@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -118,15 +118,23 @@ export function QualityChart({ breakdown, onQualityClick, filterType, lockedFilt
     setTablePage(0);
   };
 
-  useEffect(() => {
+  // Sync localType to filterType prop when it changes (React 19 idiom: store prev render).
+  const [prevFilterType, setPrevFilterType] = useState(filterType);
+  if (prevFilterType !== filterType) {
+    setPrevFilterType(filterType);
     setLocalType(filterType);
-  }, [filterType]);
+  }
 
   const effectiveType = lockedFilterType ? filterType : localType;
 
-  useEffect(() => {
+  // Reset table page when grouping inputs change.
+  const [prevTopN, setPrevTopN] = useState(topN);
+  const [prevEffectiveType, setPrevEffectiveType] = useState(effectiveType);
+  if (prevTopN !== topN || prevEffectiveType !== effectiveType) {
+    setPrevTopN(topN);
+    setPrevEffectiveType(effectiveType);
     setTablePage(0);
-  }, [topN, effectiveType]);
+  }
 
   // Filter by type if specified
   const filtered = effectiveType

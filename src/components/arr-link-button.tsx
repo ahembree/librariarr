@@ -113,23 +113,27 @@ export function ArrInstanceCard({ match, hideQualityProfile }: { match: ArrMatch
 }
 
 export function ArrSection({ itemId, mediaType, hideQualityProfile }: { itemId: string; mediaType?: string; hideQualityProfile?: boolean }) {
-  const [arrData, setArrData] = useState<ArrInfoResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Keyed by itemId so a stale response from a previous id doesn't render against the new one.
+  const [arrFetch, setArrFetch] = useState<{ forId: string; data: ArrInfoResponse | null } | null>(null);
+  const arrData = arrFetch && arrFetch.forId === itemId ? arrFetch.data : null;
+  const loading = !arrFetch || arrFetch.forId !== itemId;
 
   useEffect(() => {
-    setArrData(null);
-    setLoading(true);
-    (async () => {
+    let cancelled = false;
+    void (async () => {
       try {
         const response = await fetch(`/api/media/${itemId}/arr-info`);
         const data: ArrInfoResponse = await response.json();
-        setArrData(data);
+        if (cancelled) return;
+        setArrFetch({ forId: itemId, data });
       } catch {
-        setArrData(null);
-      } finally {
-        setLoading(false);
+        if (cancelled) return;
+        setArrFetch({ forId: itemId, data: null });
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [itemId]);
 
   if (loading) {

@@ -78,19 +78,22 @@ export function RecentlyAdded({
   const [localType, setLocalType] = useState<"MOVIE" | "SERIES" | "MUSIC" | undefined>(filterType);
   const [localServerId, setLocalServerId] = useState<string | undefined>(undefined);
 
-  useEffect(() => {
+  // Sync local overrides to prop changes (React 19 idiom: store prev render).
+  const [prevFilterType, setPrevFilterType] = useState(filterType);
+  if (prevFilterType !== filterType) {
+    setPrevFilterType(filterType);
     setLocalType(filterType);
-  }, [filterType]);
-
-  useEffect(() => {
+  }
+  const [prevServerId, setPrevServerId] = useState(serverId);
+  if (prevServerId !== serverId) {
+    setPrevServerId(serverId);
     setLocalServerId(undefined);
-  }, [serverId]);
+  }
 
   const effectiveType = lockedFilterType ? filterType : localType;
   const effectiveServerId = localServerId ?? serverId;
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
     try {
       const params = new URLSearchParams({ limit: String(limit) });
       if (effectiveType) params.set("type", effectiveType);
@@ -107,12 +110,23 @@ export function RecentlyAdded({
   }, [limit, effectiveType, effectiveServerId]);
 
   useEffect(() => {
-    fetchData();
+    void (async () => { await fetchData(); })();
   }, [fetchData]);
 
-  useEffect(() => {
+  // Reset paging when the inputs change.
+  const [prevLimit, setPrevLimit] = useState(limit);
+  const [prevEffectiveType, setPrevEffectiveType] = useState(effectiveType);
+  const [prevEffectiveServerId, setPrevEffectiveServerId] = useState(effectiveServerId);
+  if (
+    prevLimit !== limit ||
+    prevEffectiveType !== effectiveType ||
+    prevEffectiveServerId !== effectiveServerId
+  ) {
+    setPrevLimit(limit);
+    setPrevEffectiveType(effectiveType);
+    setPrevEffectiveServerId(effectiveServerId);
     setPage(0);
-  }, [limit, effectiveType, effectiveServerId]);
+  }
 
   const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
   const pageItems = items.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
