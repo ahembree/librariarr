@@ -22,10 +22,20 @@ const mockPrisma = vi.hoisted(() => ({
   },
   appSettings: {
     findUnique: vi.fn(),
+    findMany: vi.fn(),
   },
   mediaItem: {
     findMany: vi.fn(),
   },
+  // $transaction supports both the array form (returns resolved array) and the
+  // callback form (invokes the callback with the same mock client). Production
+  // code uses both shapes.
+  $transaction: vi.fn(async (arg: unknown) => {
+    if (typeof arg === "function") {
+      return (arg as (tx: unknown) => unknown)(mockPrisma);
+    }
+    return Promise.all(arg as Promise<unknown>[]);
+  }),
 }));
 
 const mockDetectAndSaveMatches = vi.hoisted(() => vi.fn());
@@ -762,7 +772,7 @@ describe("executeLifecycleActions", () => {
     mockExecuteAction.mockResolvedValue(undefined);
     mockPrisma.lifecycleAction.update.mockResolvedValue({});
     mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
-    mockPrisma.appSettings.findUnique.mockResolvedValue(null);
+    mockPrisma.appSettings.findMany.mockResolvedValue([]);
     mockSyncMediaServer.mockResolvedValue(undefined);
 
     await executeLifecycleActions("u1");
@@ -797,11 +807,14 @@ describe("executeLifecycleActions", () => {
     mockExecuteAction.mockResolvedValue(undefined);
     mockPrisma.lifecycleAction.update.mockResolvedValue({});
     mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
-    mockPrisma.appSettings.findUnique.mockResolvedValue({
-      discordWebhookUrl: "https://discord.com/webhook/123",
-      discordWebhookUsername: "Bot",
-      discordWebhookAvatarUrl: null,
-    });
+    mockPrisma.appSettings.findMany.mockResolvedValue([
+      {
+        userId: "u1",
+        discordWebhookUrl: "https://discord.com/webhook/123",
+        discordWebhookUsername: "Bot",
+        discordWebhookAvatarUrl: null,
+      },
+    ]);
     mockBuildSuccessSummaryEmbed.mockReturnValue({ title: "Success" });
     mockSendDiscordNotification.mockResolvedValue(undefined);
 
@@ -842,7 +855,7 @@ describe("executeLifecycleActions", () => {
     mockExecuteAction.mockResolvedValue(undefined);
     mockPrisma.lifecycleAction.update.mockResolvedValue({});
     mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
-    mockPrisma.appSettings.findUnique.mockResolvedValue(null);
+    mockPrisma.appSettings.findMany.mockResolvedValue([]);
 
     await executeLifecycleActions("u1");
 

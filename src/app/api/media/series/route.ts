@@ -34,7 +34,13 @@ export async function GET(request: NextRequest) {
   };
 
   if (parentTitle) where.parentTitle = parentTitle;
-  if (seasonNumber) where.seasonNumber = parseInt(seasonNumber);
+  if (seasonNumber) {
+    const n = parseInt(seasonNumber);
+    if (Number.isNaN(n)) {
+      return NextResponse.json({ error: "seasonNumber must be an integer" }, { status: 400 });
+    }
+    where.seasonNumber = n;
+  }
   if (search) {
     where.OR = [
       { title: { contains: search, mode: "insensitive" } },
@@ -128,6 +134,6 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     items: serializedItems,
-    pagination: { page, limit, total, pages: Math.ceil(total / limit), hasMore },
+    pagination: { page, limit, total, pages: limit > 0 ? Math.ceil(total / limit) : 1, hasMore },
   });
 }

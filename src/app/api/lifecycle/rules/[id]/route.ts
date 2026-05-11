@@ -77,35 +77,34 @@ export async function PUT(
   // backwards compatibility and safety.
   const clearMatches = request.nextUrl.searchParams.get("clearMatches") !== "false";
 
-  // Wrap in transaction to prevent race conditions with concurrent detection runs.
-  const operations = [
-    prisma.ruleSet.updateMany({
+  // Wrap update + cleanup + read in a single transaction so the returned
+  // record reflects exactly the values we just wrote and isn't clobbered
+  // by a concurrent update between commit and read.
+  const updated = await prisma.$transaction(async (tx) => {
+    const result = await tx.ruleSet.updateMany({
       where: { id, userId: session.userId },
       data: updateData,
-    }),
-  ];
-  if (clearMatches) {
-    operations.push(prisma.ruleMatch.deleteMany({ where: { ruleSetId: id } }));
-    operations.push(
-      prisma.lifecycleAction.deleteMany({
-        where: { ruleSetId: id, status: "PENDING" },
-      }),
-    );
-  } else if (actionEnabled === false) {
-    // Delete pending actions immediately when actions are disabled
-    operations.push(
-      prisma.lifecycleAction.deleteMany({
-        where: { ruleSetId: id, status: "PENDING" },
-      }),
-    );
-  }
-  const [ruleSet] = await prisma.$transaction(operations);
+    });
+    if (result.count === 0) return null;
 
-  if (ruleSet.count === 0) {
+    if (clearMatches) {
+      await tx.ruleMatch.deleteMany({ where: { ruleSetId: id } });
+      await tx.lifecycleAction.deleteMany({
+        where: { ruleSetId: id, status: "PENDING" },
+      });
+    } else if (actionEnabled === false) {
+      await tx.lifecycleAction.deleteMany({
+        where: { ruleSetId: id, status: "PENDING" },
+      });
+    }
+
+    return tx.ruleSet.findUnique({ where: { id } });
+  });
+
+  if (!updated) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const updated = await prisma.ruleSet.findUnique({ where: { id } });
   return NextResponse.json({ ruleSet: updated });
 }
 

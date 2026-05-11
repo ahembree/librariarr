@@ -97,8 +97,10 @@ export async function PUT(
   const body = data as ScheduleInput;
 
   // Verify ownership
-  const existing = await prisma.prerollSchedule.findUnique({ where: { id } });
-  if (!existing || existing.userId !== session.userId) {
+  const existing = await prisma.prerollSchedule.findFirst({
+    where: { id, userId: session.userId! },
+  });
+  if (!existing) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
@@ -216,8 +218,11 @@ export async function DELETE(
   const { id } = await params;
 
   // Verify ownership
-  const existing = await prisma.prerollSchedule.findUnique({ where: { id } });
-  if (!existing || existing.userId !== session.userId) {
+  const existing = await prisma.prerollSchedule.findFirst({
+    where: { id, userId: session.userId! },
+    select: { id: true },
+  });
+  if (!existing) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
