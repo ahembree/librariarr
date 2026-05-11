@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.2](https://github.com/ahembree/librariarr/compare/v0.16.1...v0.16.2) (2026-05-11)
+
+
+### Bug Fixes
+
+* **security:** update next to 16.2.6 to fix security issues ([3fa5f6b](https://github.com/ahembree/librariarr/commit/3fa5f6ba3bdb0e6bdef8be5847789e0e912bd88a))
+* **security:** update next to 16.2.6 to fix security issues ([29811c1](https://github.com/ahembree/librariarr/commit/29811c147f835008fc061a3d33625d2a12da8814))
+
 ## [0.16.1](https://github.com/ahembree/librariarr/compare/v0.16.0...v0.16.1) (2026-05-11)
 
 
