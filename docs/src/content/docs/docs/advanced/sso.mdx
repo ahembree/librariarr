@@ -108,6 +108,39 @@ To remove the link entirely, click **Unlink SSO** in the SSO Account Linking
 section. Linking and unlinking both invalidate any other active sessions for
 the account.
 
+## Recovery — locked out of SSO
+
+If SSO is enabled, your account has no Plex link or local password as a
+fallback, and your identity provider is unreachable (or your forward-auth
+proxy is misconfigured), use the **break-glass override**:
+
+1. Set the `SSO_DISABLE_OVERRIDE` environment variable to `true` on the
+   Librariarr container.
+2. Restart the container.
+
+While `SSO_DISABLE_OVERRIDE` is active:
+
+- SSO login is forcibly disabled regardless of the stored configuration.
+- The local username/password form returns to the login page (provided
+  local auth is enabled and you have credentials set).
+- The Settings → Authentication SSO panel shows an amber banner indicating
+  the override is active.
+- Your stored OIDC / forward-auth configuration is preserved untouched.
+
+To restore SSO, unset the env var and restart. No DB changes are required.
+
+The override accepts `true`, `1`, or `yes` (case-insensitive, whitespace
+tolerant). Any other value — including `false`, `0`, or unset — leaves SSO
+controlled by the database setting.
+
+<Aside>
+  If you have no local credentials either, set
+  <code>SSO_DISABLE_OVERRIDE=true</code> first to get back in via the local
+  form. If you also have no local user, restore from a backup file using
+  the "Restore from Backup" flow available on the login page when no users
+  exist.
+</Aside>
+
 ## Troubleshooting
 
 The login page surfaces errors returned by the SSO callback as a banner above

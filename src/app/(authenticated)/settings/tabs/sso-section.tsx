@@ -40,6 +40,7 @@ interface SsoConfig {
   forwardAuthUserHeader: string;
   forwardAuthEmailHeader: string;
   forwardAuthNameHeader: string;
+  overrideActive?: boolean;
 }
 
 interface SsoLinkInfo {
@@ -269,6 +270,20 @@ export function SsoSection() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {config.overrideActive && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-500">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-medium">SSO disabled by environment override</p>
+                <p className="text-xs">
+                  <code>SSO_DISABLE_OVERRIDE</code> is set, so SSO login is
+                  forcibly disabled regardless of the settings below. Unset the
+                  variable and restart the container to re-enable SSO. The
+                  stored configuration is preserved.
+                </p>
+              </div>
+            </div>
+          )}
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
               <p className="text-sm font-medium">Enable SSO Login</p>

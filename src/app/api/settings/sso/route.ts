@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { validateRequest, ssoConfigSchema } from "@/lib/validation";
 import { sanitize } from "@/lib/api/sanitize";
+import { isSsoOverrideActive } from "@/lib/sso/config";
 
 const SSO_SELECT = {
   ssoEnabled: true,
@@ -32,7 +33,10 @@ export async function GET() {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  return NextResponse.json(sanitize(settings));
+  return NextResponse.json({
+    ...sanitize(settings),
+    overrideActive: isSsoOverrideActive(),
+  });
 }
 
 export async function PUT(request: NextRequest) {
@@ -116,7 +120,10 @@ export async function PUT(request: NextRequest) {
     select: SSO_SELECT,
   });
 
-  return NextResponse.json(sanitize(updated));
+  return NextResponse.json({
+    ...sanitize(updated),
+    overrideActive: isSsoOverrideActive(),
+  });
 }
 
 function isMaskedSecret(value: string | null | undefined): boolean {

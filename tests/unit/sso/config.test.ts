@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { isSsoUsable, type SsoSettings } from "@/lib/sso/config";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { isSsoOverrideActive, isSsoUsable, type SsoSettings } from "@/lib/sso/config";
 
 function makeSettings(overrides: Partial<SsoSettings> = {}): SsoSettings {
   return {
@@ -74,5 +74,71 @@ describe("isSsoUsable", () => {
         )
       ).toBe(false);
     });
+  });
+});
+
+describe("isSsoOverrideActive", () => {
+  const originalValue = process.env.SSO_DISABLE_OVERRIDE;
+
+  beforeEach(() => {
+    delete process.env.SSO_DISABLE_OVERRIDE;
+  });
+
+  afterEach(() => {
+    if (originalValue === undefined) {
+      delete process.env.SSO_DISABLE_OVERRIDE;
+    } else {
+      process.env.SSO_DISABLE_OVERRIDE = originalValue;
+    }
+  });
+
+  it("returns false when the env var is unset", () => {
+    expect(isSsoOverrideActive()).toBe(false);
+  });
+
+  it("returns false for an empty string", () => {
+    process.env.SSO_DISABLE_OVERRIDE = "";
+    expect(isSsoOverrideActive()).toBe(false);
+  });
+
+  it("returns false for unrecognized values", () => {
+    process.env.SSO_DISABLE_OVERRIDE = "false";
+    expect(isSsoOverrideActive()).toBe(false);
+
+    process.env.SSO_DISABLE_OVERRIDE = "0";
+    expect(isSsoOverrideActive()).toBe(false);
+
+    process.env.SSO_DISABLE_OVERRIDE = "no";
+    expect(isSsoOverrideActive()).toBe(false);
+
+    process.env.SSO_DISABLE_OVERRIDE = "maybe";
+    expect(isSsoOverrideActive()).toBe(false);
+  });
+
+  it("recognizes 'true' (case-insensitive)", () => {
+    process.env.SSO_DISABLE_OVERRIDE = "true";
+    expect(isSsoOverrideActive()).toBe(true);
+
+    process.env.SSO_DISABLE_OVERRIDE = "TRUE";
+    expect(isSsoOverrideActive()).toBe(true);
+
+    process.env.SSO_DISABLE_OVERRIDE = "True";
+    expect(isSsoOverrideActive()).toBe(true);
+  });
+
+  it("recognizes '1' and 'yes'", () => {
+    process.env.SSO_DISABLE_OVERRIDE = "1";
+    expect(isSsoOverrideActive()).toBe(true);
+
+    process.env.SSO_DISABLE_OVERRIDE = "yes";
+    expect(isSsoOverrideActive()).toBe(true);
+
+    process.env.SSO_DISABLE_OVERRIDE = "YES";
+    expect(isSsoOverrideActive()).toBe(true);
+  });
+
+  it("trims surrounding whitespace", () => {
+    process.env.SSO_DISABLE_OVERRIDE = "  true  ";
+    expect(isSsoOverrideActive()).toBe(true);
   });
 });
