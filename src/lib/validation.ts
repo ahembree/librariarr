@@ -449,6 +449,42 @@ export const plexLinkSchema = z.object({
   { message: "Either pinId or authToken must be provided" }
 );
 
+// ─── SSO schemas ───
+
+export const ssoConfigSchema = z.object({
+  ssoEnabled: z.boolean().optional(),
+  ssoMode: z.enum(["OIDC", "FORWARD_AUTH"]).optional(),
+  oidcIssuer: z
+    .union([
+      z.string().refine(
+        (val) => /^https?:\/\//i.test(val),
+        "Issuer must start with http:// or https://"
+      ),
+      z.literal(""),
+    ])
+    .nullable()
+    .optional(),
+  oidcClientId: z.string().nullable().optional(),
+  oidcClientSecret: z.string().nullable().optional(),
+  oidcScopes: z.string().min(1).optional(),
+  oidcUsernameClaim: z.string().min(1).optional(),
+  forwardAuthUserHeader: z.string().min(1).optional(),
+  forwardAuthEmailHeader: z.string().min(1).optional(),
+  forwardAuthNameHeader: z.string().min(1).optional(),
+});
+
+export const ssoTestSchema = z.object({
+  oidcIssuer: z.string().refine(
+    (val) => /^https?:\/\//i.test(val),
+    "Issuer must start with http:// or https://"
+  ),
+});
+
+export const ssoLinkSchema = z.object({
+  ssoSubject: z.string().min(1, "SSO subject is required"),
+  ssoProvider: z.string().optional(),
+});
+
 // ─── Integration schemas ───
 
 export const seerrInstanceCreateSchema = z.object({

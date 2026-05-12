@@ -11,6 +11,10 @@ export interface SessionData {
   plexToken?: string;
   isLoggedIn: boolean;
   sessionVersion?: number;
+  // Transient SSO OIDC handshake state — present only between the redirect to
+  // the IdP and the callback. Cleared once the callback consumes them.
+  oidcState?: string;
+  oidcVerifier?: string;
 }
 
 const SESSION_SECRET_FILE = "/config/.session-secret";

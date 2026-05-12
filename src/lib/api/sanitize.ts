@@ -8,6 +8,7 @@ const SENSITIVE_FIELDS = new Set([
   "plexToken",
   "passwordHash",
   "backupEncryptionPassword",
+  "oidcClientSecret",
 ]);
 
 const MASKED_VALUE = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";

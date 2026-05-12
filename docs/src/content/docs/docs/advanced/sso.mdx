@@ -1,0 +1,121 @@
+---
+title: SSO Authentication
+description: Configure OIDC or forward-auth single sign-on for Librariarr.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Librariarr supports single sign-on (SSO) for local authentication via two
+mechanisms:
+
+- **OIDC** — OpenID Connect Authorization Code + PKCE flow. Works with
+  Authentik, Authelia, Keycloak, Pocket ID, Zitadel, Okta, and any other
+  OIDC-compliant provider.
+- **Forward Auth** — trust identity headers (e.g. `Remote-User`) injected by an
+  upstream reverse proxy.
+
+<Aside type="caution">
+  When SSO is enabled, the local username/password form is hidden on the login
+  screen. Plex login remains available if a Plex account is linked. Make sure
+  you have a working alternate login method before enabling SSO, or you may
+  lock yourself out.
+</Aside>
+
+## How linking works
+
+Librariarr uses **manual linking**: new SSO logins are not auto-provisioned. An
+admin must explicitly link an SSO subject identifier to an existing Librariarr
+user before that user can log in via SSO.
+
+The "subject" is:
+
+- **OIDC** — the `sub` claim returned in the userinfo response (e.g.
+  `ak-abc123...` for Authentik, the user's UUID for Keycloak).
+- **Forward auth** — the value of the configured user header (typically the
+  username from your proxy).
+
+## OIDC setup
+
+1. Register a new application in your identity provider. Configure it as a
+   **confidential client** (with a client secret) or a **public client** with
+   PKCE only.
+2. Set the redirect URI to:
+
+   ```
+   https://your-librariarr-host/api/auth/sso/oidc/callback
+   ```
+
+3. In Librariarr, go to **Settings → Authentication → Single Sign-On**:
+   - **SSO Mode:** `OIDC`
+   - **Issuer URL:** the base URL where the provider serves
+     `.well-known/openid-configuration` (e.g.
+     `https://auth.example.com/application/o/librariarr/`)
+   - **Client ID:** from your IdP application
+   - **Client Secret:** from your IdP (leave blank for public clients)
+   - **Scopes:** defaults to `openid profile email` — adjust as needed
+   - **Username Claim:** defaults to `preferred_username`
+
+4. Click **Test Discovery** to verify the issuer URL resolves correctly.
+
+5. Under **SSO Account Linking**, paste the `sub` value of your IdP user into
+   the input and click **Link Identity**.
+
+6. Toggle **Enable SSO Login** on and click **Save SSO Settings**. The login
+   page will now display a "Sign in with SSO" button.
+
+## Forward Auth setup
+
+Forward auth is appropriate when Librariarr sits behind an authenticating
+reverse proxy (Authelia, Authentik forward-auth, oauth2-proxy, Caddy
+forward_auth, etc.) that handles all authentication upstream and injects
+identity headers into proxied requests.
+
+<Aside type="danger">
+  Forward auth trusts identity headers. **Librariarr must be reachable only
+  through your authenticating proxy.** If users can reach the container
+  directly (e.g. on the LAN, via another port), they can spoof these headers
+  and bypass authentication entirely.
+</Aside>
+
+1. Configure your reverse proxy to perform forward auth and inject identity
+   headers into requests forwarded to Librariarr. The typical Authelia /
+   Authentik defaults work out of the box:
+
+   | Header | Default | Description |
+   |--------|---------|-------------|
+   | `Remote-User` | username | Required — used as the SSO subject |
+   | `Remote-Email` | email | Optional |
+   | `Remote-Name` | display name | Optional |
+
+2. In **Settings → Authentication → Single Sign-On**:
+   - **SSO Mode:** `Forward Auth`
+   - Override the header names if your proxy uses different ones
+
+3. Under **SSO Account Linking**, link your account using the value your proxy
+   sends as the user header (typically your username).
+
+4. Toggle **Enable SSO Login** on and save. The login page will display a
+   "Sign in with SSO" button that, when clicked, redirects through your proxy
+   and logs you in based on the trusted headers.
+
+## Disabling SSO
+
+Toggle **Enable SSO Login** off and save. The local username/password form
+will return on the login page (provided local auth is enabled in
+**Settings → Authentication → Local Authentication**).
+
+To remove the link entirely, click **Unlink SSO** in the SSO Account Linking
+section. Linking and unlinking both invalidate any other active sessions for
+the account.
+
+## Troubleshooting
+
+The login page surfaces errors returned by the SSO callback as a banner above
+the SSO button:
+
+| Message | Cause |
+|---------|-------|
+| SSO request expired or was tampered with | The state cookie was lost (session expired between redirect and callback) or the `state` value didn't match. Try again. |
+| Failed to verify your identity with the SSO provider | The token exchange with the IdP failed. Check the Librariarr logs for the underlying response. |
+| Your SSO account is not linked to a Librariarr user | The OIDC `sub` (or proxy username) doesn't match any account's linked subject. Link it in Settings. |
+| Forward-auth proxy did not provide a user identity header | The configured user header was absent. Verify your reverse proxy is injecting it. |

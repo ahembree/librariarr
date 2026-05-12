@@ -99,6 +99,7 @@ pnpm exec vitest run tests/path/to/file.test.ts  # Run a single test file
 - `src/lib/dedup/` — Multi-server dedup: `resolveServerFilter`, `server-presence` helpers (see Multi-Server Dedup below)
 - `src/lib/filters/build-where.ts` — Shared filter query param parsing for media routes (see Filter Utilities below)
 - `src/lib/plex/` — Plex OAuth flow and API client
+- `src/lib/sso/` — OIDC (Authorization Code + PKCE) and forward-auth helpers. Manual-linking only: an admin must link an `ssoSubject` to a User before SSO login is accepted. When `AppSettings.ssoEnabled` is true, the local username/password form is hidden on the login page (Plex login remains).
 - `src/lib/sync/sync-server.ts` — Media sync engine (fetches metadata from Plex)
 - `src/lib/scheduler/` — node-cron scheduler, initialized via `instrumentation.ts`
 - `src/lib/rules/` — Lifecycle rule engine with recursive AND/OR groups

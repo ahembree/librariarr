@@ -16,6 +16,9 @@ model User {
   email            String?
   username         String
   sessionVersion   Int               @default(0)
+  ssoSubject       String?           @unique
+  ssoProvider      String?
+  ssoEnabled       Boolean           @default(false)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   mediaServers     MediaServer[]
@@ -62,6 +65,18 @@ model AppSettings {
   discordWebhookAvatarUrl      String?
   discordNotifyMaintenance     Boolean   @default(false)
   localAuthEnabled       Boolean @default(false)
+  // SSO — when ssoEnabled is true, the local username/password form is hidden
+  // on the login screen. Plex login remains available if a Plex account is linked.
+  ssoEnabled                Boolean   @default(false)
+  ssoMode                   String    @default("OIDC")
+  oidcIssuer                String?
+  oidcClientId              String?
+  oidcClientSecret          String?
+  oidcScopes                String    @default("openid profile email")
+  oidcUsernameClaim         String    @default("preferred_username")
+  forwardAuthUserHeader     String    @default("Remote-User")
+  forwardAuthEmailHeader    String    @default("Remote-Email")
+  forwardAuthNameHeader     String    @default("Remote-Name")
   preferredTitleServerId   String?
   preferredArtworkServerId String?
   // Backup

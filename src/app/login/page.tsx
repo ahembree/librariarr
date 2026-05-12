@@ -20,12 +20,28 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertCircle, RotateCcw, Loader2 } from "lucide-react";
+import { AlertCircle, RotateCcw, Loader2, LogIn } from "lucide-react";
 import { Logo } from "@/components/logo";
+
+const SSO_ERROR_MESSAGES: Record<string, string> = {
+  sso_not_configured: "SSO is not configured.",
+  missing_params: "SSO provider returned an incomplete response.",
+  state_mismatch: "SSO request expired or was tampered with. Please try again.",
+  token_exchange_failed: "Failed to verify your identity with the SSO provider.",
+  not_linked: "Your SSO account is not linked to a Librariarr user. Ask an administrator to link it.",
+  missing_user_header: "Forward-auth proxy did not provide a user identity header.",
+};
 
 export default function LoginPage() {
   const router = useRouter();
   const [localAuthEnabled, setLocalAuthEnabled] = useState(false);
+  const [ssoEnabled, setSsoEnabled] = useState(false);
+  const [ssoMode, setSsoMode] = useState<"OIDC" | "FORWARD_AUTH">("OIDC");
+  const [ssoError] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const code = new URLSearchParams(window.location.search).get("sso_error");
+    return code ? (SSO_ERROR_MESSAGES[code] ?? "SSO login failed.") : null;
+  });
   const [localUsername, setLocalUsername] = useState("");
   const [localPassword, setLocalPassword] = useState("");
   const [localLoading, setLocalLoading] = useState(false);
@@ -88,6 +104,8 @@ export default function LoginPage() {
 
         setSetupRequired(data.setupRequired ?? false);
         setLocalAuthEnabled(data.localAuthEnabled);
+        setSsoEnabled(Boolean(data.ssoEnabled));
+        if (data.ssoMode === "FORWARD_AUTH") setSsoMode("FORWARD_AUTH");
       } catch {
         // If check fails, just show Plex login
       } finally {
@@ -100,6 +118,7 @@ export default function LoginPage() {
       cancelled = true;
     };
   }, [router]);
+
 
 
   const handleLocalLogin = async (e: React.SyntheticEvent<HTMLFormElement>) => {
@@ -336,6 +355,42 @@ export default function LoginPage() {
               <AlertCircle className="h-4 w-4 shrink-0" />
               {plexError}
             </div>
+          )}
+          {/* SSO login button */}
+          {ssoEnabled && (
+            <>
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-card px-2 text-muted-foreground">or</span>
+                </div>
+              </div>
+              <Button
+                asChild
+                variant="outline"
+                size="lg"
+                className="w-full cursor-pointer"
+              >
+                <a
+                  href={
+                    ssoMode === "FORWARD_AUTH"
+                      ? "/api/auth/sso/forward"
+                      : "/api/auth/sso/oidc/login"
+                  }
+                >
+                  <LogIn className="mr-2 h-4 w-4" />
+                  Sign in with SSO
+                </a>
+              </Button>
+              {ssoError && (
+                <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  {ssoError}
+                </div>
+              )}
+            </>
           )}
           {/* Setup prompt when no account exists */}
           {setupRequired && (

@@ -31,6 +31,7 @@ import {
   XCircle,
 } from "lucide-react";
 import type { AuthInfo } from "../types";
+import { SsoSection } from "./sso-section";
 
 export interface CredentialsForm {
   currentPassword: string;
@@ -246,6 +247,9 @@ export function AuthenticationTab({
           )}
         </CardContent>
       </Card>
+
+      {/* SSO (OIDC + Forward Auth) */}
+      <SsoSection />
 
       {/* Create Credentials Dialog -- shown when enabling local auth without existing credentials */}
       <Dialog open={showCredentialPrompt} onOpenChange={(open) => { if (!open) onSetShowCredentialPrompt(false); }}>
