@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { validateRequest, ssoConfigSchema } from "@/lib/validation";
 import { sanitize } from "@/lib/api/sanitize";
 import { isSsoOverrideActive } from "@/lib/sso/config";
+import { resolveSecretWrite } from "@/lib/sso/secret-write";
 
 const SSO_SELECT = {
   ssoEnabled: true,
@@ -101,12 +102,7 @@ export async function PUT(request: NextRequest) {
     ssoMode: next.ssoMode,
     oidcIssuer: next.oidcIssuer?.trim() || null,
     oidcClientId: next.oidcClientId?.trim() || null,
-    // Allow leaving the secret untouched when the masked placeholder is sent
-    // back from the client. The `sanitize()` mask is "••••••••" — if we see it
-    // (or any all-bullet string), keep the existing secret.
-    oidcClientSecret: isMaskedSecret(data.oidcClientSecret)
-      ? current.oidcClientSecret
-      : data.oidcClientSecret?.trim() || null,
+    oidcClientSecret: resolveSecretWrite(data.oidcClientSecret, current.oidcClientSecret),
     oidcScopes: next.oidcScopes,
     oidcUsernameClaim: next.oidcUsernameClaim,
     forwardAuthUserHeader: next.forwardAuthUserHeader,
@@ -126,7 +122,3 @@ export async function PUT(request: NextRequest) {
   });
 }
 
-function isMaskedSecret(value: string | null | undefined): boolean {
-  if (!value) return false;
-  return /^•+$/.test(value);
-}

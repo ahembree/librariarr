@@ -77,6 +77,15 @@ export async function discoverOidc(issuer: string): Promise<OidcDiscovery> {
   if (!config.authorization_endpoint || !config.token_endpoint) {
     throw new Error("OIDC discovery response missing required endpoints");
   }
+  // OIDC Discovery §4.3 (and RFC 8414 §3.3) require the `issuer` value in the
+  // response to match the URL the client used to fetch the document. Catches
+  // misconfiguration (wrong path) and a class of host-header attacks where a
+  // misbehaving IdP advertises a different issuer than expected.
+  if (config.issuer && normalizeIssuer(config.issuer) !== base) {
+    throw new Error(
+      `OIDC issuer mismatch: discovery advertises "${config.issuer}" but was fetched from "${base}"`
+    );
+  }
   return config;
 }
 
@@ -185,10 +194,12 @@ export async function fetchUserInfo(
     );
   }
   const info = (await res.json()) as OidcUserInfo;
-  if (!info.sub) {
+  if (info.sub === undefined || info.sub === null || info.sub === "") {
     throw new Error("Userinfo response missing required `sub` claim");
   }
-  return info;
+  // JSON permits non-string scalars; some providers return `sub` as a number.
+  // Coerce defensively so the downstream DB lookup matches what was stored.
+  return { ...info, sub: String(info.sub) };
 }
 
 /**

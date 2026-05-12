@@ -466,7 +466,14 @@ export const ssoConfigSchema = z.object({
     .optional(),
   oidcClientId: z.string().nullable().optional(),
   oidcClientSecret: z.string().nullable().optional(),
-  oidcScopes: z.string().min(1).optional(),
+  oidcScopes: z
+    .string()
+    .min(1)
+    .refine(
+      (val) => val.split(/\s+/).some((s) => s.toLowerCase() === "openid"),
+      "Scopes must include 'openid'"
+    )
+    .optional(),
   oidcUsernameClaim: z.string().min(1).optional(),
   forwardAuthUserHeader: z.string().min(1).optional(),
   forwardAuthEmailHeader: z.string().min(1).optional(),

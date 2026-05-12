@@ -71,14 +71,23 @@ export async function DELETE() {
   // Don't allow unlinking if the user has no other way to log in
   const me = await prisma.user.findUnique({
     where: { id: session.userId },
-    select: { plexId: true, passwordHash: true, appSettings: { select: { ssoEnabled: true } } },
+    select: { plexId: true, appSettings: { select: { ssoEnabled: true } } },
   });
   if (!me) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (me.appSettings?.ssoEnabled && !me.plexId && !me.passwordHash) {
+  // When global SSO is enabled, the local username/password form is hidden on
+  // the login page — so a stored passwordHash doesn't rescue the admin. The
+  // only viable fallback while SSO is on is a linked Plex account. (The
+  // SSO_DISABLE_OVERRIDE env var is a separate recovery path that doesn't
+  // require this check, since it operates outside the running app.)
+  if (me.appSettings?.ssoEnabled && !me.plexId) {
     return NextResponse.json(
-      { error: "Cannot unlink SSO while SSO is the only enabled login method" },
+      {
+        error:
+          "Cannot unlink SSO while it is the only available login method. " +
+          "Disable SSO under Settings → Authentication first, or link a Plex account.",
+      },
       { status: 400 }
     );
   }

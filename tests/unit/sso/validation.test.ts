@@ -64,6 +64,23 @@ describe("ssoConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects scopes missing 'openid'", () => {
+    const result = ssoConfigSchema.safeParse({ oidcScopes: "profile email" });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts scopes containing 'openid' in any position", () => {
+    expect(
+      ssoConfigSchema.safeParse({ oidcScopes: "openid" }).success
+    ).toBe(true);
+    expect(
+      ssoConfigSchema.safeParse({ oidcScopes: "profile openid email" }).success
+    ).toBe(true);
+    expect(
+      ssoConfigSchema.safeParse({ oidcScopes: "OPENID profile" }).success
+    ).toBe(true);
+  });
+
   it("rejects empty username claim", () => {
     const result = ssoConfigSchema.safeParse({ oidcUsernameClaim: "" });
     expect(result.success).toBe(false);

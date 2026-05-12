@@ -179,6 +179,38 @@ describe("discoverOidc", () => {
       /OIDC discovery failed \(404\)/
     );
   });
+
+  it("rejects when the issuer claim doesn't match the requested URL", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          issuer: "https://different.example.com",
+          authorization_endpoint: "https://idp.example.com/auth",
+          token_endpoint: "https://idp.example.com/token",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    ) as typeof fetch;
+
+    await expect(discoverOidc("https://idp.example.com")).rejects.toThrow(
+      /OIDC issuer mismatch/
+    );
+  });
+
+  it("tolerates trailing-slash differences in the issuer claim", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          issuer: "https://idp.example.com/",
+          authorization_endpoint: "https://idp.example.com/auth",
+          token_endpoint: "https://idp.example.com/token",
+        }),
+        { status: 200 }
+      )
+    ) as typeof fetch;
+
+    await expect(discoverOidc("https://idp.example.com")).resolves.toBeDefined();
+  });
 });
 
 describe("exchangeCodeForToken", () => {
@@ -306,6 +338,28 @@ describe("fetchUserInfo", () => {
   it("throws when the response omits the sub claim", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ email: "a@b.com" }), { status: 200 })
+    ) as typeof fetch;
+
+    await expect(fetchUserInfo(makeDiscovery(), "at")).rejects.toThrow(
+      /missing required `sub`/
+    );
+  });
+
+  it("coerces a numeric sub claim to a string", async () => {
+    // Some IdPs return integer sub values; the DB stores ssoSubject as a string,
+    // so silent type mismatches would never link. Coerce defensively.
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ sub: 1234567 }), { status: 200 })
+    ) as typeof fetch;
+
+    const info = await fetchUserInfo(makeDiscovery(), "at");
+    expect(info.sub).toBe("1234567");
+    expect(typeof info.sub).toBe("string");
+  });
+
+  it("rejects when sub is the empty string", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ sub: "" }), { status: 200 })
     ) as typeof fetch;
 
     await expect(fetchUserInfo(makeDiscovery(), "at")).rejects.toThrow(
