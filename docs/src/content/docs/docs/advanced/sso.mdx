@@ -105,8 +105,16 @@ will return on the login page (provided local auth is enabled in
 **Settings → Authentication → Local Authentication**).
 
 To remove the link entirely, click **Unlink SSO** in the SSO Account Linking
-section. Linking and unlinking both invalidate any other active sessions for
-the account.
+section. Unlinking also automatically turns off the global SSO toggle, since
+keeping it on after removing your identity link would silently hide the local
+form without giving you a way to log in. Both linking and unlinking invalidate
+any other active sessions for the account.
+
+Unlinking is refused only if you would have no working login method left
+afterwards — that is, no linked Plex account **and** no local credentials
+(`localAuthEnabled` with a password set). Plex is **not** required;
+Jellyfin- and Emby-only deployments work fine with local credentials as the
+fallback.
 
 ## Recovery — locked out of SSO
 

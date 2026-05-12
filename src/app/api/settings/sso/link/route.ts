@@ -61,46 +61,77 @@ export async function POST(request: NextRequest) {
   });
 }
 
-/** Unlink the SSO subject from the current user. Bumps sessionVersion. */
+/**
+ * Unlink the SSO subject from the current user.
+ *
+ * Side effects, all in one transaction:
+ *   - Clear ssoSubject/ssoProvider and set user.ssoEnabled = false
+ *   - If global SSO is currently on, atomically flip AppSettings.ssoEnabled
+ *     off as well. The user is effectively saying "I don't use SSO anymore" —
+ *     leaving the global toggle on after unlinking would silently lock them
+ *     out, since the local username/password form is hidden whenever SSO is
+ *     usable. Flipping it off restores the local form on the login page.
+ *   - Bump sessionVersion to invalidate other sessions
+ *
+ * Refuses to unlink only if the user has no other working login method. A
+ * working method is either a linked Plex account, OR local credentials
+ * (passwordHash set AND localAuthEnabled true). Plex is NOT required —
+ * Jellyfin/Emby-only deployments work fine with local credentials as the
+ * fallback. (SSO_DISABLE_OVERRIDE is a separate env-var recovery path.)
+ */
 export async function DELETE() {
   const session = await getSession();
   if (!session.isLoggedIn || !session.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Don't allow unlinking if the user has no other way to log in
   const me = await prisma.user.findUnique({
     where: { id: session.userId },
-    select: { plexId: true, appSettings: { select: { ssoEnabled: true } } },
+    select: {
+      plexId: true,
+      passwordHash: true,
+      appSettings: { select: { ssoEnabled: true, localAuthEnabled: true } },
+    },
   });
   if (!me) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  // When global SSO is enabled, the local username/password form is hidden on
-  // the login page — so a stored passwordHash doesn't rescue the admin. The
-  // only viable fallback while SSO is on is a linked Plex account. (The
-  // SSO_DISABLE_OVERRIDE env var is a separate recovery path that doesn't
-  // require this check, since it operates outside the running app.)
-  if (me.appSettings?.ssoEnabled && !me.plexId) {
+
+  const globalSsoEnabled = me.appSettings?.ssoEnabled ?? false;
+  const hasPlex = !!me.plexId;
+  const hasUsableLocal =
+    !!me.passwordHash && !!me.appSettings?.localAuthEnabled;
+
+  if (!hasPlex && !hasUsableLocal) {
     return NextResponse.json(
       {
         error:
-          "Cannot unlink SSO while it is the only available login method. " +
-          "Disable SSO under Settings → Authentication first, or link a Plex account.",
+          "Cannot unlink SSO without another working login method. " +
+          "Set up local credentials (Settings → Authentication → Local Authentication) " +
+          "or link a Plex account first.",
       },
       { status: 400 }
     );
   }
 
-  const user = await prisma.user.update({
-    where: { id: session.userId },
-    data: {
-      ssoSubject: null,
-      ssoProvider: null,
-      ssoEnabled: false,
-      sessionVersion: { increment: 1 },
-    },
-    select: { sessionVersion: true },
+  const user = await prisma.$transaction(async (tx) => {
+    const u = await tx.user.update({
+      where: { id: session.userId },
+      data: {
+        ssoSubject: null,
+        ssoProvider: null,
+        ssoEnabled: false,
+        sessionVersion: { increment: 1 },
+      },
+      select: { sessionVersion: true },
+    });
+    if (globalSsoEnabled) {
+      await tx.appSettings.update({
+        where: { userId: session.userId! },
+        data: { ssoEnabled: false },
+      });
+    }
+    return u;
   });
 
   session.sessionVersion = user.sessionVersion;

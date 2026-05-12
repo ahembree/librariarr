@@ -83,7 +83,7 @@ export async function PUT(request: NextRequest) {
 
     const me = await prisma.user.findUnique({
       where: { id: session.userId },
-      select: { ssoSubject: true, ssoEnabled: true, plexId: true, passwordHash: true },
+      select: { ssoSubject: true, ssoEnabled: true },
     });
     if (!me?.ssoSubject || !me.ssoEnabled) {
       return NextResponse.json(
