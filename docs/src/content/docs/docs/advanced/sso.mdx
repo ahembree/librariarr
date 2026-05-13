@@ -52,6 +52,22 @@ the username — there's no `sub` concept in forward auth.
 These steps apply to every OIDC provider. Provider-specific subsections below
 cover where to click and what defaults to expect.
 
+<Aside>
+  Versions verified against this documentation (as of May 2026):
+
+  | Provider | Verified version |
+  |----------|------------------|
+  | Authentik | 2026.2.x |
+  | Authelia | 4.39.x |
+  | Keycloak | 26.6.x |
+  | Pocket ID | 2.6.x |
+  | Zitadel | 4.13.x |
+
+  Earlier major versions may use different UI paths or config syntax —
+  notably Authelia &lt; 4.39 (which preceded the `claims_policies` feature)
+  and Zitadel v2/v3 console layouts.
+</Aside>
+
 1. **Register a client** in your IdP. Set the redirect URI to:
 
    ```
@@ -83,23 +99,39 @@ cover where to click and what defaults to expect.
 
 ### Authentik
 
-1. **Admin Interface → Applications → Providers → Create.**
-2. Type: **OAuth2/OpenID Provider**. Name: `Librariarr`.
-3. Set:
+In Authentik 2026.x the recommended path creates the application and provider
+together. The older "Providers first, then Application" path still works and
+is documented as the alternative below.
+
+**Recommended (2026.x):**
+
+1. **Admin Interface → Applications → Applications → Create with provider.**
+2. Application name: `Librariarr`. Slug: `librariarr`.
+3. Choose **OAuth2/OpenID Provider**. On the provider page:
    - Client type: **Confidential**
    - Redirect URIs: `https://your-librariarr-host/api/auth/sso/oidc/callback`
    - Signing Key: `authentik Self-signed Certificate`
-   - **Subject mode:** `Based on the User's hashed ID` (default) **or** `Based on the User's username` if you'd rather link by name. See [Finding your subject value](#finding-your-subject-value).
-4. **Save.** Copy the **Client ID** and **Client Secret**.
-5. **Applications → Applications → Create.** Name: `Librariarr`. Slug: `librariarr`. Provider: the one you just created.
-6. In Librariarr:
-   - **Issuer URL:** `https://auth.example.com/application/o/librariarr/`
-     *(replace the slug with whatever you used; trailing slash optional but recommended)*
+   - **Subject mode** (under Advanced protocol settings): `Based on the User's hashed ID` (default — produces a stable opaque ID) **or** `Based on the User's username` if you'd rather link by name.
+4. **Finish.** Note the **Client ID** and **Client Secret** shown on the
+   completion screen.
+
+**Alternative (legacy path):**
+
+1. **Admin Interface → Applications → Providers → Create.**
+2. Type: **OAuth2/OpenID Provider**. Same fields as above.
+3. **Save.** Copy the **Client ID** and **Client Secret**.
+4. **Applications → Applications → Create.** Link to the provider you just made.
+
+**Then in Librariarr:**
+
+- **Issuer URL:** `https://auth.example.com/application/o/librariarr/`
+  *(replace the slug with whatever you used; the trailing slash matches Authentik's advertised issuer)*
 
 ### Authelia
 
-Authelia supports OIDC since v4.30, with the modern client config landing in
-4.38. The example below is for 4.38+.
+Authelia 4.39 introduced **claims policies**, restructured the default claims
+returned in ID Tokens, and reworked the container image. The example below
+targets 4.39+; earlier versions used a slightly different client schema.
 
 1. Edit Authelia's `configuration.yml`. Under `identity_providers.oidc.clients`,
    add:
@@ -107,12 +139,20 @@ Authelia supports OIDC since v4.30, with the modern client config landing in
    ```yaml
    identity_providers:
      oidc:
+       # Optional: customize which claims appear in the ID Token. The 4.39
+       # defaults follow the OIDC spec strictly, so adding preferred_username
+       # makes Librariarr's username display nicer.
+       claims_policies:
+         librariarr:
+           id_token: ['email', 'email_verified', 'preferred_username', 'name']
+
        clients:
          - client_id: librariarr
            client_name: Librariarr
            client_secret: '$pbkdf2-sha512$...'  # generate with `authelia crypto hash generate pbkdf2`
            public: false
            authorization_policy: one_factor   # or two_factor
+           claims_policy: librariarr          # references the policy above
            redirect_uris:
              - https://your-librariarr-host/api/auth/sso/oidc/callback
            scopes:
@@ -127,12 +167,18 @@ Authelia supports OIDC since v4.30, with the modern client config landing in
    - **Issuer URL:** `https://auth.example.com` *(your Authelia base URL — no path)*
    - **Client ID:** `librariarr`
    - **Client Secret:** the **plaintext** secret you hashed (not the `$pbkdf2…` value)
-4. Authelia's `sub` is a stable UUID-style identifier by default. To use the
-   username instead, set `claims_policy: username` on the client (newer
-   versions) or configure a custom claims policy with `subject` mapped to
-   `preferred_username`.
+
+**About Authelia's `sub` claim:** Authelia 4.39 uses **UUID v4 subject
+identifiers** for every client. There is no first-class way to swap `sub`
+for a username — that's by design (the OIDC spec requires `sub` to be a
+stable opaque identifier per user/client). Link by the UUID:
+[trigger the SSO flow once and read the logs](#recommended-method-trigger-the-flow-once-read-the-logs)
+to obtain the value, then paste it into Librariarr's linking input.
 
 ### Keycloak
+
+Verified against Keycloak 26.6.x. The "Admin Console v2" (PatternFly 5
+rewrite) is the default in 26.x.
 
 1. **Realm settings → Clients → Create client.** Type: **OpenID Connect**. Client ID: `librariarr`.
 2. **Client authentication:** On. **Authentication flow:** Standard flow + Direct access grants off.
@@ -149,7 +195,9 @@ Authelia supports OIDC since v4.30, with the modern client config landing in
 
 ### Pocket ID
 
-Pocket ID is a lightweight passkey-only OIDC provider.
+Pocket ID is a lightweight passkey-only OIDC provider
+([pocket-id/pocket-id](https://github.com/pocket-id/pocket-id)). Verified
+against v2.6.x.
 
 1. Log in to the Pocket ID admin panel.
 2. **OIDC Clients → Add OIDC Client.**
@@ -162,6 +210,10 @@ Pocket ID is a lightweight passkey-only OIDC provider.
    `preferred_username` carries the username.
 
 ### Zitadel
+
+Verified against Zitadel v4.13.x. Zitadel switched to AGPLv3 and a
+quarterly major release cadence at v3; the console wording below matches
+v4's "Login V2" experience.
 
 1. In the Zitadel console: **Projects → \<your project\> → New Application.** Type: **Web**. Authentication method: **Code (with PKCE)**.
 2. Redirect URI: `https://your-librariarr-host/api/auth/sso/oidc/callback`. Post-logout URI: your login URL.
@@ -250,6 +302,10 @@ reverse proxy will call for forward-auth (see proxy snippets below).
 
 #### oauth2-proxy
 
+Use **oauth2-proxy v7.15.2 or newer** — earlier 7.x releases shipped multiple
+authentication-bypass and session-fixation CVEs (CVE-2026-34986 and the
+CVE-2026-3228x series) that were fixed in 7.15.2.
+
 oauth2-proxy injects `X-Forwarded-User`, `X-Forwarded-Email`,
 `X-Forwarded-Preferred-Username` when running in forward-auth mode. In
 Librariarr override:
@@ -273,6 +329,29 @@ show the minimum needed for Librariarr; adapt hostnames to your setup.
 Traefik uses the `ForwardAuth` middleware. Define a middleware once and apply
 it to the Librariarr router.
 
+<Aside type="caution">
+  The `trustForwardHeader=true` middleware option was **deprecated in Traefik
+  v3.6.14** and will be removed in the next major version. Configure trusted
+  proxy IPs at the EntryPoint level instead, via
+  `entryPoints.<name>.forwardedHeaders.trustedIPs`. The snippets below use the
+  modern approach; on Traefik &lt; 3.6.14 you can still set
+  `forwardauth.trustForwardHeader=true` on the middleware.
+</Aside>
+
+**EntryPoint trust (Traefik static config) — applies to all forward-auth setups below:**
+
+```yaml title="traefik.yml"
+entryPoints:
+  websecure:
+    address: ":443"
+    forwardedHeaders:
+      # The IPs of the Authelia/Authentik/oauth2-proxy containers reaching
+      # this entrypoint. Adjust for your network.
+      trustedIPs:
+        - 172.16.0.0/12
+        - 10.0.0.0/8
+```
+
 **Authelia:**
 
 ```yaml title="docker-compose.yml (Traefik labels)"
@@ -286,12 +365,11 @@ services:
       - traefik.http.services.librariarr.loadbalancer.server.port=3000
 
   authelia:
-    image: authelia/authelia:latest
+    image: authelia/authelia:4.39
     labels:
       - traefik.enable=true
       - traefik.http.routers.authelia.rule=Host(`auth.example.com`)
       - traefik.http.middlewares.authelia.forwardauth.address=http://authelia:9091/api/authz/forward-auth
-      - traefik.http.middlewares.authelia.forwardauth.trustForwardHeader=true
       - traefik.http.middlewares.authelia.forwardauth.authResponseHeaders=Remote-User,Remote-Email,Remote-Name,Remote-Groups
 ```
 
@@ -310,11 +388,10 @@ services:
   # The Authentik outpost is reachable on its standard 9000 port.
   # Adjust to point at your outpost host/port.
   authentik:
-    image: ghcr.io/goauthentik/server:latest
+    image: ghcr.io/goauthentik/server:2026.2
     labels:
       - traefik.enable=true
       - traefik.http.middlewares.authentik.forwardauth.address=http://authentik:9000/outpost.goauthentik.io/auth/traefik
-      - traefik.http.middlewares.authentik.forwardauth.trustForwardHeader=true
       - traefik.http.middlewares.authentik.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-email,X-authentik-name,X-authentik-groups,X-authentik-uid
 ```
 
@@ -332,7 +409,7 @@ services:
       - traefik.http.routers.librariarr.middlewares=oauth2-proxy@docker
 
   oauth2-proxy:
-    image: quay.io/oauth2-proxy/oauth2-proxy:latest
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15
     command:
       - --provider=oidc
       - --reverse-proxy=true
@@ -340,7 +417,6 @@ services:
       - --upstream=static://200
     labels:
       - traefik.http.middlewares.oauth2-proxy.forwardauth.address=http://oauth2-proxy:4180/oauth2/auth
-      - traefik.http.middlewares.oauth2-proxy.forwardauth.trustForwardHeader=true
       - traefik.http.middlewares.oauth2-proxy.forwardauth.authResponseHeaders=X-Forwarded-User,X-Forwarded-Email,X-Forwarded-Preferred-Username
 ```
 
@@ -348,6 +424,12 @@ services:
 
 Caddy's `forward_auth` directive handles the call to the auth provider and the
 redirect to the login page on failure.
+
+<Aside type="caution">
+  Use **Caddy 2.11.2 or newer**. Earlier 2.11.x releases shipped a
+  `forward_auth` vulnerability (identity injection / potential privilege
+  escalation) that was patched in 2.11.2.
+</Aside>
 
 **Authelia:**
 
