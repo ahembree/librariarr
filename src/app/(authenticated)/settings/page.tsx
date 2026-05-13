@@ -1813,6 +1813,26 @@ export default function SettingsPage() {
     }
   };
 
+  const handleTogglePlexLogin = async (checked: boolean) => {
+    setAuthLoading(true);
+    try {
+      const res = await fetch("/api/settings/auth", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plexLoginEnabled: checked }),
+      });
+      if (res.ok) {
+        setAuthInfo((prev) => prev ? { ...prev, plexLoginEnabled: checked } : prev);
+      } else {
+        // Surface the lockout-guard error so admins know why the toggle didn't move
+        const data = await res.json().catch(() => ({}));
+        if (data.error) alert(data.error);
+      }
+    } catch {} finally {
+      setAuthLoading(false);
+    }
+  };
+
   const handleChangeCredentials = async () => {
     setCredentialsError("");
     setCredentialsSuccess("");
@@ -2286,6 +2306,7 @@ export default function SettingsPage() {
             onSetPromptForm={setPromptForm}
             onSetShowCredentialPrompt={setShowCredentialPrompt}
             onToggleLocalAuth={handleToggleLocalAuth}
+            onTogglePlexLogin={handleTogglePlexLogin}
             onChangeCredentials={handleChangeCredentials}
             onPlexLink={handlePlexLink}
             onCreateCredentialsAndEnable={handleCreateCredentialsAndEnable}

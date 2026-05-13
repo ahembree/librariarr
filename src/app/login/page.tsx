@@ -35,6 +35,7 @@ const SSO_ERROR_MESSAGES: Record<string, string> = {
 export default function LoginPage() {
   const router = useRouter();
   const [localAuthEnabled, setLocalAuthEnabled] = useState(false);
+  const [plexLoginEnabled, setPlexLoginEnabled] = useState(true);
   const [ssoEnabled, setSsoEnabled] = useState(false);
   const [ssoMode, setSsoMode] = useState<"OIDC" | "FORWARD_AUTH">("OIDC");
   const [ssoError] = useState<string | null>(() => {
@@ -104,6 +105,7 @@ export default function LoginPage() {
 
         setSetupRequired(data.setupRequired ?? false);
         setLocalAuthEnabled(data.localAuthEnabled);
+        setPlexLoginEnabled(data.plexLoginEnabled ?? true);
         setSsoEnabled(Boolean(data.ssoEnabled));
         if (data.ssoMode === "FORWARD_AUTH") setSsoMode("FORWARD_AUTH");
       } catch {
@@ -307,66 +309,74 @@ export default function LoginPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Plex login button */}
-          <div className="space-y-2">
-            <Button
-              onClick={handlePlexLogin}
-              disabled={plexLoading}
-              className="w-full cursor-pointer bg-[#cc7b19] text-white hover:bg-[#e5a00d] disabled:opacity-60"
-              size="lg"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                className="mr-2 h-5 w-5 shrink-0"
-                aria-hidden="true"
-              >
-                <path d="M3.987 8.409c-.96 0-1.587.28-2.12.933v-.72H0v8.88s.038.018.127.037c.138.03.821.187 1.331-.249.441-.377.542-.814.542-1.318v-1.283c.533.573 1.147.813 2 .813 1.84 0 3.253-1.493 3.253-3.48 0-2.12-1.36-3.613-3.266-3.613Zm16.748 5.595.406.591c.391.614.894.906 1.492.908.621-.012 1.064-.562 1.226-.755 0 0-.307-.27-.686-.72-.517-.614-1.214-1.755-1.24-1.803l-1.198 1.779Zm-3.205-1.955c0-2.08-1.52-3.64-3.52-3.64s-3.467 1.587-3.467 3.573a3.48 3.48 0 0 0 3.507 3.52c1.413 0 2.626-.84 3.253-2.293h-2.04l-.093.093c-.427.4-.72.533-1.227.533-.787 0-1.373-.506-1.453-1.266h4.986c.04-.214.054-.307.054-.52Zm-7.671-.219c0 .769.11 1.701.868 2.722l.056.069c-.306.526-.742.88-1.248.88-.399 0-.814-.211-1.138-.579a2.177 2.177 0 0 1-.538-1.441V6.409H9.86l-.001 5.421Zm9.283 3.46h-2.39l2.247-3.332-2.247-3.335h2.39l2.248 3.335-2.248 3.332Zm1.593-1.286Zm-17.162-.342c-.933 0-1.68-.773-1.68-1.72s.76-1.666 1.68-1.666c.92 0 1.68.733 1.68 1.68 0 .946-.733 1.706-1.68 1.706Zm18.361-1.974L24 8.622h-2.391l-.87 1.293 1.195 1.773Zm-9.404-.466c.16-.706.72-1.133 1.493-1.133.773 0 1.373.467 1.507 1.133h-3Z" />
-              </svg>
-              {plexLoading ? "Waiting for Plex authentication..." : "Sign in with Plex"}
-            </Button>
-            {plexLoading && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full cursor-pointer"
-                onClick={cancelPlexAuth}
-              >
-                Cancel
-              </Button>
-            )}
-          </div>
-          {authUrl && plexLoading && (
-            <p className="text-center text-sm text-muted-foreground">
-              A new window should have opened. If not,{" "}
-              <a
-                href={authUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline hover:text-foreground"
-              >
-                click here
-              </a>{" "}
-              and return to this tab when done.
-            </p>
-          )}
-          {plexError && (
-            <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              {plexError}
-            </div>
+          {/* Plex login button — hidden when admin has disabled Plex login.
+              Always shown during initial setup (setupRequired) so the first
+              user can be created via Plex regardless of the toggle. */}
+          {(plexLoginEnabled || setupRequired) && (
+            <>
+              <div className="space-y-2">
+                <Button
+                  onClick={handlePlexLogin}
+                  disabled={plexLoading}
+                  className="w-full cursor-pointer bg-[#cc7b19] text-white hover:bg-[#e5a00d] disabled:opacity-60"
+                  size="lg"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    className="mr-2 h-5 w-5 shrink-0"
+                    aria-hidden="true"
+                  >
+                    <path d="M3.987 8.409c-.96 0-1.587.28-2.12.933v-.72H0v8.88s.038.018.127.037c.138.03.821.187 1.331-.249.441-.377.542-.814.542-1.318v-1.283c.533.573 1.147.813 2 .813 1.84 0 3.253-1.493 3.253-3.48 0-2.12-1.36-3.613-3.266-3.613Zm16.748 5.595.406.591c.391.614.894.906 1.492.908.621-.012 1.064-.562 1.226-.755 0 0-.307-.27-.686-.72-.517-.614-1.214-1.755-1.24-1.803l-1.198 1.779Zm-3.205-1.955c0-2.08-1.52-3.64-3.52-3.64s-3.467 1.587-3.467 3.573a3.48 3.48 0 0 0 3.507 3.52c1.413 0 2.626-.84 3.253-2.293h-2.04l-.093.093c-.427.4-.72.533-1.227.533-.787 0-1.373-.506-1.453-1.266h4.986c.04-.214.054-.307.054-.52Zm-7.671-.219c0 .769.11 1.701.868 2.722l.056.069c-.306.526-.742.88-1.248.88-.399 0-.814-.211-1.138-.579a2.177 2.177 0 0 1-.538-1.441V6.409H9.86l-.001 5.421Zm9.283 3.46h-2.39l2.247-3.332-2.247-3.335h2.39l2.248 3.335-2.248 3.332Zm1.593-1.286Zm-17.162-.342c-.933 0-1.68-.773-1.68-1.72s.76-1.666 1.68-1.666c.92 0 1.68.733 1.68 1.68 0 .946-.733 1.706-1.68 1.706Zm18.361-1.974L24 8.622h-2.391l-.87 1.293 1.195 1.773Zm-9.404-.466c.16-.706.72-1.133 1.493-1.133.773 0 1.373.467 1.507 1.133h-3Z" />
+                  </svg>
+                  {plexLoading ? "Waiting for Plex authentication..." : "Sign in with Plex"}
+                </Button>
+                {plexLoading && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full cursor-pointer"
+                    onClick={cancelPlexAuth}
+                  >
+                    Cancel
+                  </Button>
+                )}
+              </div>
+              {authUrl && plexLoading && (
+                <p className="text-center text-sm text-muted-foreground">
+                  A new window should have opened. If not,{" "}
+                  <a
+                    href={authUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline hover:text-foreground"
+                  >
+                    click here
+                  </a>{" "}
+                  and return to this tab when done.
+                </p>
+              )}
+              {plexError && (
+                <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  {plexError}
+                </div>
+              )}
+            </>
           )}
           {/* SSO login button */}
           {ssoEnabled && (
             <>
-              <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <span className="w-full border-t" />
+              {(plexLoginEnabled || setupRequired) && (
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-card px-2 text-muted-foreground">or</span>
+                  </div>
                 </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-card px-2 text-muted-foreground">or</span>
-                </div>
-              </div>
+              )}
               <Button
                 asChild
                 variant="outline"
@@ -576,14 +586,16 @@ export default function LoginPage() {
           {/* Local auth form */}
           {localAuthEnabled && (
             <>
-              <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <span className="w-full border-t" />
+              {(plexLoginEnabled || setupRequired || ssoEnabled) && (
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-card px-2 text-muted-foreground">or</span>
+                  </div>
                 </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-card px-2 text-muted-foreground">or</span>
-                </div>
-              </div>
+              )}
               <form onSubmit={handleLocalLogin} className="space-y-3">
                 <div className="space-y-2">
                   <Label htmlFor="username">Username</Label>

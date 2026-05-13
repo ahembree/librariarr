@@ -18,6 +18,24 @@ export async function POST(request: NextRequest) {
     const plexUser = await getPlexUser(authToken);
     const plexIdStr = plexUser.id.toString();
 
+    // Reject the login flow when the admin has disabled Plex login (but only
+    // after setup is complete — first-user creation via Plex always works).
+    // The /api/auth/plex/link endpoint used by Settings → Connect Plex Account
+    // is unaffected by this check, so admins can still link/relink Plex while
+    // keeping the login button hidden on the public login page.
+    const userCount = await prisma.user.count();
+    if (userCount > 0) {
+      const settings = await prisma.appSettings.findFirst({
+        select: { plexLoginEnabled: true },
+      });
+      if (settings && settings.plexLoginEnabled === false) {
+        return NextResponse.json(
+          { error: "Plex login is disabled by the administrator." },
+          { status: 403 }
+        );
+      }
+    }
+
     // Check if a user with this Plex ID already exists
     const existingUser = await prisma.user.findUnique({
       where: { plexId: plexIdStr },
@@ -47,8 +65,8 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // No user with this Plex ID — check if any users exist (single-admin app)
-    const userCount = await prisma.user.count();
+    // No user with this Plex ID — single-admin app, so reject if any user
+    // already exists. (userCount was already fetched above.)
     if (userCount > 0) {
       return NextResponse.json(
         { error: "This Plex account is not linked to the admin user. Use Settings > Authentication to link your Plex account." },

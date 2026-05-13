@@ -62,6 +62,7 @@ export interface AuthenticationTabProps {
   onSetPromptForm: (updater: (prev: PromptForm) => PromptForm) => void;
   onSetShowCredentialPrompt: (open: boolean) => void;
   onToggleLocalAuth: (enabled: boolean) => void;
+  onTogglePlexLogin: (enabled: boolean) => void;
   onChangeCredentials: () => void;
   onPlexLink: () => void;
   onCreateCredentialsAndEnable: () => void;
@@ -83,6 +84,7 @@ export function AuthenticationTab({
   onSetPromptForm,
   onSetShowCredentialPrompt,
   onToggleLocalAuth,
+  onTogglePlexLogin,
   onChangeCredentials,
   onPlexLink,
   onCreateCredentialsAndEnable,
@@ -107,7 +109,7 @@ export function AuthenticationTab({
             Link your Plex account for server discovery and Plex OAuth login.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           {authInfo?.plexConnected ? (
             <div className="flex items-center gap-2 text-sm">
               <CheckCircle className="h-4 w-4 text-green-500" />
@@ -131,6 +133,33 @@ export function AuthenticationTab({
                 {plexLinking ? "Waiting for Plex..." : "Connect Plex Account"}
               </Button>
             </div>
+          )}
+
+          {/* Plex login toggle — only shown when a Plex account is linked.
+              Lets the admin hide the Plex login button from the public login
+              page (useful when relying on SSO) while keeping the Plex token
+              attached for server discovery and library sync. */}
+          {authInfo?.plexConnected && (
+            <>
+              <Separator />
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-medium">Allow Plex Login</p>
+                  <p className="text-xs text-muted-foreground">
+                    Show the &ldquo;Sign in with Plex&rdquo; button on the
+                    login page. Turning this off keeps your Plex token
+                    attached for server discovery and library sync —
+                    you&rsquo;ll just need another sign-in method (SSO or
+                    local credentials).
+                  </p>
+                </div>
+                <Switch
+                  checked={authInfo?.plexLoginEnabled ?? true}
+                  disabled={authLoading}
+                  onCheckedChange={onTogglePlexLogin}
+                />
+              </div>
+            </>
           )}
         </CardContent>
       </Card>

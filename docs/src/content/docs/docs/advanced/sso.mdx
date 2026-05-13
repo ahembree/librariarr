@@ -15,9 +15,19 @@ Librariarr supports single sign-on (SSO) via two mechanisms:
 
 <Aside type="caution">
   When SSO is enabled the local username/password form is hidden on the login
-  screen. Plex login remains available if a Plex account is linked. Make sure
-  you have a working alternate login method (local credentials or Plex) before
-  enabling SSO, or you may lock yourself out.
+  screen. Plex login remains available by default if a Plex account is linked.
+  Make sure you have a working alternate login method (local credentials or
+  Plex) before enabling SSO, or you may lock yourself out.
+</Aside>
+
+<Aside type="tip">
+  **Want SSO-only login while keeping Plex for media access?** You can hide
+  the Plex login button without unlinking Plex from your account. Toggle off
+  **Settings → Authentication → Plex Connection → Allow Plex Login**. Your
+  Plex token stays attached for server discovery and library sync; it just
+  won't appear as a login option on the public login page. The toggle is
+  gated by the same lockout check as the others — you'll need SSO or local
+  credentials configured first.
 </Aside>
 
 ## How linking works

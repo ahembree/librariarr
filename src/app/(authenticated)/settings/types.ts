@@ -75,6 +75,7 @@ export interface AuthInfo {
   localUsername: string | null;
   hasPassword: boolean;
   localAuthEnabled: boolean;
+  plexLoginEnabled: boolean;
   displayName: string;
 }
 

@@ -182,7 +182,8 @@ export const backupRestoreSchema = z.object({
 });
 
 export const authSettingsSchema = z.object({
-  localAuthEnabled: z.boolean(),
+  localAuthEnabled: z.boolean().optional(),
+  plexLoginEnabled: z.boolean().optional(),
 });
 
 export const runJobSchema = z.object({

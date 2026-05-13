@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   validateRequest,
   authLoginSchema,
+  authSettingsSchema,
   serverAddSchema,
   maintenanceSchema,
   authSetupSchema,
@@ -416,5 +417,47 @@ describe("terminateSessionSchema", () => {
       serverId: "server-123",
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("authSettingsSchema", () => {
+  it("accepts the empty object (no toggles changed)", () => {
+    expect(authSettingsSchema.safeParse({}).success).toBe(true);
+  });
+
+  it("accepts localAuthEnabled alone", () => {
+    expect(
+      authSettingsSchema.safeParse({ localAuthEnabled: true }).success
+    ).toBe(true);
+    expect(
+      authSettingsSchema.safeParse({ localAuthEnabled: false }).success
+    ).toBe(true);
+  });
+
+  it("accepts plexLoginEnabled alone", () => {
+    expect(
+      authSettingsSchema.safeParse({ plexLoginEnabled: true }).success
+    ).toBe(true);
+    expect(
+      authSettingsSchema.safeParse({ plexLoginEnabled: false }).success
+    ).toBe(true);
+  });
+
+  it("accepts both toggles together", () => {
+    expect(
+      authSettingsSchema.safeParse({
+        localAuthEnabled: true,
+        plexLoginEnabled: false,
+      }).success
+    ).toBe(true);
+  });
+
+  it("rejects non-boolean values", () => {
+    expect(
+      authSettingsSchema.safeParse({ localAuthEnabled: "yes" }).success
+    ).toBe(false);
+    expect(
+      authSettingsSchema.safeParse({ plexLoginEnabled: 1 }).success
+    ).toBe(false);
   });
 });

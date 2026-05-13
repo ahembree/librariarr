@@ -65,6 +65,10 @@ model AppSettings {
   discordWebhookAvatarUrl      String?
   discordNotifyMaintenance     Boolean   @default(false)
   localAuthEnabled       Boolean @default(false)
+  // Allow signing in with Plex from the login page. When false, the Plex
+  // button is hidden and /api/auth/plex/token rejects logins — but the
+  // user's plexToken stays attached for media server / library sync.
+  plexLoginEnabled       Boolean @default(true)
   // SSO — when ssoEnabled is true, the local username/password form is hidden
   // on the login screen. Plex login remains available if a Plex account is linked.
   ssoEnabled                Boolean   @default(false)
