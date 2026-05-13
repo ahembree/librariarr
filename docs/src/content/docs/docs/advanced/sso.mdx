@@ -207,56 +207,256 @@ authentication upstream and injects identity headers.
 
 4. Toggle **Enable SSO Login** on and save.
 
-### Authelia (forward auth)
+### Authentication providers
 
-Authelia's session check endpoint injects `Remote-User`, `Remote-Email`,
-`Remote-Name`, and `Remote-Groups` by default. The Librariarr defaults work
-unchanged.
+These are the services that actually authenticate the user. Configure your
+reverse proxy to delegate to one of them, then set the matching header
+overrides in Librariarr.
 
-Configure your proxy to call Authelia's auth endpoint for the Librariarr route
-(see [Authelia's proxy integration docs](https://www.authelia.com/integration/proxies/introduction/)).
-Then in Librariarr, just set **SSO Mode** to `Forward Auth` — no header
-overrides needed.
+#### Authelia
 
-### Authentik (forward auth outpost)
+Authelia's auth endpoint injects `Remote-User`, `Remote-Email`, `Remote-Name`,
+and `Remote-Groups` by default. The Librariarr defaults work unchanged — set
+**SSO Mode** to `Forward Auth` and don't touch the header overrides.
 
-1. **Applications → Providers → Create → Proxy Provider.**
+Auth endpoint URLs you'll need when wiring up your reverse proxy:
+
+| Endpoint | Used by |
+|----------|---------|
+| `/api/authz/forward-auth` | Traefik, Caddy, HAProxy, Skipper |
+| `/api/verify` | Nginx (`auth_request`) |
+
+See the [Authelia proxy integration docs](https://www.authelia.com/integration/proxies/introduction/)
+for the canonical reference.
+
+#### Authentik (proxy outpost)
+
+1. **Admin → Applications → Providers → Create → Proxy Provider.**
 2. Mode: **Forward auth (single application)**.
 3. External host: `https://your-librariarr-host`.
-4. Save. Create an Application linked to this provider.
-5. Deploy or attach a **Proxy Outpost** that fronts Librariarr.
-6. Authentik's forward-auth outpost injects `X-authentik-username`,
-   `X-authentik-email`, `X-authentik-name` — **not** `Remote-*` by default.
+4. **Save.** Create an Application linked to this provider.
+5. **Outposts:** ensure an outpost includes this provider. The embedded
+   outpost works; a standalone outpost is also fine.
 
-   In Librariarr, override:
-   - **User Header:** `X-authentik-username`
-   - **Email Header:** `X-authentik-email`
-   - **Name Header:** `X-authentik-name`
+Authentik's outpost injects `X-authentik-username`, `X-authentik-email`,
+`X-authentik-name` — **not** `Remote-*`. In Librariarr override:
 
-### Caddy `forward_auth`
+- **User Header:** `X-authentik-username`
+- **Email Header:** `X-authentik-email`
+- **Name Header:** `X-authentik-name`
 
-Caddy passes the upstream auth provider's response headers through to the
-proxied service. Combined with Authelia or Authentik forward-auth, the
-defaults work:
+The outpost exposes a `/outpost.goauthentik.io/auth/...` endpoint that your
+reverse proxy will call for forward-auth (see proxy snippets below).
 
-```caddyfile
+#### oauth2-proxy
+
+oauth2-proxy injects `X-Forwarded-User`, `X-Forwarded-Email`,
+`X-Forwarded-Preferred-Username` when running in forward-auth mode. In
+Librariarr override:
+
+- **User Header:** `X-Forwarded-Preferred-Username` *(or `X-Forwarded-User` for the raw IdP sub)*
+- **Email Header:** `X-Forwarded-Email`
+- **Name Header:** `X-Forwarded-User`
+
+Run with `--reverse-proxy=true` and `--pass-authorization-header=true`; expose
+`/oauth2/auth` as the auth-check endpoint for your reverse proxy.
+
+### Reverse proxy wiring
+
+The proxy's job is to (1) ask the auth provider whether the request is
+authenticated, (2) if not, send the user to the provider's login flow, and
+(3) if yes, pass the identity headers through to Librariarr. Snippets below
+show the minimum needed for Librariarr; adapt hostnames to your setup.
+
+#### Traefik (v2 / v3)
+
+Traefik uses the `ForwardAuth` middleware. Define a middleware once and apply
+it to the Librariarr router.
+
+**Authelia:**
+
+```yaml title="docker-compose.yml (Traefik labels)"
+services:
+  librariarr:
+    image: ahembree/librariarr:latest
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.librariarr.rule=Host(`librariarr.example.com`)
+      - traefik.http.routers.librariarr.middlewares=authelia@docker
+      - traefik.http.services.librariarr.loadbalancer.server.port=3000
+
+  authelia:
+    image: authelia/authelia:latest
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.authelia.rule=Host(`auth.example.com`)
+      - traefik.http.middlewares.authelia.forwardauth.address=http://authelia:9091/api/authz/forward-auth
+      - traefik.http.middlewares.authelia.forwardauth.trustForwardHeader=true
+      - traefik.http.middlewares.authelia.forwardauth.authResponseHeaders=Remote-User,Remote-Email,Remote-Name,Remote-Groups
+```
+
+**Authentik:**
+
+```yaml title="docker-compose.yml (Traefik labels)"
+services:
+  librariarr:
+    image: ahembree/librariarr:latest
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.librariarr.rule=Host(`librariarr.example.com`)
+      - traefik.http.routers.librariarr.middlewares=authentik@docker
+      - traefik.http.services.librariarr.loadbalancer.server.port=3000
+
+  # The Authentik outpost is reachable on its standard 9000 port.
+  # Adjust to point at your outpost host/port.
+  authentik:
+    image: ghcr.io/goauthentik/server:latest
+    labels:
+      - traefik.enable=true
+      - traefik.http.middlewares.authentik.forwardauth.address=http://authentik:9000/outpost.goauthentik.io/auth/traefik
+      - traefik.http.middlewares.authentik.forwardauth.trustForwardHeader=true
+      - traefik.http.middlewares.authentik.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-email,X-authentik-name,X-authentik-groups,X-authentik-uid
+```
+
+You'll also need a router that exposes the outpost's `/outpost.goauthentik.io`
+path on the Librariarr hostname so the redirect-back flow works. The simplest
+way is to add a second router on `Host(\`librariarr.example.com\`) && PathPrefix(\`/outpost.goauthentik.io/\`)`
+that routes to the outpost service.
+
+**oauth2-proxy:**
+
+```yaml title="docker-compose.yml (Traefik labels)"
+services:
+  librariarr:
+    labels:
+      - traefik.http.routers.librariarr.middlewares=oauth2-proxy@docker
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:latest
+    command:
+      - --provider=oidc
+      - --reverse-proxy=true
+      - --pass-authorization-header=true
+      - --upstream=static://200
+    labels:
+      - traefik.http.middlewares.oauth2-proxy.forwardauth.address=http://oauth2-proxy:4180/oauth2/auth
+      - traefik.http.middlewares.oauth2-proxy.forwardauth.trustForwardHeader=true
+      - traefik.http.middlewares.oauth2-proxy.forwardauth.authResponseHeaders=X-Forwarded-User,X-Forwarded-Email,X-Forwarded-Preferred-Username
+```
+
+#### Caddy
+
+Caddy's `forward_auth` directive handles the call to the auth provider and the
+redirect to the login page on failure.
+
+**Authelia:**
+
+```caddyfile title="Caddyfile"
 librariarr.example.com {
-    forward_auth authelia.example.com:9091 {
-        uri /api/verify?rd=https://auth.example.com
+    forward_auth authelia:9091 {
+        uri /api/authz/forward-auth
         copy_headers Remote-User Remote-Email Remote-Name Remote-Groups
     }
     reverse_proxy librariarr:3000
 }
 ```
 
-### oauth2-proxy
+**Authentik:**
 
-oauth2-proxy injects `X-Forwarded-User`, `X-Forwarded-Email`,
-`X-Forwarded-Preferred-Username`. In Librariarr, override:
+```caddyfile title="Caddyfile"
+librariarr.example.com {
+    # The outpost's path must be reachable on the Librariarr hostname
+    # so the redirect-back flow works.
+    reverse_proxy /outpost.goauthentik.io/* authentik:9000
 
-- **User Header:** `X-Forwarded-Preferred-Username` *(or `X-Forwarded-User` for the IdP-specific sub)*
-- **Email Header:** `X-Forwarded-Email`
-- **Name Header:** `X-Forwarded-User`
+    forward_auth authentik:9000 {
+        uri /outpost.goauthentik.io/auth/caddy
+        copy_headers X-authentik-username X-authentik-email X-authentik-name X-authentik-groups
+        # Authentik's outpost requires this set
+        header_up X-Forwarded-Host {http.request.host}
+    }
+    reverse_proxy librariarr:3000
+}
+```
+
+**oauth2-proxy:**
+
+```caddyfile title="Caddyfile"
+librariarr.example.com {
+    reverse_proxy /oauth2/* oauth2-proxy:4180
+
+    forward_auth oauth2-proxy:4180 {
+        uri /oauth2/auth
+        copy_headers X-Forwarded-User X-Forwarded-Email X-Forwarded-Preferred-Username
+    }
+    reverse_proxy librariarr:3000
+}
+```
+
+#### Nginx
+
+Nginx uses `auth_request` for forward auth. The pattern is the same across
+providers — only the auth endpoint URI and the header names differ.
+
+**Authelia:**
+
+```nginx title="/etc/nginx/sites-available/librariarr"
+server {
+    listen 443 ssl http2;
+    server_name librariarr.example.com;
+
+    # Internal auth check
+    location = /authelia {
+        internal;
+        proxy_pass http://authelia:9091/api/verify;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header X-Original-URL $scheme://$http_host$request_uri;
+    }
+
+    # Redirect unauthenticated users to the Authelia login page
+    error_page 401 = @authelia_redirect;
+    location @authelia_redirect {
+        return 302 https://auth.example.com/?rd=$scheme://$http_host$request_uri;
+    }
+
+    location / {
+        auth_request /authelia;
+
+        # Pull the identity headers from the auth response and forward them
+        auth_request_set $remote_user $upstream_http_remote_user;
+        auth_request_set $remote_email $upstream_http_remote_email;
+        auth_request_set $remote_name $upstream_http_remote_name;
+        proxy_set_header Remote-User $remote_user;
+        proxy_set_header Remote-Email $remote_email;
+        proxy_set_header Remote-Name $remote_name;
+
+        proxy_pass http://librariarr:3000;
+        # Standard reverse-proxy headers
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+    }
+}
+```
+
+**Authentik:** swap the auth location's `proxy_pass` to point at the outpost
+(`http://authentik:9000/outpost.goauthentik.io/auth/nginx`) and forward the
+`X-authentik-*` headers instead of `Remote-*`. You'll also want a regular
+`location /outpost.goauthentik.io/` block that proxies to the outpost so the
+redirect-back flow can reach it on the Librariarr hostname.
+
+**oauth2-proxy:** point the auth location at `oauth2-proxy:4180/oauth2/auth`
+and forward `X-Forwarded-User`, `X-Forwarded-Email`, and
+`X-Forwarded-Preferred-Username`.
+
+### Tested combinations — quick reference
+
+| Reverse proxy | Auth provider | Header overrides in Librariarr |
+|---------------|---------------|-------------------------------|
+| Traefik / Caddy / Nginx | Authelia | None (defaults) |
+| Traefik / Caddy / Nginx | Authentik proxy outpost | `X-authentik-username` / `-email` / `-name` |
+| Traefik / Caddy / Nginx | oauth2-proxy | `X-Forwarded-Preferred-Username` / `X-Forwarded-Email` / `X-Forwarded-User` |
 
 ## Finding your subject value
 
