@@ -1,162 +1,404 @@
 ---
 title: SSO Authentication
-description: Configure OIDC or forward-auth single sign-on for Librariarr.
+description: Configure OIDC or forward-auth single sign-on for Librariarr, with step-by-step guides for Authentik, Authelia, Keycloak, Pocket ID, and Zitadel.
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 
-Librariarr supports single sign-on (SSO) for local authentication via two
-mechanisms:
+Librariarr supports single sign-on (SSO) via two mechanisms:
 
-- **OIDC** — OpenID Connect Authorization Code + PKCE flow. Works with
-  Authentik, Authelia, Keycloak, Pocket ID, Zitadel, Okta, and any other
-  OIDC-compliant provider.
+- **OIDC** — OpenID Connect Authorization Code + PKCE. Works with Authentik,
+  Authelia, Keycloak, Pocket ID, Zitadel, Okta, and any other OIDC-compliant
+  provider.
 - **Forward Auth** — trust identity headers (e.g. `Remote-User`) injected by an
-  upstream reverse proxy.
+  upstream authenticating reverse proxy.
 
 <Aside type="caution">
-  When SSO is enabled, the local username/password form is hidden on the login
+  When SSO is enabled the local username/password form is hidden on the login
   screen. Plex login remains available if a Plex account is linked. Make sure
-  you have a working alternate login method before enabling SSO, or you may
-  lock yourself out.
+  you have a working alternate login method (local credentials or Plex) before
+  enabling SSO, or you may lock yourself out.
 </Aside>
 
 ## How linking works
 
-Librariarr uses **manual linking**: new SSO logins are not auto-provisioned. An
+Librariarr uses **manual linking**: SSO logins are never auto-provisioned. An
 admin must explicitly link an SSO subject identifier to an existing Librariarr
 user before that user can log in via SSO.
 
-The "subject" is:
+### The "subject" — hashed ID vs username
 
-- **OIDC** — the `sub` claim returned in the userinfo response (e.g.
-  `ak-abc123...` for Authentik, the user's UUID for Keycloak).
-- **Forward auth** — the value of the configured user header (typically the
-  username from your proxy).
+Every OIDC provider returns a `sub` claim that identifies the authenticated
+user. Most providers default to a **stable hashed ID** — a UUID or opaque
+string that never changes even if the user renames themselves. Some providers
+also let you configure `sub` to be the **username** instead.
 
-## OIDC setup
+| Mode | What `sub` looks like | Trade-off |
+|------|----------------------|-----------|
+| Hashed ID *(default)* | `b8f3e2c4-1234-...` or `ak-abc123def...` | Permanent — never changes |
+| Username | `alice` | Human-readable, but breaks if the username is renamed at the IdP |
 
-1. Register a new application in your identity provider. Configure it as a
-   **confidential client** (with a client secret) or a **public client** with
-   PKCE only.
-2. Set the redirect URI to:
+**Use hashed ID unless you have a reason not to.** It's set-and-forget. The
+username mode is convenient when you're getting started or testing, since
+you'll see the value in your IdP's user list rather than having to hunt for
+a UUID.
+
+For **forward auth**, the "subject" is whatever value your reverse proxy
+injects as the user header (typically `Remote-User`). This is almost always
+the username — there's no `sub` concept in forward auth.
+
+## OIDC setup — generic steps
+
+These steps apply to every OIDC provider. Provider-specific subsections below
+cover where to click and what defaults to expect.
+
+1. **Register a client** in your IdP. Set the redirect URI to:
 
    ```
    https://your-librariarr-host/api/auth/sso/oidc/callback
    ```
 
-3. In Librariarr, go to **Settings → Authentication → Single Sign-On**:
+   The host must match exactly how users reach Librariarr in a browser
+   (protocol, domain, port).
+
+2. **Copy** the Client ID, Client Secret, and Issuer URL.
+
+3. **In Librariarr** → **Settings → Authentication → Single Sign-On**:
    - **SSO Mode:** `OIDC`
-   - **Issuer URL:** the base URL where the provider serves
-     `.well-known/openid-configuration` (e.g.
-     `https://auth.example.com/application/o/librariarr/`)
-   - **Client ID:** from your IdP application
-   - **Client Secret:** from your IdP (leave blank for public clients)
-   - **Scopes:** defaults to `openid profile email` — adjust as needed
-   - **Username Claim:** defaults to `preferred_username`
+   - **Issuer URL:** the base URL where the IdP serves `.well-known/openid-configuration`
+   - **Client ID** / **Client Secret:** from your IdP
+   - **Scopes:** `openid profile email` (default — `openid` is required)
+   - **Username Claim:** `preferred_username` (default — used for the display name shown in the app)
 
-4. Click **Test Discovery** to verify the issuer URL resolves correctly.
+4. Click **Test Discovery**. Should report "Discovery succeeded."
 
-5. Under **SSO Account Linking**, paste the `sub` value of your IdP user into
-   the input and click **Link Identity**.
+5. **Link your account.** Under **SSO Account Linking**, paste the `sub`
+   value (see [Finding your subject value](#finding-your-subject-value)
+   below). Click **Link Identity**.
 
 6. Toggle **Enable SSO Login** on and click **Save SSO Settings**. The login
-   page will now display a "Sign in with SSO" button.
+   page now shows **Sign in with SSO**.
 
-## Forward Auth setup
+7. Sign out and verify the SSO flow works end-to-end before relying on it.
+
+### Authentik
+
+1. **Admin Interface → Applications → Providers → Create.**
+2. Type: **OAuth2/OpenID Provider**. Name: `Librariarr`.
+3. Set:
+   - Client type: **Confidential**
+   - Redirect URIs: `https://your-librariarr-host/api/auth/sso/oidc/callback`
+   - Signing Key: `authentik Self-signed Certificate`
+   - **Subject mode:** `Based on the User's hashed ID` (default) **or** `Based on the User's username` if you'd rather link by name. See [Finding your subject value](#finding-your-subject-value).
+4. **Save.** Copy the **Client ID** and **Client Secret**.
+5. **Applications → Applications → Create.** Name: `Librariarr`. Slug: `librariarr`. Provider: the one you just created.
+6. In Librariarr:
+   - **Issuer URL:** `https://auth.example.com/application/o/librariarr/`
+     *(replace the slug with whatever you used; trailing slash optional but recommended)*
+
+### Authelia
+
+Authelia supports OIDC since v4.30, with the modern client config landing in
+4.38. The example below is for 4.38+.
+
+1. Edit Authelia's `configuration.yml`. Under `identity_providers.oidc.clients`,
+   add:
+
+   ```yaml
+   identity_providers:
+     oidc:
+       clients:
+         - client_id: librariarr
+           client_name: Librariarr
+           client_secret: '$pbkdf2-sha512$...'  # generate with `authelia crypto hash generate pbkdf2`
+           public: false
+           authorization_policy: one_factor   # or two_factor
+           redirect_uris:
+             - https://your-librariarr-host/api/auth/sso/oidc/callback
+           scopes:
+             - openid
+             - profile
+             - email
+           userinfo_signed_response_alg: none
+   ```
+
+2. Restart Authelia.
+3. In Librariarr:
+   - **Issuer URL:** `https://auth.example.com` *(your Authelia base URL — no path)*
+   - **Client ID:** `librariarr`
+   - **Client Secret:** the **plaintext** secret you hashed (not the `$pbkdf2…` value)
+4. Authelia's `sub` is a stable UUID-style identifier by default. To use the
+   username instead, set `claims_policy: username` on the client (newer
+   versions) or configure a custom claims policy with `subject` mapped to
+   `preferred_username`.
+
+### Keycloak
+
+1. **Realm settings → Clients → Create client.** Type: **OpenID Connect**. Client ID: `librariarr`.
+2. **Client authentication:** On. **Authentication flow:** Standard flow + Direct access grants off.
+3. **Valid redirect URIs:** `https://your-librariarr-host/api/auth/sso/oidc/callback`
+4. **Save.** Open the **Credentials** tab, copy the **Client secret**.
+5. In Librariarr:
+   - **Issuer URL:** `https://kc.example.com/realms/{your-realm}` *(no trailing slash)*
+   - **Client ID:** `librariarr`
+   - **Client Secret:** from step 4
+6. Keycloak's `sub` is the user's UUID (visible at **Users → \<user\> → ID** in
+   the admin console). To use the username instead, add a mapper:
+   **Client → Client scopes → librariarr-dedicated → Add mapper → User Property**,
+   property `username`, claim name `sub`.
+
+### Pocket ID
+
+Pocket ID is a lightweight passkey-only OIDC provider.
+
+1. Log in to the Pocket ID admin panel.
+2. **OIDC Clients → Add OIDC Client.**
+3. Name: `Librariarr`. Callback URL: `https://your-librariarr-host/api/auth/sso/oidc/callback`.
+4. **Save.** Copy the **Client ID** and **Client Secret**.
+5. In Librariarr:
+   - **Issuer URL:** `https://pocket-id.example.com` *(the Pocket ID base URL — no path)*
+   - **Client ID** / **Client Secret:** from step 4
+6. Pocket ID's `sub` is the user's UUID, visible in the admin **Users** list.
+   `preferred_username` carries the username.
+
+### Zitadel
+
+1. In the Zitadel console: **Projects → \<your project\> → New Application.** Type: **Web**. Authentication method: **Code (with PKCE)**.
+2. Redirect URI: `https://your-librariarr-host/api/auth/sso/oidc/callback`. Post-logout URI: your login URL.
+3. **Create.** Copy the **Client ID** and **Client Secret**.
+4. **Token settings:** set the **Auth Token Type** to JWT (optional but recommended).
+5. In Librariarr:
+   - **Issuer URL:** your Zitadel instance URL, e.g. `https://my-instance-abc.zitadel.cloud` *(no path)*
+   - **Client ID** / **Client Secret:** from step 3
+6. Zitadel's `sub` is a long numeric user ID, visible at **Users → \<user\>** in the console.
+
+## Forward Auth setup — generic steps
 
 Forward auth is appropriate when Librariarr sits behind an authenticating
-reverse proxy (Authelia, Authentik forward-auth, oauth2-proxy, Caddy
-forward_auth, etc.) that handles all authentication upstream and injects
-identity headers into proxied requests.
+reverse proxy (Authelia, Authentik forward-auth outpost, oauth2-proxy, Caddy
+`forward_auth`, Traefik `ForwardAuth` middleware) that handles all
+authentication upstream and injects identity headers.
 
 <Aside type="danger">
   Forward auth trusts identity headers. **Librariarr must be reachable only
   through your authenticating proxy.** If users can reach the container
-  directly (e.g. on the LAN, via another port), they can spoof these headers
-  and bypass authentication entirely.
+  directly (e.g. on the LAN at port 3000, or via another reverse-proxy route
+  that doesn't enforce auth), they can spoof these headers and bypass
+  authentication entirely. Block direct access at the firewall or bind the
+  container to localhost.
 </Aside>
 
 1. Configure your reverse proxy to perform forward auth and inject identity
-   headers into requests forwarded to Librariarr. The typical Authelia /
-   Authentik defaults work out of the box:
+   headers into requests forwarded to Librariarr. Default headers:
 
-   | Header | Default | Description |
-   |--------|---------|-------------|
-   | `Remote-User` | username | Required — used as the SSO subject |
-   | `Remote-Email` | email | Optional |
-   | `Remote-Name` | display name | Optional |
+   | Header | Description |
+   |--------|-------------|
+   | `Remote-User` | Required — used as the SSO subject |
+   | `Remote-Email` | Optional |
+   | `Remote-Name` | Optional — display name |
 
 2. In **Settings → Authentication → Single Sign-On**:
    - **SSO Mode:** `Forward Auth`
-   - Override the header names if your proxy uses different ones
+   - Override the header names if your proxy uses different ones (some
+     proxies use `X-Forwarded-User`, `X-authentik-username`, etc.)
 
-3. Under **SSO Account Linking**, link your account using the value your proxy
-   sends as the user header (typically your username).
+3. **Link your account** using the value your proxy sends as the user header
+   (typically the username).
 
-4. Toggle **Enable SSO Login** on and save. The login page will display a
-   "Sign in with SSO" button that, when clicked, redirects through your proxy
-   and logs you in based on the trusted headers.
+4. Toggle **Enable SSO Login** on and save.
+
+### Authelia (forward auth)
+
+Authelia's session check endpoint injects `Remote-User`, `Remote-Email`,
+`Remote-Name`, and `Remote-Groups` by default. The Librariarr defaults work
+unchanged.
+
+Configure your proxy to call Authelia's auth endpoint for the Librariarr route
+(see [Authelia's proxy integration docs](https://www.authelia.com/integration/proxies/introduction/)).
+Then in Librariarr, just set **SSO Mode** to `Forward Auth` — no header
+overrides needed.
+
+### Authentik (forward auth outpost)
+
+1. **Applications → Providers → Create → Proxy Provider.**
+2. Mode: **Forward auth (single application)**.
+3. External host: `https://your-librariarr-host`.
+4. Save. Create an Application linked to this provider.
+5. Deploy or attach a **Proxy Outpost** that fronts Librariarr.
+6. Authentik's forward-auth outpost injects `X-authentik-username`,
+   `X-authentik-email`, `X-authentik-name` — **not** `Remote-*` by default.
+
+   In Librariarr, override:
+   - **User Header:** `X-authentik-username`
+   - **Email Header:** `X-authentik-email`
+   - **Name Header:** `X-authentik-name`
+
+### Caddy `forward_auth`
+
+Caddy passes the upstream auth provider's response headers through to the
+proxied service. Combined with Authelia or Authentik forward-auth, the
+defaults work:
+
+```caddyfile
+librariarr.example.com {
+    forward_auth authelia.example.com:9091 {
+        uri /api/verify?rd=https://auth.example.com
+        copy_headers Remote-User Remote-Email Remote-Name Remote-Groups
+    }
+    reverse_proxy librariarr:3000
+}
+```
+
+### oauth2-proxy
+
+oauth2-proxy injects `X-Forwarded-User`, `X-Forwarded-Email`,
+`X-Forwarded-Preferred-Username`. In Librariarr, override:
+
+- **User Header:** `X-Forwarded-Preferred-Username` *(or `X-Forwarded-User` for the IdP-specific sub)*
+- **Email Header:** `X-Forwarded-Email`
+- **Name Header:** `X-Forwarded-User`
+
+## Finding your subject value
+
+This is the single most common source of frustration: pasting the wrong value
+into **SSO Account Linking** and getting "Your SSO account is not linked to a
+Librariarr user."
+
+### Recommended method: trigger the flow once, read the logs
+
+The most reliable way to find out what `sub` your IdP actually returns:
+
+1. Save your OIDC config in Librariarr (don't link anything yet).
+2. Sign out.
+3. Click **Sign in with SSO** on the login page. Authenticate at the IdP.
+4. You'll bounce back with the `not_linked` error — expected.
+5. Check Librariarr's logs:
+
+   ```bash
+   docker logs librariarr 2>&1 | grep "no linked account"
+   ```
+
+   You'll see a line like:
+
+   ```
+   OIDC login rejected: no linked account for sub=b8f3e2c4-1234-...
+   ```
+
+6. Copy that `sub` value verbatim into the linking input. Click **Link Identity**.
+7. Toggle SSO on, sign out, sign in again — should work.
+
+This works for any IdP regardless of how `sub` is configured.
+
+### Alternative: read it from your IdP
+
+| Provider | Where to find the `sub` |
+|----------|-------------------------|
+| Authentik (hashed ID) | Not visible in the admin UI. Use the logs method, or switch to username mode. |
+| Authentik (username mode) | The user's username, as shown in **Directory → Users**. |
+| Authelia | UUID in `users_database.yml` if file-based, or your LDAP/database. |
+| Keycloak | **Users → \<user\> → Details → ID** (a UUID). |
+| Pocket ID | **Users → \<user\>** — the ID column. |
+| Zitadel | **Users → \<user\>** — long numeric ID at the top of the user page. |
 
 ## Disabling SSO
 
 Toggle **Enable SSO Login** off and save. The local username/password form
-will return on the login page (provided local auth is enabled in
+returns on the login page (provided local auth is enabled in
 **Settings → Authentication → Local Authentication**).
 
-To remove the link entirely, click **Unlink SSO** in the SSO Account Linking
-section. Unlinking also automatically turns off the global SSO toggle, since
-keeping it on after removing your identity link would silently hide the local
-form without giving you a way to log in. Both linking and unlinking invalidate
-any other active sessions for the account.
+To remove the link entirely, click **Unlink SSO**. Unlinking also
+automatically turns off the global SSO toggle — keeping it on after removing
+your identity would silently hide the local form without giving you a way to
+log in. Both linking and unlinking invalidate any other active sessions for
+the account.
 
 Unlinking is refused only if you would have no working login method left
-afterwards — that is, no linked Plex account **and** no local credentials
-(`localAuthEnabled` with a password set). Plex is **not** required;
-Jellyfin- and Emby-only deployments work fine with local credentials as the
-fallback.
+afterwards (no Plex link **and** no local credentials). Plex is **not**
+required — Jellyfin- and Emby-only deployments work fine with local
+credentials as the fallback.
 
 ## Recovery — locked out of SSO
 
-If SSO is enabled, your account has no Plex link or local password as a
-fallback, and your identity provider is unreachable (or your forward-auth
-proxy is misconfigured), use the **break-glass override**:
+If SSO is enabled and your IdP is unreachable (or your forward-auth proxy is
+misconfigured), use the **break-glass override**:
 
-1. Set the `SSO_DISABLE_OVERRIDE` environment variable to `true` on the
-   Librariarr container.
-2. Restart the container.
+1. Set `SSO_DISABLE_OVERRIDE=true` on the Librariarr container.
+2. Restart.
 
-While `SSO_DISABLE_OVERRIDE` is active:
+While the override is active:
 
 - SSO login is forcibly disabled regardless of the stored configuration.
-- The local username/password form returns to the login page (provided
-  local auth is enabled and you have credentials set).
-- The Settings → Authentication SSO panel shows an amber banner indicating
-  the override is active.
+- The local username/password form returns (provided local auth is enabled and
+  you have credentials set).
+- The Settings → Authentication SSO panel shows an amber banner.
 - Your stored OIDC / forward-auth configuration is preserved untouched.
 
-To restore SSO, unset the env var and restart. No DB changes are required.
-
-The override accepts `true`, `1`, or `yes` (case-insensitive, whitespace
-tolerant). Any other value — including `false`, `0`, or unset — leaves SSO
-controlled by the database setting.
+Unset the env var and restart to restore SSO. The override accepts `true`,
+`1`, or `yes` (case-insensitive, whitespace tolerant).
 
 <Aside>
   If you have no local credentials either, set
   <code>SSO_DISABLE_OVERRIDE=true</code> first to get back in via the local
-  form. If you also have no local user, restore from a backup file using
-  the "Restore from Backup" flow available on the login page when no users
-  exist.
+  form. If you also have no local user at all, restore from a backup file
+  using the "Restore from Backup" flow available on the login page when no
+  users exist.
 </Aside>
 
 ## Troubleshooting
 
-The login page surfaces errors returned by the SSO callback as a banner above
-the SSO button:
+### Errors shown on the login page
 
-| Message | Cause |
-|---------|-------|
-| SSO request expired or was tampered with | The state cookie was lost (session expired between redirect and callback) or the `state` value didn't match. Try again. |
-| Failed to verify your identity with the SSO provider | The token exchange with the IdP failed. Check the Librariarr logs for the underlying response. |
-| Your SSO account is not linked to a Librariarr user | The OIDC `sub` (or proxy username) doesn't match any account's linked subject. Link it in Settings. |
-| Forward-auth proxy did not provide a user identity header | The configured user header was absent. Verify your reverse proxy is injecting it. |
+The login page surfaces SSO errors as a banner above the SSO button:
+
+| Message | What it means | Fix |
+|---------|---------------|-----|
+| Your SSO account is not linked to a Librariarr user | The `sub` (or proxy username) doesn't match any account's linked subject | Use the [logs method](#recommended-method-trigger-the-flow-once-read-the-logs) to find the actual value and re-link |
+| SSO request expired or was tampered with | State cookie was lost between redirect and callback, or `state` didn't match | Try again. If persistent, check that `COOKIE_SECURE` isn't forcing HTTPS-only on an HTTP host |
+| Failed to verify your identity with the SSO provider | Token exchange with the IdP failed | Check Librariarr logs for the underlying response — usually a redirect URI mismatch or wrong client secret |
+| Forward-auth proxy did not provide a user identity header | The configured user header was absent from the request | Verify the proxy is injecting the header and the name matches what's configured |
+| SSO is not configured | Settings missing or override active | Complete the OIDC config, or unset `SSO_DISABLE_OVERRIDE` |
+
+### "Test Discovery" fails
+
+| Error | Likely cause |
+|-------|--------------|
+| `OIDC discovery failed (404)` | Wrong issuer URL. Try with/without a trailing slash. For Authentik, the path is `/application/o/{slug}/`. For Keycloak, `/realms/{realm}`. |
+| `OIDC issuer mismatch` | The `issuer` claim in the response doesn't match the URL Librariarr fetched. Re-check the URL — often a wrong realm/slug. |
+| `OIDC discovery response missing required endpoints` | The endpoint returned something other than valid discovery JSON. Browser-check `{issuer}/.well-known/openid-configuration` to confirm. |
+
+### Login bounces back without an error code
+
+If you're redirected back to the login page with no error in the URL, check
+the browser developer tools network tab. The callback request should be
+`GET /api/auth/sso/oidc/callback?code=...&state=...`. If `state` is missing,
+your IdP isn't preserving query parameters on the redirect — uncommon, but
+some custom IdP configurations strip them.
+
+### Redirect URI mismatch at the IdP
+
+Most IdPs are strict about exact match (including protocol, port, and trailing
+slash). The Librariarr redirect URI is always:
+
+```
+{public-url-of-librariarr}/api/auth/sso/oidc/callback
+```
+
+Behind a reverse proxy, Librariarr honors `X-Forwarded-Proto` and
+`X-Forwarded-Host` (or falls back to the `Host` header) when building the
+redirect URI. If your IdP rejects the URI, check the values your proxy is
+actually injecting — a mismatch between `X-Forwarded-Proto: http` and an IdP
+that expects `https` will produce a mismatch error from the IdP, not from
+Librariarr.
+
+### Forward-auth login replaces my Plex session
+
+This is expected behavior. Clicking **Sign in with SSO** under forward auth
+mode logs you in as the user identified by your proxy headers, replacing any
+existing session. The user is the same account — only the session method
+changes. Plex tokens stored on the user record are reattached automatically.
+
+### SSO settings panel shows "SSO disabled by environment override"
+
+`SSO_DISABLE_OVERRIDE` is set. SSO is forcibly off until you unset the env
+var and restart the container. Stored config is preserved; nothing is being
+silently overwritten.
