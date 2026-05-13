@@ -61,6 +61,7 @@ export function SsoSection() {
   const [linkSubject, setLinkSubject] = useState("");
   const [linking, setLinking] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [linkNotice, setLinkNotice] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -155,6 +156,7 @@ export function SsoSection() {
 
   const handleLink = async () => {
     setLinkError(null);
+    setLinkNotice(null);
     if (!linkSubject.trim()) {
       setLinkError("Subject is required");
       return;
@@ -173,6 +175,13 @@ export function SsoSection() {
       }
       setLink(data);
       setLinkSubject("");
+      // If global SSO is currently off, remind the admin they still need to
+      // enable it before login works. Linking alone doesn't activate SSO.
+      if (config && !config.ssoEnabled) {
+        setLinkNotice(
+          "Identity linked. SSO login is currently disabled — toggle 'Enable SSO Login' below and save to activate it."
+        );
+      }
     } catch {
       setLinkError("Network error");
     } finally {
@@ -182,6 +191,7 @@ export function SsoSection() {
 
   const handleUnlink = async () => {
     setLinkError(null);
+    setLinkNotice(null);
     setLinking(true);
     try {
       const res = await fetch("/api/settings/sso/link", { method: "DELETE" });
@@ -190,7 +200,21 @@ export function SsoSection() {
         setLinkError(data.error || "Failed to unlink");
         return;
       }
-      setLink(data);
+      setLink({
+        ssoSubject: data.ssoSubject ?? null,
+        ssoProvider: data.ssoProvider ?? null,
+        ssoEnabled: data.ssoEnabled ?? false,
+      });
+      // If the server also flipped global SSO off (it does so whenever SSO was
+      // enabled at the time of unlink), reflect that in the local config so
+      // the toggle below shows the truth and the admin understands why the
+      // login page no longer offers SSO.
+      if (data.globalSsoDisabled) {
+        setConfig((prev) => (prev ? { ...prev, ssoEnabled: false } : prev));
+        setLinkNotice(
+          "SSO login has also been turned off because no identity is linked. Re-link an identity and re-enable SSO login below to use it again."
+        );
+      }
     } catch {
       setLinkError("Network error");
     } finally {
@@ -251,6 +275,12 @@ export function SsoSection() {
             <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
               <AlertCircle className="h-4 w-4 shrink-0" />
               {linkError}
+            </div>
+          )}
+          {linkNotice && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-500">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{linkNotice}</span>
             </div>
           )}
         </CardContent>

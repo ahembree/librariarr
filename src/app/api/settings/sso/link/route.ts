@@ -139,5 +139,14 @@ export async function DELETE() {
 
   apiLogger.info("Auth", "SSO unlinked");
 
-  return NextResponse.json({ ssoSubject: null, ssoProvider: null, ssoEnabled: false });
+  return NextResponse.json({
+    ssoSubject: null,
+    ssoProvider: null,
+    ssoEnabled: false,
+    // Tells the UI whether unlinking also flipped the global SSO toggle. The
+    // settings page uses this to update its in-memory config and surface a
+    // notice so the admin isn't surprised when the login screen no longer
+    // shows the SSO button.
+    globalSsoDisabled: globalSsoEnabled,
+  });
 }
