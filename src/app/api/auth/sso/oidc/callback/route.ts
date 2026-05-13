@@ -85,6 +85,29 @@ export async function GET(request: NextRequest) {
     return redirectToLogin(request, "not_linked");
   }
 
+  // Sync the configured username claim into the User record so the display
+  // name in the app matches what the IdP returns. The claim defaults to
+  // `preferred_username` and is configurable per-deployment. We only update
+  // when the claim is a non-empty string and differs from what's stored, to
+  // avoid pointless writes.
+  const claimedUsername = userInfo[settings.oidcUsernameClaim];
+  if (
+    typeof claimedUsername === "string" &&
+    claimedUsername.trim().length > 0 &&
+    claimedUsername !== user.username
+  ) {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        username: claimedUsername,
+        // Also pick up email from userinfo when present
+        ...(typeof userInfo.email === "string" && userInfo.email
+          ? { email: userInfo.email }
+          : {}),
+      },
+    });
+  }
+
   // Replace any prior session data so we don't leak Plex tokens across logins.
   session.destroy();
   session.userId = user.id;

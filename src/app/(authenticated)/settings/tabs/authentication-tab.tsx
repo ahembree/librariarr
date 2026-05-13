@@ -189,6 +189,16 @@ export function AuthenticationTab({
               onCheckedChange={onToggleLocalAuth}
             />
           </div>
+          {authInfo?.localAuthEnabled && authInfo?.localAuthHiddenBySso && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-500">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                SSO is enabled, so the local username/password form is hidden
+                on the login page. This toggle controls what would appear if
+                you disabled SSO.
+              </span>
+            </div>
+          )}
           {!authInfo?.plexConnected && !authInfo?.localAuthEnabled && (
             <div className="flex items-center gap-2 rounded-md bg-muted p-3 text-sm text-muted-foreground">
               <AlertCircle className="h-4 w-4 shrink-0" />

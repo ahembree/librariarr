@@ -27,12 +27,20 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Report whether SSO is currently the effective gate on the local form.
+  // When true, the login page hides the local username/password form even if
+  // localAuthEnabled is true in the DB — so the Authentication tab should
+  // surface that to avoid the confusion of "Local Login is ON but the form
+  // doesn't appear on the login page".
+  const ssoUsableNow = isSsoUsable(await getSsoSettings());
+
   return NextResponse.json({
     plexConnected: !!user.plexId,
     localUsername: user.localUsername,
     hasPassword: !!user.passwordHash,
     localAuthEnabled: user.appSettings?.localAuthEnabled ?? false,
     plexLoginEnabled: user.appSettings?.plexLoginEnabled ?? true,
+    localAuthHiddenBySso: ssoUsableNow,
     displayName: user.username,
   });
 }
@@ -71,6 +79,21 @@ export async function PUT(request: NextRequest) {
 
   const nextLocal = data.localAuthEnabled ?? user.appSettings?.localAuthEnabled ?? false;
   const nextPlex = data.plexLoginEnabled ?? user.appSettings?.plexLoginEnabled ?? true;
+
+  // Don't let admins enable local auth without a password set — the form
+  // would appear on the login page but every submission would fail. Client
+  // already runs a credential-prompt dialog, but a direct API call would
+  // bypass that.
+  if (nextLocal && !user.passwordHash) {
+    return NextResponse.json(
+      {
+        error:
+          "Set a local password first (Settings → Authentication → Local Authentication) " +
+          "before enabling local login.",
+      },
+      { status: 400 }
+    );
+  }
 
   // What login methods would the user have after this update? At least one
   // must remain. Note: when SSO is usable, the local form is hidden on the

@@ -76,6 +76,9 @@ export interface AuthInfo {
   hasPassword: boolean;
   localAuthEnabled: boolean;
   plexLoginEnabled: boolean;
+  /** True when SSO is currently usable and is hiding the local form on the
+   *  login page (regardless of the localAuthEnabled DB value). */
+  localAuthHiddenBySso?: boolean;
   displayName: string;
 }
 

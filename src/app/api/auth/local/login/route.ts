@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, authLoginSchema } from "@/lib/validation";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
+import { getSsoSettings, isSsoUsable } from "@/lib/sso/config";
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,6 +15,24 @@ export async function POST(request: NextRequest) {
     const { data, error } = await validateRequest(request, authLoginSchema);
     if (error) return error;
     const { username, password } = data;
+
+    // Gate before credential check: the login page hides the local form when
+    // localAuthEnabled is false or when SSO is usable (SSO hides local). Without
+    // this check, a direct POST would bypass those toggles entirely — a real
+    // auth-bypass for anyone with valid credentials. Return the same generic
+    // 401 as a credential mismatch so we don't leak which toggle is off.
+    const [settings, ssoSettings] = await Promise.all([
+      prisma.appSettings.findFirst({ select: { localAuthEnabled: true } }),
+      getSsoSettings(),
+    ]);
+    const localAuthEnabled = settings?.localAuthEnabled ?? false;
+    const ssoUsable = isSsoUsable(ssoSettings);
+    if (!localAuthEnabled || ssoUsable) {
+      return NextResponse.json(
+        { error: "Invalid username or password" },
+        { status: 401 }
+      );
+    }
 
     const user = await prisma.user.findUnique({
       where: { localUsername: username.trim().toLowerCase() },

@@ -366,4 +366,29 @@ describe("fetchUserInfo", () => {
       /missing required `sub`/
     );
   });
+
+  it("passes through additional claims so callers can read username/email", async () => {
+    // The callback consumes settings.oidcUsernameClaim against the userinfo
+    // payload to sync the display name. The OidcUserInfo type allows arbitrary
+    // extra string keys; this guards that fetchUserInfo doesn't accidentally
+    // strip them.
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          sub: "abc",
+          preferred_username: "alice",
+          email: "alice@example.com",
+          name: "Alice Liddell",
+          custom_claim: "value",
+        }),
+        { status: 200 }
+      )
+    ) as typeof fetch;
+
+    const info = await fetchUserInfo(makeDiscovery(), "at");
+    expect(info.preferred_username).toBe("alice");
+    expect(info.email).toBe("alice@example.com");
+    expect(info.name).toBe("Alice Liddell");
+    expect(info["custom_claim"]).toBe("value");
+  });
 });

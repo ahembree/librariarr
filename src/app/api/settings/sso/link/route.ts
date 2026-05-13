@@ -90,7 +90,13 @@ export async function DELETE() {
     select: {
       plexId: true,
       passwordHash: true,
-      appSettings: { select: { ssoEnabled: true, localAuthEnabled: true } },
+      appSettings: {
+        select: {
+          ssoEnabled: true,
+          localAuthEnabled: true,
+          plexLoginEnabled: true,
+        },
+      },
     },
   });
   if (!me) {
@@ -98,17 +104,21 @@ export async function DELETE() {
   }
 
   const globalSsoEnabled = me.appSettings?.ssoEnabled ?? false;
-  const hasPlex = !!me.plexId;
+  // Plex linkage alone isn't enough — if the admin disabled plexLoginEnabled,
+  // the button is hidden and the /api/auth/plex/token route rejects logins.
+  // So a "usable Plex fallback" requires both the linkage AND the toggle.
+  const hasUsablePlex =
+    !!me.plexId && (me.appSettings?.plexLoginEnabled ?? true);
   const hasUsableLocal =
     !!me.passwordHash && !!me.appSettings?.localAuthEnabled;
 
-  if (!hasPlex && !hasUsableLocal) {
+  if (!hasUsablePlex && !hasUsableLocal) {
     return NextResponse.json(
       {
         error:
           "Cannot unlink SSO without another working login method. " +
-          "Set up local credentials (Settings → Authentication → Local Authentication) " +
-          "or link a Plex account first.",
+          "Either enable Plex login (Settings → Authentication → Plex Connection → Allow Plex Login) " +
+          "or set up local credentials first.",
       },
       { status: 400 }
     );

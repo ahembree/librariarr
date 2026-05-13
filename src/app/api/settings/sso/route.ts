@@ -96,6 +96,46 @@ export async function PUT(request: NextRequest) {
     }
   }
 
+  // Lockout guard for the disable path. Disabling SSO restores the local
+  // form (subject to localAuthEnabled + passwordHash) and the Plex button
+  // (subject to plexLoginEnabled), so verify at least one non-SSO method
+  // will be usable afterwards. Without this, an admin who set up SSO-only
+  // login (plexLoginEnabled=false, localAuthEnabled=false) could disable
+  // SSO and end up with no login methods at all.
+  const wasSsoUsable =
+    !!current.ssoEnabled && current.ssoMode === "OIDC"
+      ? !!current.oidcIssuer && !!current.oidcClientId
+      : current.ssoMode === "FORWARD_AUTH"
+        ? !!current.forwardAuthUserHeader
+        : false;
+  const isDisablingSso = wasSsoUsable && next.ssoEnabled === false;
+  if (isDisablingSso) {
+    const userData = await prisma.user.findUnique({
+      where: { id: session.userId },
+      select: {
+        plexId: true,
+        passwordHash: true,
+        appSettings: {
+          select: { localAuthEnabled: true, plexLoginEnabled: true },
+        },
+      },
+    });
+    const willHavePlex =
+      !!userData?.plexId && (userData?.appSettings?.plexLoginEnabled ?? true);
+    const willHaveLocal =
+      !!userData?.passwordHash && !!userData?.appSettings?.localAuthEnabled;
+    if (!willHavePlex && !willHaveLocal) {
+      return NextResponse.json(
+        {
+          error:
+            "Cannot disable SSO — you'd have no way to sign in. Enable Plex login " +
+            "(Settings → Authentication → Plex Connection) or set up local credentials first.",
+        },
+        { status: 400 }
+      );
+    }
+  }
+
   // Normalize empty strings to null so the OIDC client doesn't try to use them
   const writeData = {
     ssoEnabled: next.ssoEnabled,
