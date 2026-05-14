@@ -96,7 +96,7 @@
   },
   "devDependencies": {
     "@commitlint/cli": "^20.5.0",
-    "@commitlint/config-conventional": "^20.5.0",
+    "@commitlint/config-conventional": "^21.0.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^25",
     "@types/node-cron": "^3.0.11",
