@@ -18,12 +18,12 @@ export async function GET(request: NextRequest) {
   const baseUrl = getExternalBaseUrl(request);
 
   // Block cross-site CSRF where a malicious page force-triggers this route.
-  // Without this, an attacker page with `<img src="/api/auth/sso/forward">`
-  // would cause the victim's browser to send a request through the proxy
-  // (which injects their identity headers) and the route would replace the
-  // victim's existing Plex/local session with a forward-auth session for the
-  // same user. Impact is limited (same identity) but the surprise is real.
-  if (!isSameOriginRequest(request)) {
+  // Strict mode rejects requests with neither Origin nor Referer (only
+  // reachable here via an attacker page setting `Referrer-Policy:
+  // no-referrer`). The route is only ever invoked from the "Sign in with
+  // SSO" anchor on /login, which always carries a same-origin Referer —
+  // no legitimate flow lands here without one.
+  if (!isSameOriginRequest(request, { strict: true })) {
     return NextResponse.redirect(new URL("/login?sso_error=csrf_blocked", baseUrl));
   }
 

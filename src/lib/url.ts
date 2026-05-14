@@ -13,6 +13,20 @@ import type { NextRequest } from "next/server";
  *  - Chained proxies (comma-separated header values)
  *  - Direct access (localhost or LAN IP, no proxy)
  */
+interface SameOriginOptions {
+  /**
+   * When true, requests with NEITHER Origin NOR Referer are rejected. Use for
+   * routes that are only ever reached via in-app button/anchor (e.g.
+   * `/api/auth/sso/forward`) — the no-headers case there is only reachable
+   * via an attacker page setting `Referrer-Policy: no-referrer`.
+   *
+   * Default false, which permits no-header requests (address-bar navigation,
+   * server-side redirects like the auth layout's redirect to /logout when
+   * the session is invalid).
+   */
+  strict?: boolean;
+}
+
 /**
  * Verify the request originates from the same site as the app itself.
  *
@@ -22,11 +36,17 @@ import type { NextRequest } from "next/server";
  * Checking Origin (or Referer as a fallback) is the standard mitigation.
  *
  * Returns true when:
- *  - No Origin/Referer is present (likely a direct address-bar navigation —
- *    can't be triggered cross-site)
- *  - Origin/Referer matches the external base URL
+ *  - Origin matches the external base URL, OR
+ *  - Origin is absent and Referer matches, OR
+ *  - (Non-strict only) Both Origin and Referer are absent — direct address-
+ *    bar navigation or server-side redirect. An attacker page with
+ *    `Referrer-Policy: no-referrer` can produce no-header requests too, so
+ *    routes that aren't reached via address-bar should pass `strict: true`.
  */
-export function isSameOriginRequest(request: NextRequest): boolean {
+export function isSameOriginRequest(
+  request: NextRequest,
+  options: SameOriginOptions = {}
+): boolean {
   const expectedBase = getExternalBaseUrl(request);
   const origin = request.headers.get("origin");
   if (origin) return origin === expectedBase;
@@ -39,11 +59,10 @@ export function isSameOriginRequest(request: NextRequest): boolean {
       return false;
     }
   }
-  // No Origin and no Referer — accept. Direct address-bar navigations,
-  // server-side redirects (e.g. the authenticated layout redirecting to
-  // /api/auth/logout when the session is invalid), and most curl-style
-  // probes fall here. Cross-site attacks always carry one or the other.
-  return true;
+  // Neither header present. In strict mode this is suspicious (attacker
+  // pages can strip Referer via Referrer-Policy: no-referrer); in lenient
+  // mode it's the address-bar / server-redirect case.
+  return !options.strict;
 }
 
 export function getExternalBaseUrl(request: NextRequest): string {

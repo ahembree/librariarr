@@ -104,24 +104,23 @@ function getSessionOptions(): SessionOptions {
 }
 
 /**
- * Resolve the `Secure` cookie attribute. Defaults to true in production so
- * deployments behind HTTPS don't accidentally leak the session cookie on
- * downgrade attempts. Direct-HTTP (no proxy, plain http://host:3000) and
- * dev deployments can opt out with `COOKIE_SECURE=false`. Explicit `true`
- * forces Secure regardless of NODE_ENV.
+ * Resolve the `Secure` cookie attribute.
+ *
+ * Defaults to `false` so direct-HTTP deployments (LAN, http://host:3000 with
+ * no proxy) keep working. The Docker image sets `NODE_ENV=production`, so a
+ * NODE_ENV-based default would silently break HTTP-only setups on upgrade —
+ * the browser would refuse to send the cookie and users would never stay
+ * logged in.
+ *
+ * HTTPS deployments should explicitly set `COOKIE_SECURE=true`. Accepts the
+ * lenient parse: `true`/`1`/`yes` (case-insensitive). The install docs flag
+ * this as recommended for any HTTPS-fronted deployment.
  */
 function resolveCookieSecure(): boolean {
   const raw = process.env.COOKIE_SECURE;
-  if (raw === undefined) return process.env.NODE_ENV === "production";
+  if (!raw) return false;
   const normalized = raw.trim().toLowerCase();
-  if (normalized === "false" || normalized === "0" || normalized === "no") {
-    return false;
-  }
-  if (normalized === "true" || normalized === "1" || normalized === "yes") {
-    return true;
-  }
-  // Unrecognized value — fall back to production default
-  return process.env.NODE_ENV === "production";
+  return normalized === "true" || normalized === "1" || normalized === "yes";
 }
 
 export async function getSession() {

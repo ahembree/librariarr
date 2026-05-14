@@ -176,4 +176,60 @@ describe("isSameOriginRequest", () => {
       )
     ).toBe(false);
   });
+
+  describe("strict mode", () => {
+    it("rejects requests with NO Origin and NO Referer", () => {
+      // Forward-auth and similar button-only routes pass strict:true to
+      // catch the attacker-with-Referrer-Policy:no-referrer case that the
+      // lenient default permits (for legitimate address-bar nav).
+      expect(
+        isSameOriginRequest(
+          makeRequest({
+            url: "http://app.example.com/",
+            host: "app.example.com",
+          }),
+          { strict: true }
+        )
+      ).toBe(false);
+    });
+
+    it("still accepts same-origin Origin in strict mode", () => {
+      expect(
+        isSameOriginRequest(
+          makeRequest({
+            url: "http://app.example.com/",
+            host: "app.example.com",
+            origin: "http://app.example.com",
+          }),
+          { strict: true }
+        )
+      ).toBe(true);
+    });
+
+    it("still accepts same-origin Referer in strict mode", () => {
+      expect(
+        isSameOriginRequest(
+          makeRequest({
+            url: "http://app.example.com/",
+            host: "app.example.com",
+            referer: "http://app.example.com/login",
+          }),
+          { strict: true }
+        )
+      ).toBe(true);
+    });
+
+    it("still rejects cross-site Origin in strict mode", () => {
+      expect(
+        isSameOriginRequest(
+          makeRequest({
+            url: "http://app.example.com/",
+            host: "app.example.com",
+            origin: "https://attacker.example",
+          }),
+          { strict: true }
+        )
+      ).toBe(false);
+    });
+  });
 });
