@@ -93,11 +93,20 @@ export async function POST(request: NextRequest) {
     // the unique constraint is on plexId, not on "being the singleton admin").
     // PostgreSQL SSI will commit one and fail the other with a serialization
     // error — the loser sees a 500 and can retry.
+    //
+    // Also creates the AppSettings row in the same transaction. Without this,
+    // Plex-first deployments end up with no AppSettings — and routes like
+    // /api/settings/sso (which uses findUnique-then-update) return 404, so
+    // the admin couldn't configure SSO at all until they happened to save
+    // some other setting that uses upsert. The /api/auth/setup local-first
+    // path already creates AppSettings; this brings the Plex-first path in
+    // line. localAuthEnabled defaults to false here since the admin signed
+    // up via Plex.
     const user = await prisma.$transaction(
       async (tx) => {
         const inner = await tx.user.count();
         if (inner > 0) return null;
-        return await tx.user.create({
+        const created = await tx.user.create({
           data: {
             plexId: plexIdStr,
             plexToken: authToken,
@@ -105,6 +114,10 @@ export async function POST(request: NextRequest) {
             username: plexUser.username,
           },
         });
+        await tx.appSettings.create({
+          data: { userId: created.id, localAuthEnabled: false },
+        });
+        return created;
       },
       { isolationLevel: "Serializable" }
     );

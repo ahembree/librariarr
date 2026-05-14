@@ -20,6 +20,38 @@ const SSO_SELECT = {
   forwardAuthNameHeader: true,
 } as const;
 
+type SsoSettingsRow = {
+  ssoEnabled: boolean;
+  ssoMode: string;
+  oidcIssuer: string | null;
+  oidcClientId: string | null;
+  oidcClientSecret: string | null;
+  oidcScopes: string;
+  oidcUsernameClaim: string;
+  forwardAuthUserHeader: string;
+  forwardAuthEmailHeader: string;
+  forwardAuthNameHeader: string;
+};
+
+/**
+ * Defaults that match the Prisma schema's `@default()` values. Used as the
+ * stand-in when the user has no `AppSettings` row yet — Plex-first
+ * deployments don't get one until a setting is saved, and we don't want
+ * /api/settings/sso to be unusable in that state.
+ */
+const SSO_DEFAULTS: SsoSettingsRow = {
+  ssoEnabled: false,
+  ssoMode: "OIDC",
+  oidcIssuer: null,
+  oidcClientId: null,
+  oidcClientSecret: null,
+  oidcScopes: "openid profile email",
+  oidcUsernameClaim: "preferred_username",
+  forwardAuthUserHeader: "Remote-User",
+  forwardAuthEmailHeader: "Remote-Email",
+  forwardAuthNameHeader: "Remote-Name",
+};
+
 export async function GET() {
   const session = await getSession();
   if (!session.isLoggedIn || !session.userId) {
@@ -31,12 +63,13 @@ export async function GET() {
     select: SSO_SELECT,
   });
 
-  if (!settings) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
+  // If no AppSettings row exists yet (e.g. Plex-first deployment that hasn't
+  // saved any setting), return the schema defaults rather than 404. The PUT
+  // below upserts, so saving will create the row.
+  const effective: SsoSettingsRow = settings ?? SSO_DEFAULTS;
 
   return NextResponse.json({
-    ...sanitize(settings),
+    ...sanitize(effective),
     overrideActive: isSsoOverrideActive(),
   });
 }
@@ -51,14 +84,13 @@ export async function PUT(request: NextRequest) {
   if (error) return error;
 
   // Load current state so we can validate the requested transition without
-  // requiring the client to send the full payload on every PUT.
-  const current = await prisma.appSettings.findUnique({
+  // requiring the client to send the full payload on every PUT. Falls back to
+  // schema defaults when no AppSettings exists — the save below upserts.
+  const existing = await prisma.appSettings.findUnique({
     where: { userId: session.userId },
     select: SSO_SELECT,
   });
-  if (!current) {
-    return NextResponse.json({ error: "Settings not found" }, { status: 404 });
-  }
+  const current: SsoSettingsRow = existing ?? SSO_DEFAULTS;
 
   const next = { ...current, ...data };
 
@@ -151,9 +183,13 @@ export async function PUT(request: NextRequest) {
     forwardAuthNameHeader: next.forwardAuthNameHeader,
   };
 
-  const updated = await prisma.appSettings.update({
+  // Upsert rather than update so a Plex-first deployment whose AppSettings
+  // row was never created (now fixed for new installs, but legacy data
+  // exists) can save SSO config without first poking some other setting.
+  const updated = await prisma.appSettings.upsert({
     where: { userId: session.userId },
-    data: writeData,
+    update: writeData,
+    create: { userId: session.userId, ...writeData },
     select: SSO_SELECT,
   });
 
@@ -167,4 +203,3 @@ export async function PUT(request: NextRequest) {
     overrideActive: isSsoOverrideActive(),
   });
 }
-
