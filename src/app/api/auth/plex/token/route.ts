@@ -60,7 +60,11 @@ export async function POST(request: NextRequest) {
         },
       });
 
+      // Destroy first to clear any transient state (e.g. SSO handshake fields
+      // from an abandoned OIDC init) before replacing with the authenticated
+      // session — matches the pattern in local/login and the SSO callback.
       const session = await getSession();
+      session.destroy();
       session.userId = existingUser.id;
       session.plexToken = authToken;
       session.isLoggedIn = true;

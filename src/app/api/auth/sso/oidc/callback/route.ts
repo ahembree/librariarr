@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { timingSafeEqual } from "crypto";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
 import { getSsoSettings, isSsoUsable } from "@/lib/sso/config";
@@ -10,9 +11,18 @@ import {
   type OidcUserInfo,
 } from "@/lib/sso/oidc-client";
 import { apiLogger } from "@/lib/logger";
+import { getExternalBaseUrl } from "@/lib/url";
+
+/** Constant-time comparison for the OIDC state value. Lengths differ → false. */
+function statesEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
 
 function redirectToLogin(request: NextRequest, error: string) {
-  const url = new URL("/login", request.url);
+  const url = new URL("/login", getExternalBaseUrl(request));
   url.searchParams.set("sso_error", error);
   return NextResponse.redirect(url);
 }
@@ -46,7 +56,7 @@ export async function GET(request: NextRequest) {
   session.oidcVerifier = undefined;
   await session.save();
 
-  if (!expectedState || !verifier || state !== expectedState) {
+  if (!expectedState || !verifier || !statesEqual(state, expectedState)) {
     apiLogger.warn("Auth", "OIDC state mismatch on callback");
     return redirectToLogin(request, "state_mismatch");
   }
@@ -118,5 +128,10 @@ export async function GET(request: NextRequest) {
 
   apiLogger.info("Auth", `SSO (OIDC) login: "${user.username}"`);
 
-  return NextResponse.redirect(new URL("/", request.url));
+  // Use the externally-visible base URL, not the raw request URL. Behind a
+  // reverse proxy, `request.url` is the internal hostname (e.g.
+  // http://librariarr:3000) and redirecting there would land users on a
+  // broken page. resolveRedirectUri builds the IdP callback URL the same way
+  // — keep them consistent.
+  return NextResponse.redirect(new URL("/", getExternalBaseUrl(request)));
 }

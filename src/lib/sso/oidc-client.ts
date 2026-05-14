@@ -61,6 +61,13 @@ function normalizeIssuer(issuer: string): string {
   return issuer.replace(/\/+$/, "");
 }
 
+/** Max bytes accepted from any IdP response. Discovery docs are ~5KB,
+ *  userinfo ~2KB, token responses ~5KB; 1MB is comfortable headroom. Without
+ *  this a malicious or compromised IdP (or DNS-hijacked issuer) could stream
+ *  multi-GB JSON and exhaust memory. `discoverOidc` is reachable
+ *  unauthenticated via `/api/auth/sso/oidc/login`. */
+const MAX_RESPONSE_BYTES = 1_048_576;
+
 async function fetchWithTimeout(
   url: string,
   init: RequestInit = {},
@@ -69,10 +76,58 @@ async function fetchWithTimeout(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    return enforceMaxBytes(res, url);
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Wrap a Response so reading the body throws if it exceeds MAX_RESPONSE_BYTES.
+ * Pre-checks the Content-Length header for early bailout when the IdP is
+ * polite enough to set one; the streaming guard catches the case where
+ * Content-Length is missing or lying.
+ */
+function enforceMaxBytes(res: Response, url: string): Response {
+  const declared = res.headers.get("content-length");
+  if (declared) {
+    const len = Number(declared);
+    if (Number.isFinite(len) && len > MAX_RESPONSE_BYTES) {
+      throw new Error(
+        `Response from ${url} exceeds ${MAX_RESPONSE_BYTES} bytes (declared ${len})`
+      );
+    }
+  }
+  if (!res.body) return res;
+  const reader = res.body.getReader();
+  let bytesRead = 0;
+  const limited = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.close();
+        return;
+      }
+      bytesRead += value.byteLength;
+      if (bytesRead > MAX_RESPONSE_BYTES) {
+        controller.error(
+          new Error(`Response from ${url} exceeds ${MAX_RESPONSE_BYTES} bytes`)
+        );
+        await reader.cancel();
+        return;
+      }
+      controller.enqueue(value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+  return new Response(limited, {
+    status: res.status,
+    statusText: res.statusText,
+    headers: res.headers,
+  });
 }
 
 export interface DiscoverOptions {

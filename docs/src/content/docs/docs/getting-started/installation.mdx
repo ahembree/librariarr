@@ -118,6 +118,8 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
 | `IMAGE_CACHE_DIR` | No | `/config/cache/images` | Artwork cache directory |
 | `PREROLL_ALLOWED_PATHS` | No | `/media,/data,/mnt,/opt/prerolls` | Comma-separated list of allowed directory prefixes for [preroll file validation](/docs/features/preroll-manager/#path-validation) |
 | `SSO_DISABLE_OVERRIDE` | No | _unset_ | Break-glass: set to `true` to force [SSO](/docs/advanced/sso/#recovery--locked-out-of-sso) off regardless of stored settings. Used to recover access when locked out of an IdP. Restart required. |
+| `COOKIE_SECURE` | No | `true` in production, else `false` | Set the `Secure` attribute on the session cookie (browser only sends it over HTTPS). Defaults to `true` when `NODE_ENV=production` (the container default). Set to `false` only if you're exposing Librariarr over plain HTTP without a TLS-terminating proxy — otherwise the browser will drop the cookie and you won't stay logged in. |
+| `TRUST_PROXY_HEADERS` | No | `true` | Whether to trust `X-Forwarded-For` / `X-Real-IP` headers when computing rate-limit buckets. Leave as `true` when behind a reverse proxy. Set to `false` if Librariarr is exposed directly to the internet — preventing attackers from rotating `X-Forwarded-For` to bypass per-IP rate limits (at the cost of a single shared rate-limit bucket for all clients). |
 
 ## Persistent Data
 

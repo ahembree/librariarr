@@ -93,7 +93,7 @@ function getSessionOptions(): SessionOptions {
       password: sessionSecret,
       cookieName: "librariarr_session",
       cookieOptions: {
-        secure: process.env.COOKIE_SECURE === "true",
+        secure: resolveCookieSecure(),
         httpOnly: true,
         sameSite: "lax" as const,
         maxAge: 60 * 60 * 24 * 30, // 30 days
@@ -101,6 +101,27 @@ function getSessionOptions(): SessionOptions {
     };
   }
   return _sessionOptions;
+}
+
+/**
+ * Resolve the `Secure` cookie attribute. Defaults to true in production so
+ * deployments behind HTTPS don't accidentally leak the session cookie on
+ * downgrade attempts. Direct-HTTP (no proxy, plain http://host:3000) and
+ * dev deployments can opt out with `COOKIE_SECURE=false`. Explicit `true`
+ * forces Secure regardless of NODE_ENV.
+ */
+function resolveCookieSecure(): boolean {
+  const raw = process.env.COOKIE_SECURE;
+  if (raw === undefined) return process.env.NODE_ENV === "production";
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "false" || normalized === "0" || normalized === "no") {
+    return false;
+  }
+  if (normalized === "true" || normalized === "1" || normalized === "yes") {
+    return true;
+  }
+  // Unrecognized value — fall back to production default
+  return process.env.NODE_ENV === "production";
 }
 
 export async function getSession() {
