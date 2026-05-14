@@ -14,7 +14,9 @@ export async function POST(request: NextRequest) {
   if (error) return error;
 
   try {
-    const discovery = await discoverOidc(data.oidcIssuer);
+    // skipCache: the admin pressed "Test Discovery" — they want a live
+    // result, not whatever's cached from earlier runs.
+    const discovery = await discoverOidc(data.oidcIssuer, { skipCache: true });
     return NextResponse.json({
       ok: true,
       issuer: discovery.issuer,

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { validateRequest, ssoConfigSchema } from "@/lib/validation";
 import { sanitize } from "@/lib/api/sanitize";
 import { isSsoOverrideActive } from "@/lib/sso/config";
+import { invalidateOidcDiscoveryCache } from "@/lib/sso/oidc-client";
 import { resolveSecretWrite } from "@/lib/sso/secret-write";
 
 const SSO_SELECT = {
@@ -155,6 +156,11 @@ export async function PUT(request: NextRequest) {
     data: writeData,
     select: SSO_SELECT,
   });
+
+  // Drop any cached discovery docs so a changed issuer URL (or a rotated
+  // signing key, etc.) takes effect on the next login instead of waiting for
+  // the TTL to expire.
+  invalidateOidcDiscoveryCache();
 
   return NextResponse.json({
     ...sanitize(updated),

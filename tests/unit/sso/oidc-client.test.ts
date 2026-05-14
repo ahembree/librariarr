@@ -7,6 +7,7 @@ import {
   fetchUserInfo,
   generatePkce,
   generateState,
+  invalidateOidcDiscoveryCache,
   resolveRedirectUri,
   type OidcDiscovery,
 } from "@/lib/sso/oidc-client";
@@ -139,6 +140,9 @@ describe("discoverOidc", () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
+    // Each test below uses skipCache:true to keep transport assertions clean,
+    // but invalidate anyway in case a future test forgets.
+    invalidateOidcDiscoveryCache();
   });
 
   it("fetches .well-known/openid-configuration and trims trailing slashes", async () => {
@@ -154,7 +158,7 @@ describe("discoverOidc", () => {
     );
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const result = await discoverOidc("https://idp.example.com///");
+    const result = await discoverOidc("https://idp.example.com///", { skipCache: true });
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls[0][0]).toBe(
       "https://idp.example.com/.well-known/openid-configuration"
@@ -167,7 +171,9 @@ describe("discoverOidc", () => {
       new Response(JSON.stringify({ issuer: "x" }), { status: 200 })
     ) as typeof fetch;
 
-    await expect(discoverOidc("https://x")).rejects.toThrow(/missing required/);
+    await expect(discoverOidc("https://x", { skipCache: true })).rejects.toThrow(
+      /missing required/
+    );
   });
 
   it("throws on non-2xx responses", async () => {
@@ -175,9 +181,9 @@ describe("discoverOidc", () => {
       new Response("not found", { status: 404 })
     ) as typeof fetch;
 
-    await expect(discoverOidc("https://nope.example.com")).rejects.toThrow(
-      /OIDC discovery failed \(404\)/
-    );
+    await expect(
+      discoverOidc("https://nope.example.com", { skipCache: true })
+    ).rejects.toThrow(/OIDC discovery failed \(404\)/);
   });
 
   it("rejects when the issuer claim doesn't match the requested URL", async () => {
@@ -192,9 +198,9 @@ describe("discoverOidc", () => {
       )
     ) as typeof fetch;
 
-    await expect(discoverOidc("https://idp.example.com")).rejects.toThrow(
-      /OIDC issuer mismatch/
-    );
+    await expect(
+      discoverOidc("https://idp.example.com", { skipCache: true })
+    ).rejects.toThrow(/OIDC issuer mismatch/);
   });
 
   it("tolerates trailing-slash differences in the issuer claim", async () => {
@@ -209,7 +215,56 @@ describe("discoverOidc", () => {
       )
     ) as typeof fetch;
 
-    await expect(discoverOidc("https://idp.example.com")).resolves.toBeDefined();
+    await expect(
+      discoverOidc("https://idp.example.com", { skipCache: true })
+    ).resolves.toBeDefined();
+  });
+
+  // Helper: fresh Response per call (Response bodies can only be read once,
+  // so a single mockResolvedValue gets exhausted after the first cache miss).
+  const respond = (issuer: string) =>
+    () =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            issuer,
+            authorization_endpoint: `${issuer}/auth`,
+            token_endpoint: `${issuer}/token`,
+          }),
+          { status: 200 }
+        )
+      );
+
+  it("caches the discovery response and returns it on subsequent calls", async () => {
+    const fetchMock = vi.fn().mockImplementation(respond("https://cache.example.com"));
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const first = await discoverOidc("https://cache.example.com");
+    const second = await discoverOidc("https://cache.example.com");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+  });
+
+  it("bypasses cache when skipCache is true", async () => {
+    const fetchMock = vi.fn().mockImplementation(respond("https://skip.example.com"));
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    await discoverOidc("https://skip.example.com"); // primes cache
+    await discoverOidc("https://skip.example.com", { skipCache: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidateOidcDiscoveryCache drops cached entries", async () => {
+    const fetchMock = vi.fn().mockImplementation(respond("https://inv.example.com"));
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    await discoverOidc("https://inv.example.com");
+    invalidateOidcDiscoveryCache();
+    await discoverOidc("https://inv.example.com");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 

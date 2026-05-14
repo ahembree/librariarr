@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "crypto";
+import { appCache } from "@/lib/cache/memory-cache";
 
 /**
  * Minimal OIDC client for the Authorization Code + PKCE flow.
@@ -44,6 +45,18 @@ export interface OidcTokenResponse {
 
 const DISCOVERY_TIMEOUT_MS = 10_000;
 
+/** Discovery response TTL. OIDC providers publish a stable document, so an
+ *  hour is conservative. Admin saves to /api/settings/sso invalidate this
+ *  cache so changes take effect immediately. */
+const DISCOVERY_CACHE_TTL_MS = 60 * 60 * 1000;
+const DISCOVERY_CACHE_PREFIX = "sso:oidc-discovery:";
+
+/** Invalidate every cached OIDC discovery entry. Called when the admin saves
+ *  SSO settings so a config change isn't masked by a stale discovery doc. */
+export function invalidateOidcDiscoveryCache(): void {
+  appCache.invalidatePrefix(DISCOVERY_CACHE_PREFIX);
+}
+
 function normalizeIssuer(issuer: string): string {
   return issuer.replace(/\/+$/, "");
 }
@@ -62,8 +75,24 @@ async function fetchWithTimeout(
   }
 }
 
-export async function discoverOidc(issuer: string): Promise<OidcDiscovery> {
+export interface DiscoverOptions {
+  /** Bypass the in-process cache and force a fresh fetch. Used by the
+   *  Test Discovery endpoint so admins see live results. */
+  skipCache?: boolean;
+}
+
+export async function discoverOidc(
+  issuer: string,
+  options: DiscoverOptions = {}
+): Promise<OidcDiscovery> {
   const base = normalizeIssuer(issuer);
+  const cacheKey = DISCOVERY_CACHE_PREFIX + base;
+
+  if (!options.skipCache) {
+    const cached = appCache.get<OidcDiscovery>(cacheKey);
+    if (cached) return cached;
+  }
+
   const url = `${base}/.well-known/openid-configuration`;
   const res = await fetchWithTimeout(url, {
     headers: { Accept: "application/json" },
@@ -85,6 +114,10 @@ export async function discoverOidc(issuer: string): Promise<OidcDiscovery> {
     throw new Error(
       `OIDC issuer mismatch: discovery advertises "${config.issuer}" but was fetched from "${base}"`
     );
+  }
+
+  if (!options.skipCache) {
+    appCache.set(cacheKey, config, DISCOVERY_CACHE_TTL_MS);
   }
   return config;
 }
