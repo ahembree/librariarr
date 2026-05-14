@@ -151,6 +151,7 @@ export default function SettingsPage() {
   });
   const [credentialsSaving, setCredentialsSaving] = useState(false);
   const [credentialsError, setCredentialsError] = useState("");
+  const [plexLoginError, setPlexLoginError] = useState("");
   const [credentialsSuccess, setCredentialsSuccess] = useState("");
   const [showCredentialPrompt, setShowCredentialPrompt] = useState(false);
   const [promptForm, setPromptForm] = useState<PromptForm>({ username: "", password: "", confirmPassword: "" });
@@ -1814,6 +1815,7 @@ export default function SettingsPage() {
   };
 
   const handleTogglePlexLogin = async (checked: boolean) => {
+    setPlexLoginError("");
     setAuthLoading(true);
     try {
       const res = await fetch("/api/settings/auth", {
@@ -1824,11 +1826,13 @@ export default function SettingsPage() {
       if (res.ok) {
         setAuthInfo((prev) => prev ? { ...prev, plexLoginEnabled: checked } : prev);
       } else {
-        // Surface the lockout-guard error so admins know why the toggle didn't move
+        // Surface the lockout-guard error inline in the Plex Connection card.
         const data = await res.json().catch(() => ({}));
-        if (data.error) alert(data.error);
+        setPlexLoginError(data.error || "Failed to update Plex login setting");
       }
-    } catch {} finally {
+    } catch {
+      setPlexLoginError("Network error");
+    } finally {
       setAuthLoading(false);
     }
   };
@@ -2298,6 +2302,7 @@ export default function SettingsPage() {
             credentialsSaving={credentialsSaving}
             credentialsError={credentialsError}
             credentialsSuccess={credentialsSuccess}
+            plexLoginError={plexLoginError}
             showCredentialPrompt={showCredentialPrompt}
             promptForm={promptForm}
             promptError={promptError}

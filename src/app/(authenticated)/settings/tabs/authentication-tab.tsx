@@ -54,6 +54,7 @@ export interface AuthenticationTabProps {
   credentialsSaving: boolean;
   credentialsError: string;
   credentialsSuccess: string;
+  plexLoginError: string;
   showCredentialPrompt: boolean;
   promptForm: PromptForm;
   promptError: string;
@@ -76,6 +77,7 @@ export function AuthenticationTab({
   credentialsSaving,
   credentialsError,
   credentialsSuccess,
+  plexLoginError,
   showCredentialPrompt,
   promptForm,
   promptError,
@@ -159,6 +161,12 @@ export function AuthenticationTab({
                   onCheckedChange={onTogglePlexLogin}
                 />
               </div>
+              {plexLoginError && (
+                <div className="flex items-start gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{plexLoginError}</span>
+                </div>
+              )}
             </>
           )}
         </CardContent>
