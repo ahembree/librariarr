@@ -20,12 +20,23 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   AlertCircle,
   CheckCircle,
   Globe,
   Loader2,
   Save,
   ShieldCheck,
+  ShieldOff,
   XCircle,
 } from "lucide-react";
 
@@ -62,6 +73,7 @@ export function SsoSection() {
   const [linking, setLinking] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [linkNotice, setLinkNotice] = useState<string | null>(null);
+  const [confirmUnlinkOpen, setConfirmUnlinkOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -85,13 +97,19 @@ export function SsoSection() {
     };
   }, []);
 
+  // Auto-dismiss the "Settings saved" banner after a few seconds — matches
+  // the toast-style ephemerality used elsewhere in the app.
+  useEffect(() => {
+    if (savedAt === null) return;
+    const t = setTimeout(() => setSavedAt(null), 3000);
+    return () => clearTimeout(t);
+  }, [savedAt]);
+
   if (loading) {
     return (
-      <Card>
-        <CardContent className="flex items-center justify-center py-8">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-        </CardContent>
-      </Card>
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      </div>
     );
   }
 
@@ -222,71 +240,13 @@ export function SsoSection() {
     }
   };
 
+  const codeClass =
+    "font-mono text-[0.85em] rounded bg-muted/60 px-1 py-0.5";
+
   return (
     <div className="space-y-6">
-      {/* SSO Account Linking */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <ShieldCheck className="h-4 w-4" />
-            SSO Account Linking
-          </CardTitle>
-          <CardDescription>
-            Link an SSO identity (OIDC <code>sub</code> claim, or the username
-            your reverse proxy will send as the user header) to this account.
-            Linking is required before SSO login can be used.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {link.ssoSubject ? (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 text-sm">
-                <CheckCircle className="h-4 w-4 text-green-500" />
-                <span>
-                  Linked to <strong>{link.ssoSubject}</strong>
-                  {link.ssoProvider ? ` (${link.ssoProvider})` : ""}
-                </span>
-              </div>
-              <Button variant="outline" size="sm" disabled={linking} onClick={handleUnlink}>
-                {linking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                Unlink SSO
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <XCircle className="h-4 w-4" />
-                <span>No SSO identity linked</span>
-              </div>
-              <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-                <Input
-                  placeholder="OIDC sub or proxy username"
-                  value={linkSubject}
-                  onChange={(e) => setLinkSubject(e.target.value)}
-                />
-                <Button disabled={linking || !linkSubject.trim()} onClick={handleLink}>
-                  {linking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                  Link Identity
-                </Button>
-              </div>
-            </div>
-          )}
-          {linkError && (
-            <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              {linkError}
-            </div>
-          )}
-          {linkNotice && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-500">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{linkNotice}</span>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* SSO Configuration */}
+      {/* SSO Configuration — comes first because admins typically configure
+          the provider before linking their identity to it. */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -301,15 +261,15 @@ export function SsoSection() {
         </CardHeader>
         <CardContent className="space-y-4">
           {config.overrideActive && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-500">
+            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-400">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <div>
                 <p className="font-medium">SSO disabled by environment override</p>
                 <p className="text-xs">
-                  <code>SSO_DISABLE_OVERRIDE</code> is set, so SSO login is
-                  forcibly disabled regardless of the settings below. Unset the
-                  variable and restart the container to re-enable SSO. The
-                  stored configuration is preserved.
+                  <code className={codeClass}>SSO_DISABLE_OVERRIDE</code> is
+                  set, so SSO login is forcibly disabled regardless of the
+                  settings below. Unset the variable and restart the container
+                  to re-enable SSO. The stored configuration is preserved.
                 </p>
               </div>
             </div>
@@ -355,7 +315,8 @@ export function SsoSection() {
                 />
                 <p className="text-xs text-muted-foreground">
                   The base URL where{" "}
-                  <code>.well-known/openid-configuration</code> is served.
+                  <code className={codeClass}>.well-known/openid-configuration</code>{" "}
+                  is served.
                 </p>
               </div>
               <div className="space-y-1">
@@ -420,7 +381,7 @@ export function SsoSection() {
               <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
                 Register a confidential client at your IdP and set the redirect
                 URI to{" "}
-                <code>
+                <code className={codeClass}>
                   {typeof window !== "undefined"
                     ? `${window.location.origin}/api/auth/sso/oidc/callback`
                     : "/api/auth/sso/oidc/callback"}
@@ -456,11 +417,18 @@ export function SsoSection() {
                   />
                 </div>
               </div>
-              <div className="rounded-md bg-destructive/10 p-3 text-xs text-destructive">
-                <strong>Security warning:</strong> Forward auth trusts the
-                identity in these headers. Only enable it when Librariarr is
-                reachable <em>exclusively</em> through your authenticating proxy
-                — direct network access would let attackers spoof the headers.
+              <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <div>
+                  <p className="font-medium">Security warning</p>
+                  <p className="text-xs">
+                    Forward auth trusts the identity in these headers. Only
+                    enable it when Librariarr is reachable{" "}
+                    <em>exclusively</em> through your authenticating proxy —
+                    direct network access would let attackers spoof the
+                    headers.
+                  </p>
+                </div>
               </div>
             </div>
           )}
@@ -488,6 +456,114 @@ export function SsoSection() {
           </Button>
         </CardContent>
       </Card>
+
+      {/* SSO Account Linking — shown second since admins typically configure
+          the provider before linking their identity. */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ShieldCheck className="h-4 w-4" />
+            SSO Account Linking
+          </CardTitle>
+          <CardDescription>
+            Link an SSO identity (OIDC{" "}
+            <code className={codeClass}>sub</code> claim, or the username your
+            reverse proxy will send as the user header) to this account.
+            Linking is required before SSO login can be used.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {link.ssoSubject ? (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm">
+                <CheckCircle className="h-4 w-4 text-green-500" />
+                <span>
+                  Linked to <strong>{link.ssoSubject}</strong>
+                  {link.ssoProvider ? ` (${link.ssoProvider})` : ""}
+                </span>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={linking}
+                onClick={() => setConfirmUnlinkOpen(true)}
+              >
+                <ShieldOff className="mr-2 h-4 w-4" />
+                Unlink SSO
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <XCircle className="h-4 w-4" />
+                <span>No SSO identity linked</span>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                <Input
+                  placeholder="OIDC sub or proxy username"
+                  value={linkSubject}
+                  onChange={(e) => setLinkSubject(e.target.value)}
+                />
+                <Button
+                  size="sm"
+                  disabled={linking || !linkSubject.trim()}
+                  onClick={handleLink}
+                >
+                  {linking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Link Identity
+                </Button>
+              </div>
+            </div>
+          )}
+          {linkError && (
+            <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              {linkError}
+            </div>
+          )}
+          {linkNotice && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-400">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{linkNotice}</span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Unlink confirmation — destructive action. Matches the AlertDialog
+          pattern used by other destructive flows (e.g. server removal in
+          servers-tab.tsx). */}
+      <AlertDialog open={confirmUnlinkOpen} onOpenChange={setConfirmUnlinkOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Unlink SSO identity?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This clears your linked SSO subject. If SSO login is currently
+              enabled, it will also be turned off automatically — otherwise the
+              local form would stay hidden on the login page with no way back
+              in. Other active sessions for your account will be invalidated.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={linking}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setConfirmUnlinkOpen(false);
+                handleUnlink();
+              }}
+              disabled={linking}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {linking ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <ShieldOff className="mr-2 h-4 w-4" />
+              )}
+              Unlink
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

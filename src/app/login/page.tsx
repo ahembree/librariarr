@@ -381,7 +381,7 @@ export default function LoginPage() {
                 asChild
                 variant="outline"
                 size="lg"
-                className="w-full cursor-pointer"
+                className="w-full cursor-pointer border-primary/30 bg-primary/5 hover:bg-primary/10 hover:border-primary/50"
               >
                 <a
                   href={
@@ -390,7 +390,7 @@ export default function LoginPage() {
                       : "/api/auth/sso/oidc/login"
                   }
                 >
-                  <LogIn className="mr-2 h-4 w-4" />
+                  <LogIn className="mr-2 h-5 w-5" />
                   Sign in with SSO
                 </a>
               </Button>
