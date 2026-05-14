@@ -66,18 +66,41 @@ export function isSameOriginRequest(
 }
 
 export function getExternalBaseUrl(request: NextRequest): string {
+  const requestUrl = new URL(request.url);
+
   // x-forwarded-host is added by reverse proxies; take the first value
   // when multiple proxies are chained (comma-separated).
-  const host =
+  const rawHost =
     request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ||
     request.headers.get("host") ||
-    new URL(request.url).host;
+    requestUrl.host;
 
   // x-forwarded-proto tells us whether SSL was terminated upstream.
-  // Without it, infer from the raw request URL (http when hitting Next.js directly).
-  const proto =
+  // Without it, infer from the raw request URL (http when hitting Next.js
+  // directly).
+  const rawProto =
     request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ||
-    new URL(request.url).protocol.replace(":", "");
+    requestUrl.protocol.replace(":", "");
+
+  // Defensive validation: a misconfigured proxy that passes client-supplied
+  // X-Forwarded-* through verbatim could let an attacker plant
+  // `Proto: javascript` or `Host: evil.com/path`. Browsers usually refuse
+  // `javascript:` Location values but defense-in-depth says don't construct
+  // them in the first place. Path injection in host can also confuse
+  // downstream URL parsing. Fall back to the raw request URL when validation
+  // fails.
+  const proto = rawProto === "http" || rawProto === "https" ? rawProto : requestUrl.protocol.replace(":", "");
+  const host = isValidHost(rawHost) ? rawHost : requestUrl.host;
 
   return `${proto}://${host}`;
+}
+
+/** Host must be a valid HTTP authority (host[:port], no path/whitespace/scheme). */
+function isValidHost(host: string): boolean {
+  if (!host) return false;
+  // Reject anything with whitespace, slashes, query, fragment, scheme separators
+  if (/[\s/\\?#]/.test(host)) return false;
+  // Bracketed IPv6 must be balanced
+  if (host.includes("[") !== host.includes("]")) return false;
+  return true;
 }

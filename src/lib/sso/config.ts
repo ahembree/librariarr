@@ -74,3 +74,20 @@ export function isSsoUsable(settings: SsoSettings | null): boolean {
   }
   return Boolean(settings.forwardAuthUserHeader);
 }
+
+/**
+ * Compute the canonical issuer string we store in `User.ssoIssuer` for the
+ * currently-configured SSO mode. The OIDC issuer URL is normalized (trailing
+ * slashes stripped) so it round-trips against `discoverOidc`'s normalization.
+ * Forward-auth uses a literal sentinel — there's no per-IdP issuer in that
+ * mode, but we still want a deterministic value so cross-mode collisions
+ * (OIDC sub "x" vs forward-auth user "x") are impossible.
+ */
+export function currentSsoIssuer(settings: SsoSettings | null): string | null {
+  if (!settings) return null;
+  if (settings.ssoMode === "OIDC") {
+    if (!settings.oidcIssuer) return null;
+    return settings.oidcIssuer.replace(/\/+$/, "");
+  }
+  return "forward-auth";
+}

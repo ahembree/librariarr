@@ -28,8 +28,9 @@ const SSO_ERROR_MESSAGES: Record<string, string> = {
   missing_params: "SSO provider returned an incomplete response.",
   state_mismatch: "SSO request expired or was tampered with. Please try again.",
   token_exchange_failed: "Failed to verify your identity with the SSO provider.",
-  not_linked: "Your SSO account is not linked to a Librariarr user. Ask an administrator to link it.",
+  not_linked: "Your SSO account is not linked to a Librariarr user. Ask an administrator to link it. (If you recently changed the configured SSO issuer, the previous link no longer applies — re-link from Settings.)",
   missing_user_header: "Forward-auth proxy did not provide a user identity header.",
+  csrf_blocked: "SSO login can only be initiated from the Librariarr login page. Open the login page directly and click Sign in with SSO.",
 };
 
 export default function LoginPage() {

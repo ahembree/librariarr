@@ -3,11 +3,17 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { validateRequest, ssoLinkSchema } from "@/lib/validation";
 import { apiLogger } from "@/lib/logger";
+import { currentSsoIssuer, getSsoSettings } from "@/lib/sso/config";
 
 /**
  * Link an SSO subject identifier to the currently signed-in admin account.
  * The admin enters the value manually (OIDC `sub` claim, or the value that
  * their reverse proxy will inject as the user header).
+ *
+ * The current canonical issuer (OIDC issuer URL or "forward-auth" sentinel)
+ * is captured at link time and stored alongside the subject. Login routes
+ * verify both, so switching IdPs doesn't accidentally let a different
+ * user's same-named subject sign in as the linked admin.
  *
  * Setting a new subject increments sessionVersion to invalidate other sessions.
  */
@@ -25,9 +31,29 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "SSO subject is required" }, { status: 400 });
   }
 
-  // Reject collision with another user (in case a future release adds multi-user support)
+  // Pin the current SSO mode/issuer at link time so a later issuer change
+  // can't silently accept the same subject from a different IdP.
+  const settings = await getSsoSettings();
+  const issuer = currentSsoIssuer(settings);
+  if (!issuer) {
+    return NextResponse.json(
+      {
+        error:
+          "Configure SSO mode and issuer (Settings → Authentication → Single Sign-On) before linking an identity.",
+      },
+      { status: 400 }
+    );
+  }
+
+  // Reject collision against another user with the SAME subject AND issuer
+  // (composite uniqueness is enforced at the DB level too — this is a
+  // friendlier error than a P2002).
   const conflict = await prisma.user.findFirst({
-    where: { ssoSubject: trimmedSubject, NOT: { id: session.userId } },
+    where: {
+      ssoSubject: trimmedSubject,
+      ssoIssuer: issuer,
+      NOT: { id: session.userId },
+    },
     select: { id: true },
   });
   if (conflict) {
@@ -41,6 +67,7 @@ export async function POST(request: NextRequest) {
     where: { id: session.userId },
     data: {
       ssoSubject: trimmedSubject,
+      ssoIssuer: issuer,
       ssoProvider: data.ssoProvider?.trim() || null,
       ssoEnabled: true,
       sessionVersion: { increment: 1 },
@@ -129,6 +156,7 @@ export async function DELETE() {
       where: { id: session.userId },
       data: {
         ssoSubject: null,
+        ssoIssuer: null,
         ssoProvider: null,
         ssoEnabled: false,
         sessionVersion: { increment: 1 },

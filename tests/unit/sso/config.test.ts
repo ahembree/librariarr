@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isSsoOverrideActive, isSsoUsable, type SsoSettings } from "@/lib/sso/config";
+import { currentSsoIssuer, isSsoOverrideActive, isSsoUsable, type SsoSettings } from "@/lib/sso/config";
 
 function makeSettings(overrides: Partial<SsoSettings> = {}): SsoSettings {
   return {
@@ -140,5 +140,62 @@ describe("isSsoOverrideActive", () => {
   it("trims surrounding whitespace", () => {
     process.env.SSO_DISABLE_OVERRIDE = "  true  ";
     expect(isSsoOverrideActive()).toBe(true);
+  });
+});
+
+describe("currentSsoIssuer", () => {
+  it("returns null when settings are null", () => {
+    expect(currentSsoIssuer(null)).toBeNull();
+  });
+
+  it("returns the OIDC issuer URL with trailing slashes stripped", () => {
+    expect(
+      currentSsoIssuer(
+        makeSettings({ ssoMode: "OIDC", oidcIssuer: "https://idp.example.com/" })
+      )
+    ).toBe("https://idp.example.com");
+    expect(
+      currentSsoIssuer(
+        makeSettings({ ssoMode: "OIDC", oidcIssuer: "https://idp.example.com" })
+      )
+    ).toBe("https://idp.example.com");
+    expect(
+      currentSsoIssuer(
+        makeSettings({ ssoMode: "OIDC", oidcIssuer: "https://idp.example.com///" })
+      )
+    ).toBe("https://idp.example.com");
+  });
+
+  it("returns null when OIDC mode but no issuer configured", () => {
+    expect(
+      currentSsoIssuer(makeSettings({ ssoMode: "OIDC", oidcIssuer: null }))
+    ).toBeNull();
+  });
+
+  it("returns the literal 'forward-auth' sentinel for forward-auth mode", () => {
+    expect(
+      currentSsoIssuer(makeSettings({ ssoMode: "FORWARD_AUTH" }))
+    ).toBe("forward-auth");
+    // Even when OIDC fields are also set, forward-auth mode wins.
+    expect(
+      currentSsoIssuer(
+        makeSettings({
+          ssoMode: "FORWARD_AUTH",
+          oidcIssuer: "https://oidc.example.com",
+        })
+      )
+    ).toBe("forward-auth");
+  });
+
+  it("normalization round-trips with discoverOidc's normalization", () => {
+    // discoverOidc strips trailing slashes the same way; the two helpers must
+    // agree so the issuer compared at login time matches what was stored.
+    const linkTime = currentSsoIssuer(
+      makeSettings({ ssoMode: "OIDC", oidcIssuer: "https://idp.example.com/" })
+    );
+    const loginTime = currentSsoIssuer(
+      makeSettings({ ssoMode: "OIDC", oidcIssuer: "https://idp.example.com" })
+    );
+    expect(linkTime).toBe(loginTime);
   });
 });

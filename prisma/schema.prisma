@@ -16,7 +16,8 @@ model User {
   email            String?
   username         String
   sessionVersion   Int               @default(0)
-  ssoSubject       String?           @unique
+  ssoSubject       String?
+  ssoIssuer        String?
   ssoProvider      String?
   ssoEnabled       Boolean           @default(false)
   createdAt        DateTime          @default(now())
@@ -34,6 +35,12 @@ model User {
   prerollPresets      PrerollPreset[]
   prerollSchedules   PrerollSchedule[]
   savedQueries       SavedQuery[]
+
+  // SSO subjects are only unique per-issuer. Two users can have sub "abc" if
+  // they came from different IdPs. This composite key prevents the cross-IdP
+  // collision attack where switching the configured IdP could let a stranger
+  // log in as the linked admin.
+  @@unique([ssoSubject, ssoIssuer])
 }
 
 model AppSettings {

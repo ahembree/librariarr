@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
-import { getSsoSettings, isSsoUsable } from "@/lib/sso/config";
+import { currentSsoIssuer, getSsoSettings, isSsoUsable } from "@/lib/sso/config";
 import {
   discoverOidc,
   exchangeCodeForToken,
@@ -80,10 +80,16 @@ export async function GET(request: NextRequest) {
     return redirectToLogin(request, "token_exchange_failed");
   }
 
-  // Manual-linking policy: a user record with this `sub` must already exist
-  // and have ssoEnabled = true. Auto-provisioning is intentionally disabled.
+  // Manual-linking policy: a user record with this (sub, issuer) pair must
+  // already exist and have ssoEnabled = true. Auto-provisioning disabled.
   const subject = userInfo.sub;
-  const user = await prisma.user.findUnique({
+  const currentIssuer = currentSsoIssuer(settings)!; // non-null: isSsoUsable verified above
+
+  // Look up by sub first. We then verify the issuer separately so we can
+  // backfill legacy rows (linked before the ssoIssuer column existed) with
+  // the current issuer on first login -- otherwise post-upgrade the admin
+  // would lose SSO until they manually re-linked.
+  const user = await prisma.user.findFirst({
     where: { ssoSubject: subject },
   });
 
@@ -95,27 +101,43 @@ export async function GET(request: NextRequest) {
     return redirectToLogin(request, "not_linked");
   }
 
-  // Sync the configured username claim into the User record so the display
-  // name in the app matches what the IdP returns. The claim defaults to
-  // `preferred_username` and is configurable per-deployment. We only update
-  // when the claim is a non-empty string and differs from what's stored, to
-  // avoid pointless writes.
-  const claimedUsername = userInfo[settings.oidcUsernameClaim];
-  if (
-    typeof claimedUsername === "string" &&
-    claimedUsername.trim().length > 0 &&
-    claimedUsername !== user.username
-  ) {
+  if (user.ssoIssuer === null) {
+    // Legacy row: link predates the ssoIssuer column. Trust the current
+    // configured issuer and pin it. After this, strict matching applies.
     await prisma.user.update({
       where: { id: user.id },
-      data: {
-        username: claimedUsername,
-        // Also pick up email from userinfo when present
-        ...(typeof userInfo.email === "string" && userInfo.email
-          ? { email: userInfo.email }
-          : {}),
-      },
+      data: { ssoIssuer: currentIssuer },
     });
+  } else if (user.ssoIssuer !== currentIssuer) {
+    // Issuer changed since link time -- could be admin reconfiguration or
+    // a cross-IdP collision attack. Either way, refuse the login until the
+    // admin explicitly re-links from the new issuer.
+    apiLogger.warn(
+      "Auth",
+      `OIDC login rejected: issuer mismatch (linked=${user.ssoIssuer}, current=${currentIssuer}) for sub=${subject}`
+    );
+    return redirectToLogin(request, "not_linked");
+  }
+
+  // Sync configured claims into the User record so display fields track the
+  // IdP. Username and email update independently so an email-only change
+  // (with stable username) still propagates. Trim before save to avoid
+  // persistent whitespace and the redundant-write loop it causes.
+  const usernameClaim = userInfo[settings.oidcUsernameClaim];
+  const newUsername =
+    typeof usernameClaim === "string" ? usernameClaim.trim() : "";
+  const newEmail =
+    typeof userInfo.email === "string" ? userInfo.email.trim() : "";
+
+  const updateData: { username?: string; email?: string } = {};
+  if (newUsername && newUsername !== user.username) {
+    updateData.username = newUsername;
+  }
+  if (newEmail && newEmail !== user.email) {
+    updateData.email = newEmail;
+  }
+  if (Object.keys(updateData).length > 0) {
+    await prisma.user.update({ where: { id: user.id }, data: updateData });
   }
 
   // Replace any prior session data so we don't leak Plex tokens across logins.

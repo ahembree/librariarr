@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
-import { getSsoSettings, isSsoUsable } from "@/lib/sso/config";
+import { currentSsoIssuer, getSsoSettings, isSsoUsable } from "@/lib/sso/config";
 import { apiLogger } from "@/lib/logger";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
 import { getExternalBaseUrl, isSameOriginRequest } from "@/lib/url";
@@ -45,13 +45,31 @@ export async function GET(request: NextRequest) {
   }
 
   // Manual-linking policy: subject must match an existing user with ssoEnabled.
-  const user = await prisma.user.findUnique({
+  // Composite (sub, issuer) match prevents a stranger's "same username" from a
+  // different forward-auth setup logging in as the linked admin if the proxy
+  // mode/setup changed since link time.
+  const expectedIssuer = currentSsoIssuer(settings)!;
+  const user = await prisma.user.findFirst({
     where: { ssoSubject: subject },
   });
   if (!user || !user.ssoEnabled) {
     apiLogger.warn(
       "Auth",
       `Forward-auth login rejected: no linked account for "${subject}"`
+    );
+    return NextResponse.redirect(new URL("/login?sso_error=not_linked", baseUrl));
+  }
+
+  if (user.ssoIssuer === null) {
+    // Legacy row from before the ssoIssuer column existed — backfill once.
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { ssoIssuer: expectedIssuer },
+    });
+  } else if (user.ssoIssuer !== expectedIssuer) {
+    apiLogger.warn(
+      "Auth",
+      `Forward-auth login rejected: issuer mismatch (linked=${user.ssoIssuer}, current=${expectedIssuer}) for "${subject}"`
     );
     return NextResponse.redirect(new URL("/login?sso_error=not_linked", baseUrl));
   }

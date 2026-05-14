@@ -72,6 +72,92 @@ describe("getExternalBaseUrl", () => {
       )
     ).toBe("https://app.example.com");
   });
+
+  describe("defensive validation against header poisoning", () => {
+    it("rejects a non-http(s) X-Forwarded-Proto and falls back to request URL", () => {
+      expect(
+        getExternalBaseUrl(
+          makeRequest({
+            url: "http://librariarr:3000/api/x",
+            forwardedHost: "app.example.com",
+            forwardedProto: "javascript",
+          })
+        )
+      ).toBe("http://app.example.com");
+    });
+
+    it("rejects file: protocol", () => {
+      expect(
+        getExternalBaseUrl(
+          makeRequest({
+            url: "https://librariarr:3000/api/x",
+            forwardedHost: "app.example.com",
+            forwardedProto: "file",
+          })
+        )
+      ).toBe("https://app.example.com");
+    });
+
+    it("rejects host with path injection and falls back to request URL host", () => {
+      expect(
+        getExternalBaseUrl(
+          makeRequest({
+            url: "http://librariarr:3000/api/x",
+            forwardedHost: "evil.com/path",
+            forwardedProto: "https",
+          })
+        )
+      ).toBe("https://librariarr:3000");
+    });
+
+    it("rejects host with whitespace", () => {
+      expect(
+        getExternalBaseUrl(
+          makeRequest({
+            url: "http://librariarr:3000/api/x",
+            forwardedHost: "evil.com header-injection",
+            forwardedProto: "https",
+          })
+        )
+      ).toBe("https://librariarr:3000");
+    });
+
+    it("rejects host with backslash", () => {
+      expect(
+        getExternalBaseUrl(
+          makeRequest({
+            url: "http://librariarr:3000/api/x",
+            forwardedHost: "evil.com\\path",
+            forwardedProto: "https",
+          })
+        )
+      ).toBe("https://librariarr:3000");
+    });
+
+    it("accepts host:port", () => {
+      expect(
+        getExternalBaseUrl(
+          makeRequest({
+            url: "http://librariarr:3000/api/x",
+            forwardedHost: "app.example.com:8443",
+            forwardedProto: "https",
+          })
+        )
+      ).toBe("https://app.example.com:8443");
+    });
+
+    it("accepts bracketed IPv6", () => {
+      expect(
+        getExternalBaseUrl(
+          makeRequest({
+            url: "http://librariarr:3000/api/x",
+            forwardedHost: "[::1]:3000",
+            forwardedProto: "http",
+          })
+        )
+      ).toBe("http://[::1]:3000");
+    });
+  });
 });
 
 describe("isSameOriginRequest", () => {
