@@ -489,7 +489,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     setupSuccessfulExchange({ sub: "fresh-sub" });
 
     // Race: user record deleted while admin was at the IdP (e.g. via
-    // scripts/reset-auth.ts delete-user).
+    // scripts/reset-auth.js delete-user).
     await prisma.appSettings.delete({ where: { userId: me.id } });
     await prisma.user.delete({ where: { id: me.id } });
 
@@ -501,6 +501,109 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     // "session_lost"-ish path (sso_not_configured is the effective surface).
     const loc = new URL(res.headers.get("location")!);
     expect(loc.searchParams.get("ssoLinkError")).toBe("sso_not_configured");
+  });
+
+  it("hits the P2025 catch when only the linker's user row is gone but settings remain", async () => {
+    // Different shape of race from the test above: A different user owns
+    // the AppSettings row, but the session's userId points at a deleted
+    // admin. The route's settings load + isLinkFlow gate pass, but the
+    // final user.update throws P2025. Verify the catch returns
+    // session_lost (not a generic 500).
+    const other = await createTestUser({ plexId: "p-other", username: "other" });
+    await seedOidcSettings(other.id, { ssoEnabled: false });
+
+    setMockSession({
+      isLoggedIn: true,
+      userId: "deleted-cuid-not-in-db",
+      oidcState: "s",
+      oidcVerifier: "v",
+      oidcFlow: "link",
+    });
+    setupSuccessfulExchange({ sub: "fresh-sub" });
+
+    const res = await callRoute(GET, {
+      method: "GET",
+      searchParams: { code: "c", state: "s" },
+    });
+    const loc = new URL(res.headers.get("location")!);
+    expect(loc.searchParams.get("ssoLinkError")).toBe("session_lost");
+  });
+
+  // ── Identity-claim sanitization ─────────────────────────────────────
+  //
+  // The IdP is an external trust boundary. Even when manual linking is
+  // already established, a compromised or misconfigured IdP can return
+  // hostile values in the username / email claims. The callback runs
+  // both through the shared sanitizer before persisting.
+
+  it("strips control characters from synced username + email", async () => {
+    const user = await createTestUser({ username: "Old", email: "old@example.com" });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { ssoSubject: "s1", ssoIssuer: ISSUER, ssoEnabled: true },
+    });
+    await seedOidcSettings(user.id);
+    setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v" });
+    setupSuccessfulExchange({
+      sub: "s1",
+      preferred_username: "alice\nINJECTED",
+      email: "alice\r\n@example.com",
+    });
+
+    await callRoute(GET, {
+      method: "GET",
+      searchParams: { code: "c", state: "s" },
+    });
+
+    const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
+    // Newline + carriage-return must be stripped from both fields. The
+    // username is stored as "aliceINJECTED" — the sanitizer doesn't try
+    // to detect injection semantics, just to neuter the dangerous bytes.
+    expect(refreshed?.username).toBe("aliceINJECTED");
+    expect(refreshed?.email).toBe("alice@example.com");
+  });
+
+  it("ignores oversize username/email claims from a hostile IdP", async () => {
+    const user = await createTestUser({ username: "Keep", email: "keep@example.com" });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { ssoSubject: "s1", ssoIssuer: ISSUER, ssoEnabled: true },
+    });
+    await seedOidcSettings(user.id);
+    setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v" });
+    setupSuccessfulExchange({
+      sub: "s1",
+      preferred_username: "x".repeat(10_000),
+      email: `${"a".repeat(1000)}@example.com`,
+    });
+
+    await callRoute(GET, {
+      method: "GET",
+      searchParams: { code: "c", state: "s" },
+    });
+
+    const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
+    expect(refreshed?.username).toBe("Keep");
+    expect(refreshed?.email).toBe("keep@example.com");
+  });
+
+  it("ignores bogus email shapes (no @, multiple @s)", async () => {
+    const user = await createTestUser({ email: "keep@example.com" });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { ssoSubject: "s1", ssoIssuer: ISSUER, ssoEnabled: true },
+    });
+    await seedOidcSettings(user.id);
+    setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v" });
+    setupSuccessfulExchange({ sub: "s1", email: "not-an-email" });
+
+    await callRoute(GET, {
+      method: "GET",
+      searchParams: { code: "c", state: "s" },
+    });
+
+    const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
+    expect(refreshed?.email).toBe("keep@example.com");
   });
 
   it("redirects link errors back to /settings, not /login", async () => {

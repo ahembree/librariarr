@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 import { prisma } from "@/lib/db";
+import { Prisma } from "@/generated/prisma/client";
 import { getSession } from "@/lib/auth/session";
 import { currentSsoIssuer, getSsoSettings, isSsoUsable } from "@/lib/sso/config";
 import {
@@ -10,6 +11,7 @@ import {
   resolveRedirectUri,
   type OidcUserInfo,
 } from "@/lib/sso/oidc-client";
+import { sanitizeEmail, sanitizeUsername } from "@/lib/sso/identity-claims";
 import { apiLogger } from "@/lib/logger";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
 import { getExternalBaseUrl } from "@/lib/url";
@@ -166,10 +168,27 @@ export async function GET(request: NextRequest) {
         select: { sessionVersion: true, username: true },
       });
     } catch (err) {
-      // Most realistic case: P2025 because the user row was deleted between
-      // the flow start and the callback (e.g. via scripts/reset-auth.ts
-      // delete-user while the admin was at the IdP). Surface a useful error
-      // rather than a generic 500.
+      // Two realistic Prisma error codes to distinguish:
+      //   P2025 — user row was deleted between flow start and callback
+      //     (e.g. via scripts/reset-auth.js delete-user while the admin
+      //     was at the IdP). Maps to session_lost.
+      //   P2002 — the composite (ssoSubject, ssoIssuer) unique index was
+      //     hit by a concurrent link from another window/tab racing this
+      //     one. The defensive findFirst above narrows the window but
+      //     can't close it. Maps to conflict so the admin sees the same
+      //     message they would on a pre-check hit.
+      if (err instanceof Prisma.PrismaClientKnownRequestError) {
+        if (err.code === "P2002") {
+          apiLogger.warn("Auth", "OIDC link hit composite unique violation");
+          return redirectToSsoSettings(request, { ssoLinkError: "conflict" });
+        }
+        if (err.code === "P2025") {
+          apiLogger.warn("Auth", "OIDC link failed: user row missing", {
+            userId: linkFlowUserId,
+          });
+          return redirectToSsoSettings(request, { ssoLinkError: "session_lost" });
+        }
+      }
       apiLogger.error("Auth", "OIDC link update failed", {
         error: String(err),
       });
@@ -246,18 +265,18 @@ export async function GET(request: NextRequest) {
   return NextResponse.redirect(new URL("/", getExternalBaseUrl(request)));
 }
 
-/** Extract username + email from a userinfo payload, trimmed and non-empty. */
+/** Extract username + email from a userinfo payload via the shared
+ *  identity-claim sanitizer: rejects non-strings, control chars, oversize
+ *  values, and obviously-bogus emails. Returns undefined for unusable
+ *  values so the caller leaves the field alone. */
 function syncableFields(
   info: OidcUserInfo,
   usernameClaim: string,
 ): { username?: string; email?: string } {
   const result: { username?: string; email?: string } = {};
-  const claimedUsername = info[usernameClaim];
-  if (typeof claimedUsername === "string" && claimedUsername.trim()) {
-    result.username = claimedUsername.trim();
-  }
-  if (typeof info.email === "string" && info.email.trim()) {
-    result.email = info.email.trim();
-  }
+  const username = sanitizeUsername(info[usernameClaim]);
+  if (username) result.username = username;
+  const email = sanitizeEmail(info.email);
+  if (email) result.email = email;
   return result;
 }

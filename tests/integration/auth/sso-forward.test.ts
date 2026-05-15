@@ -249,4 +249,58 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
     });
     expect(new URL(res.headers.get("location")!).pathname).toBe("/");
   });
+
+  // ── Identity-claim sanitization ─────────────────────────────────────
+  //
+  // The reverse proxy is an external trust boundary. The route runs
+  // Remote-Email and Remote-Name through the shared sanitizer. Control
+  // bytes and CRLF in header values are rejected by the fetch Headers
+  // API before they can reach this route, so those cases are unit-tested
+  // in tests/unit/sso/identity-claims.test.ts instead. Here we cover
+  // what a misbehaving proxy CAN actually send: oversize values and
+  // bogus email shapes.
+
+  it("ignores oversize email/name header values", async () => {
+    const user = await createTestUser({ username: "Keep", email: "keep@example.com" });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { ssoSubject: "alice", ssoIssuer: "forward-auth", ssoEnabled: true },
+    });
+    await seedForwardAuth(user.id);
+
+    await callRoute(GET, {
+      method: "GET",
+      headers: {
+        ...SAME_ORIGIN_HEADERS,
+        "Remote-User": "alice",
+        "Remote-Email": `${"a".repeat(1000)}@example.com`,
+        "Remote-Name": "x".repeat(5000),
+      },
+    });
+
+    const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
+    expect(refreshed?.username).toBe("Keep");
+    expect(refreshed?.email).toBe("keep@example.com");
+  });
+
+  it("ignores bogus email shapes from the proxy", async () => {
+    const user = await createTestUser({ email: "keep@example.com" });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { ssoSubject: "alice", ssoIssuer: "forward-auth", ssoEnabled: true },
+    });
+    await seedForwardAuth(user.id);
+
+    await callRoute(GET, {
+      method: "GET",
+      headers: {
+        ...SAME_ORIGIN_HEADERS,
+        "Remote-User": "alice",
+        "Remote-Email": "not-an-email",
+      },
+    });
+
+    const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
+    expect(refreshed?.email).toBe("keep@example.com");
+  });
 });

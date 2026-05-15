@@ -5,6 +5,7 @@ import { currentSsoIssuer, getSsoSettings, isSsoUsable } from "@/lib/sso/config"
 import { apiLogger } from "@/lib/logger";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
 import { getExternalBaseUrl, isSameOriginRequest } from "@/lib/url";
+import { sanitizeEmail, sanitizeUsername } from "@/lib/sso/identity-claims";
 
 /**
  * Forward-auth login: trusts identity headers injected by an upstream reverse
@@ -76,17 +77,16 @@ export async function GET(request: NextRequest) {
   }
 
   // Optional identity claims from the proxy. Sync into the User record so
-  // the display name + email track the IdP. (Previously these were stored
-  // as configurable header names but never read — dead config.)
-  const emailHeader = request.headers.get(settings.forwardAuthEmailHeader);
-  const nameHeader = request.headers.get(settings.forwardAuthNameHeader);
+  // the display name + email track the IdP. Run through the shared
+  // sanitizer (rejects control chars, oversize values, bogus emails) —
+  // these headers come from an external trust boundary and a hostile or
+  // misconfigured proxy could otherwise write log-injecting strings or
+  // multi-MB blobs into the User row.
+  const email = sanitizeEmail(request.headers.get(settings.forwardAuthEmailHeader));
+  const name = sanitizeUsername(request.headers.get(settings.forwardAuthNameHeader));
   const updateData: { email?: string; username?: string } = {};
-  if (emailHeader && emailHeader.trim() && emailHeader !== user.email) {
-    updateData.email = emailHeader.trim();
-  }
-  if (nameHeader && nameHeader.trim() && nameHeader !== user.username) {
-    updateData.username = nameHeader.trim();
-  }
+  if (email && email !== user.email) updateData.email = email;
+  if (name && name !== user.username) updateData.username = name;
   if (Object.keys(updateData).length > 0) {
     await prisma.user.update({ where: { id: user.id }, data: updateData });
   }

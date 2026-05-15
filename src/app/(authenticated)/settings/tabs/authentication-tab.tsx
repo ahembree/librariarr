@@ -267,6 +267,7 @@ export function AuthenticationTab({
                     <Label htmlFor="cred-username">New Username</Label>
                     <Input
                       id="cred-username"
+                      autoComplete="username"
                       placeholder={authInfo.localUsername ?? "username"}
                       value={credentialsForm.newUsername}
                       onChange={(e) => onSetCredentialsForm((f) => ({ ...f, newUsername: e.target.value }))}
@@ -277,6 +278,7 @@ export function AuthenticationTab({
                     <Input
                       id="cred-current-pw"
                       type="password"
+                      autoComplete="current-password"
                       placeholder="Required to make changes"
                       value={credentialsForm.currentPassword}
                       onChange={(e) => onSetCredentialsForm((f) => ({ ...f, currentPassword: e.target.value }))}
@@ -287,6 +289,7 @@ export function AuthenticationTab({
                     <Input
                       id="cred-new-pw"
                       type="password"
+                      autoComplete="new-password"
                       placeholder="Min 8 characters"
                       value={credentialsForm.newPassword}
                       onChange={(e) => onSetCredentialsForm((f) => ({ ...f, newPassword: e.target.value }))}
@@ -297,6 +300,7 @@ export function AuthenticationTab({
                     <Input
                       id="cred-confirm-pw"
                       type="password"
+                      autoComplete="new-password"
                       placeholder="Repeat new password"
                       value={credentialsForm.confirmPassword}
                       onChange={(e) => onSetCredentialsForm((f) => ({ ...f, confirmPassword: e.target.value }))}
@@ -304,13 +308,13 @@ export function AuthenticationTab({
                   </div>
                 </div>
                 {credentialsError && (
-                  <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                  <div role="alert" className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
                     <AlertCircle className="h-4 w-4 shrink-0" />
                     {credentialsError}
                   </div>
                 )}
                 {credentialsSuccess && (
-                  <div className="flex items-center gap-2 rounded-md bg-green-500/10 p-3 text-sm text-green-500">
+                  <div role="status" className="flex items-center gap-2 rounded-md bg-green-500/10 p-3 text-sm text-green-500">
                     <CheckCircle className="h-4 w-4 shrink-0" />
                     {credentialsSuccess}
                   </div>

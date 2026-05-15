@@ -71,37 +71,60 @@ export async function POST(request: NextRequest) {
   //
   // sessionVersion bump invalidates any stale sessions that referenced the
   // previous link.
-  await prisma.$transaction([
-    prisma.appSettings.update({
-      where: { userId: session.userId },
-      data: {
-        // Never auto-re-enable on revert. The admin opts back in via the
-        // step 3 toggle once they've verified the restored config works.
-        ssoEnabled: false,
-        ssoMode,
-        oidcIssuer: strOrNull("oidcIssuer"),
-        oidcClientId: strOrNull("oidcClientId"),
-        oidcClientSecret: strOrNull("oidcClientSecret"),
-        oidcScopes: str("oidcScopes", "openid profile email"),
-        oidcUsernameClaim: str("oidcUsernameClaim", "preferred_username"),
-        forwardAuthUserHeader: str("forwardAuthUserHeader", "Remote-User"),
-        forwardAuthEmailHeader: str("forwardAuthEmailHeader", "Remote-Email"),
-        forwardAuthNameHeader: str("forwardAuthNameHeader", "Remote-Name"),
-        // Json columns use Prisma.JsonNull to explicitly null the value.
-        previousSsoConfig: Prisma.JsonNull,
-      },
-    }),
-    prisma.user.update({
-      where: { id: session.userId },
-      data: {
-        ssoSubject: null,
-        ssoIssuer: null,
-        ssoProvider: null,
-        ssoEnabled: false,
-        sessionVersion: { increment: 1 },
-      },
-    }),
-  ]);
+  try {
+    await prisma.$transaction([
+      prisma.appSettings.update({
+        where: { userId: session.userId },
+        data: {
+          // Never auto-re-enable on revert. The admin opts back in via the
+          // step 3 toggle once they've verified the restored config works.
+          ssoEnabled: false,
+          ssoMode,
+          oidcIssuer: strOrNull("oidcIssuer"),
+          oidcClientId: strOrNull("oidcClientId"),
+          oidcClientSecret: strOrNull("oidcClientSecret"),
+          oidcScopes: str("oidcScopes", "openid profile email"),
+          oidcUsernameClaim: str("oidcUsernameClaim", "preferred_username"),
+          forwardAuthUserHeader: str("forwardAuthUserHeader", "Remote-User"),
+          forwardAuthEmailHeader: str("forwardAuthEmailHeader", "Remote-Email"),
+          forwardAuthNameHeader: str("forwardAuthNameHeader", "Remote-Name"),
+          // Json columns use Prisma.JsonNull to explicitly null the value.
+          previousSsoConfig: Prisma.JsonNull,
+        },
+      }),
+      prisma.user.update({
+        where: { id: session.userId },
+        data: {
+          ssoSubject: null,
+          ssoIssuer: null,
+          ssoProvider: null,
+          ssoEnabled: false,
+          sessionVersion: { increment: 1 },
+        },
+      }),
+    ]);
+  } catch (err) {
+    // P2025 (record not found) — the admin row or AppSettings row was
+    // deleted between the load above and this write (e.g. via the recovery
+    // CLI). Return a friendlier 410 than a generic 500.
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2025"
+    ) {
+      apiLogger.warn(
+        "Auth",
+        "SSO revert failed: admin row or AppSettings was deleted mid-flow"
+      );
+      return NextResponse.json(
+        {
+          error:
+            "Your account or settings no longer exist. The setup screen will appear on next page load.",
+        },
+        { status: 410 }
+      );
+    }
+    throw err;
+  }
 
   // Drop the cache so the next login re-fetches with the reverted issuer.
   invalidateOidcDiscoveryCache();
