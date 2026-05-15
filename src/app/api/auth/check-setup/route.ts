@@ -5,16 +5,33 @@ import { getSsoSettings, isSsoOverrideActive, isSsoUsable } from "@/lib/sso/conf
 export async function GET() {
   const userCount = await prisma.user.count();
   let localAuthEnabled = false;
-  let plexLoginEnabled = true;
+  let plexLoginEnabled = false;
   let ssoEnabled = false;
   let ssoMode: "OIDC" | "FORWARD_AUTH" = "OIDC";
 
   if (userCount > 0) {
-    const settings = await prisma.appSettings.findFirst({
-      select: { localAuthEnabled: true, plexLoginEnabled: true },
+    // Single-user app: find the admin and read their state + their AppSettings
+    // in one query. The login page needs to know which credential methods the
+    // admin actually has, not just which toggles are flipped — e.g. Plex login
+    // shouldn't show when no Plex account is linked because the button would
+    // immediately fail with "not linked to admin user."
+    const user = await prisma.user.findFirst({
+      select: {
+        plexId: true,
+        appSettings: {
+          select: { localAuthEnabled: true, plexLoginEnabled: true },
+        },
+      },
     });
-    localAuthEnabled = settings?.localAuthEnabled ?? false;
-    plexLoginEnabled = settings?.plexLoginEnabled ?? true;
+
+    const hasPlexLinked = !!user?.plexId;
+    localAuthEnabled = user?.appSettings?.localAuthEnabled ?? false;
+    // Plex button only when (a) a Plex account is linked AND (b) the admin
+    // hasn't explicitly hidden the button. Local-first setups have no
+    // plexId by default, so the button stays hidden until the admin
+    // explicitly links Plex from Settings → Authentication.
+    plexLoginEnabled =
+      hasPlexLinked && (user?.appSettings?.plexLoginEnabled ?? true);
 
     const ssoSettings = await getSsoSettings();
     if (isSsoUsable(ssoSettings)) {
@@ -25,15 +42,13 @@ export async function GET() {
     }
 
     // Break-glass: when SSO_DISABLE_OVERRIDE is set, surface every credential
-    // the user has so they can recover. Without this, an admin who set up
-    // SSO-only login (plexLoginEnabled=false, localAuthEnabled=false because
-    // SSO hid it) would still see a near-empty login page after enabling the
-    // override — the override only flips ssoEnabled. Force the other toggles
-    // visible so the user can actually log in with whatever credentials they
-    // have. Stored DB values are untouched.
+    // the user actually has so they can recover. Override forces SSO off
+    // (already handled by getSsoSettings). For Plex login it only matters
+    // if the admin has actually linked Plex — otherwise the button would
+    // appear but be unusable. Same gate.
     if (isSsoOverrideActive()) {
-      localAuthEnabled = settings?.localAuthEnabled ?? false;
-      plexLoginEnabled = true;
+      localAuthEnabled = user?.appSettings?.localAuthEnabled ?? false;
+      plexLoginEnabled = hasPlexLinked;
     }
   }
 

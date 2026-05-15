@@ -42,7 +42,15 @@ export async function POST(request: NextRequest) {
           },
         });
         await tx.appSettings.create({
-          data: { userId: created.id, localAuthEnabled: true },
+          // Local-first setup: enable local auth, and default the Plex login
+          // button off since no Plex account is linked yet. (The check-setup
+          // endpoint enforces this too — but storing the explicit value
+          // means anything that reads it directly sees the truth.)
+          data: {
+            userId: created.id,
+            localAuthEnabled: true,
+            plexLoginEnabled: false,
+          },
         });
         await tx.systemConfig.upsert({
           where: { id: "singleton" },
