@@ -101,6 +101,14 @@ describe("POST /api/auth/local/login", () => {
         passwordHash: "hashed_correctpassword",
       },
     });
+    // The route now gates on AppSettings.localAuthEnabled before doing the
+    // bcrypt check (an auth-bypass-prevention measure for the case where
+    // the admin disabled local login but a direct POST would otherwise
+    // still authenticate). Tests that exercise the credential-check path
+    // must opt into local auth.
+    await prisma.appSettings.create({
+      data: { userId: user.id, localAuthEnabled: true },
+    });
 
     mockCompare.mockResolvedValue(false);
 
@@ -124,6 +132,9 @@ describe("POST /api/auth/local/login", () => {
         localUsername: "localuser",
         passwordHash: "hashed_password",
       },
+    });
+    await prisma.appSettings.create({
+      data: { userId: user.id, localAuthEnabled: true },
     });
 
     mockCompare.mockResolvedValue(true);
@@ -149,6 +160,9 @@ describe("POST /api/auth/local/login", () => {
         localUsername: "localuser",
         passwordHash: "hashed_password",
       },
+    });
+    await prisma.appSettings.create({
+      data: { userId: user.id, localAuthEnabled: true },
     });
 
     mockCompare.mockResolvedValue(true);

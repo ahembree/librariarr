@@ -98,6 +98,15 @@ describe("PUT /api/settings/auth", () => {
 
   it("updates localAuthEnabled to true", async () => {
     const user = await createTestUser();
+    // The PUT now refuses to enable local login without a passwordHash set
+    // — otherwise the form would appear on the login page but every
+    // submission would fail. The UI's credential-prompt dialog covers this
+    // in the client, but the route enforces server-side too. Set the hash
+    // explicitly here to exercise the happy path.
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash: "hashed_existing", localUsername: "testuser" },
+    });
     setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
 
     const res = await callRoute(PUT, {
