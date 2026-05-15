@@ -643,20 +643,44 @@ misconfigured), use the **break-glass override**:
 While the override is active:
 
 - SSO login is forcibly disabled regardless of the stored configuration.
-- The local username/password form returns (provided local auth is enabled and
-  you have credentials set).
-- The Settings → Authentication SSO panel shows an amber banner.
+- The local username/password form returns whenever a password has actually
+  been set on the account, **even if you previously disabled the
+  *Enable Local Login* toggle**. The override treats local-auth-disabled as
+  a "hide for normal flows" hint, not a hard lockout — admins who had local
+  credentials and disabled them because they were using SSO get them back.
+- The Plex login button returns whenever a Plex account is actually linked,
+  even if you previously disabled the *Allow Plex Login* toggle.
+- The Settings → Authentication SSO panel shows an amber banner indicating
+  the override is in effect.
 - Your stored OIDC / forward-auth configuration is preserved untouched.
 
 Unset the env var and restart to restore SSO. The override accepts `true`,
 `1`, or `yes` (case-insensitive, whitespace tolerant).
 
-<Aside>
-  If you have no local credentials either, set
-  <code>SSO_DISABLE_OVERRIDE=true</code> first to get back in via the local
-  form. If you also have no local user at all, restore from a backup file
-  using the "Restore from Backup" flow available on the login page when no
-  users exist.
+### What if I have no credentials at all?
+
+The override only re-surfaces credentials that actually exist on your User
+record. If you set up SSO-only with no Plex account linked and no local
+password ever set, there's nothing for the override to restore. In that
+case:
+
+1. Stop the container.
+2. Wipe the database (or rename your `/config` volume to start fresh).
+3. Start the container — the login page now shows the *Restore from Backup*
+   button (only visible when no users exist).
+4. Restore a backup taken before you locked yourself out.
+
+This is one reason the docs recommend setting up *both* an SSO identity
+**and** local credentials (or a linked Plex account) when running an
+SSO-protected deployment — pure single-method setups have no recovery
+path short of a backup restore.
+
+<Aside type="caution">
+  The override is a display/runtime override, not a configuration override.
+  It tells the login routes to ignore the *Enable Local Login* and
+  *Allow Plex Login* toggles for the duration of the env var being set,
+  surfacing any credentials that *actually exist* on the User record. It
+  cannot conjure credentials that were never created.
 </Aside>
 
 ## Troubleshooting

@@ -18,6 +18,7 @@ export async function GET() {
     const user = await prisma.user.findFirst({
       select: {
         plexId: true,
+        passwordHash: true,
         appSettings: {
           select: { localAuthEnabled: true, plexLoginEnabled: true },
         },
@@ -25,6 +26,7 @@ export async function GET() {
     });
 
     const hasPlexLinked = !!user?.plexId;
+    const hasLocalCreds = !!user?.passwordHash;
     localAuthEnabled = user?.appSettings?.localAuthEnabled ?? false;
     // Plex button only when (a) a Plex account is linked AND (b) the admin
     // hasn't explicitly hidden the button. Local-first setups have no
@@ -42,12 +44,15 @@ export async function GET() {
     }
 
     // Break-glass: when SSO_DISABLE_OVERRIDE is set, surface every credential
-    // the user actually has so they can recover. Override forces SSO off
-    // (already handled by getSsoSettings). For Plex login it only matters
-    // if the admin has actually linked Plex — otherwise the button would
-    // appear but be unusable. Same gate.
+    // the admin actually has so they can recover access. Override forces SSO
+    // off (already handled by getSsoSettings). For local + Plex we ignore
+    // the per-toggle hide flags and surface anything where there's an
+    // actually-usable credential underneath — admins who disabled
+    // localAuthEnabled because they were using SSO would otherwise see a
+    // blank login page when SSO is down. Stored DB values are untouched;
+    // this is purely a display override.
     if (isSsoOverrideActive()) {
-      localAuthEnabled = user?.appSettings?.localAuthEnabled ?? false;
+      localAuthEnabled = hasLocalCreds;
       plexLoginEnabled = hasPlexLinked;
     }
   }
