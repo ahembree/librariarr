@@ -4,8 +4,14 @@ import { getSession } from "@/lib/auth/session";
 import bcrypt from "bcryptjs";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, changePasswordSchema } from "@/lib/validation";
+import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
 
 export async function POST(request: NextRequest) {
+  // Rate-limit even though the route is authenticated. bcrypt.compare runs on
+  // each call and the route is otherwise an oracle for testing currentPassword.
+  const rateLimited = checkAuthRateLimit(request, "change-password");
+  if (rateLimited) return rateLimited;
+
   const session = await getSession();
   if (!session.isLoggedIn || !session.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -27,20 +33,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (hasNewUsername) {
-      const trimmed = newUsername.trim();
-      // Check for uniqueness
-      const existing = await prisma.user.findUnique({
-        where: { localUsername: trimmed.toLowerCase() },
-      });
-      if (existing && existing.id !== session.userId) {
-        return NextResponse.json(
-          { error: "Username is already taken" },
-          { status: 409 }
-        );
-      }
-    }
-
     const user = await prisma.user.findUnique({
       where: { id: session.userId },
     });
@@ -49,7 +41,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // If user already has a password, verify the current one
+    // Verify currentPassword *first* so the route doesn't become a username-
+    // enumeration oracle for callers without the current password (the
+    // 409 "Username is already taken" response would otherwise leak which
+    // local usernames exist before any auth check). Skipped only when the
+    // user has no password yet — initial credential setup for a Plex/SSO-
+    // only account.
     if (user.passwordHash) {
       if (!currentPassword) {
         return NextResponse.json(
@@ -62,6 +59,19 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           { error: "Current password is incorrect" },
           { status: 401 }
+        );
+      }
+    }
+
+    if (hasNewUsername) {
+      const trimmed = newUsername.trim();
+      const existing = await prisma.user.findUnique({
+        where: { localUsername: trimmed.toLowerCase() },
+      });
+      if (existing && existing.id !== session.userId) {
+        return NextResponse.json(
+          { error: "Username is already taken" },
+          { status: 409 }
         );
       }
     }

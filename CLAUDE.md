@@ -70,6 +70,8 @@ pnpm exec vitest run tests/path/to/file.test.ts  # Run a single test file
 
 **Config:** Tests run sequentially (`pool: "forks"`, `fileParallelism: false`) to prevent DB contention. Test timeout 15s, hook timeout 30s. Coverage scope: `src/lib/**/*.ts` and `src/app/api/**/*.ts` only.
 
+**Test coverage requirement:** Every new or modified file under the coverage scope must have tests. In practice that means: every new route handler under `src/app/api/` gets an integration test in `tests/integration/`, and every new module under `src/lib/` gets a unit test in `tests/unit/`. Unit-level lib coverage is necessary but not sufficient — route handlers compose multiple lib modules with session state, validation, rate-limiting, and DB writes, and bugs hide in those seams. When the lib is fully covered but the route isn't, the route isn't tested.
+
 ## Architecture
 
 **Stack:** Next.js 16 (App Router) · React 19 · TypeScript · PostgreSQL 18 · Prisma 7 · Tailwind CSS v4 · shadcn/ui · Docker
@@ -99,6 +101,7 @@ pnpm exec vitest run tests/path/to/file.test.ts  # Run a single test file
 - `src/lib/dedup/` — Multi-server dedup: `resolveServerFilter`, `server-presence` helpers (see Multi-Server Dedup below)
 - `src/lib/filters/build-where.ts` — Shared filter query param parsing for media routes (see Filter Utilities below)
 - `src/lib/plex/` — Plex OAuth flow and API client
+- `src/lib/sso/` — OIDC (Authorization Code + PKCE) and forward-auth helpers. Manual-linking only: an admin must link an `ssoSubject` to a User before SSO login is accepted. When `AppSettings.ssoEnabled` is true, the local username/password form is hidden on the login page (Plex login remains by default). `AppSettings.plexLoginEnabled` (default true) independently controls whether the Plex login button is shown — toggling it off hides Plex from the login page without unlinking the Plex token from the User record (so server discovery and library sync still work). `/api/settings/auth` enforces a unified lockout guard: at least one of Plex login, local auth, or SSO must remain usable post-update.
 - `src/lib/sync/sync-server.ts` — Media sync engine (fetches metadata from Plex)
 - `src/lib/scheduler/` — node-cron scheduler, initialized via `instrumentation.ts`
 - `src/lib/rules/` — Lifecycle rule engine with recursive AND/OR groups

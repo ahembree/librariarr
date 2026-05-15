@@ -13,6 +13,15 @@ vi.mock("bcryptjs", () => ({
   default: mockBcrypt,
 }));
 
+// Mock rate limiter — change-password is now rate-limited and the limiter's
+// in-memory state would persist across tests.
+const mockCheckAuthRateLimit = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/rate-limit/rate-limiter", () => ({
+  checkAuthRateLimit: mockCheckAuthRateLimit,
+  authRateLimiter: { check: vi.fn().mockReturnValue({ limited: false }) },
+  getClientIp: vi.fn().mockReturnValue("127.0.0.1"),
+}));
+
 // Critical: redirect prisma to test database
 vi.mock("@/lib/db", async () => {
   const { getTestPrisma } = await import("../../setup/test-db");
@@ -40,6 +49,7 @@ describe("POST /api/auth/local/change-password", () => {
     mockBcrypt.compare.mockImplementation(
       async (pw: string, hash: string) => hash === `hashed_${pw}`
     );
+    mockCheckAuthRateLimit.mockReturnValue(null);
   });
 
   afterAll(async () => {

@@ -9,27 +9,117 @@ After installation, configure Librariarr through the **Settings** page. Settings
 
 ## Authentication
 
-Librariarr supports two authentication methods that can be used independently or together.
+Librariarr supports **three independent authentication methods**. Configure
+each in **Settings → Authentication**. The login page only shows the methods
+that are actually usable (linked + toggle on); methods you haven't set up stay
+hidden until you do.
+
+| Method | When the login page shows it |
+|--------|------------------------------|
+| Plex OAuth | Plex account linked AND the *Allow Plex Login* toggle is on |
+| Local username/password | Local credentials set AND the *Enable Local Login* toggle is on AND SSO is not active (SSO replaces local) |
+| Single Sign-On (SSO) | OIDC / forward-auth configured, an identity is linked, and the *Enable SSO Login* toggle is on |
+
+Sessions are encrypted via [iron-session](https://github.com/vvo/iron-session)
+and expire after 30 days. They're invalidated server-side when you change
+credentials, link/unlink SSO, or rotate your `SESSION_SECRET`.
+
+### Initial setup
+
+The first user is created by whatever method you choose on the login screen:
+
+- **Local-first**: click *Create Local Account* on the login page. You'll set
+  a username (≥3 chars) and password (≥8 chars). The *Allow Plex Login*
+  toggle starts off — Plex stays hidden until you link a Plex account.
+- **Plex-first**: click *Sign in with Plex* and complete the OAuth flow.
+  The first Plex login becomes the admin. *Enable Local Login* starts off
+  since no password is set yet.
+
+Only one initial setup is allowed — once the first admin exists, the login
+page locks to the configured methods.
 
 ### Plex OAuth
 
-The primary authentication method. Click **Sign in with Plex** on the login page to authenticate via your Plex account.
+Click **Sign in with Plex** on the login page or **Connect Plex Account**
+in **Settings → Authentication** to link a Plex account.
 
 - Automatically discovers your Plex servers
-- Tokens are stored securely in the database
-- Login sessions are encrypted and expire after 30 days
+- Tokens are stored in the DB and re-attached to your session on login
+- The display name + email sync from Plex on every Plex login
+
+The **Allow Plex Login** toggle (visible once a Plex account is linked)
+controls whether the *Sign in with Plex* button appears on the login page.
+Turning it off keeps your Plex token attached for server discovery and
+library sync — it just won't appear as a login option. Useful if you
+prefer SSO or local auth for sign-in but still need Plex linked for
+media-server features.
 
 ### Local Authentication
 
-Optional username/password authentication, configured in **Settings → Authentication**.
+Username/password authentication. Configured in **Settings → Authentication
+→ Local Authentication**.
 
 - **Username**: minimum 3 characters
 - **Password**: minimum 8 characters
-- Enable/disable via toggle — if enabling for the first time, you'll be prompted to create credentials
-- Can be used alongside Plex OAuth or as the sole authentication method
+- Stored as a bcrypt-cost-12 hash
+- Toggling **Enable Local Login** on without an existing password opens
+  a credential prompt to create one
+- Hidden on the login page when SSO is active (SSO is intended to replace
+  local credentials)
+
+The toggle is disabled and shows a warning when disabling local auth would
+leave you with no working sign-in method.
+
+### Single Sign-On (SSO)
+
+OpenID Connect (OIDC) and forward-auth modes for integrating with self-hosted
+identity providers (Authentik, Authelia, Keycloak, Pocket ID, Zitadel, etc.)
+or upstream auth-proxies (Authelia, Authentik outpost, oauth2-proxy, etc.).
+
+Configured in **Settings → Authentication → Single Sign-On** as a three-step
+wizard:
+
+1. **Configure your identity provider.** Pick OIDC or Forward Auth, fill in
+   the connection settings (issuer URL, client ID/secret, etc.), save.
+2. **Link your SSO identity.** For OIDC, click **Verify & Link via OIDC** —
+   this runs a real OAuth round-trip that validates the client ID + client
+   secret + redirect URI end-to-end and auto-captures your `sub` claim.
+   Bad credentials fail here, before SSO is activated. For forward-auth,
+   paste the username your proxy injects.
+3. **Enable SSO login.** Toggle the switch. The *Sign in with SSO* button
+   appears on the login page; the local username/password form is hidden
+   while SSO is active.
+
+When SSO is enabled and your identity is linked, the **Verify & Link via
+OIDC** flow is the recommended way to validate any credential changes — it
+gives you confirmation the IdP still talks to Librariarr before you sign out.
+
+See the [SSO Authentication guide](/docs/advanced/sso/) for provider-specific
+setup, reverse-proxy snippets, and recovery procedures.
+
+### Recovery from lockout
+
+The Authentication settings have lockout guards that prevent you from
+disabling the only working method via the UI. If you still manage to get
+locked out (broken IdP, lost credentials, etc.):
+
+| What you've still got | Recovery path |
+|----------------------|----------------|
+| A working method on the login page | Sign in with it |
+| Plex linked but button hidden | Set [`SSO_DISABLE_OVERRIDE=true`](/docs/advanced/sso/#recovery--locked-out-of-sso) — the override re-surfaces the Plex button |
+| Local credentials but local-auth disabled | Set `SSO_DISABLE_OVERRIDE=true` — the override re-surfaces the local form when a passwordHash is set |
+| SSO only, IdP unreachable, **with Plex or local fallback** | Set `SSO_DISABLE_OVERRIDE=true`, sign in via Plex or local, then [**Revert to Previous**](/docs/advanced/sso/#reverting-a-bad-sso-config) to roll back the most recent SSO config change |
+| **No fallback credentials at all**, just shell access | Copy [`scripts/reset-auth.js`](/docs/advanced/sso/#option-a--reset-cli-script) into the container with `docker cp` and run `node /tmp/reset-auth.js wipe-sso` (the script isn't bundled into the image, by design) |
+| No fallback, no shell, **just DB access** | Run the [SQL recovery commands](/docs/advanced/sso/#option-b--direct-sql) against PostgreSQL |
+| None of the above | Restore from a backup file with a working state via the *Restore from Backup* button on the login page (shown when no users exist — wipe the DB to surface it) |
 
 <Aside type="caution">
-  If you disable both Plex OAuth and local authentication, you may lock yourself out. Restore from a backup to recover access.
+  Backup restore brings back whatever state was saved in the backup file —
+  if you saved a broken SSO config and then made several more saves,
+  backups taken after the breaking save will restore *back to broken*. The
+  in-app **Revert to Previous** button and the `reset-auth.js` CLI are
+  more reliable for SSO-config rollback because they bypass the backup
+  rotation entirely.
 </Aside>
 
 ## Scheduling

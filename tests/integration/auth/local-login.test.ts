@@ -101,6 +101,14 @@ describe("POST /api/auth/local/login", () => {
         passwordHash: "hashed_correctpassword",
       },
     });
+    // The route now gates on AppSettings.localAuthEnabled before doing the
+    // bcrypt check (an auth-bypass-prevention measure for the case where
+    // the admin disabled local login but a direct POST would otherwise
+    // still authenticate). Tests that exercise the credential-check path
+    // must opt into local auth.
+    await prisma.appSettings.create({
+      data: { userId: user.id, localAuthEnabled: true },
+    });
 
     mockCompare.mockResolvedValue(false);
 
@@ -124,6 +132,9 @@ describe("POST /api/auth/local/login", () => {
         localUsername: "localuser",
         passwordHash: "hashed_password",
       },
+    });
+    await prisma.appSettings.create({
+      data: { userId: user.id, localAuthEnabled: true },
     });
 
     mockCompare.mockResolvedValue(true);
@@ -149,6 +160,9 @@ describe("POST /api/auth/local/login", () => {
         localUsername: "localuser",
         passwordHash: "hashed_password",
       },
+    });
+    await prisma.appSettings.create({
+      data: { userId: user.id, localAuthEnabled: true },
     });
 
     mockCompare.mockResolvedValue(true);
@@ -178,5 +192,106 @@ describe("POST /api/auth/local/login", () => {
     const body = await expectJson<{ error: string }>(response, 429);
     expect(body.error).toBe("Too many attempts. Try again later.");
     expect(response.headers.get("Retry-After")).toBe("60");
+  });
+
+  // ── Auth-bypass-prevention gate ─────────────────────────────────────
+  //
+  // The login page hides the local form when the admin disables local auth
+  // OR when SSO is active. Without these server-side checks, a direct POST
+  // would still authenticate anyone with valid credentials — an auth-bypass
+  // for the toggles the admin thought they had control over.
+
+  it("returns 401 with generic error when localAuthEnabled is false (form hidden)", async () => {
+    const prisma = getTestPrisma();
+    const user = await createTestUser({ username: "localuser" });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { localUsername: "localuser", passwordHash: "hashed_correct" },
+    });
+    await prisma.appSettings.create({
+      data: { userId: user.id, localAuthEnabled: false },
+    });
+    mockCompare.mockResolvedValue(true);
+
+    const response = await callRoute(POST, {
+      url: "/api/auth/local/login",
+      method: "POST",
+      body: { username: "localuser", password: "correct" },
+    });
+
+    const body = await expectJson<{ error: string }>(response, 401);
+    expect(body.error).toBe("Invalid username or password");
+    // Bcrypt must NOT be reached — the gate rejects before credential check.
+    expect(mockCompare).not.toHaveBeenCalled();
+  });
+
+  it("returns 401 with generic error when SSO is usable (SSO replaces local)", async () => {
+    const prisma = getTestPrisma();
+    const user = await createTestUser({ username: "localuser" });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        localUsername: "localuser",
+        passwordHash: "hashed_correct",
+        ssoSubject: "abc",
+        ssoIssuer: "https://idp.example.com",
+        ssoEnabled: true,
+      },
+    });
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id,
+        localAuthEnabled: true,
+        ssoEnabled: true,
+        ssoMode: "OIDC",
+        oidcIssuer: "https://idp.example.com",
+        oidcClientId: "client-1",
+      },
+    });
+    mockCompare.mockResolvedValue(true);
+
+    const response = await callRoute(POST, {
+      url: "/api/auth/local/login",
+      method: "POST",
+      body: { username: "localuser", password: "correct" },
+    });
+
+    const body = await expectJson<{ error: string }>(response, 401);
+    expect(body.error).toBe("Invalid username or password");
+    expect(mockCompare).not.toHaveBeenCalled();
+  });
+
+  it("bypasses the localAuthEnabled gate when SSO_DISABLE_OVERRIDE is active", async () => {
+    const originalOverride = process.env.SSO_DISABLE_OVERRIDE;
+    process.env.SSO_DISABLE_OVERRIDE = "true";
+    try {
+      const prisma = getTestPrisma();
+      const user = await createTestUser({ username: "localuser" });
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { localUsername: "localuser", passwordHash: "hashed_correct" },
+      });
+      // Toggle off in DB — but override should bypass.
+      await prisma.appSettings.create({
+        data: { userId: user.id, localAuthEnabled: false },
+      });
+      mockCompare.mockResolvedValue(true);
+
+      const response = await callRoute(POST, {
+        url: "/api/auth/local/login",
+        method: "POST",
+        body: { username: "localuser", password: "correct" },
+      });
+
+      const body = await expectJson<{ authenticated: boolean }>(response, 200);
+      expect(body.authenticated).toBe(true);
+      expect(mockCompare).toHaveBeenCalled();
+    } finally {
+      if (originalOverride === undefined) {
+        delete process.env.SSO_DISABLE_OVERRIDE;
+      } else {
+        process.env.SSO_DISABLE_OVERRIDE = originalOverride;
+      }
+    }
   });
 });

@@ -151,6 +151,8 @@ export default function SettingsPage() {
   });
   const [credentialsSaving, setCredentialsSaving] = useState(false);
   const [credentialsError, setCredentialsError] = useState("");
+  const [plexLoginError, setPlexLoginError] = useState("");
+  const [localAuthError, setLocalAuthError] = useState("");
   const [credentialsSuccess, setCredentialsSuccess] = useState("");
   const [showCredentialPrompt, setShowCredentialPrompt] = useState(false);
   const [promptForm, setPromptForm] = useState<PromptForm>({ username: "", password: "", confirmPassword: "" });
@@ -1791,6 +1793,7 @@ export default function SettingsPage() {
   const handlePlexLink = () => plexOAuth.startAuth();
 
   const handleToggleLocalAuth = async (checked: boolean) => {
+    setLocalAuthError("");
     // If enabling and no credentials exist, prompt to create them first
     if (checked && !authInfo?.hasPassword) {
       setPromptForm({ username: "", password: "", confirmPassword: "" });
@@ -1807,8 +1810,40 @@ export default function SettingsPage() {
       });
       if (res.ok) {
         setAuthInfo((prev) => prev ? { ...prev, localAuthEnabled: checked } : prev);
+      } else {
+        // Surface the lockout-guard error inline. The UI also gates the
+        // switch via wouldLockOut, so this mostly catches edge cases where
+        // the client state is stale (e.g. SSO became unlinked from another
+        // tab between page load and clicking the toggle).
+        const data = await res.json().catch(() => ({}));
+        setLocalAuthError(data.error || "Failed to update local login setting");
       }
-    } catch {} finally {
+    } catch {
+      setLocalAuthError("Network error");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleTogglePlexLogin = async (checked: boolean) => {
+    setPlexLoginError("");
+    setAuthLoading(true);
+    try {
+      const res = await fetch("/api/settings/auth", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plexLoginEnabled: checked }),
+      });
+      if (res.ok) {
+        setAuthInfo((prev) => prev ? { ...prev, plexLoginEnabled: checked } : prev);
+      } else {
+        // Surface the lockout-guard error inline in the Plex Connection card.
+        const data = await res.json().catch(() => ({}));
+        setPlexLoginError(data.error || "Failed to update Plex login setting");
+      }
+    } catch {
+      setPlexLoginError("Network error");
+    } finally {
       setAuthLoading(false);
     }
   };
@@ -2278,6 +2313,8 @@ export default function SettingsPage() {
             credentialsSaving={credentialsSaving}
             credentialsError={credentialsError}
             credentialsSuccess={credentialsSuccess}
+            plexLoginError={plexLoginError}
+            localAuthError={localAuthError}
             showCredentialPrompt={showCredentialPrompt}
             promptForm={promptForm}
             promptError={promptError}
@@ -2286,6 +2323,7 @@ export default function SettingsPage() {
             onSetPromptForm={setPromptForm}
             onSetShowCredentialPrompt={setShowCredentialPrompt}
             onToggleLocalAuth={handleToggleLocalAuth}
+            onTogglePlexLogin={handleTogglePlexLogin}
             onChangeCredentials={handleChangeCredentials}
             onPlexLink={handlePlexLink}
             onCreateCredentialsAndEnable={handleCreateCredentialsAndEnable}

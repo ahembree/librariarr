@@ -71,14 +71,38 @@ export function checkAuthRateLimit(request: Request, bucket: string): Response |
   return null;
 }
 
+/**
+ * Resolve the client IP for rate-limit bucketing.
+ *
+ * `x-forwarded-for` / `x-real-ip` are set by reverse proxies. We trust them
+ * by default because most deployments sit behind a proxy that scrubs and
+ * re-injects them — this is the documented topology in the install docs.
+ *
+ * For deployments exposed *directly* to the internet (no proxy between
+ * Librariarr and the client), trusting these headers means an attacker can
+ * trivially bypass per-IP rate limits by rotating `X-Forwarded-For`. Set
+ * `TRUST_PROXY_HEADERS=false` in that case to fall back to a global bucket
+ * (less granular but tamper-proof against header spoofing).
+ *
+ * Falsy values for `TRUST_PROXY_HEADERS`: `"false"`, `"0"`, `"no"`
+ * (case-insensitive). Anything else (including unset) means trust.
+ */
 export function getClientIp(request: Request): string {
-  // x-forwarded-for / x-real-ip are set by reverse proxies. Always trusted —
-  // this is a self-hosted internal app where header spoofing is not a concern.
-  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  if (forwarded) return forwarded;
-  const realIp = request.headers.get("x-real-ip");
-  if (realIp) return realIp;
-  // Fallback: Next.js Request API doesn't expose raw socket IP.
-  // Rate limiting will use a global bucket when no proxy headers are available.
+  if (proxyHeadersTrusted()) {
+    const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+    if (forwarded) return forwarded;
+    const realIp = request.headers.get("x-real-ip");
+    if (realIp) return realIp;
+  }
+  // Next.js Request API doesn't expose raw socket IP. When proxy headers are
+  // either absent or distrusted, fall back to a single shared bucket — slower
+  // legitimate users but no way to escape rate limits via header rotation.
   return "unknown";
+}
+
+function proxyHeadersTrusted(): boolean {
+  const raw = process.env.TRUST_PROXY_HEADERS;
+  if (!raw) return true;
+  const normalized = raw.trim().toLowerCase();
+  return !(normalized === "false" || normalized === "0" || normalized === "no");
 }

@@ -11,6 +11,19 @@ export interface SessionData {
   plexToken?: string;
   isLoggedIn: boolean;
   sessionVersion?: number;
+  // Transient SSO OIDC handshake state — present only between the redirect to
+  // the IdP and the callback. Cleared once the callback consumes them.
+  oidcState?: string;
+  oidcVerifier?: string;
+  /**
+   * Tells the OIDC callback whether this handshake was an anonymous login
+   * (default) or an authenticated link flow initiated from the settings
+   * page. The link path captures the IdP-issued `sub` directly so admins
+   * don't need to find it in logs — and it doubles as live verification
+   * that client_id + client_secret + redirect URI all work before SSO is
+   * activated.
+   */
+  oidcFlow?: "link";
 }
 
 const SESSION_SECRET_FILE = "/config/.session-secret";
@@ -89,7 +102,7 @@ function getSessionOptions(): SessionOptions {
       password: sessionSecret,
       cookieName: "librariarr_session",
       cookieOptions: {
-        secure: process.env.COOKIE_SECURE === "true",
+        secure: resolveCookieSecure(),
         httpOnly: true,
         sameSite: "lax" as const,
         maxAge: 60 * 60 * 24 * 30, // 30 days
@@ -97,6 +110,26 @@ function getSessionOptions(): SessionOptions {
     };
   }
   return _sessionOptions;
+}
+
+/**
+ * Resolve the `Secure` cookie attribute.
+ *
+ * Defaults to `false` so direct-HTTP deployments (LAN, http://host:3000 with
+ * no proxy) keep working. The Docker image sets `NODE_ENV=production`, so a
+ * NODE_ENV-based default would silently break HTTP-only setups on upgrade —
+ * the browser would refuse to send the cookie and users would never stay
+ * logged in.
+ *
+ * HTTPS deployments should explicitly set `COOKIE_SECURE=true`. Accepts the
+ * lenient parse: `true`/`1`/`yes` (case-insensitive). The install docs flag
+ * this as recommended for any HTTPS-fronted deployment.
+ */
+function resolveCookieSecure(): boolean {
+  const raw = process.env.COOKIE_SECURE;
+  if (!raw) return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized === "true" || normalized === "1" || normalized === "yes";
 }
 
 export async function getSession() {

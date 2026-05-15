@@ -19,6 +19,15 @@ const eslintConfig = defineConfig([
       "react-hooks/incompatible-library": "off",
     },
   },
+  {
+    // The recovery script is plain CommonJS (no TypeScript runner in prod),
+    // so `require()` is expected here. Linting the rest of the codebase
+    // with the TS ruleset is still desired.
+    files: ["scripts/**/*.js"],
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:

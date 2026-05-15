@@ -116,6 +116,10 @@ export default defineConfig({
               label: "Security Hardening",
               slug: "docs/advanced/security-hardening",
             },
+            {
+              label: "SSO Authentication",
+              slug: "docs/advanced/sso",
+            },
           ],
         },
         {

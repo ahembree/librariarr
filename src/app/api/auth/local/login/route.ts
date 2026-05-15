@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, authLoginSchema } from "@/lib/validation";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
+import { getSsoSettings, isSsoOverrideActive, isSsoUsable } from "@/lib/sso/config";
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,6 +15,35 @@ export async function POST(request: NextRequest) {
     const { data, error } = await validateRequest(request, authLoginSchema);
     if (error) return error;
     const { username, password } = data;
+
+    // Gate before credential check: the login page hides the local form when
+    // localAuthEnabled is false or when SSO is usable (SSO hides local). Without
+    // this check, a direct POST would bypass those toggles entirely — a real
+    // auth-bypass for anyone with valid credentials. Return the same generic
+    // 401 as a credential mismatch so we don't leak which toggle is off.
+    //
+    // SSO_DISABLE_OVERRIDE bypasses the localAuthEnabled toggle here for the
+    // same reason check-setup re-surfaces the local form: an admin who had
+    // localAuthEnabled=false because they were using SSO would otherwise be
+    // locked out when SSO is down even though they have valid local
+    // credentials. ssoUsable is already false under override
+    // (getSsoSettings forces ssoEnabled=false), so that part of the gate
+    // takes care of itself.
+    const [settings, ssoSettings] = await Promise.all([
+      prisma.appSettings.findFirst({ select: { localAuthEnabled: true } }),
+      getSsoSettings(),
+    ]);
+    const overrideActive = isSsoOverrideActive();
+    const localAuthEnabled = overrideActive
+      ? true
+      : (settings?.localAuthEnabled ?? false);
+    const ssoUsable = isSsoUsable(ssoSettings);
+    if (!localAuthEnabled || ssoUsable) {
+      return NextResponse.json(
+        { error: "Invalid username or password" },
+        { status: 401 }
+      );
+    }
 
     const user = await prisma.user.findUnique({
       where: { localUsername: username.trim().toLowerCase() },

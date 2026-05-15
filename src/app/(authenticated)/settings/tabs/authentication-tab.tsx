@@ -31,6 +31,7 @@ import {
   XCircle,
 } from "lucide-react";
 import type { AuthInfo } from "../types";
+import { SsoSection } from "./sso-section";
 
 export interface CredentialsForm {
   currentPassword: string;
@@ -53,6 +54,8 @@ export interface AuthenticationTabProps {
   credentialsSaving: boolean;
   credentialsError: string;
   credentialsSuccess: string;
+  plexLoginError: string;
+  localAuthError: string;
   showCredentialPrompt: boolean;
   promptForm: PromptForm;
   promptError: string;
@@ -61,6 +64,7 @@ export interface AuthenticationTabProps {
   onSetPromptForm: (updater: (prev: PromptForm) => PromptForm) => void;
   onSetShowCredentialPrompt: (open: boolean) => void;
   onToggleLocalAuth: (enabled: boolean) => void;
+  onTogglePlexLogin: (enabled: boolean) => void;
   onChangeCredentials: () => void;
   onPlexLink: () => void;
   onCreateCredentialsAndEnable: () => void;
@@ -74,6 +78,8 @@ export function AuthenticationTab({
   credentialsSaving,
   credentialsError,
   credentialsSuccess,
+  plexLoginError,
+  localAuthError,
   showCredentialPrompt,
   promptForm,
   promptError,
@@ -82,6 +88,7 @@ export function AuthenticationTab({
   onSetPromptForm,
   onSetShowCredentialPrompt,
   onToggleLocalAuth,
+  onTogglePlexLogin,
   onChangeCredentials,
   onPlexLink,
   onCreateCredentialsAndEnable,
@@ -106,7 +113,7 @@ export function AuthenticationTab({
             Link your Plex account for server discovery and Plex OAuth login.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           {authInfo?.plexConnected ? (
             <div className="flex items-center gap-2 text-sm">
               <CheckCircle className="h-4 w-4 text-green-500" />
@@ -131,6 +138,39 @@ export function AuthenticationTab({
               </Button>
             </div>
           )}
+
+          {/* Plex login toggle — only shown when a Plex account is linked.
+              Lets the admin hide the Plex login button from the public login
+              page (useful when relying on SSO) while keeping the Plex token
+              attached for server discovery and library sync. */}
+          {authInfo?.plexConnected && (
+            <>
+              <Separator />
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-medium">Allow Plex Login</p>
+                  <p className="text-xs text-muted-foreground">
+                    Show the &ldquo;Sign in with Plex&rdquo; button on the
+                    login page. Turning this off keeps your Plex token
+                    attached for server discovery and library sync —
+                    you&rsquo;ll just need another sign-in method (SSO or
+                    local credentials).
+                  </p>
+                </div>
+                <Switch
+                  checked={authInfo?.plexLoginEnabled ?? true}
+                  disabled={authLoading}
+                  onCheckedChange={onTogglePlexLogin}
+                />
+              </div>
+              {plexLoginError && (
+                <div className="flex items-start gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{plexLoginError}</span>
+                </div>
+              )}
+            </>
+          )}
         </CardContent>
       </Card>
 
@@ -146,19 +186,65 @@ export function AuthenticationTab({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <p className="text-sm font-medium">Enable Local Login</p>
-              <p className="text-xs text-muted-foreground">
-                Allow signing in with username and password.
-              </p>
+          {/* Lockout protection: disabling local login is only safe when at
+              least one other login method works. Mirrors the server-side
+              guard in /api/settings/auth PUT so the UI doesn't pretend an
+              action is possible when the server will reject it. */}
+          {(() => {
+            const isPlexUsable =
+              (authInfo?.plexConnected ?? false) && (authInfo?.plexLoginEnabled ?? false);
+            const isSsoUsableNow = authInfo?.localAuthHiddenBySso === true;
+            const wouldLockOut =
+              (authInfo?.localAuthEnabled ?? false) && !isPlexUsable && !isSsoUsableNow;
+
+            return (
+              <>
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <p className="text-sm font-medium">Enable Local Login</p>
+                    <p className="text-xs text-muted-foreground">
+                      Allow signing in with username and password.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={authInfo?.localAuthEnabled ?? false}
+                    disabled={authLoading || wouldLockOut}
+                    onCheckedChange={onToggleLocalAuth}
+                  />
+                </div>
+                {wouldLockOut && (
+                  <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-400">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <div>
+                      <p className="font-medium">Local login is your only sign-in method</p>
+                      <p className="text-xs">
+                        Disabling it would lock you out. Set up another method
+                        first &mdash; link a Plex account (Plex Connection
+                        above) or configure SSO (Single Sign-On below) and
+                        enable it &mdash; then this toggle will be available.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+          {localAuthError && (
+            <div className="flex items-start gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{localAuthError}</span>
             </div>
-            <Switch
-              checked={authInfo?.localAuthEnabled ?? false}
-              disabled={authLoading || (!authInfo?.plexConnected && !authInfo?.localAuthEnabled)}
-              onCheckedChange={onToggleLocalAuth}
-            />
-          </div>
+          )}
+          {authInfo?.localAuthEnabled && authInfo?.localAuthHiddenBySso && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-400">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                SSO is enabled, so the local username/password form is hidden
+                on the login page. This toggle controls what would appear if
+                you disabled SSO.
+              </span>
+            </div>
+          )}
           {!authInfo?.plexConnected && !authInfo?.localAuthEnabled && (
             <div className="flex items-center gap-2 rounded-md bg-muted p-3 text-sm text-muted-foreground">
               <AlertCircle className="h-4 w-4 shrink-0" />
@@ -181,6 +267,7 @@ export function AuthenticationTab({
                     <Label htmlFor="cred-username">New Username</Label>
                     <Input
                       id="cred-username"
+                      autoComplete="username"
                       placeholder={authInfo.localUsername ?? "username"}
                       value={credentialsForm.newUsername}
                       onChange={(e) => onSetCredentialsForm((f) => ({ ...f, newUsername: e.target.value }))}
@@ -191,6 +278,7 @@ export function AuthenticationTab({
                     <Input
                       id="cred-current-pw"
                       type="password"
+                      autoComplete="current-password"
                       placeholder="Required to make changes"
                       value={credentialsForm.currentPassword}
                       onChange={(e) => onSetCredentialsForm((f) => ({ ...f, currentPassword: e.target.value }))}
@@ -201,6 +289,7 @@ export function AuthenticationTab({
                     <Input
                       id="cred-new-pw"
                       type="password"
+                      autoComplete="new-password"
                       placeholder="Min 8 characters"
                       value={credentialsForm.newPassword}
                       onChange={(e) => onSetCredentialsForm((f) => ({ ...f, newPassword: e.target.value }))}
@@ -211,6 +300,7 @@ export function AuthenticationTab({
                     <Input
                       id="cred-confirm-pw"
                       type="password"
+                      autoComplete="new-password"
                       placeholder="Repeat new password"
                       value={credentialsForm.confirmPassword}
                       onChange={(e) => onSetCredentialsForm((f) => ({ ...f, confirmPassword: e.target.value }))}
@@ -218,13 +308,13 @@ export function AuthenticationTab({
                   </div>
                 </div>
                 {credentialsError && (
-                  <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                  <div role="alert" className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
                     <AlertCircle className="h-4 w-4 shrink-0" />
                     {credentialsError}
                   </div>
                 )}
                 {credentialsSuccess && (
-                  <div className="flex items-center gap-2 rounded-md bg-green-500/10 p-3 text-sm text-green-500">
+                  <div role="status" className="flex items-center gap-2 rounded-md bg-green-500/10 p-3 text-sm text-green-500">
                     <CheckCircle className="h-4 w-4 shrink-0" />
                     {credentialsSuccess}
                   </div>
@@ -246,6 +336,9 @@ export function AuthenticationTab({
           )}
         </CardContent>
       </Card>
+
+      {/* SSO (OIDC + Forward Auth) */}
+      <SsoSection />
 
       {/* Create Credentials Dialog -- shown when enabling local auth without existing credentials */}
       <Dialog open={showCredentialPrompt} onOpenChange={(open) => { if (!open) onSetShowCredentialPrompt(false); }}>

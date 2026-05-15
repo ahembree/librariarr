@@ -46,6 +46,21 @@ Set the encryption password in **Settings → General → Backup & Restore**.
   If you lose the encryption passphrase, encrypted backups **cannot be recovered**. There is no passphrase reset or recovery mechanism. Store your passphrase securely.
 </Aside>
 
+<Aside type="caution">
+  Backups contain **plaintext secrets** — Plex tokens, Sonarr/Radarr/Lidarr/Seerr API keys, the OIDC client secret, and the saved backup encryption password itself. Encrypted backups are strongly recommended whenever the file may leave the host or be stored on shared media.
+</Aside>
+
+### What's included
+
+Configuration backups capture every column of the configuration tables, including:
+
+- **User accounts** — usernames, hashed passwords, Plex IDs/tokens, and SSO linkage (`ssoSubject`, `ssoProvider`, `ssoEnabled`)
+- **App settings** — schedules, notifications, theme, and the full SSO configuration (mode, OIDC issuer/client ID/client secret/scopes/username claim, forward-auth header names, master `ssoEnabled` toggle)
+- **Media servers, libraries, and integrations** (Sonarr, Radarr, Lidarr, Seerr)
+- **Lifecycle rule sets, blackout schedules, preroll presets and schedules, saved queries**
+
+After restoring, SSO is restored exactly as configured at backup time. If the restored backup has SSO enabled but you cannot reach the IdP from the new environment, use the [`SSO_DISABLE_OVERRIDE`](/docs/advanced/sso/#recovery--locked-out-of-sso) env var to recover access.
+
 ## Scheduling
 
 Configure automatic backups in **Settings → General**:

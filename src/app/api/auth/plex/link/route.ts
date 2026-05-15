@@ -63,9 +63,15 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Update session with plexToken and current version
+    // Update session with plexToken and current version. Also clear any
+    // transient OIDC handshake fields that might be left over from an
+    // abandoned SSO init — they should never outlive the redirect they were
+    // issued for, and shouldn't accumulate in long-lived authenticated
+    // sessions.
     session.plexToken = plexAuthToken;
     session.sessionVersion = currentUser.sessionVersion;
+    session.oidcState = undefined;
+    session.oidcVerifier = undefined;
     await session.save();
 
     apiLogger.info("Auth", `Plex account linked for user "${session.userId}"`);

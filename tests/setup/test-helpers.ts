@@ -10,6 +10,7 @@ export function createTestRequest(
     method?: string;
     body?: unknown;
     searchParams?: Record<string, string>;
+    headers?: Record<string, string>;
   }
 ): NextRequest {
   const baseUrl = "http://localhost:3000";
@@ -25,9 +26,15 @@ export function createTestRequest(
     method: options?.method ?? "GET",
   };
 
+  const headers: Record<string, string> = { ...(options?.headers ?? {}) };
   if (options?.body !== undefined) {
     init.body = JSON.stringify(options.body);
-    init.headers = { "Content-Type": "application/json" };
+    if (!Object.keys(headers).some((k) => k.toLowerCase() === "content-type")) {
+      headers["Content-Type"] = "application/json";
+    }
+  }
+  if (Object.keys(headers).length > 0) {
+    init.headers = headers;
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -44,6 +51,7 @@ export async function callRoute(
     method?: string;
     body?: unknown;
     searchParams?: Record<string, string>;
+    headers?: Record<string, string>;
   }
 ): Promise<Response> {
   const request = createTestRequest(options?.url ?? "/api/test", options);

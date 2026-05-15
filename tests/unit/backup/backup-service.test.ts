@@ -145,6 +145,60 @@ describe("createBackup", () => {
     expect(mockPrismaModels.lifecycleException.findMany).toHaveBeenCalled();
     expect(mockPrismaModels.watchHistory.findMany).toHaveBeenCalled();
   });
+
+  it("preserves SSO fields on User and AppSettings in the exported payload", async () => {
+    // Regression guard: SSO config lives in plain columns on User + AppSettings,
+    // so backups must capture them. If someone later switches to a column-filtering
+    // select(), this test fails and forces an explicit decision.
+    mockPrismaModels.user.findMany.mockResolvedValue([
+      {
+        id: "u1",
+        username: "admin",
+        ssoSubject: "ak-abc123",
+        ssoProvider: "Authentik",
+        ssoEnabled: true,
+      },
+    ]);
+    mockPrismaModels.appSettings.findMany.mockResolvedValue([
+      {
+        id: "s1",
+        userId: "u1",
+        ssoEnabled: true,
+        ssoMode: "OIDC",
+        oidcIssuer: "https://idp.example.com",
+        oidcClientId: "client-xyz",
+        oidcClientSecret: "super-secret",
+        oidcScopes: "openid profile email",
+        oidcUsernameClaim: "preferred_username",
+        forwardAuthUserHeader: "Remote-User",
+        forwardAuthEmailHeader: "Remote-Email",
+        forwardAuthNameHeader: "Remote-Name",
+      },
+    ]);
+
+    await createBackup();
+
+    const buffer = mockFs.writeFile.mock.calls[0][1] as Buffer;
+    const parsed = JSON.parse(gunzipSync(buffer).toString("utf-8"));
+
+    expect(parsed.data.user[0]).toMatchObject({
+      ssoSubject: "ak-abc123",
+      ssoProvider: "Authentik",
+      ssoEnabled: true,
+    });
+    expect(parsed.data.appSettings[0]).toMatchObject({
+      ssoEnabled: true,
+      ssoMode: "OIDC",
+      oidcIssuer: "https://idp.example.com",
+      oidcClientId: "client-xyz",
+      oidcClientSecret: "super-secret",
+      oidcScopes: "openid profile email",
+      oidcUsernameClaim: "preferred_username",
+      forwardAuthUserHeader: "Remote-User",
+      forwardAuthEmailHeader: "Remote-Email",
+      forwardAuthNameHeader: "Remote-Name",
+    });
+  });
 });
 
 describe("restoreBackup", () => {
@@ -192,6 +246,76 @@ describe("restoreBackup", () => {
           expect.objectContaining({ id: "u1", username: "admin" }),
         ]),
         skipDuplicates: true,
+      }),
+    );
+  });
+
+  it("restores SSO fields on User and AppSettings", async () => {
+    const backupData = {
+      metadata: {
+        version: 1,
+        appVersion: "1.0.0",
+        createdAt: new Date().toISOString(),
+        tables: { user: 1, appSettings: 1 },
+      },
+      data: {
+        user: [
+          {
+            id: "u1",
+            username: "admin",
+            ssoSubject: "ak-abc123",
+            ssoProvider: "Authentik",
+            ssoEnabled: true,
+            createdAt: "2024-01-01T00:00:00.000Z",
+          },
+        ],
+        appSettings: [
+          {
+            id: "s1",
+            userId: "u1",
+            ssoEnabled: true,
+            ssoMode: "OIDC",
+            oidcIssuer: "https://idp.example.com",
+            oidcClientId: "client-xyz",
+            oidcClientSecret: "super-secret",
+            oidcScopes: "openid profile email",
+            oidcUsernameClaim: "preferred_username",
+            forwardAuthUserHeader: "Remote-User",
+            forwardAuthEmailHeader: "Remote-Email",
+            forwardAuthNameHeader: "Remote-Name",
+          },
+        ],
+      },
+    };
+    const compressed = gzipSync(Buffer.from(JSON.stringify(backupData)));
+    mockFs.readFile.mockResolvedValue(compressed);
+
+    await restoreBackup("librariarr-backup-2024-01-01T00-00-00.json.gz");
+
+    expect(mockPrismaModels.user.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.arrayContaining([
+          expect.objectContaining({
+            ssoSubject: "ak-abc123",
+            ssoProvider: "Authentik",
+            ssoEnabled: true,
+          }),
+        ]),
+      }),
+    );
+    expect(mockPrismaModels.appSettings.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.arrayContaining([
+          expect.objectContaining({
+            ssoEnabled: true,
+            ssoMode: "OIDC",
+            oidcIssuer: "https://idp.example.com",
+            oidcClientId: "client-xyz",
+            oidcClientSecret: "super-secret",
+            oidcUsernameClaim: "preferred_username",
+            forwardAuthUserHeader: "Remote-User",
+          }),
+        ]),
       }),
     );
   });

@@ -43,6 +43,11 @@ describe("sanitize", () => {
     expect(result.backupEncryptionPassword).toBe("••••••••");
   });
 
+  it("masks oidcClientSecret field", () => {
+    const result = sanitize({ oidcClientSecret: "oidc-secret" });
+    expect(result.oidcClientSecret).toBe("••••••••");
+  });
+
   it("does not mask sensitive fields when value is null", () => {
     const result = sanitize({ accessToken: null, apiKey: null });
     expect(result.accessToken).toBe(null);

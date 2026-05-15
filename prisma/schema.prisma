@@ -16,6 +16,10 @@ model User {
   email            String?
   username         String
   sessionVersion   Int               @default(0)
+  ssoSubject       String?
+  ssoIssuer        String?
+  ssoProvider      String?
+  ssoEnabled       Boolean           @default(false)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   mediaServers     MediaServer[]
@@ -31,6 +35,12 @@ model User {
   prerollPresets      PrerollPreset[]
   prerollSchedules   PrerollSchedule[]
   savedQueries       SavedQuery[]
+
+  // SSO subjects are only unique per-issuer. Two users can have sub "abc" if
+  // they came from different IdPs. This composite key prevents the cross-IdP
+  // collision attack where switching the configured IdP could let a stranger
+  // log in as the linked admin.
+  @@unique([ssoSubject, ssoIssuer])
 }
 
 model AppSettings {
@@ -62,6 +72,27 @@ model AppSettings {
   discordWebhookAvatarUrl      String?
   discordNotifyMaintenance     Boolean   @default(false)
   localAuthEnabled       Boolean @default(false)
+  // Allow signing in with Plex from the login page. When false, the Plex
+  // button is hidden and /api/auth/plex/token rejects logins — but the
+  // user's plexToken stays attached for media server / library sync.
+  plexLoginEnabled       Boolean @default(true)
+  // SSO — when ssoEnabled is true, the local username/password form is hidden
+  // on the login screen. Plex login remains available if a Plex account is linked.
+  ssoEnabled                Boolean   @default(false)
+  ssoMode                   String    @default("OIDC")
+  oidcIssuer                String?
+  oidcClientId              String?
+  oidcClientSecret          String?
+  oidcScopes                String    @default("openid profile email")
+  oidcUsernameClaim         String    @default("preferred_username")
+  forwardAuthUserHeader     String    @default("Remote-User")
+  forwardAuthEmailHeader    String    @default("Remote-Email")
+  forwardAuthNameHeader     String    @default("Remote-Name")
+  // Single-step undo for SSO config changes. Snapshotted on every PUT to
+  // /api/settings/sso. Resistant to backup rotation — gives admins a
+  // recovery path when bad credentials are saved and the only available
+  // backups all have the broken state.
+  previousSsoConfig         Json?
   preferredTitleServerId   String?
   preferredArtworkServerId String?
   // Backup

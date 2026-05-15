@@ -5,6 +5,7 @@ import { getSession } from "@/lib/auth/session";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, plexTokenSchema } from "@/lib/validation";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
+import { isSsoOverrideActive } from "@/lib/sso/config";
 
 export async function POST(request: NextRequest) {
   try {
@@ -17,6 +18,31 @@ export async function POST(request: NextRequest) {
     const { authToken } = data;
     const plexUser = await getPlexUser(authToken);
     const plexIdStr = plexUser.id.toString();
+
+    // Reject the login flow when the admin has disabled Plex login (but only
+    // after setup is complete — first-user creation via Plex always works).
+    // The /api/auth/plex/link endpoint used by Settings → Connect Plex Account
+    // is unaffected by this check, so admins can still link/relink Plex while
+    // keeping the login button hidden on the public login page.
+    const initialCount = await prisma.user.count();
+    if (initialCount > 0) {
+      const settings = await prisma.appSettings.findFirst({
+        select: { plexLoginEnabled: true },
+      });
+      // SSO_DISABLE_OVERRIDE bypasses this gate — the override is a recovery
+      // mode and the login page surfaces the Plex button under it, so the
+      // server must accept the login or the UI would be misleading.
+      if (
+        settings &&
+        settings.plexLoginEnabled === false &&
+        !isSsoOverrideActive()
+      ) {
+        return NextResponse.json(
+          { error: "Plex login is disabled by the administrator." },
+          { status: 403 }
+        );
+      }
+    }
 
     // Check if a user with this Plex ID already exists
     const existingUser = await prisma.user.findUnique({
@@ -34,7 +60,11 @@ export async function POST(request: NextRequest) {
         },
       });
 
+      // Destroy first to clear any transient state (e.g. SSO handshake fields
+      // from an abandoned OIDC init) before replacing with the authenticated
+      // session — matches the pattern in local/login and the SSO callback.
       const session = await getSession();
+      session.destroy();
       session.userId = existingUser.id;
       session.plexToken = authToken;
       session.isLoggedIn = true;
@@ -47,26 +77,66 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // No user with this Plex ID — check if any users exist (single-admin app)
-    const userCount = await prisma.user.count();
-    if (userCount > 0) {
+    // No user with this Plex ID — single-admin app, so reject if any user
+    // already exists. (Initial check above bounced the post-setup case; this
+    // path is for the initial-setup flow.)
+    if (initialCount > 0) {
       return NextResponse.json(
         { error: "This Plex account is not linked to the admin user. Use Settings > Authentication to link your Plex account." },
         { status: 403 }
       );
     }
 
-    // No users exist at all — create the first user via Plex
-    const user = await prisma.user.create({
-      data: {
-        plexId: plexIdStr,
-        plexToken: authToken,
-        email: plexUser.email,
-        username: plexUser.username,
+    // First-user creation. Serializable transaction so two concurrent setup
+    // requests can't both pass the userCount check and both create admins
+    // (which would silently produce two users with different plexIds, since
+    // the unique constraint is on plexId, not on "being the singleton admin").
+    // PostgreSQL SSI will commit one and fail the other with a serialization
+    // error — the loser sees a 500 and can retry.
+    //
+    // Also creates the AppSettings row in the same transaction. Without this,
+    // Plex-first deployments end up with no AppSettings — and routes like
+    // /api/settings/sso (which uses findUnique-then-update) return 404, so
+    // the admin couldn't configure SSO at all until they happened to save
+    // some other setting that uses upsert. The /api/auth/setup local-first
+    // path already creates AppSettings; this brings the Plex-first path in
+    // line. localAuthEnabled defaults to false here since the admin signed
+    // up via Plex.
+    const user = await prisma.$transaction(
+      async (tx) => {
+        const inner = await tx.user.count();
+        if (inner > 0) return null;
+        const created = await tx.user.create({
+          data: {
+            plexId: plexIdStr,
+            plexToken: authToken,
+            email: plexUser.email,
+            username: plexUser.username,
+          },
+        });
+        await tx.appSettings.create({
+          data: { userId: created.id, localAuthEnabled: false },
+        });
+        return created;
       },
-    });
+      { isolationLevel: "Serializable" }
+    );
+
+    if (!user) {
+      // Another request beat us during setup — surface the same error the
+      // post-setup path would.
+      return NextResponse.json(
+        { error: "This Plex account is not linked to the admin user. Use Settings > Authentication to link your Plex account." },
+        { status: 403 }
+      );
+    }
 
     const session = await getSession();
+    // Destroy first to clear any transient state (e.g. SSO handshake fields
+    // from an abandoned OIDC init) before replacing with the authenticated
+    // session — matches the pattern in the existing-user branch above and
+    // in local/login and the SSO callback.
+    session.destroy();
     session.userId = user.id;
     session.plexToken = authToken;
     session.isLoggedIn = true;

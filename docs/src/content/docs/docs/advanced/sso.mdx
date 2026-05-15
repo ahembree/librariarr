@@ -1,0 +1,909 @@
+---
+title: SSO Authentication
+description: Configure OIDC or forward-auth single sign-on for Librariarr, with step-by-step guides for Authentik, Authelia, Keycloak, Pocket ID, and Zitadel.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Librariarr supports single sign-on (SSO) via two mechanisms:
+
+- **OIDC** — OpenID Connect Authorization Code + PKCE. Works with Authentik,
+  Authelia, Keycloak, Pocket ID, Zitadel, Okta, and any other OIDC-compliant
+  provider.
+- **Forward Auth** — trust identity headers (e.g. `Remote-User`) injected by an
+  upstream authenticating reverse proxy.
+
+<Aside type="caution">
+  When SSO is enabled the local username/password form is hidden on the login
+  screen. Plex login remains available by default if a Plex account is linked.
+  Make sure you have a working alternate login method (local credentials or
+  Plex) before enabling SSO, or you may lock yourself out.
+</Aside>
+
+<Aside type="tip">
+  **Want SSO-only login while keeping Plex for media access?** You can hide
+  the Plex login button without unlinking Plex from your account. Toggle off
+  **Settings → Authentication → Plex Connection → Allow Plex Login**. Your
+  Plex token stays attached for server discovery and library sync; it just
+  won't appear as a login option on the public login page. The toggle is
+  gated by the same lockout check as the others — you'll need SSO or local
+  credentials configured first.
+</Aside>
+
+## How linking works
+
+Librariarr uses **manual linking**: SSO logins are never auto-provisioned. An
+admin must explicitly link an SSO subject identifier to an existing Librariarr
+user before that user can log in via SSO.
+
+### The "subject" — hashed ID vs username
+
+Every OIDC provider returns a `sub` claim that identifies the authenticated
+user. Most providers default to a **stable hashed ID** — a UUID or opaque
+string that never changes even if the user renames themselves. Some providers
+also let you configure `sub` to be the **username** instead.
+
+| Mode | What `sub` looks like | Trade-off |
+|------|----------------------|-----------|
+| Hashed ID *(default)* | `b8f3e2c4-1234-...` or `ak-abc123def...` | Permanent — never changes |
+| Username | `alice` | Human-readable, but breaks if the username is renamed at the IdP |
+
+**Use hashed ID unless you have a reason not to.** It's set-and-forget. The
+username mode is convenient when you're getting started or testing, since
+you'll see the value in your IdP's user list rather than having to hunt for
+a UUID.
+
+For **forward auth**, the "subject" is whatever value your reverse proxy
+injects as the user header (typically `Remote-User`). This is almost always
+the username — there's no `sub` concept in forward auth.
+
+## OIDC setup — generic steps
+
+These steps apply to every OIDC provider. Provider-specific subsections below
+cover where to click and what defaults to expect.
+
+<Aside>
+  Versions verified against this documentation (as of May 2026):
+
+  | Provider | Verified version |
+  |----------|------------------|
+  | Authentik | 2026.2.x |
+  | Authelia | 4.39.x |
+  | Keycloak | 26.6.x |
+  | Pocket ID | 2.6.x |
+  | Zitadel | 4.13.x |
+
+  Earlier major versions may use different UI paths or config syntax —
+  notably Authelia &lt; 4.39 (which preceded the `claims_policies` feature)
+  and Zitadel v2/v3 console layouts.
+</Aside>
+
+1. **Register a client** in your IdP. Set the redirect URI to:
+
+   ```
+   https://your-librariarr-host/api/auth/sso/oidc/callback
+   ```
+
+   The host must match exactly how users reach Librariarr in a browser
+   (protocol, domain, port).
+
+2. **Copy** the Client ID, Client Secret, and Issuer URL.
+
+3. **In Librariarr** → **Settings → Authentication → Single Sign-On**:
+   - **SSO Mode:** `OIDC`
+   - **Issuer URL:** the base URL where the IdP serves `.well-known/openid-configuration`
+   - **Client ID** / **Client Secret:** from your IdP
+   - **Scopes:** `openid profile email` (default — `openid` is required)
+   - **Username Claim:** `preferred_username` (default — used for the display name shown in the app)
+
+4. Click **Test Discovery**. Should report "Discovery succeeded."
+
+5. **Link your account.** Under **SSO Account Linking**, paste the `sub`
+   value (see [Finding your subject value](#finding-your-subject-value)
+   below). Click **Link Identity**.
+
+6. Toggle **Enable SSO Login** on and click **Save SSO Settings**. The login
+   page now shows **Sign in with SSO**.
+
+7. Sign out and verify the SSO flow works end-to-end before relying on it.
+
+### Authentik
+
+In Authentik 2026.x the recommended path creates the application and provider
+together. The older "Providers first, then Application" path still works and
+is documented as the alternative below.
+
+**Recommended (2026.x):**
+
+1. **Admin Interface → Applications → Applications → Create with provider.**
+2. Application name: `Librariarr`. Slug: `librariarr`.
+3. Choose **OAuth2/OpenID Provider**. On the provider page:
+   - Client type: **Confidential**
+   - Redirect URIs: `https://your-librariarr-host/api/auth/sso/oidc/callback`
+   - Signing Key: `authentik Self-signed Certificate`
+   - **Subject mode** (under Advanced protocol settings): `Based on the User's hashed ID` (default — produces a stable opaque ID) **or** `Based on the User's username` if you'd rather link by name.
+4. **Finish.** Note the **Client ID** and **Client Secret** shown on the
+   completion screen.
+
+**Alternative (legacy path):**
+
+1. **Admin Interface → Applications → Providers → Create.**
+2. Type: **OAuth2/OpenID Provider**. Same fields as above.
+3. **Save.** Copy the **Client ID** and **Client Secret**.
+4. **Applications → Applications → Create.** Link to the provider you just made.
+
+**Then in Librariarr:**
+
+- **Issuer URL:** `https://auth.example.com/application/o/librariarr/`
+  *(replace the slug with whatever you used; the trailing slash matches Authentik's advertised issuer)*
+
+### Authelia
+
+Authelia 4.39 introduced **claims policies**, restructured the default claims
+returned in ID Tokens, and reworked the container image. The example below
+targets 4.39+; earlier versions used a slightly different client schema.
+
+1. Edit Authelia's `configuration.yml`. Under `identity_providers.oidc.clients`,
+   add:
+
+   ```yaml
+   identity_providers:
+     oidc:
+       # Optional: customize which claims appear in the ID Token. The 4.39
+       # defaults follow the OIDC spec strictly, so adding preferred_username
+       # makes Librariarr's username display nicer.
+       claims_policies:
+         librariarr:
+           id_token: ['email', 'email_verified', 'preferred_username', 'name']
+
+       clients:
+         - client_id: librariarr
+           client_name: Librariarr
+           client_secret: '$pbkdf2-sha512$...'  # generate with `authelia crypto hash generate pbkdf2`
+           public: false
+           authorization_policy: one_factor   # or two_factor
+           claims_policy: librariarr          # references the policy above
+           redirect_uris:
+             - https://your-librariarr-host/api/auth/sso/oidc/callback
+           scopes:
+             - openid
+             - profile
+             - email
+           userinfo_signed_response_alg: none
+   ```
+
+2. Restart Authelia.
+3. In Librariarr:
+   - **Issuer URL:** `https://auth.example.com` *(your Authelia base URL — no path)*
+   - **Client ID:** `librariarr`
+   - **Client Secret:** the **plaintext** secret you hashed (not the `$pbkdf2…` value)
+
+**About Authelia's `sub` claim:** Authelia 4.39 uses **UUID v4 subject
+identifiers** for every client. There is no first-class way to swap `sub`
+for a username — that's by design (the OIDC spec requires `sub` to be a
+stable opaque identifier per user/client). Link by the UUID:
+[trigger the SSO flow once and read the logs](#recommended-method-trigger-the-flow-once-read-the-logs)
+to obtain the value, then paste it into Librariarr's linking input.
+
+### Keycloak
+
+Verified against Keycloak 26.6.x. The "Admin Console v2" (PatternFly 5
+rewrite) is the default in 26.x.
+
+1. **Realm settings → Clients → Create client.** Type: **OpenID Connect**. Client ID: `librariarr`.
+2. **Client authentication:** On. **Authentication flow:** Standard flow + Direct access grants off.
+3. **Valid redirect URIs:** `https://your-librariarr-host/api/auth/sso/oidc/callback`
+4. **Save.** Open the **Credentials** tab, copy the **Client secret**.
+5. In Librariarr:
+   - **Issuer URL:** `https://kc.example.com/realms/{your-realm}` *(no trailing slash)*
+   - **Client ID:** `librariarr`
+   - **Client Secret:** from step 4
+6. Keycloak's `sub` is the user's UUID (visible at **Users → \<user\> → ID** in
+   the admin console). To use the username instead, add a mapper:
+   **Client → Client scopes → librariarr-dedicated → Add mapper → User Property**,
+   property `username`, claim name `sub`.
+
+### Pocket ID
+
+Pocket ID is a lightweight passkey-only OIDC provider
+([pocket-id/pocket-id](https://github.com/pocket-id/pocket-id)). Verified
+against v2.6.x.
+
+1. Log in to the Pocket ID admin panel.
+2. **OIDC Clients → Add OIDC Client.**
+3. Name: `Librariarr`. Callback URL: `https://your-librariarr-host/api/auth/sso/oidc/callback`.
+4. **Save.** Copy the **Client ID** and **Client Secret**.
+5. In Librariarr:
+   - **Issuer URL:** `https://pocket-id.example.com` *(the Pocket ID base URL — no path)*
+   - **Client ID** / **Client Secret:** from step 4
+6. Pocket ID's `sub` is the user's UUID, visible in the admin **Users** list.
+   `preferred_username` carries the username.
+
+### Zitadel
+
+Verified against Zitadel v4.13.x. Zitadel switched to AGPLv3 and a
+quarterly major release cadence at v3; the console wording below matches
+v4's "Login V2" experience.
+
+1. In the Zitadel console: **Projects → \<your project\> → New Application.** Type: **Web**. Authentication method: **Code (with PKCE)**.
+2. Redirect URI: `https://your-librariarr-host/api/auth/sso/oidc/callback`. Post-logout URI: your login URL.
+3. **Create.** Copy the **Client ID** and **Client Secret**.
+4. **Token settings:** set the **Auth Token Type** to JWT (optional but recommended).
+5. In Librariarr:
+   - **Issuer URL:** your Zitadel instance URL, e.g. `https://my-instance-abc.zitadel.cloud` *(no path)*
+   - **Client ID** / **Client Secret:** from step 3
+6. Zitadel's `sub` is a long numeric user ID, visible at **Users → \<user\>** in the console.
+
+## Forward Auth setup — generic steps
+
+Forward auth is appropriate when Librariarr sits behind an authenticating
+reverse proxy (Authelia, Authentik forward-auth outpost, oauth2-proxy, Caddy
+`forward_auth`, Traefik `ForwardAuth` middleware) that handles all
+authentication upstream and injects identity headers.
+
+<Aside type="danger">
+  Forward auth trusts identity headers. **Librariarr must be reachable only
+  through your authenticating proxy.** If users can reach the container
+  directly (e.g. on the LAN at port 3000, or via another reverse-proxy route
+  that doesn't enforce auth), they can spoof these headers and bypass
+  authentication entirely. Block direct access at the firewall or bind the
+  container to localhost.
+</Aside>
+
+1. Configure your reverse proxy to perform forward auth and inject identity
+   headers into requests forwarded to Librariarr. Default headers:
+
+   | Header | Description |
+   |--------|-------------|
+   | `Remote-User` | Required — used as the SSO subject |
+   | `Remote-Email` | Optional |
+   | `Remote-Name` | Optional — display name |
+
+2. In **Settings → Authentication → Single Sign-On**:
+   - **SSO Mode:** `Forward Auth`
+   - Override the header names if your proxy uses different ones (some
+     proxies use `X-Forwarded-User`, `X-authentik-username`, etc.)
+
+3. **Link your account** using the value your proxy sends as the user header
+   (typically the username).
+
+4. Toggle **Enable SSO Login** on and save.
+
+### Authentication providers
+
+These are the services that actually authenticate the user. Configure your
+reverse proxy to delegate to one of them, then set the matching header
+overrides in Librariarr.
+
+#### Authelia
+
+Authelia's auth endpoint injects `Remote-User`, `Remote-Email`, `Remote-Name`,
+and `Remote-Groups` by default. The Librariarr defaults work unchanged — set
+**SSO Mode** to `Forward Auth` and don't touch the header overrides.
+
+Auth endpoint URLs you'll need when wiring up your reverse proxy:
+
+| Endpoint | Used by |
+|----------|---------|
+| `/api/authz/forward-auth` | Traefik, Caddy, HAProxy, Skipper |
+| `/api/verify` | Nginx (`auth_request`) |
+
+See the [Authelia proxy integration docs](https://www.authelia.com/integration/proxies/introduction/)
+for the canonical reference.
+
+#### Authentik (proxy outpost)
+
+1. **Admin → Applications → Providers → Create → Proxy Provider.**
+2. Mode: **Forward auth (single application)**.
+3. External host: `https://your-librariarr-host`.
+4. **Save.** Create an Application linked to this provider.
+5. **Outposts:** ensure an outpost includes this provider. The embedded
+   outpost works; a standalone outpost is also fine.
+
+Authentik's outpost injects `X-authentik-username`, `X-authentik-email`,
+`X-authentik-name` — **not** `Remote-*`. In Librariarr override:
+
+- **User Header:** `X-authentik-username`
+- **Email Header:** `X-authentik-email`
+- **Name Header:** `X-authentik-name`
+
+The outpost exposes a `/outpost.goauthentik.io/auth/...` endpoint that your
+reverse proxy will call for forward-auth (see proxy snippets below).
+
+#### oauth2-proxy
+
+Use **oauth2-proxy v7.15.2 or newer** — earlier 7.x releases shipped multiple
+authentication-bypass and session-fixation CVEs (CVE-2026-34986 and the
+CVE-2026-3228x series) that were fixed in 7.15.2.
+
+oauth2-proxy injects `X-Forwarded-User`, `X-Forwarded-Email`,
+`X-Forwarded-Preferred-Username` when running in forward-auth mode. In
+Librariarr override:
+
+- **User Header:** `X-Forwarded-Preferred-Username` *(or `X-Forwarded-User` for the raw IdP sub)*
+- **Email Header:** `X-Forwarded-Email`
+- **Name Header:** `X-Forwarded-User`
+
+Run with `--reverse-proxy=true` and `--pass-authorization-header=true`; expose
+`/oauth2/auth` as the auth-check endpoint for your reverse proxy.
+
+### Reverse proxy wiring
+
+The proxy's job is to (1) ask the auth provider whether the request is
+authenticated, (2) if not, send the user to the provider's login flow, and
+(3) if yes, pass the identity headers through to Librariarr. Snippets below
+show the minimum needed for Librariarr; adapt hostnames to your setup.
+
+#### Traefik (v2 / v3)
+
+Traefik uses the `ForwardAuth` middleware. The snippets below are
+**additions** — they assume Traefik, Librariarr, and your chosen auth
+provider are already deployed and you're just wiring them together. Don't
+copy them as standalone compose files; merge the labels into your existing
+service definitions.
+
+<Aside type="caution">
+  The `trustForwardHeader=true` middleware option was **deprecated in Traefik
+  v3.6.14** and will be removed in the next major version. Configure trusted
+  proxy IPs at the EntryPoint level instead, via
+  `entryPoints.<name>.forwardedHeaders.trustedIPs`. The snippets below use the
+  modern approach; on Traefik &lt; 3.6.14 you can still set
+  `forwardauth.trustForwardHeader=true` on the middleware.
+</Aside>
+
+**EntryPoint trust** — add this to your existing entrypoint in `traefik.yml`
+(applies to all forward-auth setups below):
+
+```yaml title="traefik.yml (additions)"
+entryPoints:
+  websecure:
+    # ... your existing entrypoint settings (address, TLS, etc.) ...
+    forwardedHeaders:
+      # IP ranges of the containers that Traefik should trust to set
+      # X-Forwarded-* headers. Adjust for your Docker / Kubernetes network.
+      trustedIPs:
+        - 172.16.0.0/12
+        - 10.0.0.0/8
+```
+
+**Authelia** — add these labels to your existing Librariarr service. Nothing
+else changes on the Authelia side; the middleware just calls Authelia's
+existing `/api/authz/forward-auth` endpoint.
+
+```yaml title="docker-compose.yml — labels on your existing librariarr service"
+services:
+  librariarr:
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.librariarr.rule=Host(`librariarr.example.com`)
+      - traefik.http.routers.librariarr.middlewares=authelia@docker
+      - traefik.http.services.librariarr.loadbalancer.server.port=3000
+
+      # Middleware definition. Adjust the address if Authelia is reachable at
+      # a different hostname/port from Traefik's network.
+      - traefik.http.middlewares.authelia.forwardauth.address=http://authelia:9091/api/authz/forward-auth
+      - traefik.http.middlewares.authelia.forwardauth.authResponseHeaders=Remote-User,Remote-Email,Remote-Name,Remote-Groups
+```
+
+**Authentik** — needs labels in two places: the Librariarr service (router +
+forward-auth middleware) **and** the existing Authentik service (a second
+router that exposes the outpost's callback path on the Librariarr hostname,
+required for the redirect-back flow).
+
+```yaml title="docker-compose.yml — labels on your existing librariarr service"
+services:
+  librariarr:
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.librariarr.rule=Host(`librariarr.example.com`)
+      - traefik.http.routers.librariarr.middlewares=authentik@docker
+      - traefik.http.services.librariarr.loadbalancer.server.port=3000
+
+      # Middleware definition. Adjust the address if Authentik is reachable
+      # at a different hostname/port from Traefik's network.
+      - traefik.http.middlewares.authentik.forwardauth.address=http://authentik:9000/outpost.goauthentik.io/auth/traefik
+      - traefik.http.middlewares.authentik.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-email,X-authentik-name,X-authentik-groups,X-authentik-uid
+```
+
+```yaml title="docker-compose.yml — labels to add to your existing authentik service"
+services:
+  authentik:
+    labels:
+      # Expose Authentik's /outpost.goauthentik.io/* path on the Librariarr
+      # hostname so the redirect-back flow can reach the outpost. Without this
+      # router, the SSO login button bounces but never lands you back at
+      # Librariarr.
+      - traefik.enable=true
+      - traefik.http.routers.authentik-outpost.rule=Host(`librariarr.example.com`) && PathPrefix(`/outpost.goauthentik.io/`)
+      - traefik.http.routers.authentik-outpost.service=authentik-outpost
+      - traefik.http.services.authentik-outpost.loadbalancer.server.port=9000
+```
+
+**oauth2-proxy** — add these labels to your existing Librariarr service. The
+middleware calls oauth2-proxy's existing `/oauth2/auth` endpoint; you don't
+need to touch the oauth2-proxy service unless its hostname differs.
+
+```yaml title="docker-compose.yml — labels on your existing librariarr service"
+services:
+  librariarr:
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.librariarr.rule=Host(`librariarr.example.com`)
+      - traefik.http.routers.librariarr.middlewares=oauth2-proxy@docker
+      - traefik.http.services.librariarr.loadbalancer.server.port=3000
+
+      # Middleware definition. Adjust the address if oauth2-proxy is reachable
+      # at a different hostname/port from Traefik's network.
+      - traefik.http.middlewares.oauth2-proxy.forwardauth.address=http://oauth2-proxy:4180/oauth2/auth
+      - traefik.http.middlewares.oauth2-proxy.forwardauth.authResponseHeaders=X-Forwarded-User,X-Forwarded-Email,X-Forwarded-Preferred-Username
+```
+
+#### Caddy
+
+Caddy's `forward_auth` directive handles the call to the auth provider and the
+redirect to the login page on failure.
+
+<Aside type="caution">
+  Use **Caddy 2.11.2 or newer**. Earlier 2.11.x releases shipped a
+  `forward_auth` vulnerability (identity injection / potential privilege
+  escalation) that was patched in 2.11.2.
+</Aside>
+
+**Authelia:**
+
+```nginx title="Caddyfile"
+librariarr.example.com {
+    forward_auth authelia:9091 {
+        uri /api/authz/forward-auth
+        copy_headers Remote-User Remote-Email Remote-Name Remote-Groups
+    }
+    reverse_proxy librariarr:3000
+}
+```
+
+**Authentik:**
+
+```nginx title="Caddyfile"
+librariarr.example.com {
+    # The outpost's path must be reachable on the Librariarr hostname
+    # so the redirect-back flow works.
+    reverse_proxy /outpost.goauthentik.io/* authentik:9000
+
+    forward_auth authentik:9000 {
+        uri /outpost.goauthentik.io/auth/caddy
+        copy_headers X-authentik-username X-authentik-email X-authentik-name X-authentik-groups
+        # Authentik's outpost requires this set
+        header_up X-Forwarded-Host {http.request.host}
+    }
+    reverse_proxy librariarr:3000
+}
+```
+
+**oauth2-proxy:**
+
+```nginx title="Caddyfile"
+librariarr.example.com {
+    reverse_proxy /oauth2/* oauth2-proxy:4180
+
+    forward_auth oauth2-proxy:4180 {
+        uri /oauth2/auth
+        copy_headers X-Forwarded-User X-Forwarded-Email X-Forwarded-Preferred-Username
+    }
+    reverse_proxy librariarr:3000
+}
+```
+
+#### Nginx
+
+Nginx uses `auth_request` for forward auth. The pattern is the same across
+providers — only the auth endpoint URI and the header names differ.
+
+**Authelia:**
+
+```nginx title="/etc/nginx/sites-available/librariarr"
+server {
+    listen 443 ssl http2;
+    server_name librariarr.example.com;
+
+    # Internal auth check
+    location = /authelia {
+        internal;
+        proxy_pass http://authelia:9091/api/verify;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header X-Original-URL $scheme://$http_host$request_uri;
+    }
+
+    # Redirect unauthenticated users to the Authelia login page
+    error_page 401 = @authelia_redirect;
+    location @authelia_redirect {
+        return 302 https://auth.example.com/?rd=$scheme://$http_host$request_uri;
+    }
+
+    location / {
+        auth_request /authelia;
+
+        # Pull the identity headers from the auth response and forward them
+        auth_request_set $remote_user $upstream_http_remote_user;
+        auth_request_set $remote_email $upstream_http_remote_email;
+        auth_request_set $remote_name $upstream_http_remote_name;
+        proxy_set_header Remote-User $remote_user;
+        proxy_set_header Remote-Email $remote_email;
+        proxy_set_header Remote-Name $remote_name;
+
+        proxy_pass http://librariarr:3000;
+        # Standard reverse-proxy headers
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+    }
+}
+```
+
+**Authentik:** swap the auth location's `proxy_pass` to point at the outpost
+(`http://authentik:9000/outpost.goauthentik.io/auth/nginx`) and forward the
+`X-authentik-*` headers instead of `Remote-*`. You'll also want a regular
+`location /outpost.goauthentik.io/` block that proxies to the outpost so the
+redirect-back flow can reach it on the Librariarr hostname.
+
+**oauth2-proxy:** point the auth location at `oauth2-proxy:4180/oauth2/auth`
+and forward `X-Forwarded-User`, `X-Forwarded-Email`, and
+`X-Forwarded-Preferred-Username`.
+
+### Tested combinations — quick reference
+
+| Reverse proxy | Auth provider | Header overrides in Librariarr |
+|---------------|---------------|-------------------------------|
+| Traefik / Caddy / Nginx | Authelia | None (defaults) |
+| Traefik / Caddy / Nginx | Authentik proxy outpost | `X-authentik-username` / `-email` / `-name` |
+| Traefik / Caddy / Nginx | oauth2-proxy | `X-Forwarded-Preferred-Username` / `X-Forwarded-Email` / `X-Forwarded-User` |
+
+## Finding your subject value
+
+### Recommended method: Verify & Link via OIDC
+
+In **Settings → Authentication → Single Sign-On → step 2**, click
+**Verify & Link via OIDC**. You'll be redirected to your IdP, sign in, and
+returned to the settings page with your `sub` automatically captured and
+the entire OIDC handshake verified end-to-end — client ID, client secret,
+and redirect URI all confirmed working before SSO is activated.
+
+This is the safest way to set up SSO: if any credential is wrong, the
+verify step fails *here* (before you've turned the SSO toggle on in
+step 3) instead of after you've enabled SSO and signed out. You retain
+your current session throughout, so a failure doesn't lock you out.
+
+### Alternative: paste the sub manually after triggering the flow
+
+If the verify-link button isn't usable (e.g. air-gapped admin network, or
+you're using the forward-auth mode), the manual fallback:
+
+1. Save your OIDC config in Librariarr (don't link anything yet).
+2. Sign out.
+3. Click **Sign in with SSO** on the login page. Authenticate at the IdP.
+4. You'll bounce back with the `not_linked` error — expected.
+5. Check Librariarr's logs:
+
+   ```bash
+   docker logs librariarr 2>&1 | grep "no linked account"
+   ```
+
+   You'll see a line like:
+
+   ```
+   OIDC login rejected: no linked account for sub=b8f3e2c4-1234-...
+   ```
+
+6. In step 2 of the SSO wizard, click **Or paste the subject manually →**,
+   paste the value, and click **Link Manually**.
+7. Toggle SSO on in step 3, sign out, sign in again — should work.
+
+<Aside type="caution">
+  The manual path doesn't verify the client ID or client secret — only the
+  subject. Typos in those credentials won't be caught until login time, so
+  the verify-link button above is strongly preferred for OIDC mode.
+</Aside>
+
+### Alternative: read it from your IdP
+
+| Provider | Where to find the `sub` |
+|----------|-------------------------|
+| Authentik (hashed ID) | Not visible in the admin UI. Use the logs method, or switch to username mode. |
+| Authentik (username mode) | The user's username, as shown in **Directory → Users**. |
+| Authelia | UUID in `users_database.yml` if file-based, or your LDAP/database. |
+| Keycloak | **Users → \<user\> → Details → ID** (a UUID). |
+| Pocket ID | **Users → \<user\>** — the ID column. |
+| Zitadel | **Users → \<user\>** — long numeric ID at the top of the user page. |
+
+## Disabling SSO
+
+Toggle **Enable SSO Login** off and save. The local username/password form
+returns on the login page (provided local auth is enabled in
+**Settings → Authentication → Local Authentication**).
+
+To remove the link entirely, click **Unlink SSO**. Unlinking also
+automatically turns off the global SSO toggle — keeping it on after removing
+your identity would silently hide the local form without giving you a way to
+log in. Both linking and unlinking invalidate any other active sessions for
+the account.
+
+Unlinking is refused only if you would have no working login method left
+afterwards (no Plex link **and** no local credentials). Plex is **not**
+required — Jellyfin- and Emby-only deployments work fine with local
+credentials as the fallback.
+
+## Recovery — locked out of SSO
+
+If SSO is enabled and your IdP is unreachable (or your forward-auth proxy is
+misconfigured), use the **break-glass override**:
+
+1. Set `SSO_DISABLE_OVERRIDE=true` on the Librariarr container.
+2. Restart.
+
+While the override is active:
+
+- SSO login is forcibly disabled regardless of the stored configuration.
+- The local username/password form returns whenever a password has actually
+  been set on the account, **even if you previously disabled the
+  *Enable Local Login* toggle**. The override treats local-auth-disabled as
+  a "hide for normal flows" hint, not a hard lockout — admins who had local
+  credentials and disabled them because they were using SSO get them back.
+- The Plex login button returns whenever a Plex account is actually linked,
+  even if you previously disabled the *Allow Plex Login* toggle.
+- The Settings → Authentication SSO panel shows an amber banner indicating
+  the override is in effect.
+- Your stored OIDC / forward-auth configuration is preserved untouched.
+
+Unset the env var and restart to restore SSO. The override accepts `true`,
+`1`, or `yes` (case-insensitive, whitespace tolerant).
+
+### What if I have no credentials at all?
+
+The override only re-surfaces credentials that actually exist on your User
+record. If you set up SSO-only with no Plex account linked and no local
+password ever set, there's nothing for the override to restore. In that
+case:
+
+1. Stop the container.
+2. Wipe the database (or rename your `/config` volume to start fresh).
+3. Start the container — the login page now shows the *Restore from Backup*
+   button (only visible when no users exist).
+4. Restore a backup taken before you locked yourself out.
+
+This is one reason the docs recommend setting up *both* an SSO identity
+**and** local credentials (or a linked Plex account) when running an
+SSO-protected deployment — pure single-method setups have no recovery
+path short of a backup restore.
+
+<Aside type="caution">
+  The override is a display/runtime override, not a configuration override.
+  It tells the login routes to ignore the *Enable Local Login* and
+  *Allow Plex Login* toggles for the duration of the env var being set,
+  surfacing any credentials that *actually exist* on the User record. It
+  cannot conjure credentials that were never created.
+</Aside>
+
+## Reverting a bad SSO config
+
+If you save broken OIDC credentials and want to roll back **without**
+relying on backup restore (backups rotate, and can end up containing only
+the broken post-change state), use the in-app revert.
+
+Every save to **Settings → Authentication → Single Sign-On → step 1**
+automatically snapshots the **previous** SSO connection settings into the
+database. When a snapshot exists, a **Revert to Previous** button appears
+in step 1 next to *Save Configuration*. Clicking it:
+
+- Restores the previous issuer URL, client ID, client secret, scopes,
+  username claim, and forward-auth header names
+- Forces SSO login off (you re-enable it explicitly in step 3 after
+  confirming the restored config works)
+- Drops the cached OIDC discovery doc so the next login re-fetches
+- Clears the snapshot (single-step undo — no history beyond the one
+  prior state)
+
+The snapshot lives in the `previousSsoConfig` column of `AppSettings` and
+is unaffected by backup rotation. The revert only requires that you can
+sign in to the settings page in some way — see the [SSO_DISABLE_OVERRIDE
+recovery flow](#recovery--locked-out-of-sso) for getting back in via Plex
+or local credentials when SSO is broken.
+
+## Recovery when fully locked out
+
+If you can't sign in by any method (no Plex, no local password, broken
+SSO config, and `SSO_DISABLE_OVERRIDE` doesn't help because there are no
+fallback credentials to surface), you need DB-level recovery. Two paths:
+
+### Option A — Reset CLI script
+
+The recovery script at `scripts/reset-auth.js` is **not bundled into the
+container image** — keeping it out of the image limits the blast radius
+if the running container is ever compromised. To use it, copy the file
+into the container temporarily, run the action, then remove it.
+
+The script uses plain Node + the `pg` module that already ships in the
+image, so no `tsx` or extra install is needed.
+
+```bash
+# 1. Grab the script (clone or download the single file from GitHub)
+curl -O https://raw.githubusercontent.com/ahembree/librariarr/main/scripts/reset-auth.js
+
+# 2. Copy it into the running container at /tmp
+docker cp reset-auth.js librariarr:/tmp/reset-auth.js
+
+# 3. Run the recovery action
+docker exec -it librariarr node /tmp/reset-auth.js status         # show current auth state
+docker exec -it librariarr node /tmp/reset-auth.js wipe-sso       # clear SSO config (preserves Plex + local)
+docker exec -it librariarr node /tmp/reset-auth.js enable-local   # force-enable local form
+docker exec -it librariarr node /tmp/reset-auth.js enable-plex    # force-enable Plex login button
+
+# Reset the local password. Prompts interactively with no echo — `-it`
+# is required so stdin is a TTY. Pass --username=<name> to also set
+# localUsername (required if it isn't set yet — the login form needs
+# both). Bumps sessionVersion so existing sessions are invalidated.
+docker exec -it librariarr node /tmp/reset-auth.js reset-password
+docker exec -it librariarr node /tmp/reset-auth.js reset-password --username=admin
+
+# Last resort: delete the user. Setup screen appears next page load.
+# WARNING: cascades to all user-linked data — synced libraries, server
+# connections, and lifecycle rules are all dropped. Prefer the actions
+# above when possible, or restore from a backup with a working user.
+docker exec -it librariarr node /tmp/reset-auth.js delete-user
+
+# 4. Remove the script from the container when done
+docker exec librariarr rm /tmp/reset-auth.js
+```
+
+`wipe-sso` is the most common recovery: clears the bad OIDC config so
+the non-SSO methods (local form / Plex button) are no longer hidden by
+an in-effect-but-broken SSO mode. Restart the container after running
+it so the in-memory OIDC discovery cache drops.
+
+**Destructive actions (`wipe-sso`, `delete-user`) prompt for confirmation**
+in interactive shells. For automation, append `--force` to skip the prompt:
+
+```bash
+docker exec librariarr node /tmp/reset-auth.js wipe-sso --force
+```
+
+If you'd rather not copy a file into the container at all, skip to
+Option B — direct SQL covers every action the script can perform.
+
+### Option B — Direct SQL
+
+If shell-into-container isn't an option, connect to PostgreSQL directly
+with `psql` (or your preferred client) and run the equivalent SQL. The
+table names are quoted because Prisma uses PascalCase identifiers.
+
+**Wipe SSO config (most common recovery):**
+
+```sql
+-- Clear AppSettings SSO fields
+UPDATE "AppSettings"
+SET
+  "ssoEnabled" = false,
+  "ssoMode" = 'OIDC',
+  "oidcIssuer" = NULL,
+  "oidcClientId" = NULL,
+  "oidcClientSecret" = NULL,
+  "previousSsoConfig" = NULL;
+
+-- Clear user-level SSO link and force session invalidation
+UPDATE "User"
+SET
+  "ssoSubject" = NULL,
+  "ssoIssuer" = NULL,
+  "ssoProvider" = NULL,
+  "ssoEnabled" = false,
+  "sessionVersion" = "sessionVersion" + 1;
+```
+
+**Force local form back on:**
+
+```sql
+UPDATE "AppSettings" SET "localAuthEnabled" = true;
+```
+
+The local form only shows up if a password is also set. Check:
+
+```sql
+SELECT id, username, "localUsername",
+       ("passwordHash" IS NOT NULL) AS has_password,
+       ("plexId" IS NOT NULL) AS has_plex
+FROM "User";
+```
+
+If `has_password` is false you'll need to either link Plex via the OAuth
+flow on the login page or `delete-user` to start over.
+
+**Force Plex login button back on:**
+
+```sql
+UPDATE "AppSettings" SET "plexLoginEnabled" = true;
+```
+
+(Only useful if `plexId` is set on the user — check with the SELECT above.)
+
+**Nuclear: delete the user and start over:**
+
+```sql
+DELETE FROM "User";
+```
+
+The setup screen appears on the next page load. Cascading deletes drop
+all data linked to the user — media servers, libraries, synced media,
+lifecycle rules, etc. Only do this if you have no other recovery path
+and don't have a backup that contains a working user.
+
+### Connecting to the database
+
+If you're using the bundled Docker Compose, the database container exposes
+psql:
+
+```bash
+docker exec -it librariarr-db psql -U librariarr -d librariarr
+```
+
+Use `\q` to exit.
+
+If you're using an external database, connect via your normal psql / GUI
+client using the connection details from your `DATABASE_URL` env var.
+
+## Troubleshooting
+
+### Errors shown on the login page
+
+The login page surfaces SSO errors as a banner above the SSO button:
+
+| Message | What it means | Fix |
+|---------|---------------|-----|
+| Your SSO account is not linked to a Librariarr user | The `sub` (or proxy username) doesn't match any account's linked subject | Use the [logs method](#recommended-method-trigger-the-flow-once-read-the-logs) to find the actual value and re-link |
+| SSO request expired or was tampered with | State cookie was lost between redirect and callback, or `state` didn't match | Try again. If persistent, check that `COOKIE_SECURE` isn't forcing HTTPS-only on an HTTP host |
+| Failed to verify your identity with the SSO provider | Token exchange with the IdP failed | Check Librariarr logs for the underlying response — usually a redirect URI mismatch or wrong client secret |
+| Forward-auth proxy did not provide a user identity header | The configured user header was absent from the request | Verify the proxy is injecting the header and the name matches what's configured |
+| SSO is not configured | Settings missing or override active | Complete the OIDC config, or unset `SSO_DISABLE_OVERRIDE` |
+
+### "Test Discovery" fails
+
+| Error | Likely cause |
+|-------|--------------|
+| `OIDC discovery failed (404)` | Wrong issuer URL. Try with/without a trailing slash. For Authentik, the path is `/application/o/{slug}/`. For Keycloak, `/realms/{realm}`. |
+| `OIDC issuer mismatch` | The `issuer` claim in the response doesn't match the URL Librariarr fetched. Re-check the URL — often a wrong realm/slug. |
+| `OIDC discovery response missing required endpoints` | The endpoint returned something other than valid discovery JSON. Browser-check `{issuer}/.well-known/openid-configuration` to confirm. |
+
+### Login bounces back without an error code
+
+If you're redirected back to the login page with no error in the URL, check
+the browser developer tools network tab. The callback request should be
+`GET /api/auth/sso/oidc/callback?code=...&state=...`. If `state` is missing,
+your IdP isn't preserving query parameters on the redirect — uncommon, but
+some custom IdP configurations strip them.
+
+### Redirect URI mismatch at the IdP
+
+Most IdPs are strict about exact match (including protocol, port, and trailing
+slash). The Librariarr redirect URI is always:
+
+```
+{public-url-of-librariarr}/api/auth/sso/oidc/callback
+```
+
+Behind a reverse proxy, Librariarr honors `X-Forwarded-Proto` and
+`X-Forwarded-Host` (or falls back to the `Host` header) when building the
+redirect URI. If your IdP rejects the URI, check the values your proxy is
+actually injecting — a mismatch between `X-Forwarded-Proto: http` and an IdP
+that expects `https` will produce a mismatch error from the IdP, not from
+Librariarr.
+
+### Forward-auth login replaces my Plex session
+
+This is expected behavior. Clicking **Sign in with SSO** under forward auth
+mode logs you in as the user identified by your proxy headers, replacing any
+existing session. The user is the same account — only the session method
+changes. Plex tokens stored on the user record are reattached automatically.
+
+### SSO settings panel shows "SSO disabled by environment override"
+
+`SSO_DISABLE_OVERRIDE` is set. SSO is forcibly off until you unset the env
+var and restart the container. Stored config is preserved; nothing is being
+silently overwritten.

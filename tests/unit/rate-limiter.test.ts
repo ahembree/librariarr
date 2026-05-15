@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { RateLimiter, getClientIp } from "@/lib/rate-limit/rate-limiter";
 
 describe("RateLimiter", () => {
@@ -139,5 +139,51 @@ describe("getClientIp", () => {
   it("returns 'unknown' when no proxy headers are present", () => {
     const request = new Request("http://localhost/api/test");
     expect(getClientIp(request)).toBe("unknown");
+  });
+
+  describe("TRUST_PROXY_HEADERS env var", () => {
+    const originalValue = process.env.TRUST_PROXY_HEADERS;
+
+    afterEach(() => {
+      if (originalValue === undefined) {
+        delete process.env.TRUST_PROXY_HEADERS;
+      } else {
+        process.env.TRUST_PROXY_HEADERS = originalValue;
+      }
+    });
+
+    it("ignores forwarded headers when TRUST_PROXY_HEADERS=false", () => {
+      process.env.TRUST_PROXY_HEADERS = "false";
+      const request = new Request("http://localhost/api/test", {
+        headers: { "x-forwarded-for": "1.2.3.4" },
+      });
+      // Falls back to "unknown" so an attacker can't escape rate-limit buckets
+      // by rotating spoofed X-Forwarded-For values when there's no real proxy.
+      expect(getClientIp(request)).toBe("unknown");
+    });
+
+    it("ignores forwarded headers when TRUST_PROXY_HEADERS=0", () => {
+      process.env.TRUST_PROXY_HEADERS = "0";
+      const request = new Request("http://localhost/api/test", {
+        headers: { "x-real-ip": "1.2.3.4" },
+      });
+      expect(getClientIp(request)).toBe("unknown");
+    });
+
+    it("trusts forwarded headers when TRUST_PROXY_HEADERS=true", () => {
+      process.env.TRUST_PROXY_HEADERS = "true";
+      const request = new Request("http://localhost/api/test", {
+        headers: { "x-forwarded-for": "1.2.3.4" },
+      });
+      expect(getClientIp(request)).toBe("1.2.3.4");
+    });
+
+    it("trusts forwarded headers when env var is unset (default)", () => {
+      delete process.env.TRUST_PROXY_HEADERS;
+      const request = new Request("http://localhost/api/test", {
+        headers: { "x-forwarded-for": "1.2.3.4" },
+      });
+      expect(getClientIp(request)).toBe("1.2.3.4");
+    });
   });
 });
