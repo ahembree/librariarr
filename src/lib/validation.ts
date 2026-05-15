@@ -139,14 +139,14 @@ const discordWebhookUrlSchema = z
 export const discordSettingsSchema = z.object({
   webhookUrl: discordWebhookUrlSchema,
   webhookUsername: z.string().max(80).optional(),
-  webhookAvatarUrl: z.string().transform((v) => v || undefined).pipe(z.string().url().optional()),
+  webhookAvatarUrl: z.string().optional().transform((v) => v || undefined).pipe(z.string().url().optional()),
   notifyMaintenance: z.boolean().optional(),
 });
 
 export const discordTestSchema = z.object({
   webhookUrl: discordWebhookUrlSchema,
   webhookUsername: z.string().max(80).optional(),
-  webhookAvatarUrl: z.string().transform((v) => v || undefined).pipe(z.string().url().optional()),
+  webhookAvatarUrl: z.string().optional().transform((v) => v || undefined).pipe(z.string().url().optional()),
 });
 
 export const dedupSettingsSchema = z.object({
