@@ -35,4 +35,13 @@ describe("resolveSecretWrite", () => {
     // Mixed content is treated as a real value, not the mask
     expect(resolveSecretWrite("abc••def", "stored")).toBe("abc••def");
   });
+
+  it("keeps the current value when the masked placeholder has surrounding whitespace", () => {
+    // Without trimming before the regex check, the anchored `^•+$` would
+    // fail to match and we'd silently overwrite the real secret with
+    // literal bullet characters.
+    expect(resolveSecretWrite("••••••••  ", "stored")).toBe("stored");
+    expect(resolveSecretWrite("  ••••••••", "stored")).toBe("stored");
+    expect(resolveSecretWrite("  ••••••••  ", "stored")).toBe("stored");
+  });
 });

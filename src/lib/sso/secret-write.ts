@@ -16,8 +16,12 @@ export function resolveSecretWrite(
 ): string | null {
   if (incoming === undefined) return current;
   if (incoming === null) return null;
-  if (incoming === "") return null;
-  if (/^•+$/.test(incoming)) return current;
+  // Trim *before* the masked-placeholder check. Otherwise a user who
+  // accidentally copy/pastes the displayed mask with trailing whitespace
+  // (e.g. `"••••••••  "`) would fail the anchored `^•+$` test and we'd
+  // silently overwrite the real secret with literal bullet characters.
   const trimmed = incoming.trim();
-  return trimmed === "" ? null : trimmed;
+  if (trimmed === "") return null;
+  if (/^•+$/.test(trimmed)) return current;
+  return trimmed;
 }

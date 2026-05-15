@@ -6,6 +6,7 @@ import { sanitize } from "@/lib/api/sanitize";
 import { isSsoOverrideActive } from "@/lib/sso/config";
 import { invalidateOidcDiscoveryCache } from "@/lib/sso/oidc-client";
 import { resolveSecretWrite } from "@/lib/sso/secret-write";
+import { isSameOriginRequest } from "@/lib/url";
 
 const SSO_SELECT = {
   ssoEnabled: true,
@@ -78,6 +79,9 @@ export async function GET() {
 }
 
 export async function PUT(request: NextRequest) {
+  if (!isSameOriginRequest(request)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
   const session = await getSession();
   if (!session.isLoggedIn || !session.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -186,35 +190,54 @@ export async function PUT(request: NextRequest) {
     forwardAuthNameHeader: next.forwardAuthNameHeader,
   };
 
-  // Snapshot the *current* SSO config into previousSsoConfig before applying
-  // the new values. Gives admins a one-click revert path that doesn't depend
-  // on having a recent backup with the working state — backups rotate and
-  // can end up containing only the broken post-change state. Only meaningful
-  // if AppSettings already exists; first-save (during create) has nothing to
-  // snapshot. Excludes ssoEnabled and previousSsoConfig itself.
-  const snapshot: SsoSettingsRow | null = existing
-    ? {
-        ssoEnabled: false, // never auto-re-enable on revert; admin opts in via step 3
-        ssoMode: current.ssoMode,
-        oidcIssuer: current.oidcIssuer,
-        oidcClientId: current.oidcClientId,
-        oidcClientSecret: current.oidcClientSecret,
-        oidcScopes: current.oidcScopes,
-        oidcUsernameClaim: current.oidcUsernameClaim,
-        forwardAuthUserHeader: current.forwardAuthUserHeader,
-        forwardAuthEmailHeader: current.forwardAuthEmailHeader,
-        forwardAuthNameHeader: current.forwardAuthNameHeader,
-      }
-    : null;
+  // Snapshot the *current* SSO config into previousSsoConfig — but only if
+  // the writable fields actually changed. Without this guard, a no-op save
+  // (admin hits Save twice in quick succession, e.g. to clear a UI banner)
+  // would overwrite the genuine previous-good config with the new state,
+  // destroying the one-step undo.
+  //
+  // ssoEnabled is excluded from both the comparison and the snapshot
+  // contents: revert never auto-re-enables, and the toggle has its own
+  // separate code path anyway.
+  const changed =
+    !existing ||
+    current.ssoMode !== writeData.ssoMode ||
+    current.oidcIssuer !== writeData.oidcIssuer ||
+    current.oidcClientId !== writeData.oidcClientId ||
+    current.oidcClientSecret !== writeData.oidcClientSecret ||
+    current.oidcScopes !== writeData.oidcScopes ||
+    current.oidcUsernameClaim !== writeData.oidcUsernameClaim ||
+    current.forwardAuthUserHeader !== writeData.forwardAuthUserHeader ||
+    current.forwardAuthEmailHeader !== writeData.forwardAuthEmailHeader ||
+    current.forwardAuthNameHeader !== writeData.forwardAuthNameHeader;
+
+  const snapshot: SsoSettingsRow | null =
+    existing && changed
+      ? {
+          ssoEnabled: false, // never auto-re-enable on revert; admin opts in via step 3
+          ssoMode: current.ssoMode,
+          oidcIssuer: current.oidcIssuer,
+          oidcClientId: current.oidcClientId,
+          oidcClientSecret: current.oidcClientSecret,
+          oidcScopes: current.oidcScopes,
+          oidcUsernameClaim: current.oidcUsernameClaim,
+          forwardAuthUserHeader: current.forwardAuthUserHeader,
+          forwardAuthEmailHeader: current.forwardAuthEmailHeader,
+          forwardAuthNameHeader: current.forwardAuthNameHeader,
+        }
+      : null;
 
   // Upsert rather than update so a Plex-first deployment whose AppSettings
   // row was never created (now fixed for new installs, but legacy data
   // exists) can save SSO config without first poking some other setting.
+  // `previousSsoConfig: undefined` in the update payload means "don't
+  // touch this field," preserving any earlier snapshot when this save is
+  // a no-op on the writable fields.
   const updated = await prisma.appSettings.upsert({
     where: { userId: session.userId },
     update: { ...writeData, previousSsoConfig: snapshot ?? undefined },
     create: { userId: session.userId, ...writeData },
-    select: SSO_SELECT,
+    select: { ...SSO_SELECT, previousSsoConfig: true },
   });
 
   // Drop any cached discovery docs so a changed issuer URL (or a rotated
@@ -222,9 +245,13 @@ export async function PUT(request: NextRequest) {
   // the TTL to expire.
   invalidateOidcDiscoveryCache();
 
+  // hasPreviousConfig should reflect the *post-save* row state, not just
+  // whether this PUT happened to take a snapshot. A no-op save preserves
+  // an earlier snapshot via `previousSsoConfig: undefined`, so the row
+  // still has one even when `snapshot` here is null.
   return NextResponse.json({
     ...sanitize(updated),
     overrideActive: isSsoOverrideActive(),
-    hasPreviousConfig: !!snapshot,
+    hasPreviousConfig: !!updated.previousSsoConfig,
   });
 }

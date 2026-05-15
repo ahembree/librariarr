@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { validateRequest, ssoLinkSchema } from "@/lib/validation";
 import { apiLogger } from "@/lib/logger";
 import { currentSsoIssuer, getSsoSettings } from "@/lib/sso/config";
+import { isSameOriginRequest } from "@/lib/url";
 
 /**
  * Link an SSO subject identifier to the currently signed-in admin account.
@@ -18,6 +19,9 @@ import { currentSsoIssuer, getSsoSettings } from "@/lib/sso/config";
  * Setting a new subject increments sessionVersion to invalidate other sessions.
  */
 export async function POST(request: NextRequest) {
+  if (!isSameOriginRequest(request)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
   const session = await getSession();
   if (!session.isLoggedIn || !session.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -106,7 +110,10 @@ export async function POST(request: NextRequest) {
  * Jellyfin/Emby-only deployments work fine with local credentials as the
  * fallback. (SSO_DISABLE_OVERRIDE is a separate env-var recovery path.)
  */
-export async function DELETE() {
+export async function DELETE(request: NextRequest) {
+  if (!isSameOriginRequest(request)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
   const session = await getSession();
   if (!session.isLoggedIn || !session.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

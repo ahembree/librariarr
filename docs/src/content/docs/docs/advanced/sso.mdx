@@ -744,6 +744,13 @@ non-SSO methods (local form / Plex button) are no longer hidden by an
 in-effect-but-broken SSO mode. Restart the container after running it so
 the in-memory OIDC discovery cache drops.
 
+**Destructive actions (`wipe-sso`, `delete-user`) prompt for confirmation**
+in interactive shells. For automation, append `--force` to skip the prompt:
+
+```bash
+docker exec librariarr pnpm exec tsx scripts/reset-auth.ts wipe-sso --force
+```
+
 ### Option B — Direct SQL
 
 If shell-into-container isn't an option, connect to PostgreSQL directly

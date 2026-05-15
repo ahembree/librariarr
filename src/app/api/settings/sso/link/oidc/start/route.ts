@@ -9,6 +9,7 @@ import {
   resolveRedirectUri,
 } from "@/lib/sso/oidc-client";
 import { apiLogger } from "@/lib/logger";
+import { isSameOriginRequest } from "@/lib/url";
 
 /**
  * Initiates an OIDC flow for the authenticated admin to LINK their identity,
@@ -26,6 +27,9 @@ import { apiLogger } from "@/lib/logger";
  * link-flow flag stashed in the encrypted session cookie.
  */
 export async function POST(request: NextRequest) {
+  if (!isSameOriginRequest(request)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
   const session = await getSession();
   if (!session.isLoggedIn || !session.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

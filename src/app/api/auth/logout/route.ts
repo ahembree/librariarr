@@ -2,7 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { getExternalBaseUrl, isSameOriginRequest } from "@/lib/url";
 
-export async function POST() {
+export async function POST(request: NextRequest) {
+  // Same-origin check on POST too, for consistency with GET. SameSite=Lax
+  // already blocks the cookie on cross-site POSTs, but some browsers (legacy
+  // versions, niche configurations) have inconsistent enforcement. Cheap
+  // defense-in-depth.
+  if (!isSameOriginRequest(request)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
   const session = await getSession();
   session.destroy();
   return NextResponse.json({ success: true });

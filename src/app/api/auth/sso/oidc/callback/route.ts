@@ -11,6 +11,7 @@ import {
   type OidcUserInfo,
 } from "@/lib/sso/oidc-client";
 import { apiLogger } from "@/lib/logger";
+import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
 import { getExternalBaseUrl } from "@/lib/url";
 
 /** Constant-time comparison for the OIDC state value. Lengths differ → false. */
@@ -37,6 +38,13 @@ function redirectToSsoSettings(request: NextRequest, params: Record<string, stri
 }
 
 export async function GET(request: NextRequest) {
+  // Rate-limit the callback too, not just /login init. Each callback hits the
+  // IdP for token exchange + userinfo (and discovery if not cached), so an
+  // attacker pounding this endpoint with stale code/state values would burn
+  // IdP-side resources even though we'd reject every request.
+  const rateLimited = checkAuthRateLimit(request, "sso-oidc-callback");
+  if (rateLimited) return rateLimited;
+
   const settings = await getSsoSettings();
   // For login: SSO must be usable (enabled + configured). For link: only the
   // OIDC config needs to be valid -- ssoEnabled can still be false because
@@ -142,19 +150,31 @@ export async function GET(request: NextRequest) {
       return redirectToSsoSettings(request, { ssoLinkError: "conflict" });
     }
 
-    const updated = await prisma.user.update({
-      where: { id: linkFlowUserId },
-      data: {
-        ssoSubject: subject,
-        ssoIssuer: currentIssuer,
-        ssoEnabled: true,
-        // Sync the IdP-provided display name + email if non-empty.
-        ...syncableFields(userInfo, settings.oidcUsernameClaim),
-        // Linking is a credential change → invalidate other sessions.
-        sessionVersion: { increment: 1 },
-      },
-      select: { sessionVersion: true, username: true },
-    });
+    let updated;
+    try {
+      updated = await prisma.user.update({
+        where: { id: linkFlowUserId },
+        data: {
+          ssoSubject: subject,
+          ssoIssuer: currentIssuer,
+          ssoEnabled: true,
+          // Sync the IdP-provided display name + email if non-empty.
+          ...syncableFields(userInfo, settings.oidcUsernameClaim),
+          // Linking is a credential change → invalidate other sessions.
+          sessionVersion: { increment: 1 },
+        },
+        select: { sessionVersion: true, username: true },
+      });
+    } catch (err) {
+      // Most realistic case: P2025 because the user row was deleted between
+      // the flow start and the callback (e.g. via scripts/reset-auth.ts
+      // delete-user while the admin was at the IdP). Surface a useful error
+      // rather than a generic 500.
+      apiLogger.error("Auth", "OIDC link update failed", {
+        error: String(err),
+      });
+      return redirectToSsoSettings(request, { ssoLinkError: "session_lost" });
+    }
 
     // Keep the current admin's session alive after the version bump.
     session.sessionVersion = updated.sessionVersion;
@@ -170,12 +190,16 @@ export async function GET(request: NextRequest) {
 
   // ── Login flow (anonymous user authenticating) ────────────────────────
 
-  // Look up by sub first. We then verify the issuer separately so we can
-  // backfill legacy rows (linked before the ssoIssuer column existed) with
-  // the current issuer on first login -- otherwise post-upgrade the admin
-  // would lose SSO until they manually re-linked.
+  // Match on (ssoSubject, ssoIssuer) composite — but also accept legacy rows
+  // with ssoIssuer=null (linked before the column existed) and backfill
+  // below. Including the issuer in the WHERE rather than fetching first and
+  // verifying afterwards means a legitimate cross-issuer same-subject row
+  // can't be silently returned and rejected.
   const user = await prisma.user.findFirst({
-    where: { ssoSubject: subject },
+    where: {
+      ssoSubject: subject,
+      OR: [{ ssoIssuer: currentIssuer }, { ssoIssuer: null }],
+    },
   });
 
   if (!user || !user.ssoEnabled) {
@@ -186,17 +210,14 @@ export async function GET(request: NextRequest) {
     return redirectToLogin(request, "not_linked");
   }
 
+  // Legacy rows (linked before the ssoIssuer column existed) come back with
+  // ssoIssuer=null thanks to the OR clause above. Backfill the current
+  // issuer so subsequent logins use strict matching.
   if (user.ssoIssuer === null) {
     await prisma.user.update({
       where: { id: user.id },
       data: { ssoIssuer: currentIssuer },
     });
-  } else if (user.ssoIssuer !== currentIssuer) {
-    apiLogger.warn(
-      "Auth",
-      `OIDC login rejected: issuer mismatch (linked=${user.ssoIssuer}, current=${currentIssuer}) for sub=${subject}`
-    );
-    return redirectToLogin(request, "not_linked");
   }
 
   // Sync configured claims into the User record.

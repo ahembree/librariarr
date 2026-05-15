@@ -13,11 +13,16 @@
  *   pnpm exec tsx scripts/reset-auth.ts enable-plex  # force-enable Plex login button
  *   pnpm exec tsx scripts/reset-auth.ts delete-user  # NUCLEAR: drop the user row, forces fresh setup
  *
+ * The destructive actions (wipe-sso, delete-user) prompt for confirmation
+ * in interactive shells. Pass `--force` to skip the prompt (for automation),
+ * or pipe `yes |` into the command.
+ *
  * The `delete-user` action triggers the setup screen on next page load but
  * keeps all media data (library sync, lifecycle rules, etc.) intact. Use as
  * a last resort when you can't otherwise recover access.
  */
 
+import { createInterface } from "readline";
 import { PrismaClient, Prisma } from "../src/generated/prisma/client.js";
 import { PrismaPg } from "@prisma/adapter-pg";
 
@@ -30,6 +35,38 @@ if (!databaseUrl) {
 const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString: databaseUrl }),
 });
+
+/**
+ * Prompt the operator for "yes" before a destructive action. Skipped when the
+ * `--force` flag is on the command line, for automation. Reads from stdin so
+ * piping `yes |` also works.
+ */
+async function confirm(prompt: string): Promise<boolean> {
+  if (process.argv.includes("--force")) return true;
+  if (!process.stdin.isTTY) {
+    console.error(
+      "Refusing destructive action without --force in a non-interactive shell.",
+    );
+    return false;
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(`${prompt} [y/N] `, (answer) => {
+      rl.close();
+      resolve(answer.trim().toLowerCase() === "y" || answer.trim().toLowerCase() === "yes");
+    });
+  });
+}
+
+/**
+ * Sanitize an error before logging — Pg / Prisma errors frequently echo the
+ * connection string back, which would dump credentials into the container's
+ * stdout (and therefore the log retention pipeline).
+ */
+function safeStringifyError(err: unknown): string {
+  const raw = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  return raw.replace(/postgres(?:ql)?:\/\/[^\s]+/gi, "postgres://[redacted]");
+}
 
 async function status() {
   const user = await prisma.user.findFirst({
@@ -83,6 +120,10 @@ async function status() {
 }
 
 async function wipeSso() {
+  if (!(await confirm("Wipe all SSO configuration and unlink the SSO subject from the user?"))) {
+    console.log("Cancelled.");
+    return;
+  }
   const settingsResult = await prisma.appSettings.updateMany({
     data: {
       ssoEnabled: false,
@@ -106,9 +147,16 @@ async function wipeSso() {
       sessionVersion: { increment: 1 },
     },
   });
-  console.log(
-    `Wiped SSO config on ${settingsResult.count} AppSettings row(s) and ${userResult.count} User row(s).`,
-  );
+
+  if (settingsResult.count === 0) {
+    console.log(
+      `No AppSettings row exists yet (typical for a Plex-first deployment that hasn't saved any setting). User-level SSO unlinked on ${userResult.count} row(s).`,
+    );
+  } else {
+    console.log(
+      `Wiped SSO config on ${settingsResult.count} AppSettings row(s) and unlinked SSO on ${userResult.count} User row(s).`,
+    );
+  }
   console.log(
     "Restart the container so any cached discovery docs are dropped, then sign in via your remaining method (Plex or local).",
   );
@@ -140,15 +188,26 @@ async function deleteUser() {
     console.log("No user to delete. The setup screen will already show.");
     return;
   }
-  // ON DELETE CASCADE handles AppSettings, mediaServers, etc. Media data
-  // attached to MediaServer (via library) also cascades -- so this *does*
-  // wipe synced library content. If you want to keep media data, restore
-  // from a backup that has a working user instead of using this option.
+  console.log(
+    "WARNING: this drops the user row AND cascades to all data linked to it:",
+  );
+  console.log("  - synced media items and their metadata");
+  console.log("  - server connections and library definitions");
+  console.log("  - lifecycle rule sets, matches, pending actions");
+  console.log("  - blackout schedules, preroll presets/schedules");
+  console.log("  - saved queries, watch history, log entries");
+  console.log("");
+  console.log(
+    "If any credentials still exist (Plex link, local password, SSO link), prefer 'wipe-sso', 'enable-local', or 'enable-plex' instead — those preserve media data.",
+  );
+  console.log("");
+  if (!(await confirm("Proceed with delete-user?"))) {
+    console.log("Cancelled.");
+    return;
+  }
   const result = await prisma.user.deleteMany();
   console.log(
-    `Deleted ${result.count} user(s). The setup screen will appear on next page load. ` +
-      `Note: cascading deletes also dropped synced media data, server connections, and lifecycle rules. ` +
-      `To preserve media data, prefer 'wipe-sso' or 'enable-local'/'enable-plex' if any credentials still exist.`,
+    `Deleted ${result.count} user(s). The setup screen will appear on next page load.`,
   );
 }
 
@@ -180,7 +239,9 @@ async function main() {
 
 main()
   .catch((err) => {
-    console.error(err);
+    // Sanitize so a connection error doesn't dump DATABASE_URL into stdout
+    // (which would end up in container logs and the log-retention pipeline).
+    console.error(safeStringifyError(err));
     process.exit(1);
   })
   .finally(() => prisma.$disconnect());

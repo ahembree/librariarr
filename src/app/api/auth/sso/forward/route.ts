@@ -35,7 +35,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL("/login?sso_error=sso_not_configured", baseUrl));
   }
 
-  const subject = request.headers.get(settings.forwardAuthUserHeader);
+  const rawSubject = request.headers.get(settings.forwardAuthUserHeader);
+  // Trim — proxies that emit `Remote-User: alice ` (trailing space) would
+  // otherwise fail to match the stored ssoSubject="alice".
+  const subject = rawSubject?.trim() ?? "";
   if (!subject) {
     apiLogger.warn(
       "Auth",
@@ -45,12 +48,16 @@ export async function GET(request: NextRequest) {
   }
 
   // Manual-linking policy: subject must match an existing user with ssoEnabled.
-  // Composite (sub, issuer) match prevents a stranger's "same username" from a
-  // different forward-auth setup logging in as the linked admin if the proxy
-  // mode/setup changed since link time.
+  // Composite (sub, issuer) match in the WHERE prevents a stranger's
+  // "same username" from a different forward-auth setup matching the
+  // linked admin row and then being rejected — the row only matches if
+  // the issuer also lines up (or is null for legacy backfill).
   const expectedIssuer = currentSsoIssuer(settings)!;
   const user = await prisma.user.findFirst({
-    where: { ssoSubject: subject },
+    where: {
+      ssoSubject: subject,
+      OR: [{ ssoIssuer: expectedIssuer }, { ssoIssuer: null }],
+    },
   });
   if (!user || !user.ssoEnabled) {
     apiLogger.warn(
@@ -66,12 +73,6 @@ export async function GET(request: NextRequest) {
       where: { id: user.id },
       data: { ssoIssuer: expectedIssuer },
     });
-  } else if (user.ssoIssuer !== expectedIssuer) {
-    apiLogger.warn(
-      "Auth",
-      `Forward-auth login rejected: issuer mismatch (linked=${user.ssoIssuer}, current=${expectedIssuer}) for "${subject}"`
-    );
-    return NextResponse.redirect(new URL("/login?sso_error=not_linked", baseUrl));
   }
 
   // Optional identity claims from the proxy. Sync into the User record so
