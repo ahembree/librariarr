@@ -15,10 +15,11 @@
  *   node scripts/reset-auth.js reset-password # set the user's local password (and optionally username)
  *   node scripts/reset-auth.js delete-user    # NUCLEAR: drop the user row, forces fresh setup
  *
- * `reset-password` reads the new password from the LIBRARIARR_NEW_PASSWORD
- * env var if set, otherwise prompts interactively with no echo. Optional
- * --username=<name> flag also sets/changes localUsername in the same run.
- * The route's validation (8 char minimum) is mirrored here.
+ * `reset-password` prompts interactively with no echo. The password is
+ * never accepted via argv (visible to `ps`) or env vars (some shell
+ * history/audit setups capture them), so run it under `docker exec -it`.
+ * Optional --username=<name> flag also sets/changes localUsername in the
+ * same run. The route's validation (8 char minimum) is mirrored here.
  *
  * Destructive actions (wipe-sso, delete-user) prompt for confirmation in
  * interactive shells. Pass `--force` to skip the prompt (for automation),
@@ -62,21 +63,17 @@ async function confirm(prompt) {
   });
 }
 
-/** Read a password from stdin without echoing it. Falls back to a non-TTY
- *  pipe read (single line) when not attached to a terminal — pipes already
- *  hide the input from `ps`. The new password is never accepted via argv
- *  because process args show up in `ps`. */
+/** Read a password from a TTY with no echo. Requires an interactive shell:
+ *  argv flags would leak to `ps`, env vars get logged by some shells'
+ *  history/audit setups, and pipes silently bake a trailing newline into
+ *  the password when the operator forgets `echo -n`. */
 function readPasswordSilently(prompt) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     if (!process.stdin.isTTY) {
-      let buf = "";
-      process.stdin.setEncoding("utf8");
-      process.stdin.on("data", (chunk) => {
-        buf += chunk;
-      });
-      process.stdin.on("end", () => resolve(buf.replace(/\r?\n$/, "")));
-      process.stdin.on("error", reject);
-      return;
+      console.error(
+        "reset-password requires an interactive TTY. Re-run with `docker exec -it ...`.",
+      );
+      process.exit(1);
     }
     process.stdout.write(prompt);
     process.stdin.setRawMode(true);
@@ -277,11 +274,10 @@ async function resetPassword() {
     process.exit(1);
   }
 
-  // Password input precedence: env var (best for automation, hides from
-  // `ps`) → interactive no-echo prompt. Never accept the password from argv
-  // because process args are visible in `ps`.
-  const envPassword = process.env.LIBRARIARR_NEW_PASSWORD;
-  const password = envPassword ?? (await readPasswordSilently("New password: "));
+  // Interactive prompt only — readPasswordSilently bails out hard when
+  // stdin isn't a TTY. Argv flags leak to `ps` and env vars get captured
+  // by some shells' audit setups, so neither is offered.
+  const password = await readPasswordSilently("New password: ");
   if (!password || password.length < 8) {
     console.error(
       "Password must be at least 8 characters (matches the in-app validation).",
@@ -375,7 +371,8 @@ async function main() {
     default:
       console.error(
         `Usage: node scripts/reset-auth.js <status|wipe-sso|enable-local|enable-plex|reset-password|delete-user>\n` +
-          `  reset-password reads the new password from LIBRARIARR_NEW_PASSWORD or prompts.\n` +
+          `  reset-password prompts interactively for the new password (no echo).\n` +
+          `  Run under \`docker exec -it ...\` so stdin is a TTY.\n` +
           `  Pass --username=<name> to also set localUsername in the same run.`,
       );
       process.exit(1);
