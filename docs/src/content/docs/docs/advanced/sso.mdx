@@ -451,7 +451,7 @@ redirect to the login page on failure.
 
 **Authelia:**
 
-```caddyfile title="Caddyfile"
+```nginx title="Caddyfile"
 librariarr.example.com {
     forward_auth authelia:9091 {
         uri /api/authz/forward-auth
@@ -463,7 +463,7 @@ librariarr.example.com {
 
 **Authentik:**
 
-```caddyfile title="Caddyfile"
+```nginx title="Caddyfile"
 librariarr.example.com {
     # The outpost's path must be reachable on the Librariarr hostname
     # so the redirect-back flow works.
@@ -481,7 +481,7 @@ librariarr.example.com {
 
 **oauth2-proxy:**
 
-```caddyfile title="Caddyfile"
+```nginx title="Caddyfile"
 librariarr.example.com {
     reverse_proxy /oauth2/* oauth2-proxy:4180
 
