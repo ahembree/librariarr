@@ -683,6 +683,147 @@ path short of a backup restore.
   cannot conjure credentials that were never created.
 </Aside>
 
+## Reverting a bad SSO config
+
+If you save broken OIDC credentials and want to roll back **without**
+relying on backup restore (backups rotate, and can end up containing only
+the broken post-change state), use the in-app revert.
+
+Every save to **Settings → Authentication → Single Sign-On → step 1**
+automatically snapshots the **previous** SSO connection settings into the
+database. When a snapshot exists, a **Revert to Previous** button appears
+in step 1 next to *Save Configuration*. Clicking it:
+
+- Restores the previous issuer URL, client ID, client secret, scopes,
+  username claim, and forward-auth header names
+- Forces SSO login off (you re-enable it explicitly in step 3 after
+  confirming the restored config works)
+- Drops the cached OIDC discovery doc so the next login re-fetches
+- Clears the snapshot (single-step undo — no history beyond the one
+  prior state)
+
+The snapshot lives in the `previousSsoConfig` column of `AppSettings` and
+is unaffected by backup rotation. The revert only requires that you can
+sign in to the settings page in some way — see the [SSO_DISABLE_OVERRIDE
+recovery flow](#recovery--locked-out-of-sso) for getting back in via Plex
+or local credentials when SSO is broken.
+
+## Recovery when fully locked out
+
+If you can't sign in by any method (no Plex, no local password, broken
+SSO config, and `SSO_DISABLE_OVERRIDE` doesn't help because there are no
+fallback credentials to surface), you need DB-level recovery. Two paths:
+
+### Option A — Reset CLI script
+
+The container ships with a small recovery script at `scripts/reset-auth.ts`.
+Run it inside the container with `pnpm exec tsx`:
+
+```bash
+# Show current auth state (helpful first step)
+docker exec -it librariarr pnpm exec tsx scripts/reset-auth.ts status
+
+# Clear all SSO config (preserves user, Plex linkage, local password)
+docker exec -it librariarr pnpm exec tsx scripts/reset-auth.ts wipe-sso
+
+# Force-enable local login (so the form shows on the login page)
+docker exec -it librariarr pnpm exec tsx scripts/reset-auth.ts enable-local
+
+# Force-enable Plex login button
+docker exec -it librariarr pnpm exec tsx scripts/reset-auth.ts enable-plex
+
+# Last resort: delete the user. The setup screen appears on next page
+# load. WARNING: this cascades to media data — synced libraries, server
+# connections, and lifecycle rules are all dropped. Prefer the actions
+# above when possible, or restore from a backup that has a working user.
+docker exec -it librariarr pnpm exec tsx scripts/reset-auth.ts delete-user
+```
+
+`wipe-sso` is the most common recovery: clears the bad OIDC config so the
+non-SSO methods (local form / Plex button) are no longer hidden by an
+in-effect-but-broken SSO mode. Restart the container after running it so
+the in-memory OIDC discovery cache drops.
+
+### Option B — Direct SQL
+
+If shell-into-container isn't an option, connect to PostgreSQL directly
+with `psql` (or your preferred client) and run the equivalent SQL. The
+table names are quoted because Prisma uses PascalCase identifiers.
+
+**Wipe SSO config (most common recovery):**
+
+```sql
+-- Clear AppSettings SSO fields
+UPDATE "AppSettings"
+SET
+  "ssoEnabled" = false,
+  "ssoMode" = 'OIDC',
+  "oidcIssuer" = NULL,
+  "oidcClientId" = NULL,
+  "oidcClientSecret" = NULL,
+  "previousSsoConfig" = NULL;
+
+-- Clear user-level SSO link and force session invalidation
+UPDATE "User"
+SET
+  "ssoSubject" = NULL,
+  "ssoIssuer" = NULL,
+  "ssoProvider" = NULL,
+  "ssoEnabled" = false,
+  "sessionVersion" = "sessionVersion" + 1;
+```
+
+**Force local form back on:**
+
+```sql
+UPDATE "AppSettings" SET "localAuthEnabled" = true;
+```
+
+The local form only shows up if a password is also set. Check:
+
+```sql
+SELECT id, username, "localUsername",
+       ("passwordHash" IS NOT NULL) AS has_password,
+       ("plexId" IS NOT NULL) AS has_plex
+FROM "User";
+```
+
+If `has_password` is false you'll need to either link Plex via the OAuth
+flow on the login page or `delete-user` to start over.
+
+**Force Plex login button back on:**
+
+```sql
+UPDATE "AppSettings" SET "plexLoginEnabled" = true;
+```
+
+(Only useful if `plexId` is set on the user — check with the SELECT above.)
+
+**Nuclear: delete the user and start over:**
+
+```sql
+DELETE FROM "User";
+```
+
+The setup screen appears on the next page load. Cascading deletes drop
+all data linked to the user — media servers, libraries, synced media,
+lifecycle rules, etc. Only do this if you have no other recovery path
+and don't have a backup that contains a working user.
+
+### Connecting to the database
+
+If you're using the bundled Docker Compose, the database container exposes
+psql:
+
+```bash
+docker exec -it librariarr-db psql -U librariarr -d librariarr
+```
+
+Use `\q` to exit.
+
+If you're using an external database, connect via your normal psql / GUI
+client using the connection details from your `DATABASE_URL` env var.
+
 ## Troubleshooting
 
 ### Errors shown on the login page

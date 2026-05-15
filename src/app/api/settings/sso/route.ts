@@ -60,7 +60,7 @@ export async function GET() {
 
   const settings = await prisma.appSettings.findUnique({
     where: { userId: session.userId },
-    select: SSO_SELECT,
+    select: { ...SSO_SELECT, previousSsoConfig: true },
   });
 
   // If no AppSettings row exists yet (e.g. Plex-first deployment that hasn't
@@ -71,6 +71,9 @@ export async function GET() {
   return NextResponse.json({
     ...sanitize(effective),
     overrideActive: isSsoOverrideActive(),
+    // Surface whether a one-step revert is available. UI uses this to gate
+    // the "Revert to previous configuration" button in step 1 of the wizard.
+    hasPreviousConfig: !!settings?.previousSsoConfig,
   });
 }
 
@@ -183,12 +186,33 @@ export async function PUT(request: NextRequest) {
     forwardAuthNameHeader: next.forwardAuthNameHeader,
   };
 
+  // Snapshot the *current* SSO config into previousSsoConfig before applying
+  // the new values. Gives admins a one-click revert path that doesn't depend
+  // on having a recent backup with the working state — backups rotate and
+  // can end up containing only the broken post-change state. Only meaningful
+  // if AppSettings already exists; first-save (during create) has nothing to
+  // snapshot. Excludes ssoEnabled and previousSsoConfig itself.
+  const snapshot: SsoSettingsRow | null = existing
+    ? {
+        ssoEnabled: false, // never auto-re-enable on revert; admin opts in via step 3
+        ssoMode: current.ssoMode,
+        oidcIssuer: current.oidcIssuer,
+        oidcClientId: current.oidcClientId,
+        oidcClientSecret: current.oidcClientSecret,
+        oidcScopes: current.oidcScopes,
+        oidcUsernameClaim: current.oidcUsernameClaim,
+        forwardAuthUserHeader: current.forwardAuthUserHeader,
+        forwardAuthEmailHeader: current.forwardAuthEmailHeader,
+        forwardAuthNameHeader: current.forwardAuthNameHeader,
+      }
+    : null;
+
   // Upsert rather than update so a Plex-first deployment whose AppSettings
   // row was never created (now fixed for new installs, but legacy data
   // exists) can save SSO config without first poking some other setting.
   const updated = await prisma.appSettings.upsert({
     where: { userId: session.userId },
-    update: writeData,
+    update: { ...writeData, previousSsoConfig: snapshot ?? undefined },
     create: { userId: session.userId, ...writeData },
     select: SSO_SELECT,
   });
@@ -201,5 +225,6 @@ export async function PUT(request: NextRequest) {
   return NextResponse.json({
     ...sanitize(updated),
     overrideActive: isSsoOverrideActive(),
+    hasPreviousConfig: !!snapshot,
   });
 }

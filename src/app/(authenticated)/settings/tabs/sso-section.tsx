@@ -34,6 +34,7 @@ import {
   CheckCircle,
   Circle,
   ExternalLink,
+  History,
   Loader2,
   Save,
   ShieldOff,
@@ -53,6 +54,7 @@ interface SsoConfig {
   forwardAuthEmailHeader: string;
   forwardAuthNameHeader: string;
   overrideActive?: boolean;
+  hasPreviousConfig?: boolean;
 }
 
 interface SsoLinkInfo {
@@ -99,6 +101,8 @@ export function SsoSection() {
   // navigation happens.
   const [oidcLinkStarting, setOidcLinkStarting] = useState(false);
   const [showManualLink, setShowManualLink] = useState(false);
+  const [confirmRevertOpen, setConfirmRevertOpen] = useState(false);
+  const [reverting, setReverting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -307,6 +311,33 @@ export function SsoSection() {
       setLinkError("Network error");
     } finally {
       setLinking(false);
+    }
+  };
+
+  const handleRevert = async () => {
+    setError(null);
+    setReverting(true);
+    try {
+      const res = await fetch("/api/settings/sso/revert", { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Failed to revert SSO configuration");
+        return;
+      }
+      // Reload the current config from the server and reset the unsaved-
+      // changes snapshot to match.
+      const refreshed = await fetch("/api/settings/sso");
+      if (refreshed.ok) {
+        const data = (await refreshed.json()) as SsoConfig;
+        setConfig(data);
+        setSavedConfigSnapshot(snapshotOf(data));
+      }
+      setSavedAt(Date.now());
+    } catch {
+      setError("Network error");
+    } finally {
+      setReverting(false);
+      setConfirmRevertOpen(false);
     }
   };
 
@@ -542,10 +573,28 @@ export function SsoSection() {
           </div>
         )}
 
-        <Button size="sm" disabled={saving || !isConfigComplete(config)} onClick={handleSaveConfig}>
-          {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-          Save Configuration
-        </Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button size="sm" disabled={saving || !isConfigComplete(config)} onClick={handleSaveConfig}>
+            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+            Save Configuration
+          </Button>
+          {config.hasPreviousConfig && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={reverting}
+              onClick={() => setConfirmRevertOpen(true)}
+            >
+              {reverting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <History className="mr-2 h-4 w-4" />
+              )}
+              Revert to Previous
+            </Button>
+          )}
+        </div>
       </StepCard>
 
       {/* ── Step 2: Link your identity ────────────────────────────────── */}
@@ -774,6 +823,38 @@ export function SsoSection() {
                 <ShieldOff className="mr-2 h-4 w-4" />
               )}
               Unlink
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Revert-config confirmation. Restores the snapshot from before the
+          last SSO config save. Single-step undo — no history beyond that. */}
+      <AlertDialog open={confirmRevertOpen} onOpenChange={setConfirmRevertOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Revert SSO configuration?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This restores the SSO connection settings that were active
+              before your most recent save (issuer URL, client ID, client
+              secret, scopes, etc.). SSO login will stay turned off after
+              the revert — you&rsquo;ll need to re-enable it in step 3
+              after confirming the restored config still works.
+              <br /><br />
+              This is single-step undo: only the immediately-previous state
+              is kept. Reverting clears the snapshot, so you can&rsquo;t
+              re-revert this revert.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={reverting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleRevert} disabled={reverting}>
+              {reverting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <History className="mr-2 h-4 w-4" />
+              )}
+              Revert
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

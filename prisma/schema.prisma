@@ -88,6 +88,11 @@ model AppSettings {
   forwardAuthUserHeader     String    @default("Remote-User")
   forwardAuthEmailHeader    String    @default("Remote-Email")
   forwardAuthNameHeader     String    @default("Remote-Name")
+  // Single-step undo for SSO config changes. Snapshotted on every PUT to
+  // /api/settings/sso. Resistant to backup rotation — gives admins a
+  // recovery path when bad credentials are saved and the only available
+  // backups all have the broken state.
+  previousSsoConfig         Json?
   preferredTitleServerId   String?
   preferredArtworkServerId String?
   // Backup
