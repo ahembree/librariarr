@@ -732,10 +732,18 @@ curl -O https://raw.githubusercontent.com/ahembree/librariarr/main/scripts/reset
 docker cp reset-auth.js librariarr:/tmp/reset-auth.js
 
 # 3. Run the recovery action
-docker exec -it librariarr node /tmp/reset-auth.js status        # show current auth state
-docker exec -it librariarr node /tmp/reset-auth.js wipe-sso      # clear SSO config (preserves Plex + local)
-docker exec -it librariarr node /tmp/reset-auth.js enable-local  # force-enable local form
-docker exec -it librariarr node /tmp/reset-auth.js enable-plex   # force-enable Plex login button
+docker exec -it librariarr node /tmp/reset-auth.js status         # show current auth state
+docker exec -it librariarr node /tmp/reset-auth.js wipe-sso       # clear SSO config (preserves Plex + local)
+docker exec -it librariarr node /tmp/reset-auth.js enable-local   # force-enable local form
+docker exec -it librariarr node /tmp/reset-auth.js enable-plex    # force-enable Plex login button
+
+# Reset the local password. Prompts interactively with no echo, or reads
+# from LIBRARIARR_NEW_PASSWORD for automation. Pass --username=<name> to
+# also set localUsername (required if it isn't set yet — the login form
+# needs both). Bumps sessionVersion so existing sessions are invalidated.
+docker exec -it librariarr node /tmp/reset-auth.js reset-password
+docker exec -it librariarr node /tmp/reset-auth.js reset-password --username=admin
+docker exec -i  -e LIBRARIARR_NEW_PASSWORD=hunter2hunter2 librariarr node /tmp/reset-auth.js reset-password
 
 # Last resort: delete the user. Setup screen appears next page load.
 # WARNING: cascades to all user-linked data — synced libraries, server

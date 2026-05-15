@@ -8,11 +8,17 @@
  *
  * Usage (inside the running container):
  *
- *   node scripts/reset-auth.js status       # show current auth state
- *   node scripts/reset-auth.js wipe-sso     # clear SSO config (keeps user, Plex, local)
- *   node scripts/reset-auth.js enable-local # force-enable local form
- *   node scripts/reset-auth.js enable-plex  # force-enable Plex login button
- *   node scripts/reset-auth.js delete-user  # NUCLEAR: drop the user row, forces fresh setup
+ *   node scripts/reset-auth.js status         # show current auth state
+ *   node scripts/reset-auth.js wipe-sso       # clear SSO config (keeps user, Plex, local)
+ *   node scripts/reset-auth.js enable-local   # force-enable local form
+ *   node scripts/reset-auth.js enable-plex    # force-enable Plex login button
+ *   node scripts/reset-auth.js reset-password # set the user's local password (and optionally username)
+ *   node scripts/reset-auth.js delete-user    # NUCLEAR: drop the user row, forces fresh setup
+ *
+ * `reset-password` reads the new password from the LIBRARIARR_NEW_PASSWORD
+ * env var if set, otherwise prompts interactively with no echo. Optional
+ * --username=<name> flag also sets/changes localUsername in the same run.
+ * The route's validation (8 char minimum) is mirrored here.
  *
  * Destructive actions (wipe-sso, delete-user) prompt for confirmation in
  * interactive shells. Pass `--force` to skip the prompt (for automation),
@@ -25,6 +31,7 @@
 
 const { createInterface } = require("readline");
 const { Client } = require("pg");
+const bcrypt = require("bcryptjs");
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -52,6 +59,54 @@ async function confirm(prompt) {
       const a = answer.trim().toLowerCase();
       resolve(a === "y" || a === "yes");
     });
+  });
+}
+
+/** Read a password from stdin without echoing it. Falls back to a non-TTY
+ *  pipe read (single line) when not attached to a terminal — pipes already
+ *  hide the input from `ps`. The new password is never accepted via argv
+ *  because process args show up in `ps`. */
+function readPasswordSilently(prompt) {
+  return new Promise((resolve, reject) => {
+    if (!process.stdin.isTTY) {
+      let buf = "";
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", (chunk) => {
+        buf += chunk;
+      });
+      process.stdin.on("end", () => resolve(buf.replace(/\r?\n$/, "")));
+      process.stdin.on("error", reject);
+      return;
+    }
+    process.stdout.write(prompt);
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.setEncoding("utf8");
+    let buf = "";
+    const ENTER = ["\n", "\r", "\u0004"]; // newline, CR, EOT
+    const BACKSPACE = ["\u007f", "\b"];
+    const onData = (ch) => {
+      if (ENTER.includes(ch)) {
+        process.stdin.setRawMode(false);
+        process.stdin.pause();
+        process.stdin.removeListener("data", onData);
+        process.stdout.write("\n");
+        resolve(buf);
+        return;
+      }
+      if (ch === "\u0003") {
+        // Ctrl+C — exit immediately without resolving.
+        process.stdin.setRawMode(false);
+        process.stdout.write("\n");
+        process.exit(130);
+      }
+      if (BACKSPACE.includes(ch)) {
+        if (buf.length > 0) buf = buf.slice(0, -1);
+        return;
+      }
+      buf += ch;
+    };
+    process.stdin.on("data", onData);
   });
 }
 
@@ -202,6 +257,99 @@ async function deleteUser() {
   );
 }
 
+/** Parse a `--key=value` style flag from argv. Returns undefined when the
+ *  flag is absent. Keeps the script free of an argv-parsing dependency. */
+function argFlag(name) {
+  const prefix = `--${name}=`;
+  const hit = process.argv.find((arg) => arg.startsWith(prefix));
+  return hit ? hit.slice(prefix.length) : undefined;
+}
+
+async function resetPassword() {
+  const userRes = await client.query(
+    `SELECT id, "localUsername", "passwordHash" FROM "User" LIMIT 1`,
+  );
+  const user = userRes.rows[0];
+  if (!user) {
+    console.error(
+      "No user exists. Run setup via the web UI first (or use 'delete-user' if you need to wipe state).",
+    );
+    process.exit(1);
+  }
+
+  // Password input precedence: env var (best for automation, hides from
+  // `ps`) → interactive no-echo prompt. Never accept the password from argv
+  // because process args are visible in `ps`.
+  const envPassword = process.env.LIBRARIARR_NEW_PASSWORD;
+  const password = envPassword ?? (await readPasswordSilently("New password: "));
+  if (!password || password.length < 8) {
+    console.error(
+      "Password must be at least 8 characters (matches the in-app validation).",
+    );
+    process.exit(1);
+  }
+
+  // Optional username via --username=<name>. Mirrors the route's 3-char
+  // minimum and lowercases it (the route's storage convention).
+  const usernameArg = argFlag("username");
+  let normalizedUsername;
+  if (usernameArg !== undefined) {
+    const trimmed = usernameArg.trim();
+    if (trimmed.length < 3) {
+      console.error("Username must be at least 3 characters.");
+      process.exit(1);
+    }
+    normalizedUsername = trimmed.toLowerCase();
+    // Check for collision against any other user (defensive — single-user
+    // app so this is mostly belt-and-braces).
+    const conflict = await client.query(
+      `SELECT id FROM "User" WHERE LOWER("localUsername") = $1 AND id <> $2 LIMIT 1`,
+      [normalizedUsername, user.id],
+    );
+    if (conflict.rows.length > 0) {
+      console.error("That localUsername is already taken by another user.");
+      process.exit(1);
+    }
+  }
+
+  // bcrypt cost 12 matches src/app/api/auth/local/* routes — keep the hash
+  // format identical so a recovered password validates on the next login.
+  const hash = await bcrypt.hash(password, 12);
+
+  if (normalizedUsername !== undefined) {
+    await client.query(
+      `UPDATE "User"
+          SET "passwordHash" = $1,
+              "localUsername" = $2,
+              "sessionVersion" = "sessionVersion" + 1
+        WHERE id = $3`,
+      [hash, normalizedUsername, user.id],
+    );
+  } else {
+    await client.query(
+      `UPDATE "User"
+          SET "passwordHash" = $1,
+              "sessionVersion" = "sessionVersion" + 1
+        WHERE id = $2`,
+      [hash, user.id],
+    );
+  }
+
+  console.log(
+    `Local password reset for user ${user.id}.${user.passwordHash ? "" : " (No password was previously set.)"}`,
+  );
+  if (normalizedUsername !== undefined) {
+    console.log(`Local username set to "${normalizedUsername}".`);
+  } else if (!user.localUsername) {
+    console.log(
+      "Note: no localUsername is set on this user. The login form needs both — re-run with `--username=<name>` or set it from Settings → Authentication after signing in.",
+    );
+  }
+  console.log(
+    "All other sessions invalidated (sessionVersion bumped). If local-auth is currently disabled, run `node scripts/reset-auth.js enable-local` so the form appears on the login page.",
+  );
+}
+
 async function main() {
   const cmd = process.argv[2];
   await client.connect();
@@ -218,12 +366,17 @@ async function main() {
     case "enable-plex":
       await enablePlex();
       break;
+    case "reset-password":
+      await resetPassword();
+      break;
     case "delete-user":
       await deleteUser();
       break;
     default:
       console.error(
-        `Usage: node scripts/reset-auth.js <status|wipe-sso|enable-local|enable-plex|delete-user>`,
+        `Usage: node scripts/reset-auth.js <status|wipe-sso|enable-local|enable-plex|reset-password|delete-user>\n` +
+          `  reset-password reads the new password from LIBRARIARR_NEW_PASSWORD or prompts.\n` +
+          `  Pass --username=<name> to also set localUsername in the same run.`,
       );
       process.exit(1);
   }
