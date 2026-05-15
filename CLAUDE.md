@@ -70,6 +70,8 @@ pnpm exec vitest run tests/path/to/file.test.ts  # Run a single test file
 
 **Config:** Tests run sequentially (`pool: "forks"`, `fileParallelism: false`) to prevent DB contention. Test timeout 15s, hook timeout 30s. Coverage scope: `src/lib/**/*.ts` and `src/app/api/**/*.ts` only.
 
+**Test coverage requirement:** Every new or modified file under the coverage scope must have tests. In practice that means: every new route handler under `src/app/api/` gets an integration test in `tests/integration/`, and every new module under `src/lib/` gets a unit test in `tests/unit/`. Unit-level lib coverage is necessary but not sufficient — route handlers compose multiple lib modules with session state, validation, rate-limiting, and DB writes, and bugs hide in those seams. When the lib is fully covered but the route isn't, the route isn't tested.
+
 ## Architecture
 
 **Stack:** Next.js 16 (App Router) · React 19 · TypeScript · PostgreSQL 18 · Prisma 7 · Tailwind CSS v4 · shadcn/ui · Docker

@@ -447,3 +447,83 @@ describe("fetchUserInfo", () => {
     expect(info["custom_claim"]).toBe("value");
   });
 });
+
+describe("response size guard (MAX_RESPONSE_BYTES)", () => {
+  // 1MB cap defends discoverOidc against a malicious/compromised IdP that
+  // streams gigabytes back. Discovery is reachable unauthenticated via
+  // /api/auth/sso/oidc/login, so the guard is a hard requirement.
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+    invalidateOidcDiscoveryCache();
+  });
+
+  it("rejects discovery responses whose declared Content-Length exceeds the cap", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          issuer: "https://idp.example.com",
+          authorization_endpoint: "https://idp.example.com/auth",
+          token_endpoint: "https://idp.example.com/token",
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": String(2 * 1024 * 1024),
+          },
+        }
+      )
+    ) as typeof fetch;
+
+    await expect(
+      discoverOidc("https://idp.example.com", { skipCache: true })
+    ).rejects.toThrow(/exceeds 1048576 bytes/);
+  });
+
+  it("rejects discovery responses whose body exceeds the cap when streamed", async () => {
+    // Content-Length absent (or lying) — the streaming guard must catch it.
+    const oversized = "x".repeat(2 * 1024 * 1024);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(oversized));
+        controller.close();
+      },
+    });
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(stream, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    ) as typeof fetch;
+
+    await expect(
+      discoverOidc("https://idp.example.com", { skipCache: true })
+    ).rejects.toThrow(/exceeds 1048576 bytes/);
+  });
+
+  it("allows discovery responses under the cap", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          issuer: "https://idp.example.com",
+          authorization_endpoint: "https://idp.example.com/auth",
+          token_endpoint: "https://idp.example.com/token",
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": "256",
+          },
+        }
+      )
+    ) as typeof fetch;
+
+    await expect(
+      discoverOidc("https://idp.example.com", { skipCache: true })
+    ).resolves.toBeDefined();
+  });
+});

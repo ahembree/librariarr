@@ -174,6 +174,89 @@ describe("POST /api/auth/plex/token", () => {
     expect(body.error).toBe("Validation failed");
   });
 
+  // ── plexLoginEnabled gate ─────────────────────────────────────────
+  //
+  // The /api/auth/plex/token route refuses logins when the admin has
+  // disabled the Plex button (plexLoginEnabled=false). Direct POSTs to
+  // this route must be rejected just like a UI submission would be.
+
+  it("returns 403 when plexLoginEnabled=false post-setup", async () => {
+    const prisma = getTestPrisma();
+    const user = await createTestUser({ plexId: "55001" });
+    await prisma.appSettings.create({
+      data: { userId: user.id, plexLoginEnabled: false },
+    });
+
+    mockGetPlexUser.mockResolvedValue({
+      id: 55001,
+      uuid: "uuid-55001",
+      email: "u@example.com",
+      username: "u",
+      authToken: "tok",
+      thumb: "",
+    });
+
+    const response = await callRoute(POST, {
+      url: "/api/auth/plex/token",
+      method: "POST",
+      body: { authToken: "tok" },
+    });
+    const body = await expectJson<{ error: string }>(response, 403);
+    expect(body.error).toMatch(/Plex login is disabled/);
+  });
+
+  it("allows login when plexLoginEnabled=false but SSO_DISABLE_OVERRIDE is set", async () => {
+    // Override is a recovery mode — the login page surfaces the Plex button
+    // under it, so the server must honor the login or the UI would lie.
+    const prisma = getTestPrisma();
+    const user = await createTestUser({ plexId: "55002" });
+    await prisma.appSettings.create({
+      data: { userId: user.id, plexLoginEnabled: false },
+    });
+
+    mockGetPlexUser.mockResolvedValue({
+      id: 55002,
+      uuid: "uuid-55002",
+      email: "u2@example.com",
+      username: "u2",
+      authToken: "tok2",
+      thumb: "",
+    });
+
+    const original = process.env.SSO_DISABLE_OVERRIDE;
+    process.env.SSO_DISABLE_OVERRIDE = "true";
+    try {
+      const response = await callRoute(POST, {
+        url: "/api/auth/plex/token",
+        method: "POST",
+        body: { authToken: "tok2" },
+      });
+      await expectJson<{ authenticated: boolean }>(response, 200);
+    } finally {
+      if (original === undefined) delete process.env.SSO_DISABLE_OVERRIDE;
+      else process.env.SSO_DISABLE_OVERRIDE = original;
+    }
+  });
+
+  it("allows first-user setup even when no AppSettings exists yet", async () => {
+    // initialCount === 0 short-circuits the plexLoginEnabled check.
+    mockGetPlexUser.mockResolvedValue({
+      id: 55003,
+      uuid: "uuid-55003",
+      email: "u3@example.com",
+      username: "u3",
+      authToken: "tok3",
+      thumb: "",
+    });
+
+    const response = await callRoute(POST, {
+      url: "/api/auth/plex/token",
+      method: "POST",
+      body: { authToken: "tok3" },
+    });
+    await expectJson<{ authenticated: boolean }>(response, 200);
+  });
+
   it("should call getPlexUser with the provided auth token", async () => {
     mockGetPlexUser.mockResolvedValue({
       id: 10001,
