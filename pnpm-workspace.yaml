@@ -1,3 +1,20 @@
+# Supply-chain controls (pnpm v11+ defaults, made explicit so they survive
+# future default changes and are visible to anyone reviewing the config).
+#
+# minimumReleaseAge: hold off on resolving newly published versions for the
+# given number of minutes. 1440 = 1 day, the v11 default. Gives the community
+# time to detect and yank compromised releases.
+minimumReleaseAge: 1440
+
+# blockExoticSubdeps: refuse transitive deps that come from git/file/http
+# sources instead of the npm registry. Direct deps in package.json may still
+# use exotic sources if explicitly declared.
+blockExoticSubdeps: true
+
+# strictDepBuilds: install scripts only run for packages explicitly listed
+# in allowBuilds below. Anything else fails the install instead of warning.
+strictDepBuilds: true
+
 allowBuilds:
   "@prisma/engines": true
   msw: false
