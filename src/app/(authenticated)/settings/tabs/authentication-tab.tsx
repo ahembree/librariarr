@@ -55,6 +55,7 @@ export interface AuthenticationTabProps {
   credentialsError: string;
   credentialsSuccess: string;
   plexLoginError: string;
+  localAuthError: string;
   showCredentialPrompt: boolean;
   promptForm: PromptForm;
   promptError: string;
@@ -78,6 +79,7 @@ export function AuthenticationTab({
   credentialsError,
   credentialsSuccess,
   plexLoginError,
+  localAuthError,
   showCredentialPrompt,
   promptForm,
   promptError,
@@ -184,19 +186,55 @@ export function AuthenticationTab({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <p className="text-sm font-medium">Enable Local Login</p>
-              <p className="text-xs text-muted-foreground">
-                Allow signing in with username and password.
-              </p>
+          {/* Lockout protection: disabling local login is only safe when at
+              least one other login method works. Mirrors the server-side
+              guard in /api/settings/auth PUT so the UI doesn't pretend an
+              action is possible when the server will reject it. */}
+          {(() => {
+            const isPlexUsable =
+              (authInfo?.plexConnected ?? false) && (authInfo?.plexLoginEnabled ?? false);
+            const isSsoUsableNow = authInfo?.localAuthHiddenBySso === true;
+            const wouldLockOut =
+              (authInfo?.localAuthEnabled ?? false) && !isPlexUsable && !isSsoUsableNow;
+
+            return (
+              <>
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <p className="text-sm font-medium">Enable Local Login</p>
+                    <p className="text-xs text-muted-foreground">
+                      Allow signing in with username and password.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={authInfo?.localAuthEnabled ?? false}
+                    disabled={authLoading || wouldLockOut}
+                    onCheckedChange={onToggleLocalAuth}
+                  />
+                </div>
+                {wouldLockOut && (
+                  <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-400">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <div>
+                      <p className="font-medium">Local login is your only sign-in method</p>
+                      <p className="text-xs">
+                        Disabling it would lock you out. Set up another method
+                        first &mdash; link a Plex account (Plex Connection
+                        above) or configure SSO (Single Sign-On below) and
+                        enable it &mdash; then this toggle will be available.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+          {localAuthError && (
+            <div className="flex items-start gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{localAuthError}</span>
             </div>
-            <Switch
-              checked={authInfo?.localAuthEnabled ?? false}
-              disabled={authLoading || (!authInfo?.plexConnected && !authInfo?.localAuthEnabled)}
-              onCheckedChange={onToggleLocalAuth}
-            />
-          </div>
+          )}
           {authInfo?.localAuthEnabled && authInfo?.localAuthHiddenBySso && (
             <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-400">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
