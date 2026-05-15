@@ -27,10 +27,34 @@ function redirectToLogin(request: NextRequest, error: string) {
   return NextResponse.redirect(url);
 }
 
+function redirectToSsoSettings(request: NextRequest, params: Record<string, string>) {
+  // Settings page → Authentication tab → SSO section. The hash matches the
+  // tab navigation in src/app/(authenticated)/settings/page.tsx.
+  const url = new URL("/settings", getExternalBaseUrl(request));
+  url.hash = "authentication";
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  return NextResponse.redirect(url);
+}
+
 export async function GET(request: NextRequest) {
   const settings = await getSsoSettings();
-  if (!isSsoUsable(settings) || settings?.ssoMode !== "OIDC") {
+  // For login: SSO must be usable (enabled + configured). For link: only the
+  // OIDC config needs to be valid -- ssoEnabled can still be false because
+  // the admin is mid-setup.
+  const session = await getSession();
+  const isLinkFlow =
+    session.oidcFlow === "link" && session.isLoggedIn && !!session.userId;
+
+  if (!settings || settings.ssoMode !== "OIDC") {
+    return isLinkFlow
+      ? redirectToSsoSettings(request, { ssoLinkError: "sso_not_configured" })
+      : redirectToLogin(request, "sso_not_configured");
+  }
+  if (!isLinkFlow && !isSsoUsable(settings)) {
     return redirectToLogin(request, "sso_not_configured");
+  }
+  if (isLinkFlow && (!settings.oidcIssuer || !settings.oidcClientId)) {
+    return redirectToSsoSettings(request, { ssoLinkError: "sso_not_configured" });
   }
 
   const url = new URL(request.url);
@@ -40,25 +64,32 @@ export async function GET(request: NextRequest) {
 
   if (providerError) {
     apiLogger.warn("Auth", `OIDC provider returned error: ${providerError}`);
-    return redirectToLogin(request, providerError);
+    return isLinkFlow
+      ? redirectToSsoSettings(request, { ssoLinkError: providerError })
+      : redirectToLogin(request, providerError);
   }
   if (!code || !state) {
-    return redirectToLogin(request, "missing_params");
+    return isLinkFlow
+      ? redirectToSsoSettings(request, { ssoLinkError: "missing_params" })
+      : redirectToLogin(request, "missing_params");
   }
 
-  const session = await getSession();
   const expectedState = session.oidcState;
   const verifier = session.oidcVerifier;
+  const linkFlowUserId = isLinkFlow ? session.userId! : null;
 
   // Always wipe the transient handshake fields, even if the exchange fails —
   // they're single-use and shouldn't outlive the redirect they were issued for.
   session.oidcState = undefined;
   session.oidcVerifier = undefined;
+  session.oidcFlow = undefined;
   await session.save();
 
   if (!expectedState || !verifier || !statesEqual(state, expectedState)) {
     apiLogger.warn("Auth", "OIDC state mismatch on callback");
-    return redirectToLogin(request, "state_mismatch");
+    return isLinkFlow
+      ? redirectToSsoSettings(request, { ssoLinkError: "state_mismatch" })
+      : redirectToLogin(request, "state_mismatch");
   }
 
   let userInfo: OidcUserInfo;
@@ -77,13 +108,67 @@ export async function GET(request: NextRequest) {
     apiLogger.error("Auth", "OIDC code exchange failed", {
       error: String(error),
     });
-    return redirectToLogin(request, "token_exchange_failed");
+    return isLinkFlow
+      ? redirectToSsoSettings(request, { ssoLinkError: "token_exchange_failed" })
+      : redirectToLogin(request, "token_exchange_failed");
   }
 
-  // Manual-linking policy: a user record with this (sub, issuer) pair must
-  // already exist and have ssoEnabled = true. Auto-provisioning disabled.
   const subject = userInfo.sub;
-  const currentIssuer = currentSsoIssuer(settings)!; // non-null: isSsoUsable verified above
+  const currentIssuer = currentSsoIssuer(settings)!;
+
+  if (isLinkFlow) {
+    // Authenticated admin completing a "verify + capture sub" round-trip.
+    // The success of the exchange above proves client_id, client_secret,
+    // and redirect URI are all correctly configured. Capture the sub
+    // verbatim from the IdP, pin the issuer, mark ssoEnabled on the user.
+    // Does NOT enable global SSO -- the admin still does that explicitly
+    // in step 3 of the wizard.
+    if (!linkFlowUserId) {
+      return redirectToSsoSettings(request, { ssoLinkError: "session_lost" });
+    }
+
+    // Block linking a sub that's already assigned to a different account
+    // (composite key would reject the update anyway; this is a friendlier
+    // error). Single-user app so this is mostly defensive.
+    const conflict = await prisma.user.findFirst({
+      where: {
+        ssoSubject: subject,
+        ssoIssuer: currentIssuer,
+        NOT: { id: linkFlowUserId },
+      },
+      select: { id: true },
+    });
+    if (conflict) {
+      return redirectToSsoSettings(request, { ssoLinkError: "conflict" });
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: linkFlowUserId },
+      data: {
+        ssoSubject: subject,
+        ssoIssuer: currentIssuer,
+        ssoEnabled: true,
+        // Sync the IdP-provided display name + email if non-empty.
+        ...syncableFields(userInfo, settings.oidcUsernameClaim),
+        // Linking is a credential change → invalidate other sessions.
+        sessionVersion: { increment: 1 },
+      },
+      select: { sessionVersion: true, username: true },
+    });
+
+    // Keep the current admin's session alive after the version bump.
+    session.sessionVersion = updated.sessionVersion;
+    await session.save();
+
+    apiLogger.info(
+      "Auth",
+      `SSO (OIDC) linked via flow: "${updated.username}" sub=${subject}`
+    );
+
+    return redirectToSsoSettings(request, { ssoLinked: "1" });
+  }
+
+  // ── Login flow (anonymous user authenticating) ────────────────────────
 
   // Look up by sub first. We then verify the issuer separately so we can
   // backfill legacy rows (linked before the ssoIssuer column existed) with
@@ -102,16 +187,11 @@ export async function GET(request: NextRequest) {
   }
 
   if (user.ssoIssuer === null) {
-    // Legacy row: link predates the ssoIssuer column. Trust the current
-    // configured issuer and pin it. After this, strict matching applies.
     await prisma.user.update({
       where: { id: user.id },
       data: { ssoIssuer: currentIssuer },
     });
   } else if (user.ssoIssuer !== currentIssuer) {
-    // Issuer changed since link time -- could be admin reconfiguration or
-    // a cross-IdP collision attack. Either way, refuse the login until the
-    // admin explicitly re-links from the new issuer.
     apiLogger.warn(
       "Auth",
       `OIDC login rejected: issuer mismatch (linked=${user.ssoIssuer}, current=${currentIssuer}) for sub=${subject}`
@@ -119,22 +199,14 @@ export async function GET(request: NextRequest) {
     return redirectToLogin(request, "not_linked");
   }
 
-  // Sync configured claims into the User record so display fields track the
-  // IdP. Username and email update independently so an email-only change
-  // (with stable username) still propagates. Trim before save to avoid
-  // persistent whitespace and the redundant-write loop it causes.
-  const usernameClaim = userInfo[settings.oidcUsernameClaim];
-  const newUsername =
-    typeof usernameClaim === "string" ? usernameClaim.trim() : "";
-  const newEmail =
-    typeof userInfo.email === "string" ? userInfo.email.trim() : "";
-
+  // Sync configured claims into the User record.
+  const sync = syncableFields(userInfo, settings.oidcUsernameClaim);
   const updateData: { username?: string; email?: string } = {};
-  if (newUsername && newUsername !== user.username) {
-    updateData.username = newUsername;
+  if (sync.username && sync.username !== user.username) {
+    updateData.username = sync.username;
   }
-  if (newEmail && newEmail !== user.email) {
-    updateData.email = newEmail;
+  if (sync.email && sync.email !== user.email) {
+    updateData.email = sync.email;
   }
   if (Object.keys(updateData).length > 0) {
     await prisma.user.update({ where: { id: user.id }, data: updateData });
@@ -150,10 +222,21 @@ export async function GET(request: NextRequest) {
 
   apiLogger.info("Auth", `SSO (OIDC) login: "${user.username}"`);
 
-  // Use the externally-visible base URL, not the raw request URL. Behind a
-  // reverse proxy, `request.url` is the internal hostname (e.g.
-  // http://librariarr:3000) and redirecting there would land users on a
-  // broken page. resolveRedirectUri builds the IdP callback URL the same way
-  // — keep them consistent.
   return NextResponse.redirect(new URL("/", getExternalBaseUrl(request)));
+}
+
+/** Extract username + email from a userinfo payload, trimmed and non-empty. */
+function syncableFields(
+  info: OidcUserInfo,
+  usernameClaim: string,
+): { username?: string; email?: string } {
+  const result: { username?: string; email?: string } = {};
+  const claimedUsername = info[usernameClaim];
+  if (typeof claimedUsername === "string" && claimedUsername.trim()) {
+    result.username = claimedUsername.trim();
+  }
+  if (typeof info.email === "string" && info.email.trim()) {
+    result.email = info.email.trim();
+  }
+  return result;
 }

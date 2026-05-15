@@ -15,6 +15,15 @@ export interface SessionData {
   // the IdP and the callback. Cleared once the callback consumes them.
   oidcState?: string;
   oidcVerifier?: string;
+  /**
+   * Tells the OIDC callback whether this handshake was an anonymous login
+   * (default) or an authenticated link flow initiated from the settings
+   * page. The link path captures the IdP-issued `sub` directly so admins
+   * don't need to find it in logs — and it doubles as live verification
+   * that client_id + client_secret + redirect URI all work before SSO is
+   * activated.
+   */
+  oidcFlow?: "link";
 }
 
 const SESSION_SECRET_FILE = "/config/.session-secret";

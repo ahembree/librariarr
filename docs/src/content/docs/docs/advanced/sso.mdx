@@ -560,13 +560,23 @@ and forward `X-Forwarded-User`, `X-Forwarded-Email`, and
 
 ## Finding your subject value
 
-This is the single most common source of frustration: pasting the wrong value
-into **SSO Account Linking** and getting "Your SSO account is not linked to a
-Librariarr user."
+### Recommended method: Verify & Link via OIDC
 
-### Recommended method: trigger the flow once, read the logs
+In **Settings → Authentication → Single Sign-On → step 2**, click
+**Verify & Link via OIDC**. You'll be redirected to your IdP, sign in, and
+returned to the settings page with your `sub` automatically captured and
+the entire OIDC handshake verified end-to-end — client ID, client secret,
+and redirect URI all confirmed working before SSO is activated.
 
-The most reliable way to find out what `sub` your IdP actually returns:
+This is the safest way to set up SSO: if any credential is wrong, the
+verify step fails *here* (before you've turned the SSO toggle on in
+step 3) instead of after you've enabled SSO and signed out. You retain
+your current session throughout, so a failure doesn't lock you out.
+
+### Alternative: paste the sub manually after triggering the flow
+
+If the verify-link button isn't usable (e.g. air-gapped admin network, or
+you're using the forward-auth mode), the manual fallback:
 
 1. Save your OIDC config in Librariarr (don't link anything yet).
 2. Sign out.
@@ -584,10 +594,15 @@ The most reliable way to find out what `sub` your IdP actually returns:
    OIDC login rejected: no linked account for sub=b8f3e2c4-1234-...
    ```
 
-6. Copy that `sub` value verbatim into the linking input. Click **Link Identity**.
-7. Toggle SSO on, sign out, sign in again — should work.
+6. In step 2 of the SSO wizard, click **Or paste the subject manually →**,
+   paste the value, and click **Link Manually**.
+7. Toggle SSO on in step 3, sign out, sign in again — should work.
 
-This works for any IdP regardless of how `sub` is configured.
+<Aside type="caution">
+  The manual path doesn't verify the client ID or client secret — only the
+  subject. Typos in those credentials won't be caught until login time, so
+  the verify-link button above is strongly preferred for OIDC mode.
+</Aside>
 
 ### Alternative: read it from your IdP
 

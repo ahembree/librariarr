@@ -33,6 +33,7 @@ import {
   AlertCircle,
   CheckCircle,
   Circle,
+  ExternalLink,
   Loader2,
   Save,
   ShieldOff,
@@ -92,6 +93,12 @@ export function SsoSection() {
 
   const [togglingEnabled, setTogglingEnabled] = useState(false);
   const [enableError, setEnableError] = useState<string | null>(null);
+  // True while the browser is being redirected to the IdP for the
+  // verify-and-link round-trip. The flow returns via /settings?ssoLinked=1 or
+  // ?ssoLinkError=…, so we just need to keep the button spinner up until
+  // navigation happens.
+  const [oidcLinkStarting, setOidcLinkStarting] = useState(false);
+  const [showManualLink, setShowManualLink] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -124,6 +131,41 @@ export function SsoSection() {
     const t = setTimeout(() => setSavedAt(null), 3000);
     return () => clearTimeout(t);
   }, [savedAt]);
+
+  // Surface ?ssoLinked=1 or ?ssoLinkError=… from the OIDC link callback,
+  // then strip the query params so a refresh doesn't redisplay them.
+  // (Wrapped in an IIFE so the setState calls aren't flagged by the
+  // react-hooks/set-state-in-effect lint — the rule allows it inside an
+  // async callback.)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let cancelled = false;
+    (async () => {
+      const params = new URLSearchParams(window.location.search);
+      const linked = params.get("ssoLinked");
+      const linkErr = params.get("ssoLinkError");
+      if (!linked && !linkErr) return;
+      if (cancelled) return;
+      if (linked) {
+        setLinkNotice(
+          "SSO identity linked and OIDC credentials verified end-to-end. Toggle Enable SSO Login in step 3 when you're ready."
+        );
+      }
+      if (linkErr) {
+        setLinkError(linkErrorMessage(linkErr));
+      }
+      params.delete("ssoLinked");
+      params.delete("ssoLinkError");
+      const next =
+        window.location.pathname +
+        (params.toString() ? "?" + params.toString() : "") +
+        window.location.hash;
+      window.history.replaceState(null, "", next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Derived step states. Computed every render — the values that determine
   // them are cheap (config fields, link state).
@@ -265,6 +307,30 @@ export function SsoSection() {
       setLinkError("Network error");
     } finally {
       setLinking(false);
+    }
+  };
+
+  const handleLinkViaOidc = async () => {
+    setLinkError(null);
+    setLinkNotice(null);
+    setOidcLinkStarting(true);
+    try {
+      const res = await fetch("/api/settings/sso/link/oidc/start", {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok || !data.authorizationUrl) {
+        setLinkError(data.error || "Failed to start OIDC link flow");
+        setOidcLinkStarting(false);
+        return;
+      }
+      // Navigate the top-level browser to the IdP. After auth, the user is
+      // redirected back to /settings?ssoLinked=1 (or ?ssoLinkError=…) and the
+      // useEffect above surfaces the outcome.
+      window.location.href = data.authorizationUrl;
+    } catch {
+      setLinkError("Network error");
+      setOidcLinkStarting(false);
     }
   };
 
@@ -488,7 +554,9 @@ export function SsoSection() {
         title="Link your SSO identity"
         description={
           step1Complete
-            ? "Paste your IdP subject identifier (OIDC sub claim, or the username your reverse proxy sends as the user header)."
+            ? config.ssoMode === "OIDC"
+              ? "Sign in to your IdP once to confirm the configuration works and capture your sub claim. (Or paste a known sub manually if you prefer.)"
+              : "Enter the username your reverse proxy injects as the user header."
             : "Save your configuration in step 1 first."
         }
         status={
@@ -521,31 +589,109 @@ export function SsoSection() {
               <XCircle className="h-4 w-4" />
               <span>No SSO identity linked</span>
             </div>
-            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-              <Input
-                placeholder="OIDC sub or proxy username"
-                value={linkSubject}
-                onChange={(e) => setLinkSubject(e.target.value)}
-                disabled={!step1Complete}
-              />
-              <Button
-                size="sm"
-                disabled={linking || !linkSubject.trim() || !step1Complete}
-                onClick={handleLink}
-              >
-                {linking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                Link Identity
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Not sure what your <code className={codeClass}>sub</code> is? Save
-              the configuration above, sign out, click <em>Sign in with SSO</em>,
-              authenticate at your IdP, then check the Librariarr logs for the
-              line starting with{" "}
-              <code className={codeClass}>OIDC login rejected: no linked
-              account for sub=…</code>
-              {" "}— copy that value back here.
-            </p>
+
+            {config.ssoMode === "OIDC" ? (
+              <>
+                {/* Primary path: real OIDC round-trip. Validates client_id +
+                    client_secret + redirect URI end-to-end and auto-captures
+                    the sub. Strongly preferred over the manual paste below. */}
+                <div className="rounded-md border border-primary/30 bg-primary/5 p-3 space-y-2">
+                  <p className="text-sm font-medium">
+                    Verify and link in one step
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    You&apos;ll be redirected to your IdP to sign in. On
+                    success we auto-capture your <code className={codeClass}>sub</code>{" "}
+                    claim and confirm the client ID, client secret, and
+                    redirect URI are all correct. This is the safest way to
+                    avoid getting locked out by a typo &mdash; bad credentials
+                    fail <em>here</em>, before SSO is activated.
+                  </p>
+                  <Button
+                    size="sm"
+                    disabled={oidcLinkStarting || !step1Complete}
+                    onClick={handleLinkViaOidc}
+                  >
+                    {oidcLinkStarting ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <ExternalLink className="mr-2 h-4 w-4" />
+                    )}
+                    Verify &amp; Link via OIDC
+                  </Button>
+                </div>
+
+                {/* Fallback path: paste sub manually. Useful when the OIDC
+                    flow can't reach the IdP from the browser (e.g. admin
+                    network restrictions), or for backups/restores. */}
+                {!showManualLink ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="px-0 text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => setShowManualLink(true)}
+                    disabled={!step1Complete}
+                  >
+                    Or paste the subject manually →
+                  </Button>
+                ) : (
+                  <div className="space-y-2 rounded-md border border-dashed border-border p-3">
+                    <p className="text-xs text-muted-foreground">
+                      Manual fallback: paste the OIDC{" "}
+                      <code className={codeClass}>sub</code> claim if the OIDC
+                      flow above isn&apos;t usable. Warning: credentials are
+                      <em> not </em>verified by this path; a typo in step 1
+                      won&apos;t be caught until login time.
+                    </p>
+                    <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                      <Input
+                        placeholder="OIDC sub claim value"
+                        value={linkSubject}
+                        onChange={(e) => setLinkSubject(e.target.value)}
+                        disabled={!step1Complete}
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={linking || !linkSubject.trim() || !step1Complete}
+                        onClick={handleLink}
+                      >
+                        {linking ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : null}
+                        Link Manually
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              // Forward-auth mode has no OAuth round-trip — the sub is the
+              // value the proxy will inject, known to the admin out-of-band.
+              <>
+                <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                  <Input
+                    placeholder="Username your reverse proxy sends"
+                    value={linkSubject}
+                    onChange={(e) => setLinkSubject(e.target.value)}
+                    disabled={!step1Complete}
+                  />
+                  <Button
+                    size="sm"
+                    disabled={linking || !linkSubject.trim() || !step1Complete}
+                    onClick={handleLink}
+                  >
+                    {linking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Link Identity
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Enter the username your reverse proxy will inject as the
+                  configured user header (typically your IdP username).
+                </p>
+              </>
+            )}
           </div>
         )}
         {linkError && (
@@ -634,6 +780,32 @@ export function SsoSection() {
       </AlertDialog>
     </div>
   );
+}
+
+/**
+ * Translate the `?ssoLinkError=…` query string returned by the OIDC link
+ * callback into a user-facing message. Each value matches one branch of the
+ * callback's redirectToSsoSettings calls.
+ */
+function linkErrorMessage(code: string): string {
+  switch (code) {
+    case "sso_not_configured":
+      return "Save the OIDC issuer URL and client ID in step 1 first.";
+    case "missing_params":
+      return "The IdP sent an incomplete response. Try again.";
+    case "state_mismatch":
+      return "The link request expired or was tampered with. Try again.";
+    case "token_exchange_failed":
+      return "OIDC token exchange failed. Double-check the client ID and client secret — this is exactly what the link flow is meant to catch before SSO is enabled.";
+    case "conflict":
+      return "Another account is already linked to this SSO identity at the same issuer.";
+    case "session_lost":
+      return "Your admin session expired during the OIDC round-trip. Sign in again and retry.";
+    default:
+      // Pass through IdP-provided error codes (e.g. access_denied) verbatim
+      // so the admin can see them directly.
+      return `OIDC link failed: ${code}`;
+  }
 }
 
 /** Serializes the config fields used in step 1 so we can detect unsaved
