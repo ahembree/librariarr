@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.17.0](https://github.com/ahembree/librariarr/compare/v0.16.2...v0.17.0) (2026-05-15)
+
+
+### Features
+
+* **auth:** add plexLoginEnabled toggle — keep Plex linked, hide login button ([5c2f54d](https://github.com/ahembree/librariarr/commit/5c2f54dab8241396160f7e10f46f1bc3aa4c2ba2))
+* **auth:** add SSO support via OIDC and forward-auth ([a420dc8](https://github.com/ahembree/librariarr/commit/a420dc8a1258d0f7822b9efffecb39841d968473))
+* **auth:** add SSO support via OIDC and forward-auth ([58d3f65](https://github.com/ahembree/librariarr/commit/58d3f657101d15ccb24c6c428a6e20c8f6eb447f))
+* **auth:** proactive lockout warning on local-auth toggle ([71d0e1b](https://github.com/ahembree/librariarr/commit/71d0e1bbac265340500b71ff648156b3241c5461))
+* **recovery:** add reset-password command to reset-auth.js ([d8e3b81](https://github.com/ahembree/librariarr/commit/d8e3b81f7f2f014358de4655b40bedc939a1d94f))
+* **sso:** add SSO_DISABLE_OVERRIDE env var for break-glass recovery ([2256f10](https://github.com/ahembree/librariarr/commit/2256f105eacf3d932cbdc0111b2d916c3da3d05f))
+* **sso:** in-app revert + cli/sql recovery for the locked-out case ([8dbe99a](https://github.com/ahembree/librariarr/commit/8dbe99ab78e8b85c54d19bc44898e2f190923306))
+* **sso:** three-step wizard ui + hide plex login when no plex linked ([9d430d4](https://github.com/ahembree/librariarr/commit/9d430d4fde7cd3e12f46c405bef9111df5eb0371))
+* **sso:** verify-and-link via real oidc round-trip to catch bad creds early ([16970b4](https://github.com/ahembree/librariarr/commit/16970b4818a05ad558029824e8295ab53cb867c1))
+
+
+### Bug Fixes
+
+* **auth:** harden session, csrf, rate-limit, and idp-fetch surface ([346fe65](https://github.com/ahembree/librariarr/commit/346fe65817e1be91250461efe088d282740e5a64))
+* **auth:** override re-surfaces credentials even when toggles are off; docs ([2c1f969](https://github.com/ahembree/librariarr/commit/2c1f9694ff087a13c3a21ab8bff46221d2fddb9f))
+* **auth:** plex-first user creation creates AppSettings; sso route upserts ([77ab307](https://github.com/ahembree/librariarr/commit/77ab307d857d1c220899eb78c7cbc9cd8d622729))
+* **auth:** revert COOKIE_SECURE default; add strict CSRF for forward-auth ([9da4ec7](https://github.com/ahembree/librariarr/commit/9da4ec785675e637c8530c802ae1efcd921943b8))
+* **recovery:** reset-password requires interactive TTY only ([3fe26e4](https://github.com/ahembree/librariarr/commit/3fe26e48bdbe98247e181a4965f4e63ef0e19627))
+* **settings:** replace alert() with inline error on Plex login toggle ([d0e8fff](https://github.com/ahembree/librariarr/commit/d0e8fff616bd7ca5cfb105258896fb0516e05b98))
+* **sso:** bug-fish pass — lockout, coercion, and validation gaps ([4b28f15](https://github.com/ahembree/librariarr/commit/4b28f15be999376a7ced51dea41914e89080c1c8))
+* **sso:** close 11 bugs from deep audit ([40297cd](https://github.com/ahembree/librariarr/commit/40297cd8e262581484b6519d57100551e823a673))
+* **sso:** close auth-bypass, lockout, and race-condition gaps found in audit ([25fffad](https://github.com/ahembree/librariarr/commit/25fffad6bf5a5053fd88c1d226718359b81ba911))
+* **sso:** close cross-idp collision, claim sync gaps, and header poisoning ([964dd46](https://github.com/ahembree/librariarr/commit/964dd46bd8a3fcad7a3a4eceee8258d527cc4313))
+* **sso:** close five bugs from the deep audit ([c78a958](https://github.com/ahembree/librariarr/commit/c78a9587a18cc050df7d5e18455a92e43c355d49))
+* **sso:** don't require Plex to unlink — accept local credentials ([de44529](https://github.com/ahembree/librariarr/commit/de44529fd722a24989776d182ba93dda92a3c4a3))
+* **sso:** recovery script uses plain node + pg, not bundled in image ([75de5c5](https://github.com/ahembree/librariarr/commit/75de5c5c4a62059d5090198ead95c1129d06cd6d))
+* **sso:** surface global-SSO auto-disable in the UI on unlink ([20f31d9](https://github.com/ahembree/librariarr/commit/20f31d92611721f69c81dd552110c00ee2d99008))
+* **sso:** ui/ux consistency pass against the style guide ([5234209](https://github.com/ahembree/librariarr/commit/523420900664f94fb8a445161173d52e85dce168))
+* **validation:** make webhookAvatarUrl truly optional under zod 4.4 ([2220ece](https://github.com/ahembree/librariarr/commit/2220ecefe084c061a6a8bf1561b0208538d5b5ce))
+
+
+### Performance Improvements
+
+* **sso:** cache OIDC discovery to cut login latency by ~1s ([a46c902](https://github.com/ahembree/librariarr/commit/a46c902345f3cf7cc88daf41d23df63dec090459))
+
 ## [0.16.2](https://github.com/ahembree/librariarr/compare/v0.16.1...v0.16.2) (2026-05-11)
 
 
