@@ -109,7 +109,7 @@ locked out (broken IdP, lost credentials, etc.):
 | Plex linked but button hidden | Set [`SSO_DISABLE_OVERRIDE=true`](/docs/advanced/sso/#recovery--locked-out-of-sso) — the override re-surfaces the Plex button |
 | Local credentials but local-auth disabled | Set `SSO_DISABLE_OVERRIDE=true` — the override re-surfaces the local form when a passwordHash is set |
 | SSO only, IdP unreachable, **with Plex or local fallback** | Set `SSO_DISABLE_OVERRIDE=true`, sign in via Plex or local, then [**Revert to Previous**](/docs/advanced/sso/#reverting-a-bad-sso-config) to roll back the most recent SSO config change |
-| **No fallback credentials at all**, just shell access | Use the [reset CLI](/docs/advanced/sso/#option-a--reset-cli-script) (`pnpm exec tsx scripts/reset-auth.ts wipe-sso`) inside the container |
+| **No fallback credentials at all**, just shell access | Copy [`scripts/reset-auth.js`](/docs/advanced/sso/#option-a--reset-cli-script) into the container with `docker cp` and run `node /tmp/reset-auth.js wipe-sso` (the script isn't bundled into the image, by design) |
 | No fallback, no shell, **just DB access** | Run the [SQL recovery commands](/docs/advanced/sso/#option-b--direct-sql) against PostgreSQL |
 | None of the above | Restore from a backup file with a working state via the *Restore from Backup* button on the login page (shown when no users exist — wipe the DB to surface it) |
 
@@ -117,7 +117,7 @@ locked out (broken IdP, lost credentials, etc.):
   Backup restore brings back whatever state was saved in the backup file —
   if you saved a broken SSO config and then made several more saves,
   backups taken after the breaking save will restore *back to broken*. The
-  in-app **Revert to Previous** button and the `reset-auth.ts` CLI are
+  in-app **Revert to Previous** button and the `reset-auth.js` CLI are
   more reliable for SSO-config rollback because they bypass the backup
   rotation entirely.
 </Aside>

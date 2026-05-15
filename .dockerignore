@@ -23,6 +23,13 @@ vitest.config.ts
 commitlint.config.ts
 .husky
 
+# Recovery scripts are intentionally NOT bundled into the production image.
+# An admin running auth recovery is expected to `docker cp` the file in
+# temporarily and remove it afterward; this keeps it out of the running
+# container's blast radius if the container is ever compromised. See
+# docs/src/content/docs/docs/advanced/sso.mdx for usage.
+scripts
+
 # Documentation
 *.md
 docs

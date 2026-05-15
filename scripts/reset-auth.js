@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * Admin auth-recovery CLI for the truly locked-out case.
  *
@@ -7,24 +8,23 @@
  *
  * Usage (inside the running container):
  *
- *   pnpm exec tsx scripts/reset-auth.ts status       # show current auth state
- *   pnpm exec tsx scripts/reset-auth.ts wipe-sso     # clear SSO config (keeps user, Plex, local)
- *   pnpm exec tsx scripts/reset-auth.ts enable-local # force-enable local form
- *   pnpm exec tsx scripts/reset-auth.ts enable-plex  # force-enable Plex login button
- *   pnpm exec tsx scripts/reset-auth.ts delete-user  # NUCLEAR: drop the user row, forces fresh setup
+ *   node scripts/reset-auth.js status       # show current auth state
+ *   node scripts/reset-auth.js wipe-sso     # clear SSO config (keeps user, Plex, local)
+ *   node scripts/reset-auth.js enable-local # force-enable local form
+ *   node scripts/reset-auth.js enable-plex  # force-enable Plex login button
+ *   node scripts/reset-auth.js delete-user  # NUCLEAR: drop the user row, forces fresh setup
  *
- * The destructive actions (wipe-sso, delete-user) prompt for confirmation
- * in interactive shells. Pass `--force` to skip the prompt (for automation),
+ * Destructive actions (wipe-sso, delete-user) prompt for confirmation in
+ * interactive shells. Pass `--force` to skip the prompt (for automation),
  * or pipe `yes |` into the command.
  *
- * The `delete-user` action triggers the setup screen on next page load but
- * keeps all media data (library sync, lifecycle rules, etc.) intact. Use as
- * a last resort when you can't otherwise recover access.
+ * Plain Node + pg with no TypeScript runner so it works in any container
+ * that has node 18+ and the pg module. Avoids depending on tsx, the Prisma
+ * client, or the generated client output being copied into the image.
  */
 
-import { createInterface } from "readline";
-import { PrismaClient, Prisma } from "../src/generated/prisma/client.js";
-import { PrismaPg } from "@prisma/adapter-pg";
+const { createInterface } = require("readline");
+const { Client } = require("pg");
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -32,16 +32,12 @@ if (!databaseUrl) {
   process.exit(1);
 }
 
-const prisma = new PrismaClient({
-  adapter: new PrismaPg({ connectionString: databaseUrl }),
-});
+const client = new Client({ connectionString: databaseUrl });
 
-/**
- * Prompt the operator for "yes" before a destructive action. Skipped when the
- * `--force` flag is on the command line, for automation. Reads from stdin so
- * piping `yes |` also works.
- */
-async function confirm(prompt: string): Promise<boolean> {
+/** Prompt the operator for "yes" before a destructive action. Skipped when
+ *  the `--force` flag is on the command line, for automation. Reads from
+ *  stdin so piping `yes |` also works. */
+async function confirm(prompt) {
   if (process.argv.includes("--force")) return true;
   if (!process.stdin.isTTY) {
     console.error(
@@ -53,44 +49,36 @@ async function confirm(prompt: string): Promise<boolean> {
   return new Promise((resolve) => {
     rl.question(`${prompt} [y/N] `, (answer) => {
       rl.close();
-      resolve(answer.trim().toLowerCase() === "y" || answer.trim().toLowerCase() === "yes");
+      const a = answer.trim().toLowerCase();
+      resolve(a === "y" || a === "yes");
     });
   });
 }
 
-/**
- * Sanitize an error before logging — Pg / Prisma errors frequently echo the
- * connection string back, which would dump credentials into the container's
- * stdout (and therefore the log retention pipeline).
- */
-function safeStringifyError(err: unknown): string {
+/** Sanitize an error before logging — pg errors frequently echo the
+ *  connection string back, which would dump credentials to stdout (and
+ *  therefore the log-retention pipeline). */
+function safeStringifyError(err) {
   const raw = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
   return raw.replace(/postgres(?:ql)?:\/\/[^\s]+/gi, "postgres://[redacted]");
 }
 
 async function status() {
-  const user = await prisma.user.findFirst({
-    select: {
-      id: true,
-      username: true,
-      localUsername: true,
-      passwordHash: true,
-      plexId: true,
-      ssoSubject: true,
-      ssoIssuer: true,
-      ssoEnabled: true,
-    },
-  });
-  const settings = await prisma.appSettings.findFirst({
-    select: {
-      localAuthEnabled: true,
-      plexLoginEnabled: true,
-      ssoEnabled: true,
-      ssoMode: true,
-      oidcIssuer: true,
-      oidcClientId: true,
-    },
-  });
+  const userResult = await client.query(
+    `SELECT id, username, "localUsername", "passwordHash", "plexId",
+            "ssoSubject", "ssoIssuer", "ssoEnabled"
+       FROM "User"
+      LIMIT 1`,
+  );
+  const settingsResult = await client.query(
+    `SELECT "localAuthEnabled", "plexLoginEnabled", "ssoEnabled",
+            "ssoMode", "oidcIssuer", "oidcClientId"
+       FROM "AppSettings"
+      LIMIT 1`,
+  );
+
+  const user = userResult.rows[0];
+  const settings = settingsResult.rows[0];
 
   if (!user) {
     console.log("No user exists. The login page will show the setup form.");
@@ -120,41 +108,43 @@ async function status() {
 }
 
 async function wipeSso() {
-  if (!(await confirm("Wipe all SSO configuration and unlink the SSO subject from the user?"))) {
+  if (
+    !(await confirm(
+      "Wipe all SSO configuration and unlink the SSO subject from the user?",
+    ))
+  ) {
     console.log("Cancelled.");
     return;
   }
-  const settingsResult = await prisma.appSettings.updateMany({
-    data: {
-      ssoEnabled: false,
-      ssoMode: "OIDC",
-      oidcIssuer: null,
-      oidcClientId: null,
-      oidcClientSecret: null,
-      // Json columns use Prisma.JsonNull as the explicit "set to JSON null"
-      // sentinel; plain `null` is reserved for "don't touch this field."
-      previousSsoConfig: Prisma.JsonNull,
-    },
-  });
-  // Also unlink any user-level SSO state + bump sessionVersion so cookies
-  // referencing the old SSO link can't be replayed.
-  const userResult = await prisma.user.updateMany({
-    data: {
-      ssoSubject: null,
-      ssoIssuer: null,
-      ssoProvider: null,
-      ssoEnabled: false,
-      sessionVersion: { increment: 1 },
-    },
-  });
+  // Clear AppSettings SSO fields + the previousSsoConfig snapshot. Json
+  // columns accept SQL NULL fine; no Prisma.JsonNull sentinel needed.
+  const settingsRes = await client.query(
+    `UPDATE "AppSettings"
+        SET "ssoEnabled" = FALSE,
+            "ssoMode" = 'OIDC',
+            "oidcIssuer" = NULL,
+            "oidcClientId" = NULL,
+            "oidcClientSecret" = NULL,
+            "previousSsoConfig" = NULL`,
+  );
+  // Unlink user-level SSO state and bump sessionVersion so cookies
+  // referencing the old link can't be replayed.
+  const userRes = await client.query(
+    `UPDATE "User"
+        SET "ssoSubject" = NULL,
+            "ssoIssuer" = NULL,
+            "ssoProvider" = NULL,
+            "ssoEnabled" = FALSE,
+            "sessionVersion" = "sessionVersion" + 1`,
+  );
 
-  if (settingsResult.count === 0) {
+  if (settingsRes.rowCount === 0) {
     console.log(
-      `No AppSettings row exists yet (typical for a Plex-first deployment that hasn't saved any setting). User-level SSO unlinked on ${userResult.count} row(s).`,
+      `No AppSettings row exists yet (typical for a Plex-first deployment that hasn't saved any setting). User-level SSO unlinked on ${userRes.rowCount} row(s).`,
     );
   } else {
     console.log(
-      `Wiped SSO config on ${settingsResult.count} AppSettings row(s) and unlinked SSO on ${userResult.count} User row(s).`,
+      `Wiped SSO config on ${settingsRes.rowCount} AppSettings row(s) and unlinked SSO on ${userRes.rowCount} User row(s).`,
     );
   }
   console.log(
@@ -163,28 +153,28 @@ async function wipeSso() {
 }
 
 async function enableLocal() {
-  const result = await prisma.appSettings.updateMany({
-    data: { localAuthEnabled: true },
-  });
+  const res = await client.query(
+    `UPDATE "AppSettings" SET "localAuthEnabled" = TRUE`,
+  );
   console.log(
-    `Set localAuthEnabled=true on ${result.count} AppSettings row(s). ` +
+    `Set localAuthEnabled=true on ${res.rowCount} AppSettings row(s). ` +
       `The local username/password form will appear on the login page (provided a password is set on the user record -- check with 'status' if unsure).`,
   );
 }
 
 async function enablePlex() {
-  const result = await prisma.appSettings.updateMany({
-    data: { plexLoginEnabled: true },
-  });
+  const res = await client.query(
+    `UPDATE "AppSettings" SET "plexLoginEnabled" = TRUE`,
+  );
   console.log(
-    `Set plexLoginEnabled=true on ${result.count} AppSettings row(s). ` +
+    `Set plexLoginEnabled=true on ${res.rowCount} AppSettings row(s). ` +
       `The "Sign in with Plex" button will appear on the login page (provided a Plex account is linked on the user record -- check with 'status').`,
   );
 }
 
 async function deleteUser() {
-  const userCount = await prisma.user.count();
-  if (userCount === 0) {
+  const countRes = await client.query(`SELECT COUNT(*)::int AS n FROM "User"`);
+  if (countRes.rows[0].n === 0) {
     console.log("No user to delete. The setup screen will already show.");
     return;
   }
@@ -205,14 +195,16 @@ async function deleteUser() {
     console.log("Cancelled.");
     return;
   }
-  const result = await prisma.user.deleteMany();
+  // DB-level ON DELETE CASCADE on every User-owned FK handles the cleanup.
+  const res = await client.query(`DELETE FROM "User"`);
   console.log(
-    `Deleted ${result.count} user(s). The setup screen will appear on next page load.`,
+    `Deleted ${res.rowCount} user(s). The setup screen will appear on next page load.`,
   );
 }
 
 async function main() {
   const cmd = process.argv[2];
+  await client.connect();
   switch (cmd) {
     case "status":
       await status();
@@ -231,7 +223,7 @@ async function main() {
       break;
     default:
       console.error(
-        `Usage: pnpm exec tsx scripts/reset-auth.ts <status|wipe-sso|enable-local|enable-plex|delete-user>`,
+        `Usage: node scripts/reset-auth.js <status|wipe-sso|enable-local|enable-plex|delete-user>`,
       );
       process.exit(1);
   }
@@ -239,9 +231,7 @@ async function main() {
 
 main()
   .catch((err) => {
-    // Sanitize so a connection error doesn't dump DATABASE_URL into stdout
-    // (which would end up in container logs and the log-retention pipeline).
     console.error(safeStringifyError(err));
     process.exit(1);
   })
-  .finally(() => prisma.$disconnect());
+  .finally(() => client.end());

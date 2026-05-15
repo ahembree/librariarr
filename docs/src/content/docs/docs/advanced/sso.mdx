@@ -716,40 +716,51 @@ fallback credentials to surface), you need DB-level recovery. Two paths:
 
 ### Option A — Reset CLI script
 
-The container ships with a small recovery script at `scripts/reset-auth.ts`.
-Run it inside the container with `pnpm exec tsx`:
+The recovery script at `scripts/reset-auth.js` is **not bundled into the
+container image** — keeping it out of the image limits the blast radius
+if the running container is ever compromised. To use it, copy the file
+into the container temporarily, run the action, then remove it.
+
+The script uses plain Node + the `pg` module that already ships in the
+image, so no `tsx` or extra install is needed.
 
 ```bash
-# Show current auth state (helpful first step)
-docker exec -it librariarr pnpm exec tsx scripts/reset-auth.ts status
+# 1. Grab the script (clone or download the single file from GitHub)
+curl -O https://raw.githubusercontent.com/ahembree/librariarr/main/scripts/reset-auth.js
 
-# Clear all SSO config (preserves user, Plex linkage, local password)
-docker exec -it librariarr pnpm exec tsx scripts/reset-auth.ts wipe-sso
+# 2. Copy it into the running container at /tmp
+docker cp reset-auth.js librariarr:/tmp/reset-auth.js
 
-# Force-enable local login (so the form shows on the login page)
-docker exec -it librariarr pnpm exec tsx scripts/reset-auth.ts enable-local
+# 3. Run the recovery action
+docker exec -it librariarr node /tmp/reset-auth.js status        # show current auth state
+docker exec -it librariarr node /tmp/reset-auth.js wipe-sso      # clear SSO config (preserves Plex + local)
+docker exec -it librariarr node /tmp/reset-auth.js enable-local  # force-enable local form
+docker exec -it librariarr node /tmp/reset-auth.js enable-plex   # force-enable Plex login button
 
-# Force-enable Plex login button
-docker exec -it librariarr pnpm exec tsx scripts/reset-auth.ts enable-plex
-
-# Last resort: delete the user. The setup screen appears on next page
-# load. WARNING: this cascades to media data — synced libraries, server
+# Last resort: delete the user. Setup screen appears next page load.
+# WARNING: cascades to all user-linked data — synced libraries, server
 # connections, and lifecycle rules are all dropped. Prefer the actions
-# above when possible, or restore from a backup that has a working user.
-docker exec -it librariarr pnpm exec tsx scripts/reset-auth.ts delete-user
+# above when possible, or restore from a backup with a working user.
+docker exec -it librariarr node /tmp/reset-auth.js delete-user
+
+# 4. Remove the script from the container when done
+docker exec librariarr rm /tmp/reset-auth.js
 ```
 
-`wipe-sso` is the most common recovery: clears the bad OIDC config so the
-non-SSO methods (local form / Plex button) are no longer hidden by an
-in-effect-but-broken SSO mode. Restart the container after running it so
-the in-memory OIDC discovery cache drops.
+`wipe-sso` is the most common recovery: clears the bad OIDC config so
+the non-SSO methods (local form / Plex button) are no longer hidden by
+an in-effect-but-broken SSO mode. Restart the container after running
+it so the in-memory OIDC discovery cache drops.
 
 **Destructive actions (`wipe-sso`, `delete-user`) prompt for confirmation**
 in interactive shells. For automation, append `--force` to skip the prompt:
 
 ```bash
-docker exec librariarr pnpm exec tsx scripts/reset-auth.ts wipe-sso --force
+docker exec librariarr node /tmp/reset-auth.js wipe-sso --force
 ```
+
+If you'd rather not copy a file into the container at all, skip to
+Option B — direct SQL covers every action the script can perform.
 
 ### Option B — Direct SQL
 
