@@ -18,7 +18,7 @@ Media library management for Plex, Jellyfin, and Emby. Track your media metadata
 
 ## Features
 
-- **Authentication** — Sign in with Plex OAuth (auto-discovery) or local credentials
+- **Authentication** — Sign in with Plex OAuth, local credentials, or [SSO](https://librariarr.dev/docs/advanced/sso/) (OIDC via Authentik, Authelia, Keycloak, Pocket ID, Zitadel; or forward-auth headers from a reverse proxy)
 - **Dashboard** — Customizable layout with drag-to-reorder cards, tabs for Movies/Series/Music, quality breakdowns, storage stats
 - **Library Browser** — Filterable views for movies, series, and music with 20+ filters, virtual scrolling, grid and table modes, alphabet navigation
 - **Detail Panel** — Slide-out panel with full metadata: video, audio, file info, subtitles, watch history
@@ -91,7 +91,7 @@ volumes:
 docker compose up -d
 ```
 
-Open [http://localhost:3000](http://localhost:3000). You'll be directed to the login page where you can sign in with Plex or create local credentials.
+Open [http://localhost:3000](http://localhost:3000). You'll be directed to the login page where you can sign in with Plex or create local credentials. SSO can be configured later from **Settings → Authentication** — see the [SSO setup guide](https://librariarr.dev/docs/advanced/sso/) for provider-specific walkthroughs.
 
 Database migrations run automatically on container start.
 
@@ -108,6 +108,9 @@ Database migrations run automatically on container start.
 | `LOG_DEBUG` | No | Enable debug-level logging (default: `false`) |
 | `BACKUP_DIR` | No | Override backup storage location (default: `/config/backups`) |
 | `IMAGE_CACHE_DIR` | No | Override image cache location (default: `/config/cache/images`) |
+| `SSO_DISABLE_OVERRIDE` | No | Break-glass: force SSO off regardless of saved config. Re-surfaces Plex/local login on the sign-in page when SSO is broken. Container restart required. See [recovery docs](https://librariarr.dev/docs/advanced/sso/#recovery-when-fully-locked-out). |
+| `TRUST_PROXY_HEADERS` | No | Trust `X-Forwarded-For` for rate-limit IP buckets. Defaults to `true`; set `false` if Librariarr is exposed directly so a client can't spoof the header to dodge rate limits. |
+| `COOKIE_SECURE` | No | Set the `Secure` flag on the session cookie. Defaults to `false` so HTTP-only deployments keep working; set to `true` (or `1`/`yes`) on any HTTPS-fronted deployment. |
 
 ## Development Setup
 
