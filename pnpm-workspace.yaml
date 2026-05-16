@@ -15,6 +15,15 @@ blockExoticSubdeps: true
 # in allowBuilds below. Anything else fails the install instead of warning.
 strictDepBuilds: true
 
+# verifyDepsBeforeRun: pnpm v11 defaults to "install", which makes every
+# `pnpm exec` / `pnpm run` re-check node_modules against the lockfile and
+# try to refresh if it looks stale. In multi-stage Docker builds this fires
+# in the build stage (where node_modules was COPY'd from a previous stage)
+# and aborts because there is no TTY to confirm the purge. We install with
+# --frozen-lockfile, so the lockfile is the source of truth and this extra
+# check has no value here.
+verifyDepsBeforeRun: false
+
 allowBuilds:
   "@prisma/engines": true
   msw: false
