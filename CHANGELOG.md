@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/ahembree/librariarr/compare/v0.17.0...v0.17.1) (2026-05-16)
+
+
+### Bug Fixes
+
+* **build:** disable verifyDepsBeforeRun for multi-stage Docker ([74f5e16](https://github.com/ahembree/librariarr/commit/74f5e169e7dcc047b4d497562d47f6000fad6f43))
+
 ## [0.17.0](https://github.com/ahembree/librariarr/compare/v0.16.2...v0.17.0) (2026-05-15)
 
 
