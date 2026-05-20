@@ -76,6 +76,9 @@ export function buildSuccessSummaryEmbed(
     UNMONITOR_RADARR: "Unmonitor in Radarr",
     UNMONITOR_SONARR: "Unmonitor in Sonarr",
     UNMONITOR_LIDARR: "Unmonitor in Lidarr",
+    CHANGE_QUALITY_PROFILE_RADARR: "Change Quality Profile (Radarr)",
+    CHANGE_QUALITY_PROFILE_SONARR: "Change Quality Profile (Sonarr)",
+    CHANGE_QUALITY_PROFILE_LIDARR: "Change Quality Profile (Lidarr)",
     DO_NOTHING: "Monitor Only",
   };
 
@@ -112,6 +115,9 @@ export function buildFailureSummaryEmbed(
     UNMONITOR_RADARR: "Unmonitor in Radarr",
     UNMONITOR_SONARR: "Unmonitor in Sonarr",
     UNMONITOR_LIDARR: "Unmonitor in Lidarr",
+    CHANGE_QUALITY_PROFILE_RADARR: "Change Quality Profile (Radarr)",
+    CHANGE_QUALITY_PROFILE_SONARR: "Change Quality Profile (Sonarr)",
+    CHANGE_QUALITY_PROFILE_LIDARR: "Change Quality Profile (Lidarr)",
     DO_NOTHING: "Monitor Only",
   };
 

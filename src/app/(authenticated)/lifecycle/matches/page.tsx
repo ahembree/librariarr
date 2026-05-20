@@ -838,6 +838,9 @@ export default function RuleMatchesPage() {
       DELETE_FILES_RADARR: "Delete Files Only (Radarr)",
       DELETE_FILES_SONARR: "Delete Files Only (Sonarr)",
       DELETE_FILES_LIDARR: "Delete Files Only (Lidarr)",
+      CHANGE_QUALITY_PROFILE_RADARR: "Change Quality Profile (Radarr)",
+      CHANGE_QUALITY_PROFILE_SONARR: "Change Quality Profile (Sonarr)",
+      CHANGE_QUALITY_PROFILE_LIDARR: "Change Quality Profile (Lidarr)",
     };
     return map[type] ?? type;
   };

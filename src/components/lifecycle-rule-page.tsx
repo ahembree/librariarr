@@ -906,8 +906,10 @@ export function LifecycleRulePage({
   const handleArrInstanceChange = (newId: string) => {
     setArrInstanceId(newId);
     setTargetQualityProfileId(null);
+    // Clear stale profiles immediately so the dropdown can't briefly show
+    // IDs from the previous Arr instance while the new fetch is in flight.
+    setArrQualityProfiles([]);
     if (!newId) {
-      setArrQualityProfiles([]);
       setDistinctValues((prev) => ({ ...prev, arrTag: [], arrQualityProfile: [] }));
       setManageTagsEnabled(false);
       setAddArrTags([]);
@@ -1325,6 +1327,9 @@ export function LifecycleRulePage({
     setActionEnabled(ruleSet.actionEnabled);
     setActionType(ruleSet.actionType ?? defaultActionType);
     setActionDelayDays(ruleSet.actionDelayDays);
+    // Clear any profile list left over from a previously loaded rule set —
+    // the effect below will repopulate from the new instance's metadata.
+    setArrQualityProfiles([]);
     setArrInstanceId(ruleSet.arrInstanceId ?? "");
     setTargetQualityProfileId(ruleSet.targetQualityProfileId ?? null);
     setAddImportExclusion(ruleSet.addImportExclusion ?? false);
