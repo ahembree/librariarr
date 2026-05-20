@@ -245,6 +245,7 @@ export async function POST(request: NextRequest) {
           status: "FAILED",
           error: msg,
           arrInstanceId: ruleSet.arrInstanceId,
+          targetQualityProfileId: ruleSet.targetQualityProfileId,
         },
       });
       failed++;

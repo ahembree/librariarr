@@ -755,6 +755,18 @@ export function LifecycleRulePage({
     );
   }, [snapshot, groups, seriesScope, serverIds]);
 
+  // The saved targetQualityProfileId no longer exists on the selected Arr
+  // instance (e.g. the user deleted the profile from Sonarr/Radarr/Lidarr,
+  // or this rule was imported from a different instance). Block save until
+  // a valid profile is re-picked so we don't persist a broken id.
+  const targetProfileMissing = useMemo(() => {
+    if (!isQualityProfileChangeAction(actionType)) return false;
+    if (!arrInstanceId) return false;
+    if (arrQualityProfiles.length === 0) return false;
+    if (targetQualityProfileId === null) return false;
+    return !arrQualityProfiles.some((p) => p.id === targetQualityProfileId);
+  }, [actionType, arrInstanceId, arrQualityProfiles, targetQualityProfileId]);
+
   // Post-save match search prompt
   const [showSaveOptions, setShowSaveOptions] = useState(false);
   const [showNewSaveOptions, setShowNewSaveOptions] = useState(false);
@@ -1968,18 +1980,26 @@ export function LifecycleRulePage({
                   <div>
                     <Label>Target quality profile</Label>
                     <Select
-                      value={targetQualityProfileId !== null ? String(targetQualityProfileId) : ""}
+                      value={
+                        targetQualityProfileId !== null && !targetProfileMissing
+                          ? String(targetQualityProfileId)
+                          : ""
+                      }
                       onValueChange={(v) => setTargetQualityProfileId(v ? parseInt(v, 10) : null)}
                       disabled={!arrInstanceId || arrQualityProfiles.length === 0}
                     >
-                      <SelectTrigger className={`mt-1.5 sm:w-72${arrInstanceId && targetQualityProfileId === null ? " border-destructive" : ""}`}>
+                      <SelectTrigger
+                        className={`mt-1.5 sm:w-72${arrInstanceId && (targetQualityProfileId === null || targetProfileMissing) ? " border-destructive" : ""}`}
+                      >
                         <SelectValue
                           placeholder={
                             !arrInstanceId
                               ? `Select a ${arrServiceName} server above`
                               : arrQualityProfiles.length === 0
                                 ? "No profiles available"
-                                : "Select a quality profile"
+                                : targetProfileMissing
+                                  ? `Saved profile (id ${targetQualityProfileId}) no longer exists`
+                                  : "Select a quality profile"
                           }
                         />
                       </SelectTrigger>
@@ -1991,9 +2011,16 @@ export function LifecycleRulePage({
                         ))}
                       </SelectContent>
                     </Select>
-                    <p className="mt-1.5 text-xs text-muted-foreground">
-                      Items already on this profile will be skipped.
-                    </p>
+                    {targetProfileMissing ? (
+                      <p className="mt-1.5 text-xs text-destructive flex items-center gap-1.5">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        The previously selected profile (id {targetQualityProfileId}) is no longer on this {arrServiceName} instance. Pick a new one to continue.
+                      </p>
+                    ) : (
+                      <p className="mt-1.5 text-xs text-muted-foreground">
+                        Items already on this profile will be skipped.
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -2362,7 +2389,7 @@ export function LifecycleRulePage({
                   setShowNewSaveOptions(true);
                 }
               }}
-              disabled={!isDirty || justSaved || !name || groups.length === 0 || !validateAllRules(groups) || loading || serverIds.length === 0 || (actionEnabled && (actionType !== "DO_NOTHING" || addArrTags.length > 0 || removeArrTags.length > 0) && !arrInstanceId) || (actionEnabled && isQualityProfileChangeAction(actionType) && targetQualityProfileId === null) || (collectionEnabled && !collectionName?.trim()) || (ruleUsesArr && !arrInstanceId)}
+              disabled={!isDirty || justSaved || !name || groups.length === 0 || !validateAllRules(groups) || loading || serverIds.length === 0 || (actionEnabled && (actionType !== "DO_NOTHING" || addArrTags.length > 0 || removeArrTags.length > 0) && !arrInstanceId) || (actionEnabled && isQualityProfileChangeAction(actionType) && targetQualityProfileId === null) || (actionEnabled && targetProfileMissing) || (collectionEnabled && !collectionName?.trim()) || (ruleUsesArr && !arrInstanceId)}
               className={justSaved ? "bg-green-600 hover:bg-green-600 text-white" : ""}
             >
               {loading ? (
