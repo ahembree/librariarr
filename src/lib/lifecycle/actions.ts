@@ -649,6 +649,9 @@ async function executeChangeQualityProfileRadarr(action: ActionRecord) {
     return;
   }
   await client.updateMovie(movie.id, { qualityProfileId: action.targetQualityProfileId });
+  if (action.searchAfterDelete) {
+    await client.triggerMovieSearch(movie.id);
+  }
 }
 
 async function executeChangeQualityProfileSonarr(action: ActionRecord) {
@@ -664,6 +667,9 @@ async function executeChangeQualityProfileSonarr(action: ActionRecord) {
     return;
   }
   await client.updateSeries(series.id, { qualityProfileId: action.targetQualityProfileId });
+  if (action.searchAfterDelete) {
+    await client.triggerSeriesSearch(series.id);
+  }
 }
 
 async function executeChangeQualityProfileLidarr(action: ActionRecord) {
@@ -679,6 +685,9 @@ async function executeChangeQualityProfileLidarr(action: ActionRecord) {
     return;
   }
   await client.updateArtist(artist.id, { qualityProfileId: action.targetQualityProfileId });
+  if (action.searchAfterDelete) {
+    await client.triggerArtistSearch(artist.id);
+  }
 }
 
 // --- Main dispatch ---

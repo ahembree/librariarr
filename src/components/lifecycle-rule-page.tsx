@@ -2024,6 +2024,19 @@ export function LifecycleRulePage({
                   </div>
                 )}
 
+                {isQualityProfileChangeAction(actionType) && (
+                  <div className="flex items-center gap-3">
+                    <Switch
+                      id="search-after-profile-change"
+                      checked={searchAfterDelete}
+                      onCheckedChange={setSearchAfterDelete}
+                    />
+                    <Label htmlFor="search-after-profile-change">
+                      Search for upgrade after profile change
+                    </Label>
+                  </div>
+                )}
+
                 {/* Discord Notification */}
                 <div className="flex items-center gap-3">
                   <Switch

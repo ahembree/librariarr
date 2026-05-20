@@ -189,6 +189,7 @@ This action switches a movie, series, or artist to a different quality profile i
 - Items that are **already on the selected profile are skipped** at execution time. No update call is made and the action completes as a no-op.
 - Combining this action with `arrQualityProfile` rule conditions lets you upgrade or downgrade items that don't match your desired profile (for example: "any movie whose current quality profile is `SD` → switch to `HD-1080p`").
 - The target profile is required when the action is enabled — Save is disabled until one is selected.
+- Toggle **Search for upgrade after profile change** to trigger an immediate *arr search after the profile is updated. The search only fires when the profile actually changed — skipped (no-op) items don't trigger a search.
 
 ### Configuring Actions
 
