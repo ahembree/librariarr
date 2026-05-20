@@ -20,7 +20,7 @@ export async function PUT(
 
   const {
     name, rules, seriesScope,
-    enabled, actionEnabled, actionType, actionDelayDays, arrInstanceId, addImportExclusion, searchAfterDelete,
+    enabled, actionEnabled, actionType, actionDelayDays, arrInstanceId, targetQualityProfileId, addImportExclusion, searchAfterDelete,
     addArrTags, removeArrTags,
     collectionEnabled, collectionName, collectionSortName, collectionHomeScreen, collectionRecommended, collectionSort,
     discordNotifyOnAction,
@@ -56,6 +56,7 @@ export async function PUT(
   if (actionType !== undefined) updateData.actionType = actionType;
   if (actionDelayDays !== undefined) updateData.actionDelayDays = actionDelayDays;
   if (arrInstanceId !== undefined) updateData.arrInstanceId = arrInstanceId;
+  if (targetQualityProfileId !== undefined) updateData.targetQualityProfileId = targetQualityProfileId;
   if (addImportExclusion !== undefined) updateData.addImportExclusion = addImportExclusion;
   if (searchAfterDelete !== undefined) updateData.searchAfterDelete = searchAfterDelete;
   if (addArrTags !== undefined) updateData.addArrTags = addArrTags;

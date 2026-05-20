@@ -43,6 +43,7 @@ export interface ActionRecord {
   id: string;
   actionType: string;
   arrInstanceId: string | null;
+  targetQualityProfileId: number | null;
   addImportExclusion: boolean;
   searchAfterDelete: boolean;
   matchedMediaItemIds: string[];
@@ -633,6 +634,53 @@ async function executeDeleteFilesLidarr(action: ActionRecord) {
   }
 }
 
+// --- Change Quality Profile executors ---
+
+async function executeChangeQualityProfileRadarr(action: ActionRecord) {
+  if (action.targetQualityProfileId == null) {
+    throw new Error("No target quality profile configured");
+  }
+  const { client, movie } = await resolveRadarrMovie(action);
+  if (movie.qualityProfileId === action.targetQualityProfileId) {
+    logger.info(
+      "Lifecycle",
+      `Skipping CHANGE_QUALITY_PROFILE_RADARR for "${movie.title}" — already on profile ${action.targetQualityProfileId}`,
+    );
+    return;
+  }
+  await client.updateMovie(movie.id, { qualityProfileId: action.targetQualityProfileId });
+}
+
+async function executeChangeQualityProfileSonarr(action: ActionRecord) {
+  if (action.targetQualityProfileId == null) {
+    throw new Error("No target quality profile configured");
+  }
+  const { client, series } = await resolveSonarrSeries(action);
+  if (series.qualityProfileId === action.targetQualityProfileId) {
+    logger.info(
+      "Lifecycle",
+      `Skipping CHANGE_QUALITY_PROFILE_SONARR for "${series.title}" — already on profile ${action.targetQualityProfileId}`,
+    );
+    return;
+  }
+  await client.updateSeries(series.id, { qualityProfileId: action.targetQualityProfileId });
+}
+
+async function executeChangeQualityProfileLidarr(action: ActionRecord) {
+  if (action.targetQualityProfileId == null) {
+    throw new Error("No target quality profile configured");
+  }
+  const { client, artist } = await resolveLidarrArtist(action);
+  if (artist.qualityProfileId === action.targetQualityProfileId) {
+    logger.info(
+      "Lifecycle",
+      `Skipping CHANGE_QUALITY_PROFILE_LIDARR for "${artist.artistName}" — already on profile ${action.targetQualityProfileId}`,
+    );
+    return;
+  }
+  await client.updateArtist(artist.id, { qualityProfileId: action.targetQualityProfileId });
+}
+
 // --- Main dispatch ---
 
 export async function executeAction(action: ActionRecord): Promise<void> {
@@ -695,6 +743,15 @@ export async function executeAction(action: ActionRecord): Promise<void> {
       break;
     case "DELETE_FILES_LIDARR":
       await executeDeleteFilesLidarr(action);
+      break;
+    case "CHANGE_QUALITY_PROFILE_RADARR":
+      await executeChangeQualityProfileRadarr(action);
+      break;
+    case "CHANGE_QUALITY_PROFILE_SONARR":
+      await executeChangeQualityProfileSonarr(action);
+      break;
+    case "CHANGE_QUALITY_PROFILE_LIDARR":
+      await executeChangeQualityProfileLidarr(action);
       break;
     default:
       throw new Error(`Unknown action type: ${action.actionType}`);

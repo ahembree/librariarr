@@ -28,6 +28,7 @@ interface ActionSchedulingRuleSet {
   actionType: string | null;
   actionDelayDays: number;
   arrInstanceId: string | null;
+  targetQualityProfileId: number | null;
   addImportExclusion: boolean;
   searchAfterDelete: boolean;
   addArrTags: string[];
@@ -143,6 +144,7 @@ export async function scheduleActionsForRuleSet(
         removeArrTags: ruleSet.removeArrTags,
         scheduledFor,
         arrInstanceId: ruleSet.arrInstanceId,
+        targetQualityProfileId: ruleSet.targetQualityProfileId,
       })),
       skipDuplicates: true,
     });

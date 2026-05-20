@@ -176,9 +176,19 @@ Actions determine what happens to matched media. Configure them in the **Actions
 |--------|-------------|----------|
 | **Delete** | Remove from *arr and optionally delete files | Sonarr/Radarr/Lidarr |
 | **Unmonitor** | Stop monitoring for upgrades in *arr | Sonarr/Radarr/Lidarr |
+| **Change Quality Profile** | Switch the *arr item to a different quality profile | Sonarr/Radarr/Lidarr |
 | **Do Nothing** | Track matches without taking action | — |
 
 Tags can be added or removed as a supplementary operation alongside any action (including Do Nothing).
+
+### Change Quality Profile
+
+This action switches a movie, series, or artist to a different quality profile in the linked *arr instance.
+
+- The dropdown is populated live from the selected *arr instance's quality profiles, so it always reflects what the *arr server currently offers.
+- Items that are **already on the selected profile are skipped** at execution time. No update call is made and the action completes as a no-op.
+- Combining this action with `arrQualityProfile` rule conditions lets you upgrade or downgrade items that don't match your desired profile (for example: "any movie whose current quality profile is `SD` → switch to `HD-1080p`").
+- The target profile is required when the action is enabled — Save is disabled until one is selected.
 
 ### Configuring Actions
 

@@ -240,6 +240,7 @@ export async function createTestRuleSet(
     actionType: string;
     actionDelayDays: number;
     arrInstanceId: string;
+    targetQualityProfileId: number | null;
     addImportExclusion: boolean;
     addArrTags: string[];
     removeArrTags: string[];
@@ -262,6 +263,7 @@ export async function createTestRuleSet(
       actionType: overrides?.actionType ?? null,
       actionDelayDays: overrides?.actionDelayDays,
       arrInstanceId: overrides?.arrInstanceId ?? null,
+      targetQualityProfileId: overrides?.targetQualityProfileId ?? null,
       addImportExclusion: overrides?.addImportExclusion,
       addArrTags: overrides?.addArrTags,
       removeArrTags: overrides?.removeArrTags,

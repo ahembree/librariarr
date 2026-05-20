@@ -163,6 +163,7 @@ export async function POST(request: NextRequest) {
         id: "immediate",
         actionType: ruleSet.actionType ?? "DO_NOTHING",
         arrInstanceId: ruleSet.arrInstanceId,
+        targetQualityProfileId: ruleSet.targetQualityProfileId,
         addImportExclusion: ruleSet.addImportExclusion,
         searchAfterDelete: ruleSet.searchAfterDelete,
         matchedMediaItemIds,
@@ -214,6 +215,7 @@ export async function POST(request: NextRequest) {
             status: "COMPLETED",
             deletedBytes,
             arrInstanceId: ruleSet.arrInstanceId,
+            targetQualityProfileId: ruleSet.targetQualityProfileId,
           },
         }),
       ]);

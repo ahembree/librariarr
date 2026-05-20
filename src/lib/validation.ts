@@ -312,6 +312,7 @@ const actionTypeEnum = z.enum([
   "UNMONITOR_DELETE_FILES_RADARR", "UNMONITOR_DELETE_FILES_SONARR", "UNMONITOR_DELETE_FILES_LIDARR",
   "MONITOR_DELETE_FILES_RADARR", "MONITOR_DELETE_FILES_SONARR", "MONITOR_DELETE_FILES_LIDARR",
   "DELETE_FILES_RADARR", "DELETE_FILES_SONARR", "DELETE_FILES_LIDARR",
+  "CHANGE_QUALITY_PROFILE_RADARR", "CHANGE_QUALITY_PROFILE_SONARR", "CHANGE_QUALITY_PROFILE_LIDARR",
 ]).nullable().optional();
 
 export const ruleSetCreateSchema = z.object({
@@ -324,6 +325,7 @@ export const ruleSetCreateSchema = z.object({
   actionType: actionTypeEnum,
   actionDelayDays: z.number().int().min(0).max(365).optional(),
   arrInstanceId: z.string().nullable().optional(),
+  targetQualityProfileId: z.number().int().nullable().optional(),
   addImportExclusion: z.boolean().optional(),
   searchAfterDelete: z.boolean().optional(),
   addArrTags: z.array(z.string()).optional(),
@@ -349,6 +351,7 @@ export const ruleSetUpdateSchema = z.object({
   actionType: actionTypeEnum,
   actionDelayDays: z.number().int().min(0).max(365).optional(),
   arrInstanceId: z.string().nullable().optional(),
+  targetQualityProfileId: z.number().int().nullable().optional(),
   addImportExclusion: z.boolean().optional(),
   searchAfterDelete: z.boolean().optional(),
   addArrTags: z.array(z.string()).optional(),

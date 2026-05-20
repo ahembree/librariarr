@@ -116,6 +116,7 @@ interface RuleSetSnapshot {
   actionType: string;
   actionDelayDays: number;
   arrInstanceId: string;
+  targetQualityProfileId: number | null;
   addImportExclusion: boolean;
   searchAfterDelete: boolean;
   addArrTags: string;
@@ -143,6 +144,7 @@ interface SavedRuleSet {
   actionType: string | null;
   actionDelayDays: number;
   arrInstanceId: string | null;
+  targetQualityProfileId?: number | null;
   addImportExclusion: boolean;
   searchAfterDelete?: boolean;
   addArrTags: string[];
@@ -162,6 +164,10 @@ interface SavedRuleSet {
 
 function isDestructiveAction(actionType: string): boolean {
   return actionType.includes("DELETE");
+}
+
+function isQualityProfileChangeAction(actionType: string): boolean {
+  return actionType.startsWith("CHANGE_QUALITY_PROFILE_");
 }
 
 function legacyToGroups(rules: Rule[] | RuleGroup[]): RuleGroup[] {
@@ -209,6 +215,7 @@ interface RuleSetExport {
   actionEnabled: boolean;
   actionType: string | null;
   actionDelayDays: number;
+  targetQualityProfileId?: number | null;
   addImportExclusion: boolean;
   searchAfterDelete?: boolean;
   addArrTags: string[];
@@ -628,6 +635,8 @@ export function LifecycleRulePage({
   const [actionType, setActionType] = useState<string>(defaultActionType);
   const [actionDelayDays, setActionDelayDays] = useState(7);
   const [arrInstanceId, setArrInstanceId] = useState<string>("");
+  const [targetQualityProfileId, setTargetQualityProfileId] = useState<number | null>(null);
+  const [arrQualityProfiles, setArrQualityProfiles] = useState<Array<{ id: number; name: string }>>([]);
   const [addImportExclusion, setAddImportExclusion] = useState(false);
   const [searchAfterDelete, setSearchAfterDelete] = useState(false);
   const [addArrTags, setAddArrTags] = useState<string[]>([]);
@@ -712,6 +721,7 @@ export function LifecycleRulePage({
       snapshot.actionType !== actionType ||
       snapshot.actionDelayDays !== actionDelayDays ||
       snapshot.arrInstanceId !== arrInstanceId ||
+      snapshot.targetQualityProfileId !== targetQualityProfileId ||
       snapshot.addImportExclusion !== addImportExclusion ||
       snapshot.searchAfterDelete !== searchAfterDelete ||
       snapshot.addArrTags !== JSON.stringify([...addArrTags].sort()) ||
@@ -730,7 +740,7 @@ export function LifecycleRulePage({
   }, [
     snapshot,
     name, groups, enabled, seriesScope, actionEnabled, actionType, actionDelayDays,
-    arrInstanceId, addImportExclusion, searchAfterDelete, addArrTags, removeArrTags,
+    arrInstanceId, targetQualityProfileId, addImportExclusion, searchAfterDelete, addArrTags, removeArrTags,
     collectionEnabled, collectionName, collectionSortName, collectionHomeScreen,
     collectionRecommended, collectionSort, discordNotifyOnAction, discordNotifyOnMatch, stickyMatches, serverIds,
   ]);
@@ -876,10 +886,12 @@ export function LifecycleRulePage({
         if (cancelled || !res.ok) return;
         const data = await res.json();
         if (cancelled) return;
+        const profiles: Array<{ id: number; name: string }> = data.qualityProfiles ?? [];
+        setArrQualityProfiles(profiles);
         setDistinctValues((prev) => ({
           ...prev,
           arrTag: data.tags?.map((t: { label: string }) => t.label) ?? [],
-          arrQualityProfile: data.qualityProfiles?.map((p: { name: string }) => p.name) ?? [],
+          arrQualityProfile: profiles.map((p) => p.name),
           arrOriginalLanguage: data.languages ?? [],
         }));
       } catch {
@@ -893,7 +905,9 @@ export function LifecycleRulePage({
 
   const handleArrInstanceChange = (newId: string) => {
     setArrInstanceId(newId);
+    setTargetQualityProfileId(null);
     if (!newId) {
+      setArrQualityProfiles([]);
       setDistinctValues((prev) => ({ ...prev, arrTag: [], arrQualityProfile: [] }));
       setManageTagsEnabled(false);
       setAddArrTags([]);
@@ -970,6 +984,7 @@ export function LifecycleRulePage({
         actionType: actionType || null,
         actionDelayDays,
         arrInstanceId: arrInstanceId || null,
+        targetQualityProfileId: isQualityProfileChangeAction(actionType) ? targetQualityProfileId : null,
         addImportExclusion,
         searchAfterDelete,
         addArrTags,
@@ -1281,6 +1296,7 @@ export function LifecycleRulePage({
     actionType,
     actionDelayDays,
     arrInstanceId,
+    targetQualityProfileId,
     addImportExclusion,
     searchAfterDelete,
     addArrTags: JSON.stringify([...addArrTags].sort()),
@@ -1310,6 +1326,7 @@ export function LifecycleRulePage({
     setActionType(ruleSet.actionType ?? defaultActionType);
     setActionDelayDays(ruleSet.actionDelayDays);
     setArrInstanceId(ruleSet.arrInstanceId ?? "");
+    setTargetQualityProfileId(ruleSet.targetQualityProfileId ?? null);
     setAddImportExclusion(ruleSet.addImportExclusion ?? false);
     setSearchAfterDelete(ruleSet.searchAfterDelete ?? false);
     setAddArrTags(ruleSet.addArrTags ?? []);
@@ -1364,6 +1381,7 @@ export function LifecycleRulePage({
       actionType: ruleSet.actionType ?? defaultActionType,
       actionDelayDays: ruleSet.actionDelayDays,
       arrInstanceId: ruleSet.arrInstanceId ?? "",
+      targetQualityProfileId: ruleSet.targetQualityProfileId ?? null,
       addImportExclusion: ruleSet.addImportExclusion ?? false,
       searchAfterDelete: ruleSet.searchAfterDelete ?? false,
       addArrTags: JSON.stringify([...(ruleSet.addArrTags ?? [])].sort()),
@@ -1426,6 +1444,8 @@ export function LifecycleRulePage({
     setActionType(defaultActionType);
     setActionDelayDays(7);
     setArrInstanceId("");
+    setTargetQualityProfileId(null);
+    setArrQualityProfiles([]);
     setAddImportExclusion(false);
     setSearchAfterDelete(false);
     setStickyMatches(false);
@@ -1458,6 +1478,7 @@ export function LifecycleRulePage({
       actionEnabled,
       actionType: actionType || null,
       actionDelayDays,
+      targetQualityProfileId: isQualityProfileChangeAction(actionType) ? targetQualityProfileId : null,
       addImportExclusion,
       searchAfterDelete,
       addArrTags,
@@ -1510,6 +1531,8 @@ export function LifecycleRulePage({
       setActionType(data.actionType ?? defaultActionType);
       setActionDelayDays(data.actionDelayDays ?? 7);
       setArrInstanceId("");
+      setTargetQualityProfileId(data.targetQualityProfileId ?? null);
+      setArrQualityProfiles([]);
       setAddImportExclusion(data.addImportExclusion ?? false);
       setSearchAfterDelete(data.searchAfterDelete ?? false);
       setAddArrTags(data.addArrTags ?? []);
@@ -1936,6 +1959,39 @@ export function LifecycleRulePage({
                   </div>
                 </div>
 
+                {isQualityProfileChangeAction(actionType) && (
+                  <div>
+                    <Label>Target quality profile</Label>
+                    <Select
+                      value={targetQualityProfileId !== null ? String(targetQualityProfileId) : ""}
+                      onValueChange={(v) => setTargetQualityProfileId(v ? parseInt(v, 10) : null)}
+                      disabled={!arrInstanceId || arrQualityProfiles.length === 0}
+                    >
+                      <SelectTrigger className={`mt-1.5 sm:w-72${arrInstanceId && targetQualityProfileId === null ? " border-destructive" : ""}`}>
+                        <SelectValue
+                          placeholder={
+                            !arrInstanceId
+                              ? `Select a ${arrServiceName} server above`
+                              : arrQualityProfiles.length === 0
+                                ? "No profiles available"
+                                : "Select a quality profile"
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {arrQualityProfiles.map((profile) => (
+                          <SelectItem key={profile.id} value={String(profile.id)}>
+                            {profile.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="mt-1.5 text-xs text-muted-foreground">
+                      Items already on this profile will be skipped.
+                    </p>
+                  </div>
+                )}
+
                 {actionType.startsWith("DELETE_") && !actionType.includes("DELETE_FILES") && (
                   <div className="flex items-center gap-3">
                     <Switch
@@ -2288,7 +2344,7 @@ export function LifecycleRulePage({
                   setShowNewSaveOptions(true);
                 }
               }}
-              disabled={!isDirty || justSaved || !name || groups.length === 0 || !validateAllRules(groups) || loading || serverIds.length === 0 || (actionEnabled && (actionType !== "DO_NOTHING" || addArrTags.length > 0 || removeArrTags.length > 0) && !arrInstanceId) || (collectionEnabled && !collectionName?.trim()) || (ruleUsesArr && !arrInstanceId)}
+              disabled={!isDirty || justSaved || !name || groups.length === 0 || !validateAllRules(groups) || loading || serverIds.length === 0 || (actionEnabled && (actionType !== "DO_NOTHING" || addArrTags.length > 0 || removeArrTags.length > 0) && !arrInstanceId) || (actionEnabled && isQualityProfileChangeAction(actionType) && targetQualityProfileId === null) || (collectionEnabled && !collectionName?.trim()) || (ruleUsesArr && !arrInstanceId)}
               className={justSaved ? "bg-green-600 hover:bg-green-600 text-white" : ""}
             >
               {loading ? (

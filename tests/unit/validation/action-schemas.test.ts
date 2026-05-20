@@ -94,12 +94,37 @@ describe("actionType validation", () => {
         "UNMONITOR_DELETE_FILES_RADARR", "UNMONITOR_DELETE_FILES_SONARR", "UNMONITOR_DELETE_FILES_LIDARR",
         "MONITOR_DELETE_FILES_RADARR", "MONITOR_DELETE_FILES_SONARR", "MONITOR_DELETE_FILES_LIDARR",
         "DELETE_FILES_RADARR", "DELETE_FILES_SONARR", "DELETE_FILES_LIDARR",
+        "CHANGE_QUALITY_PROFILE_RADARR", "CHANGE_QUALITY_PROFILE_SONARR", "CHANGE_QUALITY_PROFILE_LIDARR",
       ];
 
       for (const actionType of validTypes) {
         const result = ruleSetCreateSchema.safeParse({ ...basePayload, actionType });
         expect(result.success, `Expected ${actionType} to be accepted`).toBe(true);
       }
+    });
+
+    it("accepts integer targetQualityProfileId", () => {
+      const result = ruleSetCreateSchema.safeParse({
+        ...basePayload,
+        actionType: "CHANGE_QUALITY_PROFILE_RADARR",
+        targetQualityProfileId: 7,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts null targetQualityProfileId", () => {
+      const result = ruleSetCreateSchema.safeParse({ ...basePayload, targetQualityProfileId: null });
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects non-integer targetQualityProfileId", () => {
+      const result = ruleSetCreateSchema.safeParse({ ...basePayload, targetQualityProfileId: 1.5 });
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects string targetQualityProfileId", () => {
+      const result = ruleSetCreateSchema.safeParse({ ...basePayload, targetQualityProfileId: "7" });
+      expect(result.success).toBe(false);
     });
 
     it("accepts null actionType", () => {

@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
 
   const {
     name, type, rules, seriesScope,
-    enabled, actionEnabled, actionType, actionDelayDays, arrInstanceId, addImportExclusion, searchAfterDelete,
+    enabled, actionEnabled, actionType, actionDelayDays, arrInstanceId, targetQualityProfileId, addImportExclusion, searchAfterDelete,
     addArrTags, removeArrTags,
     collectionEnabled, collectionName, collectionSortName, collectionHomeScreen, collectionRecommended, collectionSort,
     discordNotifyOnAction,
@@ -60,6 +60,7 @@ export async function POST(request: NextRequest) {
       actionType: actionType ?? null,
       actionDelayDays: actionDelayDays ?? 7,
       arrInstanceId: arrInstanceId ?? null,
+      targetQualityProfileId: targetQualityProfileId ?? null,
       addImportExclusion: addImportExclusion ?? false,
       searchAfterDelete: searchAfterDelete ?? false,
       addArrTags: addArrTags ?? [],

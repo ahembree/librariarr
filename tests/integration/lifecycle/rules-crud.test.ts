@@ -216,6 +216,60 @@ describe("Lifecycle Rules CRUD", () => {
       expect(body.ruleSet.collectionRecommended).toBe(true);
     });
 
+    it("creates a rule set with CHANGE_QUALITY_PROFILE action and target profile", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(POST, {
+        url: "/api/lifecycle/rules",
+        method: "POST",
+        body: {
+          name: "Bump Profile",
+          type: "MOVIE",
+          rules: [dummyRule],
+          serverIds: [server.id],
+          actionEnabled: true,
+          actionType: "CHANGE_QUALITY_PROFILE_RADARR",
+          arrInstanceId: "some-arr-id",
+          targetQualityProfileId: 7,
+        },
+      });
+
+      const body = await expectJson<{
+        ruleSet: {
+          actionType: string;
+          targetQualityProfileId: number;
+        };
+      }>(response, 201);
+
+      expect(body.ruleSet.actionType).toBe("CHANGE_QUALITY_PROFILE_RADARR");
+      expect(body.ruleSet.targetQualityProfileId).toBe(7);
+    });
+
+    it("returns 400 when targetQualityProfileId is not an integer", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(POST, {
+        url: "/api/lifecycle/rules",
+        method: "POST",
+        body: {
+          name: "Bad Profile",
+          type: "MOVIE",
+          rules: [dummyRule],
+          serverIds: [server.id],
+          actionEnabled: true,
+          actionType: "CHANGE_QUALITY_PROFILE_RADARR",
+          arrInstanceId: "some-arr-id",
+          targetQualityProfileId: "not-a-number",
+        },
+      });
+
+      await expectJson(response, 400);
+    });
+
     it("returns 400 when name is missing", async () => {
       const user = await createTestUser();
       setMockSession({ isLoggedIn: true, userId: user.id });
@@ -384,6 +438,33 @@ describe("Lifecycle Rules CRUD", () => {
       expect(body.ruleSet.actionType).toBe("DO_NOTHING");
       expect(body.ruleSet.collectionEnabled).toBe(true);
       expect(body.ruleSet.collectionName).toBe("New Collection");
+    });
+
+    it("updates targetQualityProfileId on existing rule set", async () => {
+      const user = await createTestUser();
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Profile Bump",
+        actionEnabled: true,
+        actionType: "CHANGE_QUALITY_PROFILE_RADARR",
+        targetQualityProfileId: 3,
+      });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRouteWithParams(
+        PUT,
+        { id: ruleSet.id },
+        {
+          url: `/api/lifecycle/rules/${ruleSet.id}`,
+          method: "PUT",
+          body: { targetQualityProfileId: 9 },
+        }
+      );
+
+      const body = await expectJson<{
+        ruleSet: { targetQualityProfileId: number };
+      }>(response, 200);
+
+      expect(body.ruleSet.targetQualityProfileId).toBe(9);
     });
 
     it("returns 404 for non-existent rule set", async () => {
