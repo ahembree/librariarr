@@ -92,7 +92,7 @@ interface RuleSetMatch {
     actionDelayDays: number;
     arrInstanceId: string | null;
     addImportExclusion: boolean;
-    searchAfterDelete: boolean;
+    searchAfterAction: boolean;
     addArrTags: string[];
     removeArrTags: string[];
     collectionEnabled: boolean;

@@ -30,7 +30,7 @@ interface ActionSchedulingRuleSet {
   arrInstanceId: string | null;
   targetQualityProfileId: number | null;
   addImportExclusion: boolean;
-  searchAfterDelete: boolean;
+  searchAfterAction: boolean;
   addArrTags: string[];
   removeArrTags: string[];
 }
@@ -138,7 +138,7 @@ export async function scheduleActionsForRuleSet(
         ruleSetType: ruleSet.type,
         actionType: ruleSet.actionType!,
         addImportExclusion: ruleSet.addImportExclusion,
-        searchAfterDelete: ruleSet.searchAfterDelete,
+        searchAfterAction: ruleSet.searchAfterAction,
         matchedMediaItemIds: episodeIdMap.get(item.id as string) ?? [],
         addArrTags: ruleSet.addArrTags,
         removeArrTags: ruleSet.removeArrTags,

@@ -52,7 +52,7 @@ interface RuleSetGroup {
     actionType: string | null;
     actionDelayDays: number;
     addImportExclusion: boolean;
-    searchAfterDelete: boolean;
+    searchAfterAction: boolean;
     addArrTags: string[];
     removeArrTags: string[];
     arrInstanceId: string | null;
@@ -167,7 +167,7 @@ async function handlePendingGrouped(userId: string) {
       ruleSet: {
         select: {
           id: true, name: true, type: true, actionType: true, actionDelayDays: true,
-          addImportExclusion: true, searchAfterDelete: true, addArrTags: true,
+          addImportExclusion: true, searchAfterAction: true, addArrTags: true,
           removeArrTags: true, arrInstanceId: true,
         },
       },
@@ -229,7 +229,7 @@ async function handlePendingGrouped(userId: string) {
       ruleSet: {
         select: {
           id: true, name: true, type: true, actionType: true, actionDelayDays: true,
-          addImportExclusion: true, searchAfterDelete: true, addArrTags: true,
+          addImportExclusion: true, searchAfterAction: true, addArrTags: true,
           removeArrTags: true, arrInstanceId: true,
         },
       },
@@ -379,7 +379,7 @@ async function handleStatusGrouped(userId: string, status: string) {
       ruleSet: {
         select: {
           id: true, name: true, type: true, actionType: true, actionDelayDays: true,
-          addImportExclusion: true, searchAfterDelete: true, addArrTags: true,
+          addImportExclusion: true, searchAfterAction: true, addArrTags: true,
           removeArrTags: true, arrInstanceId: true,
         },
       },
@@ -442,7 +442,7 @@ async function handleStatusGrouped(userId: string, status: string) {
       actionType: a.actionType,
       actionDelayDays: 0,
       addImportExclusion: false,
-      searchAfterDelete: false,
+      searchAfterAction: false,
       addArrTags: [] as string[],
       removeArrTags: [] as string[],
       arrInstanceId: null,

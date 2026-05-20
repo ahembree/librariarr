@@ -86,7 +86,7 @@ export async function POST(
       arrInstanceId: action.arrInstanceId,
       targetQualityProfileId: action.targetQualityProfileId,
       addImportExclusion: action.addImportExclusion,
-      searchAfterDelete: action.searchAfterDelete,
+      searchAfterAction: action.searchAfterAction,
       matchedMediaItemIds: action.matchedMediaItemIds,
       addArrTags: action.addArrTags,
       removeArrTags: action.removeArrTags,

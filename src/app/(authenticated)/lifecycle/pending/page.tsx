@@ -113,7 +113,7 @@ interface RuleSetGroup {
     actionType: string | null;
     actionDelayDays: number;
     addImportExclusion: boolean;
-    searchAfterDelete: boolean;
+    searchAfterAction: boolean;
     addArrTags: string[];
     removeArrTags: string[];
     arrInstanceId: string | null;

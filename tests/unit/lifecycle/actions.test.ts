@@ -81,7 +81,7 @@ function makeAction(overrides: Partial<ActionRecord> = {}): ActionRecord {
     arrInstanceId: "arr1",
     targetQualityProfileId: null,
     addImportExclusion: false,
-    searchAfterDelete: false,
+    searchAfterAction: false,
     matchedMediaItemIds: [],
     addArrTags: [],
     removeArrTags: [],
@@ -249,7 +249,7 @@ describe("executeAction", () => {
 
     await executeAction(makeAction({
       actionType: "UNMONITOR_DELETE_FILES_RADARR",
-      searchAfterDelete: true,
+      searchAfterAction: true,
     }));
 
     expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { monitored: false });
@@ -429,7 +429,7 @@ describe("executeAction", () => {
     expect(mockRadarrClient.triggerMovieSearch).not.toHaveBeenCalled();
   });
 
-  it("triggers a Radarr search after CHANGE_QUALITY_PROFILE_RADARR when searchAfterDelete is true", async () => {
+  it("triggers a Radarr search after CHANGE_QUALITY_PROFILE_RADARR when searchAfterAction is true", async () => {
     mockPrisma.radarrInstance.findUnique.mockResolvedValue({
       id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
     });
@@ -440,7 +440,7 @@ describe("executeAction", () => {
     await executeAction(makeAction({
       actionType: "CHANGE_QUALITY_PROFILE_RADARR",
       targetQualityProfileId: 7,
-      searchAfterDelete: true,
+      searchAfterAction: true,
     }));
 
     expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { qualityProfileId: 7 });
@@ -458,7 +458,7 @@ describe("executeAction", () => {
     await executeAction(makeAction({
       actionType: "CHANGE_QUALITY_PROFILE_RADARR",
       targetQualityProfileId: 7,
-      searchAfterDelete: true,
+      searchAfterAction: true,
     }));
 
     expect(mockRadarrClient.updateMovie).not.toHaveBeenCalled();
@@ -514,7 +514,7 @@ describe("executeAction", () => {
     expect(mockSonarrClient.triggerSeriesSearch).not.toHaveBeenCalled();
   });
 
-  it("triggers a Sonarr search after CHANGE_QUALITY_PROFILE_SONARR when searchAfterDelete is true", async () => {
+  it("triggers a Sonarr search after CHANGE_QUALITY_PROFILE_SONARR when searchAfterAction is true", async () => {
     mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
       id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
     });
@@ -525,7 +525,7 @@ describe("executeAction", () => {
     await executeAction(makeAction({
       actionType: "CHANGE_QUALITY_PROFILE_SONARR",
       targetQualityProfileId: 4,
-      searchAfterDelete: true,
+      searchAfterAction: true,
       mediaItem: {
         id: "item1", title: "Test Show", parentTitle: null, year: 2024,
         externalIds: [{ source: "TVDB", externalId: "67890" }],
@@ -581,7 +581,7 @@ describe("executeAction", () => {
     expect(mockLidarrClient.triggerArtistSearch).not.toHaveBeenCalled();
   });
 
-  it("triggers a Lidarr search after CHANGE_QUALITY_PROFILE_LIDARR when searchAfterDelete is true", async () => {
+  it("triggers a Lidarr search after CHANGE_QUALITY_PROFILE_LIDARR when searchAfterAction is true", async () => {
     mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
       id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true,
     });
@@ -592,7 +592,7 @@ describe("executeAction", () => {
     await executeAction(makeAction({
       actionType: "CHANGE_QUALITY_PROFILE_LIDARR",
       targetQualityProfileId: 6,
-      searchAfterDelete: true,
+      searchAfterAction: true,
       mediaItem: {
         id: "item1", title: "Test Artist", parentTitle: null, year: null,
         externalIds: [{ source: "MUSICBRAINZ", externalId: "mb-123" }],

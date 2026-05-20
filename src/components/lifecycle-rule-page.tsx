@@ -118,7 +118,7 @@ interface RuleSetSnapshot {
   arrInstanceId: string;
   targetQualityProfileId: number | null;
   addImportExclusion: boolean;
-  searchAfterDelete: boolean;
+  searchAfterAction: boolean;
   addArrTags: string;
   removeArrTags: string;
   collectionEnabled: boolean;
@@ -146,7 +146,7 @@ interface SavedRuleSet {
   arrInstanceId: string | null;
   targetQualityProfileId?: number | null;
   addImportExclusion: boolean;
-  searchAfterDelete?: boolean;
+  searchAfterAction?: boolean;
   addArrTags: string[];
   removeArrTags: string[];
   collectionEnabled: boolean;
@@ -217,7 +217,7 @@ interface RuleSetExport {
   actionDelayDays: number;
   targetQualityProfileId?: number | null;
   addImportExclusion: boolean;
-  searchAfterDelete?: boolean;
+  searchAfterAction?: boolean;
   addArrTags: string[];
   removeArrTags: string[];
   collectionEnabled: boolean;
@@ -638,7 +638,7 @@ export function LifecycleRulePage({
   const [targetQualityProfileId, setTargetQualityProfileId] = useState<number | null>(null);
   const [arrQualityProfiles, setArrQualityProfiles] = useState<Array<{ id: number; name: string }>>([]);
   const [addImportExclusion, setAddImportExclusion] = useState(false);
-  const [searchAfterDelete, setSearchAfterDelete] = useState(false);
+  const [searchAfterAction, setSearchAfterAction] = useState(false);
   const [addArrTags, setAddArrTags] = useState<string[]>([]);
   const [removeArrTags, setRemoveArrTags] = useState<string[]>([]);
   const [manageTagsEnabled, setManageTagsEnabled] = useState(false);
@@ -723,7 +723,7 @@ export function LifecycleRulePage({
       snapshot.arrInstanceId !== arrInstanceId ||
       snapshot.targetQualityProfileId !== targetQualityProfileId ||
       snapshot.addImportExclusion !== addImportExclusion ||
-      snapshot.searchAfterDelete !== searchAfterDelete ||
+      snapshot.searchAfterAction !== searchAfterAction ||
       snapshot.addArrTags !== JSON.stringify([...addArrTags].sort()) ||
       snapshot.removeArrTags !== JSON.stringify([...removeArrTags].sort()) ||
       snapshot.collectionEnabled !== collectionEnabled ||
@@ -740,7 +740,7 @@ export function LifecycleRulePage({
   }, [
     snapshot,
     name, groups, enabled, seriesScope, actionEnabled, actionType, actionDelayDays,
-    arrInstanceId, targetQualityProfileId, addImportExclusion, searchAfterDelete, addArrTags, removeArrTags,
+    arrInstanceId, targetQualityProfileId, addImportExclusion, searchAfterAction, addArrTags, removeArrTags,
     collectionEnabled, collectionName, collectionSortName, collectionHomeScreen,
     collectionRecommended, collectionSort, discordNotifyOnAction, discordNotifyOnMatch, stickyMatches, serverIds,
   ]);
@@ -988,7 +988,7 @@ export function LifecycleRulePage({
         arrInstanceId: arrInstanceId || null,
         targetQualityProfileId: isQualityProfileChangeAction(actionType) ? targetQualityProfileId : null,
         addImportExclusion,
-        searchAfterDelete,
+        searchAfterAction,
         addArrTags,
         removeArrTags,
         collectionEnabled,
@@ -1300,7 +1300,7 @@ export function LifecycleRulePage({
     arrInstanceId,
     targetQualityProfileId,
     addImportExclusion,
-    searchAfterDelete,
+    searchAfterAction,
     addArrTags: JSON.stringify([...addArrTags].sort()),
     removeArrTags: JSON.stringify([...removeArrTags].sort()),
     collectionEnabled,
@@ -1333,7 +1333,7 @@ export function LifecycleRulePage({
     setArrInstanceId(ruleSet.arrInstanceId ?? "");
     setTargetQualityProfileId(ruleSet.targetQualityProfileId ?? null);
     setAddImportExclusion(ruleSet.addImportExclusion ?? false);
-    setSearchAfterDelete(ruleSet.searchAfterDelete ?? false);
+    setSearchAfterAction(ruleSet.searchAfterAction ?? false);
     setAddArrTags(ruleSet.addArrTags ?? []);
     setRemoveArrTags(ruleSet.removeArrTags ?? []);
     setManageTagsEnabled((ruleSet.addArrTags ?? []).length > 0 || (ruleSet.removeArrTags ?? []).length > 0);
@@ -1388,7 +1388,7 @@ export function LifecycleRulePage({
       arrInstanceId: ruleSet.arrInstanceId ?? "",
       targetQualityProfileId: ruleSet.targetQualityProfileId ?? null,
       addImportExclusion: ruleSet.addImportExclusion ?? false,
-      searchAfterDelete: ruleSet.searchAfterDelete ?? false,
+      searchAfterAction: ruleSet.searchAfterAction ?? false,
       addArrTags: JSON.stringify([...(ruleSet.addArrTags ?? [])].sort()),
       removeArrTags: JSON.stringify([...(ruleSet.removeArrTags ?? [])].sort()),
       collectionEnabled: ruleSet.collectionEnabled ?? false,
@@ -1452,7 +1452,7 @@ export function LifecycleRulePage({
     setTargetQualityProfileId(null);
     setArrQualityProfiles([]);
     setAddImportExclusion(false);
-    setSearchAfterDelete(false);
+    setSearchAfterAction(false);
     setStickyMatches(false);
     setAddArrTags([]);
     setRemoveArrTags([]);
@@ -1485,7 +1485,7 @@ export function LifecycleRulePage({
       actionDelayDays,
       targetQualityProfileId: isQualityProfileChangeAction(actionType) ? targetQualityProfileId : null,
       addImportExclusion,
-      searchAfterDelete,
+      searchAfterAction,
       addArrTags,
       removeArrTags,
       collectionEnabled,
@@ -1539,7 +1539,7 @@ export function LifecycleRulePage({
       setTargetQualityProfileId(data.targetQualityProfileId ?? null);
       setArrQualityProfiles([]);
       setAddImportExclusion(data.addImportExclusion ?? false);
-      setSearchAfterDelete(data.searchAfterDelete ?? false);
+      setSearchAfterAction(data.searchAfterAction ?? false);
       setAddArrTags(data.addArrTags ?? []);
       setRemoveArrTags(data.removeArrTags ?? []);
       setManageTagsEnabled((data.addArrTags ?? []).length > 0 || (data.removeArrTags ?? []).length > 0);
@@ -2015,8 +2015,8 @@ export function LifecycleRulePage({
                   <div className="flex items-center gap-3">
                     <Switch
                       id="search-after-delete"
-                      checked={searchAfterDelete}
-                      onCheckedChange={setSearchAfterDelete}
+                      checked={searchAfterAction}
+                      onCheckedChange={setSearchAfterAction}
                     />
                     <Label htmlFor="search-after-delete">
                       Search for new copy after file deletion
@@ -2028,8 +2028,8 @@ export function LifecycleRulePage({
                   <div className="flex items-center gap-3">
                     <Switch
                       id="search-after-profile-change"
-                      checked={searchAfterDelete}
-                      onCheckedChange={setSearchAfterDelete}
+                      checked={searchAfterAction}
+                      onCheckedChange={setSearchAfterAction}
                     />
                     <Label htmlFor="search-after-profile-change">
                       Search for upgrade after profile change

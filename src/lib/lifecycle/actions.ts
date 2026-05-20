@@ -45,7 +45,7 @@ export interface ActionRecord {
   arrInstanceId: string | null;
   targetQualityProfileId: number | null;
   addImportExclusion: boolean;
-  searchAfterDelete: boolean;
+  searchAfterAction: boolean;
   matchedMediaItemIds: string[];
   addArrTags: string[];
   removeArrTags: string[];
@@ -418,7 +418,7 @@ async function executeUnmonitorDeleteFilesRadarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(movie.tmdbId, movie.title, action.mediaItem.year ?? 0);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }
 }
@@ -438,7 +438,7 @@ async function executeUnmonitorDeleteFilesSonarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(series.tvdbId, series.title);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerSeriesSearch(series.id);
   }
 }
@@ -466,7 +466,7 @@ async function executeUnmonitorDeleteFilesLidarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(artist.foreignArtistId, artist.artistName);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
 }
@@ -542,7 +542,7 @@ async function executeMonitorDeleteFilesRadarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(movie.tmdbId, movie.title, action.mediaItem.year ?? 0);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }
 }
@@ -564,7 +564,7 @@ async function executeMonitorDeleteFilesSonarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(series.tvdbId, series.title);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerSeriesSearch(series.id);
   }
 }
@@ -581,7 +581,7 @@ async function executeMonitorDeleteFilesLidarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(artist.foreignArtistId, artist.artistName);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
 }
@@ -596,7 +596,7 @@ async function executeDeleteFilesRadarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(movie.tmdbId, movie.title, action.mediaItem.year ?? 0);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }
 }
@@ -615,7 +615,7 @@ async function executeDeleteFilesSonarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(series.tvdbId, series.title);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerSeriesSearch(series.id);
   }
 }
@@ -629,7 +629,7 @@ async function executeDeleteFilesLidarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(artist.foreignArtistId, artist.artistName);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
 }
@@ -649,7 +649,7 @@ async function executeChangeQualityProfileRadarr(action: ActionRecord) {
     return;
   }
   await client.updateMovie(movie.id, { qualityProfileId: action.targetQualityProfileId });
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }
 }
@@ -667,7 +667,7 @@ async function executeChangeQualityProfileSonarr(action: ActionRecord) {
     return;
   }
   await client.updateSeries(series.id, { qualityProfileId: action.targetQualityProfileId });
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerSeriesSearch(series.id);
   }
 }
@@ -685,7 +685,7 @@ async function executeChangeQualityProfileLidarr(action: ActionRecord) {
     return;
   }
   await client.updateArtist(artist.id, { qualityProfileId: action.targetQualityProfileId });
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
 }
