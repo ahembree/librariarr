@@ -77,10 +77,18 @@ describe("audioLanguage stream evaluation", () => {
     expect(result.get("1")).toHaveLength(0);
   });
 
-  it("contains matches single value", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "audioLanguage", operator: "contains", value: "span" })])];
+  it("contains matches a single selected language (list membership)", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "audioLanguage", operator: "contains", value: "spanish" })])];
     const result = matched([multiStreamItem], rules);
     expect(result.get("1")!.length).toBeGreaterThan(0);
+  });
+
+  it("contains is list membership — substrings of present languages do not match", () => {
+    // Audio languages are English and Spanish; "span" is a substring of Spanish
+    // but the multi-select UI means "contains" is exact membership.
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "audioLanguage", operator: "contains", value: "span" })])];
+    const result = matched([multiStreamItem], rules);
+    expect(result.get("1")).toHaveLength(0);
   });
 
   it("contains matches pipe-separated values", () => {
@@ -95,14 +103,14 @@ describe("audioLanguage stream evaluation", () => {
     expect(result.get("1")).toHaveLength(0);
   });
 
-  it("notContains succeeds when no audio language contains the value", () => {
+  it("notContains succeeds when no audio language is in the selected list", () => {
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "audioLanguage", operator: "notContains", value: "japanese" })])];
     const result = matched([multiStreamItem], rules);
     expect(result.get("1")!.length).toBeGreaterThan(0);
   });
 
-  it("notContains fails when an audio language contains the value", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "audioLanguage", operator: "notContains", value: "eng" })])];
+  it("notContains fails when an audio language is in the selected list", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "audioLanguage", operator: "notContains", value: "english" })])];
     const result = matched([multiStreamItem], rules);
     expect(result.get("1")).toHaveLength(0);
   });
@@ -180,8 +188,8 @@ describe("subtitleLanguage stream evaluation", () => {
     expect(result.get("1")).toHaveLength(0);
   });
 
-  it("contains matches substring in subtitle language", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "subtitleLanguage", operator: "contains", value: "ger" })])];
+  it("contains (multi-select) matches an exact subtitle language", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "subtitleLanguage", operator: "contains", value: "german" })])];
     const result = matched([multiStreamItem], rules);
     expect(result.get("1")!.length).toBeGreaterThan(0);
   });
@@ -205,16 +213,16 @@ describe("subtitleLanguage stream evaluation", () => {
     expect(result.get("3")).toHaveLength(0);
   });
 
-  it("notContains succeeds when no subtitle language contains the value", () => {
-    // multiStreamItem subtitles: English, French, German — none contain "Jap"
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "subtitleLanguage", operator: "notContains", value: "Jap" })])];
+  it("notContains succeeds when no subtitle language is in the selected list", () => {
+    // multiStreamItem subtitles: English, French, German — Japanese not present
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "subtitleLanguage", operator: "notContains", value: "japanese" })])];
     const result = matched([multiStreamItem], rules);
     expect(result.get("1")!.length).toBeGreaterThan(0);
   });
 
-  it("notContains fails when a subtitle language contains the value", () => {
-    // multiStreamItem subtitles: English, French, German — "English" contains "Eng"
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "subtitleLanguage", operator: "notContains", value: "Eng" })])];
+  it("notContains fails when a subtitle language is in the selected list", () => {
+    // multiStreamItem subtitles include English
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "subtitleLanguage", operator: "notContains", value: "english" })])];
     const result = matched([multiStreamItem], rules);
     expect(result.get("1")).toHaveLength(0);
   });
@@ -269,8 +277,8 @@ describe("streamAudioCodec stream evaluation", () => {
     expect(result.get("1")).toHaveLength(0);
   });
 
-  it("contains matches substring in audio codec", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "streamAudioCodec", operator: "contains", value: "ac" })])];
+  it("contains (multi-select) matches an exact audio codec", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "streamAudioCodec", operator: "contains", value: "ac3" })])];
     const result = matched([multiStreamItem], rules);
     expect(result.get("1")!.length).toBeGreaterThan(0);
   });
@@ -295,16 +303,16 @@ describe("streamAudioCodec stream evaluation", () => {
     expect(result.get("1")).toHaveLength(0);
   });
 
-  it("notContains succeeds when no audio codec contains the value", () => {
-    // audioOnlyItem audio codec: flac — does not contain "mp3"
+  it("notContains succeeds when no audio codec is in the selected list", () => {
+    // audioOnlyItem audio codec: flac — not in {mp3}
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "streamAudioCodec", operator: "notContains", value: "mp3" })])];
     const result = matched([audioOnlyItem], rules);
     expect(result.get("3")!.length).toBeGreaterThan(0);
   });
 
-  it("notContains fails when an audio codec contains the value", () => {
-    // audioOnlyItem audio codec: flac — "flac" contains "fla"
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "streamAudioCodec", operator: "notContains", value: "fla" })])];
+  it("notContains fails when an audio codec is in the selected list", () => {
+    // audioOnlyItem audio codec: flac — in {flac}
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "streamAudioCodec", operator: "notContains", value: "flac" })])];
     const result = matched([audioOnlyItem], rules);
     expect(result.get("3")).toHaveLength(0);
   });

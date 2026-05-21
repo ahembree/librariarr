@@ -122,8 +122,8 @@ These fields require a configured [Seerr](/docs/integrations/seerr/) integration
 | `greaterThanOrEqual` | number | Greater than or equal |
 | `lessThan` | number | Less than value |
 | `lessThanOrEqual` | number | Less than or equal |
-| `contains` | text | Substring match (case-insensitive) |
-| `notContains` | text | Does not contain substring |
+| `contains` | text | For free-text fields (e.g. title, path): substring match (case-insensitive). For enumerable fields (e.g. quality profile, tag, codec) the operator presents a multi-select and matches if the item's value equals any selected value (list membership, not substring). |
+| `notContains` | text | Inverse of `contains` — same free-text vs enumerable distinction. |
 | `matchesWildcard` | text | Wildcard match (`*` = any characters, `?` = single character) |
 | `notMatchesWildcard` | text | Does not match wildcard pattern |
 | `before` | date | Before a specific date |

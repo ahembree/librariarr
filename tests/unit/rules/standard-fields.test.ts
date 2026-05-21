@@ -177,9 +177,9 @@ describe("Text fields spot-check (other text fields)", () => {
     expect(result.get("1")!.length).toBeGreaterThan(0);
   });
 
-  it("audioProfile contains", () => {
+  it("audioProfile contains (multi-select) matches an exact profile", () => {
     const items = [{ id: "1", audioProfile: "Dolby Atmos" }];
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "audioProfile", operator: "contains", value: "atmos" })])];
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "audioProfile", operator: "contains", value: "Dolby Atmos" })])];
     const result = matched(items, rules);
     expect(result.get("1")!.length).toBeGreaterThan(0);
   });
@@ -198,9 +198,9 @@ describe("Text fields spot-check (other text fields)", () => {
     expect(result.get("1")!.length).toBeGreaterThan(0);
   });
 
-  it("aspectRatio contains", () => {
+  it("aspectRatio contains (multi-select) matches an exact aspect ratio", () => {
     const items = [{ id: "1", aspectRatio: "2.39:1" }];
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "aspectRatio", operator: "contains", value: "2.39" })])];
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "aspectRatio", operator: "contains", value: "2.39:1" })])];
     const result = matched(items, rules);
     expect(result.get("1")!.length).toBeGreaterThan(0);
   });
@@ -868,6 +868,22 @@ describe("Genre field (JSON array)", () => {
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "contains", value: "SCI-FI" })])];
     const result = matched(items, rules);
     expect(result.get("1")!.length).toBeGreaterThan(0);
+  });
+
+  it("contains supports pipe-separated multi-select (matches if any value is in genres)", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "contains", value: "Comedy|Sci-Fi" })])];
+    const result = matched(items, rules);
+    expect(result.get("1")!.length).toBeGreaterThan(0); // has Sci-Fi
+    expect(result.get("2")!.length).toBeGreaterThan(0); // has Comedy
+    expect(result.get("3")).toHaveLength(0); // empty
+  });
+
+  it("notContains supports pipe-separated multi-select (excludes if any value is in genres)", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "notContains", value: "Action|Sci-Fi" })])];
+    const result = matched(items, rules);
+    expect(result.get("1")).toHaveLength(0); // has both
+    expect(result.get("2")!.length).toBeGreaterThan(0); // has neither
+    expect(result.get("3")!.length).toBeGreaterThan(0); // empty
   });
 });
 

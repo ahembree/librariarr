@@ -14,10 +14,16 @@
  *   3. Explicit safety net in `evaluateRules`: when every rule produces an
  *      empty WHERE AND no in-memory re-eval is flagged, return [] rather than
  *      matching the entire library (engine.ts ~line 2779).
+ *   4. `isUnconfiguredContainsRule` returns false / unsatisfiable WHERE for
+ *      contains/notContains rules with no selected values — prevents partially
+ *      configured rules (especially `notContains <nothing>`, which is
+ *      vacuously true) from sweeping the library. Negate is intentionally
+ *      not applied.
  */
 
 import { describe, it, expect } from "vitest";
-import { hasAnyActiveRules } from "@/lib/rules/engine";
+import { hasAnyActiveRules, getMatchedCriteriaForItems, evaluateAllRulesInMemory } from "@/lib/rules/engine";
+import type { ArrMetadata, ArrDataMap, SeerrMetadata, SeerrDataMap } from "@/lib/rules/engine";
 import {
   isArrField,
   isSeerrField,
@@ -172,5 +178,333 @@ describe("Safety invariants (documentation)", () => {
     // empty WHERE (e.g. invalid operators, typo'd fields) will match the
     // entire library and queue every item for deletion.
     expect(true).toBe(true);
+  });
+});
+
+// ─── Defense 4: unconfigured contains/notContains never sweep the library ──
+
+describe("Unconfigured contains/notContains must not match the library", () => {
+  // The in-memory entry point. WHERE-clause behaviour is harder to assert
+  // without DB access, but the in-memory guard is the final gate — if it
+  // returns false, the rule never matches regardless of what Phase 1 returned.
+  const items = [
+    { id: "m1", title: "Movie A", studio: "Warner Bros", contentRating: "PG-13", genres: ["Action"], labels: ["Favorite"], externalIds: [{ source: "TMDB", externalId: "1" }] },
+    { id: "m2", title: "Movie B", studio: "Disney", contentRating: "PG", genres: ["Comedy"], labels: [], externalIds: [{ source: "TMDB", externalId: "2" }] },
+    { id: "m3", title: "Movie C", studio: null, contentRating: null, genres: [], labels: null, externalIds: [{ source: "TMDB", externalId: "3" }] },
+  ];
+
+  function makeArrMeta(overrides?: Partial<ArrMetadata>): ArrMetadata {
+    return {
+      arrId: 0, tags: ["Default"], qualityProfile: "HD-1080p", monitored: false,
+      rating: null, tmdbRating: null, rtCriticRating: null,
+      dateAdded: null, path: null, sizeOnDisk: null, originalLanguage: null,
+      releaseDate: null, inCinemasDate: null, runtime: null,
+      qualityName: null, qualityCutoffMet: null, downloadDate: null,
+      firstAired: null, seasonCount: null, episodeCount: null,
+      status: null, ended: null, seriesType: null, hasUnaired: null,
+      monitoredSeasonCount: null, monitoredEpisodeCount: null,
+      ...overrides,
+    };
+  }
+
+  function makeSeerrMeta(overrides?: Partial<SeerrMetadata>): SeerrMetadata {
+    return {
+      requested: true, requestCount: 1, requestDate: "2024-01-01",
+      requestedBy: ["alice"], approvalDate: null, declineDate: null,
+      ...overrides,
+    };
+  }
+
+  const arrData: ArrDataMap = { "1": makeArrMeta(), "2": makeArrMeta(), "3": makeArrMeta() };
+  const seerrData: SeerrDataMap = { "TMDB:1": makeSeerrMeta(), "TMDB:2": makeSeerrMeta(), "TMDB:3": makeSeerrMeta() };
+
+  function makeRule(o: Partial<Rule> & Pick<Rule, "field" | "operator" | "value">): Rule {
+    return { id: "r1", condition: "AND", ...o };
+  }
+
+  function expectNoMatches(rules: Rule[] | RuleGroup[]) {
+    const result = getMatchedCriteriaForItems(items, rules, "MOVIE", arrData, seerrData);
+    for (const item of items) {
+      expect(result.get(item.id) ?? []).toHaveLength(0);
+    }
+  }
+
+  const operatorsToCheck = ["contains", "notContains"] as const;
+  const emptyValues = ["", "|", "||", "  "] as const;
+
+  for (const operator of operatorsToCheck) {
+    for (const value of emptyValues) {
+      const display = value === "" ? "<empty>" : JSON.stringify(value);
+      it(`enumerable text field (studio) — ${operator} ${display} matches nothing`, () => {
+        expectNoMatches([{ id: "g", condition: "AND", rules: [makeRule({ field: "studio", operator, value })], groups: [] }]);
+      });
+
+      it(`non-enumerable text field (title) — ${operator} ${display} matches nothing`, () => {
+        expectNoMatches([{ id: "g", condition: "AND", rules: [makeRule({ field: "title", operator, value })], groups: [] }]);
+      });
+
+      it(`arr field (arrQualityProfile) — ${operator} ${display} matches nothing`, () => {
+        expectNoMatches([{ id: "g", condition: "AND", rules: [makeRule({ field: "arrQualityProfile", operator, value })], groups: [] }]);
+      });
+
+      it(`arr field (arrTag) — ${operator} ${display} matches nothing`, () => {
+        expectNoMatches([{ id: "g", condition: "AND", rules: [makeRule({ field: "arrTag", operator, value })], groups: [] }]);
+      });
+
+      it(`seerr field (seerrRequestedBy) — ${operator} ${display} matches nothing`, () => {
+        expectNoMatches([{ id: "g", condition: "AND", rules: [makeRule({ field: "seerrRequestedBy", operator, value })], groups: [] }]);
+      });
+
+      it(`array field (genre) — ${operator} ${display} matches nothing`, () => {
+        expectNoMatches([{ id: "g", condition: "AND", rules: [makeRule({ field: "genre", operator, value })], groups: [] }]);
+      });
+
+      it(`array field (labels) — ${operator} ${display} matches nothing`, () => {
+        expectNoMatches([{ id: "g", condition: "AND", rules: [makeRule({ field: "labels", operator, value })], groups: [] }]);
+      });
+    }
+  }
+
+  it("negate=true cannot flip an unconfigured contains rule into match-all", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [makeRule({ field: "studio", operator: "contains", value: "", negate: true })],
+      groups: [],
+    }]);
+  });
+
+  it("negate=true cannot flip an unconfigured notContains rule into match-all", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [makeRule({ field: "arrQualityProfile", operator: "notContains", value: "", negate: true })],
+      groups: [],
+    }]);
+  });
+
+  it("unconfigured rule in an AND group makes the whole group match nothing", () => {
+    // Use evaluateAllRulesInMemory directly — it applies AND/OR group logic,
+    // whereas getMatchedCriteriaForItems reports per-rule matches independently.
+    const groups: RuleGroup[] = [{
+      id: "g", condition: "AND",
+      rules: [
+        makeRule({ field: "title", operator: "contains", value: "Movie", condition: "AND" }),
+        makeRule({ field: "arrQualityProfile", operator: "notContains", value: "", condition: "AND" }),
+      ],
+      groups: [],
+    }];
+    for (const item of items) {
+      const arrMeta = arrData[item.externalIds[0].externalId];
+      expect(evaluateAllRulesInMemory(groups, item, arrMeta)).toBe(false);
+    }
+  });
+
+  it("stream query group with quantifier=none and unconfigured rule matches nothing (no vacuous truth)", () => {
+    // quantifier=none ("no stream of this type satisfies all the rules") would
+    // otherwise be vacuously true when a rule always returns false.
+    const streamItems = [
+      {
+        id: "s1",
+        title: "Item with streams",
+        streams: [{ streamType: 2, codec: "aac", language: "English" }],
+        externalIds: [{ source: "TMDB", externalId: "1" }],
+      },
+      {
+        id: "s2",
+        title: "Item without audio streams",
+        streams: [],
+        externalIds: [{ source: "TMDB", externalId: "2" }],
+      },
+    ];
+    const groups: RuleGroup[] = [{
+      id: "g", condition: "AND",
+      streamQuery: { streamType: "audio", quantifier: "none" },
+      rules: [makeRule({ field: "sqCodec", operator: "contains", value: "" })],
+      groups: [],
+    }];
+    for (const item of streamItems) {
+      expect(evaluateAllRulesInMemory(groups, item)).toBe(false);
+    }
+  });
+
+  it("unconfigured rule in an OR group does not lift the whole group to match-all", () => {
+    // OR with an unconfigured rule should defer to the other (configured) rule.
+    // The configured rule here matches title === "Movie A", so only m1 should match.
+    const groups: RuleGroup[] = [{
+      id: "g", condition: "AND",
+      rules: [
+        makeRule({ field: "title", operator: "equals", value: "Movie A", condition: "AND" }),
+        makeRule({ field: "arrQualityProfile", operator: "contains", value: "", condition: "OR" }),
+      ],
+      groups: [],
+    }];
+    const matchedIds = items.filter((item) => {
+      const arrMeta = arrData[item.externalIds[0].externalId];
+      return evaluateAllRulesInMemory(groups, item, arrMeta);
+    }).map((i) => i.id);
+    expect(matchedIds).toEqual(["m1"]);
+  });
+});
+
+// ─── Defense 5: unknown / mismatched operator and malformed value ──────────
+
+describe("Unknown operator, type mismatch, or malformed value must not match the library", () => {
+  const items = [
+    { id: "m1", title: "Movie A", playCount: 10, year: 2020, externalIds: [{ source: "TMDB", externalId: "1" }] },
+    { id: "m2", title: "Movie B", playCount: 5, year: 2010, externalIds: [{ source: "TMDB", externalId: "2" }] },
+  ];
+
+  function expectNoMatches(rules: RuleGroup[]) {
+    for (const item of items) {
+      expect(evaluateAllRulesInMemory(rules, item)).toBe(false);
+    }
+  }
+
+  it("unknown operator with negate=true does not flip false to match-all", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "title", operator: "totallyMadeUpOp" as never, value: "x", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("operator/field-type mismatch with negate=true does not match all (contains on number)", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "playCount", operator: "contains", value: "5", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("operator/field-type mismatch (greaterThan on text) with negate=true does not match all", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "title", operator: "greaterThan", value: "abc", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("greaterThan with a non-numeric value (NaN comparison) does not match all via negate", () => {
+    // playCount > NaN is false for every item; negate=true would flip to match-all.
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "playCount", operator: "greaterThan", value: "not-a-number", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("between with a malformed half does not match all via negate", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "year", operator: "between", value: "2000,", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("between with no comma (single value) does not match all via negate", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "year", operator: "between", value: "2020", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("between with empty value does not match all via negate", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "year", operator: "between", value: "", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("notMatchesWildcard with empty pattern (regex `^$`) does not match all", () => {
+    // ^$ matches only the empty string; negate would otherwise sweep the library.
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "title", operator: "notMatchesWildcard", value: "", condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("matchesWildcard with empty pattern + negate=true does not match all", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "title", operator: "matchesWildcard", value: "", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("equals with empty value on numeric field (Number('') === 0 quirk) does not flip via negate", () => {
+    // playCount = "" coerces to 0; for items with playCount !== 0, equals returns false;
+    // negate=true would flip to true and sweep most of the library.
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "playCount", operator: "equals", value: "", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("unknown field name with negate=true does not match all", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "thisFieldDoesNotExist" as never, operator: "equals", value: "x", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("arrTag isNull with negate=true does not flip to match-all", () => {
+    // arrTag is `string[]` and is never null, so isNull is meaningless.
+    // The arr-tag handler doesn't implement isNull → default returns false,
+    // bypassing the negate flip that would otherwise sweep the library.
+    function makeArrMeta(): ArrMetadata {
+      return {
+        arrId: 0, tags: ["Default"], qualityProfile: "HD-1080p", monitored: false,
+        rating: null, tmdbRating: null, rtCriticRating: null,
+        dateAdded: null, path: null, sizeOnDisk: null, originalLanguage: null,
+        releaseDate: null, inCinemasDate: null, runtime: null,
+        qualityName: null, qualityCutoffMet: null, downloadDate: null,
+        firstAired: null, seasonCount: null, episodeCount: null,
+        status: null, ended: null, seriesType: null, hasUnaired: null,
+        monitoredSeasonCount: null, monitoredEpisodeCount: null,
+      };
+    }
+    const arrData: ArrDataMap = { "1": makeArrMeta(), "2": makeArrMeta() };
+    const groups: RuleGroup[] = [{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "arrTag", operator: "isNull", value: "", negate: true, condition: "AND" }],
+      groups: [],
+    }];
+    for (const item of items) {
+      expect(evaluateAllRulesInMemory(groups, item, arrData[item.externalIds[0].externalId])).toBe(false);
+    }
+  });
+
+  it("arrEnded isNull correctly matches items with null arrEnded (pre-existing bug fix)", () => {
+    // Items with null arrEnded should match `isNull`. Old code returned false
+    // (the null guard fell through before checking isNull/isNotNull), then
+    // negate=true would flip false to true and match items WITH a value too.
+    function makeArrMeta(ended: boolean | null): ArrMetadata {
+      return {
+        arrId: 0, tags: [], qualityProfile: "HD-1080p", monitored: false,
+        rating: null, tmdbRating: null, rtCriticRating: null,
+        dateAdded: null, path: null, sizeOnDisk: null, originalLanguage: null,
+        releaseDate: null, inCinemasDate: null, runtime: null,
+        qualityName: null, qualityCutoffMet: null, downloadDate: null,
+        firstAired: null, seasonCount: null, episodeCount: null,
+        status: null, ended, seriesType: null, hasUnaired: null,
+        monitoredSeasonCount: null, monitoredEpisodeCount: null,
+      };
+    }
+    const seriesItem = { id: "s1", externalIds: [{ source: "TVDB", externalId: "1" }] };
+    const nullEndedRule: RuleGroup[] = [{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "arrEnded", operator: "isNull", value: "", condition: "AND" }],
+      groups: [],
+    }];
+    // Item with null ended: isNull is true.
+    expect(evaluateAllRulesInMemory(nullEndedRule, seriesItem, makeArrMeta(null))).toBe(true);
+    // Item with ended=true: isNull is false.
+    expect(evaluateAllRulesInMemory(nullEndedRule, seriesItem, makeArrMeta(true))).toBe(false);
+    // Item with ended=false: isNull is false.
+    expect(evaluateAllRulesInMemory(nullEndedRule, seriesItem, makeArrMeta(false))).toBe(false);
   });
 });

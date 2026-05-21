@@ -13,7 +13,9 @@ import {
   isArrField,
   isSeerrField,
   isSeriesAggregateField,
+  isEnumerableField,
 } from "@/lib/conditions";
+import { isOperatorVisible } from "@/lib/conditions/helpers";
 
 describe("CONDITION_FIELDS registry", () => {
   it("has no duplicate field values", () => {
@@ -105,6 +107,20 @@ describe("Field-set predicates derive from registry", () => {
       expect(isSeriesAggregateField(f.value)).toBe(!!f.isSeriesAggregate);
     }
   });
+
+  it("isEnumerableField agrees with the registry flags for CONDITION_FIELDS and STREAM_QUERY_FIELDS", () => {
+    for (const f of CONDITION_FIELDS) {
+      expect(isEnumerableField(f.value)).toBe(!!f.enumerable);
+    }
+    for (const f of STREAM_QUERY_FIELDS) {
+      expect(isEnumerableField(f.value)).toBe(!!f.enumerable);
+    }
+  });
+
+  it("isEnumerableField returns false for unknown fields", () => {
+    expect(isEnumerableField("nonExistentField")).toBe(false);
+    expect(isEnumerableField("")).toBe(false);
+  });
 });
 
 describe("CONDITION_OPERATORS", () => {
@@ -145,5 +161,46 @@ describe("STREAM_QUERY_FIELDS registry", () => {
       expect(seen.has(f.value)).toBe(false);
       seen.add(f.value);
     }
+  });
+});
+
+describe("isOperatorVisible (UI operator filter)", () => {
+  it("hides isNull / isNotNull on non-nullable non-String fields (playCount, isWatchlisted)", () => {
+    // playCount: Int @default(0). The engine maps isNull → UNSATISFIABLE,
+    // isNotNull → MATCH_ALL — technically correct but useless and misleading.
+    expect(isOperatorVisible("isNull", "playCount")).toBe(false);
+    expect(isOperatorVisible("isNotNull", "playCount")).toBe(false);
+    expect(isOperatorVisible("isNull", "isWatchlisted")).toBe(false);
+    expect(isOperatorVisible("isNotNull", "isWatchlisted")).toBe(false);
+  });
+
+  it("keeps isNull / isNotNull on non-nullable String fields (title) — engine substitutes empty string", () => {
+    expect(isOperatorVisible("isNull", "title")).toBe(true);
+    expect(isOperatorVisible("isNotNull", "title")).toBe(true);
+  });
+
+  it("keeps isNull / isNotNull on nullable fields (studio, lastPlayedAt, rating, etc.)", () => {
+    for (const field of ["studio", "lastPlayedAt", "rating", "year", "audioCodec"]) {
+      expect(isOperatorVisible("isNull", field), `${field} should keep isNull`).toBe(true);
+      expect(isOperatorVisible("isNotNull", field), `${field} should keep isNotNull`).toBe(true);
+    }
+  });
+
+  it("keeps positive operators on non-nullable fields (the fix only targets isNull/isNotNull)", () => {
+    expect(isOperatorVisible("equals", "playCount")).toBe(true);
+    expect(isOperatorVisible("greaterThan", "playCount")).toBe(true);
+    expect(isOperatorVisible("notEquals", "playCount")).toBe(true);
+  });
+
+  it("returns false for unknown fields", () => {
+    expect(isOperatorVisible("equals", "totally-bogus")).toBe(false);
+    expect(isOperatorVisible("isNull", "totally-bogus")).toBe(false);
+  });
+
+  it("returns false for type-incompatible operator/field combos", () => {
+    // greaterThan is numeric only — should be hidden for text fields.
+    expect(isOperatorVisible("greaterThan", "studio")).toBe(false);
+    // contains is text only — should be hidden for numeric fields.
+    expect(isOperatorVisible("contains", "rating")).toBe(false);
   });
 });
