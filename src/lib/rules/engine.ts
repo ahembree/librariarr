@@ -237,18 +237,32 @@ function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
     return applyNegate(clause, negate);
   }
 
-  // Genre / Labels (JSON array fields)
+  // Genre / Labels (JSON array fields). Enumerable multi-select: `contains`
+  // means "any selected value is present in the array".
   if (field === "genre" || field === "labels") {
     const column = field === "labels" ? "labels" : "genres";
+    const strValue = String(value);
+    const parts = (operator === "contains" || operator === "notContains")
+      ? strValue.split("|").filter(Boolean)
+      : [strValue];
+    const matchValues = parts.length > 0 ? parts : [strValue];
     let clause: Prisma.MediaItemWhereInput;
     switch (operator) {
       case "equals":
+        clause = { [column]: { array_contains: strValue } };
+        break;
       case "contains":
-        clause = { [column]: { array_contains: String(value) } };
+        clause = matchValues.length === 1
+          ? { [column]: { array_contains: matchValues[0] } }
+          : { OR: matchValues.map((v) => ({ [column]: { array_contains: v } })) };
         break;
       case "notEquals":
+        clause = { NOT: { [column]: { array_contains: strValue } } };
+        break;
       case "notContains":
-        clause = { NOT: { [column]: { array_contains: String(value) } } };
+        clause = matchValues.length === 1
+          ? { NOT: { [column]: { array_contains: matchValues[0] } } }
+          : { AND: matchValues.map((v) => ({ NOT: { [column]: { array_contains: v } } })) };
         break;
       default:
         return {};
@@ -1588,7 +1602,8 @@ function evaluateRuleAgainstItem(
     return negate ? !result : result;
   }
 
-  // Genre / Labels (JSON array fields)
+  // Genre / Labels (JSON array fields). Enumerable multi-select: `contains`
+  // means "any selected value is present in the array".
   if (field === "genre" || field === "labels") {
     const sourceCol = field === "labels" ? "labels" : "genres";
     const arr = Array.isArray(item[sourceCol]) ? (item[sourceCol] as string[]).map((g) => g.toLowerCase()) : [];
@@ -1596,12 +1611,20 @@ function evaluateRuleAgainstItem(
     let result: boolean;
     switch (operator) {
       case "equals":
-      case "contains":
         result = arr.some((g) => g === strValue);
         break;
-      case "notContains":
-        result = !arr.some((g) => g === strValue);
+      case "contains": {
+        const parts = strValue.split("|").filter(Boolean);
+        const matchValues = parts.length > 0 ? parts : [strValue];
+        result = matchValues.some((v) => arr.some((g) => g === v));
         break;
+      }
+      case "notContains": {
+        const parts = strValue.split("|").filter(Boolean);
+        const matchValues = parts.length > 0 ? parts : [strValue];
+        result = !matchValues.some((v) => arr.some((g) => g === v));
+        break;
+      }
       case "notEquals":
         result = !arr.some((g) => g === strValue);
         break;

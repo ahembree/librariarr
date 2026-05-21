@@ -439,14 +439,26 @@ function handleGenreField(
   negate?: boolean,
   column: string = "genres",
 ): Prisma.MediaItemWhereInput {
+  // Enumerable multi-select: `contains` with "Action|Comedy" means the array
+  // includes ANY of the selected values.
+  const parts = (operator === "contains" || operator === "notContains")
+    ? value.split("|").filter(Boolean)
+    : [value];
+  const matchValues = parts.length > 0 ? parts : [value];
   let clause: Prisma.MediaItemWhereInput;
   switch (operator) {
     case "equals":
-    case "contains":
       clause = { [column]: { array_contains: value } };
       break;
+    case "contains":
+      clause = matchValues.length === 1
+        ? { [column]: { array_contains: matchValues[0] } }
+        : { OR: matchValues.map((v) => ({ [column]: { array_contains: v } })) };
+      break;
     case "notContains":
-      clause = { NOT: { [column]: { array_contains: value } } };
+      clause = matchValues.length === 1
+        ? { NOT: { [column]: { array_contains: matchValues[0] } } }
+        : { AND: matchValues.map((v) => ({ NOT: { [column]: { array_contains: v } } })) };
       break;
     case "isNull":
       clause = { [column]: { equals: Prisma.DbNull } };
@@ -1473,7 +1485,8 @@ function evaluateStreamCountInMemory(
   return negate ? !result : result;
 }
 
-/** Evaluate a JSON array field (genre, labels) in memory */
+/** Evaluate a JSON array field (genre, labels) in memory. Enumerable
+ * multi-select: `contains` with pipe-separated values is list membership. */
 function evaluateArrayFieldInMemory(
   column: string,
   operator: string,
@@ -1485,12 +1498,20 @@ function evaluateArrayFieldInMemory(
   let result: boolean;
   switch (operator) {
     case "equals":
-    case "contains":
       result = arr !== null && arr.includes(value);
       break;
-    case "notContains":
-      result = arr === null || !arr.includes(value);
+    case "contains": {
+      const parts = value.split("|").filter(Boolean);
+      const matchValues = parts.length > 0 ? parts : [value];
+      result = arr !== null && matchValues.some((v) => arr.includes(v));
       break;
+    }
+    case "notContains": {
+      const parts = value.split("|").filter(Boolean);
+      const matchValues = parts.length > 0 ? parts : [value];
+      result = arr === null || !matchValues.some((v) => arr.includes(v));
+      break;
+    }
     case "isNull":
       result = arr === null || arr.length === 0;
       break;

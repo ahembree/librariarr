@@ -869,6 +869,22 @@ describe("Genre field (JSON array)", () => {
     const result = matched(items, rules);
     expect(result.get("1")!.length).toBeGreaterThan(0);
   });
+
+  it("contains supports pipe-separated multi-select (matches if any value is in genres)", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "contains", value: "Comedy|Sci-Fi" })])];
+    const result = matched(items, rules);
+    expect(result.get("1")!.length).toBeGreaterThan(0); // has Sci-Fi
+    expect(result.get("2")!.length).toBeGreaterThan(0); // has Comedy
+    expect(result.get("3")).toHaveLength(0); // empty
+  });
+
+  it("notContains supports pipe-separated multi-select (excludes if any value is in genres)", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "notContains", value: "Action|Sci-Fi" })])];
+    const result = matched(items, rules);
+    expect(result.get("1")).toHaveLength(0); // has both
+    expect(result.get("2")!.length).toBeGreaterThan(0); // has neither
+    expect(result.get("3")!.length).toBeGreaterThan(0); // empty
+  });
 });
 
 // ---------------------------------------------------------------------------
