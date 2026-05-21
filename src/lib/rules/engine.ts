@@ -259,26 +259,10 @@ function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
     return applyNegate(clause, negate);
   }
 
-  // Has External ID (relation query)
-  if (field === "hasExternalId") {
-    let clause: Prisma.MediaItemWhereInput;
-    switch (operator) {
-      case "equals":
-        clause = { externalIds: { some: { source: String(value) } } };
-        break;
-      case "notEquals":
-        clause = { externalIds: { none: { source: String(value) } } };
-        break;
-      default:
-        return {};
-    }
-    return applyNegate(clause, negate);
-  }
-
   // Field-specific WHERE-emitting handlers live in where-builder.ts and are
   // shared with the query builder. The dispatcher above handles all the
-  // engine-specific routing (stream relation, external, series aggregate,
-  // hasExternalId) before reaching this lookup.
+  // engine-specific routing (stream relation, external, series aggregate)
+  // before reaching this lookup; hasExternalId is routed via FIELD_HANDLERS.
   const handler = FIELD_HANDLERS[field];
   if (handler) return handler(operator, value, field, negate);
 
@@ -1460,9 +1444,11 @@ function evaluateRuleAgainstItem(
     let result: boolean;
     switch (operator) {
       case "equals":
+      case "isNotNull":
         result = externalIds.some((e) => e.source === strValue);
         break;
       case "notEquals":
+      case "isNull":
         result = !externalIds.some((e) => e.source === strValue);
         break;
       default: return false;

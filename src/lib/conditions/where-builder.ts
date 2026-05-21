@@ -131,7 +131,6 @@ export function isUnconfiguredContainsRule(operator: string, value: string | num
 // Fields NOT covered here (kept inline in each engine's dispatcher):
 //   - Stream relation fields (audioLanguage, subtitleLanguage,
 //     streamAudioCodec) — Prisma `streams: { some: {...} }` queries
-//   - hasExternalId — engines disagree on isNull/isNotNull semantics
 //   - Stream-query (sq*), cross-system, arr/seerr, series-aggregate —
 //     handled at higher layers (Phase 2, group-level, enrichment)
 
@@ -500,6 +499,29 @@ export const textGenericHandler: FieldHandler = (operator, value, field, negate)
 };
 
 /**
+ * hasExternalId presence check via the `externalIds` relation. The "value"
+ * is the source name (TMDB, TVDB, IMDB, MUSICBRAINZ); isNotNull is an alias
+ * for equals (has a row for that source) and isNull is an alias for
+ * notEquals (no row for that source).
+ */
+const hasExternalIdHandler: FieldHandler = (operator, value, _field, negate) => {
+  let clause: Prisma.MediaItemWhereInput;
+  switch (operator) {
+    case "equals":
+    case "isNotNull":
+      clause = { externalIds: { some: { source: String(value) } } };
+      break;
+    case "notEquals":
+    case "isNull":
+      clause = { externalIds: { none: { source: String(value) } } };
+      break;
+    default:
+      return {};
+  }
+  return applyNegate(clause, negate);
+};
+
+/**
  * Map of field name → handler. The dispatcher in each engine looks up the
  * handler here; misses fall back to `textGenericHandler`. Date and numeric
  * field sets are expanded so every member field maps to the same handler.
@@ -512,6 +534,7 @@ export const FIELD_HANDLERS: Record<string, FieldHandler> = (() => {
     resolution: resolutionHandler,
     genre: genreLabelsHandler,
     labels: genreLabelsHandler,
+    hasExternalId: hasExternalIdHandler,
   };
   for (const f of DATE_HANDLER_FIELDS) handlers[f] = dateHandler;
   for (const f of NUMERIC_HANDLER_FIELDS) handlers[f] = numericHandler;

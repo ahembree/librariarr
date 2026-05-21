@@ -929,6 +929,22 @@ describe("hasExternalId field", () => {
     const result = matched(items, rules);
     expect(result.get("3")!.length).toBeGreaterThan(0);
   });
+
+  it("isNotNull is an alias for equals (has the specified source)", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "hasExternalId", operator: "isNotNull", value: "TMDB" })])];
+    const result = matched(items, rules);
+    expect(result.get("1")!.length).toBeGreaterThan(0); // has TMDB
+    expect(result.get("2")).toHaveLength(0); // no TMDB
+    expect(result.get("3")).toHaveLength(0); // empty
+  });
+
+  it("isNull is an alias for notEquals (does not have the specified source)", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "hasExternalId", operator: "isNull", value: "TMDB" })])];
+    const result = matched(items, rules);
+    expect(result.get("1")).toHaveLength(0); // has TMDB
+    expect(result.get("2")!.length).toBeGreaterThan(0); // no TMDB
+    expect(result.get("3")!.length).toBeGreaterThan(0); // empty
+  });
 });
 
 // ---------------------------------------------------------------------------
