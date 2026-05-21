@@ -620,7 +620,7 @@ describe("Lifecycle Actions", () => {
       const item = await createTestMediaItem(library.id, {
         title: "Pilot",
         parentTitle: "Some Show",
-        type: "EPISODE",
+        type: "SERIES",
       });
       const ruleSet = await createTestRuleSet(user.id, {
         name: "Series Rule",
