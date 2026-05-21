@@ -115,16 +115,17 @@ export function evaluateQuerySeerrRule(rule: QueryRule, meta: SeerrMetadata | un
           result = !m.requestedBy.some((u) => u.toLowerCase() === strVal);
           break;
         case "contains": {
+          // Enumerable multi-select — exact list membership against requester usernames.
           const values = strVal.split("|").filter(Boolean);
           result = values.some((v) =>
-            m.requestedBy.some((u) => u.toLowerCase().includes(v))
+            m.requestedBy.some((u) => u.toLowerCase() === v)
           );
           break;
         }
         case "notContains": {
           const values = strVal.split("|").filter(Boolean);
           result = !values.some((v) =>
-            m.requestedBy.some((u) => u.toLowerCase().includes(v))
+            m.requestedBy.some((u) => u.toLowerCase() === v)
           );
           break;
         }

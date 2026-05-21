@@ -13,6 +13,7 @@ import {
   isArrField,
   isSeerrField,
   isSeriesAggregateField,
+  isEnumerableField,
 } from "@/lib/conditions";
 
 describe("CONDITION_FIELDS registry", () => {
@@ -104,6 +105,20 @@ describe("Field-set predicates derive from registry", () => {
       expect(isSeerrField(f.value)).toBe(!!f.requiresSeerr);
       expect(isSeriesAggregateField(f.value)).toBe(!!f.isSeriesAggregate);
     }
+  });
+
+  it("isEnumerableField agrees with the registry flags for CONDITION_FIELDS and STREAM_QUERY_FIELDS", () => {
+    for (const f of CONDITION_FIELDS) {
+      expect(isEnumerableField(f.value)).toBe(!!f.enumerable);
+    }
+    for (const f of STREAM_QUERY_FIELDS) {
+      expect(isEnumerableField(f.value)).toBe(!!f.enumerable);
+    }
+  });
+
+  it("isEnumerableField returns false for unknown fields", () => {
+    expect(isEnumerableField("nonExistentField")).toBe(false);
+    expect(isEnumerableField("")).toBe(false);
   });
 });
 

@@ -86,16 +86,35 @@ describe("arrTag (text array)", () => {
     expect(result.get("m1")).toHaveLength(0);
   });
 
-  it("contains matches partial substring", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrTag", operator: "contains", value: "grad" })])];
+  it("contains matches an exact tag from the selected list", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrTag", operator: "contains", value: "Upgrade" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
     expect(result.get("m1")!.length).toBeGreaterThan(0);
   });
 
-  it("notContains does not match when substring present", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrTag", operator: "notContains", value: "grad" })])];
+  it("contains is list membership, not substring (does not match partial)", () => {
+    // Tag list contains "Upgrade" but not "grad" — substring match would be a bug.
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrTag", operator: "contains", value: "grad" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
     expect(result.get("m1")).toHaveLength(0);
+  });
+
+  it("contains supports pipe-separated multi-select", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrTag", operator: "contains", value: "missing|keep" })])];
+    const result = matched(movieItems, rules, "MOVIE", arrData);
+    expect(result.get("m1")!.length).toBeGreaterThan(0);
+  });
+
+  it("notContains excludes when any selected tag is present", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrTag", operator: "notContains", value: "Upgrade" })])];
+    const result = matched(movieItems, rules, "MOVIE", arrData);
+    expect(result.get("m1")).toHaveLength(0);
+  });
+
+  it("notContains keeps items whose tags are not in the selected list", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrTag", operator: "notContains", value: "missing" })])];
+    const result = matched(movieItems, rules, "MOVIE", arrData);
+    expect(result.get("m1")!.length).toBeGreaterThan(0);
   });
 
   it("matchesWildcard matches with pattern", () => {
@@ -156,15 +175,50 @@ describe("arrQualityProfile (text)", () => {
     expect(result.get("m1")).toHaveLength(0);
   });
 
-  it("contains matches substring", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "contains", value: "ultra" })])];
+  it("contains matches an exact profile name from the selected list", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "contains", value: "Ultra-HD" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
     expect(result.get("m1")!.length).toBeGreaterThan(0);
   });
 
-  it("notContains matches when substring absent", () => {
+  it("contains is list membership, not substring", () => {
+    // The UI shows a multi-select of profile names; selecting "ultra" should
+    // not match a profile literally named "Ultra-HD" via substring search.
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "contains", value: "ultra" })])];
+    const result = matched(movieItems, rules, "MOVIE", arrData);
+    expect(result.get("m1")).toHaveLength(0);
+  });
+
+  it("contains supports pipe-separated multi-select", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "contains", value: "SD|Ultra-HD" })])];
+    const result = matched(movieItems, rules, "MOVIE", arrData);
+    expect(result.get("m1")!.length).toBeGreaterThan(0);
+  });
+
+  it("notContains excludes when profile is in the selected list", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "notContains", value: "Ultra-HD" })])];
+    const result = matched(movieItems, rules, "MOVIE", arrData);
+    expect(result.get("m1")).toHaveLength(0);
+  });
+
+  it("notContains keeps items whose profile is not in the selected list", () => {
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "notContains", value: "bluray" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
+    expect(result.get("m1")!.length).toBeGreaterThan(0);
+  });
+
+  // Regression: user-reported bug where selecting "Default" also matched "Default New".
+  it("contains 'Default' does not match a profile named 'Default New'", () => {
+    const defaultNewMeta: ArrDataMap = { [tmdbId]: makeArrMeta({ qualityProfile: "Default New" }) };
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "contains", value: "Default" })])];
+    const result = matched(movieItems, rules, "MOVIE", defaultNewMeta);
+    expect(result.get("m1")).toHaveLength(0);
+  });
+
+  it("contains 'Default' still matches the exact profile 'Default'", () => {
+    const defaultMeta: ArrDataMap = { [tmdbId]: makeArrMeta({ qualityProfile: "Default" }) };
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "contains", value: "Default" })])];
+    const result = matched(movieItems, rules, "MOVIE", defaultMeta);
     expect(result.get("m1")!.length).toBeGreaterThan(0);
   });
 
@@ -722,13 +776,13 @@ describe("arrOriginalLanguage (text, nullable)", () => {
     expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
   });
 
-  it("contains matches substring", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrOriginalLanguage", operator: "contains", value: "eng" })])];
+  it("contains (multi-select) matches an exact language from the selected list", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrOriginalLanguage", operator: "contains", value: "english" })])];
     expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
   });
 
-  it("notContains matches when substring absent", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrOriginalLanguage", operator: "notContains", value: "fre" })])];
+  it("notContains keeps items whose language is not in the selected list", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrOriginalLanguage", operator: "notContains", value: "french" })])];
     expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
   });
 
@@ -746,8 +800,8 @@ describe("arrQualityName (text, nullable)", () => {
     expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
   });
 
-  it("contains matches substring", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrQualityName", operator: "contains", value: "2160p" })])];
+  it("contains (multi-select) matches an exact quality name from the selected list", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrQualityName", operator: "contains", value: "Bluray-2160p Remux" })])];
     expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
   });
 
@@ -775,8 +829,8 @@ describe("arrStatus (text, nullable)", () => {
     expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
   });
 
-  it("contains matches substring", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrStatus", operator: "contains", value: "contin" })])];
+  it("contains (multi-select) matches an exact status from the selected list", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrStatus", operator: "contains", value: "continuing" })])];
     expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
   });
 
@@ -804,8 +858,8 @@ describe("arrSeriesType (text, nullable)", () => {
     expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
   });
 
-  it("contains matches substring", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrSeriesType", operator: "contains", value: "stand" })])];
+  it("contains (multi-select) matches an exact series type from the selected list", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrSeriesType", operator: "contains", value: "standard" })])];
     expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
   });
 

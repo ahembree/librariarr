@@ -507,9 +507,22 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
       expect(result.get("item1")!).toHaveLength(1);
     });
 
-    it("matches contains with partial username", () => {
+    it("contains (multi-select) is list membership, not substring", () => {
+      // The UI shows a multi-select of usernames; selecting "ali" should not
+      // match a user literally named "Alice" by substring.
       const rules: Rule[] = [
         { id: "r1", field: "seerrRequestedBy", operator: "contains", value: "ali", condition: "AND" },
+      ];
+      const items = [makeItem("item1", "55")];
+      const seerrData = makeSeerrData("55", { requestedBy: ["Alice", "Bob"] });
+
+      const result = getMatchedCriteriaForItems(items, rules, "MOVIE", undefined, seerrData);
+      expect(result.get("item1")!).toHaveLength(0);
+    });
+
+    it("matches contains with an exact username", () => {
+      const rules: Rule[] = [
+        { id: "r1", field: "seerrRequestedBy", operator: "contains", value: "Alice", condition: "AND" },
       ];
       const items = [makeItem("item1", "55")];
       const seerrData = makeSeerrData("55", { requestedBy: ["Alice", "Bob"] });

@@ -25,6 +25,7 @@ import {
   serializeSeriesAggregateForEval,
   type AggregableEpisode,
 } from "@/lib/conditions";
+import { isEnumerableField } from "@/lib/conditions/helpers";
 
 /** Batch-fetch cross-system enrichment data for candidate items */
 async function fetchCrossSystemData(
@@ -279,15 +280,16 @@ function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
         break;
       }
       case "contains": {
+        // Resolution is enumerable — `contains` is multi-select list membership.
         const parts = strVal.split("|").filter(Boolean);
         const allDbValues = parts.flatMap((p) => RESOLUTION_DB_VALUES[p] ?? [p]);
-        clause = { OR: allDbValues.map((v) => ({ resolution: { contains: v, mode: "insensitive" as const } })) };
+        clause = { resolution: { in: allDbValues, mode: "insensitive" } };
         break;
       }
       case "notContains": {
         const parts = strVal.split("|").filter(Boolean);
         const allDbValues = parts.flatMap((p) => RESOLUTION_DB_VALUES[p] ?? [p]);
-        clause = { AND: allDbValues.map((v) => ({ NOT: { resolution: { contains: v, mode: "insensitive" as const } } })) };
+        clause = { NOT: { resolution: { in: allDbValues, mode: "insensitive" } } };
         break;
       }
       case "isNull":
@@ -302,7 +304,10 @@ function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
     return applyNegate(clause, negate);
   }
 
-  // Text fields (default)
+  // Text fields (default). Enumerable fields use list-membership for
+  // contains/notContains (mirrors the multi-select UI); free-text fields use
+  // substring search.
+  const enumerable = isEnumerableField(field);
   let clause: Prisma.MediaItemWhereInput;
   switch (operator) {
     case "equals":
@@ -313,7 +318,11 @@ function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
       break;
     case "contains": {
       const values = String(value).split("|").filter(Boolean);
-      if (values.length > 1) {
+      if (enumerable) {
+        clause = values.length === 0
+          ? { [field]: { equals: String(value), mode: "insensitive" } }
+          : { OR: values.map((v) => ({ [field]: { equals: v, mode: "insensitive" as const } })) };
+      } else if (values.length > 1) {
         clause = { OR: values.map((v) => ({ [field]: { contains: v, mode: "insensitive" as const } })) };
       } else {
         clause = { [field]: { contains: String(value), mode: "insensitive" } };
@@ -322,7 +331,11 @@ function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
     }
     case "notContains": {
       const values = String(value).split("|").filter(Boolean);
-      if (values.length > 1) {
+      if (enumerable) {
+        clause = values.length === 0
+          ? { NOT: { [field]: { equals: String(value), mode: "insensitive" } } }
+          : { AND: values.map((v) => ({ NOT: { [field]: { equals: v, mode: "insensitive" as const } } })) };
+      } else if (values.length > 1) {
         clause = { AND: values.map((v) => ({ NOT: { [field]: { contains: v, mode: "insensitive" as const } } })) };
       } else {
         clause = { NOT: { [field]: { contains: String(value), mode: "insensitive" } } };
@@ -386,25 +399,16 @@ function handleStreamField(
       };
       break;
     case "contains": {
+      // Stream language/codec fields are enumerable — list membership semantics.
       const parts = value.split("|").filter(Boolean);
-      if (parts.length > 1) {
-        clause = { OR: parts.map((v) => ({ streams: { some: { streamType, ...knownLangFilter, [columnName]: { contains: v, mode: "insensitive" as const } } } })) };
-      } else {
-        clause = {
-          streams: { some: { streamType, ...knownLangFilter, [columnName]: { contains: value, mode: "insensitive" } } },
-        };
-      }
+      const matchValues = parts.length > 0 ? parts : [value];
+      clause = { OR: matchValues.map((v) => ({ streams: { some: { streamType, ...knownLangFilter, [columnName]: { equals: v, mode: "insensitive" as const } } } })) };
       break;
     }
     case "notContains": {
       const parts = value.split("|").filter(Boolean);
-      if (parts.length > 1) {
-        clause = { AND: parts.map((v) => ({ NOT: { streams: { some: { streamType, ...knownLangFilter, [columnName]: { contains: v, mode: "insensitive" as const } } } } })) };
-      } else {
-        clause = {
-          NOT: { streams: { some: { streamType, ...knownLangFilter, [columnName]: { contains: value, mode: "insensitive" } } } },
-        };
-      }
+      const matchValues = parts.length > 0 ? parts : [value];
+      clause = { AND: matchValues.map((v) => ({ NOT: { streams: { some: { streamType, ...knownLangFilter, [columnName]: { equals: v, mode: "insensitive" as const } } } } })) };
       break;
     }
     case "isNull": {
@@ -525,11 +529,30 @@ function buildQueryStreamQueryClause(group: QueryGroup): Prisma.MediaItemWhereIn
     // Text fields
     else {
       const strValue = String(value);
+      const enumerable = isEnumerableField(field);
       switch (operator) {
         case "equals": cond = { [column]: { equals: strValue, mode: "insensitive" } }; break;
         case "notEquals": cond = { [column]: { not: strValue, mode: "insensitive" } }; break;
-        case "contains": cond = { [column]: { contains: strValue, mode: "insensitive" } }; break;
-        case "notContains": cond = { NOT: { [column]: { contains: strValue, mode: "insensitive" } } }; break;
+        case "contains": {
+          if (enumerable) {
+            const parts = strValue.split("|").filter(Boolean);
+            const matchValues = parts.length > 0 ? parts : [strValue];
+            cond = { OR: matchValues.map((v) => ({ [column]: { equals: v, mode: "insensitive" as const } })) };
+          } else {
+            cond = { [column]: { contains: strValue, mode: "insensitive" } };
+          }
+          break;
+        }
+        case "notContains": {
+          if (enumerable) {
+            const parts = strValue.split("|").filter(Boolean);
+            const matchValues = parts.length > 0 ? parts : [strValue];
+            cond = { AND: matchValues.map((v) => ({ NOT: { [column]: { equals: v, mode: "insensitive" as const } } })) };
+          } else {
+            cond = { NOT: { [column]: { contains: strValue, mode: "insensitive" } } };
+          }
+          break;
+        }
         case "isNull": cond = { [column]: null }; break;
         case "isNotNull": cond = { [column]: { not: null } }; break;
       }
@@ -1396,13 +1419,14 @@ function evaluateStreamRuleInMemory(
       result = !knownStreams.some(s => s[columnName]!.toLowerCase() === value.toLowerCase());
       break;
     case "contains": {
+      // Enumerable multi-select — exact list membership against stream values.
       const parts = value.toLowerCase().split("|").filter(Boolean);
-      result = parts.some(v => knownStreams.some(s => s[columnName]!.toLowerCase().includes(v)));
+      result = parts.some(v => knownStreams.some(s => s[columnName]!.toLowerCase() === v));
       break;
     }
     case "notContains": {
       const parts = value.toLowerCase().split("|").filter(Boolean);
-      result = !parts.some(v => knownStreams.some(s => s[columnName]!.toLowerCase().includes(v)));
+      result = !parts.some(v => knownStreams.some(s => s[columnName]!.toLowerCase() === v));
       break;
     }
     case "matchesWildcard": {
@@ -1547,13 +1571,23 @@ function evaluateQueryRuleInMemory(
     }
     if (field === "matchedByRuleSet") {
       const matchedSets = (item.matchedRuleSets as string[]) ?? [];
-      const strValue = String(value);
+      const matchedLower = matchedSets.map((s) => s.toLowerCase());
+      const strValue = String(value).toLowerCase();
       let result: boolean;
       switch (operator) {
-        case "equals": result = matchedSets.some((s) => s.toLowerCase() === strValue.toLowerCase()); break;
-        case "notEquals": result = !matchedSets.some((s) => s.toLowerCase() === strValue.toLowerCase()); break;
-        case "contains": result = matchedSets.some((s) => s.toLowerCase().includes(strValue.toLowerCase())); break;
-        case "notContains": result = !matchedSets.some((s) => s.toLowerCase().includes(strValue.toLowerCase())); break;
+        case "equals": result = matchedLower.includes(strValue); break;
+        case "notEquals": result = !matchedLower.includes(strValue); break;
+        case "contains": {
+          // Enumerable multi-select — exact list membership against rule-set names.
+          const values = strValue.split("|").filter(Boolean);
+          result = values.some((v) => matchedLower.includes(v));
+          break;
+        }
+        case "notContains": {
+          const values = strValue.split("|").filter(Boolean);
+          result = !values.some((v) => matchedLower.includes(v));
+          break;
+        }
         case "isNull": result = matchedSets.length === 0; break;
         case "isNotNull": result = matchedSets.length > 0; break;
         default: result = false;
@@ -1726,13 +1760,14 @@ function evaluateQueryRuleInMemory(
         case "equals": result = labelLower === valLower; break;
         case "notEquals": result = labelLower !== valLower; break;
         case "contains": {
+          // Resolution is enumerable — `contains` is multi-select list membership.
           const parts = valLower.split("|").filter(Boolean);
-          result = parts.some((p) => labelLower.includes(p));
+          result = parts.some((p) => labelLower === p);
           break;
         }
         case "notContains": {
           const parts = valLower.split("|").filter(Boolean);
-          result = !parts.some((p) => labelLower.includes(p));
+          result = !parts.some((p) => labelLower === p);
           break;
         }
         case "matchesWildcard": result = wildcardToRegex(valLower).test(labelLower); break;
@@ -1767,17 +1802,22 @@ function evaluateQueryRuleInMemory(
   } else {
     const strVal = String(value).toLowerCase();
     const lower = itemStr.toLowerCase();
+    const textEnumerable = isEnumerableField(field);
     switch (operator) {
       case "equals": result = lower === strVal; break;
       case "notEquals": result = lower !== strVal; break;
       case "contains": {
         const values = strVal.split("|").filter(Boolean);
-        result = values.some((v) => lower.includes(v));
+        result = textEnumerable
+          ? values.some((v) => lower === v)
+          : values.some((v) => lower.includes(v));
         break;
       }
       case "notContains": {
         const values = strVal.split("|").filter(Boolean);
-        result = !values.some((v) => lower.includes(v));
+        result = textEnumerable
+          ? !values.some((v) => lower === v)
+          : !values.some((v) => lower.includes(v));
         break;
       }
       default: result = false;
@@ -1844,6 +1884,7 @@ function evaluateStreamQueryRuleAgainstStream(
   // Text fields (including computed)
   const strActual = streamValue != null ? String(streamValue).toLowerCase() : "";
   const strValue = String(value).toLowerCase();
+  const streamEnumerable = isEnumerableField(field);
 
   let result: boolean;
   switch (operator) {
@@ -1851,8 +1892,28 @@ function evaluateStreamQueryRuleAgainstStream(
     case "isNotNull": result = streamValue != null && strActual !== ""; break;
     case "equals": result = strActual === strValue; break;
     case "notEquals": result = strActual !== strValue; break;
-    case "contains": result = strActual.includes(strValue); break;
-    case "notContains": result = !strActual.includes(strValue); break;
+    case "contains": {
+      if (streamEnumerable) {
+        const parts = strValue.split("|").filter(Boolean);
+        result = parts.length > 0
+          ? parts.some((p) => strActual === p)
+          : strActual === strValue;
+      } else {
+        result = strActual.includes(strValue);
+      }
+      break;
+    }
+    case "notContains": {
+      if (streamEnumerable) {
+        const parts = strValue.split("|").filter(Boolean);
+        result = parts.length > 0
+          ? !parts.some((p) => strActual === p)
+          : strActual !== strValue;
+      } else {
+        result = !strActual.includes(strValue);
+      }
+      break;
+    }
     case "matchesWildcard": {
       const re = wildcardToRegex(strValue);
       result = re.test(strActual);

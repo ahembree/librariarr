@@ -242,17 +242,25 @@ describe("evaluateQueryArrRule", () => {
       expect(result).toBe(true);
     });
 
-    it("contains checks for partial match", () => {
+    it("contains is list membership against the selected tag set", () => {
       const result = evaluateQueryArrRule(
-        { id: "r1", field: "arrTag", operator: "contains", value: "imp", condition: "AND" },
+        { id: "r1", field: "arrTag", operator: "contains", value: "important", condition: "AND" },
         makeArrMeta({ tags: ["Important"] }),
       );
       expect(result).toBe(true);
     });
 
-    it("notContains returns false when tag matches", () => {
+    it("contains does not match a substring of an existing tag", () => {
       const result = evaluateQueryArrRule(
-        { id: "r1", field: "arrTag", operator: "notContains", value: "imp", condition: "AND" },
+        { id: "r1", field: "arrTag", operator: "contains", value: "imp", condition: "AND" },
+        makeArrMeta({ tags: ["Important"] }),
+      );
+      expect(result).toBe(false);
+    });
+
+    it("notContains returns false when tag is in the selected list", () => {
+      const result = evaluateQueryArrRule(
+        { id: "r1", field: "arrTag", operator: "notContains", value: "important", condition: "AND" },
         makeArrMeta({ tags: ["Important"] }),
       );
       expect(result).toBe(false);
@@ -473,14 +481,21 @@ describe("evaluateQuerySeerrRule", () => {
       )).toBe(true);
     });
 
-    it("contains checks partial match", () => {
+    it("contains matches an exact requester from the selected list", () => {
       expect(evaluateQuerySeerrRule(
-        { id: "r1", field: "seerrRequestedBy", operator: "contains", value: "adm", condition: "AND" },
+        { id: "r1", field: "seerrRequestedBy", operator: "contains", value: "admin", condition: "AND" },
         makeSeerrMeta({ requestedBy: ["Admin", "User2"] }),
       )).toBe(true);
     });
 
-    it("notContains returns true when no match", () => {
+    it("contains does not match substrings of a requester name", () => {
+      expect(evaluateQuerySeerrRule(
+        { id: "r1", field: "seerrRequestedBy", operator: "contains", value: "adm", condition: "AND" },
+        makeSeerrMeta({ requestedBy: ["Admin", "User2"] }),
+      )).toBe(false);
+    });
+
+    it("notContains returns true when no requester is in the selected list", () => {
       expect(evaluateQuerySeerrRule(
         { id: "r1", field: "seerrRequestedBy", operator: "notContains", value: "xyz", condition: "AND" },
         makeSeerrMeta({ requestedBy: ["Admin"] }),

@@ -1,6 +1,7 @@
 import type { ArrMetadata, ArrDataMap } from "@/lib/rules/engine";
 import type { QueryRule, QueryGroup, RuleCondition } from "./types";
 import { ARR_QUERY_FIELDS } from "./types";
+import { isEnumerableField } from "@/lib/conditions/helpers";
 
 /** Convert a glob-style wildcard pattern to a RegExp */
 function wildcardToRegex(pattern: string): RegExp {
@@ -43,13 +44,14 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
           result = !meta.tags.some((t) => t.toLowerCase() === strVal);
           break;
         case "contains": {
+          // Enumerable multi-select — exact list membership against tag set.
           const values = strVal.split("|").filter(Boolean);
-          result = values.some((v) => meta.tags.some((t) => t.toLowerCase().includes(v)));
+          result = values.some((v) => meta.tags.some((t) => t.toLowerCase() === v));
           break;
         }
         case "notContains": {
           const values = strVal.split("|").filter(Boolean);
-          result = !values.some((v) => meta.tags.some((t) => t.toLowerCase().includes(v)));
+          result = !values.some((v) => meta.tags.some((t) => t.toLowerCase() === v));
           break;
         }
         case "matchesWildcard": {
@@ -69,21 +71,23 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
     }
     case "arrQualityProfile": {
       const strVal = String(value).toLowerCase();
+      const profile = meta.qualityProfile.toLowerCase();
       switch (operator) {
         case "equals":
-          result = meta.qualityProfile.toLowerCase() === strVal;
+          result = profile === strVal;
           break;
         case "notEquals":
-          result = meta.qualityProfile.toLowerCase() !== strVal;
+          result = profile !== strVal;
           break;
         case "contains": {
+          // Enumerable multi-select — exact list membership against profile names.
           const values = strVal.split("|").filter(Boolean);
-          result = values.some((v) => meta.qualityProfile.toLowerCase().includes(v));
+          result = values.some((v) => profile === v);
           break;
         }
         case "notContains": {
           const values = strVal.split("|").filter(Boolean);
-          result = !values.some((v) => meta.qualityProfile.toLowerCase().includes(v));
+          result = !values.some((v) => profile === v);
           break;
         }
         case "matchesWildcard": {
@@ -340,21 +344,27 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
       }
       if (operator === "isNotNull") { result = true; break; }
       const strVal = String(value).toLowerCase();
+      const metaLower = metaVal.toLowerCase();
+      const enumerable = isEnumerableField(field);
       switch (operator) {
         case "equals":
-          result = metaVal.toLowerCase() === strVal;
+          result = metaLower === strVal;
           break;
         case "notEquals":
-          result = metaVal.toLowerCase() !== strVal;
+          result = metaLower !== strVal;
           break;
         case "contains": {
           const values = strVal.split("|").filter(Boolean);
-          result = values.some((v) => metaVal.toLowerCase().includes(v));
+          result = enumerable
+            ? values.some((v) => metaLower === v)
+            : values.some((v) => metaLower.includes(v));
           break;
         }
         case "notContains": {
           const values = strVal.split("|").filter(Boolean);
-          result = !values.some((v) => metaVal.toLowerCase().includes(v));
+          result = enumerable
+            ? !values.some((v) => metaLower === v)
+            : !values.some((v) => metaLower.includes(v));
           break;
         }
         case "matchesWildcard": {

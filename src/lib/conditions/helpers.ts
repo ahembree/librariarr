@@ -1,4 +1,5 @@
 import { CONDITION_FIELDS } from "./fields";
+import { STREAM_QUERY_FIELDS } from "./stream-query";
 import type { ConditionGroup } from "./types";
 
 // ─── Field-set predicates ────────────────────────────────────────────────
@@ -24,6 +25,11 @@ const CROSS_SYSTEM_FIELD_VALUES = new Set([
   "matchedByRuleSet",
   "hasPendingAction",
 ]);
+const ENUMERABLE_FIELD_VALUES = new Set(
+  [...CONDITION_FIELDS, ...STREAM_QUERY_FIELDS]
+    .filter((f) => f.enumerable)
+    .map((f) => f.value),
+);
 
 export function isArrField(field: string): boolean {
   return ARR_FIELD_VALUES.has(field);
@@ -47,6 +53,18 @@ export function isCrossSystemField(field: string): boolean {
 
 export function isSeriesAggregateField(field: string): boolean {
   return SERIES_AGGREGATE_FIELD_VALUES.has(field);
+}
+
+/**
+ * A field is "enumerable" when its values are drawn from a known/finite set
+ * (e.g. quality profile names, codecs, languages). The builder shows a
+ * multi-select dropdown for `contains` / `notContains` on these fields, so
+ * the engine MUST treat those operators as list-membership (exact match
+ * against any selected value) rather than substring search — otherwise
+ * selecting "Default" would also match "Default New".
+ */
+export function isEnumerableField(field: string): boolean {
+  return ENUMERABLE_FIELD_VALUES.has(field);
 }
 
 // Stable arrays for callers that need to enumerate
