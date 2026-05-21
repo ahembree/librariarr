@@ -43,6 +43,21 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // CHANGE_QUALITY_PROFILE_* actions require a target profile id. Fast-fail
+  // here so we don't write N FAILED rows — one per match — for a rule that
+  // is misconfigured at the rule-set level. The UI guards against saving
+  // such a rule, but a direct API write could still land us here.
+  if (
+    ruleSet.actionType &&
+    ruleSet.actionType.startsWith("CHANGE_QUALITY_PROFILE_") &&
+    ruleSet.targetQualityProfileId == null
+  ) {
+    return NextResponse.json(
+      { error: "Rule set has no target quality profile configured" },
+      { status: 400 }
+    );
+  }
+
   // Track episode-level matched IDs for series with seriesScope=false
   const episodeIdMap = new Map<string, string[]>();
 

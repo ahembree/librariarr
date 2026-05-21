@@ -281,7 +281,7 @@ export async function restoreBackup(
           const batch = rows.slice(i, i + BATCH_SIZE);
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           await (tx as any)[table].createMany({
-            data: batch.map((row) => deserializeRow(row as Record<string, unknown>)),
+            data: batch.map((row) => deserializeRow(row as Record<string, unknown>, table)),
             skipDuplicates: true,
           });
 
@@ -453,12 +453,26 @@ function tableToDbName(table: string): string {
   return map[table] ?? table;
 }
 
-// Deserialize date strings back to Date objects for Prisma
-function deserializeRow(row: Record<string, unknown>): Record<string, unknown> {
-  const result = { ...row };
-  for (const [key, value] of Object.entries(result)) {
+// Per-table rename map for legacy field names from older schema versions.
+// Keys are the legacy column name in the backup file, values are the current
+// model field name. Without this, restores of pre-rename backups would crash
+// on `createMany` with "Unknown argument" errors.
+const LEGACY_FIELD_RENAMES: Record<string, Record<string, string>> = {
+  ruleSet: { searchAfterDelete: "searchAfterAction" },
+  lifecycleAction: { searchAfterDelete: "searchAfterAction" },
+};
+
+// Deserialize date strings back to Date objects for Prisma, and migrate any
+// legacy field names so older backups still restore cleanly.
+function deserializeRow(row: Record<string, unknown>, table?: string): Record<string, unknown> {
+  const renames = table ? LEGACY_FIELD_RENAMES[table] : undefined;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row)) {
+    const mappedKey = renames?.[key] ?? key;
     if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)) {
-      result[key] = new Date(value);
+      result[mappedKey] = new Date(value);
+    } else {
+      result[mappedKey] = value;
     }
   }
   return result;

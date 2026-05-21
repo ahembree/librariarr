@@ -72,6 +72,7 @@ interface ActionItem {
   addImportExclusion: boolean;
   addArrTags: string[];
   removeArrTags: string[];
+  targetQualityProfileId: number | null;
   status: string;
   scheduledFor: string;
   executedAt: string | null;
@@ -117,6 +118,7 @@ interface RuleSetGroup {
     addArrTags: string[];
     removeArrTags: string[];
     arrInstanceId: string | null;
+    targetQualityProfileId?: number | null;
     deleted?: boolean;
   };
   items: ActionItem[];
@@ -138,7 +140,7 @@ const STATUS_COLORS: Record<string, string> = {
   FAILED: "bg-red-500/20 text-red-400 border-red-500/30",
 };
 
-function formatActionType(type: string): string {
+function formatActionType(type: string, targetQualityProfileId?: number | null): string {
   const map: Record<string, string> = {
     DO_NOTHING: "Monitor Only",
     DELETE_RADARR: "Delete from Radarr",
@@ -160,7 +162,11 @@ function formatActionType(type: string): string {
     CHANGE_QUALITY_PROFILE_SONARR: "Change Quality Profile (Sonarr)",
     CHANGE_QUALITY_PROFILE_LIDARR: "Change Quality Profile (Lidarr)",
   };
-  return map[type] ?? type;
+  const label = map[type] ?? type;
+  if (type.startsWith("CHANGE_QUALITY_PROFILE_") && targetQualityProfileId != null) {
+    return `${label} → profile #${targetQualityProfileId}`;
+  }
+  return label;
 }
 
 /* ---------- Virtualized action table for a single group ---------- */
@@ -275,7 +281,7 @@ function VirtualizedActionTable({
                   <td className="p-4 align-middle">
                     <div className="space-y-1">
                       <p className="text-sm">
-                        {formatActionType(action.actionType)}
+                        {formatActionType(action.actionType, action.targetQualityProfileId)}
                       </p>
                       {action.addImportExclusion && (
                         <Badge variant="outline" className="text-[10px]">
@@ -1180,7 +1186,7 @@ export default function PendingActionsPage() {
                             </Badge>
                             {group.ruleSet.actionType && (
                               <span className="text-xs text-muted-foreground">
-                                Action: {formatActionType(group.ruleSet.actionType)}
+                                Action: {formatActionType(group.ruleSet.actionType, group.ruleSet.targetQualityProfileId)}
                               </span>
                             )}
                             {(group.ruleSet.addArrTags?.length > 0 || group.ruleSet.removeArrTags?.length > 0) && (
@@ -1323,7 +1329,7 @@ export default function PendingActionsPage() {
                 {(() => {
                   const group = groups.find((g) => g.ruleSet.id === confirmExecuteRuleSetId);
                   if (!group) return "Are you sure?";
-                  return `This will immediately execute ${formatActionType(group.ruleSet.actionType ?? "DO_NOTHING")} on ${group.count} item${group.count !== 1 ? "s" : ""} for "${group.ruleSet.name}". This action cannot be undone.`;
+                  return `This will immediately execute ${formatActionType(group.ruleSet.actionType ?? "DO_NOTHING", group.ruleSet.targetQualityProfileId)} on ${group.count} item${group.count !== 1 ? "s" : ""} for "${group.ruleSet.name}". This action cannot be undone.`;
                 })()}
               </AlertDialogDescription>
             </AlertDialogHeader>
@@ -1370,7 +1376,7 @@ export default function PendingActionsPage() {
               <AlertDialogDescription asChild>
                 <div className="space-y-3">
                   <p>
-                    Retry {formatActionType(confirmRetryAction?.actionType ?? "")} for &quot;{confirmRetryAction?.mediaItem.title}&quot;?
+                    Retry {formatActionType(confirmRetryAction?.actionType ?? "", confirmRetryAction?.targetQualityProfileId)} for &quot;{confirmRetryAction?.mediaItem.title}&quot;?
                   </p>
                   {confirmRetryAction?.error?.includes("title mismatch") && (() => {
                     const arrTitleMatch = confirmRetryAction.error?.match(/Arr returned "([^"]+)"/);

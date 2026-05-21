@@ -517,6 +517,27 @@ describe("Lifecycle Actions", () => {
       expect(body.error).toContain("Arr instance");
     });
 
+    it("returns 400 fast-fail when CHANGE_QUALITY_PROFILE action lacks a target profile", async () => {
+      const user = await createTestUser();
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Missing Target",
+        actionType: "CHANGE_QUALITY_PROFILE_RADARR",
+        arrInstanceId: "arr1",
+        targetQualityProfileId: null,
+      });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/target quality profile/i);
+    });
+
     it("executes DO_NOTHING action for specified media items", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);

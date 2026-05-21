@@ -48,6 +48,22 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Refuse to persist an enabled CHANGE_QUALITY_PROFILE_* action without a
+  // target profile — every scheduled action would just produce a FAILED row
+  // at execution time. The UI guards this too, but a direct API write needs
+  // its own check.
+  if (
+    actionEnabled &&
+    actionType &&
+    actionType.startsWith("CHANGE_QUALITY_PROFILE_") &&
+    (targetQualityProfileId == null)
+  ) {
+    return NextResponse.json(
+      { error: "Change Quality Profile actions require a target quality profile" },
+      { status: 400 }
+    );
+  }
+
   const ruleSet = await prisma.ruleSet.create({
     data: {
       userId: session.userId!,

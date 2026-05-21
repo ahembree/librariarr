@@ -247,6 +247,30 @@ describe("Lifecycle Rules CRUD", () => {
       expect(body.ruleSet.targetQualityProfileId).toBe(7);
     });
 
+    it("returns 400 when CHANGE_QUALITY_PROFILE action is enabled but no target profile is set", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(POST, {
+        url: "/api/lifecycle/rules",
+        method: "POST",
+        body: {
+          name: "Missing Target",
+          type: "MOVIE",
+          rules: [dummyRule],
+          serverIds: [server.id],
+          actionEnabled: true,
+          actionType: "CHANGE_QUALITY_PROFILE_RADARR",
+          arrInstanceId: "some-arr-id",
+          // targetQualityProfileId intentionally omitted
+        },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/target quality profile/i);
+    });
+
     it("returns 400 when targetQualityProfileId is not an integer", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);

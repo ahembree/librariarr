@@ -481,6 +481,35 @@ describe("executeAction", () => {
     expect(mockRadarrClient.updateMovie).not.toHaveBeenCalled();
   });
 
+  it("propagates Arr error from CHANGE_QUALITY_PROFILE_RADARR when the target profile was deleted on Arr", async () => {
+    // Scheduled with a valid id, but the admin removed the profile from
+    // Radarr before execution. Arr's PUT returns an error; we expect the
+    // error to propagate so the action is recorded as FAILED (rather than
+    // silently succeeding). The persistence of targetQualityProfileId on
+    // the FAILED row is covered at the route level — here we just verify
+    // the executor surfaces the underlying Arr error verbatim.
+    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
+    });
+    mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
+      id: 1, title: "Test Movie", tmdbId: 12345, tags: [], qualityProfileId: 3,
+    });
+    mockRadarrClient.updateMovie.mockRejectedValueOnce(
+      new Error("Radarr 400: Quality profile with id 99 not found")
+    );
+
+    await expect(
+      executeAction(makeAction({
+        actionType: "CHANGE_QUALITY_PROFILE_RADARR",
+        targetQualityProfileId: 99,
+        searchAfterAction: true,
+      }))
+    ).rejects.toThrow(/profile.*99.*not found/i);
+
+    // Search must NOT fire when the update itself failed.
+    expect(mockRadarrClient.triggerMovieSearch).not.toHaveBeenCalled();
+  });
+
   it("throws on CHANGE_QUALITY_PROFILE_RADARR without target profile", async () => {
     mockPrisma.radarrInstance.findUnique.mockResolvedValue({
       id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
