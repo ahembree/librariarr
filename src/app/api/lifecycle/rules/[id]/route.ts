@@ -20,7 +20,7 @@ export async function PUT(
 
   const {
     name, rules, seriesScope,
-    enabled, actionEnabled, actionType, actionDelayDays, arrInstanceId, addImportExclusion, searchAfterDelete,
+    enabled, actionEnabled, actionType, actionDelayDays, arrInstanceId, targetQualityProfileId, addImportExclusion, searchAfterAction,
     addArrTags, removeArrTags,
     collectionEnabled, collectionName, collectionSortName, collectionHomeScreen, collectionRecommended, collectionSort,
     discordNotifyOnAction,
@@ -48,6 +48,34 @@ export async function PUT(
     }
   }
 
+  // If the merged state would be an enabled CHANGE_QUALITY_PROFILE_* action
+  // with no target profile, refuse the write. Have to merge with the current
+  // record because PUT only sends changed fields.
+  if (actionEnabled !== undefined || actionType !== undefined || targetQualityProfileId !== undefined) {
+    const current = await prisma.ruleSet.findFirst({
+      where: { id, userId: session.userId },
+      select: { actionEnabled: true, actionType: true, targetQualityProfileId: true },
+    });
+    if (current) {
+      const nextActionEnabled = actionEnabled ?? current.actionEnabled;
+      const nextActionType = actionType !== undefined ? actionType : current.actionType;
+      const nextTargetId = targetQualityProfileId !== undefined
+        ? targetQualityProfileId
+        : current.targetQualityProfileId;
+      if (
+        nextActionEnabled &&
+        nextActionType &&
+        nextActionType.startsWith("CHANGE_QUALITY_PROFILE_") &&
+        nextTargetId == null
+      ) {
+        return NextResponse.json(
+          { error: "Change Quality Profile actions require a target quality profile" },
+          { status: 400 }
+        );
+      }
+    }
+  }
+
   const updateData: Record<string, unknown> = {};
   if (name !== undefined) updateData.name = name;
   if (rules !== undefined) updateData.rules = rules;
@@ -56,8 +84,9 @@ export async function PUT(
   if (actionType !== undefined) updateData.actionType = actionType;
   if (actionDelayDays !== undefined) updateData.actionDelayDays = actionDelayDays;
   if (arrInstanceId !== undefined) updateData.arrInstanceId = arrInstanceId;
+  if (targetQualityProfileId !== undefined) updateData.targetQualityProfileId = targetQualityProfileId;
   if (addImportExclusion !== undefined) updateData.addImportExclusion = addImportExclusion;
-  if (searchAfterDelete !== undefined) updateData.searchAfterDelete = searchAfterDelete;
+  if (searchAfterAction !== undefined) updateData.searchAfterAction = searchAfterAction;
   if (addArrTags !== undefined) updateData.addArrTags = addArrTags;
   if (removeArrTags !== undefined) updateData.removeArrTags = removeArrTags;
   if (enabled !== undefined) updateData.enabled = enabled;

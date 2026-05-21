@@ -35,6 +35,7 @@ interface ActionItem {
   addImportExclusion: boolean;
   addArrTags: string[];
   removeArrTags: string[];
+  targetQualityProfileId: number | null;
   status: string;
   scheduledFor: string;
   executedAt: string | null;
@@ -52,10 +53,11 @@ interface RuleSetGroup {
     actionType: string | null;
     actionDelayDays: number;
     addImportExclusion: boolean;
-    searchAfterDelete: boolean;
+    searchAfterAction: boolean;
     addArrTags: string[];
     removeArrTags: string[];
     arrInstanceId: string | null;
+    targetQualityProfileId?: number | null;
   };
   items: ActionItem[];
   count: number;
@@ -167,8 +169,8 @@ async function handlePendingGrouped(userId: string) {
       ruleSet: {
         select: {
           id: true, name: true, type: true, actionType: true, actionDelayDays: true,
-          addImportExclusion: true, searchAfterDelete: true, addArrTags: true,
-          removeArrTags: true, arrInstanceId: true,
+          addImportExclusion: true, searchAfterAction: true, addArrTags: true,
+          removeArrTags: true, arrInstanceId: true, targetQualityProfileId: true,
         },
       },
     },
@@ -229,8 +231,8 @@ async function handlePendingGrouped(userId: string) {
       ruleSet: {
         select: {
           id: true, name: true, type: true, actionType: true, actionDelayDays: true,
-          addImportExclusion: true, searchAfterDelete: true, addArrTags: true,
-          removeArrTags: true, arrInstanceId: true,
+          addImportExclusion: true, searchAfterAction: true, addArrTags: true,
+          removeArrTags: true, arrInstanceId: true, targetQualityProfileId: true,
         },
       },
     },
@@ -298,6 +300,7 @@ async function handlePendingGrouped(userId: string) {
       addImportExclusion: a.addImportExclusion,
       addArrTags: a.addArrTags,
       removeArrTags: a.removeArrTags,
+      targetQualityProfileId: a.targetQualityProfileId,
       status: a.status,
       scheduledFor: a.scheduledFor.toISOString(),
       executedAt: a.executedAt?.toISOString() ?? null,
@@ -333,6 +336,7 @@ async function handlePendingGrouped(userId: string) {
       addImportExclusion: m.ruleSet.addImportExclusion,
       addArrTags: m.ruleSet.addArrTags,
       removeArrTags: m.ruleSet.removeArrTags,
+      targetQualityProfileId: m.ruleSet.targetQualityProfileId,
       status: "PENDING",
       scheduledFor: estimatedDate.toISOString(),
       executedAt: null,
@@ -379,8 +383,8 @@ async function handleStatusGrouped(userId: string, status: string) {
       ruleSet: {
         select: {
           id: true, name: true, type: true, actionType: true, actionDelayDays: true,
-          addImportExclusion: true, searchAfterDelete: true, addArrTags: true,
-          removeArrTags: true, arrInstanceId: true,
+          addImportExclusion: true, searchAfterAction: true, addArrTags: true,
+          removeArrTags: true, arrInstanceId: true, targetQualityProfileId: true,
         },
       },
     },
@@ -442,10 +446,11 @@ async function handleStatusGrouped(userId: string, status: string) {
       actionType: a.actionType,
       actionDelayDays: 0,
       addImportExclusion: false,
-      searchAfterDelete: false,
+      searchAfterAction: false,
       addArrTags: [] as string[],
       removeArrTags: [] as string[],
       arrInstanceId: null,
+      targetQualityProfileId: a.targetQualityProfileId ?? null,
       deleted: true,
     };
 
@@ -486,6 +491,7 @@ async function handleStatusGrouped(userId: string, status: string) {
       addImportExclusion: a.addImportExclusion,
       addArrTags: a.addArrTags,
       removeArrTags: a.removeArrTags,
+      targetQualityProfileId: a.targetQualityProfileId,
       status: a.status,
       scheduledFor: a.scheduledFor.toISOString(),
       executedAt: a.executedAt?.toISOString() ?? null,

@@ -420,8 +420,9 @@ model RuleSet {
   actionType            String?
   actionDelayDays       Int               @default(7)
   arrInstanceId         String?
+  targetQualityProfileId Int?
   addImportExclusion    Boolean           @default(false)
-  searchAfterDelete     Boolean           @default(false)
+  searchAfterAction     Boolean           @default(false)
   addArrTags            String[]          @default([])
   removeArrTags         String[]          @default([])
   collectionEnabled     Boolean           @default(false)
@@ -464,8 +465,9 @@ model LifecycleAction {
   executedAt      DateTime?
   error           String?
   arrInstanceId        String?
+  targetQualityProfileId Int?
   addImportExclusion   Boolean               @default(false)
-  searchAfterDelete    Boolean               @default(false)
+  searchAfterAction    Boolean               @default(false)
   matchedMediaItemIds  String[]              @default([])
   addArrTags           String[]              @default([])
   removeArrTags        String[]              @default([])

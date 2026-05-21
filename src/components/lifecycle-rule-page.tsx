@@ -116,8 +116,9 @@ interface RuleSetSnapshot {
   actionType: string;
   actionDelayDays: number;
   arrInstanceId: string;
+  targetQualityProfileId: number | null;
   addImportExclusion: boolean;
-  searchAfterDelete: boolean;
+  searchAfterAction: boolean;
   addArrTags: string;
   removeArrTags: string;
   collectionEnabled: boolean;
@@ -143,8 +144,9 @@ interface SavedRuleSet {
   actionType: string | null;
   actionDelayDays: number;
   arrInstanceId: string | null;
+  targetQualityProfileId?: number | null;
   addImportExclusion: boolean;
-  searchAfterDelete?: boolean;
+  searchAfterAction?: boolean;
   addArrTags: string[];
   removeArrTags: string[];
   collectionEnabled: boolean;
@@ -162,6 +164,10 @@ interface SavedRuleSet {
 
 function isDestructiveAction(actionType: string): boolean {
   return actionType.includes("DELETE");
+}
+
+function isQualityProfileChangeAction(actionType: string): boolean {
+  return actionType.startsWith("CHANGE_QUALITY_PROFILE_");
 }
 
 function legacyToGroups(rules: Rule[] | RuleGroup[]): RuleGroup[] {
@@ -210,7 +216,7 @@ interface RuleSetExport {
   actionType: string | null;
   actionDelayDays: number;
   addImportExclusion: boolean;
-  searchAfterDelete?: boolean;
+  searchAfterAction?: boolean;
   addArrTags: string[];
   removeArrTags: string[];
   collectionEnabled: boolean;
@@ -628,8 +634,15 @@ export function LifecycleRulePage({
   const [actionType, setActionType] = useState<string>(defaultActionType);
   const [actionDelayDays, setActionDelayDays] = useState(7);
   const [arrInstanceId, setArrInstanceId] = useState<string>("");
+  const [targetQualityProfileId, setTargetQualityProfileId] = useState<number | null>(null);
+  const [arrQualityProfiles, setArrQualityProfiles] = useState<Array<{ id: number; name: string }>>([]);
+  // Tracks the lifecycle of the per-instance metadata fetch so the dropdown
+  // can distinguish "loading" from "fetch failed" from "instance has no
+  // profiles" — and so Save can be blocked until we actually know whether
+  // the saved targetQualityProfileId is valid on this instance.
+  const [arrProfilesStatus, setArrProfilesStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [addImportExclusion, setAddImportExclusion] = useState(false);
-  const [searchAfterDelete, setSearchAfterDelete] = useState(false);
+  const [searchAfterAction, setSearchAfterAction] = useState(false);
   const [addArrTags, setAddArrTags] = useState<string[]>([]);
   const [removeArrTags, setRemoveArrTags] = useState<string[]>([]);
   const [manageTagsEnabled, setManageTagsEnabled] = useState(false);
@@ -712,8 +725,9 @@ export function LifecycleRulePage({
       snapshot.actionType !== actionType ||
       snapshot.actionDelayDays !== actionDelayDays ||
       snapshot.arrInstanceId !== arrInstanceId ||
+      snapshot.targetQualityProfileId !== targetQualityProfileId ||
       snapshot.addImportExclusion !== addImportExclusion ||
-      snapshot.searchAfterDelete !== searchAfterDelete ||
+      snapshot.searchAfterAction !== searchAfterAction ||
       snapshot.addArrTags !== JSON.stringify([...addArrTags].sort()) ||
       snapshot.removeArrTags !== JSON.stringify([...removeArrTags].sort()) ||
       snapshot.collectionEnabled !== collectionEnabled ||
@@ -730,7 +744,7 @@ export function LifecycleRulePage({
   }, [
     snapshot,
     name, groups, enabled, seriesScope, actionEnabled, actionType, actionDelayDays,
-    arrInstanceId, addImportExclusion, searchAfterDelete, addArrTags, removeArrTags,
+    arrInstanceId, targetQualityProfileId, addImportExclusion, searchAfterAction, addArrTags, removeArrTags,
     collectionEnabled, collectionName, collectionSortName, collectionHomeScreen,
     collectionRecommended, collectionSort, discordNotifyOnAction, discordNotifyOnMatch, stickyMatches, serverIds,
   ]);
@@ -744,6 +758,20 @@ export function LifecycleRulePage({
       snapshot.serverIds !== JSON.stringify([...serverIds].sort())
     );
   }, [snapshot, groups, seriesScope, serverIds]);
+
+  // The saved targetQualityProfileId no longer exists on the selected Arr
+  // instance (e.g. the user deleted the profile from Sonarr/Radarr/Lidarr,
+  // or this rule was imported from a different instance). Block save until
+  // a valid profile is re-picked so we don't persist a broken id. Only
+  // evaluate after the metadata fetch has resolved — while loading or after
+  // a fetch error we have no authoritative list to compare against.
+  const targetProfileMissing = useMemo(() => {
+    if (!isQualityProfileChangeAction(actionType)) return false;
+    if (!arrInstanceId) return false;
+    if (arrProfilesStatus !== "ready") return false;
+    if (targetQualityProfileId === null) return false;
+    return !arrQualityProfiles.some((p) => p.id === targetQualityProfileId);
+  }, [actionType, arrInstanceId, arrProfilesStatus, arrQualityProfiles, targetQualityProfileId]);
 
   // Post-save match search prompt
   const [showSaveOptions, setShowSaveOptions] = useState(false);
@@ -868,22 +896,35 @@ export function LifecycleRulePage({
   // The "reset when arrInstanceId is cleared" half of this lives in handleArrInstanceChange below
   // — keeping it in the change handler avoids the set-state-in-effect anti-pattern.
   useEffect(() => {
+    // Idle reset is handled by the imperative setters (handleArrInstanceChange,
+    // load/import/new flows) — the effect only runs when we have an instance
+    // to fetch from.
     if (!arrInstanceId) return;
     let cancelled = false;
     void (async () => {
+      // "loading" is set inside the async block (after commit) rather than
+      // in the effect body so we don't synchronously cascade renders.
+      setArrProfilesStatus("loading");
       try {
         const res = await fetch(`/api/integrations/${arrApiPath}/${arrInstanceId}/metadata`);
-        if (cancelled || !res.ok) return;
+        if (cancelled) return;
+        if (!res.ok) {
+          setArrProfilesStatus("error");
+          return;
+        }
         const data = await res.json();
         if (cancelled) return;
+        const profiles: Array<{ id: number; name: string }> = data.qualityProfiles ?? [];
+        setArrQualityProfiles(profiles);
         setDistinctValues((prev) => ({
           ...prev,
           arrTag: data.tags?.map((t: { label: string }) => t.label) ?? [],
-          arrQualityProfile: data.qualityProfiles?.map((p: { name: string }) => p.name) ?? [],
+          arrQualityProfile: profiles.map((p) => p.name),
           arrOriginalLanguage: data.languages ?? [],
         }));
+        setArrProfilesStatus("ready");
       } catch {
-        // Silent failure
+        if (!cancelled) setArrProfilesStatus("error");
       }
     })();
     return () => {
@@ -893,6 +934,11 @@ export function LifecycleRulePage({
 
   const handleArrInstanceChange = (newId: string) => {
     setArrInstanceId(newId);
+    setTargetQualityProfileId(null);
+    // Clear stale profiles immediately so the dropdown can't briefly show
+    // IDs from the previous Arr instance while the new fetch is in flight.
+    setArrQualityProfiles([]);
+    setArrProfilesStatus(newId ? "loading" : "idle");
     if (!newId) {
       setDistinctValues((prev) => ({ ...prev, arrTag: [], arrQualityProfile: [] }));
       setManageTagsEnabled(false);
@@ -970,8 +1016,9 @@ export function LifecycleRulePage({
         actionType: actionType || null,
         actionDelayDays,
         arrInstanceId: arrInstanceId || null,
+        targetQualityProfileId: isQualityProfileChangeAction(actionType) ? targetQualityProfileId : null,
         addImportExclusion,
-        searchAfterDelete,
+        searchAfterAction,
         addArrTags,
         removeArrTags,
         collectionEnabled,
@@ -1281,8 +1328,9 @@ export function LifecycleRulePage({
     actionType,
     actionDelayDays,
     arrInstanceId,
+    targetQualityProfileId,
     addImportExclusion,
-    searchAfterDelete,
+    searchAfterAction,
     addArrTags: JSON.stringify([...addArrTags].sort()),
     removeArrTags: JSON.stringify([...removeArrTags].sort()),
     collectionEnabled,
@@ -1309,9 +1357,14 @@ export function LifecycleRulePage({
     setActionEnabled(ruleSet.actionEnabled);
     setActionType(ruleSet.actionType ?? defaultActionType);
     setActionDelayDays(ruleSet.actionDelayDays);
+    // Clear any profile list left over from a previously loaded rule set —
+    // the effect below will repopulate from the new instance's metadata.
+    setArrQualityProfiles([]);
+    setArrProfilesStatus(ruleSet.arrInstanceId ? "loading" : "idle");
     setArrInstanceId(ruleSet.arrInstanceId ?? "");
+    setTargetQualityProfileId(ruleSet.targetQualityProfileId ?? null);
     setAddImportExclusion(ruleSet.addImportExclusion ?? false);
-    setSearchAfterDelete(ruleSet.searchAfterDelete ?? false);
+    setSearchAfterAction(ruleSet.searchAfterAction ?? false);
     setAddArrTags(ruleSet.addArrTags ?? []);
     setRemoveArrTags(ruleSet.removeArrTags ?? []);
     setManageTagsEnabled((ruleSet.addArrTags ?? []).length > 0 || (ruleSet.removeArrTags ?? []).length > 0);
@@ -1364,8 +1417,9 @@ export function LifecycleRulePage({
       actionType: ruleSet.actionType ?? defaultActionType,
       actionDelayDays: ruleSet.actionDelayDays,
       arrInstanceId: ruleSet.arrInstanceId ?? "",
+      targetQualityProfileId: ruleSet.targetQualityProfileId ?? null,
       addImportExclusion: ruleSet.addImportExclusion ?? false,
-      searchAfterDelete: ruleSet.searchAfterDelete ?? false,
+      searchAfterAction: ruleSet.searchAfterAction ?? false,
       addArrTags: JSON.stringify([...(ruleSet.addArrTags ?? [])].sort()),
       removeArrTags: JSON.stringify([...(ruleSet.removeArrTags ?? [])].sort()),
       collectionEnabled: ruleSet.collectionEnabled ?? false,
@@ -1426,8 +1480,11 @@ export function LifecycleRulePage({
     setActionType(defaultActionType);
     setActionDelayDays(7);
     setArrInstanceId("");
+    setTargetQualityProfileId(null);
+    setArrQualityProfiles([]);
+    setArrProfilesStatus("idle");
     setAddImportExclusion(false);
-    setSearchAfterDelete(false);
+    setSearchAfterAction(false);
     setStickyMatches(false);
     setAddArrTags([]);
     setRemoveArrTags([]);
@@ -1458,8 +1515,11 @@ export function LifecycleRulePage({
       actionEnabled,
       actionType: actionType || null,
       actionDelayDays,
+      // Quality-profile ids are Arr-instance-specific and not portable across
+      // installs, so we deliberately omit targetQualityProfileId from exports.
+      // Imports require the user to pick a profile after selecting an instance.
       addImportExclusion,
-      searchAfterDelete,
+      searchAfterAction,
       addArrTags,
       removeArrTags,
       collectionEnabled,
@@ -1510,8 +1570,13 @@ export function LifecycleRulePage({
       setActionType(data.actionType ?? defaultActionType);
       setActionDelayDays(data.actionDelayDays ?? 7);
       setArrInstanceId("");
+      setArrProfilesStatus("idle");
+      // Quality-profile ids are instance-specific — force the user to pick
+      // a profile fresh after selecting an Arr instance.
+      setTargetQualityProfileId(null);
+      setArrQualityProfiles([]);
       setAddImportExclusion(data.addImportExclusion ?? false);
-      setSearchAfterDelete(data.searchAfterDelete ?? false);
+      setSearchAfterAction(data.searchAfterAction ?? false);
       setAddArrTags(data.addArrTags ?? []);
       setRemoveArrTags(data.removeArrTags ?? []);
       setManageTagsEnabled((data.addArrTags ?? []).length > 0 || (data.removeArrTags ?? []).length > 0);
@@ -1936,6 +2001,68 @@ export function LifecycleRulePage({
                   </div>
                 </div>
 
+                {isQualityProfileChangeAction(actionType) && (
+                  <div>
+                    <Label>Target quality profile</Label>
+                    <Select
+                      value={
+                        targetQualityProfileId !== null && !targetProfileMissing
+                          ? String(targetQualityProfileId)
+                          : ""
+                      }
+                      onValueChange={(v) => setTargetQualityProfileId(v ? parseInt(v, 10) : null)}
+                      disabled={
+                        !arrInstanceId ||
+                        arrProfilesStatus === "loading" ||
+                        arrProfilesStatus === "error" ||
+                        arrQualityProfiles.length === 0
+                      }
+                    >
+                      <SelectTrigger
+                        className={`mt-1.5 sm:w-72${arrInstanceId && arrProfilesStatus === "ready" && (targetQualityProfileId === null || targetProfileMissing) ? " border-destructive" : ""}`}
+                      >
+                        <SelectValue
+                          placeholder={
+                            !arrInstanceId
+                              ? `Select a ${arrServiceName} server above`
+                              : arrProfilesStatus === "loading"
+                                ? `Loading profiles from ${arrServiceName}…`
+                                : arrProfilesStatus === "error"
+                                  ? `Failed to load profiles from ${arrServiceName}`
+                                  : arrQualityProfiles.length === 0
+                                    ? "No profiles available"
+                                    : targetProfileMissing
+                                      ? `Saved profile (id ${targetQualityProfileId}) no longer exists`
+                                      : "Select a quality profile"
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {arrQualityProfiles.map((profile) => (
+                          <SelectItem key={profile.id} value={String(profile.id)}>
+                            {profile.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {arrInstanceId && arrProfilesStatus === "error" ? (
+                      <p className="mt-1.5 text-xs text-destructive flex items-center gap-1.5">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        Could not reach {arrServiceName} to load quality profiles. Check the server is online and try again.
+                      </p>
+                    ) : targetProfileMissing ? (
+                      <p className="mt-1.5 text-xs text-destructive flex items-center gap-1.5">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        The previously selected profile (id {targetQualityProfileId}) is no longer on this {arrServiceName} instance. Pick a new one to continue.
+                      </p>
+                    ) : (
+                      <p className="mt-1.5 text-xs text-muted-foreground">
+                        Items already on this profile will be skipped.
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {actionType.startsWith("DELETE_") && !actionType.includes("DELETE_FILES") && (
                   <div className="flex items-center gap-3">
                     <Switch
@@ -1953,12 +2080,25 @@ export function LifecycleRulePage({
                 {actionType.includes("DELETE_FILES") && (
                   <div className="flex items-center gap-3">
                     <Switch
-                      id="search-after-delete"
-                      checked={searchAfterDelete}
-                      onCheckedChange={setSearchAfterDelete}
+                      id="search-after-file-delete"
+                      checked={searchAfterAction}
+                      onCheckedChange={setSearchAfterAction}
                     />
-                    <Label htmlFor="search-after-delete">
+                    <Label htmlFor="search-after-file-delete">
                       Search for new copy after file deletion
+                    </Label>
+                  </div>
+                )}
+
+                {isQualityProfileChangeAction(actionType) && (
+                  <div className="flex items-center gap-3">
+                    <Switch
+                      id="search-after-profile-change"
+                      checked={searchAfterAction}
+                      onCheckedChange={setSearchAfterAction}
+                    />
+                    <Label htmlFor="search-after-profile-change">
+                      Search for upgrade after profile change
                     </Label>
                   </div>
                 )}
@@ -2288,7 +2428,7 @@ export function LifecycleRulePage({
                   setShowNewSaveOptions(true);
                 }
               }}
-              disabled={!isDirty || justSaved || !name || groups.length === 0 || !validateAllRules(groups) || loading || serverIds.length === 0 || (actionEnabled && (actionType !== "DO_NOTHING" || addArrTags.length > 0 || removeArrTags.length > 0) && !arrInstanceId) || (collectionEnabled && !collectionName?.trim()) || (ruleUsesArr && !arrInstanceId)}
+              disabled={!isDirty || justSaved || !name || groups.length === 0 || !validateAllRules(groups) || loading || serverIds.length === 0 || (actionEnabled && (actionType !== "DO_NOTHING" || addArrTags.length > 0 || removeArrTags.length > 0) && !arrInstanceId) || (actionEnabled && isQualityProfileChangeAction(actionType) && targetQualityProfileId === null) || (actionEnabled && targetProfileMissing) || (actionEnabled && isQualityProfileChangeAction(actionType) && !!arrInstanceId && arrProfilesStatus !== "ready") || (collectionEnabled && !collectionName?.trim()) || (ruleUsesArr && !arrInstanceId)}
               className={justSaved ? "bg-green-600 hover:bg-green-600 text-white" : ""}
             >
               {loading ? (

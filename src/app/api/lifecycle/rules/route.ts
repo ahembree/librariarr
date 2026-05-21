@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
 
   const {
     name, type, rules, seriesScope,
-    enabled, actionEnabled, actionType, actionDelayDays, arrInstanceId, addImportExclusion, searchAfterDelete,
+    enabled, actionEnabled, actionType, actionDelayDays, arrInstanceId, targetQualityProfileId, addImportExclusion, searchAfterAction,
     addArrTags, removeArrTags,
     collectionEnabled, collectionName, collectionSortName, collectionHomeScreen, collectionRecommended, collectionSort,
     discordNotifyOnAction,
@@ -48,6 +48,22 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Refuse to persist an enabled CHANGE_QUALITY_PROFILE_* action without a
+  // target profile — every scheduled action would just produce a FAILED row
+  // at execution time. The UI guards this too, but a direct API write needs
+  // its own check.
+  if (
+    actionEnabled &&
+    actionType &&
+    actionType.startsWith("CHANGE_QUALITY_PROFILE_") &&
+    (targetQualityProfileId == null)
+  ) {
+    return NextResponse.json(
+      { error: "Change Quality Profile actions require a target quality profile" },
+      { status: 400 }
+    );
+  }
+
   const ruleSet = await prisma.ruleSet.create({
     data: {
       userId: session.userId!,
@@ -60,8 +76,9 @@ export async function POST(request: NextRequest) {
       actionType: actionType ?? null,
       actionDelayDays: actionDelayDays ?? 7,
       arrInstanceId: arrInstanceId ?? null,
+      targetQualityProfileId: targetQualityProfileId ?? null,
       addImportExclusion: addImportExclusion ?? false,
-      searchAfterDelete: searchAfterDelete ?? false,
+      searchAfterAction: searchAfterAction ?? false,
       addArrTags: addArrTags ?? [],
       removeArrTags: removeArrTags ?? [],
       collectionEnabled: collectionEnabled ?? false,

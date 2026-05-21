@@ -48,7 +48,8 @@ next-env.d.ts
 /src/generated/
 
 # AI assistant and IDE configs
-.claude/
+.claude/*
+!.claude/skills/
 .serena/
 .mcp.json
 .vscode/

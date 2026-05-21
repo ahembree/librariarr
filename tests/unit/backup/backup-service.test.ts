@@ -328,6 +328,62 @@ describe("restoreBackup", () => {
       restoreBackup("librariarr-backup-2024-01-01T00-00-00.json.gz"),
     ).rejects.toThrow("Invalid backup file structure");
   });
+
+  it("renames legacy searchAfterDelete to searchAfterAction on restore", async () => {
+    // Backups taken before migration 0008 use `searchAfterDelete`. Without
+    // the per-table key rename, Prisma createMany would reject the legacy
+    // field and break disaster recovery for upgrading users.
+    const backupData = {
+      metadata: {
+        version: 1,
+        appVersion: "1.0.0",
+        createdAt: new Date().toISOString(),
+        tables: { ruleSet: 1, lifecycleAction: 1 },
+      },
+      data: {
+        ruleSet: [
+          {
+            id: "rs1",
+            name: "Old Rule",
+            type: "MOVIE",
+            searchAfterDelete: true,
+          },
+        ],
+        lifecycleAction: [
+          {
+            id: "la1",
+            ruleSetId: "rs1",
+            actionType: "DELETE_FILES_RADARR",
+            searchAfterDelete: true,
+          },
+        ],
+      },
+    };
+    const compressed = gzipSync(Buffer.from(JSON.stringify(backupData)));
+    mockFs.readFile.mockResolvedValue(compressed);
+
+    await restoreBackup("librariarr-backup-2024-01-01T00-00-00.json.gz");
+
+    expect(mockPrismaModels.ruleSet.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.arrayContaining([
+          expect.objectContaining({ id: "rs1", searchAfterAction: true }),
+        ]),
+      }),
+    );
+    const ruleSetCall = mockPrismaModels.ruleSet.createMany.mock.calls[0][0];
+    expect(ruleSetCall.data[0]).not.toHaveProperty("searchAfterDelete");
+
+    expect(mockPrismaModels.lifecycleAction.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.arrayContaining([
+          expect.objectContaining({ id: "la1", searchAfterAction: true }),
+        ]),
+      }),
+    );
+    const actionCall = mockPrismaModels.lifecycleAction.createMany.mock.calls[0][0];
+    expect(actionCall.data[0]).not.toHaveProperty("searchAfterDelete");
+  });
 });
 
 describe("listBackups", () => {

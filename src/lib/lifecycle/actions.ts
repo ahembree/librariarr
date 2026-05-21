@@ -43,8 +43,9 @@ export interface ActionRecord {
   id: string;
   actionType: string;
   arrInstanceId: string | null;
+  targetQualityProfileId: number | null;
   addImportExclusion: boolean;
-  searchAfterDelete: boolean;
+  searchAfterAction: boolean;
   matchedMediaItemIds: string[];
   addArrTags: string[];
   removeArrTags: string[];
@@ -62,11 +63,14 @@ export interface ActionRecord {
 
 /**
  * Normalize a title for fuzzy comparison between Plex/Jellyfin/Emby and Arr systems.
- * Handles common differences: article placement, year suffixes, punctuation, case.
+ * Handles common differences: article placement, year suffixes, punctuation, case,
+ * and Unicode diacritics (e.g. "Abramović" ↔ "Abramovic").
  */
 export function normalizeTitle(title: string): string {
   return title
     .toLowerCase()
+    .normalize("NFD")                   // decompose accented chars (ć → c + combining ́)
+    .replace(/[̀-ͯ]/g, "")    // strip combining diacritical marks
     .replace(/,\s*(the|a|an)$/i, "")   // "Matrix, The" → "Matrix"
     .replace(/^(the|a|an)\s+/i, "")     // "The Matrix" → "Matrix"
     .replace(/\s*\([^)]*\)\s*/g, " ")   // "Movie (2024)" → "Movie "
@@ -417,7 +421,7 @@ async function executeUnmonitorDeleteFilesRadarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(movie.tmdbId, movie.title, action.mediaItem.year ?? 0);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }
 }
@@ -437,7 +441,7 @@ async function executeUnmonitorDeleteFilesSonarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(series.tvdbId, series.title);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerSeriesSearch(series.id);
   }
 }
@@ -465,7 +469,7 @@ async function executeUnmonitorDeleteFilesLidarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(artist.foreignArtistId, artist.artistName);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
 }
@@ -541,7 +545,7 @@ async function executeMonitorDeleteFilesRadarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(movie.tmdbId, movie.title, action.mediaItem.year ?? 0);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }
 }
@@ -563,7 +567,7 @@ async function executeMonitorDeleteFilesSonarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(series.tvdbId, series.title);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerSeriesSearch(series.id);
   }
 }
@@ -580,7 +584,7 @@ async function executeMonitorDeleteFilesLidarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(artist.foreignArtistId, artist.artistName);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
 }
@@ -595,7 +599,7 @@ async function executeDeleteFilesRadarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(movie.tmdbId, movie.title, action.mediaItem.year ?? 0);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }
 }
@@ -614,7 +618,7 @@ async function executeDeleteFilesSonarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(series.tvdbId, series.title);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
     await client.triggerSeriesSearch(series.id);
   }
 }
@@ -628,7 +632,63 @@ async function executeDeleteFilesLidarr(action: ActionRecord) {
   if (action.addImportExclusion) {
     await client.addExclusion(artist.foreignArtistId, artist.artistName);
   }
-  if (action.searchAfterDelete) {
+  if (action.searchAfterAction) {
+    await client.triggerArtistSearch(artist.id);
+  }
+}
+
+// --- Change Quality Profile executors ---
+
+async function executeChangeQualityProfileRadarr(action: ActionRecord) {
+  if (action.targetQualityProfileId == null) {
+    throw new Error("No target quality profile configured");
+  }
+  const { client, movie } = await resolveRadarrMovie(action);
+  if (movie.qualityProfileId === action.targetQualityProfileId) {
+    logger.info(
+      "Lifecycle",
+      `Skipping CHANGE_QUALITY_PROFILE_RADARR for "${movie.title}" — already on profile ${action.targetQualityProfileId}`,
+    );
+    return;
+  }
+  await client.updateMovie(movie.id, { qualityProfileId: action.targetQualityProfileId });
+  if (action.searchAfterAction) {
+    await client.triggerMovieSearch(movie.id);
+  }
+}
+
+async function executeChangeQualityProfileSonarr(action: ActionRecord) {
+  if (action.targetQualityProfileId == null) {
+    throw new Error("No target quality profile configured");
+  }
+  const { client, series } = await resolveSonarrSeries(action);
+  if (series.qualityProfileId === action.targetQualityProfileId) {
+    logger.info(
+      "Lifecycle",
+      `Skipping CHANGE_QUALITY_PROFILE_SONARR for "${series.title}" — already on profile ${action.targetQualityProfileId}`,
+    );
+    return;
+  }
+  await client.updateSeries(series.id, { qualityProfileId: action.targetQualityProfileId });
+  if (action.searchAfterAction) {
+    await client.triggerSeriesSearch(series.id);
+  }
+}
+
+async function executeChangeQualityProfileLidarr(action: ActionRecord) {
+  if (action.targetQualityProfileId == null) {
+    throw new Error("No target quality profile configured");
+  }
+  const { client, artist } = await resolveLidarrArtist(action);
+  if (artist.qualityProfileId === action.targetQualityProfileId) {
+    logger.info(
+      "Lifecycle",
+      `Skipping CHANGE_QUALITY_PROFILE_LIDARR for "${artist.artistName}" — already on profile ${action.targetQualityProfileId}`,
+    );
+    return;
+  }
+  await client.updateArtist(artist.id, { qualityProfileId: action.targetQualityProfileId });
+  if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
 }
@@ -695,6 +755,15 @@ export async function executeAction(action: ActionRecord): Promise<void> {
       break;
     case "DELETE_FILES_LIDARR":
       await executeDeleteFilesLidarr(action);
+      break;
+    case "CHANGE_QUALITY_PROFILE_RADARR":
+      await executeChangeQualityProfileRadarr(action);
+      break;
+    case "CHANGE_QUALITY_PROFILE_SONARR":
+      await executeChangeQualityProfileSonarr(action);
+      break;
+    case "CHANGE_QUALITY_PROFILE_LIDARR":
+      await executeChangeQualityProfileLidarr(action);
       break;
     default:
       throw new Error(`Unknown action type: ${action.actionType}`);

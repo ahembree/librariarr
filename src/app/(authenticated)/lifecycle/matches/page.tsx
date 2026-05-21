@@ -91,8 +91,9 @@ interface RuleSetMatch {
     actionType: string | null;
     actionDelayDays: number;
     arrInstanceId: string | null;
+    targetQualityProfileId: number | null;
     addImportExclusion: boolean;
-    searchAfterDelete: boolean;
+    searchAfterAction: boolean;
     addArrTags: string[];
     removeArrTags: string[];
     collectionEnabled: boolean;
@@ -819,7 +820,7 @@ export default function RuleMatchesPage() {
     });
   };
 
-  const formatActionType = (type: string | null) => {
+  const formatActionType = (type: string | null, targetQualityProfileId?: number | null) => {
     if (!type) return "None";
     const map: Record<string, string> = {
       DO_NOTHING: "Monitor Only",
@@ -838,8 +839,15 @@ export default function RuleMatchesPage() {
       DELETE_FILES_RADARR: "Delete Files Only (Radarr)",
       DELETE_FILES_SONARR: "Delete Files Only (Sonarr)",
       DELETE_FILES_LIDARR: "Delete Files Only (Lidarr)",
+      CHANGE_QUALITY_PROFILE_RADARR: "Change Quality Profile (Radarr)",
+      CHANGE_QUALITY_PROFILE_SONARR: "Change Quality Profile (Sonarr)",
+      CHANGE_QUALITY_PROFILE_LIDARR: "Change Quality Profile (Lidarr)",
     };
-    return map[type] ?? type;
+    const label = map[type] ?? type;
+    if (type.startsWith("CHANGE_QUALITY_PROFILE_") && targetQualityProfileId != null) {
+      return `${label} → profile #${targetQualityProfileId}`;
+    }
+    return label;
   };
 
   if (loading) {
@@ -999,7 +1007,7 @@ export default function RuleMatchesPage() {
                         </Badge>
                         {match.ruleSet.actionEnabled && (
                           <span className="text-xs text-muted-foreground">
-                            Action: {formatActionType(match.ruleSet.actionType)}
+                            Action: {formatActionType(match.ruleSet.actionType, match.ruleSet.targetQualityProfileId)}
                           </span>
                         )}
                         {(match.ruleSet.addArrTags?.length > 0 || match.ruleSet.removeArrTags?.length > 0) && (

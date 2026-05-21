@@ -79,8 +79,9 @@ function makeAction(overrides: Partial<ActionRecord> = {}): ActionRecord {
     id: "action1",
     actionType: "DELETE_RADARR",
     arrInstanceId: "arr1",
+    targetQualityProfileId: null,
     addImportExclusion: false,
-    searchAfterDelete: false,
+    searchAfterAction: false,
     matchedMediaItemIds: [],
     addArrTags: [],
     removeArrTags: [],
@@ -248,7 +249,7 @@ describe("executeAction", () => {
 
     await executeAction(makeAction({
       actionType: "UNMONITOR_DELETE_FILES_RADARR",
-      searchAfterDelete: true,
+      searchAfterAction: true,
     }));
 
     expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { monitored: false });
@@ -409,6 +410,248 @@ describe("executeAction", () => {
 
     expect(mockSonarrClient.updateSeries).toHaveBeenCalledWith(2, { monitored: false });
     expect(mockSonarrClient.deleteEpisodeFiles).toHaveBeenCalledWith([10, 11]);
+  });
+
+  it("executes CHANGE_QUALITY_PROFILE_RADARR when current profile differs", async () => {
+    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
+    });
+    mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
+      id: 1, title: "Test Movie", tmdbId: 12345, tags: [], qualityProfileId: 3,
+    });
+
+    await executeAction(makeAction({
+      actionType: "CHANGE_QUALITY_PROFILE_RADARR",
+      targetQualityProfileId: 7,
+    }));
+
+    expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { qualityProfileId: 7 });
+    expect(mockRadarrClient.triggerMovieSearch).not.toHaveBeenCalled();
+  });
+
+  it("triggers a Radarr search after CHANGE_QUALITY_PROFILE_RADARR when searchAfterAction is true", async () => {
+    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
+    });
+    mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
+      id: 1, title: "Test Movie", tmdbId: 12345, tags: [], qualityProfileId: 3,
+    });
+
+    await executeAction(makeAction({
+      actionType: "CHANGE_QUALITY_PROFILE_RADARR",
+      targetQualityProfileId: 7,
+      searchAfterAction: true,
+    }));
+
+    expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { qualityProfileId: 7 });
+    expect(mockRadarrClient.triggerMovieSearch).toHaveBeenCalledWith(1);
+  });
+
+  it("does NOT trigger a Radarr search when CHANGE_QUALITY_PROFILE_RADARR is skipped as no-op", async () => {
+    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
+    });
+    mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
+      id: 1, title: "Test Movie", tmdbId: 12345, tags: [], qualityProfileId: 7,
+    });
+
+    await executeAction(makeAction({
+      actionType: "CHANGE_QUALITY_PROFILE_RADARR",
+      targetQualityProfileId: 7,
+      searchAfterAction: true,
+    }));
+
+    expect(mockRadarrClient.updateMovie).not.toHaveBeenCalled();
+    expect(mockRadarrClient.triggerMovieSearch).not.toHaveBeenCalled();
+  });
+
+  it("skips CHANGE_QUALITY_PROFILE_RADARR when item already on target profile", async () => {
+    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
+    });
+    mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
+      id: 1, title: "Test Movie", tmdbId: 12345, tags: [], qualityProfileId: 7,
+    });
+
+    await executeAction(makeAction({
+      actionType: "CHANGE_QUALITY_PROFILE_RADARR",
+      targetQualityProfileId: 7,
+    }));
+
+    expect(mockRadarrClient.updateMovie).not.toHaveBeenCalled();
+  });
+
+  it("propagates Arr error from CHANGE_QUALITY_PROFILE_RADARR when the target profile was deleted on Arr", async () => {
+    // Scheduled with a valid id, but the admin removed the profile from
+    // Radarr before execution. Arr's PUT returns an error; we expect the
+    // error to propagate so the action is recorded as FAILED (rather than
+    // silently succeeding). The persistence of targetQualityProfileId on
+    // the FAILED row is covered at the route level — here we just verify
+    // the executor surfaces the underlying Arr error verbatim.
+    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
+    });
+    mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
+      id: 1, title: "Test Movie", tmdbId: 12345, tags: [], qualityProfileId: 3,
+    });
+    mockRadarrClient.updateMovie.mockRejectedValueOnce(
+      new Error("Radarr 400: Quality profile with id 99 not found")
+    );
+
+    await expect(
+      executeAction(makeAction({
+        actionType: "CHANGE_QUALITY_PROFILE_RADARR",
+        targetQualityProfileId: 99,
+        searchAfterAction: true,
+      }))
+    ).rejects.toThrow(/profile.*99.*not found/i);
+
+    // Search must NOT fire when the update itself failed.
+    expect(mockRadarrClient.triggerMovieSearch).not.toHaveBeenCalled();
+  });
+
+  it("throws on CHANGE_QUALITY_PROFILE_RADARR without target profile", async () => {
+    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
+    });
+    await expect(executeAction(makeAction({
+      actionType: "CHANGE_QUALITY_PROFILE_RADARR",
+      targetQualityProfileId: null,
+    }))).rejects.toThrow("No target quality profile configured");
+  });
+
+  it("executes CHANGE_QUALITY_PROFILE_SONARR when current profile differs", async () => {
+    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
+    });
+    mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({
+      id: 2, title: "Test Show", tvdbId: 67890, tags: [], qualityProfileId: 1,
+    });
+
+    const action = makeAction({
+      actionType: "CHANGE_QUALITY_PROFILE_SONARR",
+      targetQualityProfileId: 4,
+      mediaItem: {
+        id: "item1", title: "Test Show", parentTitle: null, year: 2024,
+        externalIds: [{ source: "TVDB", externalId: "67890" }],
+      },
+    });
+
+    await executeAction(action);
+
+    expect(mockSonarrClient.updateSeries).toHaveBeenCalledWith(2, { qualityProfileId: 4 });
+    expect(mockSonarrClient.triggerSeriesSearch).not.toHaveBeenCalled();
+  });
+
+  it("triggers a Sonarr search after CHANGE_QUALITY_PROFILE_SONARR when searchAfterAction is true", async () => {
+    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
+    });
+    mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({
+      id: 2, title: "Test Show", tvdbId: 67890, tags: [], qualityProfileId: 1,
+    });
+
+    await executeAction(makeAction({
+      actionType: "CHANGE_QUALITY_PROFILE_SONARR",
+      targetQualityProfileId: 4,
+      searchAfterAction: true,
+      mediaItem: {
+        id: "item1", title: "Test Show", parentTitle: null, year: 2024,
+        externalIds: [{ source: "TVDB", externalId: "67890" }],
+      },
+    }));
+
+    expect(mockSonarrClient.updateSeries).toHaveBeenCalledWith(2, { qualityProfileId: 4 });
+    expect(mockSonarrClient.triggerSeriesSearch).toHaveBeenCalledWith(2);
+  });
+
+  it("skips CHANGE_QUALITY_PROFILE_SONARR when item already on target profile", async () => {
+    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
+    });
+    mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({
+      id: 2, title: "Test Show", tvdbId: 67890, tags: [], qualityProfileId: 4,
+    });
+
+    const action = makeAction({
+      actionType: "CHANGE_QUALITY_PROFILE_SONARR",
+      targetQualityProfileId: 4,
+      mediaItem: {
+        id: "item1", title: "Test Show", parentTitle: null, year: 2024,
+        externalIds: [{ source: "TVDB", externalId: "67890" }],
+      },
+    });
+
+    await executeAction(action);
+
+    expect(mockSonarrClient.updateSeries).not.toHaveBeenCalled();
+  });
+
+  it("executes CHANGE_QUALITY_PROFILE_LIDARR when current profile differs", async () => {
+    mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true,
+    });
+    mockLidarrClient.getArtistByMusicBrainzId.mockResolvedValue({
+      id: 5, artistName: "Test Artist", foreignArtistId: "mb-123", tags: [], qualityProfileId: 2,
+    });
+
+    const action = makeAction({
+      actionType: "CHANGE_QUALITY_PROFILE_LIDARR",
+      targetQualityProfileId: 6,
+      mediaItem: {
+        id: "item1", title: "Test Artist", parentTitle: null, year: null,
+        externalIds: [{ source: "MUSICBRAINZ", externalId: "mb-123" }],
+      },
+    });
+
+    await executeAction(action);
+
+    expect(mockLidarrClient.updateArtist).toHaveBeenCalledWith(5, { qualityProfileId: 6 });
+    expect(mockLidarrClient.triggerArtistSearch).not.toHaveBeenCalled();
+  });
+
+  it("triggers a Lidarr search after CHANGE_QUALITY_PROFILE_LIDARR when searchAfterAction is true", async () => {
+    mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true,
+    });
+    mockLidarrClient.getArtistByMusicBrainzId.mockResolvedValue({
+      id: 5, artistName: "Test Artist", foreignArtistId: "mb-123", tags: [], qualityProfileId: 2,
+    });
+
+    await executeAction(makeAction({
+      actionType: "CHANGE_QUALITY_PROFILE_LIDARR",
+      targetQualityProfileId: 6,
+      searchAfterAction: true,
+      mediaItem: {
+        id: "item1", title: "Test Artist", parentTitle: null, year: null,
+        externalIds: [{ source: "MUSICBRAINZ", externalId: "mb-123" }],
+      },
+    }));
+
+    expect(mockLidarrClient.updateArtist).toHaveBeenCalledWith(5, { qualityProfileId: 6 });
+    expect(mockLidarrClient.triggerArtistSearch).toHaveBeenCalledWith(5);
+  });
+
+  it("skips CHANGE_QUALITY_PROFILE_LIDARR when item already on target profile", async () => {
+    mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true,
+    });
+    mockLidarrClient.getArtistByMusicBrainzId.mockResolvedValue({
+      id: 5, artistName: "Test Artist", foreignArtistId: "mb-123", tags: [], qualityProfileId: 6,
+    });
+
+    const action = makeAction({
+      actionType: "CHANGE_QUALITY_PROFILE_LIDARR",
+      targetQualityProfileId: 6,
+      mediaItem: {
+        id: "item1", title: "Test Artist", parentTitle: null, year: null,
+        externalIds: [{ source: "MUSICBRAINZ", externalId: "mb-123" }],
+      },
+    });
+
+    await executeAction(action);
+
+    expect(mockLidarrClient.updateArtist).not.toHaveBeenCalled();
   });
 });
 
