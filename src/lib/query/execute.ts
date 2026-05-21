@@ -19,20 +19,18 @@ import { lookupSeerrMeta } from "@/lib/rules/engine";
 import {
   MB_IN_BYTES,
   DURATION_MS_PER_MIN,
-  RESOLUTION_DB_VALUES,
   wildcardToRegex,
   aggregateEpisodesIntoSeries,
   serializeSeriesAggregateForEval,
   type AggregableEpisode,
 } from "@/lib/conditions";
-import { isEnumerableField, isNonNullableNonTextField, isNonNullableTextField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
+import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
 import {
   applyNegate,
-  withNullSafety,
-  applyNegateNullable,
   UNSATISFIABLE_WHERE,
-  MATCH_ALL_WHERE,
   isUnconfiguredContainsRule,
+  FIELD_HANDLERS,
+  textGenericHandler,
 } from "@/lib/conditions/where-builder";
 
 /** Batch-fetch cross-system enrichment data for candidate items */
@@ -132,272 +130,20 @@ function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
     return handleStreamField(field, operator, String(value), negate);
   }
 
-  // Genre (JSON array)
-  if (field === GENRE_FIELD) {
-    return handleGenreField(operator, String(value), negate);
-  }
-
-  // Labels (JSON array — same handling as genre)
-  if (field === LABELS_FIELD) {
-    return handleGenreField(operator, String(value), negate, "labels");
-  }
-
   // External ID presence
   if (field === EXTERNAL_ID_FIELD) {
     return handleExternalIdField(operator, String(value), negate);
   }
 
-  // File size (user inputs MB, DB stores bytes as BigInt)
-  if (field === "fileSize") {
-    const bytesValue = BigInt(Math.round(Number(value) * MB_IN_BYTES));
-    let clause: Prisma.MediaItemWhereInput;
-    switch (operator) {
-      // Positive ops on nullable BigInt: applyNegateNullable adds OR null on negate.
-      case "greaterThan": return applyNegateNullable("fileSize", { fileSize: { gt: bytesValue } }, negate);
-      case "greaterThanOrEqual": return applyNegateNullable("fileSize", { fileSize: { gte: bytesValue } }, negate);
-      case "lessThan": return applyNegateNullable("fileSize", { fileSize: { lt: bytesValue } }, negate);
-      case "lessThanOrEqual": return applyNegateNullable("fileSize", { fileSize: { lte: bytesValue } }, negate);
-      case "equals": return applyNegateNullable("fileSize", { fileSize: bytesValue }, negate);
-      case "between": {
-        const [minStr, maxStr] = String(value).split(",");
-        return applyNegateNullable("fileSize", { fileSize: { gte: BigInt(Math.round(Number(minStr) * MB_IN_BYTES)), lte: BigInt(Math.round(Number(maxStr) * MB_IN_BYTES)) } }, negate);
-      }
-      case "notEquals": clause = withNullSafety("fileSize", { fileSize: { not: bytesValue } }); break;
-      case "isNull": clause = { fileSize: null }; break;
-      case "isNotNull": clause = { fileSize: { not: null } }; break;
-      default: return {};
-    }
-    return applyNegate(clause, negate);
-  }
+  // Field-specific WHERE-emitting handlers live in where-builder.ts and are
+  // shared with the rule engine. The dispatcher above handles all the
+  // query-engine-specific routing (stream relation, external) before
+  // reaching this lookup.
+  const handler = FIELD_HANDLERS[field];
+  if (handler) return handler(operator, value, field, negate);
 
-  // Duration (user inputs minutes, DB stores milliseconds)
-  if (field === "duration") {
-    const msValue = Number(value) * DURATION_MS_PER_MIN;
-    let clause: Prisma.MediaItemWhereInput;
-    switch (operator) {
-      case "greaterThan": return applyNegateNullable("duration", { duration: { gt: msValue } }, negate);
-      case "greaterThanOrEqual": return applyNegateNullable("duration", { duration: { gte: msValue } }, negate);
-      case "lessThan": return applyNegateNullable("duration", { duration: { lt: msValue } }, negate);
-      case "lessThanOrEqual": return applyNegateNullable("duration", { duration: { lte: msValue } }, negate);
-      case "equals": return applyNegateNullable("duration", { duration: Math.round(msValue) }, negate);
-      case "between": {
-        const [minStr, maxStr] = String(value).split(",");
-        return applyNegateNullable("duration", { duration: { gte: Number(minStr) * DURATION_MS_PER_MIN, lte: Number(maxStr) * DURATION_MS_PER_MIN } }, negate);
-      }
-      case "notEquals": clause = withNullSafety("duration", { duration: { not: Math.round(msValue) } }); break;
-      case "isNull": clause = { duration: null }; break;
-      case "isNotNull": clause = { duration: { not: null } }; break;
-      default: return {};
-    }
-    return applyNegate(clause, negate);
-  }
-
-  // Boolean fields (isWatchlisted is non-nullable in the schema).
-  if (field === "isWatchlisted") {
-    if (operator === "isNull") return applyNegate(UNSATISFIABLE_WHERE, negate);
-    if (operator === "isNotNull") return applyNegate(MATCH_ALL_WHERE, negate);
-
-    const boolVal = String(value).toLowerCase() === "true";
-    let boolClause: Prisma.MediaItemWhereInput;
-    switch (operator) {
-      case "equals":
-        boolClause = { isWatchlisted: boolVal };
-        break;
-      case "notEquals":
-        boolClause = { isWatchlisted: !boolVal };
-        break;
-      default:
-        // Unknown operator on a non-nullable column — refuse to match anything.
-        return UNSATISFIABLE_WHERE;
-    }
-    return applyNegate(boolClause, negate);
-  }
-
-  // Date fields
-  const dateFields = new Set(["lastPlayedAt", "addedAt", "originallyAvailableAt"]);
-  if (dateFields.has(field)) {
-    let clause: Prisma.MediaItemWhereInput;
-    switch (operator) {
-      case "before": return applyNegateNullable(field, { [field]: { lt: new Date(String(value)) } }, negate);
-      case "after": return applyNegateNullable(field, { [field]: { gt: new Date(String(value)) } }, negate);
-      case "inLastDays": {
-        const daysAgo = new Date();
-        daysAgo.setDate(daysAgo.getDate() - Number(value));
-        return applyNegateNullable(field, { [field]: { gte: daysAgo } }, negate);
-      }
-      case "notInLastDays": {
-        const daysAgo = new Date();
-        daysAgo.setDate(daysAgo.getDate() - Number(value));
-        return applyNegateNullable(field, { [field]: { lt: daysAgo } }, negate);
-      }
-      case "equals": {
-        const dayStart = new Date(String(value));
-        const dayEnd = new Date(dayStart);
-        dayEnd.setDate(dayEnd.getDate() + 1);
-        return applyNegateNullable(field, { [field]: { gte: dayStart, lt: dayEnd } }, negate);
-      }
-      case "between": {
-        const [fromStr, toStr] = String(value).split(",");
-        const endDate = new Date(toStr);
-        endDate.setDate(endDate.getDate() + 1);
-        return applyNegateNullable(field, { [field]: { gte: new Date(fromStr), lt: endDate } }, negate);
-      }
-      case "notEquals": {
-        const dayStart = new Date(String(value));
-        const dayEnd = new Date(dayStart);
-        dayEnd.setDate(dayEnd.getDate() + 1);
-        clause = withNullSafety(field, { OR: [{ [field]: { lt: dayStart } }, { [field]: { gte: dayEnd } }] });
-        break;
-      }
-      case "isNull": clause = { [field]: null }; break;
-      case "isNotNull": clause = { [field]: { not: null } }; break;
-      default: return {};
-    }
-    return applyNegate(clause, negate);
-  }
-
-  // Numeric fields
-  const numericFields = new Set([
-    "playCount", "videoBitrate", "audioChannels", "year",
-    "videoBitDepth", "audioSamplingRate", "audioBitrate",
-    "rating", "audienceRating", "ratingCount",
-  ]);
-  if (numericFields.has(field)) {
-    const numValue = Number(value);
-    let clause: Prisma.MediaItemWhereInput;
-    switch (operator) {
-      case "equals": return applyNegateNullable(field, { [field]: numValue }, negate);
-      case "greaterThan": return applyNegateNullable(field, { [field]: { gt: numValue } }, negate);
-      case "greaterThanOrEqual": return applyNegateNullable(field, { [field]: { gte: numValue } }, negate);
-      case "lessThan": return applyNegateNullable(field, { [field]: { lt: numValue } }, negate);
-      case "lessThanOrEqual": return applyNegateNullable(field, { [field]: { lte: numValue } }, negate);
-      case "between": {
-        const [minStr, maxStr] = String(value).split(",");
-        return applyNegateNullable(field, { [field]: { gte: Number(minStr), lte: Number(maxStr) } }, negate);
-      }
-      case "notEquals": clause = withNullSafety(field, { [field]: { not: numValue } }); break;
-      case "isNull":
-        if (isNonNullableNonTextField(field)) { clause = UNSATISFIABLE_WHERE; break; }
-        clause = { [field]: null };
-        break;
-      case "isNotNull":
-        if (isNonNullableNonTextField(field)) { clause = MATCH_ALL_WHERE; break; }
-        clause = { [field]: { not: null } };
-        break;
-      default: return {};
-    }
-    return applyNegate(clause, negate);
-  }
-
-  // Resolution field — map display labels (e.g. "480P") to raw DB values (e.g. "480", "480p")
-  if (field === "resolution") {
-    const strVal = String(value);
-    let clause: Prisma.MediaItemWhereInput;
-    switch (operator) {
-      case "equals": {
-        const dbValues = RESOLUTION_DB_VALUES[strVal];
-        const positive: Prisma.MediaItemWhereInput = dbValues
-          ? { resolution: { in: dbValues, mode: "insensitive" } }
-          : { resolution: { equals: strVal, mode: "insensitive" } };
-        return applyNegateNullable("resolution", positive, negate);
-      }
-      case "notEquals": {
-        const dbValues = RESOLUTION_DB_VALUES[strVal];
-        const notClause: Prisma.MediaItemWhereInput = dbValues
-          ? { NOT: { resolution: { in: dbValues, mode: "insensitive" } } }
-          : { resolution: { not: strVal, mode: "insensitive" } };
-        clause = withNullSafety("resolution", notClause);
-        break;
-      }
-      case "contains": {
-        // Resolution is enumerable — `contains` is multi-select list membership.
-        const parts = strVal.split("|").filter(Boolean);
-        const allDbValues = parts.flatMap((p) => RESOLUTION_DB_VALUES[p] ?? [p]);
-        return applyNegateNullable("resolution", { resolution: { in: allDbValues, mode: "insensitive" } }, negate);
-      }
-      case "notContains": {
-        const parts = strVal.split("|").filter(Boolean);
-        const allDbValues = parts.flatMap((p) => RESOLUTION_DB_VALUES[p] ?? [p]);
-        clause = withNullSafety("resolution", { NOT: { resolution: { in: allDbValues, mode: "insensitive" } } });
-        break;
-      }
-      case "isNull":
-        clause = { OR: [{ resolution: null }, { resolution: "" }] };
-        break;
-      case "isNotNull":
-        clause = { AND: [{ resolution: { not: null } }, { NOT: { resolution: "" } }] };
-        break;
-      default:
-        return {};
-    }
-    return applyNegate(clause, negate);
-  }
-
-  // Text fields (default). Enumerable fields use list-membership for
-  // contains/notContains (mirrors the multi-select UI); free-text fields use
-  // substring search.
-  const enumerable = isEnumerableField(field);
-  let clause: Prisma.MediaItemWhereInput;
-  switch (operator) {
-    case "equals":
-      return applyNegateNullable(field, { [field]: { equals: String(value), mode: "insensitive" } }, negate);
-    case "notEquals":
-      clause = withNullSafety(field, { [field]: { not: String(value), mode: "insensitive" } });
-      break;
-    case "contains": {
-      const values = String(value).split("|").filter(Boolean);
-      let positive: Prisma.MediaItemWhereInput;
-      if (enumerable) {
-        positive = values.length === 0
-          ? { [field]: { equals: String(value), mode: "insensitive" } }
-          : { OR: values.map((v) => ({ [field]: { equals: v, mode: "insensitive" as const } })) };
-      } else if (values.length > 1) {
-        positive = { OR: values.map((v) => ({ [field]: { contains: v, mode: "insensitive" as const } })) };
-      } else {
-        positive = { [field]: { contains: String(value), mode: "insensitive" } };
-      }
-      return applyNegateNullable(field, positive, negate);
-    }
-    case "notContains": {
-      const values = String(value).split("|").filter(Boolean);
-      let notClause: Prisma.MediaItemWhereInput;
-      if (enumerable) {
-        notClause = values.length === 0
-          ? { NOT: { [field]: { equals: String(value), mode: "insensitive" } } }
-          : { AND: values.map((v) => ({ NOT: { [field]: { equals: v, mode: "insensitive" as const } } })) };
-      } else if (values.length > 1) {
-        notClause = { AND: values.map((v) => ({ NOT: { [field]: { contains: v, mode: "insensitive" as const } } })) };
-      } else {
-        notClause = { NOT: { [field]: { contains: String(value), mode: "insensitive" } } };
-      }
-      clause = withNullSafety(field, notClause);
-      break;
-    }
-    case "isNull":
-      // Prisma 7 rejects `{ field: null }` on non-nullable columns. See
-      // src/lib/conditions/field-metadata.ts for the per-type rationale; the
-      // rule engine handler is the canonical sibling implementation.
-      if (isNonNullableNonTextField(field)) {
-        clause = UNSATISFIABLE_WHERE;
-        break;
-      }
-      clause = isNonNullableTextField(field)
-        ? { [field]: "" }
-        : { OR: [{ [field]: null }, { [field]: "" }] };
-      break;
-    case "isNotNull":
-      if (isNonNullableNonTextField(field)) {
-        clause = MATCH_ALL_WHERE;
-        break;
-      }
-      clause = isNonNullableTextField(field)
-        ? { NOT: { [field]: "" } }
-        : { AND: [{ [field]: { not: null } }, { NOT: { [field]: "" } }] };
-      break;
-    default:
-      return {};
-  }
-  return applyNegate(clause, negate);
+  // Text-generic fallback for unrecognized text fields.
+  return textGenericHandler(operator, value, field, negate);
 }
 
 function handleStreamField(
@@ -473,56 +219,6 @@ function handleStreamField(
       clause = { streams: { some: { streamType, ...hasValueFilter } } };
       break;
     }
-    default:
-      return {};
-  }
-  return applyNegate(clause, negate);
-}
-
-function handleGenreField(
-  operator: string,
-  value: string,
-  negate?: boolean,
-  column: string = "genres",
-): Prisma.MediaItemWhereInput {
-  // Enumerable multi-select: `contains` with "Action|Comedy" means the array
-  // includes ANY of the selected values.
-  const parts = (operator === "contains" || operator === "notContains")
-    ? value.split("|").filter(Boolean)
-    : [value];
-  const matchValues = parts.length > 0 ? parts : [value];
-  let clause: Prisma.MediaItemWhereInput;
-  switch (operator) {
-    case "equals":
-      clause = { [column]: { array_contains: value } };
-      break;
-    case "contains":
-      clause = matchValues.length === 1
-        ? { [column]: { array_contains: matchValues[0] } }
-        : { OR: matchValues.map((v) => ({ [column]: { array_contains: v } })) };
-      break;
-    case "notEquals":
-      // JSON array notEquals: include NULL JSON columns (no array → not equal to value).
-      clause = {
-        OR: [
-          { [column]: { equals: Prisma.DbNull } },
-          { NOT: { [column]: { array_contains: value } } },
-        ],
-      };
-      break;
-    case "notContains": {
-      const notClause: Prisma.MediaItemWhereInput = matchValues.length === 1
-        ? { NOT: { [column]: { array_contains: matchValues[0] } } }
-        : { AND: matchValues.map((v) => ({ NOT: { [column]: { array_contains: v } } })) };
-      clause = { OR: [{ [column]: { equals: Prisma.DbNull } }, notClause] };
-      break;
-    }
-    case "isNull":
-      clause = { [column]: { equals: Prisma.DbNull } };
-      break;
-    case "isNotNull":
-      clause = { NOT: { [column]: { equals: Prisma.DbNull } } };
-      break;
     default:
       return {};
   }
