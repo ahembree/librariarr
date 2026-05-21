@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.18.0](https://github.com/ahembree/librariarr/compare/v0.17.1...v0.18.0) (2026-05-21)
+
+
+### Features
+
+* **lifecycle:** add Change Quality Profile action for Arr apps ([9bd2ad9](https://github.com/ahembree/librariarr/commit/9bd2ad97a743926374c821435ea4c64b561327e0))
+* **lifecycle:** add Change Quality Profile action for Arr apps ([1ce9f61](https://github.com/ahembree/librariarr/commit/1ce9f61af9215ce4beade2316431d676a12c09b9))
+* **lifecycle:** trigger Arr search after quality profile change ([36e7b9d](https://github.com/ahembree/librariarr/commit/36e7b9db1b7b56ea6317c19f3d1ffac7a842d6d1))
+
+
+### Bug Fixes
+
+* add additional guards and tests ([bbae71d](https://github.com/ahembree/librariarr/commit/bbae71d042b4741e17db7a667a13071660dbc5cd))
+* **docs:** shadow root postcss config so astro build doesn't load tailwind plugin ([8641d3e](https://github.com/ahembree/librariarr/commit/8641d3eb20b0bdcbc35d7a4fc13e0d499252c741))
+* **lifecycle:** fix bugs with quality profile changes ([21dc54b](https://github.com/ahembree/librariarr/commit/21dc54b737489686b5cdc0e92ad3e285e106c006))
+* **lifecycle:** fix unicode diacritic matching ([c0759dd](https://github.com/ahembree/librariarr/commit/c0759ddce5b575bef38c064832ccc5682376ca7d))
+* **lifecycle:** label new action type and reset profile list on switch ([96a6e9f](https://github.com/ahembree/librariarr/commit/96a6e9f6a591fd33b53bcfc909ba8e2aaf363b3c))
+* **lifecycle:** surface stale quality profile + persist target id on failed exec ([14d8ff0](https://github.com/ahembree/librariarr/commit/14d8ff086035ed7b602ec91687b1672211378c75))
+* **rules:** block match-all from unconfigured contains/notContains ([7ee03a3](https://github.com/ahembree/librariarr/commit/7ee03a39ed7c728c9786db337c09910d16216c39))
+* **rules:** block match-all from unknown operator, type mismatch, or malformed value ([6ca88b2](https://github.com/ahembree/librariarr/commit/6ca88b2d4225e56461e22ad250efa394aa85257c))
+* **rules:** handle isNull/isNotNull on non-nullable text fields ([6a092a5](https://github.com/ahembree/librariarr/commit/6a092a52eb776947663282ada2a108716e374eb8))
+* **rules:** handle pipe-separated multi-select for genre and labels ([3168e7e](https://github.com/ahembree/librariarr/commit/3168e7e70e90dd160c103973a9c76305ffb8f164))
+* **rules:** use list membership for contains on enumerable fields ([3b1278e](https://github.com/ahembree/librariarr/commit/3b1278e0c5440c8691a616599fedb513be8ec13c))
+
 ## [0.17.1](https://github.com/ahembree/librariarr/compare/v0.17.0...v0.17.1) (2026-05-16)
 
 
