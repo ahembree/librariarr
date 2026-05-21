@@ -1,4 +1,5 @@
 import { CONDITION_FIELDS } from "./fields";
+import { isNonNullableNonTextField } from "./field-metadata";
 import { CONDITION_OPERATORS } from "./operators";
 import { STREAM_QUERY_FIELDS } from "./stream-query";
 import type { ConditionGroup, ConditionFieldType } from "./types";
@@ -108,6 +109,27 @@ export function isOperatorApplicable(operator: string, field: string): boolean {
   return false;
 }
 
+/**
+ * UI-level operator filter. Defers to isOperatorApplicable for type checking,
+ * then hides isNull / isNotNull when the field is non-nullable AND not a String
+ * — for those columns the engine correctly returns UNSATISFIABLE/MATCH_ALL,
+ * which is technically right but produces a useless rule ("Play Count Is Empty"
+ * always matches 0, "Is Not Empty" always matches all). The rule builder uses
+ * this to omit those operators from the dropdown; the engine still accepts
+ * them if a rule somehow contains one (e.g. from a saved rule pre-dating this
+ * filter), it just returns the trivial result.
+ *
+ * Non-nullable String fields (title) keep isNull/isNotNull because the engine
+ * substitutes empty-string semantics — "Title Is Empty" is a meaningful query.
+ */
+export function isOperatorVisible(operator: string, field: string): boolean {
+  if (!isOperatorApplicable(operator, field)) return false;
+  if ((operator === "isNull" || operator === "isNotNull") && isNonNullableNonTextField(field)) {
+    return false;
+  }
+  return true;
+}
+
 const VALUELESS_OPERATORS = new Set(["isNull", "isNotNull"]);
 
 /**
@@ -174,26 +196,15 @@ export function isValueValidForRule(
   return true;
 }
 
-/**
- * Text fields that the Prisma schema marks `String` (not `String?`).
- *
- * Prisma 7 throws `Argument 'not' is missing` for `{ field: { not: null } }`
- * and rejects `{ field: null }` outright on non-nullable columns. The
- * generic text-field WHERE builder needs to emit different clauses for
- * `isNull` / `isNotNull` against these — semantically the "no value"
- * state is the empty string, not SQL NULL.
- *
- * Keep this list in sync with `prisma/schema.prisma`: it should contain
- * every CONDITION_FIELDS / STREAM_QUERY_FIELDS entry whose schema type
- * is `String` (not `String?`).
- */
-export const NON_NULLABLE_TEXT_FIELDS: ReadonlySet<string> = new Set([
-  "title",
-]);
-
-export function isNonNullableTextField(field: string): boolean {
-  return NON_NULLABLE_TEXT_FIELDS.has(field);
-}
+// Non-nullable field metadata lives in ./field-metadata.ts. Re-exported here
+// for backward compatibility with existing imports.
+export {
+  isNonNullableField,
+  isNonNullableTextField,
+  isNonNullableNonTextField,
+  getNonNullableType,
+  type PrismaScalarType,
+} from "./field-metadata";
 
 // Stable arrays for callers that need to enumerate
 export const ARR_FIELDS = Array.from(ARR_FIELD_VALUES);

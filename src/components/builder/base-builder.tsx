@@ -92,6 +92,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { RuleCondition } from "@/lib/rules/types";
+import { isOperatorVisible } from "@/lib/conditions/helpers";
 import type {
   BaseRule,
   BaseGroup,
@@ -182,8 +183,11 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
 
   const fieldDef = config.fields.find((f) => f.value === rule.field);
   const fieldType = fieldDef?.type ?? "text";
+  // Hide operators that don't apply to the field type AND hide isNull/isNotNull
+  // for non-nullable non-String columns (e.g. playCount, isWatchlisted) where
+  // the engine correctly returns 0 / all but the UI label "Is Empty" misleads.
   const applicableOperators = config.operators.filter((op) =>
-    op.types.includes(fieldType),
+    isOperatorVisible(op.value, rule.field),
   );
   const enumerable = fieldDef?.enumerable ?? false;
   const knownVals = fieldDef?.knownValues;
@@ -688,11 +692,9 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
         if (r.id !== ruleId) return r;
         const updated = { ...r, ...updates };
         if (updates.field) {
-          const ft =
-            config.fields.find((f) => f.value === updates.field)?.type ??
-            "text";
+          // Match the dropdown filter above (operator must be visible for the new field).
           const applicable = config.operators.filter((op) =>
-            op.types.includes(ft),
+            isOperatorVisible(op.value, updates.field as string),
           );
           if (!applicable.find((op) => op.value === updated.operator)) {
             updated.operator = applicable[0]?.value ?? "equals";
@@ -712,6 +714,13 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
             if (wasMulti && !isMulti) {
               updated.value = String(r.value).split("|")[0] || "";
             }
+          }
+          // When switching TO a valueless operator (isNull/isNotNull), clear any
+          // leftover value. Otherwise the stale value persists and leaks into
+          // matched-criteria display ("Language is empty English (Canada)")
+          // and into the rule's saved JSON.
+          if (config.isValuelessOperator?.(updated.operator)) {
+            updated.value = "";
           }
         }
         return updated;
