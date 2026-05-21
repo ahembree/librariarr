@@ -7,7 +7,7 @@ import {
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
   RULE_FIELDS, STREAM_QUERY_FIELDS, type RuleField,
 } from "./types";
-import { isEnumerableField } from "@/lib/conditions/helpers";
+import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
 import { detectStreamAudioProfile, detectStreamDynamicRange } from "./stream-detection";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import {
@@ -181,16 +181,27 @@ const UNSATISFIABLE_WHERE: Prisma.MediaItemWhereInput = {
 };
 
 /**
- * A contains/notContains rule whose value yields no selectable entries
- * (e.g. `""`, `"|"`, or whitespace-only) is unconfigured. Treat it as
- * match-nothing so partially configured rules can never sweep the
- * library — applies to non-enumerable fields too, where the old WHERE
- * silently matched all (`field LIKE '%%'` for contains) or nothing
- * (notContains), depending on direction.
+ * A contains/notContains/wildcard rule with no meaningful value is
+ * unconfigured. Treat it as match-nothing so partially configured rules
+ * can never sweep the library.
+ *
+ * For contains/notContains: an empty multi-select (`""`, `"|"`, whitespace-only)
+ *   means no values are selected — `notContains <nothing>` would otherwise be
+ *   vacuously true and match every item with a non-empty field.
+ * For matchesWildcard/notMatchesWildcard: an empty pattern (`""`,
+ *   whitespace-only) means no pattern was supplied. Treating it as the
+ *   regex `^$` would make `notMatchesWildcard ""` match every item with a
+ *   non-empty field. `*` is intentional (matches everything) and is NOT
+ *   treated as unconfigured.
  */
 function isUnconfiguredContainsRule(operator: string, value: string | number): boolean {
-  if (operator !== "contains" && operator !== "notContains") return false;
-  return String(value).split("|").map((s) => s.trim()).filter(Boolean).length === 0;
+  if (operator === "contains" || operator === "notContains") {
+    return String(value).split("|").map((s) => s.trim()).filter(Boolean).length === 0;
+  }
+  if (operator === "matchesWildcard" || operator === "notMatchesWildcard") {
+    return String(value).trim() === "";
+  }
+  return false;
 }
 
 function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
@@ -199,6 +210,21 @@ function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
   // Safety: unconfigured contains/notContains must never match anything.
   // Returned directly so applyNegate cannot flip it to "match everything".
   if (isUnconfiguredContainsRule(operator, value)) {
+    return UNSATISFIABLE_WHERE;
+  }
+
+  // Safety: an operator that does not apply to the field (unknown operator,
+  // wrong-type combo like `greaterThan` on a boolean, etc.) would otherwise
+  // fall through every branch and contribute `{}` to the WHERE composition
+  // while Phase 2's `default: result = false` would then be flipped to
+  // true by negate=true, sweeping the library.
+  if (!isOperatorApplicable(operator, field)) {
+    return UNSATISFIABLE_WHERE;
+  }
+  // Safety: malformed values (e.g. `playCount > "abc"` → `> NaN`, never
+  // true for any item but flipped to "match all" by negate). Bypasses
+  // applyNegate by returning directly.
+  if (!isValueValidForRule(operator, value, field)) {
     return UNSATISFIABLE_WHERE;
   }
 
@@ -645,6 +671,16 @@ function buildStreamQueryClause(group: RuleGroup): Prisma.MediaItemWhereInput | 
     if (isUnconfiguredContainsRule(rule.operator, rule.value)) {
       return UNSATISFIABLE_WHERE;
     }
+    // Safety: operator/field-type mismatch (e.g. `contains` on a boolean
+    // stream attribute) — fail the group rather than silently dropping
+    // the constraint.
+    if (!isOperatorApplicable(rule.operator, rule.field)) {
+      return UNSATISFIABLE_WHERE;
+    }
+    // Safety: malformed value → fail the group.
+    if (!isValueValidForRule(rule.operator, rule.value, rule.field)) {
+      return UNSATISFIABLE_WHERE;
+    }
 
     const column = streamQueryFieldToColumn(field);
     if (!column) continue;
@@ -1049,6 +1085,11 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
   // Checked before any field-specific branch so even nonsensical pairings
   // like `foundInArr contains ""` cannot leak into match-all behavior.
   if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
+  // Safety: unknown operator or wrong-type combo → match nothing (bypass negate).
+  // foundInArr is a boolean; equals/notEquals are the only applicable operators.
+  if (!isOperatorApplicable(rule.operator, rule.field)) return false;
+  // Safety: malformed value → match nothing.
+  if (!isValueValidForRule(rule.operator, rule.value, rule.field)) return false;
   // foundInArr must be checked before the !meta guard since it explicitly
   // tests for the presence/absence of Arr metadata
   if (rule.field === "foundInArr") {
@@ -1093,7 +1134,7 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
           break;
         }
         default:
-          result = false;
+          return false;
       }
       break;
     }
@@ -1130,7 +1171,7 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
           break;
         }
         default:
-          result = false;
+          return false;
       }
       break;
     }
@@ -1144,7 +1185,7 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
           result = meta.monitored !== boolVal;
           break;
         default:
-          result = false;
+          return false;
       }
       break;
     }
@@ -1165,7 +1206,7 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
           result = meta.rating >= Number(minStr) && meta.rating <= Number(maxStr);
           break;
         }
-        default: result = false;
+        default: return false;
       }
       break;
     }
@@ -1186,7 +1227,7 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
           result = meta.tmdbRating >= Number(minStr) && meta.tmdbRating <= Number(maxStr);
           break;
         }
-        default: result = false;
+        default: return false;
       }
       break;
     }
@@ -1207,7 +1248,7 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
           result = meta.rtCriticRating >= Number(minStr) && meta.rtCriticRating <= Number(maxStr);
           break;
         }
-        default: result = false;
+        default: return false;
       }
       break;
     }
@@ -1266,7 +1307,7 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
           break;
         }
         default:
-          result = false;
+          return false;
       }
       break;
     }
@@ -1289,7 +1330,7 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
           result = sizeMB >= Number(minStr) && sizeMB <= Number(maxStr);
           break;
         }
-        default: result = false;
+        default: return false;
       }
       break;
     }
@@ -1320,7 +1361,7 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
           result = metaVal >= Number(minStr) && metaVal <= Number(maxStr);
           break;
         }
-        default: result = false;
+        default: return false;
       }
       break;
     }
@@ -1332,12 +1373,17 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
         field === "arrQualityCutoffMet" ? meta.qualityCutoffMet :
         field === "arrEnded" ? meta.ended :
         meta.hasUnaired;
+      // Handle isNull/isNotNull before the null guard, otherwise items
+      // with a null value can't be matched by either operator and
+      // `isNull negate:true` would flip the always-false default to "match all".
+      if (operator === "isNull") { result = metaVal === null; break; }
+      if (operator === "isNotNull") { result = metaVal !== null; break; }
       if (metaVal === null) { result = false; break; }
       const boolVal = String(value).toLowerCase() === "true";
       switch (operator) {
         case "equals": result = metaVal === boolVal; break;
         case "notEquals": result = metaVal !== boolVal; break;
-        default: result = false;
+        default: return false;
       }
       break;
     }
@@ -1353,6 +1399,11 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
         field === "arrQualityName" ? meta.qualityName :
         field === "arrStatus" ? meta.status :
         meta.seriesType;
+      // Handle isNull/isNotNull before the null guard, otherwise items
+      // with a null value can't be matched by either operator and
+      // `isNull negate:true` would flip the always-false default to "match all".
+      if (operator === "isNull") { result = metaVal === null; break; }
+      if (operator === "isNotNull") { result = metaVal !== null; break; }
       if (metaVal === null) { result = false; break; }
       const strVal = String(value).toLowerCase();
       const metaLower = metaVal.toLowerCase();
@@ -1389,12 +1440,12 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
           break;
         }
         default:
-          result = false;
+          return false;
       }
       break;
     }
     default:
-      result = false;
+      return false;
   }
 
   return negate ? !result : result;
@@ -1404,6 +1455,10 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
 function evaluateSeerrRule(rule: Rule, meta: SeerrMetadata | undefined): boolean {
   // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
   if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
+  // Safety: unknown operator or wrong-type combo → match nothing (bypass negate).
+  if (!isOperatorApplicable(rule.operator, rule.field)) return false;
+  // Safety: malformed value → match nothing.
+  if (!isValueValidForRule(rule.operator, rule.value, rule.field)) return false;
   const { field, operator, value, negate } = rule;
   let result: boolean;
 
@@ -1428,7 +1483,7 @@ function evaluateSeerrRule(rule: Rule, meta: SeerrMetadata | undefined): boolean
           result = m.requested !== boolVal;
           break;
         default:
-          result = false;
+          return false;
       }
       break;
     }
@@ -1454,7 +1509,7 @@ function evaluateSeerrRule(rule: Rule, meta: SeerrMetadata | undefined): boolean
           result = m.requestCount <= numVal;
           break;
         default:
-          result = false;
+          return false;
       }
       break;
     }
@@ -1508,7 +1563,7 @@ function evaluateSeerrRule(rule: Rule, meta: SeerrMetadata | undefined): boolean
           break;
         }
         default:
-          result = false;
+          return false;
       }
       break;
     }
@@ -1537,12 +1592,12 @@ function evaluateSeerrRule(rule: Rule, meta: SeerrMetadata | undefined): boolean
           break;
         }
         default:
-          result = false;
+          return false;
       }
       break;
     }
     default:
-      result = false;
+      return false;
   }
 
   return negate ? !result : result;
@@ -1568,6 +1623,13 @@ function evaluateRuleAgainstItem(
   // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
   // Mirrors `ruleToWhereClause`'s UNSATISFIABLE_WHERE so Phase 1 and Phase 2 agree.
   if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
+  // Safety: unknown operator or operator/field-type mismatch → match nothing.
+  // Without this, `default: result = false` in any operator switch would be
+  // vacuously flipped to true by negate=true and sweep the library.
+  if (!isOperatorApplicable(rule.operator, rule.field)) return false;
+  // Safety: malformed value (NaN, unparseable date, etc.) → match nothing,
+  // bypassing negate.
+  if (!isValueValidForRule(rule.operator, rule.value, rule.field)) return false;
 
   const { field, operator, value, negate } = rule;
 
@@ -1630,7 +1692,7 @@ function evaluateRuleAgainstItem(
         result = !streamValues.some((sv) => re.test(sv));
         break;
       }
-      default: result = false;
+      default: return false;
     }
     return negate ? !result : result;
   }
@@ -1649,7 +1711,7 @@ function evaluateRuleAgainstItem(
       case "greaterThanOrEqual": result = count >= numValue; break;
       case "lessThan": result = count < numValue; break;
       case "lessThanOrEqual": result = count <= numValue; break;
-      default: result = false;
+      default: return false;
     }
     return negate ? !result : result;
   }
@@ -1690,7 +1752,7 @@ function evaluateRuleAgainstItem(
         result = !arr.some((g) => re.test(g));
         break;
       }
-      default: result = false;
+      default: return false;
     }
     return negate ? !result : result;
   }
@@ -1707,7 +1769,7 @@ function evaluateRuleAgainstItem(
       case "notEquals":
         result = !externalIds.some((e) => e.source === strValue);
         break;
-      default: result = false;
+      default: return false;
     }
     return negate ? !result : result;
   }
@@ -1720,7 +1782,7 @@ function evaluateRuleAgainstItem(
     switch (operator) {
       case "equals": result = itemVal === boolVal; break;
       case "notEquals": result = itemVal !== boolVal; break;
-      default: result = false;
+      default: return false;
     }
     return negate ? !result : result;
   }
@@ -1745,7 +1807,7 @@ function evaluateRuleAgainstItem(
           result = count >= Number(minStr) && count <= Number(maxStr);
           break;
         }
-        default: result = false;
+        default: return false;
       }
       return negate ? !result : result;
     }
@@ -1770,7 +1832,7 @@ function evaluateRuleAgainstItem(
         }
         case "isNull": result = matchedSets.length === 0; break;
         case "isNotNull": result = matchedSets.length > 0; break;
-        default: result = false;
+        default: return false;
       }
       return negate ? !result : result;
     }
@@ -1781,7 +1843,7 @@ function evaluateRuleAgainstItem(
       switch (operator) {
         case "equals": result = hasPending === boolVal; break;
         case "notEquals": result = hasPending !== boolVal; break;
-        default: result = false;
+        default: return false;
       }
       return negate ? !result : result;
     }
@@ -1816,7 +1878,7 @@ function evaluateRuleAgainstItem(
         result = fileBytes >= minBytes && fileBytes <= maxBytes;
         break;
       }
-      default: result = false;
+      default: return false;
     }
     return negate ? !result : result;
   }
@@ -1838,7 +1900,7 @@ function evaluateRuleAgainstItem(
         result = itemMs >= Number(minStr) * DURATION_MS_PER_MIN && itemMs <= Number(maxStr) * DURATION_MS_PER_MIN;
         break;
       }
-      default: result = false;
+      default: return false;
     }
     return negate ? !result : result;
   }
@@ -1881,7 +1943,7 @@ function evaluateRuleAgainstItem(
           result = itemDay >= fromStr && itemDay <= toStr;
           break;
         }
-        default: result = false;
+        default: return false;
       }
     }
     return negate ? !result : result;
@@ -1910,7 +1972,7 @@ function evaluateRuleAgainstItem(
         result = itemNum >= Number(minStr) && itemNum <= Number(maxStr);
         break;
       }
-      default: result = false;
+      default: return false;
     }
     return negate ? !result : result;
   }
@@ -2315,6 +2377,10 @@ function evaluateStreamQueryRuleAgainstStream(
 ): boolean {
   // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
   if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
+  // Safety: unknown operator or wrong-type combo → match nothing (bypass negate).
+  if (!isOperatorApplicable(rule.operator, rule.field)) return false;
+  // Safety: malformed value → match nothing.
+  if (!isValueValidForRule(rule.operator, rule.value, rule.field)) return false;
   const field = rule.field as StreamQueryField;
   const { operator, value, negate } = rule;
 
@@ -2338,7 +2404,7 @@ function evaluateStreamQueryRuleAgainstStream(
     switch (operator) {
       case "equals": result = actual === boolVal; break;
       case "notEquals": result = actual !== boolVal; break;
-      default: result = false;
+      default: return false;
     }
     return negate ? !result : result;
   }
@@ -2366,7 +2432,7 @@ function evaluateStreamQueryRuleAgainstStream(
             result = actual >= Number(minStr) && actual <= Number(maxStr);
             break;
           }
-          default: result = false;
+          default: return false;
         }
       }
     }
@@ -2416,7 +2482,7 @@ function evaluateStreamQueryRuleAgainstStream(
       result = !re.test(strActual);
       break;
     }
-    default: result = false;
+    default: return false;
   }
   return negate ? !result : result;
 }
@@ -2437,10 +2503,15 @@ function evaluateStreamQueryGroupInMemory(
   const activeRules = group.rules.filter((r) => r.enabled !== false);
   if (activeRules.length === 0) return false;
 
-  // Safety: an unconfigured contains/notContains rule in this group makes
-  // the entire group unsatisfiable. Without this guard, quantifier="none"
-  // would be vacuously true ("no stream matches false") and sweep the library.
-  if (activeRules.some((rule) => isUnconfiguredContainsRule(rule.operator, rule.value))) {
+  // Safety: an unconfigured contains/notContains rule, an operator that
+  // doesn't apply to the field type, or a malformed value makes the entire
+  // group unsatisfiable. Without this guard, quantifier="none" would be
+  // vacuously true ("no stream matches false") and sweep the library.
+  if (activeRules.some((rule) =>
+    isUnconfiguredContainsRule(rule.operator, rule.value) ||
+    !isOperatorApplicable(rule.operator, rule.field) ||
+    !isValueValidForRule(rule.operator, rule.value, rule.field)
+  )) {
     return false;
   }
 

@@ -344,3 +344,110 @@ describe("Unconfigured contains/notContains must not match the library", () => {
     expect(matchedIds).toEqual(["m1"]);
   });
 });
+
+// ─── Defense 5: unknown / mismatched operator and malformed value ──────────
+
+describe("Unknown operator, type mismatch, or malformed value must not match the library", () => {
+  const items = [
+    { id: "m1", title: "Movie A", playCount: 10, year: 2020, externalIds: [{ source: "TMDB", externalId: "1" }] },
+    { id: "m2", title: "Movie B", playCount: 5, year: 2010, externalIds: [{ source: "TMDB", externalId: "2" }] },
+  ];
+
+  function expectNoMatches(rules: RuleGroup[]) {
+    for (const item of items) {
+      expect(evaluateAllRulesInMemory(rules, item)).toBe(false);
+    }
+  }
+
+  it("unknown operator with negate=true does not flip false to match-all", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "title", operator: "totallyMadeUpOp" as never, value: "x", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("operator/field-type mismatch with negate=true does not match all (contains on number)", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "playCount", operator: "contains", value: "5", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("operator/field-type mismatch (greaterThan on text) with negate=true does not match all", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "title", operator: "greaterThan", value: "abc", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("greaterThan with a non-numeric value (NaN comparison) does not match all via negate", () => {
+    // playCount > NaN is false for every item; negate=true would flip to match-all.
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "playCount", operator: "greaterThan", value: "not-a-number", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("between with a malformed half does not match all via negate", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "year", operator: "between", value: "2000,", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("between with no comma (single value) does not match all via negate", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "year", operator: "between", value: "2020", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("between with empty value does not match all via negate", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "year", operator: "between", value: "", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("notMatchesWildcard with empty pattern (regex `^$`) does not match all", () => {
+    // ^$ matches only the empty string; negate would otherwise sweep the library.
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "title", operator: "notMatchesWildcard", value: "", condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("matchesWildcard with empty pattern + negate=true does not match all", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "title", operator: "matchesWildcard", value: "", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("equals with empty value on numeric field (Number('') === 0 quirk) does not flip via negate", () => {
+    // playCount = "" coerces to 0; for items with playCount !== 0, equals returns false;
+    // negate=true would flip to true and sweep most of the library.
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "playCount", operator: "equals", value: "", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+
+  it("unknown field name with negate=true does not match all", () => {
+    expectNoMatches([{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "thisFieldDoesNotExist" as never, operator: "equals", value: "x", negate: true, condition: "AND" }],
+      groups: [],
+    }]);
+  });
+});

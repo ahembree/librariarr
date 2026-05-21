@@ -25,7 +25,7 @@ import {
   serializeSeriesAggregateForEval,
   type AggregableEpisode,
 } from "@/lib/conditions";
-import { isEnumerableField } from "@/lib/conditions/helpers";
+import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
 
 /** Batch-fetch cross-system enrichment data for candidate items */
 async function fetchCrossSystemData(
@@ -106,14 +106,19 @@ const UNSATISFIABLE_WHERE: Prisma.MediaItemWhereInput = {
 };
 
 /**
- * A contains/notContains rule whose value yields no selectable entries
- * (`""`, `"|"`, or whitespace-only) is unconfigured. Treat it as
- * match-nothing so partially configured rules can never sweep the
- * library.
+ * A contains/notContains/wildcard rule with no meaningful value is
+ * unconfigured. Treat it as match-nothing so partially configured rules
+ * can never sweep the library — `notMatchesWildcard ""` would otherwise
+ * match every item with a non-empty field.
  */
 function isUnconfiguredContainsRule(operator: string, value: string | number): boolean {
-  if (operator !== "contains" && operator !== "notContains") return false;
-  return String(value).split("|").map((s) => s.trim()).filter(Boolean).length === 0;
+  if (operator === "contains" || operator === "notContains") {
+    return String(value).split("|").map((s) => s.trim()).filter(Boolean).length === 0;
+  }
+  if (operator === "matchesWildcard" || operator === "notMatchesWildcard") {
+    return String(value).trim() === "";
+  }
+  return false;
 }
 
 /**
@@ -125,6 +130,14 @@ function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
   // Safety: unconfigured contains/notContains must never match anything.
   // Returned directly so applyNegate cannot flip it to "match everything".
   if (isUnconfiguredContainsRule(operator, value)) {
+    return UNSATISFIABLE_WHERE;
+  }
+  // Safety: unknown operator or operator/field-type mismatch — fail closed.
+  if (!isOperatorApplicable(operator, field)) {
+    return UNSATISFIABLE_WHERE;
+  }
+  // Safety: malformed values (e.g. `playCount > "abc"` → `> NaN`).
+  if (!isValueValidForRule(operator, value, field)) {
     return UNSATISFIABLE_WHERE;
   }
 
@@ -542,6 +555,15 @@ function buildQueryStreamQueryClause(group: QueryGroup): Prisma.MediaItemWhereIn
     // Safety: unconfigured contains/notContains makes the entire stream query
     // unsatisfiable. Anything else would let an empty multi-select sweep the library.
     if (isUnconfiguredContainsRule(rule.operator, rule.value)) {
+      return UNSATISFIABLE_WHERE;
+    }
+    // Safety: operator/field-type mismatch (e.g. `contains` on a boolean
+    // stream attribute) — fail closed.
+    if (!isOperatorApplicable(rule.operator, rule.field)) {
+      return UNSATISFIABLE_WHERE;
+    }
+    // Safety: malformed value → fail the group.
+    if (!isValueValidForRule(rule.operator, rule.value, rule.field)) {
       return UNSATISFIABLE_WHERE;
     }
 
@@ -1594,6 +1616,10 @@ function evaluateQueryRuleInMemory(
   // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
   // Mirrors `queryRuleToWhere`'s UNSATISFIABLE_WHERE so Phase 1 and Phase 2 agree.
   if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
+  // Safety: unknown operator or wrong-type combo → match nothing (bypass negate).
+  if (!isOperatorApplicable(rule.operator, rule.field)) return false;
+  // Safety: malformed value → match nothing.
+  if (!isValueValidForRule(rule.operator, rule.value, rule.field)) return false;
 
   const { field, operator, value, negate } = rule;
 
@@ -1626,7 +1652,7 @@ function evaluateQueryRuleInMemory(
           result = count >= Number(minStr) && count <= Number(maxStr);
           break;
         }
-        default: result = false;
+        default: return false;
       }
       return negate ? !result : result;
     }
@@ -1651,7 +1677,7 @@ function evaluateQueryRuleInMemory(
         }
         case "isNull": result = matchedSets.length === 0; break;
         case "isNotNull": result = matchedSets.length > 0; break;
-        default: result = false;
+        default: return false;
       }
       return negate ? !result : result;
     }
@@ -1662,7 +1688,7 @@ function evaluateQueryRuleInMemory(
       switch (operator) {
         case "equals": result = hasPending === boolVal; break;
         case "notEquals": result = hasPending !== boolVal; break;
-        default: result = false;
+        default: return false;
       }
       return negate ? !result : result;
     }
@@ -1733,7 +1759,7 @@ function evaluateQueryRuleInMemory(
     switch (operator) {
       case "equals": result = item[field] === boolVal; break;
       case "notEquals": result = item[field] !== boolVal; break;
-      default: result = false;
+      default: return false;
     }
     return negate ? !result : result;
   }
@@ -1778,7 +1804,7 @@ function evaluateQueryRuleInMemory(
           result = itemDay >= fromStr && itemDay <= toStr;
           break;
         }
-        default: result = false;
+        default: return false;
       }
     }
     return negate ? !result : result;
@@ -1833,7 +1859,7 @@ function evaluateQueryRuleInMemory(
         }
         case "matchesWildcard": result = wildcardToRegex(valLower).test(labelLower); break;
         case "notMatchesWildcard": result = !wildcardToRegex(valLower).test(labelLower); break;
-        default: result = false;
+        default: return false;
       }
     }
     return negate ? !result : result;
@@ -1881,7 +1907,7 @@ function evaluateQueryRuleInMemory(
           : !values.some((v) => lower.includes(v));
         break;
       }
-      default: result = false;
+      default: return false;
     }
   }
   return negate ? !result : result;
@@ -1894,6 +1920,10 @@ function evaluateStreamQueryRuleAgainstStream(
 ): boolean {
   // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
   if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
+  // Safety: unknown operator or wrong-type combo → match nothing (bypass negate).
+  if (!isOperatorApplicable(rule.operator, rule.field)) return false;
+  // Safety: malformed value → match nothing.
+  if (!isValueValidForRule(rule.operator, rule.value, rule.field)) return false;
   const field = rule.field as StreamQueryField;
   const { operator, value, negate } = rule;
 
@@ -1917,7 +1947,7 @@ function evaluateStreamQueryRuleAgainstStream(
     switch (operator) {
       case "equals": result = actual === boolVal; break;
       case "notEquals": result = actual !== boolVal; break;
-      default: result = false;
+      default: return false;
     }
     return negate ? !result : result;
   }
@@ -1987,7 +2017,7 @@ function evaluateStreamQueryRuleAgainstStream(
       result = !re.test(strActual);
       break;
     }
-    default: result = false;
+    default: return false;
   }
   return negate ? !result : result;
 }
@@ -2008,10 +2038,15 @@ function evaluateStreamQueryGroupInMemory(
   const activeRules = group.rules.filter((r) => r.enabled !== false);
   if (activeRules.length === 0) return false;
 
-  // Safety: an unconfigured contains/notContains rule in this group makes
-  // the entire group unsatisfiable. Without this guard, quantifier="none"
-  // would be vacuously true ("no stream matches false") and sweep the library.
-  if (activeRules.some((rule) => isUnconfiguredContainsRule(rule.operator, rule.value))) {
+  // Safety: an unconfigured contains/notContains rule, an operator that
+  // doesn't apply to the field type, or a malformed value makes the entire
+  // group unsatisfiable. Without this guard, quantifier="none" would be
+  // vacuously true ("no stream matches false") and sweep the library.
+  if (activeRules.some((rule) =>
+    isUnconfiguredContainsRule(rule.operator, rule.value) ||
+    !isOperatorApplicable(rule.operator, rule.field) ||
+    !isValueValidForRule(rule.operator, rule.value, rule.field)
+  )) {
     return false;
   }
 

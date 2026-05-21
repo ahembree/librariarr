@@ -1,7 +1,7 @@
 import type { ArrMetadata, ArrDataMap } from "@/lib/rules/engine";
 import type { QueryRule, QueryGroup, RuleCondition } from "./types";
 import { ARR_QUERY_FIELDS } from "./types";
-import { isEnumerableField } from "@/lib/conditions/helpers";
+import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
 
 /** Convert a glob-style wildcard pattern to a RegExp */
 function wildcardToRegex(pattern: string): RegExp {
@@ -20,15 +20,20 @@ function getExternalIdSource(type: string): string {
 }
 
 /**
- * A contains/notContains rule whose value yields no selectable entries
- * (`""`, `"|"`, or whitespace-only) is unconfigured. Returning false
- * (ignoring negate) is required to prevent partially configured rules
- * from sweeping the library — `notContains <nothing>` would otherwise
- * be vacuously true.
+ * A contains/notContains/wildcard rule with no meaningful value is
+ * unconfigured. Returning false (ignoring negate) is required to prevent
+ * partially configured rules from sweeping the library — for example
+ * `notMatchesWildcard ""` would otherwise be regex `^$` and match every
+ * item with a non-empty field.
  */
 function isUnconfiguredContainsRule(operator: string, value: string | number): boolean {
-  if (operator !== "contains" && operator !== "notContains") return false;
-  return String(value).split("|").map((s) => s.trim()).filter(Boolean).length === 0;
+  if (operator === "contains" || operator === "notContains") {
+    return String(value).split("|").map((s) => s.trim()).filter(Boolean).length === 0;
+  }
+  if (operator === "matchesWildcard" || operator === "notMatchesWildcard") {
+    return String(value).trim() === "";
+  }
+  return false;
 }
 
 /** Evaluate a single Arr rule against Arr metadata */
@@ -37,6 +42,10 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
   // Checked first so even nonsensical pairings like `foundInArr contains ""`
   // cannot leak into match-all behavior.
   if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
+  // Safety: unknown operator or wrong-type combo → match nothing (bypass negate).
+  if (!isOperatorApplicable(rule.operator, rule.field)) return false;
+  // Safety: malformed value → match nothing.
+  if (!isValueValidForRule(rule.operator, rule.value, rule.field)) return false;
   // foundInArr must be checked before the !meta guard since it explicitly
   // tests for the presence/absence of Arr metadata
   if (rule.field === "foundInArr") {
@@ -81,7 +90,7 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
           break;
         }
         default:
-          result = true;
+          return false;
       }
       break;
     }
@@ -117,7 +126,7 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
           break;
         }
         default:
-          result = true;
+          return false;
       }
       break;
     }
@@ -131,7 +140,7 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
           result = meta.monitored !== boolVal;
           break;
         default:
-          result = true;
+          return false;
       }
       break;
     }
@@ -161,7 +170,7 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
           result = meta.rating <= numVal;
           break;
         default:
-          result = true;
+          return false;
       }
       break;
     }
@@ -191,7 +200,7 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
           result = meta.tmdbRating <= numVal;
           break;
         default:
-          result = true;
+          return false;
       }
       break;
     }
@@ -221,7 +230,7 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
           result = meta.rtCriticRating <= numVal;
           break;
         default:
-          result = true;
+          return false;
       }
       break;
     }
@@ -273,7 +282,7 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
           result = true;
           break;
         default:
-          result = true;
+          return false;
       }
       break;
     }
@@ -293,7 +302,7 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
         case "greaterThanOrEqual": result = sizeMB >= numVal; break;
         case "lessThan": result = sizeMB < numVal; break;
         case "lessThanOrEqual": result = sizeMB <= numVal; break;
-        default: result = true;
+        default: return false;
       }
       break;
     }
@@ -321,7 +330,7 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
         case "greaterThanOrEqual": result = metaVal >= numVal; break;
         case "lessThan": result = metaVal < numVal; break;
         case "lessThanOrEqual": result = metaVal <= numVal; break;
-        default: result = true;
+        default: return false;
       }
       break;
     }
@@ -338,7 +347,7 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
       switch (operator) {
         case "equals": result = metaVal === boolVal; break;
         case "notEquals": result = metaVal !== boolVal; break;
-        default: result = true;
+        default: return false;
       }
       break;
     }
@@ -394,12 +403,12 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
           break;
         }
         default:
-          result = true;
+          return false;
       }
       break;
     }
     default:
-      result = true;
+      return false;
   }
 
   return negate ? !result : result;

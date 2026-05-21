@@ -1,18 +1,28 @@
 import type { SeerrMetadata, SeerrDataMap } from "@/lib/rules/engine";
 import type { QueryRule, QueryGroup, RuleCondition } from "./types";
 import { SEERR_QUERY_FIELDS } from "./types";
+import { isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
 
-/** See arr-filter.ts for the rationale — unconfigured contains/notContains
+/** See arr-filter.ts — unconfigured contains/notContains/wildcard rules
  * must never match anything, even with negate set. */
 function isUnconfiguredContainsRule(operator: string, value: string | number): boolean {
-  if (operator !== "contains" && operator !== "notContains") return false;
-  return String(value).split("|").map((s) => s.trim()).filter(Boolean).length === 0;
+  if (operator === "contains" || operator === "notContains") {
+    return String(value).split("|").map((s) => s.trim()).filter(Boolean).length === 0;
+  }
+  if (operator === "matchesWildcard" || operator === "notMatchesWildcard") {
+    return String(value).trim() === "";
+  }
+  return false;
 }
 
 /** Evaluate a single Seerr rule against Seerr metadata */
 export function evaluateQuerySeerrRule(rule: QueryRule, meta: SeerrMetadata | undefined): boolean {
   // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
   if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
+  // Safety: unknown operator or wrong-type combo → match nothing (bypass negate).
+  if (!isOperatorApplicable(rule.operator, rule.field)) return false;
+  // Safety: malformed value → match nothing.
+  if (!isValueValidForRule(rule.operator, rule.value, rule.field)) return false;
   const { field, operator, value, negate } = rule;
   let result: boolean;
 
@@ -37,7 +47,7 @@ export function evaluateQuerySeerrRule(rule: QueryRule, meta: SeerrMetadata | un
           result = m.requested !== boolVal;
           break;
         default:
-          result = true;
+          return false;
       }
       break;
     }
@@ -63,7 +73,7 @@ export function evaluateQuerySeerrRule(rule: QueryRule, meta: SeerrMetadata | un
           result = m.requestCount <= numVal;
           break;
         default:
-          result = true;
+          return false;
       }
       break;
     }
@@ -110,7 +120,7 @@ export function evaluateQuerySeerrRule(rule: QueryRule, meta: SeerrMetadata | un
           result = true; // we have a date, so it's not null
           break;
         default:
-          result = true;
+          return false;
       }
       break;
     }
@@ -139,12 +149,12 @@ export function evaluateQuerySeerrRule(rule: QueryRule, meta: SeerrMetadata | un
           break;
         }
         default:
-          result = true;
+          return false;
       }
       break;
     }
     default:
-      result = true;
+      return false;
   }
 
   return negate ? !result : result;

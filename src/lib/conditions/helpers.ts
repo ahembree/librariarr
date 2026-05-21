@@ -1,6 +1,7 @@
 import { CONDITION_FIELDS } from "./fields";
+import { CONDITION_OPERATORS } from "./operators";
 import { STREAM_QUERY_FIELDS } from "./stream-query";
-import type { ConditionGroup } from "./types";
+import type { ConditionGroup, ConditionFieldType } from "./types";
 
 // ─── Field-set predicates ────────────────────────────────────────────────
 
@@ -65,6 +66,112 @@ export function isSeriesAggregateField(field: string): boolean {
  */
 export function isEnumerableField(field: string): boolean {
   return ENUMERABLE_FIELD_VALUES.has(field);
+}
+
+// ─── Operator validity ──────────────────────────────────────────────────
+
+const ALL_FIELD_TYPE_MAP = new Map<string, ConditionFieldType>(
+  [...CONDITION_FIELDS, ...STREAM_QUERY_FIELDS].map((f) => [f.value, f.type]),
+);
+
+const OPERATOR_TYPE_MAP = new Map<string, ReadonlySet<ConditionFieldType>>(
+  CONDITION_OPERATORS.map((o) => [o.value, new Set(o.types)]),
+);
+
+/**
+ * Whether the given operator is applicable to the given field, based on the
+ * operator/field type registries. Returns false when either is unknown or
+ * the operator's allowed types do not include the field's type. The rule
+ * engines call this at every evaluator entry point to short-circuit unknown
+ * or mismatched rules to "match nothing" — otherwise `default: result = false`
+ * in an operator switch would be vacuously flipped to true by negate=true and
+ * sweep the library.
+ *
+ * Note: cross-system, stream-count, hasExternalId, and watchlisted fields
+ * are evaluated outside the standard switch flow and are explicitly excluded
+ * from this check (the engines handle them in branches that exit before the
+ * negate flip).
+ */
+export function isOperatorApplicable(operator: string, field: string): boolean {
+  const fieldType = ALL_FIELD_TYPE_MAP.get(field);
+  if (!fieldType) return false;
+  const types = OPERATOR_TYPE_MAP.get(operator);
+  if (!types) return false;
+  if (types.has(fieldType)) return true;
+  // isNull / isNotNull are useful for nullable booleans too (e.g.
+  // arrQualityCutoffMet, arrEnded). The operator registry omits boolean
+  // from their type list to keep the rule builder UI tidy, but the engine
+  // supports them via the field-specific null-check branches.
+  if ((operator === "isNull" || operator === "isNotNull") && fieldType === "boolean") {
+    return true;
+  }
+  return false;
+}
+
+const VALUELESS_OPERATORS = new Set(["isNull", "isNotNull"]);
+
+/**
+ * Whether the rule's value is well-formed for the given field/operator combo.
+ * Returns false when the value cannot be meaningfully compared — e.g.
+ * `playCount > "abc"` yields `> NaN`, which is false for every item but
+ * which negate=true would then flip to true (sweeping the library).
+ *
+ * Validity rules:
+ *  - `isNull`/`isNotNull` ignore value → always valid.
+ *  - `between` requires `"a,b"` with both halves valid for the field type.
+ *  - Numeric fields require finite numbers (rejects NaN / "abc" / "").
+ *  - Date fields require a parseable date (`inLastDays`/`notInLastDays`
+ *    expect a non-negative number of days).
+ *  - Boolean fields require the literal `"true"`/`"false"`.
+ *  - Text fields accept any string — text comparisons can't go vacuous.
+ */
+/** Strict numeric-string parser. Rejects "", "  ", "5abc" etc. — JS's
+ * `Number("")` coerces to 0 and `Number.isFinite(0)` is true, which would
+ * leak an empty `between` half (e.g. `"5,"`) past a naive check and produce
+ * an always-false `between(5, 0)` clause that negate=true would flip to
+ * match-all. */
+function isStrictFiniteNumeric(input: string): boolean {
+  if (input.trim() === "") return false;
+  return Number.isFinite(Number(input));
+}
+
+export function isValueValidForRule(
+  operator: string,
+  value: string | number,
+  field: string,
+): boolean {
+  if (VALUELESS_OPERATORS.has(operator)) return true;
+  const fieldType = ALL_FIELD_TYPE_MAP.get(field);
+  if (!fieldType) return false;
+  const strValue = String(value);
+  if (operator === "between") {
+    const parts = strValue.split(",");
+    if (parts.length !== 2) return false;
+    if (fieldType === "number") {
+      return isStrictFiniteNumeric(parts[0]) && isStrictFiniteNumeric(parts[1]);
+    }
+    if (fieldType === "date") {
+      if (parts[0].trim() === "" || parts[1].trim() === "") return false;
+      return !isNaN(new Date(parts[0]).getTime()) && !isNaN(new Date(parts[1]).getTime());
+    }
+    return false;
+  }
+  if (fieldType === "number") {
+    return isStrictFiniteNumeric(strValue);
+  }
+  if (fieldType === "date") {
+    if (operator === "inLastDays" || operator === "notInLastDays") {
+      if (!isStrictFiniteNumeric(strValue)) return false;
+      return Number(strValue) >= 0;
+    }
+    return strValue !== "" && !isNaN(new Date(strValue).getTime());
+  }
+  if (fieldType === "boolean") {
+    const lower = strValue.toLowerCase();
+    return lower === "true" || lower === "false";
+  }
+  // text — any string is comparable
+  return true;
 }
 
 // Stable arrays for callers that need to enumerate
