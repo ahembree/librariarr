@@ -26,6 +26,14 @@ describe("normalizeTitle", () => {
     expect(normalizeTitle("S.H.I.E.L.D.")).toBe("shield");
   });
 
+  it("strips diacritics so accented and unaccented forms compare equal", () => {
+    // Plex/Jellyfin/Emby copies sometimes drop accents while Arr keeps them.
+    expect(normalizeTitle("Marina Abramović")).toBe("marina abramovic");
+    expect(normalizeTitle("Pokémon")).toBe("pokemon");
+    expect(normalizeTitle("Café Résumé")).toBe("cafe resume");
+    expect(normalizeTitle("naïve")).toBe("naive");
+  });
+
   it("collapses whitespace", () => {
     // Note: leading spaces prevent the ^(the|a|an) regex from matching,
     // so "The" is preserved. This is correct — real titles don't have leading spaces.
@@ -54,6 +62,21 @@ describe("validateArrItem", () => {
     // "Avatar (2009)" → "avatar", "Avatar" → "avatar"
     expect(() =>
       validateArrItem("Avatar (2009)", "Avatar", "Radarr movie", "12345")
+    ).not.toThrow();
+  });
+
+  it("passes when titles differ only by diacritics", () => {
+    // Regression: Plex stored "Marina Abramovic" but Radarr returned "Marina Abramović".
+    expect(() =>
+      validateArrItem(
+        "Marina Abramovic: The Artist Is Present",
+        "Marina Abramović: The Artist Is Present",
+        "Radarr movie",
+        "84309",
+      )
+    ).not.toThrow();
+    expect(() =>
+      validateArrItem("Pokemon", "Pokémon", "Sonarr series", "12345")
     ).not.toThrow();
   });
 

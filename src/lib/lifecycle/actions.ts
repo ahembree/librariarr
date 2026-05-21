@@ -63,11 +63,14 @@ export interface ActionRecord {
 
 /**
  * Normalize a title for fuzzy comparison between Plex/Jellyfin/Emby and Arr systems.
- * Handles common differences: article placement, year suffixes, punctuation, case.
+ * Handles common differences: article placement, year suffixes, punctuation, case,
+ * and Unicode diacritics (e.g. "Abramović" ↔ "Abramovic").
  */
 export function normalizeTitle(title: string): string {
   return title
     .toLowerCase()
+    .normalize("NFD")                   // decompose accented chars (ć → c + combining ́)
+    .replace(/[̀-ͯ]/g, "")    // strip combining diacritical marks
     .replace(/,\s*(the|a|an)$/i, "")   // "Matrix, The" → "Matrix"
     .replace(/^(the|a|an)\s+/i, "")     // "The Matrix" → "Matrix"
     .replace(/\s*\([^)]*\)\s*/g, " ")   // "Movie (2024)" → "Movie "
