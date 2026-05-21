@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { QueryRule, QueryGroup, QueryDefinition, RuleCondition } from "./types";
-import { STREAM_FIELDS, GENRE_FIELD, LABELS_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules } from "./types";
+import { GENRE_FIELD, LABELS_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules } from "./types";
 import {
   isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
@@ -26,7 +26,6 @@ import {
 } from "@/lib/conditions";
 import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
 import {
-  applyNegate,
   UNSATISFIABLE_WHERE,
   isUnconfiguredContainsRule,
   FIELD_HANDLERS,
@@ -125,99 +124,19 @@ function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
   // Skip series-aggregate fields — computed in dedicated series-scope path
   if (isSeriesAggregateField(field)) return {};
 
-  // Stream relation fields
-  if (STREAM_FIELDS.has(field)) {
-    return handleStreamField(field, operator, String(value), negate);
-  }
+  // Stream count fields — always post-filtered in-memory
+  if (field === "audioStreamCount" || field === "subtitleStreamCount") return {};
 
   // Field-specific WHERE-emitting handlers live in where-builder.ts and are
   // shared with the rule engine. The dispatcher above handles all the
-  // query-engine-specific routing (stream relation) before reaching this
-  // lookup; hasExternalId is routed via FIELD_HANDLERS.
+  // query-engine-specific routing (cross-system, stream query, stream count)
+  // before reaching this lookup; stream relation and hasExternalId are routed
+  // via FIELD_HANDLERS.
   const handler = FIELD_HANDLERS[field];
   if (handler) return handler(operator, value, field, negate);
 
   // Text-generic fallback for unrecognized text fields.
   return textGenericHandler(operator, value, field, negate);
-}
-
-function handleStreamField(
-  field: string,
-  operator: string,
-  value: string,
-  negate?: boolean,
-): Prisma.MediaItemWhereInput {
-  // audioStreamCount / subtitleStreamCount — handled via raw SQL separately
-  if (field === "audioStreamCount" || field === "subtitleStreamCount") {
-    return {};
-  }
-
-  // Determine stream type and which column to query
-  let streamType: number;
-  let columnName: string;
-  if (field === "audioLanguage") {
-    streamType = 2;
-    columnName = "language";
-  } else if (field === "streamAudioCodec") {
-    streamType = 2;
-    columnName = "codec";
-  } else {
-    // subtitleLanguage
-    streamType = 3;
-    columnName = "language";
-  }
-
-  // For language fields, exclude streams with unknown/null/empty language
-  const isLangField = columnName === "language";
-  const knownLangFilter = isLangField
-    ? { language: { not: null, notIn: ["", "Unknown"] } }
-    : {};
-
-  let clause: Prisma.MediaItemWhereInput;
-  switch (operator) {
-    case "equals":
-      clause = {
-        streams: { some: { streamType, ...knownLangFilter, [columnName]: { equals: value, mode: "insensitive" } } },
-      };
-      break;
-    case "notEquals":
-      clause = {
-        NOT: { streams: { some: { streamType, ...knownLangFilter, [columnName]: { equals: value, mode: "insensitive" } } } },
-      };
-      break;
-    case "contains": {
-      // Stream language/codec fields are enumerable — list membership semantics.
-      const parts = value.split("|").filter(Boolean);
-      const matchValues = parts.length > 0 ? parts : [value];
-      clause = { OR: matchValues.map((v) => ({ streams: { some: { streamType, ...knownLangFilter, [columnName]: { equals: v, mode: "insensitive" as const } } } })) };
-      break;
-    }
-    case "notContains": {
-      const parts = value.split("|").filter(Boolean);
-      const matchValues = parts.length > 0 ? parts : [value];
-      clause = { AND: matchValues.map((v) => ({ NOT: { streams: { some: { streamType, ...knownLangFilter, [columnName]: { equals: v, mode: "insensitive" as const } } } } })) };
-      break;
-    }
-    case "isNull": {
-      // "Is Empty" — no stream of this type has a known value
-      const hasValueFilter = isLangField
-        ? knownLangFilter
-        : { [columnName]: { not: null } };
-      clause = { NOT: { streams: { some: { streamType, ...hasValueFilter } } } };
-      break;
-    }
-    case "isNotNull": {
-      // "Is Not Empty" — at least one stream of this type has a known value
-      const hasValueFilter = isLangField
-        ? knownLangFilter
-        : { [columnName]: { not: null } };
-      clause = { streams: { some: { streamType, ...hasValueFilter } } };
-      break;
-    }
-    default:
-      return {};
-  }
-  return applyNegate(clause, negate);
 }
 
 /**

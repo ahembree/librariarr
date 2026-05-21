@@ -129,8 +129,8 @@ export function isUnconfiguredContainsRule(operator: string, value: string | num
 // handler runs — handlers assume valid operator/value pairs.
 //
 // Fields NOT covered here (kept inline in each engine's dispatcher):
-//   - Stream relation fields (audioLanguage, subtitleLanguage,
-//     streamAudioCodec) — Prisma `streams: { some: {...} }` queries
+//   - Stream-count fields (audioStreamCount, subtitleStreamCount) — always
+//     post-filtered in Phase 2; engines skip them before the handler lookup
 //   - Stream-query (sq*), cross-system, arr/seerr, series-aggregate —
 //     handled at higher layers (Phase 2, group-level, enrichment)
 
@@ -522,6 +522,69 @@ const hasExternalIdHandler: FieldHandler = (operator, value, _field, negate) => 
 };
 
 /**
+ * Stream relation handler for audioLanguage, subtitleLanguage, and
+ * streamAudioCodec — fields backed by the `streams` Prisma relation.
+ * Wildcard operators (matchesWildcard, notMatchesWildcard) return `{}`
+ * unchanged so Phase 2 can do the regex match in-memory.
+ *
+ * For language fields the handler excludes streams whose language is
+ * NULL / "" / "Unknown" via `knownLangFilter`; the database stores those
+ * placeholders but the rule UI treats them as no value. Codec fields
+ * don't carry that placeholder set, so the filter is empty.
+ */
+const streamRelationHandler: FieldHandler = (operator, value, field, negate) => {
+  if (operator === "matchesWildcard" || operator === "notMatchesWildcard") return {};
+  const streamType = field === "subtitleLanguage" ? 3 : 2;
+  const streamField = field === "streamAudioCodec" ? "codec" : "language";
+  const isLangField = field === "audioLanguage" || field === "subtitleLanguage";
+  const knownLangFilter = isLangField
+    ? { language: { not: null, notIn: ["", "Unknown"] } }
+    : {};
+  let clause: Prisma.MediaItemWhereInput;
+  switch (operator) {
+    case "equals":
+      clause = { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: String(value), mode: "insensitive" } } } };
+      break;
+    case "notEquals":
+      clause = { NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: String(value), mode: "insensitive" } } } } };
+      break;
+    case "contains": {
+      // Stream language/codec fields are enumerable — `contains` is multi-select
+      // list membership, not substring search.
+      const parts = String(value).split("|").filter(Boolean);
+      const matchValues = parts.length > 0 ? parts : [String(value)];
+      clause = { OR: matchValues.map((v) => ({ streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: v, mode: "insensitive" as const } } } })) };
+      break;
+    }
+    case "notContains": {
+      const parts = String(value).split("|").filter(Boolean);
+      const matchValues = parts.length > 0 ? parts : [String(value)];
+      clause = { AND: matchValues.map((v) => ({ NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: v, mode: "insensitive" as const } } } } })) };
+      break;
+    }
+    case "isNull": {
+      // "Is Empty" — no stream of this type has a known value
+      const hasValueFilter = isLangField
+        ? knownLangFilter
+        : { [streamField]: { not: null } };
+      clause = { NOT: { streams: { some: { streamType, ...hasValueFilter } } } };
+      break;
+    }
+    case "isNotNull": {
+      // "Is Not Empty" — at least one stream of this type has a known value
+      const hasValueFilter = isLangField
+        ? knownLangFilter
+        : { [streamField]: { not: null } };
+      clause = { streams: { some: { streamType, ...hasValueFilter } } };
+      break;
+    }
+    default:
+      return {};
+  }
+  return applyNegate(clause, negate);
+};
+
+/**
  * Map of field name → handler. The dispatcher in each engine looks up the
  * handler here; misses fall back to `textGenericHandler`. Date and numeric
  * field sets are expanded so every member field maps to the same handler.
@@ -535,6 +598,9 @@ export const FIELD_HANDLERS: Record<string, FieldHandler> = (() => {
     genre: genreLabelsHandler,
     labels: genreLabelsHandler,
     hasExternalId: hasExternalIdHandler,
+    audioLanguage: streamRelationHandler,
+    subtitleLanguage: streamRelationHandler,
+    streamAudioCodec: streamRelationHandler,
   };
   for (const f of DATE_HANDLER_FIELDS) handlers[f] = dateHandler;
   for (const f of NUMERIC_HANDLER_FIELDS) handlers[f] = numericHandler;

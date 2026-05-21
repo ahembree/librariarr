@@ -16,7 +16,6 @@ import {
   wildcardToRegex,
 } from "@/lib/conditions";
 import {
-  applyNegate,
   UNSATISFIABLE_WHERE,
   isUnconfiguredContainsRule,
   FIELD_HANDLERS,
@@ -205,64 +204,11 @@ function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
   // Stream count fields — always post-filtered in-memory
   if (STREAM_COUNT_FIELDS.has(field)) return {};
 
-  // Stream language/codec fields — Prisma relation queries (wildcards post-filtered)
-  if (STREAM_LANG_CODEC_FIELDS.has(field)) {
-    if (operator === "matchesWildcard" || operator === "notMatchesWildcard") return {};
-    const streamType = field === "subtitleLanguage" ? 3 : 2;
-    const streamField = field === "streamAudioCodec" ? "codec" : "language";
-    // For language fields, exclude streams with unknown/null/empty language
-    const isLangField = STREAM_LANGUAGE_FIELDS.has(field);
-    const knownLangFilter = isLangField
-      ? { language: { not: null, notIn: ["", "Unknown"] } }
-      : {};
-    let clause: Prisma.MediaItemWhereInput;
-    switch (operator) {
-      case "equals":
-        clause = { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: String(value), mode: "insensitive" } } } };
-        break;
-      case "notEquals":
-        clause = { NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: String(value), mode: "insensitive" } } } } };
-        break;
-      case "contains": {
-        // Stream language/codec fields are enumerable — `contains` is multi-select
-        // list membership, not substring search.
-        const parts = String(value).split("|").filter(Boolean);
-        const matchValues = parts.length > 0 ? parts : [String(value)];
-        clause = { OR: matchValues.map((v) => ({ streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: v, mode: "insensitive" as const } } } })) };
-        break;
-      }
-      case "notContains": {
-        const parts = String(value).split("|").filter(Boolean);
-        const matchValues = parts.length > 0 ? parts : [String(value)];
-        clause = { AND: matchValues.map((v) => ({ NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: v, mode: "insensitive" as const } } } } })) };
-        break;
-      }
-      case "isNull": {
-        // "Is Empty" — no stream of this type has a known value
-        const hasValueFilter = isLangField
-          ? knownLangFilter
-          : { [streamField]: { not: null } };
-        clause = { NOT: { streams: { some: { streamType, ...hasValueFilter } } } };
-        break;
-      }
-      case "isNotNull": {
-        // "Is Not Empty" — at least one stream of this type has a known value
-        const hasValueFilter = isLangField
-          ? knownLangFilter
-          : { [streamField]: { not: null } };
-        clause = { streams: { some: { streamType, ...hasValueFilter } } };
-        break;
-      }
-      default:
-        return {};
-    }
-    return applyNegate(clause, negate);
-  }
-
   // Field-specific WHERE-emitting handlers live in where-builder.ts and are
   // shared with the query builder. The dispatcher above handles all the
-  // engine-specific routing (stream relation, external, series aggregate)
-  // before reaching this lookup; hasExternalId is routed via FIELD_HANDLERS.
+  // engine-specific routing (external, series aggregate, cross-system,
+  // stream query/count) before reaching this lookup; stream relation,
+  // hasExternalId are routed via FIELD_HANDLERS.
   const handler = FIELD_HANDLERS[field];
   if (handler) return handler(operator, value, field, negate);
 
