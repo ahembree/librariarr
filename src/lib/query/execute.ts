@@ -25,7 +25,15 @@ import {
   serializeSeriesAggregateForEval,
   type AggregableEpisode,
 } from "@/lib/conditions";
-import { isEnumerableField, isNonNullableField, isNonNullableNonTextField, isNonNullableTextField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
+import { isEnumerableField, isNonNullableNonTextField, isNonNullableTextField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
+import {
+  applyNegate,
+  withNullSafety,
+  applyNegateNullable,
+  UNSATISFIABLE_WHERE,
+  MATCH_ALL_WHERE,
+  isUnconfiguredContainsRule,
+} from "@/lib/conditions/where-builder";
 
 /** Batch-fetch cross-system enrichment data for candidate items */
 async function fetchCrossSystemData(
@@ -85,75 +93,6 @@ async function fetchCrossSystemData(
   }
 
   return result;
-}
-
-function applyNegate(clause: Prisma.MediaItemWhereInput, negate?: boolean): Prisma.MediaItemWhereInput {
-  if (!negate) return clause;
-  return { NOT: clause };
-}
-
-/**
- * Wrap a "not"-shaped clause so NULL rows are correctly INCLUDED. Prisma's
- * `{ field: { not: X } }` and `{ NOT: { field: ... } }` evaluate to UNKNOWN
- * for NULL rows under PostgreSQL three-valued logic, excluding them — but
- * the in-memory evaluator coerces NULL→default and includes them. Without
- * this wrapper Phase 1 drops items Phase 2 would match. Mirrors the helper
- * in src/lib/rules/engine.ts.
- */
-function withNullSafety(field: string, notClause: Prisma.MediaItemWhereInput): Prisma.MediaItemWhereInput {
-  if (isNonNullableField(field)) return notClause;
-  return { OR: [{ [field]: null }, notClause] };
-}
-
-/**
- * Negate a positive Phase 1 predicate with NULL-safety. Mirrors the helper
- * in src/lib/rules/engine.ts. See that file for the full rationale: Phase 1
- * `NOT (positive predicate)` excludes NULL rows under PostgreSQL 3VL, but
- * Phase 2 coerces NULL → default → false → negate flips to true, so we must
- * include NULL rows explicitly when negating a positive clause.
- */
-function applyNegateNullable(field: string, positiveClause: Prisma.MediaItemWhereInput, negate?: boolean): Prisma.MediaItemWhereInput {
-  if (!negate) return positiveClause;
-  return withNullSafety(field, { NOT: positiveClause });
-}
-
-/**
- * An always-false Prisma `WhereInput` sentinel used to deliberately reject
- * unconfigured contains/notContains rules. The contradiction (id equals two
- * distinct literals) survives AND/OR composition without flipping to
- * "match everything", as would happen with `{ AND: [] }` or `{ NOT: {} }`.
- */
-/**
- * Always-true Prisma `WhereInput`. Used for `isNotNull` on non-nullable
- * columns. Empty `{}` cannot be used because the engine filters out empty
- * clauses upstream; a non-empty always-true predicate survives composition
- * and inverts correctly via applyNegate. Mirrors src/lib/rules/engine.ts.
- */
-const MATCH_ALL_WHERE: Prisma.MediaItemWhereInput = {
-  id: { not: "__librariarr_never_id__" },
-};
-
-const UNSATISFIABLE_WHERE: Prisma.MediaItemWhereInput = {
-  AND: [
-    { id: { equals: "__librariarr_unsatisfiable_a__" } },
-    { id: { equals: "__librariarr_unsatisfiable_b__" } },
-  ],
-};
-
-/**
- * A contains/notContains/wildcard rule with no meaningful value is
- * unconfigured. Treat it as match-nothing so partially configured rules
- * can never sweep the library — `notMatchesWildcard ""` would otherwise
- * match every item with a non-empty field.
- */
-function isUnconfiguredContainsRule(operator: string, value: string | number): boolean {
-  if (operator === "contains" || operator === "notContains") {
-    return String(value).split("|").map((s) => s.trim()).filter(Boolean).length === 0;
-  }
-  if (operator === "matchesWildcard" || operator === "notMatchesWildcard") {
-    return String(value).trim() === "";
-  }
-  return false;
 }
 
 /**
