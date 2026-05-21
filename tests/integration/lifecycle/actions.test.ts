@@ -608,6 +608,42 @@ describe("Lifecycle Actions", () => {
       expect(actions[0].actionType).toBe("DO_NOTHING");
       expect(actions[0].mediaItemId).toBe(item.id);
       expect(actions[0].ruleSetId).toBe(ruleSet.id);
+      // Denormalized title snapshot — preserves displayable name after the
+      // MediaItem row is removed by a later library sync.
+      expect(actions[0].mediaItemTitle).toBe("Record Movie");
+    });
+
+    it("snapshots parentTitle on COMPLETED actions so series/episode titles survive MediaItem deletion", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const item = await createTestMediaItem(library.id, {
+        title: "Pilot",
+        parentTitle: "Some Show",
+        type: "EPISODE",
+      });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Series Rule",
+        type: "SERIES",
+        actionType: "DO_NOTHING",
+      });
+      await createTestRuleMatch(ruleSet.id, item.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id, mediaItemIds: [item.id] },
+      });
+
+      const prisma = getTestPrisma();
+      const actions = await prisma.lifecycleAction.findMany({
+        where: { userId: user.id },
+      });
+      expect(actions).toHaveLength(1);
+      expect(actions[0].mediaItemTitle).toBe("Pilot");
+      expect(actions[0].mediaItemParentTitle).toBe("Some Show");
     });
 
     it("records FAILED status when executeAction throws", async () => {
@@ -658,6 +694,9 @@ describe("Lifecycle Actions", () => {
       expect(actions).toHaveLength(1);
       expect(actions[0].status).toBe("FAILED");
       expect(actions[0].error).toContain("Radarr API down");
+      // Denormalized title is captured on FAILED records too so the matches
+      // page doesn't fall back to "Unknown" after later cleanup.
+      expect(actions[0].mediaItemTitle).toBe("Failing Movie");
     });
   });
 });

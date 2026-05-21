@@ -216,6 +216,8 @@ export async function POST(request: NextRequest) {
           data: {
             userId: session.userId!,
             mediaItemId: item.id,
+            mediaItemTitle: item.title,
+            mediaItemParentTitle: item.parentTitle,
             ruleSetId: ruleSet.id,
             ruleSetName: ruleSet.name,
             ruleSetType: ruleSet.type,
@@ -246,6 +248,8 @@ export async function POST(request: NextRequest) {
         data: {
           userId: session.userId!,
           mediaItemId: item.id,
+          mediaItemTitle: item.title,
+          mediaItemParentTitle: item.parentTitle,
           ruleSetId: ruleSet.id,
           ruleSetName: ruleSet.name,
           ruleSetType: ruleSet.type,
