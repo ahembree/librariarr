@@ -450,4 +450,61 @@ describe("Unknown operator, type mismatch, or malformed value must not match the
       groups: [],
     }]);
   });
+
+  it("arrTag isNull with negate=true does not flip to match-all", () => {
+    // arrTag is `string[]` and is never null, so isNull is meaningless.
+    // The arr-tag handler doesn't implement isNull → default returns false,
+    // bypassing the negate flip that would otherwise sweep the library.
+    function makeArrMeta(): ArrMetadata {
+      return {
+        arrId: 0, tags: ["Default"], qualityProfile: "HD-1080p", monitored: false,
+        rating: null, tmdbRating: null, rtCriticRating: null,
+        dateAdded: null, path: null, sizeOnDisk: null, originalLanguage: null,
+        releaseDate: null, inCinemasDate: null, runtime: null,
+        qualityName: null, qualityCutoffMet: null, downloadDate: null,
+        firstAired: null, seasonCount: null, episodeCount: null,
+        status: null, ended: null, seriesType: null, hasUnaired: null,
+        monitoredSeasonCount: null, monitoredEpisodeCount: null,
+      };
+    }
+    const arrData: ArrDataMap = { "1": makeArrMeta(), "2": makeArrMeta() };
+    const groups: RuleGroup[] = [{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "arrTag", operator: "isNull", value: "", negate: true, condition: "AND" }],
+      groups: [],
+    }];
+    for (const item of items) {
+      expect(evaluateAllRulesInMemory(groups, item, arrData[item.externalIds[0].externalId])).toBe(false);
+    }
+  });
+
+  it("arrEnded isNull correctly matches items with null arrEnded (pre-existing bug fix)", () => {
+    // Items with null arrEnded should match `isNull`. Old code returned false
+    // (the null guard fell through before checking isNull/isNotNull), then
+    // negate=true would flip false to true and match items WITH a value too.
+    function makeArrMeta(ended: boolean | null): ArrMetadata {
+      return {
+        arrId: 0, tags: [], qualityProfile: "HD-1080p", monitored: false,
+        rating: null, tmdbRating: null, rtCriticRating: null,
+        dateAdded: null, path: null, sizeOnDisk: null, originalLanguage: null,
+        releaseDate: null, inCinemasDate: null, runtime: null,
+        qualityName: null, qualityCutoffMet: null, downloadDate: null,
+        firstAired: null, seasonCount: null, episodeCount: null,
+        status: null, ended, seriesType: null, hasUnaired: null,
+        monitoredSeasonCount: null, monitoredEpisodeCount: null,
+      };
+    }
+    const seriesItem = { id: "s1", externalIds: [{ source: "TVDB", externalId: "1" }] };
+    const nullEndedRule: RuleGroup[] = [{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", field: "arrEnded", operator: "isNull", value: "", condition: "AND" }],
+      groups: [],
+    }];
+    // Item with null ended: isNull is true.
+    expect(evaluateAllRulesInMemory(nullEndedRule, seriesItem, makeArrMeta(null))).toBe(true);
+    // Item with ended=true: isNull is false.
+    expect(evaluateAllRulesInMemory(nullEndedRule, seriesItem, makeArrMeta(true))).toBe(false);
+    // Item with ended=false: isNull is false.
+    expect(evaluateAllRulesInMemory(nullEndedRule, seriesItem, makeArrMeta(false))).toBe(false);
+  });
 });
