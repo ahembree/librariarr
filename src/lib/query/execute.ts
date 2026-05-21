@@ -93,10 +93,40 @@ function applyNegate(clause: Prisma.MediaItemWhereInput, negate?: boolean): Pris
 }
 
 /**
+ * An always-false Prisma `WhereInput` sentinel used to deliberately reject
+ * unconfigured contains/notContains rules. The contradiction (id equals two
+ * distinct literals) survives AND/OR composition without flipping to
+ * "match everything", as would happen with `{ AND: [] }` or `{ NOT: {} }`.
+ */
+const UNSATISFIABLE_WHERE: Prisma.MediaItemWhereInput = {
+  AND: [
+    { id: { equals: "__librariarr_unsatisfiable_a__" } },
+    { id: { equals: "__librariarr_unsatisfiable_b__" } },
+  ],
+};
+
+/**
+ * A contains/notContains rule whose value yields no selectable entries
+ * (`""`, `"|"`, or whitespace-only) is unconfigured. Treat it as
+ * match-nothing so partially configured rules can never sweep the
+ * library.
+ */
+function isUnconfiguredContainsRule(operator: string, value: string | number): boolean {
+  if (operator !== "contains" && operator !== "notContains") return false;
+  return String(value).split("|").map((s) => s.trim()).filter(Boolean).length === 0;
+}
+
+/**
  * Convert a single query rule to a Prisma WHERE clause.
  */
 function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
   const { field, operator, value, negate } = rule;
+
+  // Safety: unconfigured contains/notContains must never match anything.
+  // Returned directly so applyNegate cannot flip it to "match everything".
+  if (isUnconfiguredContainsRule(operator, value)) {
+    return UNSATISFIABLE_WHERE;
+  }
 
   // Skip external (arr/seerr) fields — handled as post-filters
   if (isExternalQueryField(field)) return {};
@@ -508,6 +538,12 @@ function buildQueryStreamQueryClause(group: QueryGroup): Prisma.MediaItemWhereIn
     const field = rule.field as StreamQueryField;
     if (isStreamQueryComputedField(field)) continue; // Phase 2 only
     if (rule.operator === "matchesWildcard" || rule.operator === "notMatchesWildcard") continue; // Phase 2
+
+    // Safety: unconfigured contains/notContains makes the entire stream query
+    // unsatisfiable. Anything else would let an empty multi-select sweep the library.
+    if (isUnconfiguredContainsRule(rule.operator, rule.value)) {
+      return UNSATISFIABLE_WHERE;
+    }
 
     const column = streamQueryFieldToColumn(field);
     if (!column) continue;
@@ -1555,6 +1591,10 @@ function evaluateQueryRuleInMemory(
   arrMeta: ArrMetadata | undefined,
   seerrMeta: SeerrMetadata | undefined,
 ): boolean {
+  // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
+  // Mirrors `queryRuleToWhere`'s UNSATISFIABLE_WHERE so Phase 1 and Phase 2 agree.
+  if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
+
   const { field, operator, value, negate } = rule;
 
   // Arr fields — delegate to existing evaluator
@@ -1852,6 +1892,8 @@ function evaluateStreamQueryRuleAgainstStream(
   rule: QueryRule,
   stream: Record<string, unknown>,
 ): boolean {
+  // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
+  if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
   const field = rule.field as StreamQueryField;
   const { operator, value, negate } = rule;
 
@@ -1965,6 +2007,13 @@ function evaluateStreamQueryGroupInMemory(
 
   const activeRules = group.rules.filter((r) => r.enabled !== false);
   if (activeRules.length === 0) return false;
+
+  // Safety: an unconfigured contains/notContains rule in this group makes
+  // the entire group unsatisfiable. Without this guard, quantifier="none"
+  // would be vacuously true ("no stream matches false") and sweep the library.
+  if (activeRules.some((rule) => isUnconfiguredContainsRule(rule.operator, rule.value))) {
+    return false;
+  }
 
   const quantifier = group.streamQuery.quantifier ?? "any";
   const streamMatches = (stream: Record<string, unknown>) =>

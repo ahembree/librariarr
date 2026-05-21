@@ -19,8 +19,24 @@ function getExternalIdSource(type: string): string {
   }
 }
 
+/**
+ * A contains/notContains rule whose value yields no selectable entries
+ * (`""`, `"|"`, or whitespace-only) is unconfigured. Returning false
+ * (ignoring negate) is required to prevent partially configured rules
+ * from sweeping the library — `notContains <nothing>` would otherwise
+ * be vacuously true.
+ */
+function isUnconfiguredContainsRule(operator: string, value: string | number): boolean {
+  if (operator !== "contains" && operator !== "notContains") return false;
+  return String(value).split("|").map((s) => s.trim()).filter(Boolean).length === 0;
+}
+
 /** Evaluate a single Arr rule against Arr metadata */
 export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefined): boolean {
+  // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
+  // Checked first so even nonsensical pairings like `foundInArr contains ""`
+  // cannot leak into match-all behavior.
+  if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
   // foundInArr must be checked before the !meta guard since it explicitly
   // tests for the presence/absence of Arr metadata
   if (rule.field === "foundInArr") {

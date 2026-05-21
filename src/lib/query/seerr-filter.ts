@@ -2,8 +2,17 @@ import type { SeerrMetadata, SeerrDataMap } from "@/lib/rules/engine";
 import type { QueryRule, QueryGroup, RuleCondition } from "./types";
 import { SEERR_QUERY_FIELDS } from "./types";
 
+/** See arr-filter.ts for the rationale — unconfigured contains/notContains
+ * must never match anything, even with negate set. */
+function isUnconfiguredContainsRule(operator: string, value: string | number): boolean {
+  if (operator !== "contains" && operator !== "notContains") return false;
+  return String(value).split("|").map((s) => s.trim()).filter(Boolean).length === 0;
+}
+
 /** Evaluate a single Seerr rule against Seerr metadata */
 export function evaluateQuerySeerrRule(rule: QueryRule, meta: SeerrMetadata | undefined): boolean {
+  // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
+  if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
   const { field, operator, value, negate } = rule;
   let result: boolean;
 

@@ -222,6 +222,33 @@ describe("arrQualityProfile (text)", () => {
     expect(result.get("m1")!.length).toBeGreaterThan(0);
   });
 
+  // Safety: unconfigured contains/notContains rules (empty value list) must
+  // never match anything — otherwise `notContains <nothing>` is vacuously true
+  // and would sweep the library.
+  it("contains with empty value matches nothing", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "contains", value: "" })])];
+    const result = matched(movieItems, rules, "MOVIE", arrData);
+    expect(result.get("m1")).toHaveLength(0);
+  });
+
+  it("notContains with empty value matches nothing (would otherwise match all)", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "notContains", value: "" })])];
+    const result = matched(movieItems, rules, "MOVIE", arrData);
+    expect(result.get("m1")).toHaveLength(0);
+  });
+
+  it("notContains with empty value + negate=true still matches nothing", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "notContains", value: "", negate: true })])];
+    const result = matched(movieItems, rules, "MOVIE", arrData);
+    expect(result.get("m1")).toHaveLength(0);
+  });
+
+  it("contains with only pipes (no real values) matches nothing", () => {
+    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "contains", value: "|||" })])];
+    const result = matched(movieItems, rules, "MOVIE", arrData);
+    expect(result.get("m1")).toHaveLength(0);
+  });
+
   it("matchesWildcard matches", () => {
     const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "matchesWildcard", value: "Ultra*" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
