@@ -21,76 +21,10 @@ import {
   FIELD_HANDLERS,
   textGenericHandler,
 } from "@/lib/conditions/where-builder";
+import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
 import { Prisma } from "@/generated/prisma/client";
 
 const STREAM_COUNT_FIELDS = new Set(["audioStreamCount", "subtitleStreamCount"]);
-
-/** Batch-fetch cross-system enrichment data for candidate items */
-async function fetchCrossSystemData(
-  itemIds: string[],
-  dedupKeys: string[],
-): Promise<Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }>> {
-  const result = new Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }>();
-  if (itemIds.length === 0) return result;
-
-  // Initialize all items
-  for (const id of itemIds) {
-    result.set(id, { serverCount: 1, matchedRuleSets: [], hasPendingAction: false });
-  }
-
-  // Server count via dedupKey
-  if (dedupKeys.length > 0) {
-    const uniqueKeys = [...new Set(dedupKeys)];
-    const serverCounts = await prisma.mediaItem.groupBy({
-      by: ["dedupKey"],
-      where: { dedupKey: { in: uniqueKeys } },
-      _count: { id: true },
-    });
-    const countMap = new Map(serverCounts.map((r) => [r.dedupKey, r._count.id]));
-
-    // We need to map dedupKey back to itemId
-    const itemDedupMap = new Map<string, string>();
-    // This is called within the filter loop context, but we need item→dedupKey mapping
-    // Re-query to get dedupKeys for our items
-    const itemsWithDedup = await prisma.mediaItem.findMany({
-      where: { id: { in: itemIds } },
-      select: { id: true, dedupKey: true },
-    });
-    for (const item of itemsWithDedup) {
-      if (item.dedupKey) {
-        itemDedupMap.set(item.id, item.dedupKey);
-        const entry = result.get(item.id);
-        if (entry) entry.serverCount = countMap.get(item.dedupKey) ?? 1;
-      }
-    }
-  }
-
-  // Matched rule sets
-  const ruleMatches = await prisma.ruleMatch.findMany({
-    where: { mediaItemId: { in: itemIds } },
-    select: { mediaItemId: true, ruleSet: { select: { name: true } } },
-  });
-  for (const match of ruleMatches) {
-    const entry = result.get(match.mediaItemId);
-    if (entry && match.ruleSet.name && !entry.matchedRuleSets.includes(match.ruleSet.name)) {
-      entry.matchedRuleSets.push(match.ruleSet.name);
-    }
-  }
-
-  // Pending actions
-  const pendingActions = await prisma.lifecycleAction.findMany({
-    where: { mediaItemId: { in: itemIds, not: null }, status: "PENDING" },
-    select: { mediaItemId: true },
-    distinct: ["mediaItemId"],
-  });
-  for (const action of pendingActions) {
-    if (!action.mediaItemId) continue;
-    const entry = result.get(action.mediaItemId);
-    if (entry) entry.hasPendingAction = true;
-  }
-
-  return result;
-}
 
 const STREAM_LANG_CODEC_FIELDS = new Set(["audioLanguage", "subtitleLanguage", "streamAudioCodec"]);
 const STREAM_LANGUAGE_FIELDS = new Set(["audioLanguage", "subtitleLanguage"]);
@@ -2668,7 +2602,7 @@ export async function evaluateRules(
     // Batch-fetch cross-system data if needed
     let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }> | undefined;
     if (hasCrossSystem) {
-      crossSystemData = await fetchCrossSystemData(filteredItems.map((i) => i.id), filteredItems.map((i) => i.dedupKey).filter(Boolean) as string[]);
+      crossSystemData = await fetchCrossSystemData(filteredItems.map((i) => i.id));
     }
 
     filteredItems = filteredItems.filter((item) => {

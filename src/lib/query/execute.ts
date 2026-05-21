@@ -31,66 +31,7 @@ import {
   FIELD_HANDLERS,
   textGenericHandler,
 } from "@/lib/conditions/where-builder";
-
-/** Batch-fetch cross-system enrichment data for candidate items */
-async function fetchCrossSystemData(
-  itemIds: string[],
-): Promise<Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }>> {
-  const result = new Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }>();
-  if (itemIds.length === 0) return result;
-
-  for (const id of itemIds) {
-    result.set(id, { serverCount: 1, matchedRuleSets: [], hasPendingAction: false });
-  }
-
-  // Server count via dedupKey
-  const itemsWithDedup = await prisma.mediaItem.findMany({
-    where: { id: { in: itemIds } },
-    select: { id: true, dedupKey: true },
-  });
-  const dedupKeys = itemsWithDedup.map((i) => i.dedupKey).filter(Boolean) as string[];
-  if (dedupKeys.length > 0) {
-    const uniqueKeys = [...new Set(dedupKeys)];
-    const serverCounts = await prisma.mediaItem.groupBy({
-      by: ["dedupKey"],
-      where: { dedupKey: { in: uniqueKeys } },
-      _count: { id: true },
-    });
-    const countMap = new Map(serverCounts.map((r) => [r.dedupKey, r._count.id]));
-    for (const item of itemsWithDedup) {
-      if (item.dedupKey) {
-        const entry = result.get(item.id);
-        if (entry) entry.serverCount = countMap.get(item.dedupKey) ?? 1;
-      }
-    }
-  }
-
-  // Matched rule sets
-  const ruleMatches = await prisma.ruleMatch.findMany({
-    where: { mediaItemId: { in: itemIds } },
-    select: { mediaItemId: true, ruleSet: { select: { name: true } } },
-  });
-  for (const match of ruleMatches) {
-    const entry = result.get(match.mediaItemId);
-    if (entry && match.ruleSet.name && !entry.matchedRuleSets.includes(match.ruleSet.name)) {
-      entry.matchedRuleSets.push(match.ruleSet.name);
-    }
-  }
-
-  // Pending actions
-  const pendingActions = await prisma.lifecycleAction.findMany({
-    where: { mediaItemId: { in: itemIds, not: null }, status: "PENDING" },
-    select: { mediaItemId: true },
-    distinct: ["mediaItemId"],
-  });
-  for (const action of pendingActions) {
-    if (!action.mediaItemId) continue;
-    const entry = result.get(action.mediaItemId);
-    if (entry) entry.hasPendingAction = true;
-  }
-
-  return result;
-}
+import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
 
 /**
  * Convert a single query rule to a Prisma WHERE clause.
