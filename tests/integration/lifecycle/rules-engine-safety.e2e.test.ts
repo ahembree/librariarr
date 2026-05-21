@@ -81,12 +81,26 @@ describe("Rule engine — match-all safety (E2E against real Postgres)", () => {
   });
 
   it("baseline: the library has the seeded items", async () => {
-    // Sanity check: a substring rule against the shared title prefix
-    // matches the full seed count (free-text contains still does substring
-    // matching by design — only enumerable fields changed semantics).
+    // Substring rule against the shared title prefix matches all items.
     expect(await matchCount(group([
       { id: "r", field: "title", operator: "contains", value: "Movie", condition: "AND" },
     ]))).toBe(SEED_COUNT);
+  });
+
+  it("title isNotNull matches all items (regression: non-nullable text fields)", async () => {
+    // `title` is `String` (not `String?`) in the schema. The old generic
+    // text WHERE builder emitted `{ title: { not: null } }`, which Prisma 7
+    // rejects with "Argument `not` is missing" for non-nullable columns.
+    // Fix: detect non-nullable text fields and use the empty-string inverse.
+    expect(await matchCount(group([
+      { id: "r", field: "title", operator: "isNotNull", value: "", condition: "AND" },
+    ]))).toBe(SEED_COUNT);
+  });
+
+  it("title isNull matches 0 items (none of the seeded titles are empty)", async () => {
+    expect(await matchCount(group([
+      { id: "r", field: "title", operator: "isNull", value: "", condition: "AND" },
+    ]))).toBe(0);
   });
 
   describe("contains / notContains with empty / whitespace-only values", () => {
@@ -188,8 +202,8 @@ describe("Rule engine — match-all safety (E2E against real Postgres)", () => {
   describe("group composition with unsatisfiable rules", () => {
     it("AND group with unconfigured rule fails the whole group (returns 0)", async () => {
       expect(await matchCount(group([
-        // The first rule alone matches everything (all titles have "Movie")
-        { id: "r1", field: "title", operator: "contains", value: "Movie", condition: "AND" },
+        // The first rule alone matches everything
+        { id: "r1", field: "title", operator: "isNotNull", value: "", condition: "AND" },
         // The second rule is unconfigured — AND collapses to 0
         { id: "r2", field: "studio", operator: "notContains", value: "", condition: "AND" },
       ]))).toBe(0);

@@ -25,7 +25,7 @@ import {
   serializeSeriesAggregateForEval,
   type AggregableEpisode,
 } from "@/lib/conditions";
-import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
+import { isEnumerableField, isNonNullableTextField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
 
 /** Batch-fetch cross-system enrichment data for candidate items */
 async function fetchCrossSystemData(
@@ -386,10 +386,16 @@ function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
       break;
     }
     case "isNull":
-      clause = { OR: [{ [field]: null }, { [field]: "" }] };
+      // For non-nullable text columns Prisma 7 rejects `{ field: null }` —
+      // the only "no value" state we can express is the empty string.
+      clause = isNonNullableTextField(field)
+        ? { [field]: "" }
+        : { OR: [{ [field]: null }, { [field]: "" }] };
       break;
     case "isNotNull":
-      clause = { AND: [{ [field]: { not: null } }, { NOT: { [field]: "" } }] };
+      clause = isNonNullableTextField(field)
+        ? { NOT: { [field]: "" } }
+        : { AND: [{ [field]: { not: null } }, { NOT: { [field]: "" } }] };
       break;
     default:
       return {};

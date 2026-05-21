@@ -174,6 +174,27 @@ export function isValueValidForRule(
   return true;
 }
 
+/**
+ * Text fields that the Prisma schema marks `String` (not `String?`).
+ *
+ * Prisma 7 throws `Argument 'not' is missing` for `{ field: { not: null } }`
+ * and rejects `{ field: null }` outright on non-nullable columns. The
+ * generic text-field WHERE builder needs to emit different clauses for
+ * `isNull` / `isNotNull` against these — semantically the "no value"
+ * state is the empty string, not SQL NULL.
+ *
+ * Keep this list in sync with `prisma/schema.prisma`: it should contain
+ * every CONDITION_FIELDS / STREAM_QUERY_FIELDS entry whose schema type
+ * is `String` (not `String?`).
+ */
+export const NON_NULLABLE_TEXT_FIELDS: ReadonlySet<string> = new Set([
+  "title",
+]);
+
+export function isNonNullableTextField(field: string): boolean {
+  return NON_NULLABLE_TEXT_FIELDS.has(field);
+}
+
 // Stable arrays for callers that need to enumerate
 export const ARR_FIELDS = Array.from(ARR_FIELD_VALUES);
 export const SEERR_FIELDS = Array.from(SEERR_FIELD_VALUES);

@@ -7,7 +7,7 @@ import {
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
   RULE_FIELDS, STREAM_QUERY_FIELDS, type RuleField,
 } from "./types";
-import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
+import { isEnumerableField, isNonNullableTextField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
 import { detectStreamAudioProfile, detectStreamDynamicRange } from "./stream-detection";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import {
@@ -613,10 +613,19 @@ function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
       break;
     }
     case "isNull":
-      clause = { OR: [{ [field]: null }, { [field]: "" }] };
+      // For non-nullable text columns (e.g. `title String` in the schema),
+      // Prisma 7 rejects `{ field: null }` — the only "no value" state we
+      // can express is the empty string.
+      clause = isNonNullableTextField(field)
+        ? { [field]: "" }
+        : { OR: [{ [field]: null }, { [field]: "" }] };
       break;
     case "isNotNull":
-      clause = { AND: [{ [field]: { not: null } }, { NOT: { [field]: "" } }] };
+      // Same reason — `{ field: { not: null } }` throws on non-nullable
+      // columns ("Argument `not` is missing"). Use the empty-string inverse.
+      clause = isNonNullableTextField(field)
+        ? { NOT: { [field]: "" } }
+        : { AND: [{ [field]: { not: null } }, { NOT: { [field]: "" } }] };
       break;
     default:
       return {};
