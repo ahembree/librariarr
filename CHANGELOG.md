@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.1](https://github.com/ahembree/librariarr/compare/v0.18.0...v0.18.1) (2026-05-21)
+
+
+### Bug Fixes
+
+* **lifecycle:** snapshot title on manually executed actions ([57438a0](https://github.com/ahembree/librariarr/commit/57438a02483229f69358f34660ea5b4734b5d1a6))
+* **tests:** use valid media item type in lifecycle action title test ([6b41476](https://github.com/ahembree/librariarr/commit/6b414767baa51136ee97501c158abb8c804b38dd))
+
 ## [0.18.0](https://github.com/ahembree/librariarr/compare/v0.17.1...v0.18.0) (2026-05-21)
 
 
