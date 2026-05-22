@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.18.2](https://github.com/ahembree/librariarr/compare/v0.18.1...v0.18.2) (2026-05-22)
+
+
+### Bug Fixes
+
+* **builder:** guard against empty-string values in enumerable dropdowns ([298817d](https://github.com/ahembree/librariarr/commit/298817d578b62cdae3a67fd26b2cf2fe26d90504))
+* **lifecycle:** context-aware Arr-missing tooltip in rule builder ([0986fb1](https://github.com/ahembree/librariarr/commit/0986fb1e19868cbc8a9eb78bffcb427eb9732c0e))
+* **query:** align stream-query Phase 1/Phase 2 with rule engine ([e48bbf9](https://github.com/ahembree/librariarr/commit/e48bbf9d6b4c48a44bafb7f0b51c1e625e721b21))
+
 ## [0.18.1](https://github.com/ahembree/librariarr/compare/v0.18.0...v0.18.1) (2026-05-21)
 
 
