@@ -22,6 +22,7 @@ import {
   textGenericHandler,
 } from "@/lib/conditions/where-builder";
 import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
+import { buildStreamQueryClause } from "@/lib/conditions/stream-query-where";
 import { Prisma } from "@/generated/prisma/client";
 
 const STREAM_COUNT_FIELDS = new Set(["audioStreamCount", "subtitleStreamCount"]);
@@ -174,141 +175,6 @@ export function hasAnyActiveRules(rules: Rule[] | RuleGroup[]): boolean {
     );
   }
   return (rules as Rule[]).some((r) => r.enabled !== false);
-}
-
-/**
- * Build a Prisma `streams: { some: { ... } }` clause for a stream query group.
- * All non-computed rules are combined with AND inside the `some` clause so they
- * apply to the SAME stream record. Computed fields are skipped (handled in Phase 2).
- * Returns null if no DB-expressible conditions exist.
- */
-function buildStreamQueryClause(group: RuleGroup): Prisma.MediaItemWhereInput | null {
-  if (!group.streamQuery) return null;
-  const streamTypeInt = STREAM_TYPE_INT_MAP[group.streamQuery.streamType];
-  const conditions: Prisma.MediaStreamWhereInput[] = [];
-
-  for (const rule of group.rules) {
-    if (rule.enabled === false) continue;
-    const field = rule.field as StreamQueryField;
-    if (isStreamQueryComputedField(field)) continue; // Phase 2 only
-    if (rule.operator === "matchesWildcard" || rule.operator === "notMatchesWildcard") continue; // Phase 2
-
-    // Safety: unconfigured contains/notContains must never match anything.
-    // An unsatisfiable inner condition makes the surrounding `streams.some`
-    // / `streams.none` clause vacuously false / true, which fails the group.
-    if (isUnconfiguredContainsRule(rule.operator, rule.value)) {
-      return UNSATISFIABLE_WHERE;
-    }
-    // Safety: operator/field-type mismatch (e.g. `contains` on a boolean
-    // stream attribute) — fail the group rather than silently dropping
-    // the constraint.
-    if (!isOperatorApplicable(rule.operator, rule.field)) {
-      return UNSATISFIABLE_WHERE;
-    }
-    // Safety: malformed value → fail the group.
-    if (!isValueValidForRule(rule.operator, rule.value, rule.field)) {
-      return UNSATISFIABLE_WHERE;
-    }
-
-    const column = streamQueryFieldToColumn(field);
-    if (!column) continue;
-
-    const { operator, value, negate } = rule;
-    let cond: Prisma.MediaStreamWhereInput | null = null;
-
-    // Boolean fields
-    if (field === "sqIsDefault" || field === "sqForced") {
-      const boolVal = String(value).toLowerCase() === "true";
-      switch (operator) {
-        case "equals": cond = { [column]: boolVal }; break;
-        case "notEquals": cond = { [column]: !boolVal }; break;
-      }
-    }
-    // Numeric fields
-    else if (["sqChannels", "sqBitrate", "sqBitDepth", "sqWidth", "sqHeight", "sqFrameRate", "sqSamplingRate"].includes(field)) {
-      const numValue = Number(value);
-      switch (operator) {
-        case "equals": cond = { [column]: numValue }; break;
-        case "notEquals": cond = { [column]: { not: numValue } }; break;
-        case "greaterThan": cond = { [column]: { gt: numValue } }; break;
-        case "greaterThanOrEqual": cond = { [column]: { gte: numValue } }; break;
-        case "lessThan": cond = { [column]: { lt: numValue } }; break;
-        case "lessThanOrEqual": cond = { [column]: { lte: numValue } }; break;
-        case "isNull": cond = { [column]: null }; break;
-        case "isNotNull": cond = { [column]: { not: null } }; break;
-        case "between": {
-          const [minStr, maxStr] = String(value).split(",");
-          cond = { [column]: { gte: Number(minStr), lte: Number(maxStr) } };
-          break;
-        }
-      }
-    }
-    // Text fields
-    else {
-      const strValue = String(value);
-      const enumerable = isEnumerableField(field);
-      switch (operator) {
-        case "equals": cond = { [column]: { equals: strValue, mode: "insensitive" } }; break;
-        case "notEquals":
-          // Stream column is nullable; include NULL-language/codec streams to
-          // match Phase 2's `String(streamValue ?? "")` coalesce behavior.
-          cond = { OR: [{ [column]: null }, { [column]: { not: strValue, mode: "insensitive" } }] };
-          break;
-        case "contains": {
-          if (enumerable) {
-            const parts = strValue.split("|").filter(Boolean);
-            const matchValues = parts.length > 0 ? parts : [strValue];
-            cond = { OR: matchValues.map((v) => ({ [column]: { equals: v, mode: "insensitive" as const } })) };
-          } else {
-            cond = { [column]: { contains: strValue, mode: "insensitive" } };
-          }
-          break;
-        }
-        case "notContains": {
-          let notCond: Prisma.MediaStreamWhereInput;
-          if (enumerable) {
-            const parts = strValue.split("|").filter(Boolean);
-            const matchValues = parts.length > 0 ? parts : [strValue];
-            notCond = { AND: matchValues.map((v) => ({ NOT: { [column]: { equals: v, mode: "insensitive" as const } } })) };
-          } else {
-            notCond = { NOT: { [column]: { contains: strValue, mode: "insensitive" } } };
-          }
-          // Include NULL stream rows for the same Phase 2 parity reason.
-          cond = { OR: [{ [column]: null }, notCond] };
-          break;
-        }
-        case "isNull": cond = { [column]: null }; break;
-        case "isNotNull": cond = { [column]: { not: null } }; break;
-      }
-    }
-
-    if (cond) {
-      conditions.push(negate ? { NOT: cond } : cond);
-    }
-  }
-
-  if (conditions.length === 0) return null;
-
-  const quantifier = group.streamQuery.quantifier ?? "any";
-  const streamCondition = { streamType: streamTypeInt, AND: conditions };
-
-  if (quantifier === "none") {
-    return { streams: { none: streamCondition } };
-  }
-  if (quantifier === "all") {
-    // "all streams of this type match" = at least one such stream EXISTS AND
-    // no such stream fails to match. The `some streamType` precondition guards
-    // against vacuous truth on items with 0 streams of this type — Phase 2's
-    // `matchingStreams.length > 0 && ...every(...)` requires the same.
-    return {
-      AND: [
-        { streams: { some: { streamType: streamTypeInt } } },
-        { streams: { none: { streamType: streamTypeInt, NOT: { AND: conditions } } } },
-      ],
-    };
-  }
-  // Default: "any" (EXISTS)
-  return { streams: { some: streamCondition } };
 }
 
 /**

@@ -32,6 +32,7 @@ import {
   textGenericHandler,
 } from "@/lib/conditions/where-builder";
 import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
+import { buildStreamQueryClause } from "@/lib/conditions/stream-query-where";
 
 /**
  * Convert a single query rule to a Prisma WHERE clause.
@@ -56,7 +57,7 @@ function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
   // Skip external (arr/seerr) fields — handled as post-filters
   if (isExternalQueryField(field)) return {};
 
-  // Skip stream query fields — handled at the group level via buildQueryStreamQueryClause
+  // Skip stream query fields — handled at the group level via buildStreamQueryClause
   if (isStreamQueryField(field)) return {};
 
   // Skip cross-system fields — enriched before Phase 2
@@ -80,133 +81,6 @@ function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
   return textGenericHandler(operator, value, field, negate);
 }
 
-/**
- * Build a Prisma WHERE clause for a stream query group.
- * Uses `streams: { some: { streamType, AND: [...] } }` so all conditions
- * apply to the SAME stream record (existential semantics).
- */
-function buildQueryStreamQueryClause(group: QueryGroup): Prisma.MediaItemWhereInput | null {
-  if (!group.streamQuery) return null;
-  const streamTypeInt = STREAM_TYPE_INT_MAP[group.streamQuery.streamType as keyof typeof STREAM_TYPE_INT_MAP];
-  const conditions: Prisma.MediaStreamWhereInput[] = [];
-
-  for (const rule of group.rules) {
-    if (rule.enabled === false) continue;
-    const field = rule.field as StreamQueryField;
-    if (isStreamQueryComputedField(field)) continue; // Phase 2 only
-    if (rule.operator === "matchesWildcard" || rule.operator === "notMatchesWildcard") continue; // Phase 2
-
-    // Safety: unconfigured contains/notContains makes the entire stream query
-    // unsatisfiable. Anything else would let an empty multi-select sweep the library.
-    if (isUnconfiguredContainsRule(rule.operator, rule.value)) {
-      return UNSATISFIABLE_WHERE;
-    }
-    // Safety: operator/field-type mismatch (e.g. `contains` on a boolean
-    // stream attribute) — fail closed.
-    if (!isOperatorApplicable(rule.operator, rule.field)) {
-      return UNSATISFIABLE_WHERE;
-    }
-    // Safety: malformed value → fail the group.
-    if (!isValueValidForRule(rule.operator, rule.value, rule.field)) {
-      return UNSATISFIABLE_WHERE;
-    }
-
-    const column = streamQueryFieldToColumn(field);
-    if (!column) continue;
-
-    const { operator, value, negate } = rule;
-    let cond: Prisma.MediaStreamWhereInput | null = null;
-
-    // Boolean fields
-    if (field === "sqIsDefault" || field === "sqForced") {
-      const boolVal = String(value).toLowerCase() === "true";
-      switch (operator) {
-        case "equals": cond = { [column]: boolVal }; break;
-        case "notEquals": cond = { [column]: !boolVal }; break;
-      }
-    }
-    // Numeric fields
-    else if (["sqChannels", "sqBitrate", "sqBitDepth", "sqWidth", "sqHeight", "sqFrameRate", "sqSamplingRate"].includes(field)) {
-      const numValue = Number(value);
-      switch (operator) {
-        case "equals": cond = { [column]: numValue }; break;
-        case "notEquals": cond = { [column]: { not: numValue } }; break;
-        case "greaterThan": cond = { [column]: { gt: numValue } }; break;
-        case "greaterThanOrEqual": cond = { [column]: { gte: numValue } }; break;
-        case "lessThan": cond = { [column]: { lt: numValue } }; break;
-        case "lessThanOrEqual": cond = { [column]: { lte: numValue } }; break;
-        case "between": { const [minStr, maxStr] = String(value).split(","); cond = { [column]: { gte: Number(minStr), lte: Number(maxStr) } }; break; }
-        case "isNull": cond = { [column]: null }; break;
-        case "isNotNull": cond = { [column]: { not: null } }; break;
-      }
-    }
-    // Text fields
-    else {
-      const strValue = String(value);
-      const enumerable = isEnumerableField(field);
-      switch (operator) {
-        case "equals": cond = { [column]: { equals: strValue, mode: "insensitive" } }; break;
-        case "notEquals":
-          // Stream column is nullable; include NULL-language/codec streams to
-          // match Phase 2's `String(streamValue ?? "")` coalesce behavior.
-          cond = { OR: [{ [column]: null }, { [column]: { not: strValue, mode: "insensitive" } }] };
-          break;
-        case "contains": {
-          if (enumerable) {
-            const parts = strValue.split("|").filter(Boolean);
-            const matchValues = parts.length > 0 ? parts : [strValue];
-            cond = { OR: matchValues.map((v) => ({ [column]: { equals: v, mode: "insensitive" as const } })) };
-          } else {
-            cond = { [column]: { contains: strValue, mode: "insensitive" } };
-          }
-          break;
-        }
-        case "notContains": {
-          let notCond: Prisma.MediaStreamWhereInput;
-          if (enumerable) {
-            const parts = strValue.split("|").filter(Boolean);
-            const matchValues = parts.length > 0 ? parts : [strValue];
-            notCond = { AND: matchValues.map((v) => ({ NOT: { [column]: { equals: v, mode: "insensitive" as const } } })) };
-          } else {
-            notCond = { NOT: { [column]: { contains: strValue, mode: "insensitive" } } };
-          }
-          // Include NULL stream rows for the same Phase 2 parity reason.
-          cond = { OR: [{ [column]: null }, notCond] };
-          break;
-        }
-        case "isNull": cond = { [column]: null }; break;
-        case "isNotNull": cond = { [column]: { not: null } }; break;
-      }
-    }
-
-    if (cond) {
-      conditions.push(negate ? { NOT: cond } : cond);
-    }
-  }
-
-  if (conditions.length === 0) return null;
-
-  const quantifier = group.streamQuery.quantifier ?? "any";
-  const streamCondition = { streamType: streamTypeInt, AND: conditions };
-
-  if (quantifier === "none") {
-    return { streams: { none: streamCondition } };
-  }
-  if (quantifier === "all") {
-    // "all streams of this type match" = at least one such stream EXISTS AND
-    // no such stream fails to match. The `some streamType` precondition guards
-    // against vacuous truth on items with 0 streams of this type — Phase 2's
-    // `matchingStreams.length > 0 && ...every(...)` requires the same.
-    return {
-      AND: [
-        { streams: { some: { streamType: streamTypeInt } } },
-        { streams: { none: { streamType: streamTypeInt, NOT: { AND: conditions } } } },
-      ],
-    };
-  }
-  // Default: "any" (EXISTS)
-  return { streams: { some: streamCondition } };
-}
 
 /** Check if a stream query group needs in-memory evaluation (computed/wildcard rules) */
 function streamQueryNeedsInMemory(group: QueryGroup): boolean {
@@ -216,7 +90,7 @@ function streamQueryNeedsInMemory(group: QueryGroup): boolean {
   // the column is nullable. PostgreSQL's `NOT (col = X)` is UNKNOWN for NULL
   // columns, so a NULL-column stream is not counted as "failing" the match,
   // and the relation-level `none-failing` clause vacuously over-matches.
-  // Phase 1 still emits a superset clause via buildQueryStreamQueryClause; Phase 2
+  // Phase 1 still emits a superset clause via buildStreamQueryClause; Phase 2
   // narrows it to the precise `matchingStreams.every(streamMatches)` semantics.
   if ((group.streamQuery.quantifier ?? "any") === "all") return true;
   return group.rules.some((r) =>
@@ -247,7 +121,7 @@ function evaluateQueryGroup(group: QueryGroup): Prisma.MediaItemWhereInput | nul
 
   // Stream query groups: build stream-level clause
   if (isStreamQueryGroup(group)) {
-    return buildQueryStreamQueryClause(group);
+    return buildStreamQueryClause(group);
   }
 
   const items: Array<{ condition: RuleCondition; clause: Prisma.MediaItemWhereInput }> = [];
