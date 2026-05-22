@@ -146,7 +146,11 @@ function buildQueryStreamQueryClause(group: QueryGroup): Prisma.MediaItemWhereIn
       const enumerable = isEnumerableField(field);
       switch (operator) {
         case "equals": cond = { [column]: { equals: strValue, mode: "insensitive" } }; break;
-        case "notEquals": cond = { [column]: { not: strValue, mode: "insensitive" } }; break;
+        case "notEquals":
+          // Stream column is nullable; include NULL-language/codec streams to
+          // match Phase 2's `String(streamValue ?? "")` coalesce behavior.
+          cond = { OR: [{ [column]: null }, { [column]: { not: strValue, mode: "insensitive" } }] };
+          break;
         case "contains": {
           if (enumerable) {
             const parts = strValue.split("|").filter(Boolean);
@@ -158,13 +162,16 @@ function buildQueryStreamQueryClause(group: QueryGroup): Prisma.MediaItemWhereIn
           break;
         }
         case "notContains": {
+          let notCond: Prisma.MediaStreamWhereInput;
           if (enumerable) {
             const parts = strValue.split("|").filter(Boolean);
             const matchValues = parts.length > 0 ? parts : [strValue];
-            cond = { AND: matchValues.map((v) => ({ NOT: { [column]: { equals: v, mode: "insensitive" as const } } })) };
+            notCond = { AND: matchValues.map((v) => ({ NOT: { [column]: { equals: v, mode: "insensitive" as const } } })) };
           } else {
-            cond = { NOT: { [column]: { contains: strValue, mode: "insensitive" } } };
+            notCond = { NOT: { [column]: { contains: strValue, mode: "insensitive" } } };
           }
+          // Include NULL stream rows for the same Phase 2 parity reason.
+          cond = { OR: [{ [column]: null }, notCond] };
           break;
         }
         case "isNull": cond = { [column]: null }; break;
@@ -186,14 +193,32 @@ function buildQueryStreamQueryClause(group: QueryGroup): Prisma.MediaItemWhereIn
     return { streams: { none: streamCondition } };
   }
   if (quantifier === "all") {
-    return { streams: { none: { streamType: streamTypeInt, NOT: { AND: conditions } } } };
+    // "all streams of this type match" = at least one such stream EXISTS AND
+    // no such stream fails to match. The `some streamType` precondition guards
+    // against vacuous truth on items with 0 streams of this type — Phase 2's
+    // `matchingStreams.length > 0 && ...every(...)` requires the same.
+    return {
+      AND: [
+        { streams: { some: { streamType: streamTypeInt } } },
+        { streams: { none: { streamType: streamTypeInt, NOT: { AND: conditions } } } },
+      ],
+    };
   }
+  // Default: "any" (EXISTS)
   return { streams: { some: streamCondition } };
 }
 
 /** Check if a stream query group needs in-memory evaluation (computed/wildcard rules) */
 function streamQueryNeedsInMemory(group: QueryGroup): boolean {
   if (!group.streamQuery) return false;
+  // `all` quantifier requires Phase 2 re-evaluation: Phase 1's NOT-of-relation
+  // clause cannot precisely express "every stream of this type matches" when
+  // the column is nullable. PostgreSQL's `NOT (col = X)` is UNKNOWN for NULL
+  // columns, so a NULL-column stream is not counted as "failing" the match,
+  // and the relation-level `none-failing` clause vacuously over-matches.
+  // Phase 1 still emits a superset clause via buildQueryStreamQueryClause; Phase 2
+  // narrows it to the precise `matchingStreams.every(streamMatches)` semantics.
+  if ((group.streamQuery.quantifier ?? "any") === "all") return true;
   return group.rules.some((r) =>
     r.enabled !== false && (
       isStreamQueryComputedField(r.field) ||
