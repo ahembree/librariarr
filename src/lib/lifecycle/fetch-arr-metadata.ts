@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { RadarrClient } from "@/lib/arr/radarr-client";
 import { SonarrClient } from "@/lib/arr/sonarr-client";
 import { LidarrClient } from "@/lib/arr/lidarr-client";
-import type { ArrDataMap } from "@/lib/rules/engine";
+import type { ArrDataMap } from "@/lib/rules/lifecycle-engine";
 
 export async function fetchArrMetadata(
   userId: string,

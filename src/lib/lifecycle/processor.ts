@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
-import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/engine";
-import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/engine";
+import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
+import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError } from "@/lib/lifecycle/actions";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
@@ -9,7 +9,7 @@ import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
 import { syncPlexCollection, removePlexCollection } from "@/lib/lifecycle/collections";
 import { syncMediaServer } from "@/lib/sync/sync-server";
 import { sendDiscordNotification, buildSuccessSummaryEmbed, buildMatchChangeEmbed, buildFailureSummaryEmbed } from "@/lib/discord/client";
-import type { Rule, RuleGroup } from "@/lib/rules/types";
+import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { eventBus } from "@/lib/events/event-bus";
 
 function formatTitleWithYear(title: string, year: number | null): string {
@@ -180,7 +180,7 @@ export async function processLifecycleRules(userId?: string) {
         continue;
       }
 
-      const rules = ruleSet.rules as unknown as Rule[] | RuleGroup[];
+      const rules = ruleSet.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
 
       // At least 1 enabled rule is required — skip entirely to avoid matching everything
       if (!hasAnyActiveRules(rules)) {

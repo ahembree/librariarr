@@ -1,91 +1,32 @@
 import { prisma } from "@/lib/db";
-import type { Rule, RuleGroup, RuleCondition, StreamQueryField } from "./types";
+import type { LifecycleRule, LifecycleRuleGroup, LifecycleRuleCondition, StreamQueryField } from "./types";
 import {
   isArrField, isSeerrField, isExternalField, isStreamField, isSeriesAggregateField,
   isCrossSystemField,
-  isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
+  isStreamQueryField, isStreamQueryGroup,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
   RULE_FIELDS, STREAM_QUERY_FIELDS, type RuleField,
 } from "./types";
-import { isEnumerableField, isNonNullableField, isNonNullableNonTextField, isNonNullableTextField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
+import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
 import { detectStreamAudioProfile, detectStreamDynamicRange } from "./stream-detection";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import {
   MB_IN_BYTES,
   DURATION_MS_PER_MIN,
-  RESOLUTION_DB_VALUES,
   wildcardToRegex,
 } from "@/lib/conditions";
+import {
+  isUnconfiguredContainsRule,
+  validateRulePreamble,
+  FIELD_HANDLERS,
+  textGenericHandler,
+} from "@/lib/conditions/where-builder";
+import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
+import { buildStreamQueryClause, streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
+import { buildGroupConditions } from "@/lib/conditions/group-composition";
 import { Prisma } from "@/generated/prisma/client";
 
 const STREAM_COUNT_FIELDS = new Set(["audioStreamCount", "subtitleStreamCount"]);
-
-/** Batch-fetch cross-system enrichment data for candidate items */
-async function fetchCrossSystemData(
-  itemIds: string[],
-  dedupKeys: string[],
-): Promise<Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }>> {
-  const result = new Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }>();
-  if (itemIds.length === 0) return result;
-
-  // Initialize all items
-  for (const id of itemIds) {
-    result.set(id, { serverCount: 1, matchedRuleSets: [], hasPendingAction: false });
-  }
-
-  // Server count via dedupKey
-  if (dedupKeys.length > 0) {
-    const uniqueKeys = [...new Set(dedupKeys)];
-    const serverCounts = await prisma.mediaItem.groupBy({
-      by: ["dedupKey"],
-      where: { dedupKey: { in: uniqueKeys } },
-      _count: { id: true },
-    });
-    const countMap = new Map(serverCounts.map((r) => [r.dedupKey, r._count.id]));
-
-    // We need to map dedupKey back to itemId
-    const itemDedupMap = new Map<string, string>();
-    // This is called within the filter loop context, but we need item→dedupKey mapping
-    // Re-query to get dedupKeys for our items
-    const itemsWithDedup = await prisma.mediaItem.findMany({
-      where: { id: { in: itemIds } },
-      select: { id: true, dedupKey: true },
-    });
-    for (const item of itemsWithDedup) {
-      if (item.dedupKey) {
-        itemDedupMap.set(item.id, item.dedupKey);
-        const entry = result.get(item.id);
-        if (entry) entry.serverCount = countMap.get(item.dedupKey) ?? 1;
-      }
-    }
-  }
-
-  // Matched rule sets
-  const ruleMatches = await prisma.ruleMatch.findMany({
-    where: { mediaItemId: { in: itemIds } },
-    select: { mediaItemId: true, ruleSet: { select: { name: true } } },
-  });
-  for (const match of ruleMatches) {
-    const entry = result.get(match.mediaItemId);
-    if (entry && match.ruleSet.name && !entry.matchedRuleSets.includes(match.ruleSet.name)) {
-      entry.matchedRuleSets.push(match.ruleSet.name);
-    }
-  }
-
-  // Pending actions
-  const pendingActions = await prisma.lifecycleAction.findMany({
-    where: { mediaItemId: { in: itemIds, not: null }, status: "PENDING" },
-    select: { mediaItemId: true },
-    distinct: ["mediaItemId"],
-  });
-  for (const action of pendingActions) {
-    if (!action.mediaItemId) continue;
-    const entry = result.get(action.mediaItemId);
-    if (entry) entry.hasPendingAction = true;
-  }
-
-  return result;
-}
 
 const STREAM_LANG_CODEC_FIELDS = new Set(["audioLanguage", "subtitleLanguage", "streamAudioCodec"]);
 const STREAM_LANGUAGE_FIELDS = new Set(["audioLanguage", "subtitleLanguage"]);
@@ -160,120 +101,13 @@ export function lookupSeerrMeta(
   return undefined;
 }
 
-function applyNegate(clause: Prisma.MediaItemWhereInput, negate?: boolean): Prisma.MediaItemWhereInput {
-  if (!negate) return clause;
-  return { NOT: clause };
-}
-
-/**
- * Wrap a "not"-shaped clause (notEquals / notContains / etc.) so that NULL
- * rows are correctly INCLUDED in the result. Prisma's `{ field: { not: X } }`
- * and `{ NOT: { field: { contains: X } } }` evaluate to UNKNOWN for NULL
- * rows under PostgreSQL three-valued logic, which excludes them — but the
- * Phase 2 in-memory evaluator coerces NULL to a default (`?? ""` or `?? 0`)
- * and INCLUDES them, so without this wrapper Phase 1 drops items that
- * Phase 2 would have matched. For non-nullable columns the wrapper is a
- * no-op (no NULL rows exist).
- */
-function withNullSafety(field: string, notClause: Prisma.MediaItemWhereInput): Prisma.MediaItemWhereInput {
-  if (isNonNullableField(field)) return notClause;
-  return { OR: [{ [field]: null }, notClause] };
-}
-
-/**
- * Negate a *positive* Phase 1 predicate (e.g. `{ field: { lt: X } }`,
- * `{ field: { equals: Y } }`) for a specific field, applying NULL-safety on
- * negate. PostgreSQL's three-valued logic excludes NULL rows from both the
- * positive clause AND its NOT — but Phase 2 coerces NULL to a default value
- * (`?? ""` or `?? 0`), evaluates positive→false, then `negate ? !false : false`
- * flips to true. So Phase 2 INCLUDES NULL rows for negated positive predicates,
- * and Phase 1 must match.
- *
- * Use this in field handlers wherever the input clause is a positive predicate.
- * For clauses that are already null-safe (e.g. notEquals after withNullSafety),
- * sentinel constants (UNSATISFIABLE_WHERE, MATCH_ALL_WHERE), or relation
- * queries (which don't have NULL-row semantics), use plain `applyNegate`.
- */
-function applyNegateNullable(field: string, positiveClause: Prisma.MediaItemWhereInput, negate?: boolean): Prisma.MediaItemWhereInput {
-  if (!negate) return positiveClause;
-  return withNullSafety(field, { NOT: positiveClause });
-}
-
-/**
- * An always-false Prisma `WhereInput`. Used as a deliberate "this rule should
- * not match any item" sentinel — e.g. for unconfigured contains/notContains
- * rules where the values list is empty. The contradiction (id equals two
- * distinct literals) survives AND/OR composition without flipping to "match
- * everything", as would happen with `{ AND: [] }` (no constraint) or
- * `{ NOT: {} }` (NOT of match-everything).
- */
-const UNSATISFIABLE_WHERE: Prisma.MediaItemWhereInput = {
-  AND: [
-    { id: { equals: "__librariarr_unsatisfiable_a__" } },
-    { id: { equals: "__librariarr_unsatisfiable_b__" } },
-  ],
-};
-
-/**
- * An always-true Prisma `WhereInput`. Used for the semantically-correct
- * "matches every row" case — e.g. `isNotNull` on a non-nullable column.
- *
- * Empty `{}` cannot be used: evaluateGroup() at line 843 filters out empty
- * clauses, and the safety net at evaluateRules() returns 0 when all clauses
- * collapsed to empty. A non-empty always-true predicate survives composition
- * and inverts correctly via applyNegate.
- */
-const MATCH_ALL_WHERE: Prisma.MediaItemWhereInput = {
-  id: { not: "__librariarr_never_id__" },
-};
-
-/**
- * A contains/notContains/wildcard rule with no meaningful value is
- * unconfigured. Treat it as match-nothing so partially configured rules
- * can never sweep the library.
- *
- * For contains/notContains: an empty multi-select (`""`, `"|"`, whitespace-only)
- *   means no values are selected — `notContains <nothing>` would otherwise be
- *   vacuously true and match every item with a non-empty field.
- * For matchesWildcard/notMatchesWildcard: an empty pattern (`""`,
- *   whitespace-only) means no pattern was supplied. Treating it as the
- *   regex `^$` would make `notMatchesWildcard ""` match every item with a
- *   non-empty field. `*` is intentional (matches everything) and is NOT
- *   treated as unconfigured.
- */
-function isUnconfiguredContainsRule(operator: string, value: string | number): boolean {
-  if (operator === "contains" || operator === "notContains") {
-    return String(value).split("|").map((s) => s.trim()).filter(Boolean).length === 0;
-  }
-  if (operator === "matchesWildcard" || operator === "notMatchesWildcard") {
-    return String(value).trim() === "";
-  }
-  return false;
-}
-
-function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
+function ruleToWhereClause(rule: LifecycleRule): Prisma.MediaItemWhereInput {
   const { field, operator, value, negate } = rule;
 
-  // Safety: unconfigured contains/notContains must never match anything.
-  // Returned directly so applyNegate cannot flip it to "match everything".
-  if (isUnconfiguredContainsRule(operator, value)) {
-    return UNSATISFIABLE_WHERE;
-  }
-
-  // Safety: an operator that does not apply to the field (unknown operator,
-  // wrong-type combo like `greaterThan` on a boolean, etc.) would otherwise
-  // fall through every branch and contribute `{}` to the WHERE composition
-  // while Phase 2's `default: result = false` would then be flipped to
-  // true by negate=true, sweeping the library.
-  if (!isOperatorApplicable(operator, field)) {
-    return UNSATISFIABLE_WHERE;
-  }
-  // Safety: malformed values (e.g. `playCount > "abc"` → `> NaN`, never
-  // true for any item but flipped to "match all" by negate). Bypasses
-  // applyNegate by returning directly.
-  if (!isValueValidForRule(operator, value, field)) {
-    return UNSATISFIABLE_WHERE;
-  }
+  // Safety preamble: unconfigured rule, inapplicable operator, malformed
+  // value → UNSATISFIABLE_WHERE. Shared with the query builder.
+  const guarded = validateRulePreamble(field, operator, value);
+  if (guarded) return guarded;
 
   // Skip external fields — they are handled as post-filters
   if (isExternalField(field)) return {};
@@ -290,434 +124,21 @@ function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
   // Stream count fields — always post-filtered in-memory
   if (STREAM_COUNT_FIELDS.has(field)) return {};
 
-  // Stream language/codec fields — Prisma relation queries (wildcards post-filtered)
-  if (STREAM_LANG_CODEC_FIELDS.has(field)) {
-    if (operator === "matchesWildcard" || operator === "notMatchesWildcard") return {};
-    const streamType = field === "subtitleLanguage" ? 3 : 2;
-    const streamField = field === "streamAudioCodec" ? "codec" : "language";
-    // For language fields, exclude streams with unknown/null/empty language
-    const isLangField = STREAM_LANGUAGE_FIELDS.has(field);
-    const knownLangFilter = isLangField
-      ? { language: { not: null, notIn: ["", "Unknown"] } }
-      : {};
-    let clause: Prisma.MediaItemWhereInput;
-    switch (operator) {
-      case "equals":
-        clause = { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: String(value), mode: "insensitive" } } } };
-        break;
-      case "notEquals":
-        clause = { NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: String(value), mode: "insensitive" } } } } };
-        break;
-      case "contains": {
-        // Stream language/codec fields are enumerable — `contains` is multi-select
-        // list membership, not substring search.
-        const parts = String(value).split("|").filter(Boolean);
-        const matchValues = parts.length > 0 ? parts : [String(value)];
-        clause = { OR: matchValues.map((v) => ({ streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: v, mode: "insensitive" as const } } } })) };
-        break;
-      }
-      case "notContains": {
-        const parts = String(value).split("|").filter(Boolean);
-        const matchValues = parts.length > 0 ? parts : [String(value)];
-        clause = { AND: matchValues.map((v) => ({ NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: v, mode: "insensitive" as const } } } } })) };
-        break;
-      }
-      case "isNull": {
-        // "Is Empty" — no stream of this type has a known value
-        const hasValueFilter = isLangField
-          ? knownLangFilter
-          : { [streamField]: { not: null } };
-        clause = { NOT: { streams: { some: { streamType, ...hasValueFilter } } } };
-        break;
-      }
-      case "isNotNull": {
-        // "Is Not Empty" — at least one stream of this type has a known value
-        const hasValueFilter = isLangField
-          ? knownLangFilter
-          : { [streamField]: { not: null } };
-        clause = { streams: { some: { streamType, ...hasValueFilter } } };
-        break;
-      }
-      default:
-        return {};
-    }
-    return applyNegate(clause, negate);
-  }
+  // Field-specific WHERE-emitting handlers live in where-builder.ts and are
+  // shared with the query builder. The dispatcher above handles all the
+  // engine-specific routing (external, series aggregate, cross-system,
+  // stream query/count) before reaching this lookup; stream relation,
+  // hasExternalId are routed via FIELD_HANDLERS.
+  const handler = FIELD_HANDLERS[field];
+  if (handler) return handler(operator, value, field, negate);
 
-  // Genre / Labels (JSON array fields). Enumerable multi-select: `contains`
-  // means "any selected value is present in the array".
-  if (field === "genre" || field === "labels") {
-    const column = field === "labels" ? "labels" : "genres";
-    const strValue = String(value);
-    const parts = (operator === "contains" || operator === "notContains")
-      ? strValue.split("|").filter(Boolean)
-      : [strValue];
-    const matchValues = parts.length > 0 ? parts : [strValue];
-    let clause: Prisma.MediaItemWhereInput;
-    switch (operator) {
-      case "equals":
-        clause = { [column]: { array_contains: strValue } };
-        break;
-      case "contains":
-        clause = matchValues.length === 1
-          ? { [column]: { array_contains: matchValues[0] } }
-          : { OR: matchValues.map((v) => ({ [column]: { array_contains: v } })) };
-        break;
-      case "notEquals":
-        // JSON column NULL needs Prisma.DbNull, not SQL null. The withNullSafety
-        // helper uses `{ [col]: null }` which targets SQL NULL — for JSON arrays
-        // we inline the Prisma.DbNull form directly.
-        clause = {
-          OR: [
-            { [column]: { equals: Prisma.DbNull } },
-            { NOT: { [column]: { array_contains: strValue } } },
-          ],
-        };
-        break;
-      case "notContains": {
-        const notClause: Prisma.MediaItemWhereInput = matchValues.length === 1
-          ? { NOT: { [column]: { array_contains: matchValues[0] } } }
-          : { AND: matchValues.map((v) => ({ NOT: { [column]: { array_contains: v } } })) };
-        clause = { OR: [{ [column]: { equals: Prisma.DbNull } }, notClause] };
-        break;
-      }
-      case "isNull":
-        clause = { [column]: { equals: Prisma.DbNull } };
-        break;
-      case "isNotNull":
-        clause = { NOT: { [column]: { equals: Prisma.DbNull } } };
-        break;
-      default:
-        return {};
-    }
-    return applyNegate(clause, negate);
-  }
-
-  // Has External ID (relation query)
-  if (field === "hasExternalId") {
-    let clause: Prisma.MediaItemWhereInput;
-    switch (operator) {
-      case "equals":
-        clause = { externalIds: { some: { source: String(value) } } };
-        break;
-      case "notEquals":
-        clause = { externalIds: { none: { source: String(value) } } };
-        break;
-      default:
-        return {};
-    }
-    return applyNegate(clause, negate);
-  }
-
-  // Is Watchlisted (boolean field, non-nullable in the schema).
-  if (field === "isWatchlisted") {
-    // Non-nullable Boolean: every row has a value. Same semantics as the
-    // generic isNull/isNotNull handler above.
-    if (operator === "isNull") return applyNegate(UNSATISFIABLE_WHERE, negate);
-    if (operator === "isNotNull") return applyNegate(MATCH_ALL_WHERE, negate);
-
-    const boolVal = String(value).toLowerCase() === "true";
-    let clause: Prisma.MediaItemWhereInput;
-    switch (operator) {
-      case "equals":
-        clause = { isWatchlisted: boolVal };
-        break;
-      case "notEquals":
-        clause = { isWatchlisted: !boolVal };
-        break;
-      default:
-        // Unknown operator on a non-nullable column — refuse to match anything
-        // (UNSATISFIABLE bypasses applyNegate so even negate=true returns nothing).
-        return UNSATISFIABLE_WHERE;
-    }
-    return applyNegate(clause, negate);
-  }
-
-  // Handle file size conversion (user inputs MB, DB stores bytes)
-  if (field === "fileSize") {
-    let clause: Prisma.MediaItemWhereInput;
-    if (operator === "isNull") return applyNegate({ fileSize: null }, negate);
-    if (operator === "isNotNull") return applyNegate({ fileSize: { not: null } }, negate);
-    const bytesValue = BigInt(Math.round(Number(value) * MB_IN_BYTES));
-    switch (operator) {
-      // Positive operators on nullable BigInt: applyNegateNullable adds OR null on negate.
-      case "greaterThan":
-        return applyNegateNullable("fileSize", { fileSize: { gt: bytesValue } }, negate);
-      case "greaterThanOrEqual":
-        return applyNegateNullable("fileSize", { fileSize: { gte: bytesValue } }, negate);
-      case "lessThan":
-        return applyNegateNullable("fileSize", { fileSize: { lt: bytesValue } }, negate);
-      case "lessThanOrEqual":
-        return applyNegateNullable("fileSize", { fileSize: { lte: bytesValue } }, negate);
-      case "equals":
-        return applyNegateNullable("fileSize", { fileSize: bytesValue }, negate);
-      case "between": {
-        const [minStr, maxStr] = String(value).split(",");
-        const minBytes = BigInt(Math.round(Number(minStr) * MB_IN_BYTES));
-        const maxBytes = BigInt(Math.round(Number(maxStr) * MB_IN_BYTES));
-        return applyNegateNullable("fileSize", { fileSize: { gte: minBytes, lte: maxBytes } }, negate);
-      }
-      case "notEquals":
-        clause = withNullSafety("fileSize", { fileSize: { not: bytesValue } });
-        break;
-      default:
-        return {};
-    }
-    return applyNegate(clause, negate);
-  }
-
-  // Duration (user inputs minutes, DB stores milliseconds)
-  if (field === "duration") {
-    const msValue = Number(value) * DURATION_MS_PER_MIN;
-    let clause: Prisma.MediaItemWhereInput;
-    switch (operator) {
-      // Positive operators on nullable column: applyNegateNullable adds OR null
-      // on negate so Phase 1 NOT(positive) matches Phase 2's NULL-included result.
-      case "greaterThan": return applyNegateNullable("duration", { duration: { gt: msValue } }, negate);
-      case "greaterThanOrEqual": return applyNegateNullable("duration", { duration: { gte: msValue } }, negate);
-      case "lessThan": return applyNegateNullable("duration", { duration: { lt: msValue } }, negate);
-      case "lessThanOrEqual": return applyNegateNullable("duration", { duration: { lte: msValue } }, negate);
-      case "equals": return applyNegateNullable("duration", { duration: Math.round(msValue) }, negate);
-      case "between": {
-        const [minStr, maxStr] = String(value).split(",");
-        return applyNegateNullable("duration", { duration: { gte: Number(minStr) * DURATION_MS_PER_MIN, lte: Number(maxStr) * DURATION_MS_PER_MIN } }, negate);
-      }
-      // Negative (already null-safe via withNullSafety) + isNull/isNotNull
-      // (explicit NULL clauses) use plain applyNegate.
-      case "notEquals": clause = withNullSafety("duration", { duration: { not: Math.round(msValue) } }); break;
-      case "isNull": clause = { duration: null }; break;
-      case "isNotNull": clause = { duration: { not: null } }; break;
-      default: return {};
-    }
-    return applyNegate(clause, negate);
-  }
-
-  // Handle date fields
-  if (field === "lastPlayedAt" || field === "addedAt" || field === "originallyAvailableAt") {
-    let clause: Prisma.MediaItemWhereInput;
-    switch (operator) {
-      // Positive operators on nullable date column: applyNegateNullable wraps
-      // with OR null on negate so Phase 1 matches Phase 2's NULL-included path.
-      case "before":
-        return applyNegateNullable(field, { [field]: { lt: new Date(String(value)) } }, negate);
-      case "after":
-        return applyNegateNullable(field, { [field]: { gt: new Date(String(value)) } }, negate);
-      case "inLastDays": {
-        const daysAgo = new Date();
-        daysAgo.setDate(daysAgo.getDate() - Number(value));
-        return applyNegateNullable(field, { [field]: { gte: daysAgo } }, negate);
-      }
-      case "notInLastDays": {
-        const daysAgo = new Date();
-        daysAgo.setDate(daysAgo.getDate() - Number(value));
-        return applyNegateNullable(field, { [field]: { lt: daysAgo } }, negate);
-      }
-      case "equals": {
-        const dayStart = new Date(String(value));
-        const dayEnd = new Date(dayStart);
-        dayEnd.setDate(dayEnd.getDate() + 1);
-        return applyNegateNullable(field, { [field]: { gte: dayStart, lt: dayEnd } }, negate);
-      }
-      case "between": {
-        const [fromStr, toStr] = String(value).split(",");
-        const endDate = new Date(toStr);
-        endDate.setDate(endDate.getDate() + 1);
-        return applyNegateNullable(field, { [field]: { gte: new Date(fromStr), lt: endDate } }, negate);
-      }
-      // Negative (already null-safe via withNullSafety).
-      case "notEquals": {
-        const dayStart = new Date(String(value));
-        const dayEnd = new Date(dayStart);
-        dayEnd.setDate(dayEnd.getDate() + 1);
-        clause = withNullSafety(field, { OR: [{ [field]: { lt: dayStart } }, { [field]: { gte: dayEnd } }] });
-        break;
-      }
-      case "isNull":
-        clause = { [field]: null };
-        break;
-      case "isNotNull":
-        clause = { [field]: { not: null } };
-        break;
-      default:
-        return {};
-    }
-    return applyNegate(clause, negate);
-  }
-
-  // Handle numeric fields
-  const numericFields = new Set([
-    "playCount", "videoBitrate", "audioChannels", "year",
-    "videoBitDepth", "audioSamplingRate", "audioBitrate",
-    "rating", "audienceRating", "ratingCount",
-  ]);
-  if (numericFields.has(field)) {
-    const numValue = Number(value);
-    let clause: Prisma.MediaItemWhereInput;
-    switch (operator) {
-      // Positive operators on nullable column: applyNegateNullable wraps with
-      // OR null on negate. For non-nullable columns (playCount) the helper is
-      // a no-op so behavior is unchanged.
-      case "equals":
-        return applyNegateNullable(field, { [field]: numValue }, negate);
-      case "greaterThan":
-        return applyNegateNullable(field, { [field]: { gt: numValue } }, negate);
-      case "greaterThanOrEqual":
-        return applyNegateNullable(field, { [field]: { gte: numValue } }, negate);
-      case "lessThan":
-        return applyNegateNullable(field, { [field]: { lt: numValue } }, negate);
-      case "lessThanOrEqual":
-        return applyNegateNullable(field, { [field]: { lte: numValue } }, negate);
-      case "between": {
-        const [minStr, maxStr] = String(value).split(",");
-        return applyNegateNullable(field, { [field]: { gte: Number(minStr), lte: Number(maxStr) } }, negate);
-      }
-      // Negative (already null-safe via withNullSafety) + isNull/isNotNull
-      // (explicit NULL clauses or sentinels for non-nullable columns).
-      case "notEquals":
-        clause = withNullSafety(field, { [field]: { not: numValue } });
-        break;
-      case "isNull":
-        if (isNonNullableNonTextField(field)) {
-          clause = UNSATISFIABLE_WHERE;
-          break;
-        }
-        clause = { [field]: null };
-        break;
-      case "isNotNull":
-        if (isNonNullableNonTextField(field)) {
-          clause = MATCH_ALL_WHERE;
-          break;
-        }
-        clause = { [field]: { not: null } };
-        break;
-      default:
-        return {};
-    }
-    return applyNegate(clause, negate);
-  }
-
-  // Resolution field — map display labels (e.g. "480P") to raw DB values (e.g. "480", "480p")
-  if (field === "resolution") {
-    const strVal = String(value);
-    let clause: Prisma.MediaItemWhereInput;
-    switch (operator) {
-      case "equals": {
-        const dbValues = RESOLUTION_DB_VALUES[strVal];
-        const positive: Prisma.MediaItemWhereInput = dbValues
-          ? { resolution: { in: dbValues, mode: "insensitive" } }
-          : { resolution: { equals: strVal, mode: "insensitive" } };
-        return applyNegateNullable("resolution", positive, negate);
-      }
-      case "notEquals": {
-        const dbValues = RESOLUTION_DB_VALUES[strVal];
-        const notClause: Prisma.MediaItemWhereInput = dbValues
-          ? { NOT: { resolution: { in: dbValues, mode: "insensitive" } } }
-          : { resolution: { not: strVal, mode: "insensitive" } };
-        clause = withNullSafety("resolution", notClause);
-        break;
-      }
-      case "contains": {
-        // Resolution is enumerable — `contains` is multi-select list membership.
-        // Each display label maps to one or more DB values; combine them via `in`.
-        const parts = strVal.split("|").filter(Boolean);
-        const allDbValues = parts.flatMap((p) => RESOLUTION_DB_VALUES[p] ?? [p]);
-        return applyNegateNullable("resolution", { resolution: { in: allDbValues, mode: "insensitive" } }, negate);
-      }
-      case "notContains": {
-        const parts = strVal.split("|").filter(Boolean);
-        const allDbValues = parts.flatMap((p) => RESOLUTION_DB_VALUES[p] ?? [p]);
-        clause = withNullSafety("resolution", { NOT: { resolution: { in: allDbValues, mode: "insensitive" } } });
-        break;
-      }
-      case "isNull":
-        clause = { OR: [{ resolution: null }, { resolution: "" }] };
-        break;
-      case "isNotNull":
-        clause = { AND: [{ resolution: { not: null } }, { NOT: { resolution: "" } }] };
-        break;
-      default:
-        return {};
-    }
-    return applyNegate(clause, negate);
-  }
-
-  // Handle text fields (parentTitle, albumTitle, videoProfile, videoFrameRate, aspectRatio,
-  // scanType, contentRating, studio, videoCodec, audioCodec, container, etc.)
-  // For enumerable fields, `contains`/`notContains` are presented in the UI as
-  // multi-select dropdowns — semantics is list membership, not substring search.
-  const enumerable = isEnumerableField(field);
-  let clause: Prisma.MediaItemWhereInput;
-  switch (operator) {
-    case "equals":
-      // Positive: applyNegateNullable adds OR null on negate.
-      return applyNegateNullable(field, { [field]: { equals: String(value), mode: "insensitive" } }, negate);
-    case "notEquals":
-      clause = withNullSafety(field, { [field]: { not: String(value), mode: "insensitive" } });
-      break;
-    case "contains": {
-      const values = String(value).split("|").filter(Boolean);
-      let positive: Prisma.MediaItemWhereInput;
-      if (enumerable) {
-        positive = values.length === 0
-          ? { [field]: { equals: String(value), mode: "insensitive" } }
-          : { OR: values.map((v) => ({ [field]: { equals: v, mode: "insensitive" as const } })) };
-      } else if (values.length > 1) {
-        positive = { OR: values.map((v) => ({ [field]: { contains: v, mode: "insensitive" as const } })) };
-      } else {
-        positive = { [field]: { contains: String(value), mode: "insensitive" } };
-      }
-      return applyNegateNullable(field, positive, negate);
-    }
-    case "notContains": {
-      const values = String(value).split("|").filter(Boolean);
-      let notClause: Prisma.MediaItemWhereInput;
-      if (enumerable) {
-        notClause = values.length === 0
-          ? { NOT: { [field]: { equals: String(value), mode: "insensitive" } } }
-          : { AND: values.map((v) => ({ NOT: { [field]: { equals: v, mode: "insensitive" as const } } })) };
-      } else if (values.length > 1) {
-        notClause = { AND: values.map((v) => ({ NOT: { [field]: { contains: v, mode: "insensitive" as const } } })) };
-      } else {
-        notClause = { NOT: { [field]: { contains: String(value), mode: "insensitive" } } };
-      }
-      clause = withNullSafety(field, notClause);
-      break;
-    }
-    case "isNull":
-      // Prisma 7 rejects `{ field: null }` on non-nullable columns. Branch
-      // by Prisma scalar type from field-metadata.ts:
-      //   - non-nullable String: "no value" = empty string
-      //   - non-nullable non-String (Int/Float/Boolean/DateTime/BigInt):
-      //     column can never be null → UNSATISFIABLE (matches 0 rows).
-      //     applyNegate inverts to match-all correctly when negate=true.
-      //   - nullable: legacy clause covers SQL NULL OR empty string
-      if (isNonNullableNonTextField(field)) {
-        clause = UNSATISFIABLE_WHERE;
-        break;
-      }
-      clause = isNonNullableTextField(field)
-        ? { [field]: "" }
-        : { OR: [{ [field]: null }, { [field]: "" }] };
-      break;
-    case "isNotNull":
-      // Symmetric to isNull. Non-nullable non-String columns always have a
-      // value → MATCH_ALL_WHERE (an always-true non-empty clause).
-      // applyNegate(MATCH_ALL, true) correctly produces match-none.
-      if (isNonNullableNonTextField(field)) {
-        clause = MATCH_ALL_WHERE;
-        break;
-      }
-      clause = isNonNullableTextField(field)
-        ? { NOT: { [field]: "" } }
-        : { AND: [{ [field]: { not: null } }, { NOT: { [field]: "" } }] };
-      break;
-    default:
-      return {};
-  }
-  return applyNegate(clause, negate);
+  // Text-generic fallback for unrecognized text fields (parentTitle, albumTitle,
+  // videoProfile, videoFrameRate, aspectRatio, scanType, contentRating, studio,
+  // videoCodec, audioCodec, container, etc.).
+  return textGenericHandler(operator, value, field, negate);
 }
 
-function isRuleGroups(input: Rule[] | RuleGroup[]): input is RuleGroup[] {
+function isRuleGroups(input: LifecycleRule[] | LifecycleRuleGroup[]): input is LifecycleRuleGroup[] {
   return input.length > 0 && "rules" in input[0];
 }
 
@@ -726,243 +147,22 @@ function isRuleGroups(input: Rule[] | RuleGroup[]): input is RuleGroup[] {
  * Returns false if all rules/groups are disabled or empty — lifecycle
  * processing requires at least 1 active rule to avoid matching everything.
  */
-export function hasAnyActiveRules(rules: Rule[] | RuleGroup[]): boolean {
+export function hasAnyActiveRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
-    return (rules as RuleGroup[]).some(
+    return (rules as LifecycleRuleGroup[]).some(
       (g) =>
         g.enabled !== false &&
         (g.rules.some((r) => r.enabled !== false) ||
           (g.groups ?? []).some((sub) =>
-            hasAnyActiveRules([sub] as RuleGroup[])
+            hasAnyActiveRules([sub] as LifecycleRuleGroup[])
           ))
     );
   }
-  return (rules as Rule[]).some((r) => r.enabled !== false);
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false);
 }
 
-/**
- * Build a Prisma `streams: { some: { ... } }` clause for a stream query group.
- * All non-computed rules are combined with AND inside the `some` clause so they
- * apply to the SAME stream record. Computed fields are skipped (handled in Phase 2).
- * Returns null if no DB-expressible conditions exist.
- */
-function buildStreamQueryClause(group: RuleGroup): Prisma.MediaItemWhereInput | null {
-  if (!group.streamQuery) return null;
-  const streamTypeInt = STREAM_TYPE_INT_MAP[group.streamQuery.streamType];
-  const conditions: Prisma.MediaStreamWhereInput[] = [];
 
-  for (const rule of group.rules) {
-    if (rule.enabled === false) continue;
-    const field = rule.field as StreamQueryField;
-    if (isStreamQueryComputedField(field)) continue; // Phase 2 only
-    if (rule.operator === "matchesWildcard" || rule.operator === "notMatchesWildcard") continue; // Phase 2
-
-    // Safety: unconfigured contains/notContains must never match anything.
-    // An unsatisfiable inner condition makes the surrounding `streams.some`
-    // / `streams.none` clause vacuously false / true, which fails the group.
-    if (isUnconfiguredContainsRule(rule.operator, rule.value)) {
-      return UNSATISFIABLE_WHERE;
-    }
-    // Safety: operator/field-type mismatch (e.g. `contains` on a boolean
-    // stream attribute) — fail the group rather than silently dropping
-    // the constraint.
-    if (!isOperatorApplicable(rule.operator, rule.field)) {
-      return UNSATISFIABLE_WHERE;
-    }
-    // Safety: malformed value → fail the group.
-    if (!isValueValidForRule(rule.operator, rule.value, rule.field)) {
-      return UNSATISFIABLE_WHERE;
-    }
-
-    const column = streamQueryFieldToColumn(field);
-    if (!column) continue;
-
-    const { operator, value, negate } = rule;
-    let cond: Prisma.MediaStreamWhereInput | null = null;
-
-    // Boolean fields
-    if (field === "sqIsDefault" || field === "sqForced") {
-      const boolVal = String(value).toLowerCase() === "true";
-      switch (operator) {
-        case "equals": cond = { [column]: boolVal }; break;
-        case "notEquals": cond = { [column]: !boolVal }; break;
-      }
-    }
-    // Numeric fields
-    else if (["sqChannels", "sqBitrate", "sqBitDepth", "sqWidth", "sqHeight", "sqFrameRate", "sqSamplingRate"].includes(field)) {
-      const numValue = Number(value);
-      switch (operator) {
-        case "equals": cond = { [column]: numValue }; break;
-        case "notEquals": cond = { [column]: { not: numValue } }; break;
-        case "greaterThan": cond = { [column]: { gt: numValue } }; break;
-        case "greaterThanOrEqual": cond = { [column]: { gte: numValue } }; break;
-        case "lessThan": cond = { [column]: { lt: numValue } }; break;
-        case "lessThanOrEqual": cond = { [column]: { lte: numValue } }; break;
-        case "isNull": cond = { [column]: null }; break;
-        case "isNotNull": cond = { [column]: { not: null } }; break;
-        case "between": {
-          const [minStr, maxStr] = String(value).split(",");
-          cond = { [column]: { gte: Number(minStr), lte: Number(maxStr) } };
-          break;
-        }
-      }
-    }
-    // Text fields
-    else {
-      const strValue = String(value);
-      const enumerable = isEnumerableField(field);
-      switch (operator) {
-        case "equals": cond = { [column]: { equals: strValue, mode: "insensitive" } }; break;
-        case "notEquals":
-          // Stream column is nullable; include NULL-language/codec streams to
-          // match Phase 2's `String(streamValue ?? "")` coalesce behavior.
-          cond = { OR: [{ [column]: null }, { [column]: { not: strValue, mode: "insensitive" } }] };
-          break;
-        case "contains": {
-          if (enumerable) {
-            const parts = strValue.split("|").filter(Boolean);
-            const matchValues = parts.length > 0 ? parts : [strValue];
-            cond = { OR: matchValues.map((v) => ({ [column]: { equals: v, mode: "insensitive" as const } })) };
-          } else {
-            cond = { [column]: { contains: strValue, mode: "insensitive" } };
-          }
-          break;
-        }
-        case "notContains": {
-          let notCond: Prisma.MediaStreamWhereInput;
-          if (enumerable) {
-            const parts = strValue.split("|").filter(Boolean);
-            const matchValues = parts.length > 0 ? parts : [strValue];
-            notCond = { AND: matchValues.map((v) => ({ NOT: { [column]: { equals: v, mode: "insensitive" as const } } })) };
-          } else {
-            notCond = { NOT: { [column]: { contains: strValue, mode: "insensitive" } } };
-          }
-          // Include NULL stream rows for the same Phase 2 parity reason.
-          cond = { OR: [{ [column]: null }, notCond] };
-          break;
-        }
-        case "isNull": cond = { [column]: null }; break;
-        case "isNotNull": cond = { [column]: { not: null } }; break;
-      }
-    }
-
-    if (cond) {
-      conditions.push(negate ? { NOT: cond } : cond);
-    }
-  }
-
-  if (conditions.length === 0) return null;
-
-  const quantifier = group.streamQuery.quantifier ?? "any";
-  const streamCondition = { streamType: streamTypeInt, AND: conditions };
-
-  if (quantifier === "none") {
-    return { streams: { none: streamCondition } };
-  }
-  if (quantifier === "all") {
-    // "all streams of this type match" = at least one such stream EXISTS AND
-    // no such stream fails to match. The `some streamType` precondition guards
-    // against vacuous truth on items with 0 streams of this type — Phase 2's
-    // `matchingStreams.length > 0 && ...every(...)` requires the same.
-    return {
-      AND: [
-        { streams: { some: { streamType: streamTypeInt } } },
-        { streams: { none: { streamType: streamTypeInt, NOT: { AND: conditions } } } },
-      ],
-    };
-  }
-  // Default: "any" (EXISTS)
-  return { streams: { some: streamCondition } };
-}
-
-/**
- * Check if a stream query group has any computed or wildcard rules
- * that require in-memory evaluation.
- */
-function streamQueryNeedsInMemory(group: RuleGroup): boolean {
-  if (!group.streamQuery) return false;
-  // `all` quantifier requires Phase 2 re-evaluation: Phase 1's NOT-of-relation
-  // clause cannot precisely express "every stream of this type matches" when
-  // the column is nullable. PostgreSQL's `NOT (col = X)` is UNKNOWN for NULL
-  // columns, so a NULL-column stream is not counted as "failing" the match,
-  // and the relation-level `none-failing` clause vacuously over-matches.
-  // Phase 1 still emits a superset clause via buildStreamQueryClause; Phase 2
-  // narrows it to the precise `matchingStreams.every(streamMatches)` semantics.
-  if ((group.streamQuery.quantifier ?? "any") === "all") return true;
-  return group.rules.some((r) =>
-    r.enabled !== false && (
-      isStreamQueryComputedField(r.field) ||
-      r.operator === "matchesWildcard" ||
-      r.operator === "notMatchesWildcard"
-    ),
-  );
-}
-
-/**
- * Recursively evaluate a single RuleGroup into a Prisma where clause.
- * Rules and nested sub-groups are combined using their individual `condition` fields.
- */
-function evaluateGroup(group: RuleGroup): Prisma.MediaItemWhereInput | null {
-  if (group.enabled === false) return null;
-
-  // Stream query groups: build a single `streams: { some: { ... } }` clause
-  if (isStreamQueryGroup(group)) {
-    return buildStreamQueryClause(group);
-  }
-
-  const items: Array<{ condition: RuleCondition; clause: Prisma.MediaItemWhereInput }> = [];
-
-  for (const rule of group.rules) {
-    if (rule.enabled === false) continue;
-    const clause = ruleToWhereClause(rule);
-    if (Object.keys(clause).length > 0) items.push({ condition: rule.condition, clause });
-  }
-
-  for (const sub of group.groups ?? []) {
-    const subClause = evaluateGroup(sub);
-    if (subClause) items.push({ condition: sub.condition, clause: subClause });
-  }
-
-  if (items.length === 0) return null;
-  if (items.length === 1) return items[0].clause;
-
-  let result: Prisma.MediaItemWhereInput = items[0].clause;
-  for (let i = 1; i < items.length; i++) {
-    const { condition, clause } = items[i];
-    if (condition === "OR") {
-      result = { OR: [result, clause] };
-    } else {
-      result = { AND: [result, clause] };
-    }
-  }
-  return result;
-}
-
-function buildGroupConditions(ruleGroups: RuleGroup[]): Prisma.MediaItemWhereInput {
-  const groupClauses: Array<{ condition: "AND" | "OR"; where: Prisma.MediaItemWhereInput }> = [];
-
-  for (const group of ruleGroups) {
-    const where = evaluateGroup(group);
-    if (!where) continue;
-    groupClauses.push({ condition: group.condition, where });
-  }
-
-  if (groupClauses.length === 0) return {};
-  if (groupClauses.length === 1) return groupClauses[0].where;
-
-  // Build nested AND/OR tree from left to right
-  let result: Prisma.MediaItemWhereInput = groupClauses[0].where;
-  for (let i = 1; i < groupClauses.length; i++) {
-    const { condition, where } = groupClauses[i];
-    if (condition === "OR") {
-      result = { OR: [result, where] };
-    } else {
-      result = { AND: [result, where] };
-    }
-  }
-  return result;
-}
 
 // ---------------------------------------------------------------------------
 // Pre-filter variants for Phase 1 queries when Phase 2 in-memory re-eval
@@ -1004,7 +204,7 @@ function combinePreFilter(
  * disabled groups (truly skip), EXTERNAL_RULE for groups that can't be filtered
  * in DB, or a concrete Prisma clause.
  */
-function evaluateGroupPreFilter(group: RuleGroup): PreFilterClause | null {
+function evaluateGroupPreFilter(group: LifecycleRuleGroup): PreFilterClause | null {
   if (group.enabled === false) return null;
 
   // Stream query groups: build DB clause if possible, EXTERNAL_RULE if it has computed/wildcard rules
@@ -1017,7 +217,7 @@ function evaluateGroupPreFilter(group: RuleGroup): PreFilterClause | null {
     return dbClause ?? EXTERNAL_RULE;
   }
 
-  const items: Array<{ condition: RuleCondition; clause: PreFilterClause }> = [];
+  const items: Array<{ condition: LifecycleRuleCondition; clause: PreFilterClause }> = [];
 
   for (const rule of group.rules) {
     if (rule.enabled === false) continue;
@@ -1044,7 +244,7 @@ function evaluateGroupPreFilter(group: RuleGroup): PreFilterClause | null {
   return result;
 }
 
-function buildGroupConditionsPreFilter(ruleGroups: RuleGroup[]): Prisma.MediaItemWhereInput {
+function buildGroupConditionsPreFilter(ruleGroups: LifecycleRuleGroup[]): Prisma.MediaItemWhereInput {
   const groupClauses: Array<{ condition: "AND" | "OR"; clause: PreFilterClause }> = [];
 
   for (const group of ruleGroups) {
@@ -1062,7 +262,7 @@ function buildGroupConditionsPreFilter(ruleGroups: RuleGroup[]): Prisma.MediaIte
   return result === EXTERNAL_RULE ? {} : result;
 }
 
-function legacyRulesToConditions(rules: Rule[]): Prisma.MediaItemWhereInput[] {
+function legacyRulesToConditions(rules: LifecycleRule[]): Prisma.MediaItemWhereInput[] {
   const groups: Prisma.MediaItemWhereInput[][] = [[]];
   for (let i = 0; i < rules.length; i++) {
     const clause = ruleToWhereClause(rules[i]);
@@ -1082,7 +282,7 @@ function legacyRulesToConditions(rules: Rule[]): Prisma.MediaItemWhereInput[] {
 }
 
 /** Check if any rule in the tree uses arr fields */
-function hasArrRules(rules: Rule[] | RuleGroup[]): boolean {
+function hasArrRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -1092,11 +292,11 @@ function hasArrRules(rules: Rule[] | RuleGroup[]): boolean {
     }
     return false;
   }
-  return (rules as Rule[]).some((r) => r.enabled !== false && isArrField(r.field));
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isArrField(r.field));
 }
 
 /** Check if any rule in the tree uses seerr fields */
-function hasSeerrRules(rules: Rule[] | RuleGroup[]): boolean {
+function hasSeerrRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -1106,11 +306,11 @@ function hasSeerrRules(rules: Rule[] | RuleGroup[]): boolean {
     }
     return false;
   }
-  return (rules as Rule[]).some((r) => r.enabled !== false && isSeerrField(r.field));
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isSeerrField(r.field));
 }
 
 /** Check if any rule uses wildcard operators on non-external fields */
-function hasWildcardRules(rules: Rule[] | RuleGroup[]): boolean {
+function hasWildcardRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -1120,11 +320,11 @@ function hasWildcardRules(rules: Rule[] | RuleGroup[]): boolean {
     }
     return false;
   }
-  return (rules as Rule[]).some((r) => r.enabled !== false && !isExternalField(r.field) && (r.operator === "matchesWildcard" || r.operator === "notMatchesWildcard"));
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && !isExternalField(r.field) && (r.operator === "matchesWildcard" || r.operator === "notMatchesWildcard"));
 }
 
 /** Check if any rule uses stream fields or stream query groups */
-function hasStreamRules(rules: Rule[] | RuleGroup[]): boolean {
+function hasStreamRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -1135,11 +335,11 @@ function hasStreamRules(rules: Rule[] | RuleGroup[]): boolean {
     }
     return false;
   }
-  return (rules as Rule[]).some((r) => r.enabled !== false && isStreamField(r.field));
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isStreamField(r.field));
 }
 
 /** Check if any stream query group requires in-memory evaluation (computed/wildcard fields) */
-function hasStreamQueryInMemoryRules(rules: Rule[] | RuleGroup[]): boolean {
+function hasStreamQueryInMemoryRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -1153,7 +353,7 @@ function hasStreamQueryInMemoryRules(rules: Rule[] | RuleGroup[]): boolean {
 }
 
 /** Check if any rule uses stream count fields (always require in-memory evaluation) */
-function hasStreamCountRules(rules: Rule[] | RuleGroup[]): boolean {
+function hasStreamCountRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -1163,11 +363,11 @@ function hasStreamCountRules(rules: Rule[] | RuleGroup[]): boolean {
     }
     return false;
   }
-  return (rules as Rule[]).some((r) => r.enabled !== false && STREAM_COUNT_FIELDS.has(r.field));
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && STREAM_COUNT_FIELDS.has(r.field));
 }
 
 /** Check if any rule uses cross-system fields (always require in-memory evaluation) */
-function hasCrossSystemFieldRules(rules: Rule[] | RuleGroup[]): boolean {
+function hasCrossSystemFieldRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -1177,11 +377,11 @@ function hasCrossSystemFieldRules(rules: Rule[] | RuleGroup[]): boolean {
     }
     return false;
   }
-  return (rules as Rule[]).some((r) => r.enabled !== false && isCrossSystemField(r.field));
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isCrossSystemField(r.field));
 }
 
 /** Check if any rule uses hasExternalId field */
-function hasExternalIdFieldRules(rules: Rule[] | RuleGroup[]): boolean {
+function hasExternalIdFieldRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -1191,11 +391,11 @@ function hasExternalIdFieldRules(rules: Rule[] | RuleGroup[]): boolean {
     }
     return false;
   }
-  return (rules as Rule[]).some((r) => r.enabled !== false && r.field === "hasExternalId");
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "hasExternalId");
 }
 
 /** Evaluate a single arr rule against arr metadata for an item */
-function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
+function evaluateArrRule(rule: LifecycleRule, meta: ArrMetadata | undefined): boolean {
   // Safety: unconfigured contains/notContains matches nothing. Negate is
   // intentionally NOT applied — `!false` would otherwise sweep the library.
   // Checked before any field-specific branch so even nonsensical pairings
@@ -1568,7 +768,7 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
 }
 
 /** Evaluate a single seerr rule against seerr metadata for an item */
-function evaluateSeerrRule(rule: Rule, meta: SeerrMetadata | undefined): boolean {
+function evaluateSeerrRule(rule: LifecycleRule, meta: SeerrMetadata | undefined): boolean {
   // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
   if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
   // Safety: unknown operator or wrong-type combo → match nothing (bypass negate).
@@ -1731,7 +931,7 @@ export interface MatchedCriterion {
 
 /** Evaluate a single rule against an item's in-memory data (mirrors DB logic) */
 function evaluateRuleAgainstItem(
-  rule: Rule,
+  rule: LifecycleRule,
   item: Record<string, unknown>,
   arrMeta?: ArrMetadata,
   seerrMeta?: SeerrMetadata
@@ -1889,9 +1089,11 @@ function evaluateRuleAgainstItem(
     let result: boolean;
     switch (operator) {
       case "equals":
+      case "isNotNull":
         result = externalIds.some((e) => e.source === strValue);
         break;
       case "notEquals":
+      case "isNull":
         result = !externalIds.some((e) => e.source === strValue);
         break;
       default: return false;
@@ -2174,10 +1376,10 @@ function evaluateRuleAgainstItem(
   return negate ? !textResult : textResult;
 }
 
-function collectAllRulesWithGroup(rules: Rule[] | RuleGroup[]): Array<{ rule: Rule; groupName?: string }> {
-  const all: Array<{ rule: Rule; groupName?: string }> = [];
+function collectAllRulesWithGroup(rules: LifecycleRule[] | LifecycleRuleGroup[]): Array<{ rule: LifecycleRule; groupName?: string }> {
+  const all: Array<{ rule: LifecycleRule; groupName?: string }> = [];
   if (isRuleGroups(rules)) {
-    for (const group of rules as RuleGroup[]) {
+    for (const group of rules as LifecycleRuleGroup[]) {
       if (group.enabled === false) continue;
       // Skip stream query groups — their rules are evaluated at group level
       if (isStreamQueryGroup(group)) continue;
@@ -2190,7 +1392,7 @@ function collectAllRulesWithGroup(rules: Rule[] | RuleGroup[]): Array<{ rule: Ru
       }
     }
   } else {
-    for (const rule of rules as Rule[]) {
+    for (const rule of rules as LifecycleRule[]) {
       if (rule.enabled === false) continue;
       all.push({ rule });
     }
@@ -2199,10 +1401,10 @@ function collectAllRulesWithGroup(rules: Rule[] | RuleGroup[]): Array<{ rule: Ru
 }
 
 /** Collect stream query groups from the rule tree */
-function collectStreamQueryGroups(rules: Rule[] | RuleGroup[]): RuleGroup[] {
-  const groups: RuleGroup[] = [];
+function collectStreamQueryGroups(rules: LifecycleRule[] | LifecycleRuleGroup[]): LifecycleRuleGroup[] {
+  const groups: LifecycleRuleGroup[] = [];
   if (!isRuleGroups(rules)) return groups;
-  for (const group of rules as RuleGroup[]) {
+  for (const group of rules as LifecycleRuleGroup[]) {
     if (group.enabled === false) continue;
     if (isStreamQueryGroup(group)) {
       groups.push(group);
@@ -2235,7 +1437,7 @@ const OPERATOR_SYMBOLS: Record<string, string> = {
 
 /**
  * For each item, evaluate every leaf rule individually and return which ones matched.
- * Items must already be confirmed matches from evaluateRules().
+ * Items must already be confirmed matches from evaluateLifecycleRules().
  */
 
 /** Extract the actual item value for a rule field, formatted for display */
@@ -2393,7 +1595,7 @@ function getActualValueForField(
 
 export function getMatchedCriteriaForItems(
   items: Array<Record<string, unknown>>,
-  rules: Rule[] | RuleGroup[],
+  rules: LifecycleRule[] | LifecycleRuleGroup[],
   type: "MOVIE" | "SERIES" | "MUSIC",
   arrData?: ArrDataMap,
   seerrData?: SeerrDataMap
@@ -2465,7 +1667,7 @@ export function getMatchedCriteriaForItems(
  */
 export function getActualValuesForAllRules(
   items: Array<Record<string, unknown>>,
-  rules: Rule[] | RuleGroup[],
+  rules: LifecycleRule[] | LifecycleRuleGroup[],
   type: "MOVIE" | "SERIES" | "MUSIC",
   arrData?: ArrDataMap,
   seerrData?: SeerrDataMap
@@ -2497,7 +1699,7 @@ export function getActualValuesForAllRules(
  * Returns true if the rule matches this specific stream.
  */
 function evaluateStreamQueryRuleAgainstStream(
-  rule: Rule,
+  rule: LifecycleRule,
   stream: Record<string, unknown>,
 ): boolean {
   // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
@@ -2617,7 +1819,7 @@ function evaluateStreamQueryRuleAgainstStream(
  * matching type satisfies ALL active rules.
  */
 function evaluateStreamQueryGroupInMemory(
-  group: RuleGroup,
+  group: LifecycleRuleGroup,
   item: Record<string, unknown>,
 ): boolean {
   if (!group.streamQuery) return false;
@@ -2655,7 +1857,7 @@ function evaluateStreamQueryGroupInMemory(
 }
 
 function evaluateRuleGroupInMemory(
-  group: RuleGroup,
+  group: LifecycleRuleGroup,
   item: Record<string, unknown>,
   arrMeta?: ArrMetadata,
   seerrMeta?: SeerrMetadata
@@ -2667,7 +1869,7 @@ function evaluateRuleGroupInMemory(
     return evaluateStreamQueryGroupInMemory(group, item);
   }
 
-  const items: Array<{ condition: RuleCondition; result: boolean }> = [];
+  const items: Array<{ condition: LifecycleRuleCondition; result: boolean }> = [];
 
   for (const rule of group.rules) {
     if (rule.enabled === false) continue;
@@ -2697,7 +1899,7 @@ function evaluateRuleGroupInMemory(
 
 /** Evaluate an entire rule set (grouped or legacy) in-memory against a single item */
 export function evaluateAllRulesInMemory(
-  rules: Rule[] | RuleGroup[],
+  rules: LifecycleRule[] | LifecycleRuleGroup[],
   item: Record<string, unknown>,
   arrMeta?: ArrMetadata,
   seerrMeta?: SeerrMetadata
@@ -2705,8 +1907,8 @@ export function evaluateAllRulesInMemory(
   if (rules.length === 0) return false;
 
   if (isRuleGroups(rules)) {
-    const groups = rules as RuleGroup[];
-    const results: Array<{ condition: RuleCondition; result: boolean }> = [];
+    const groups = rules as LifecycleRuleGroup[];
+    const results: Array<{ condition: LifecycleRuleCondition; result: boolean }> = [];
 
     for (let i = 0; i < groups.length; i++) {
       const groupResult = evaluateRuleGroupInMemory(groups[i], item, arrMeta, seerrMeta);
@@ -2730,9 +1932,9 @@ export function evaluateAllRulesInMemory(
   }
 
   // Legacy flat rules: grouped by AND boundaries, within-group OR
-  const flat = (rules as Rule[]).filter((r) => r.enabled !== false);
+  const flat = (rules as LifecycleRule[]).filter((r) => r.enabled !== false);
   if (flat.length === 0) return false;
-  const buckets: Rule[][] = [[]];
+  const buckets: LifecycleRule[][] = [[]];
   for (let i = 0; i < flat.length; i++) {
     buckets[buckets.length - 1].push(flat[i]);
     if (i < flat.length - 1 && flat[i].condition === "AND") {
@@ -2752,7 +1954,7 @@ export { hasArrRules, hasSeerrRules, hasStreamRules, hasExternalIdFieldRules, ha
  * This is the default for SERIES type rule sets.
  */
 export async function evaluateSeriesScope(
-  rules: Rule[] | RuleGroup[],
+  rules: LifecycleRule[] | LifecycleRuleGroup[],
   serverIds: string[],
   arrData?: ArrDataMap,
   seerrData?: SeerrDataMap
@@ -2883,7 +2085,7 @@ export async function evaluateSeriesScope(
   const matching = [];
 
   for (const series of aggregated) {
-    // Serialize for in-memory evaluation (mirrors evaluateRules output format)
+    // Serialize for in-memory evaluation (mirrors evaluateLifecycleRules output format)
     const item: Record<string, unknown> = {
       ...series,
       fileSize: series.fileSize,
@@ -2955,7 +2157,7 @@ export async function evaluateSeriesScope(
  * This is the default for MUSIC type rule sets.
  */
 export async function evaluateMusicScope(
-  rules: Rule[] | RuleGroup[],
+  rules: LifecycleRule[] | LifecycleRuleGroup[],
   serverIds: string[],
   arrData?: ArrDataMap
 ) {
@@ -3085,8 +2287,8 @@ export async function evaluateMusicScope(
   }));
 }
 
-export async function evaluateRules(
-  rules: Rule[] | RuleGroup[],
+export async function evaluateLifecycleRules(
+  rules: LifecycleRule[] | LifecycleRuleGroup[],
   type: "MOVIE" | "SERIES" | "MUSIC",
   serverIds: string[],
   arrData?: ArrDataMap,
@@ -3117,10 +2319,10 @@ export async function evaluateRules(
   // EXTERNAL_RULE AND X = X (safe). This keeps DB-expressible conditions for
   // performance while guaranteeing the Phase 1 result is a superset of Phase 2.
   if (needsFullReeval && isRuleGroups(rules)) {
-    const combined = buildGroupConditionsPreFilter(rules as unknown as RuleGroup[]);
+    const combined = buildGroupConditionsPreFilter(rules as unknown as LifecycleRuleGroup[]);
     andConditions = Object.keys(combined).length > 0 ? [combined] : [];
   } else if (isRuleGroups(rules)) {
-    const combined = buildGroupConditions(rules);
+    const combined = buildGroupConditions(rules, ruleToWhereClause);
     andConditions = Object.keys(combined).length > 0 ? [combined] : [];
   } else {
     andConditions = legacyRulesToConditions(rules);
@@ -3165,7 +2367,7 @@ export async function evaluateRules(
     // Batch-fetch cross-system data if needed
     let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }> | undefined;
     if (hasCrossSystem) {
-      crossSystemData = await fetchCrossSystemData(filteredItems.map((i) => i.id), filteredItems.map((i) => i.dedupKey).filter(Boolean) as string[]);
+      crossSystemData = await fetchCrossSystemData(filteredItems.map((i) => i.id));
     }
 
     filteredItems = filteredItems.filter((item) => {

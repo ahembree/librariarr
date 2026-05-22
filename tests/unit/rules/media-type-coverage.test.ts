@@ -1,17 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { getMatchedCriteriaForItems } from "@/lib/rules/engine";
-import type { ArrMetadata, ArrDataMap, SeerrMetadata, SeerrDataMap } from "@/lib/rules/engine";
-import type { Rule, RuleGroup } from "@/lib/rules/types";
+import { getMatchedCriteriaForItems } from "@/lib/rules/lifecycle-engine";
+import type { ArrMetadata, ArrDataMap, SeerrMetadata, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
+import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeRule(overrides: Partial<Rule> & Pick<Rule, "field" | "operator" | "value">): Rule {
+function makeRule(overrides: Partial<LifecycleRule> & Pick<LifecycleRule, "field" | "operator" | "value">): LifecycleRule {
   return { id: "r1", condition: "AND", ...overrides };
 }
 
-function makeGroup(rules: Rule[], overrides?: Partial<RuleGroup>): RuleGroup {
+function makeGroup(rules: LifecycleRule[], overrides?: Partial<LifecycleRuleGroup>): LifecycleRuleGroup {
   return { id: "g1", condition: "AND", rules, groups: [], ...overrides };
 }
 
@@ -39,7 +39,7 @@ function makeSeerrMeta(overrides?: Partial<SeerrMetadata>): SeerrMetadata {
 
 function matched(
   items: Array<Record<string, unknown>>,
-  rules: RuleGroup[],
+  rules: LifecycleRuleGroup[],
   type: "MOVIE" | "SERIES" | "MUSIC",
   arrData?: ArrDataMap,
   seerrData?: SeerrDataMap,
@@ -61,14 +61,14 @@ describe("Standard fields across media types", () => {
 
   for (const type of types) {
     it(`title equals works for ${type}`, () => {
-      const rules: RuleGroup[] = [makeGroup([makeRule({ field: "title", operator: "equals", value: "Inception" })])];
+      const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "title", operator: "equals", value: "Inception" })])];
       const result = matched(textItems, rules, type);
       expect(result.get("1")!.length).toBeGreaterThan(0);
       expect(result.get("2")).toHaveLength(0);
     });
 
     it(`title matchesWildcard works for ${type}`, () => {
-      const rules: RuleGroup[] = [makeGroup([makeRule({ field: "title", operator: "matchesWildcard", value: "The *" })])];
+      const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "title", operator: "matchesWildcard", value: "The *" })])];
       const result = matched(textItems, rules, type);
       expect(result.get("1")).toHaveLength(0);
       expect(result.get("2")!.length).toBeGreaterThan(0);
@@ -82,7 +82,7 @@ describe("Standard fields across media types", () => {
 
   for (const type of types) {
     it(`playCount greaterThan works for ${type}`, () => {
-      const rules: RuleGroup[] = [makeGroup([makeRule({ field: "playCount", operator: "greaterThan", value: 5 })])];
+      const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "playCount", operator: "greaterThan", value: 5 })])];
       const result = matched(numericItems, rules, type);
       expect(result.get("1")!.length).toBeGreaterThan(0);
       expect(result.get("2")).toHaveLength(0);
@@ -96,7 +96,7 @@ describe("Standard fields across media types", () => {
 
   for (const type of types) {
     it(`lastPlayedAt before works for ${type}`, () => {
-      const rules: RuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: "before", value: "2022-01-01" })])];
+      const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: "before", value: "2022-01-01" })])];
       const result = matched(dateItems, rules, type);
       expect(result.get("1")!.length).toBeGreaterThan(0);
       expect(result.get("2")).toHaveLength(0);
@@ -110,7 +110,7 @@ describe("Standard fields across media types", () => {
 
   for (const type of types) {
     it(`genre equals works for ${type}`, () => {
-      const rules: RuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "equals", value: "Action" })])];
+      const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "equals", value: "Action" })])];
       const result = matched(genreItems, rules, type);
       expect(result.get("1")!.length).toBeGreaterThan(0);
       expect(result.get("2")).toHaveLength(0);
@@ -124,7 +124,7 @@ describe("Standard fields across media types", () => {
 
   for (const type of types) {
     it(`isWatchlisted equals works for ${type}`, () => {
-      const rules: RuleGroup[] = [makeGroup([makeRule({ field: "isWatchlisted", operator: "equals", value: "true" })])];
+      const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "isWatchlisted", operator: "equals", value: "true" })])];
       const result = matched(boolItems, rules, type);
       expect(result.get("1")!.length).toBeGreaterThan(0);
       expect(result.get("2")).toHaveLength(0);
@@ -142,42 +142,42 @@ describe("Arr external ID source per type", () => {
   it("MOVIE Arr lookup uses TMDB ID", () => {
     const items = [{ id: "1", externalIds: [{ source: "TMDB", externalId: "tmdb-100" }] }];
     const arrData: ArrDataMap = { "tmdb-100": arrMeta };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "MOVIE", arrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("MOVIE Arr lookup does NOT use TVDB ID", () => {
     const items = [{ id: "1", externalIds: [{ source: "TVDB", externalId: "tvdb-100" }] }];
     const arrData: ArrDataMap = { "tvdb-100": arrMeta };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "MOVIE", arrData).get("1")).toHaveLength(0);
   });
 
   it("SERIES Arr lookup uses TVDB ID", () => {
     const items = [{ id: "1", externalIds: [{ source: "TVDB", externalId: "tvdb-200" }] }];
     const arrData: ArrDataMap = { "tvdb-200": arrMeta };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "SERIES", arrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("SERIES Arr lookup does NOT use TMDB ID", () => {
     const items = [{ id: "1", externalIds: [{ source: "TMDB", externalId: "tmdb-200" }] }];
     const arrData: ArrDataMap = { "tmdb-200": arrMeta };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "SERIES", arrData).get("1")).toHaveLength(0);
   });
 
   it("MUSIC Arr lookup uses MUSICBRAINZ ID", () => {
     const items = [{ id: "1", externalIds: [{ source: "MUSICBRAINZ", externalId: "mb-300" }] }];
     const arrData: ArrDataMap = { "mb-300": arrMeta };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "MUSIC", arrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("MUSIC Arr lookup does NOT use TMDB ID", () => {
     const items = [{ id: "1", externalIds: [{ source: "TMDB", externalId: "tmdb-300" }] }];
     const arrData: ArrDataMap = { "tmdb-300": arrMeta };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "MUSIC", arrData).get("1")).toHaveLength(0);
   });
 });
@@ -188,28 +188,28 @@ describe("Seerr external ID source per type", () => {
   it("MOVIE Seerr lookup uses TMDB ID", () => {
     const items = [{ id: "1", externalIds: [{ source: "TMDB", externalId: "tmdb-100" }] }];
     const seerrData: SeerrDataMap = { "TMDB:tmdb-100": seerrMeta };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "MOVIE", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("MOVIE Seerr lookup does NOT use TVDB ID", () => {
     const items = [{ id: "1", externalIds: [{ source: "TVDB", externalId: "tvdb-100" }] }];
     const seerrData: SeerrDataMap = { "TVDB:tvdb-100": seerrMeta };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "MOVIE", undefined, seerrData).get("1")).toHaveLength(0);
   });
 
   it("SERIES Seerr lookup uses TVDB ID", () => {
     const items = [{ id: "1", externalIds: [{ source: "TVDB", externalId: "tvdb-200" }] }];
     const seerrData: SeerrDataMap = { "TVDB:tvdb-200": seerrMeta };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("SERIES Seerr lookup falls back to TMDB ID when TVDB is unavailable", () => {
     const items = [{ id: "1", externalIds: [{ source: "TMDB", externalId: "tmdb-200" }] }];
     const seerrData: SeerrDataMap = { "TMDB:tmdb-200": seerrMeta };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
@@ -218,7 +218,7 @@ describe("Seerr external ID source per type", () => {
     // happens to have TMDB=12345. Without namespacing, B would falsely match.
     const items = [{ id: "B", externalIds: [{ source: "TVDB", externalId: "12345" }] }];
     const seerrData: SeerrDataMap = { "TMDB:12345": seerrMeta };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("B")).toHaveLength(0);
   });
 
@@ -231,7 +231,7 @@ describe("Seerr external ID source per type", () => {
       "TVDB:tvdb-300": seerrMeta,
       "MUSICBRAINZ:mb-300": seerrMeta,
     };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
     const result = matched(items, rules, "MUSIC", undefined, seerrData);
     expect(result.get("T")).toHaveLength(0);
     expect(result.get("M")).toHaveLength(0);
@@ -248,72 +248,72 @@ describe("Seerr fields with SERIES type", () => {
 
   it("seerrRequested equals true matches", () => {
     const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requested: true }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrRequested equals false matches when not requested", () => {
     const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requested: false }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "false" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "false" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrRequestDate before matches", () => {
     const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requestDate: "2024-01-15T00:00:00Z" }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestDate", operator: "before", value: "2024-06-01" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestDate", operator: "before", value: "2024-06-01" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrRequestDate after matches", () => {
     const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requestDate: "2024-08-01T00:00:00Z" }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestDate", operator: "after", value: "2024-06-01" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestDate", operator: "after", value: "2024-06-01" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrRequestCount greaterThan matches", () => {
     const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requestCount: 5 }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestCount", operator: "greaterThan", value: 3 })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestCount", operator: "greaterThan", value: 3 })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrRequestCount lessThan does not match", () => {
     const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requestCount: 5 }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestCount", operator: "lessThan", value: 3 })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestCount", operator: "lessThan", value: 3 })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")).toHaveLength(0);
   });
 
   it("seerrRequestedBy contains matches", () => {
     const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requestedBy: ["alice", "bob"] }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestedBy", operator: "contains", value: "alice" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestedBy", operator: "contains", value: "alice" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrRequestedBy notContains matches when user not present", () => {
     const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requestedBy: ["alice"] }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestedBy", operator: "notContains", value: "charlie" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestedBy", operator: "notContains", value: "charlie" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrApprovalDate equals matches same date", () => {
     const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ approvalDate: "2024-05-10T14:00:00Z" }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrApprovalDate", operator: "equals", value: "2024-05-10" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrApprovalDate", operator: "equals", value: "2024-05-10" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrDeclineDate before matches", () => {
     const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ declineDate: "2024-02-01T00:00:00Z" }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrDeclineDate", operator: "before", value: "2024-06-01" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrDeclineDate", operator: "before", value: "2024-06-01" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")!.length).toBeGreaterThan(0);
   });
 
   it("seerrRequested returns false when no seerr data exists", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "SERIES", undefined, undefined).get("1")).toHaveLength(0);
   });
 
   it("seerrRequestDate returns false when date is null", () => {
     const seerrData: SeerrDataMap = { [`TVDB:${tvdbId}`]: makeSeerrMeta({ requestDate: null }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestDate", operator: "before", value: "2024-06-01" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestDate", operator: "before", value: "2024-06-01" })])];
     expect(matched(items, rules, "SERIES", undefined, seerrData).get("1")).toHaveLength(0);
   });
 });
@@ -334,7 +334,7 @@ describe("Seerr fields with MUSIC type", () => {
       "MUSICBRAINZ:mb-m1": makeSeerrMeta({ requested: true }),
       "TMDB:tmdb-m1": makeSeerrMeta({ requested: true }),
     };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
     const result = matched(items, rules, "MUSIC", undefined, seerrData);
     expect(result.get("T")).toHaveLength(0);
     expect(result.get("M")).toHaveLength(0);
@@ -343,7 +343,7 @@ describe("Seerr fields with MUSIC type", () => {
 
   it("returns false when no seerr data provided", () => {
     const items = [{ id: "1", externalIds: [{ source: "TVDB", externalId: "tvdb-m1" }] }];
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequested", operator: "equals", value: "true" })])];
     expect(matched(items, rules, "MUSIC", undefined, undefined).get("1")).toHaveLength(0);
   });
 });
@@ -358,19 +358,19 @@ describe("Movie-only Arr fields return false for SERIES type", () => {
 
   it("arrInCinemasDate returns false for SERIES (null in Sonarr metadata)", () => {
     const arrData: ArrDataMap = { [tvdbId]: makeArrMeta({ inCinemasDate: null }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrInCinemasDate", operator: "before", value: "2025-01-01" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrInCinemasDate", operator: "before", value: "2025-01-01" })])];
     expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(0);
   });
 
   it("arrRuntime returns false for SERIES (null in Sonarr metadata)", () => {
     const arrData: ArrDataMap = { [tvdbId]: makeArrMeta({ runtime: null }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrRuntime", operator: "greaterThan", value: 90 })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrRuntime", operator: "greaterThan", value: 90 })])];
     expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(0);
   });
 
   it("arrDownloadDate returns false for SERIES (null in Sonarr metadata)", () => {
     const arrData: ArrDataMap = { [tvdbId]: makeArrMeta({ downloadDate: null }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrDownloadDate", operator: "before", value: "2025-01-01" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrDownloadDate", operator: "before", value: "2025-01-01" })])];
     expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(0);
   });
 
@@ -378,7 +378,7 @@ describe("Movie-only Arr fields return false for SERIES type", () => {
     const mbId = "mb-iso1";
     const musicItems = [{ id: "m1", externalIds: [{ source: "MUSICBRAINZ", externalId: mbId }] }];
     const arrData: ArrDataMap = { [mbId]: makeArrMeta({ inCinemasDate: null }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrInCinemasDate", operator: "after", value: "2020-01-01" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrInCinemasDate", operator: "after", value: "2020-01-01" })])];
     expect(matched(musicItems, rules, "MUSIC", arrData).get("m1")).toHaveLength(0);
   });
 });
@@ -389,55 +389,55 @@ describe("Series-only Arr fields return false for MOVIE type", () => {
 
   it("arrSeasonCount returns false for MOVIE (null in Radarr metadata)", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ seasonCount: null }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrSeasonCount", operator: "greaterThan", value: 1 })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrSeasonCount", operator: "greaterThan", value: 1 })])];
     expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(0);
   });
 
   it("arrEpisodeCount returns false for MOVIE (null in Radarr metadata)", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ episodeCount: null }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrEpisodeCount", operator: "greaterThan", value: 10 })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrEpisodeCount", operator: "greaterThan", value: 10 })])];
     expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(0);
   });
 
   it("arrStatus returns false for MOVIE (null in Radarr metadata)", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ status: null }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrStatus", operator: "equals", value: "continuing" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrStatus", operator: "equals", value: "continuing" })])];
     expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(0);
   });
 
   it("arrEnded returns false for MOVIE (null in Radarr metadata)", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ ended: null }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrEnded", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrEnded", operator: "equals", value: "true" })])];
     expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(0);
   });
 
   it("arrSeriesType returns false for MOVIE (null in Radarr metadata)", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ seriesType: null }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrSeriesType", operator: "equals", value: "standard" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrSeriesType", operator: "equals", value: "standard" })])];
     expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(0);
   });
 
   it("arrHasUnaired returns false for MOVIE (null in Radarr metadata)", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ hasUnaired: null }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrHasUnaired", operator: "equals", value: "true" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrHasUnaired", operator: "equals", value: "true" })])];
     expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(0);
   });
 
   it("arrFirstAired returns false for MOVIE (null in Radarr metadata)", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ firstAired: null }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrFirstAired", operator: "before", value: "2025-01-01" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrFirstAired", operator: "before", value: "2025-01-01" })])];
     expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(0);
   });
 
   it("arrMonitoredSeasonCount returns false for MOVIE (null in Radarr metadata)", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ monitoredSeasonCount: null }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrMonitoredSeasonCount", operator: "greaterThan", value: 0 })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitoredSeasonCount", operator: "greaterThan", value: 0 })])];
     expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(0);
   });
 
   it("arrMonitoredEpisodeCount returns false for MOVIE (null in Radarr metadata)", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ monitoredEpisodeCount: null }) };
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "arrMonitoredEpisodeCount", operator: "greaterThan", value: 0 })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitoredEpisodeCount", operator: "greaterThan", value: 0 })])];
     expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(0);
   });
 });
@@ -452,34 +452,34 @@ describe("Series aggregate fields return false for MOVIE type", () => {
   ];
 
   it("latestEpisodeViewDate returns false for MOVIE", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "latestEpisodeViewDate", operator: "before", value: "2025-01-01" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "latestEpisodeViewDate", operator: "before", value: "2025-01-01" })])];
     expect(matched(movieItems, rules, "MOVIE").get("m1")).toHaveLength(0);
   });
 
   it("availableEpisodeCount returns false for MOVIE (null defaults to 0)", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "availableEpisodeCount", operator: "greaterThan", value: 0 })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "availableEpisodeCount", operator: "greaterThan", value: 0 })])];
     expect(matched(movieItems, rules, "MOVIE").get("m1")).toHaveLength(0);
   });
 
   it("watchedEpisodeCount returns false for MOVIE (null defaults to 0)", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "watchedEpisodeCount", operator: "greaterThan", value: 0 })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedEpisodeCount", operator: "greaterThan", value: 0 })])];
     expect(matched(movieItems, rules, "MOVIE").get("m1")).toHaveLength(0);
   });
 
   it("watchedEpisodePercentage returns false for MOVIE (null defaults to 0)", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "watchedEpisodePercentage", operator: "greaterThan", value: 50 })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedEpisodePercentage", operator: "greaterThan", value: 50 })])];
     expect(matched(movieItems, rules, "MOVIE").get("m1")).toHaveLength(0);
   });
 
   it("lastEpisodeAddedAt returns false for MOVIE", () => {
     const movieNull = [{ id: "m1", lastEpisodeAddedAt: null }];
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "lastEpisodeAddedAt", operator: "before", value: "2025-01-01" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastEpisodeAddedAt", operator: "before", value: "2025-01-01" })])];
     expect(matched(movieNull, rules, "MOVIE").get("m1")).toHaveLength(0);
   });
 
   it("lastEpisodeAiredAt returns false for MOVIE", () => {
     const movieNull = [{ id: "m1", lastEpisodeAiredAt: null }];
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "lastEpisodeAiredAt", operator: "before", value: "2025-01-01" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastEpisodeAiredAt", operator: "before", value: "2025-01-01" })])];
     expect(matched(movieNull, rules, "MOVIE").get("m1")).toHaveLength(0);
   });
 });
@@ -490,17 +490,17 @@ describe("Series aggregate fields return false for MUSIC type", () => {
   ];
 
   it("latestEpisodeViewDate returns false for MUSIC", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "latestEpisodeViewDate", operator: "after", value: "2020-01-01" })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "latestEpisodeViewDate", operator: "after", value: "2020-01-01" })])];
     expect(matched(musicItems, rules, "MUSIC").get("a1")).toHaveLength(0);
   });
 
   it("availableEpisodeCount returns false for MUSIC (null defaults to 0)", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "availableEpisodeCount", operator: "greaterThan", value: 0 })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "availableEpisodeCount", operator: "greaterThan", value: 0 })])];
     expect(matched(musicItems, rules, "MUSIC").get("a1")).toHaveLength(0);
   });
 
   it("watchedEpisodePercentage returns false for MUSIC (null defaults to 0)", () => {
-    const rules: RuleGroup[] = [makeGroup([makeRule({ field: "watchedEpisodePercentage", operator: "equals", value: 100 })])];
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedEpisodePercentage", operator: "equals", value: 100 })])];
     expect(matched(musicItems, rules, "MUSIC").get("a1")).toHaveLength(0);
   });
 });
@@ -522,22 +522,22 @@ describe("Stream fields are type-agnostic", () => {
 
   for (const type of ["MOVIE", "SERIES", "MUSIC"] as const) {
     it(`audioLanguage equals works for ${type}`, () => {
-      const rules: RuleGroup[] = [makeGroup([makeRule({ field: "audioLanguage", operator: "equals", value: "English" })])];
+      const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audioLanguage", operator: "equals", value: "English" })])];
       expect(matched(streamItem, rules, type).get("1")!.length).toBeGreaterThan(0);
     });
 
     it(`subtitleLanguage equals works for ${type}`, () => {
-      const rules: RuleGroup[] = [makeGroup([makeRule({ field: "subtitleLanguage", operator: "equals", value: "Spanish" })])];
+      const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "subtitleLanguage", operator: "equals", value: "Spanish" })])];
       expect(matched(streamItem, rules, type).get("1")!.length).toBeGreaterThan(0);
     });
 
     it(`audioStreamCount equals works for ${type}`, () => {
-      const rules: RuleGroup[] = [makeGroup([makeRule({ field: "audioStreamCount", operator: "equals", value: 1 })])];
+      const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audioStreamCount", operator: "equals", value: 1 })])];
       expect(matched(streamItem, rules, type).get("1")!.length).toBeGreaterThan(0);
     });
 
     it(`subtitleStreamCount equals works for ${type}`, () => {
-      const rules: RuleGroup[] = [makeGroup([makeRule({ field: "subtitleStreamCount", operator: "equals", value: 1 })])];
+      const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "subtitleStreamCount", operator: "equals", value: 1 })])];
       expect(matched(streamItem, rules, type).get("1")!.length).toBeGreaterThan(0);
     });
   }

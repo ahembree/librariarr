@@ -15,7 +15,7 @@
  *
  *   1. Either the rule engine's `ruleToWhereClause` produces a non-empty
  *      Prisma WHERE for the field, OR the field is in one of these
- *      categories so that the engine's `evaluateRules` knows to fall back
+ *      categories so that the engine's `evaluateLifecycleRules` knows to fall back
  *      to in-memory post-filter:
  *        - `requiresArr: true`     → caught by `hasArrRules`
  *        - `requiresSeerr: true`   → caught by `hasSeerrRules`
@@ -25,7 +25,7 @@
  *        - stream-query fields (sq*)
  *
  *   2. If neither is true, the engine's safety net at the bottom of
- *      `evaluateRules` (look for "Safety net: if all rules produced empty
+ *      `evaluateLifecycleRules` (look for "Safety net: if all rules produced empty
  *      WHERE clauses") returns `[]` rather than matching the whole library.
  *      Do not remove that block. The unit tests in
  *      `tests/unit/rules/deletion-safety.test.ts` document why.

@@ -43,7 +43,7 @@ interface MediaDetailSidePanelProps {
   detailUrl?: string;
   /** Matched criteria from lifecycle rules (displayed above cast) */
   matchedCriteria?: MatchedCriterion[];
-  /** Rule groups for Logic Preview with highlighting */
+  /** LifecycleRule groups for Logic Preview with highlighting */
   ruleGroups?: BaseGroup<BaseRule>[];
   /** Builder config for generating pseudocode */
   builderConfig?: BuilderConfig<BaseRule, BaseGroup<BaseRule>>;

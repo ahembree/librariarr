@@ -23,16 +23,16 @@ import {
 } from "./builder/tree-utils";
 
 // Backward-compat type aliases for existing callers
-export type Rule = Condition;
-export type RuleGroup = ConditionGroup;
+export type LifecycleRule = Condition;
+export type LifecycleRuleGroup = ConditionGroup;
 
 // ─── Re-exports for backward compatibility ──────────────────────────────────
 
-export function countAllRules(groups: RuleGroup[]): number {
+export function countAllRules(groups: LifecycleRuleGroup[]): number {
   return _countAllRules(groups);
 }
 
-export function validateAllRules(groups: RuleGroup[]): boolean {
+export function validateAllRules(groups: LifecycleRuleGroup[]): boolean {
   return _validateAllRules(
     groups,
     (field) =>
@@ -45,17 +45,17 @@ export function validateAllRules(groups: RuleGroup[]): boolean {
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
-function createRule(): Rule {
+function createRule(): LifecycleRule {
   return {
     id: generateId(),
-    field: "playCount",
-    operator: "equals",
+    field: "title",
+    operator: "contains",
     value: "",
     condition: "OR" as ConditionLogic,
   };
 }
 
-export const ruleBuilderConfig: BuilderConfig<Rule, RuleGroup> = {
+export const ruleBuilderConfig: BuilderConfig<LifecycleRule, LifecycleRuleGroup> = {
   fields: CONDITION_FIELDS,
   operators: CONDITION_OPERATORS,
   sections: CONDITION_SECTIONS,
@@ -85,7 +85,9 @@ export const ruleBuilderConfig: BuilderConfig<Rule, RuleGroup> = {
     const def = getConditionField(field);
     if (!def) return null;
     if (def.requiresArr && ctx.arrConnected === false)
-      return "Select an Arr server above to use Arr criteria";
+      return ctx.arrAvailableForLibrary
+        ? "Select an Arr server above to use Arr criteria"
+        : "Configure an Arr integration in Settings to use Arr criteria";
     if (def.requiresSeerr && ctx.seerrConnected === false)
       return "Configure a Seerr instance in Settings to use Seerr criteria";
     if (def.isSeriesAggregate && ctx.libraryType !== "SERIES")
@@ -147,11 +149,15 @@ export const ruleBuilderConfig: BuilderConfig<Rule, RuleGroup> = {
 // ─── Component ──────────────────────────────────────────────────────────────
 
 interface RuleBuilderProps {
-  groups: RuleGroup[];
-  onChange: (groups: RuleGroup[]) => void;
+  groups: LifecycleRuleGroup[];
+  onChange: (groups: LifecycleRuleGroup[]) => void;
   distinctValues?: Record<string, string[]>;
   arrConnected?: boolean;
   arrUnreachable?: boolean;
+  /** True when the user has at least one Arr instance of the appropriate
+   * type configured globally (regardless of whether one is selected for
+   * this rule set). Controls Arr-missing tooltip wording. */
+  arrAvailableForLibrary?: boolean;
   seerrConnected?: boolean;
   seerrUnreachable?: boolean;
   libraryType?: LibraryType;
@@ -163,6 +169,7 @@ export function RuleBuilder({
   distinctValues,
   arrConnected,
   arrUnreachable,
+  arrAvailableForLibrary,
   seerrConnected,
   seerrUnreachable,
   libraryType,
@@ -170,12 +177,13 @@ export function RuleBuilder({
   const fieldContext: FieldContext = {
     arrConnected,
     arrUnreachable,
+    arrAvailableForLibrary,
     seerrConnected,
     seerrUnreachable,
     libraryType,
   };
   return (
-    <BaseBuilder<Rule, RuleGroup>
+    <BaseBuilder<LifecycleRule, LifecycleRuleGroup>
       groups={groups}
       onChange={onChange}
       distinctValues={distinctValues}

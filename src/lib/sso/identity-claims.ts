@@ -21,7 +21,6 @@ const MAX_LENGTH = 256;
  *  log lines, can be used for log injection, and have no legitimate place
  *  in a username or email. */
 function stripControls(value: string): string {
-  // eslint-disable-next-line no-control-regex
   return value.replace(/[\x00-\x1f\x7f]/g, "");
 }
 

@@ -1,16 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { getMatchedCriteriaForItems } from "@/lib/rules/engine";
-import type { Rule, RuleGroup } from "@/lib/rules/types";
+import { getMatchedCriteriaForItems } from "@/lib/rules/lifecycle-engine";
+import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 
-function makeRule(overrides: Partial<Rule> & Pick<Rule, "field" | "operator" | "value">): Rule {
+function makeRule(overrides: Partial<LifecycleRule> & Pick<LifecycleRule, "field" | "operator" | "value">): LifecycleRule {
   return { id: "r1", condition: "AND", ...overrides };
 }
 
-function makeGroup(rules: Rule[]): RuleGroup {
+function makeGroup(rules: LifecycleRule[]): LifecycleRuleGroup {
   return { id: "g1", condition: "AND", rules, groups: [] };
 }
 
-function evalRules(items: Array<Record<string, unknown>>, rules: RuleGroup[]) {
+function evalRules(items: Array<Record<string, unknown>>, rules: LifecycleRuleGroup[]) {
   return getMatchedCriteriaForItems(items, rules, "MOVIE");
 }
 

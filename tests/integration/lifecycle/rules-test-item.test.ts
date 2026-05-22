@@ -32,7 +32,7 @@ const mockHasArrRules = vi.hoisted(() => vi.fn().mockReturnValue(false));
 const mockHasSeerrRules = vi.hoisted(() => vi.fn().mockReturnValue(false));
 const mockHasStreamRules = vi.hoisted(() => vi.fn().mockReturnValue(false));
 
-vi.mock("@/lib/rules/engine", () => ({
+vi.mock("@/lib/rules/lifecycle-engine", () => ({
   evaluateAllRulesInMemory: mockEvaluateAllRulesInMemory,
   getMatchedCriteriaForItems: mockGetMatchedCriteriaForItems,
   getActualValuesForAllRules: mockGetActualValuesForAllRules,

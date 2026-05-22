@@ -32,7 +32,7 @@ import {
 
 // ─── Type aliases ───────────────────────────────────────────────────────
 export type RuleOperator = string;
-export type RuleCondition = ConditionLogic;
+export type LifecycleRuleCondition = ConditionLogic;
 export type QueryRule = Condition;
 export type QueryGroup = ConditionGroup;
 export type QueryFieldSection = ConditionSection;

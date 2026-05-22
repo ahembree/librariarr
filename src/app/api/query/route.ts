@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { validateRequest, executeQuerySchema } from "@/lib/validation";
-import { executeQuery } from "@/lib/query/execute";
+import { executeQuery } from "@/lib/query/query-engine";
 import type { QueryDefinition } from "@/lib/query/types";
 
 export async function POST(request: Request) {

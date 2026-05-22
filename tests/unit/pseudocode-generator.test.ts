@@ -141,12 +141,12 @@ describe("generatePseudocode", () => {
     });
   });
 
-  // ── Rule connectors (the core AND/OR logic) ─────────────────────────────
+  // ── LifecycleRule connectors (the core AND/OR logic) ─────────────────────────────
 
   describe("rule connectors within a group", () => {
     it("uses the CURRENT rule's condition as the connector (not previous)", () => {
-      // Rule 1 has condition "OR", Rule 2 has condition "AND"
-      // The connector between them should be Rule 2's condition: "AND"
+      // Rule 1 has condition "OR", LifecycleRule 2 has condition "AND"
+      // The connector between them should be LifecycleRule 2's condition: "AND"
       const groups = [makeGroup({
         rules: [
           makeRule({ field: "playCount", operator: "equals", value: "0", condition: "OR" }),
@@ -819,7 +819,7 @@ describe("generatePseudocode", () => {
     });
   });
 
-  // ── Rule IDs ──────────────────────────────────────────────────────────────
+  // ── LifecycleRule IDs ──────────────────────────────────────────────────────────────
 
   describe("ruleId mapping", () => {
     it("rule lines include the original rule's id", () => {

@@ -1,20 +1,20 @@
 import { describe, it, expect } from "vitest";
-import { getMatchedCriteriaForItems } from "@/lib/rules/engine";
-import type { Rule, RuleGroup } from "@/lib/rules/types";
+import { getMatchedCriteriaForItems } from "@/lib/rules/lifecycle-engine";
+import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeRule(overrides: Partial<Rule> & Pick<Rule, "field" | "operator" | "value">): Rule {
+function makeRule(overrides: Partial<LifecycleRule> & Pick<LifecycleRule, "field" | "operator" | "value">): LifecycleRule {
   return { id: "r1", condition: "AND", ...overrides };
 }
 
 function makeStreamQueryGroup(
   streamType: string,
-  rules: Rule[],
-  overrides?: Partial<RuleGroup>,
-): RuleGroup {
+  rules: LifecycleRule[],
+  overrides?: Partial<LifecycleRuleGroup>,
+): LifecycleRuleGroup {
   return {
     id: "sq1",
     condition: "AND",
@@ -25,7 +25,7 @@ function makeStreamQueryGroup(
   };
 }
 
-function matched(items: Array<Record<string, unknown>>, groups: RuleGroup[]) {
+function matched(items: Array<Record<string, unknown>>, groups: LifecycleRuleGroup[]) {
   return getMatchedCriteriaForItems(items, groups, "MOVIE");
 }
 

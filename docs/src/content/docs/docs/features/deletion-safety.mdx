@@ -277,9 +277,9 @@ If you want to verify the safety claims above by reading the code, the codebase 
 
 | Claim | Where to look |
 |-|-|
-| Empty / disabled rule sets can't match | `hasAnyActiveRules` in `src/lib/rules/engine.ts` (early return at the top of `evaluateRules`, `evaluateSeriesScope`, `evaluateMusicScope`, and the `/api/lifecycle/rules/preview` route) |
-| External-field rules can't broaden the database query | `evaluateGroupPreFilter` and `combinePreFilter` in `src/lib/rules/engine.ts`. The `EXTERNAL_RULE` sentinel propagates through AND/OR; pre-filter is only used when `needsFullReeval=true` |
-| The empty-WHERE safety net | The block tagged `// Safety net: if all rules produced empty WHERE clauses` near the top of `evaluateRules` in `src/lib/rules/engine.ts` |
+| Empty / disabled rule sets can't match | `hasAnyActiveRules` in `src/lib/rules/lifecycle-engine.ts` (early return at the top of `evaluateLifecycleRules`, `evaluateSeriesScope`, `evaluateMusicScope`, and the `/api/lifecycle/rules/preview` route) |
+| External-field rules can't broaden the database query | `evaluateGroupPreFilter` and `combinePreFilter` in `src/lib/rules/lifecycle-engine.ts`. The `EXTERNAL_RULE` sentinel propagates through AND/OR; pre-filter is only used when `needsFullReeval=true` |
+| The empty-WHERE safety net | The block tagged `// Safety net: if all rules produced empty WHERE clauses` near the top of `evaluateLifecycleRules` in `src/lib/rules/lifecycle-engine.ts` |
 | Action scheduling skipped when actions disabled | `scheduleActionsForRuleSet` in `src/lib/lifecycle/processor.ts` (early-deletes pending actions when `actionEnabled=false` or no `actionType`) |
 | Stale matches cancelled at scheduling time | `scheduleActionsForRuleSet` in `src/lib/lifecycle/processor.ts` (after detection, deletes pending actions whose item isn't in the new match set) |
 | Stale matches cancelled at execute time | The pending-actions loop in `processLifecycleRules` in `src/lib/lifecycle/processor.ts` (re-checks `matchSet` immediately before `executeAction`) |

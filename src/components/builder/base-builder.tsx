@@ -91,7 +91,7 @@ import {
   AlertTriangle,
   type LucideIcon,
 } from "lucide-react";
-import type { RuleCondition } from "@/lib/rules/types";
+import type { LifecycleRuleCondition } from "@/lib/rules/types";
 import { isOperatorVisible } from "@/lib/conditions/helpers";
 import type {
   BaseRule,
@@ -163,7 +163,7 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
   onRemove: (groupId: string, ruleId: string) => void;
   onDuplicate: (groupId: string, ruleId: string) => void;
   onToggleEnabled: (groupId: string, ruleId: string) => void;
-  onConditionChange: (ruleId: string, condition: RuleCondition) => void;
+  onConditionChange: (ruleId: string, condition: LifecycleRuleCondition) => void;
 }) {
   const sortableId = `${groupId}:${rule.id}`;
   const {
@@ -192,9 +192,17 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
   const enumerable = fieldDef?.enumerable ?? false;
   const knownVals = fieldDef?.knownValues;
   const distinctVals = distinctValues?.[rule.field];
+  // Filter empty/whitespace-only values: Radix `<Select.Item />` rejects an
+  // empty-string value (it's reserved for the placeholder/cleared state),
+  // and an empty option is never a meaningful selection in the rule builder.
+  // Distinct-values endpoints can return `""` for nullable text columns that
+  // store empty strings in the database; this guard prevents a crash when
+  // they do.
   const dropdownValues =
     enumerable || fieldType === "boolean"
-      ? [...new Set([...(knownVals ?? []), ...(distinctVals ?? [])])]
+      ? [...new Set([...(knownVals ?? []), ...(distinctVals ?? [])])].filter(
+          (v) => typeof v === "string" && v.trim().length > 0,
+        )
       : [];
 
   const isNullOp = config.isValuelessOperator?.(rule.operator) ?? false;
@@ -235,7 +243,7 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
       {!isFirst && (
         <Select
           value={rule.condition}
-          onValueChange={(v) => onConditionChange(rule.id, v as RuleCondition)}
+          onValueChange={(v) => onConditionChange(rule.id, v as LifecycleRuleCondition)}
         >
           <SelectTrigger className="w-20 h-8 text-xs shrink-0">
             <SelectValue />
@@ -774,7 +782,7 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
     }));
   }, [onUpdateTree, group.id, config]);
 
-  const handleUpdateRuleCondition = useCallback((ruleId: string, condition: RuleCondition) => {
+  const handleUpdateRuleCondition = useCallback((ruleId: string, condition: LifecycleRuleCondition) => {
     onUpdateTree(group.id, (g) => ({
       ...g,
       rules: g.rules.map((r) =>
@@ -783,7 +791,7 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
     }));
   }, [onUpdateTree, group.id]);
 
-  const handleUpdateSubGroupCondition = useCallback((subGroupId: string, condition: RuleCondition) => {
+  const handleUpdateSubGroupCondition = useCallback((subGroupId: string, condition: LifecycleRuleCondition) => {
     onUpdateTree(subGroupId, (g) => ({ ...g, condition }));
   }, [onUpdateTree]);
 
@@ -1066,7 +1074,7 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
                 <div className="flex justify-center py-1">
                   <Select
                     value={sub.condition}
-                    onValueChange={(v) => handleUpdateSubGroupCondition(sub.id, v as RuleCondition)}
+                    onValueChange={(v) => handleUpdateSubGroupCondition(sub.id, v as LifecycleRuleCondition)}
                   >
                     <SelectTrigger className="w-20 h-6 text-xs">
                       <SelectValue />
@@ -1348,7 +1356,7 @@ export function BaseBuilder<R extends BaseRule, G extends BaseGroup<R>>({
 
   const updateGroupCondition = useCallback((
     groupId: string,
-    condition: RuleCondition,
+    condition: LifecycleRuleCondition,
   ) => {
     onChange(groups.map((g) => (g.id === groupId ? { ...g, condition } : g)));
   }, [groups, onChange]);
@@ -1751,7 +1759,7 @@ export function BaseBuilder<R extends BaseRule, G extends BaseGroup<R>>({
                   <Select
                     value={group.condition}
                     onValueChange={(v) =>
-                      updateGroupCondition(group.id, v as RuleCondition)
+                      updateGroupCondition(group.id, v as LifecycleRuleCondition)
                     }
                   >
                     <SelectTrigger className="w-20">

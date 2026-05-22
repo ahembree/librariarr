@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { evaluateRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/engine";
-import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
+import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { syncPlexCollection } from "@/lib/lifecycle/collections";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
-import type { Rule, RuleGroup } from "@/lib/rules/types";
+import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { validateRequest, collectionSyncSchema } from "@/lib/validation";
 
 export async function POST(request: Request) {
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
   }
 
   const serverIds = ruleSet.user.mediaServers.map((s) => s.id);
-  const rules = ruleSet.rules as unknown as Rule[] | RuleGroup[];
+  const rules = ruleSet.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
 
   // SAFETY: Refuse to evaluate if no rules are active — would match everything
   if (!hasAnyActiveRules(rules)) {
@@ -64,7 +64,7 @@ export async function POST(request: Request) {
   } else if (ruleSet.type === "MUSIC" && ruleSet.seriesScope) {
     matchedItems = await evaluateMusicScope(rules, serverIds, arrData);
   } else {
-    matchedItems = await evaluateRules(rules, ruleSet.type, serverIds, arrData, seerrData);
+    matchedItems = await evaluateLifecycleRules(rules, ruleSet.type, serverIds, arrData, seerrData);
   }
 
   await syncPlexCollection(ruleSet, matchedItems);

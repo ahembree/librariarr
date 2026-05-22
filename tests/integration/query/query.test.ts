@@ -5,7 +5,7 @@ import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers"
 
 // Mock the query executor to avoid complex dependency chain (Arr clients, Seerr, dedup, etc.)
 const mockExecuteQuery = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/query/execute", () => ({
+vi.mock("@/lib/query/query-engine", () => ({
   executeQuery: mockExecuteQuery,
 }));
 

@@ -21,7 +21,7 @@ describe("Rule structure validation", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts valid RuleGroup format", () => {
+  it("accepts valid LifecycleRuleGroup format", () => {
     const result = validateRules([
       {
         id: "g1",
@@ -88,9 +88,9 @@ describe("Rule structure validation", () => {
     expect(result.success).toBe(false);
   });
 
-  // ── Invalid RuleGroup ──
+  // ── Invalid LifecycleRuleGroup ──
 
-  it("rejects RuleGroup without condition", () => {
+  it("rejects LifecycleRuleGroup without condition", () => {
     const result = validateRules([
       {
         id: "g1",
@@ -103,7 +103,7 @@ describe("Rule structure validation", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects RuleGroup with invalid condition", () => {
+  it("rejects LifecycleRuleGroup with invalid condition", () => {
     const result = validateRules([
       {
         id: "g1",
@@ -117,7 +117,7 @@ describe("Rule structure validation", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects RuleGroup where rules is not an array", () => {
+  it("rejects LifecycleRuleGroup where rules is not an array", () => {
     const result = validateRules([
       {
         id: "g1",
@@ -129,7 +129,7 @@ describe("Rule structure validation", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects RuleGroup with malformed nested rules", () => {
+  it("rejects LifecycleRuleGroup with malformed nested rules", () => {
     const result = validateRules([
       {
         id: "g1",

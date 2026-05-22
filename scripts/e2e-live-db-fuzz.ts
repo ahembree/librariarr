@@ -3,7 +3,7 @@
  *
  * For every valid (field, operator) pair and every hazard value variant
  * (empty / whitespace / NaN / type-mismatch / malformed-between / wildcard-*
- * / unknown-operator), call evaluateRules with negate ∈ {false, true} and
+ * / unknown-operator), call evaluateLifecycleRules with negate ∈ {false, true} and
  * assert the engine returns 0 matches (i.e. rejected the rule). Anything
  * > 0 is a regression of the deletion-safety guarantee.
  *
@@ -19,12 +19,12 @@
 import { randomUUID } from "crypto";
 import { writeFileSync } from "fs";
 import { prisma } from "@/lib/db";
-import { evaluateRules, type ArrDataMap, type SeerrDataMap } from "@/lib/rules/engine";
+import { evaluateLifecycleRules, type ArrDataMap, type SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { CONDITION_FIELDS, CONDITION_OPERATORS } from "@/lib/conditions";
 import { isNonNullableField, isOperatorApplicable } from "@/lib/conditions/helpers";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
-import type { RuleGroup } from "@/lib/rules/types";
+import type { LifecycleRuleGroup } from "@/lib/rules/types";
 
 const TYPES = ["MOVIE", "SERIES", "MUSIC"] as const;
 type LibType = (typeof TYPES)[number];
@@ -60,7 +60,7 @@ const HAZARD_VARIANTS = [
   { name: "wildcard_question_only", value: "?" },
 ];
 
-function ruleGroup(rules: Array<{ field: string; operator: string; value: string; negate?: boolean; logic?: "AND" | "OR" }>, groupLogic: "AND" | "OR" = "AND"): RuleGroup[] {
+function ruleGroup(rules: Array<{ field: string; operator: string; value: string; negate?: boolean; logic?: "AND" | "OR" }>, groupLogic: "AND" | "OR" = "AND"): LifecycleRuleGroup[] {
   return [
     {
       id: randomUUID(),
@@ -95,8 +95,9 @@ async function snapshot() {
  * positives (e.g. `equals ""` on text, `matchesWildcard "*"`) are filtered out
  * because they're legitimate operations the engine should respect.
  *
- * Engine guards (see src/lib/rules/engine.ts:197 isUnconfiguredContainsRule
- * and src/lib/conditions/helpers.ts isValueValidForRule):
+ * Engine guards (see `isUnconfiguredContainsRule` in
+ * src/lib/conditions/where-builder.ts and `isValueValidForRule` in
+ * src/lib/conditions/helpers.ts):
  *   - contains/notContains with empty/whitespace/"|" → UNSATISFIABLE
  *   - matchesWildcard/notMatchesWildcard with empty/whitespace pattern → UNSATISFIABLE
  *     (but `*` is INTENTIONAL match-all and not unconfigured)
@@ -166,7 +167,7 @@ async function main() {
   // year >= 2000 is a safe baseline check for movies/series; playCount >= 0 for music.
   for (const t of TYPES) {
     if (baselines[t] === 0) continue;
-    const ok = await evaluateRules(
+    const ok = await evaluateLifecycleRules(
       ruleGroup([{ field: t === "MUSIC" ? "playCount" : "year", operator: "greaterThanOrEqual", value: t === "MUSIC" ? "0" : "1900" }]),
       t,
       serverIds,
@@ -229,7 +230,7 @@ async function main() {
             totalEvals++;
             totalValueless++;
             try {
-              const items = await evaluateRules(
+              const items = await evaluateLifecycleRules(
                 ruleGroup([{ field: f.value, operator: op.value, value: "", negate }]),
                 t, serverIds, arrCache[t], seerrCache[t],
               );
@@ -266,7 +267,7 @@ async function main() {
             totalEvals++;
             totalHazard++;
             try {
-              const items = await evaluateRules(
+              const items = await evaluateLifecycleRules(
                 ruleGroup([{ field: f.value, operator: op.value, value: variant.value, negate }]),
                 t, serverIds, arrCache[t], seerrCache[t],
               );
@@ -301,7 +302,7 @@ async function main() {
               totalEvals++;
               totalHazard++;
               try {
-                const items = await evaluateRules(
+                const items = await evaluateLifecycleRules(
                   ruleGroup([{ field: f.value, operator: wop, value: wv.value, negate }]),
                   t, serverIds, arrCache[t], seerrCache[t],
                 );
@@ -325,7 +326,7 @@ async function main() {
         totalEvals++;
         totalUnknownOp++;
         try {
-          const items = await evaluateRules(
+          const items = await evaluateLifecycleRules(
             ruleGroup([{ field: f.value, operator: "thisOperatorDoesNotExist", value: "anyValue", negate }]),
             t, serverIds, arrCache[t], seerrCache[t],
           );
@@ -380,7 +381,7 @@ async function main() {
           totalEvals++;
           totalComposition++;
           try {
-            const items = await evaluateRules(
+            const items = await evaluateLifecycleRules(
               ruleGroup([
                 { ...validBase, logic: "AND" },
                 { field: h.field, operator: h.op, value: h.value, negate, logic: groupLogic },

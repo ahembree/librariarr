@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { evaluateRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/engine";
-import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/engine";
-import type { RuleGroup, Rule } from "@/lib/rules/types";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
+import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { validateRequest, ruleDiffSchema } from "@/lib/validation";
@@ -44,7 +44,7 @@ export async function POST(
   }
 
   const { rules, type, seriesScope, serverIds } = data;
-  const typedRules = rules as unknown as Rule[] | RuleGroup[];
+  const typedRules = rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
 
   // Get existing matches from DB
   const existingMatches = await prisma.ruleMatch.findMany({
@@ -103,7 +103,7 @@ export async function POST(
   } else if (type === "MUSIC" && seriesScope !== false) {
     items = await evaluateMusicScope(typedRules, serverIds, arrData);
   } else {
-    const rawItems = await evaluateRules(typedRules, type, serverIds, arrData, seerrData);
+    const rawItems = await evaluateLifecycleRules(typedRules, type, serverIds, arrData, seerrData);
     items = type === "SERIES" ? groupSeriesResults(rawItems) : rawItems;
   }
 

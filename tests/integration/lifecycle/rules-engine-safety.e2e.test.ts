@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
-import type { RuleGroup } from "@/lib/rules/types";
+import type { LifecycleRuleGroup } from "@/lib/rules/types";
 
 // Critical: redirect prisma to test database
 vi.mock("@/lib/db", async () => {
@@ -25,7 +25,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 // Import AFTER the prisma mock so the engine wires up to the test DB
-const { evaluateRules } = await import("@/lib/rules/engine");
+const { evaluateLifecycleRules } = await import("@/lib/rules/lifecycle-engine");
 
 const SEED_COUNT = 50;
 let serverId: string;
@@ -64,12 +64,12 @@ afterAll(async () => {
   await disconnectTestDb();
 });
 
-function group(rules: RuleGroup["rules"]): RuleGroup[] {
+function group(rules: LifecycleRuleGroup["rules"]): LifecycleRuleGroup[] {
   return [{ id: "g", condition: "AND", rules, groups: [] }];
 }
 
-async function matchCount(rules: RuleGroup[]) {
-  const items = await evaluateRules(rules, "MOVIE", [serverId]);
+async function matchCount(rules: LifecycleRuleGroup[]) {
+  const items = await evaluateLifecycleRules(rules, "MOVIE", [serverId]);
   return items.length;
 }
 

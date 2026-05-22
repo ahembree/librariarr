@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { evaluateAllQueryRulesInMemory } from "@/lib/query/execute";
+import { evaluateAllQueryRulesInMemory } from "@/lib/query/query-engine";
 import type { QueryRule, QueryGroup } from "@/lib/query/types";
-import type { ArrMetadata, SeerrMetadata } from "@/lib/rules/engine";
+import type { ArrMetadata, SeerrMetadata } from "@/lib/rules/lifecycle-engine";
 
 // ---------------------------------------------------------------------------
 // Helpers

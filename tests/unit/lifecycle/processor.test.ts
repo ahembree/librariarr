@@ -85,7 +85,7 @@ vi.mock("@/lib/discord/client", () => ({
   buildMatchChangeEmbed: mockBuildMatchChangeEmbed,
   buildFailureSummaryEmbed: mockBuildFailureSummaryEmbed,
 }));
-vi.mock("@/lib/rules/engine", () => ({
+vi.mock("@/lib/rules/lifecycle-engine", () => ({
   hasArrRules: mockHasArrRules,
   hasSeerrRules: mockHasSeerrRules,
   hasAnyActiveRules: mockHasAnyActiveRules,

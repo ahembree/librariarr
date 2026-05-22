@@ -102,7 +102,7 @@ export async function GET() {
         array_agg(DISTINCT codec) FILTER (WHERE codec IS NOT NULL) AS codecs,
         array_agg(DISTINCT profile) FILTER (WHERE profile IS NOT NULL) AS profiles,
         array_agg(DISTINCT language) FILTER (WHERE language IS NOT NULL AND language != '' AND language != 'Unknown') AS languages,
-        array_agg(DISTINCT "languageCode") FILTER (WHERE "languageCode" IS NOT NULL) AS "languageCodes",
+        array_agg(DISTINCT "languageCode") FILTER (WHERE "languageCode" IS NOT NULL AND "languageCode" != '') AS "languageCodes",
         array_agg(DISTINCT "scanType") FILTER (WHERE "scanType" IS NOT NULL) AS "sqScanTypes",
         array_agg(DISTINCT "videoRangeType") FILTER (WHERE "videoRangeType" IS NOT NULL) AS "videoRangeTypes",
         array_agg(DISTINCT "audioChannelLayout") FILTER (WHERE "audioChannelLayout" IS NOT NULL) AS "audioLayouts"

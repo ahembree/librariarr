@@ -1,19 +1,22 @@
 /**
- * E2E regression for stream query Phase 1/Phase 2 disagreements:
+ * E2E regression for query builder stream-query Phase 1/Phase 2 divergences.
+ * Parallel to tests/integration/lifecycle/rules-engine-stream-query.e2e.test.ts —
+ * the rule engine's buildStreamQueryClause had three NULL/quantifier bugs fixed
+ * earlier; the query builder's buildQueryStreamQueryClause had drifted behind:
  *
- * 1. **"all" quantifier on 0 streams**: Phase 1 emitted `{ streams: { none: ... } }`
+ * 1. "all" quantifier on 0 streams: Phase 1 emitted only `{ streams: { none: ... } }`
  *    which is vacuously TRUE for items with 0 streams of the matched type.
  *    Phase 2's `matchingStreams.length > 0 && every(...)` correctly required
- *    at least one stream. Phase 1 was patched to AND in `streams: { some: { streamType } }`.
+ *    at least one stream. Phase 1 patched to AND in `streams: { some: { streamType } }`.
  *
- * 2. **notEquals/notContains on nullable stream column**: Phase 1 emitted
+ * 2. notEquals / notContains on nullable stream column: Phase 1 emitted
  *    `{ [column]: { not: X } }` which excluded NULL-column streams under 3VL.
  *    Phase 2's `String(streamValue ?? "")` coalesce included them. Phase 1
- *    was patched to wrap with `OR { [column]: null }`.
+ *    patched to wrap with `OR { [column]: null }`.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
-import type { LifecycleRuleGroup } from "@/lib/rules/types";
+import type { QueryDefinition, QueryGroup } from "@/lib/query/types";
 
 vi.mock("@/lib/db", async () => {
   const { getTestPrisma } = await import("../../setup/test-db");
@@ -25,13 +28,11 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const { evaluateLifecycleRules } = await import("@/lib/rules/lifecycle-engine");
+const { executeQuery } = await import("@/lib/query/query-engine");
 
-// Stream type constants (mirror src/lib/conditions/stream-query.ts STREAM_TYPE_INT_MAP).
 const STREAM_AUDIO = 2;
-// const STREAM_VIDEO = 1;
-// const STREAM_SUBTITLE = 3;
 
+let userId: string;
 let serverId: string;
 let withAudioId: string;
 let noAudioId: string;
@@ -40,16 +41,17 @@ let withNullLangId: string;
 beforeAll(async () => {
   await cleanDatabase();
   const prisma = getTestPrisma();
-  const user = await prisma.user.create({ data: { username: "test-stream-query", passwordHash: "x" } });
+  const user = await prisma.user.create({ data: { username: "test-query-stream", passwordHash: "x" } });
+  userId = user.id;
   const server = await prisma.mediaServer.create({
-    data: { userId: user.id, name: "Test", type: "PLEX", url: "http://test:32400", accessToken: "x", machineId: "stream-q-test" },
+    data: { userId: user.id, name: "Test", type: "PLEX", url: "http://test:32400", accessToken: "x", machineId: "query-sq-test" },
   });
   serverId = server.id;
   const library = await prisma.library.create({
     data: { mediaServerId: server.id, key: "1", title: "Movies", type: "MOVIE" },
   });
 
-  // 1. Movie WITH an English audio stream — should match "all audio = English".
+  // 1. Movie WITH an English audio stream
   const withAudio = await prisma.mediaItem.create({
     data: {
       libraryId: library.id, ratingKey: "with-audio", title: "Has Audio", type: "MOVIE", year: 2020,
@@ -58,13 +60,13 @@ beforeAll(async () => {
   });
   withAudioId = withAudio.id;
 
-  // 2. Movie with NO audio streams — must NOT match "all audio = English" (vacuous truth).
+  // 2. Movie with NO audio streams — must NOT match "all audio = English" (vacuous truth)
   const noAudio = await prisma.mediaItem.create({
     data: { libraryId: library.id, ratingKey: "no-audio", title: "Silent Movie", type: "MOVIE", year: 2020 },
   });
   noAudioId = noAudio.id;
 
-  // 3. Movie with one audio stream that has NULL language — for notEquals NULL handling.
+  // 3. Movie with one audio stream that has NULL language — for notEquals NULL handling
   const withNull = await prisma.mediaItem.create({
     data: {
       libraryId: library.id, ratingKey: "null-lang", title: "Unknown Lang", type: "MOVIE", year: 2020,
@@ -79,21 +81,26 @@ afterAll(async () => {
 });
 
 async function streamMatchIds(quantifier: "any" | "none" | "all", rules: Array<{ field: string; operator: string; value: string; negate?: boolean }>): Promise<string[]> {
-  const group: LifecycleRuleGroup = {
+  const group: QueryGroup = {
     id: "g", condition: "AND",
     rules: rules.map((r, i) => ({ id: `r${i}`, field: r.field, operator: r.operator, value: r.value, condition: "AND", negate: r.negate ?? false })),
     groups: [],
     streamQuery: { streamType: "audio", quantifier },
   };
-  const items = await evaluateLifecycleRules([group], "MOVIE", [serverId]);
-  return items.map((i) => i.id).sort();
+  const definition: QueryDefinition = {
+    mediaTypes: ["MOVIE"],
+    serverIds: [serverId],
+    groups: [group],
+    sortBy: "title",
+    sortOrder: "asc",
+  };
+  const result = await executeQuery(definition, userId, 1, 100);
+  return result.items.map((i) => i.id as string).sort();
 }
 
-describe("Rule engine — stream query 'all' quantifier must not vacuously match 0-stream items", () => {
+describe("Query builder — stream query 'all' quantifier must not vacuously match 0-stream items", () => {
   it("all + language equals English: matches movies WITH such a stream, excludes 0-stream items", async () => {
     const matches = await streamMatchIds("all", [{ field: "sqLanguage", operator: "equals", value: "English" }]);
-    // Expected: only withAudioId. noAudioId must NOT vacuously match. withNullLangId must NOT match
-    // because its only stream has language=NULL, which is not "English".
     expect(matches).toEqual([withAudioId].sort());
   });
 
@@ -104,7 +111,6 @@ describe("Rule engine — stream query 'all' quantifier must not vacuously match
 
   it("none + language equals English: matches items with NO English stream", async () => {
     const matches = await streamMatchIds("none", [{ field: "sqLanguage", operator: "equals", value: "English" }]);
-    // Expected: noAudioId (no streams at all) + withNullLangId (its stream is NOT English).
     expect(matches).toEqual([noAudioId, withNullLangId].sort());
   });
 
@@ -114,11 +120,9 @@ describe("Rule engine — stream query 'all' quantifier must not vacuously match
   });
 });
 
-describe("Rule engine — stream query notEquals on nullable column includes NULL streams", () => {
-  it("any + language notEquals 'English': matches items with at least one non-English stream (NULL counts as non-English)", async () => {
+describe("Query builder — stream query notEquals on nullable column includes NULL streams", () => {
+  it("any + language notEquals 'English': NULL-language streams count as non-English", async () => {
     const matches = await streamMatchIds("any", [{ field: "sqLanguage", operator: "notEquals", value: "English" }]);
-    // Expected: withNullLangId (NULL stream counts as non-English under Phase 2 coalesce).
-    // noAudioId has NO streams at all, so "any" quantifier with no streams fails.
     expect(matches).toEqual([withNullLangId].sort());
   });
 
@@ -129,9 +133,6 @@ describe("Rule engine — stream query notEquals on nullable column includes NUL
 
   it("all + language notEquals 'English': all streams (incl. NULL-lang ones) must not be English", async () => {
     const matches = await streamMatchIds("all", [{ field: "sqLanguage", operator: "notEquals", value: "English" }]);
-    // withNullLangId has 1 stream with NULL language → NULL is treated as non-English → ALL match.
-    // withAudioId has 1 English stream → fails "all not English".
-    // noAudioId has 0 streams → fails "all" (vacuous truth blocked).
     expect(matches).toEqual([withNullLangId].sort());
   });
 });
