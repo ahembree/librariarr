@@ -1610,7 +1610,7 @@ export function LifecycleRulePage({
           <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">{pageTitle}</h1>
           <Button variant="outline" onClick={newRuleSet}>
             <FileText className="mr-2 h-4 w-4" />
-            New LifecycleRule Set
+            New Rule Set
           </Button>
         </div>
       )}
@@ -1618,7 +1618,7 @@ export function LifecycleRulePage({
         <div className="mb-6 flex justify-end">
           <Button variant="outline" onClick={newRuleSet}>
             <FileText className="mr-2 h-4 w-4" />
-            New LifecycleRule Set
+            New Rule Set
           </Button>
         </div>
       )}
@@ -1629,7 +1629,7 @@ export function LifecycleRulePage({
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <FileText className="h-4 w-4" />
-              Saved LifecycleRule Sets
+              Saved Rule Sets
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -1917,6 +1917,7 @@ export function LifecycleRulePage({
               distinctValues={distinctValues}
               arrConnected={!!arrInstanceId}
               arrUnreachable={integrationsStatus.arrUnreachable}
+              arrAvailableForLibrary={arrInstances.length > 0}
               seerrConnected={mediaType === "MUSIC" ? undefined : seerrConnected}
               seerrUnreachable={integrationsStatus.seerrUnreachable}
               libraryType={mediaType}

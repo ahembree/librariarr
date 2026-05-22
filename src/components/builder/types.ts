@@ -57,6 +57,12 @@ export interface FieldContext {
    * per-row badge on rules that depend on Arr connectivity. */
   arrUnreachable?: boolean;
   seerrUnreachable?: boolean;
+  /** Whether the user has at least one Arr instance of the appropriate type
+   * (Radarr for MOVIE, Sonarr for SERIES, Lidarr for MUSIC) configured
+   * globally. Used by the lifecycle rule builder to distinguish "no Arr
+   * configured" from "Arr configured but not selected for this rule set" —
+   * the two cases need different remediation text. */
+  arrAvailableForLibrary?: boolean;
   /** Singular library type — used by the rule builder. */
   libraryType?: "MOVIE" | "SERIES" | "MUSIC";
   /** Selected media types — used by the query builder (which is multi-type). */

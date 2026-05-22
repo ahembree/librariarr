@@ -85,7 +85,9 @@ export const ruleBuilderConfig: BuilderConfig<LifecycleRule, LifecycleRuleGroup>
     const def = getConditionField(field);
     if (!def) return null;
     if (def.requiresArr && ctx.arrConnected === false)
-      return "Configure an Arr integration in Settings to use Arr criteria";
+      return ctx.arrAvailableForLibrary
+        ? "Select an Arr server above to use Arr criteria"
+        : "Configure an Arr integration in Settings to use Arr criteria";
     if (def.requiresSeerr && ctx.seerrConnected === false)
       return "Configure a Seerr instance in Settings to use Seerr criteria";
     if (def.isSeriesAggregate && ctx.libraryType !== "SERIES")
@@ -152,6 +154,10 @@ interface RuleBuilderProps {
   distinctValues?: Record<string, string[]>;
   arrConnected?: boolean;
   arrUnreachable?: boolean;
+  /** True when the user has at least one Arr instance of the appropriate
+   * type configured globally (regardless of whether one is selected for
+   * this rule set). Controls Arr-missing tooltip wording. */
+  arrAvailableForLibrary?: boolean;
   seerrConnected?: boolean;
   seerrUnreachable?: boolean;
   libraryType?: LibraryType;
@@ -163,6 +169,7 @@ export function RuleBuilder({
   distinctValues,
   arrConnected,
   arrUnreachable,
+  arrAvailableForLibrary,
   seerrConnected,
   seerrUnreachable,
   libraryType,
@@ -170,6 +177,7 @@ export function RuleBuilder({
   const fieldContext: FieldContext = {
     arrConnected,
     arrUnreachable,
+    arrAvailableForLibrary,
     seerrConnected,
     seerrUnreachable,
     libraryType,
