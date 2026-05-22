@@ -1437,7 +1437,7 @@ const OPERATOR_SYMBOLS: Record<string, string> = {
 
 /**
  * For each item, evaluate every leaf rule individually and return which ones matched.
- * Items must already be confirmed matches from evaluateRules().
+ * Items must already be confirmed matches from evaluateLifecycleRules().
  */
 
 /** Extract the actual item value for a rule field, formatted for display */
@@ -2085,7 +2085,7 @@ export async function evaluateSeriesScope(
   const matching = [];
 
   for (const series of aggregated) {
-    // Serialize for in-memory evaluation (mirrors evaluateRules output format)
+    // Serialize for in-memory evaluation (mirrors evaluateLifecycleRules output format)
     const item: Record<string, unknown> = {
       ...series,
       fileSize: series.fileSize,
@@ -2287,7 +2287,7 @@ export async function evaluateMusicScope(
   }));
 }
 
-export async function evaluateRules(
+export async function evaluateLifecycleRules(
   rules: Rule[] | RuleGroup[],
   type: "MOVIE" | "SERIES" | "MUSIC",
   serverIds: string[],

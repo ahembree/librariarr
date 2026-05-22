@@ -25,7 +25,7 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const { evaluateRules } = await import("@/lib/rules/lifecycle-engine");
+const { evaluateLifecycleRules } = await import("@/lib/rules/lifecycle-engine");
 
 // Stream type constants (mirror src/lib/conditions/stream-query.ts STREAM_TYPE_INT_MAP).
 const STREAM_AUDIO = 2;
@@ -85,7 +85,7 @@ async function streamMatchIds(quantifier: "any" | "none" | "all", rules: Array<{
     groups: [],
     streamQuery: { streamType: "audio", quantifier },
   };
-  const items = await evaluateRules([group], "MOVIE", [serverId]);
+  const items = await evaluateLifecycleRules([group], "MOVIE", [serverId]);
   return items.map((i) => i.id).sort();
 }
 

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { evaluateRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { RuleGroup, Rule } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
@@ -103,7 +103,7 @@ export async function POST(
   } else if (type === "MUSIC" && seriesScope !== false) {
     items = await evaluateMusicScope(typedRules, serverIds, arrData);
   } else {
-    const rawItems = await evaluateRules(typedRules, type, serverIds, arrData, seerrData);
+    const rawItems = await evaluateLifecycleRules(typedRules, type, serverIds, arrData, seerrData);
     items = type === "SERIES" ? groupSeriesResults(rawItems) : rawItems;
   }
 

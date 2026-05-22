@@ -25,7 +25,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 // Import AFTER the prisma mock so the engine wires up to the test DB
-const { evaluateRules } = await import("@/lib/rules/lifecycle-engine");
+const { evaluateLifecycleRules } = await import("@/lib/rules/lifecycle-engine");
 
 const SEED_COUNT = 50;
 let serverId: string;
@@ -69,7 +69,7 @@ function group(rules: RuleGroup["rules"]): RuleGroup[] {
 }
 
 async function matchCount(rules: RuleGroup[]) {
-  const items = await evaluateRules(rules, "MOVIE", [serverId]);
+  const items = await evaluateLifecycleRules(rules, "MOVIE", [serverId]);
   return items.length;
 }
 

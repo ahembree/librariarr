@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { evaluateRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { syncPlexCollection } from "@/lib/lifecycle/collections";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
@@ -64,7 +64,7 @@ export async function POST(request: Request) {
   } else if (ruleSet.type === "MUSIC" && ruleSet.seriesScope) {
     matchedItems = await evaluateMusicScope(rules, serverIds, arrData);
   } else {
-    matchedItems = await evaluateRules(rules, ruleSet.type, serverIds, arrData, seerrData);
+    matchedItems = await evaluateLifecycleRules(rules, ruleSet.type, serverIds, arrData, seerrData);
   }
 
   await syncPlexCollection(ruleSet, matchedItems);

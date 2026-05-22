@@ -11,7 +11,7 @@
  *   1. `hasAnyActiveRules` rejects empty / all-disabled rule sets.
  *   2. `buildGroupConditionsPreFilter` propagates empty WHEREs as
  *      `EXTERNAL_RULE` so AND/OR is preserved when in-memory re-eval is needed.
- *   3. Explicit safety net in `evaluateRules`: when every rule produces an
+ *   3. Explicit safety net in `evaluateLifecycleRules`: when every rule produces an
  *      empty WHERE AND no in-memory re-eval is flagged, return [] rather than
  *      matching the entire library (engine.ts ~line 2779).
  *   4. `isUnconfiguredContainsRule` returns false / unsatisfiable WHERE for
@@ -100,7 +100,7 @@ describe("hasAnyActiveRules — first defense against match-all", () => {
  *   - Unknown field names (caught by the safety net at line 2779)
  *
  * Each of the first four trips a corresponding `has*Rules` predicate which
- * sets `needsFullReeval=true` in `evaluateRules`. This test asserts those
+ * sets `needsFullReeval=true` in `evaluateLifecycleRules`. This test asserts those
  * predicates exist and identify the right fields.
  */
 describe("Empty-WHERE field categorization (invariants)", () => {

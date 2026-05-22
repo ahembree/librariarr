@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { evaluateRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { Rule, RuleGroup } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
@@ -96,7 +96,7 @@ export async function detectAndSaveMatches(
       }
     }
   } else {
-    const rawItems = await evaluateRules(rules, ruleSet.type, serverIds, arrData, seerrData);
+    const rawItems = await evaluateLifecycleRules(rules, ruleSet.type, serverIds, arrData, seerrData);
     if (ruleSet.type === "SERIES") {
       const grouped = groupSeriesResults(rawItems);
       // Build episode ID map: grouped item id → individual episode ids

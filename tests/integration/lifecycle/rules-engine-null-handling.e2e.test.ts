@@ -28,7 +28,7 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const { evaluateRules } = await import("@/lib/rules/lifecycle-engine");
+const { evaluateLifecycleRules } = await import("@/lib/rules/lifecycle-engine");
 
 const FULL_COUNT = 20;
 const NULL_COUNT = 20;
@@ -96,7 +96,7 @@ function group(field: string, operator: string, value: string, negate = false): 
 }
 
 async function count(rules: RuleGroup[]) {
-  return (await evaluateRules(rules, "MOVIE", [serverId])).length;
+  return (await evaluateLifecycleRules(rules, "MOVIE", [serverId])).length;
 }
 
 describe("Rule engine — NULL handling for notEquals/notContains (Phase 1 must include NULL rows)", () => {

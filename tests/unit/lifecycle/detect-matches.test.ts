@@ -36,7 +36,7 @@ vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 vi.mock("@/lib/rules/lifecycle-engine", () => ({
-  evaluateRules: mockEvaluateRules,
+  evaluateLifecycleRules: mockEvaluateRules,
   evaluateSeriesScope: mockEvaluateSeriesScope,
   evaluateMusicScope: mockEvaluateMusicScope,
   groupSeriesResults: mockGroupSeriesResults,

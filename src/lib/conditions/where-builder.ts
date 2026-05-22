@@ -83,7 +83,7 @@ export const UNSATISFIABLE_WHERE: Prisma.MediaItemWhereInput = {
  * "matches every row" case — e.g. `isNotNull` on a non-nullable column.
  *
  * Empty `{}` cannot be used: evaluateGroup() at line 843 filters out empty
- * clauses, and the safety net at evaluateRules() returns 0 when all clauses
+ * clauses, and the safety net at evaluateLifecycleRules() returns 0 when all clauses
  * collapsed to empty. A non-empty always-true predicate survives composition
  * and inverts correctly via applyNegate.
  */

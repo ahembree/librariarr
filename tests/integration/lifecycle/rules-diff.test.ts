@@ -37,7 +37,7 @@ const mockGetMatchedCriteriaForItems = vi.hoisted(() => vi.fn().mockReturnValue(
 const mockGetActualValuesForAllRules = vi.hoisted(() => vi.fn().mockReturnValue(new Map()));
 
 vi.mock("@/lib/rules/lifecycle-engine", () => ({
-  evaluateRules: mockEvaluateRules,
+  evaluateLifecycleRules: mockEvaluateRules,
   evaluateSeriesScope: mockEvaluateSeriesScope,
   evaluateMusicScope: mockEvaluateMusicScope,
   hasArrRules: mockHasArrRules,
