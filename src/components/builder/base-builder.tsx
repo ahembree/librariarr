@@ -192,9 +192,17 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
   const enumerable = fieldDef?.enumerable ?? false;
   const knownVals = fieldDef?.knownValues;
   const distinctVals = distinctValues?.[rule.field];
+  // Filter empty/whitespace-only values: Radix `<Select.Item />` rejects an
+  // empty-string value (it's reserved for the placeholder/cleared state),
+  // and an empty option is never a meaningful selection in the rule builder.
+  // Distinct-values endpoints can return `""` for nullable text columns that
+  // store empty strings in the database; this guard prevents a crash when
+  // they do.
   const dropdownValues =
     enumerable || fieldType === "boolean"
-      ? [...new Set([...(knownVals ?? []), ...(distinctVals ?? [])])]
+      ? [...new Set([...(knownVals ?? []), ...(distinctVals ?? [])])].filter(
+          (v) => typeof v === "string" && v.trim().length > 0,
+        )
       : [];
 
   const isNullOp = config.isValuelessOperator?.(rule.operator) ?? false;
