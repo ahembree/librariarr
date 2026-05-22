@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { getMatchedCriteriaForItems } from "@/lib/rules/engine";
-import type { ArrMetadata, ArrDataMap } from "@/lib/rules/engine";
+import { getMatchedCriteriaForItems } from "@/lib/rules/lifecycle-engine";
+import type { ArrMetadata, ArrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { Rule, RuleGroup } from "@/lib/rules/types";
 
 // ---------------------------------------------------------------------------

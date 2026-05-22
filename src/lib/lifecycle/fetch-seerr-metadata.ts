@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { SeerrClient } from "@/lib/seerr/seerr-client";
-import type { SeerrDataMap } from "@/lib/rules/engine";
+import type { SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 
 export async function fetchSeerrMetadata(
   userId: string,

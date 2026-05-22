@@ -23,7 +23,7 @@ import type { QueryGroup } from "@/lib/query/types";
 
 import { evaluateQueryArrRule } from "@/lib/query/arr-filter";
 import { evaluateQuerySeerrRule } from "@/lib/query/seerr-filter";
-import type { ArrMetadata, SeerrMetadata } from "@/lib/rules/engine";
+import type { ArrMetadata, SeerrMetadata } from "@/lib/rules/lifecycle-engine";
 
 // ---------------------------------------------------------------------------
 // Helpers

@@ -1,4 +1,4 @@
-import type { ArrMetadata, ArrDataMap } from "@/lib/rules/engine";
+import type { ArrMetadata, ArrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { QueryRule, QueryGroup, RuleCondition } from "./types";
 import { ARR_QUERY_FIELDS } from "./types";
 import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";

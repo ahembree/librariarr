@@ -1,4 +1,4 @@
-import type { SeerrMetadata, SeerrDataMap } from "@/lib/rules/engine";
+import type { SeerrMetadata, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { QueryRule, QueryGroup, RuleCondition } from "./types";
 import { SEERR_QUERY_FIELDS } from "./types";
 import { isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";

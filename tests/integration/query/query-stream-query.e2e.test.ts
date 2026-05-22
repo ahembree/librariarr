@@ -28,7 +28,7 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const { executeQuery } = await import("@/lib/query/execute");
+const { executeQuery } = await import("@/lib/query/query-engine");
 
 const STREAM_AUDIO = 2;
 

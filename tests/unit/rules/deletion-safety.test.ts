@@ -22,8 +22,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { hasAnyActiveRules, getMatchedCriteriaForItems, evaluateAllRulesInMemory } from "@/lib/rules/engine";
-import type { ArrMetadata, ArrDataMap, SeerrMetadata, SeerrDataMap } from "@/lib/rules/engine";
+import { hasAnyActiveRules, getMatchedCriteriaForItems, evaluateAllRulesInMemory } from "@/lib/rules/lifecycle-engine";
+import type { ArrMetadata, ArrDataMap, SeerrMetadata, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import {
   isArrField,
   isSeerrField,

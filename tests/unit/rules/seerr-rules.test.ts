@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { hasSeerrRules, getMatchedCriteriaForItems } from "@/lib/rules/engine";
-import type { SeerrMetadata, SeerrDataMap } from "@/lib/rules/engine";
+import { hasSeerrRules, getMatchedCriteriaForItems } from "@/lib/rules/lifecycle-engine";
+import type { SeerrMetadata, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { isSeerrField, isExternalField, SEERR_FIELDS } from "@/lib/rules/types";
 import type { Rule, RuleGroup } from "@/lib/rules/types";
 

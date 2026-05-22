@@ -14,8 +14,8 @@ import { evaluateQueryArrRule } from "./arr-filter";
 import { evaluateQuerySeerrRule } from "./seerr-filter";
 import { fetchArrDataForQuery } from "./fetch-arr-data";
 import { fetchSeerrDataForQuery } from "./fetch-seerr-data";
-import type { ArrDataMap, ArrMetadata, SeerrDataMap, SeerrMetadata } from "@/lib/rules/engine";
-import { lookupSeerrMeta } from "@/lib/rules/engine";
+import type { ArrDataMap, ArrMetadata, SeerrDataMap, SeerrMetadata } from "@/lib/rules/lifecycle-engine";
+import { lookupSeerrMeta } from "@/lib/rules/lifecycle-engine";
 import {
   MB_IN_BYTES,
   DURATION_MS_PER_MIN,

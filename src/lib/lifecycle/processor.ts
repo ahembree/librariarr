@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
-import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/engine";
-import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/engine";
+import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
+import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError } from "@/lib/lifecycle/actions";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";

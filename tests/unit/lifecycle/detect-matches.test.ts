@@ -35,7 +35,7 @@ vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
-vi.mock("@/lib/rules/engine", () => ({
+vi.mock("@/lib/rules/lifecycle-engine", () => ({
   evaluateRules: mockEvaluateRules,
   evaluateSeriesScope: mockEvaluateSeriesScope,
   evaluateMusicScope: mockEvaluateMusicScope,

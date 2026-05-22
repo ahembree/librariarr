@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { hasArrRules, hasStreamRules, hasExternalIdFieldRules, groupSeriesResults, getMatchedCriteriaForItems, hasAnyActiveRules, evaluateAllRulesInMemory } from "@/lib/rules/engine";
+import { hasArrRules, hasStreamRules, hasExternalIdFieldRules, groupSeriesResults, getMatchedCriteriaForItems, hasAnyActiveRules, evaluateAllRulesInMemory } from "@/lib/rules/lifecycle-engine";
 import type { Rule, RuleGroup } from "@/lib/rules/types";
 
 describe("hasArrRules", () => {

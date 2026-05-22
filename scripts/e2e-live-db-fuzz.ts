@@ -19,7 +19,7 @@
 import { randomUUID } from "crypto";
 import { writeFileSync } from "fs";
 import { prisma } from "@/lib/db";
-import { evaluateRules, type ArrDataMap, type SeerrDataMap } from "@/lib/rules/engine";
+import { evaluateRules, type ArrDataMap, type SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { CONDITION_FIELDS, CONDITION_OPERATORS } from "@/lib/conditions";
 import { isNonNullableField, isOperatorApplicable } from "@/lib/conditions/helpers";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";

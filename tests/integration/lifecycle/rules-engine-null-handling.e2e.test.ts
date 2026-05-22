@@ -28,7 +28,7 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const { evaluateRules } = await import("@/lib/rules/engine");
+const { evaluateRules } = await import("@/lib/rules/lifecycle-engine");
 
 const FULL_COUNT = 20;
 const NULL_COUNT = 20;
