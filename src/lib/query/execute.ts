@@ -26,8 +26,8 @@ import {
 } from "@/lib/conditions";
 import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
 import {
-  UNSATISFIABLE_WHERE,
   isUnconfiguredContainsRule,
+  validateRulePreamble,
   FIELD_HANDLERS,
   textGenericHandler,
 } from "@/lib/conditions/where-builder";
@@ -40,19 +40,10 @@ import { buildStreamQueryClause } from "@/lib/conditions/stream-query-where";
 function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
   const { field, operator, value, negate } = rule;
 
-  // Safety: unconfigured contains/notContains must never match anything.
-  // Returned directly so applyNegate cannot flip it to "match everything".
-  if (isUnconfiguredContainsRule(operator, value)) {
-    return UNSATISFIABLE_WHERE;
-  }
-  // Safety: unknown operator or operator/field-type mismatch — fail closed.
-  if (!isOperatorApplicable(operator, field)) {
-    return UNSATISFIABLE_WHERE;
-  }
-  // Safety: malformed values (e.g. `playCount > "abc"` → `> NaN`).
-  if (!isValueValidForRule(operator, value, field)) {
-    return UNSATISFIABLE_WHERE;
-  }
+  // Safety preamble: unconfigured rule, inapplicable operator, malformed
+  // value → UNSATISFIABLE_WHERE. Shared with the rule engine.
+  const guarded = validateRulePreamble(field, operator, value);
+  if (guarded) return guarded;
 
   // Skip external (arr/seerr) fields — handled as post-filters
   if (isExternalQueryField(field)) return {};

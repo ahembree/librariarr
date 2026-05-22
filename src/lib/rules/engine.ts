@@ -16,8 +16,8 @@ import {
   wildcardToRegex,
 } from "@/lib/conditions";
 import {
-  UNSATISFIABLE_WHERE,
   isUnconfiguredContainsRule,
+  validateRulePreamble,
   FIELD_HANDLERS,
   textGenericHandler,
 } from "@/lib/conditions/where-builder";
@@ -103,26 +103,10 @@ export function lookupSeerrMeta(
 function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
   const { field, operator, value, negate } = rule;
 
-  // Safety: unconfigured contains/notContains must never match anything.
-  // Returned directly so applyNegate cannot flip it to "match everything".
-  if (isUnconfiguredContainsRule(operator, value)) {
-    return UNSATISFIABLE_WHERE;
-  }
-
-  // Safety: an operator that does not apply to the field (unknown operator,
-  // wrong-type combo like `greaterThan` on a boolean, etc.) would otherwise
-  // fall through every branch and contribute `{}` to the WHERE composition
-  // while Phase 2's `default: result = false` would then be flipped to
-  // true by negate=true, sweeping the library.
-  if (!isOperatorApplicable(operator, field)) {
-    return UNSATISFIABLE_WHERE;
-  }
-  // Safety: malformed values (e.g. `playCount > "abc"` → `> NaN`, never
-  // true for any item but flipped to "match all" by negate). Bypasses
-  // applyNegate by returning directly.
-  if (!isValueValidForRule(operator, value, field)) {
-    return UNSATISFIABLE_WHERE;
-  }
+  // Safety preamble: unconfigured rule, inapplicable operator, malformed
+  // value → UNSATISFIABLE_WHERE. Shared with the query builder.
+  const guarded = validateRulePreamble(field, operator, value);
+  if (guarded) return guarded;
 
   // Skip external fields — they are handled as post-filters
   if (isExternalField(field)) return {};

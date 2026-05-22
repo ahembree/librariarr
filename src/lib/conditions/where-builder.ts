@@ -21,7 +21,7 @@
  */
 import { Prisma } from "@/generated/prisma/client";
 import { isNonNullableField, isNonNullableNonTextField, isNonNullableTextField } from "./field-metadata";
-import { isEnumerableField } from "./helpers";
+import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "./helpers";
 import { MB_IN_BYTES, DURATION_MS_PER_MIN, RESOLUTION_DB_VALUES } from "./constants";
 
 export function applyNegate(clause: Prisma.MediaItemWhereInput, negate?: boolean): Prisma.MediaItemWhereInput {
@@ -105,6 +105,29 @@ export const MATCH_ALL_WHERE: Prisma.MediaItemWhereInput = {
  *   non-empty field. `*` is intentional (matches everything) and is NOT
  *   treated as unconfigured.
  */
+/**
+ * Run the rule-dispatcher safety guards in the canonical order:
+ *
+ *   1. Unconfigured contains / notContains / wildcard → match-nothing.
+ *   2. Operator does not apply to the field's type → match-nothing.
+ *   3. Malformed value (NaN for numerics, unparseable date, etc.) → match-nothing.
+ *
+ * Returns `UNSATISFIABLE_WHERE` for any guard hit; returns `null` when the
+ * rule passes all guards and the dispatcher should continue to field-specific
+ * routing. Each guard returns a non-`{}` clause directly so the result
+ * survives composition without `applyNegate` flipping it to "match everything".
+ */
+export function validateRulePreamble(
+  field: string,
+  operator: string,
+  value: string | number,
+): Prisma.MediaItemWhereInput | null {
+  if (isUnconfiguredContainsRule(operator, value)) return UNSATISFIABLE_WHERE;
+  if (!isOperatorApplicable(operator, field)) return UNSATISFIABLE_WHERE;
+  if (!isValueValidForRule(operator, value, field)) return UNSATISFIABLE_WHERE;
+  return null;
+}
+
 export function isUnconfiguredContainsRule(operator: string, value: string | number): boolean {
   if (operator === "contains" || operator === "notContains") {
     return String(value).split("|").map((s) => s.trim()).filter(Boolean).length === 0;
