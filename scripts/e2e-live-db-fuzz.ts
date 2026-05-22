@@ -95,8 +95,9 @@ async function snapshot() {
  * positives (e.g. `equals ""` on text, `matchesWildcard "*"`) are filtered out
  * because they're legitimate operations the engine should respect.
  *
- * Engine guards (see src/lib/rules/engine.ts:197 isUnconfiguredContainsRule
- * and src/lib/conditions/helpers.ts isValueValidForRule):
+ * Engine guards (see `isUnconfiguredContainsRule` in
+ * src/lib/conditions/where-builder.ts and `isValueValidForRule` in
+ * src/lib/conditions/helpers.ts):
  *   - contains/notContains with empty/whitespace/"|" → UNSATISFIABLE
  *   - matchesWildcard/notMatchesWildcard with empty/whitespace pattern → UNSATISFIABLE
  *     (but `*` is INTENTIONAL match-all and not unconfigured)
