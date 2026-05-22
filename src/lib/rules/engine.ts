@@ -3,7 +3,7 @@ import type { Rule, RuleGroup, RuleCondition, StreamQueryField } from "./types";
 import {
   isArrField, isSeerrField, isExternalField, isStreamField, isSeriesAggregateField,
   isCrossSystemField,
-  isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
+  isStreamQueryField, isStreamQueryGroup,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
   RULE_FIELDS, STREAM_QUERY_FIELDS, type RuleField,
 } from "./types";
@@ -22,7 +22,7 @@ import {
   textGenericHandler,
 } from "@/lib/conditions/where-builder";
 import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
-import { buildStreamQueryClause } from "@/lib/conditions/stream-query-where";
+import { buildStreamQueryClause, streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
 import { Prisma } from "@/generated/prisma/client";
 
 const STREAM_COUNT_FIELDS = new Set(["audioStreamCount", "subtitleStreamCount"]);
@@ -161,28 +161,6 @@ export function hasAnyActiveRules(rules: Rule[] | RuleGroup[]): boolean {
   return (rules as Rule[]).some((r) => r.enabled !== false);
 }
 
-/**
- * Check if a stream query group has any computed or wildcard rules
- * that require in-memory evaluation.
- */
-function streamQueryNeedsInMemory(group: RuleGroup): boolean {
-  if (!group.streamQuery) return false;
-  // `all` quantifier requires Phase 2 re-evaluation: Phase 1's NOT-of-relation
-  // clause cannot precisely express "every stream of this type matches" when
-  // the column is nullable. PostgreSQL's `NOT (col = X)` is UNKNOWN for NULL
-  // columns, so a NULL-column stream is not counted as "failing" the match,
-  // and the relation-level `none-failing` clause vacuously over-matches.
-  // Phase 1 still emits a superset clause via buildStreamQueryClause; Phase 2
-  // narrows it to the precise `matchingStreams.every(streamMatches)` semantics.
-  if ((group.streamQuery.quantifier ?? "any") === "all") return true;
-  return group.rules.some((r) =>
-    r.enabled !== false && (
-      isStreamQueryComputedField(r.field) ||
-      r.operator === "matchesWildcard" ||
-      r.operator === "notMatchesWildcard"
-    ),
-  );
-}
 
 /**
  * Recursively evaluate a single RuleGroup into a Prisma where clause.

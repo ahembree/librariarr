@@ -34,6 +34,27 @@ import {
   type StreamQueryField,
 } from "./stream-query";
 
+/**
+ * Whether a stream-query group needs Phase 2 in-memory re-evaluation.
+ * Returns true when the group either:
+ *   - uses the `all` quantifier (Phase 1 emits a superset clause — see
+ *     `buildStreamQueryClause` for the NULL-column reasoning), or
+ *   - contains a computed stream field (sqAudioProfile, sqDynamicRange,
+ *     etc.), or
+ *   - contains a wildcard operator (matchesWildcard / notMatchesWildcard).
+ */
+export function streamQueryNeedsInMemory(group: ConditionGroup): boolean {
+  if (!group.streamQuery) return false;
+  if ((group.streamQuery.quantifier ?? "any") === "all") return true;
+  return group.rules.some((r) =>
+    r.enabled !== false && (
+      isStreamQueryComputedField(r.field) ||
+      r.operator === "matchesWildcard" ||
+      r.operator === "notMatchesWildcard"
+    ),
+  );
+}
+
 export function buildStreamQueryClause(group: ConditionGroup): Prisma.MediaItemWhereInput | null {
   if (!group.streamQuery) return null;
   const streamTypeInt = STREAM_TYPE_INT_MAP[group.streamQuery.streamType];

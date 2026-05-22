@@ -3,7 +3,7 @@ import { Prisma } from "@/generated/prisma/client";
 import type { QueryRule, QueryGroup, QueryDefinition, RuleCondition } from "./types";
 import { GENRE_FIELD, LABELS_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules } from "./types";
 import {
-  isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
+  isStreamQueryField, isStreamQueryGroup,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
 } from "@/lib/rules/types";
 import { normalizeResolutionLabel } from "@/lib/resolution";
@@ -32,7 +32,7 @@ import {
   textGenericHandler,
 } from "@/lib/conditions/where-builder";
 import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
-import { buildStreamQueryClause } from "@/lib/conditions/stream-query-where";
+import { buildStreamQueryClause, streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
 
 /**
  * Convert a single query rule to a Prisma WHERE clause.
@@ -72,26 +72,6 @@ function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
   return textGenericHandler(operator, value, field, negate);
 }
 
-
-/** Check if a stream query group needs in-memory evaluation (computed/wildcard rules) */
-function streamQueryNeedsInMemory(group: QueryGroup): boolean {
-  if (!group.streamQuery) return false;
-  // `all` quantifier requires Phase 2 re-evaluation: Phase 1's NOT-of-relation
-  // clause cannot precisely express "every stream of this type matches" when
-  // the column is nullable. PostgreSQL's `NOT (col = X)` is UNKNOWN for NULL
-  // columns, so a NULL-column stream is not counted as "failing" the match,
-  // and the relation-level `none-failing` clause vacuously over-matches.
-  // Phase 1 still emits a superset clause via buildStreamQueryClause; Phase 2
-  // narrows it to the precise `matchingStreams.every(streamMatches)` semantics.
-  if ((group.streamQuery.quantifier ?? "any") === "all") return true;
-  return group.rules.some((r) =>
-    r.enabled !== false && (
-      isStreamQueryComputedField(r.field) ||
-      r.operator === "matchesWildcard" ||
-      r.operator === "notMatchesWildcard"
-    ),
-  );
-}
 
 /** Check if any group tree contains stream query groups needing in-memory eval */
 function hasStreamQueryInMemoryRules(groups: QueryGroup[]): boolean {
