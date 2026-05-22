@@ -48,8 +48,8 @@ export function validateAllRules(groups: LifecycleRuleGroup[]): boolean {
 function createRule(): LifecycleRule {
   return {
     id: generateId(),
-    field: "playCount",
-    operator: "equals",
+    field: "title",
+    operator: "contains",
     value: "",
     condition: "OR" as ConditionLogic,
   };
@@ -85,7 +85,7 @@ export const ruleBuilderConfig: BuilderConfig<LifecycleRule, LifecycleRuleGroup>
     const def = getConditionField(field);
     if (!def) return null;
     if (def.requiresArr && ctx.arrConnected === false)
-      return "Select an Arr server above to use Arr criteria";
+      return "Configure an Arr integration in Settings to use Arr criteria";
     if (def.requiresSeerr && ctx.seerrConnected === false)
       return "Configure a Seerr instance in Settings to use Seerr criteria";
     if (def.isSeriesAggregate && ctx.libraryType !== "SERIES")
