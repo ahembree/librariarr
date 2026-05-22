@@ -32,7 +32,8 @@ import {
   textGenericHandler,
 } from "@/lib/conditions/where-builder";
 import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
-import { buildStreamQueryClause, streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
+import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
+import { buildGroupConditions } from "@/lib/conditions/group-composition";
 
 /**
  * Convert a single query rule to a Prisma WHERE clause.
@@ -83,69 +84,6 @@ function hasStreamQueryInMemoryRules(groups: QueryGroup[]): boolean {
   return false;
 }
 
-/**
- * Recursively evaluate a QueryGroup into a Prisma WHERE clause.
- * Rules and sub-groups are combined using their individual `condition` fields.
- */
-function evaluateQueryGroup(group: QueryGroup): Prisma.MediaItemWhereInput | null {
-  if (group.enabled === false) return null;
-
-  // Stream query groups: build stream-level clause
-  if (isStreamQueryGroup(group)) {
-    return buildStreamQueryClause(group);
-  }
-
-  const items: Array<{ condition: RuleCondition; clause: Prisma.MediaItemWhereInput }> = [];
-
-  for (const rule of group.rules) {
-    if (rule.enabled === false) continue;
-    const clause = queryRuleToWhere(rule);
-    if (Object.keys(clause).length > 0) items.push({ condition: rule.condition, clause });
-  }
-
-  for (const sub of group.groups ?? []) {
-    const subClause = evaluateQueryGroup(sub);
-    if (subClause) items.push({ condition: sub.condition, clause: subClause });
-  }
-
-  if (items.length === 0) return null;
-  if (items.length === 1) return items[0].clause;
-
-  let result: Prisma.MediaItemWhereInput = items[0].clause;
-  for (let i = 1; i < items.length; i++) {
-    const { condition, clause } = items[i];
-    if (condition === "OR") {
-      result = { OR: [result, clause] };
-    } else {
-      result = { AND: [result, clause] };
-    }
-  }
-  return result;
-}
-
-function buildQueryConditions(groups: QueryGroup[]): Prisma.MediaItemWhereInput {
-  const groupClauses: Array<{ condition: "AND" | "OR"; where: Prisma.MediaItemWhereInput }> = [];
-
-  for (const group of groups) {
-    const where = evaluateQueryGroup(group);
-    if (!where) continue;
-    groupClauses.push({ condition: group.condition, where });
-  }
-
-  if (groupClauses.length === 0) return {};
-  if (groupClauses.length === 1) return groupClauses[0].where;
-
-  let result: Prisma.MediaItemWhereInput = groupClauses[0].where;
-  for (let i = 1; i < groupClauses.length; i++) {
-    const { condition, where } = groupClauses[i];
-    if (condition === "OR") {
-      result = { OR: [result, where] };
-    } else {
-      result = { AND: [result, where] };
-    }
-  }
-  return result;
-}
 
 /** Collect all stream count rules from the group tree */
 function collectStreamCountRules(groups: QueryGroup[]): QueryRule[] {
@@ -349,7 +287,7 @@ function buildBaseWhere(
   }
 
   if (groups.length > 0) {
-    const conditions = buildQueryConditions(groups);
+    const conditions = buildGroupConditions(groups, queryRuleToWhere);
     if (Object.keys(conditions).length > 0) {
       where.AND = [conditions];
     }
