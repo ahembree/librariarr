@@ -22,7 +22,7 @@ import { hasArrRules, hasSeerrRules } from "@/lib/conditions";
 import { MediaTable } from "@/components/media-table";
 import { MediaDetailSidePanel, type MatchedCriterion } from "@/components/media-detail-side-panel";
 import { usePanelResize } from "@/hooks/use-panel-resize";
-import type { Rule, RuleGroup } from "@/lib/rules/types";
+import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { Label } from "@/components/ui/label";
 import {
@@ -137,7 +137,7 @@ interface SavedRuleSet {
   id: string;
   name: string;
   type: string;
-  rules: Rule[] | RuleGroup[];
+  rules: LifecycleRule[] | LifecycleRuleGroup[];
   enabled: boolean;
   seriesScope?: boolean;
   actionEnabled: boolean;
@@ -170,16 +170,16 @@ function isQualityProfileChangeAction(actionType: string): boolean {
   return actionType.startsWith("CHANGE_QUALITY_PROFILE_");
 }
 
-function legacyToGroups(rules: Rule[] | RuleGroup[]): RuleGroup[] {
+function legacyToGroups(rules: LifecycleRule[] | LifecycleRuleGroup[]): LifecycleRuleGroup[] {
   if (rules.length === 0) return [];
   if ("rules" in rules[0]) {
-    return (rules as RuleGroup[]).map((g) => ({
+    return (rules as LifecycleRuleGroup[]).map((g) => ({
       ...g,
       groups: g.groups ?? [],
     }));
   }
-  const flat = rules as Rule[];
-  const groups: RuleGroup[] = [
+  const flat = rules as LifecycleRule[];
+  const groups: LifecycleRuleGroup[] = [
     { id: generateId(), condition: "AND", rules: [], groups: [] },
   ];
   for (let i = 0; i < flat.length; i++) {
@@ -191,10 +191,10 @@ function legacyToGroups(rules: Rule[] | RuleGroup[]): RuleGroup[] {
   return groups;
 }
 
-function countRules(rules: Rule[] | RuleGroup[]): number {
+function countRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): number {
   if (rules.length === 0) return 0;
   if ("rules" in rules[0]) {
-    return countAllRules(rules as RuleGroup[]);
+    return countAllRules(rules as LifecycleRuleGroup[]);
   }
   return rules.length;
 }
@@ -209,7 +209,7 @@ interface RuleSetExport {
   version: 1;
   type: string;
   name: string;
-  rules: RuleGroup[];
+  rules: LifecycleRuleGroup[];
   seriesScope?: boolean;
   enabled: boolean;
   actionEnabled: boolean;
@@ -561,7 +561,7 @@ export function LifecycleRulePage({
   const [importJson, setImportJson] = useState("");
   const [exportJson, setExportJson] = useState("");
   const [copied, setCopied] = useState(false);
-  const [groups, setGroups] = useState<RuleGroup[]>([]);
+  const [groups, setGroups] = useState<LifecycleRuleGroup[]>([]);
   const [preview, setPreview] = useState<PreviewItem[]>([]);
   const selectedItem = useMemo(
     () => (selectedItemId ? preview.find((p) => p.id === selectedItemId) ?? null : null),
@@ -1610,7 +1610,7 @@ export function LifecycleRulePage({
           <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">{pageTitle}</h1>
           <Button variant="outline" onClick={newRuleSet}>
             <FileText className="mr-2 h-4 w-4" />
-            New Rule Set
+            New LifecycleRule Set
           </Button>
         </div>
       )}
@@ -1618,18 +1618,18 @@ export function LifecycleRulePage({
         <div className="mb-6 flex justify-end">
           <Button variant="outline" onClick={newRuleSet}>
             <FileText className="mr-2 h-4 w-4" />
-            New Rule Set
+            New LifecycleRule Set
           </Button>
         </div>
       )}
 
-      {/* Saved Rule Sets */}
+      {/* Saved LifecycleRule Sets */}
       {savedRuleSets.length > 0 && (
         <Card className="mb-6">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <FileText className="h-4 w-4" />
-              Saved Rule Sets
+              Saved LifecycleRule Sets
             </CardTitle>
           </CardHeader>
           <CardContent>

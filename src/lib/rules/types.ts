@@ -49,9 +49,9 @@ export {
 // forward (matches `QueryRule.field: string` and the runtime reality).
 export type RuleField = string;
 export type RuleOperator = ConditionOperator;
-export type RuleCondition = ConditionLogic;
-export type Rule = Condition;
-export type RuleGroup = ConditionGroup;
+export type LifecycleRuleCondition = ConditionLogic;
+export type LifecycleRule = Condition;
+export type LifecycleRuleGroup = ConditionGroup;
 export type RuleFieldSection = ConditionSection;
 export type RuleFieldDef = ConditionField;
 

@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
-import type { RuleGroup } from "@/lib/rules/types";
+import type { LifecycleRuleGroup } from "@/lib/rules/types";
 
 vi.mock("@/lib/db", async () => {
   const { getTestPrisma } = await import("../../setup/test-db");
@@ -87,7 +87,7 @@ afterAll(async () => {
   await disconnectTestDb();
 });
 
-function group(field: string, operator: string, value: string, negate = false): RuleGroup[] {
+function group(field: string, operator: string, value: string, negate = false): LifecycleRuleGroup[] {
   return [{
     id: "g", condition: "AND",
     rules: [{ id: "r", field, operator, value, condition: "AND", negate }],
@@ -95,7 +95,7 @@ function group(field: string, operator: string, value: string, negate = false): 
   }];
 }
 
-async function count(rules: RuleGroup[]) {
+async function count(rules: LifecycleRuleGroup[]) {
   return (await evaluateLifecycleRules(rules, "MOVIE", [serverId])).length;
 }
 

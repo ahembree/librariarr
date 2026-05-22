@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import type { Rule, RuleGroup, RuleCondition, StreamQueryField } from "./types";
+import type { LifecycleRule, LifecycleRuleGroup, LifecycleRuleCondition, StreamQueryField } from "./types";
 import {
   isArrField, isSeerrField, isExternalField, isStreamField, isSeriesAggregateField,
   isCrossSystemField,
@@ -101,7 +101,7 @@ export function lookupSeerrMeta(
   return undefined;
 }
 
-function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
+function ruleToWhereClause(rule: LifecycleRule): Prisma.MediaItemWhereInput {
   const { field, operator, value, negate } = rule;
 
   // Safety preamble: unconfigured rule, inapplicable operator, malformed
@@ -138,7 +138,7 @@ function ruleToWhereClause(rule: Rule): Prisma.MediaItemWhereInput {
   return textGenericHandler(operator, value, field, negate);
 }
 
-function isRuleGroups(input: Rule[] | RuleGroup[]): input is RuleGroup[] {
+function isRuleGroups(input: LifecycleRule[] | LifecycleRuleGroup[]): input is LifecycleRuleGroup[] {
   return input.length > 0 && "rules" in input[0];
 }
 
@@ -147,19 +147,19 @@ function isRuleGroups(input: Rule[] | RuleGroup[]): input is RuleGroup[] {
  * Returns false if all rules/groups are disabled or empty — lifecycle
  * processing requires at least 1 active rule to avoid matching everything.
  */
-export function hasAnyActiveRules(rules: Rule[] | RuleGroup[]): boolean {
+export function hasAnyActiveRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
-    return (rules as RuleGroup[]).some(
+    return (rules as LifecycleRuleGroup[]).some(
       (g) =>
         g.enabled !== false &&
         (g.rules.some((r) => r.enabled !== false) ||
           (g.groups ?? []).some((sub) =>
-            hasAnyActiveRules([sub] as RuleGroup[])
+            hasAnyActiveRules([sub] as LifecycleRuleGroup[])
           ))
     );
   }
-  return (rules as Rule[]).some((r) => r.enabled !== false);
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false);
 }
 
 
@@ -204,7 +204,7 @@ function combinePreFilter(
  * disabled groups (truly skip), EXTERNAL_RULE for groups that can't be filtered
  * in DB, or a concrete Prisma clause.
  */
-function evaluateGroupPreFilter(group: RuleGroup): PreFilterClause | null {
+function evaluateGroupPreFilter(group: LifecycleRuleGroup): PreFilterClause | null {
   if (group.enabled === false) return null;
 
   // Stream query groups: build DB clause if possible, EXTERNAL_RULE if it has computed/wildcard rules
@@ -217,7 +217,7 @@ function evaluateGroupPreFilter(group: RuleGroup): PreFilterClause | null {
     return dbClause ?? EXTERNAL_RULE;
   }
 
-  const items: Array<{ condition: RuleCondition; clause: PreFilterClause }> = [];
+  const items: Array<{ condition: LifecycleRuleCondition; clause: PreFilterClause }> = [];
 
   for (const rule of group.rules) {
     if (rule.enabled === false) continue;
@@ -244,7 +244,7 @@ function evaluateGroupPreFilter(group: RuleGroup): PreFilterClause | null {
   return result;
 }
 
-function buildGroupConditionsPreFilter(ruleGroups: RuleGroup[]): Prisma.MediaItemWhereInput {
+function buildGroupConditionsPreFilter(ruleGroups: LifecycleRuleGroup[]): Prisma.MediaItemWhereInput {
   const groupClauses: Array<{ condition: "AND" | "OR"; clause: PreFilterClause }> = [];
 
   for (const group of ruleGroups) {
@@ -262,7 +262,7 @@ function buildGroupConditionsPreFilter(ruleGroups: RuleGroup[]): Prisma.MediaIte
   return result === EXTERNAL_RULE ? {} : result;
 }
 
-function legacyRulesToConditions(rules: Rule[]): Prisma.MediaItemWhereInput[] {
+function legacyRulesToConditions(rules: LifecycleRule[]): Prisma.MediaItemWhereInput[] {
   const groups: Prisma.MediaItemWhereInput[][] = [[]];
   for (let i = 0; i < rules.length; i++) {
     const clause = ruleToWhereClause(rules[i]);
@@ -282,7 +282,7 @@ function legacyRulesToConditions(rules: Rule[]): Prisma.MediaItemWhereInput[] {
 }
 
 /** Check if any rule in the tree uses arr fields */
-function hasArrRules(rules: Rule[] | RuleGroup[]): boolean {
+function hasArrRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -292,11 +292,11 @@ function hasArrRules(rules: Rule[] | RuleGroup[]): boolean {
     }
     return false;
   }
-  return (rules as Rule[]).some((r) => r.enabled !== false && isArrField(r.field));
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isArrField(r.field));
 }
 
 /** Check if any rule in the tree uses seerr fields */
-function hasSeerrRules(rules: Rule[] | RuleGroup[]): boolean {
+function hasSeerrRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -306,11 +306,11 @@ function hasSeerrRules(rules: Rule[] | RuleGroup[]): boolean {
     }
     return false;
   }
-  return (rules as Rule[]).some((r) => r.enabled !== false && isSeerrField(r.field));
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isSeerrField(r.field));
 }
 
 /** Check if any rule uses wildcard operators on non-external fields */
-function hasWildcardRules(rules: Rule[] | RuleGroup[]): boolean {
+function hasWildcardRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -320,11 +320,11 @@ function hasWildcardRules(rules: Rule[] | RuleGroup[]): boolean {
     }
     return false;
   }
-  return (rules as Rule[]).some((r) => r.enabled !== false && !isExternalField(r.field) && (r.operator === "matchesWildcard" || r.operator === "notMatchesWildcard"));
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && !isExternalField(r.field) && (r.operator === "matchesWildcard" || r.operator === "notMatchesWildcard"));
 }
 
 /** Check if any rule uses stream fields or stream query groups */
-function hasStreamRules(rules: Rule[] | RuleGroup[]): boolean {
+function hasStreamRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -335,11 +335,11 @@ function hasStreamRules(rules: Rule[] | RuleGroup[]): boolean {
     }
     return false;
   }
-  return (rules as Rule[]).some((r) => r.enabled !== false && isStreamField(r.field));
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isStreamField(r.field));
 }
 
 /** Check if any stream query group requires in-memory evaluation (computed/wildcard fields) */
-function hasStreamQueryInMemoryRules(rules: Rule[] | RuleGroup[]): boolean {
+function hasStreamQueryInMemoryRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -353,7 +353,7 @@ function hasStreamQueryInMemoryRules(rules: Rule[] | RuleGroup[]): boolean {
 }
 
 /** Check if any rule uses stream count fields (always require in-memory evaluation) */
-function hasStreamCountRules(rules: Rule[] | RuleGroup[]): boolean {
+function hasStreamCountRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -363,11 +363,11 @@ function hasStreamCountRules(rules: Rule[] | RuleGroup[]): boolean {
     }
     return false;
   }
-  return (rules as Rule[]).some((r) => r.enabled !== false && STREAM_COUNT_FIELDS.has(r.field));
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && STREAM_COUNT_FIELDS.has(r.field));
 }
 
 /** Check if any rule uses cross-system fields (always require in-memory evaluation) */
-function hasCrossSystemFieldRules(rules: Rule[] | RuleGroup[]): boolean {
+function hasCrossSystemFieldRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -377,11 +377,11 @@ function hasCrossSystemFieldRules(rules: Rule[] | RuleGroup[]): boolean {
     }
     return false;
   }
-  return (rules as Rule[]).some((r) => r.enabled !== false && isCrossSystemField(r.field));
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isCrossSystemField(r.field));
 }
 
 /** Check if any rule uses hasExternalId field */
-function hasExternalIdFieldRules(rules: Rule[] | RuleGroup[]): boolean {
+function hasExternalIdFieldRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -391,11 +391,11 @@ function hasExternalIdFieldRules(rules: Rule[] | RuleGroup[]): boolean {
     }
     return false;
   }
-  return (rules as Rule[]).some((r) => r.enabled !== false && r.field === "hasExternalId");
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "hasExternalId");
 }
 
 /** Evaluate a single arr rule against arr metadata for an item */
-function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
+function evaluateArrRule(rule: LifecycleRule, meta: ArrMetadata | undefined): boolean {
   // Safety: unconfigured contains/notContains matches nothing. Negate is
   // intentionally NOT applied — `!false` would otherwise sweep the library.
   // Checked before any field-specific branch so even nonsensical pairings
@@ -768,7 +768,7 @@ function evaluateArrRule(rule: Rule, meta: ArrMetadata | undefined): boolean {
 }
 
 /** Evaluate a single seerr rule against seerr metadata for an item */
-function evaluateSeerrRule(rule: Rule, meta: SeerrMetadata | undefined): boolean {
+function evaluateSeerrRule(rule: LifecycleRule, meta: SeerrMetadata | undefined): boolean {
   // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
   if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
   // Safety: unknown operator or wrong-type combo → match nothing (bypass negate).
@@ -931,7 +931,7 @@ export interface MatchedCriterion {
 
 /** Evaluate a single rule against an item's in-memory data (mirrors DB logic) */
 function evaluateRuleAgainstItem(
-  rule: Rule,
+  rule: LifecycleRule,
   item: Record<string, unknown>,
   arrMeta?: ArrMetadata,
   seerrMeta?: SeerrMetadata
@@ -1376,10 +1376,10 @@ function evaluateRuleAgainstItem(
   return negate ? !textResult : textResult;
 }
 
-function collectAllRulesWithGroup(rules: Rule[] | RuleGroup[]): Array<{ rule: Rule; groupName?: string }> {
-  const all: Array<{ rule: Rule; groupName?: string }> = [];
+function collectAllRulesWithGroup(rules: LifecycleRule[] | LifecycleRuleGroup[]): Array<{ rule: LifecycleRule; groupName?: string }> {
+  const all: Array<{ rule: LifecycleRule; groupName?: string }> = [];
   if (isRuleGroups(rules)) {
-    for (const group of rules as RuleGroup[]) {
+    for (const group of rules as LifecycleRuleGroup[]) {
       if (group.enabled === false) continue;
       // Skip stream query groups — their rules are evaluated at group level
       if (isStreamQueryGroup(group)) continue;
@@ -1392,7 +1392,7 @@ function collectAllRulesWithGroup(rules: Rule[] | RuleGroup[]): Array<{ rule: Ru
       }
     }
   } else {
-    for (const rule of rules as Rule[]) {
+    for (const rule of rules as LifecycleRule[]) {
       if (rule.enabled === false) continue;
       all.push({ rule });
     }
@@ -1401,10 +1401,10 @@ function collectAllRulesWithGroup(rules: Rule[] | RuleGroup[]): Array<{ rule: Ru
 }
 
 /** Collect stream query groups from the rule tree */
-function collectStreamQueryGroups(rules: Rule[] | RuleGroup[]): RuleGroup[] {
-  const groups: RuleGroup[] = [];
+function collectStreamQueryGroups(rules: LifecycleRule[] | LifecycleRuleGroup[]): LifecycleRuleGroup[] {
+  const groups: LifecycleRuleGroup[] = [];
   if (!isRuleGroups(rules)) return groups;
-  for (const group of rules as RuleGroup[]) {
+  for (const group of rules as LifecycleRuleGroup[]) {
     if (group.enabled === false) continue;
     if (isStreamQueryGroup(group)) {
       groups.push(group);
@@ -1595,7 +1595,7 @@ function getActualValueForField(
 
 export function getMatchedCriteriaForItems(
   items: Array<Record<string, unknown>>,
-  rules: Rule[] | RuleGroup[],
+  rules: LifecycleRule[] | LifecycleRuleGroup[],
   type: "MOVIE" | "SERIES" | "MUSIC",
   arrData?: ArrDataMap,
   seerrData?: SeerrDataMap
@@ -1667,7 +1667,7 @@ export function getMatchedCriteriaForItems(
  */
 export function getActualValuesForAllRules(
   items: Array<Record<string, unknown>>,
-  rules: Rule[] | RuleGroup[],
+  rules: LifecycleRule[] | LifecycleRuleGroup[],
   type: "MOVIE" | "SERIES" | "MUSIC",
   arrData?: ArrDataMap,
   seerrData?: SeerrDataMap
@@ -1699,7 +1699,7 @@ export function getActualValuesForAllRules(
  * Returns true if the rule matches this specific stream.
  */
 function evaluateStreamQueryRuleAgainstStream(
-  rule: Rule,
+  rule: LifecycleRule,
   stream: Record<string, unknown>,
 ): boolean {
   // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
@@ -1819,7 +1819,7 @@ function evaluateStreamQueryRuleAgainstStream(
  * matching type satisfies ALL active rules.
  */
 function evaluateStreamQueryGroupInMemory(
-  group: RuleGroup,
+  group: LifecycleRuleGroup,
   item: Record<string, unknown>,
 ): boolean {
   if (!group.streamQuery) return false;
@@ -1857,7 +1857,7 @@ function evaluateStreamQueryGroupInMemory(
 }
 
 function evaluateRuleGroupInMemory(
-  group: RuleGroup,
+  group: LifecycleRuleGroup,
   item: Record<string, unknown>,
   arrMeta?: ArrMetadata,
   seerrMeta?: SeerrMetadata
@@ -1869,7 +1869,7 @@ function evaluateRuleGroupInMemory(
     return evaluateStreamQueryGroupInMemory(group, item);
   }
 
-  const items: Array<{ condition: RuleCondition; result: boolean }> = [];
+  const items: Array<{ condition: LifecycleRuleCondition; result: boolean }> = [];
 
   for (const rule of group.rules) {
     if (rule.enabled === false) continue;
@@ -1899,7 +1899,7 @@ function evaluateRuleGroupInMemory(
 
 /** Evaluate an entire rule set (grouped or legacy) in-memory against a single item */
 export function evaluateAllRulesInMemory(
-  rules: Rule[] | RuleGroup[],
+  rules: LifecycleRule[] | LifecycleRuleGroup[],
   item: Record<string, unknown>,
   arrMeta?: ArrMetadata,
   seerrMeta?: SeerrMetadata
@@ -1907,8 +1907,8 @@ export function evaluateAllRulesInMemory(
   if (rules.length === 0) return false;
 
   if (isRuleGroups(rules)) {
-    const groups = rules as RuleGroup[];
-    const results: Array<{ condition: RuleCondition; result: boolean }> = [];
+    const groups = rules as LifecycleRuleGroup[];
+    const results: Array<{ condition: LifecycleRuleCondition; result: boolean }> = [];
 
     for (let i = 0; i < groups.length; i++) {
       const groupResult = evaluateRuleGroupInMemory(groups[i], item, arrMeta, seerrMeta);
@@ -1932,9 +1932,9 @@ export function evaluateAllRulesInMemory(
   }
 
   // Legacy flat rules: grouped by AND boundaries, within-group OR
-  const flat = (rules as Rule[]).filter((r) => r.enabled !== false);
+  const flat = (rules as LifecycleRule[]).filter((r) => r.enabled !== false);
   if (flat.length === 0) return false;
-  const buckets: Rule[][] = [[]];
+  const buckets: LifecycleRule[][] = [[]];
   for (let i = 0; i < flat.length; i++) {
     buckets[buckets.length - 1].push(flat[i]);
     if (i < flat.length - 1 && flat[i].condition === "AND") {
@@ -1954,7 +1954,7 @@ export { hasArrRules, hasSeerrRules, hasStreamRules, hasExternalIdFieldRules, ha
  * This is the default for SERIES type rule sets.
  */
 export async function evaluateSeriesScope(
-  rules: Rule[] | RuleGroup[],
+  rules: LifecycleRule[] | LifecycleRuleGroup[],
   serverIds: string[],
   arrData?: ArrDataMap,
   seerrData?: SeerrDataMap
@@ -2157,7 +2157,7 @@ export async function evaluateSeriesScope(
  * This is the default for MUSIC type rule sets.
  */
 export async function evaluateMusicScope(
-  rules: Rule[] | RuleGroup[],
+  rules: LifecycleRule[] | LifecycleRuleGroup[],
   serverIds: string[],
   arrData?: ArrDataMap
 ) {
@@ -2288,7 +2288,7 @@ export async function evaluateMusicScope(
 }
 
 export async function evaluateLifecycleRules(
-  rules: Rule[] | RuleGroup[],
+  rules: LifecycleRule[] | LifecycleRuleGroup[],
   type: "MOVIE" | "SERIES" | "MUSIC",
   serverIds: string[],
   arrData?: ArrDataMap,
@@ -2319,7 +2319,7 @@ export async function evaluateLifecycleRules(
   // EXTERNAL_RULE AND X = X (safe). This keeps DB-expressible conditions for
   // performance while guaranteeing the Phase 1 result is a superset of Phase 2.
   if (needsFullReeval && isRuleGroups(rules)) {
-    const combined = buildGroupConditionsPreFilter(rules as unknown as RuleGroup[]);
+    const combined = buildGroupConditionsPreFilter(rules as unknown as LifecycleRuleGroup[]);
     andConditions = Object.keys(combined).length > 0 ? [combined] : [];
   } else if (isRuleGroups(rules)) {
     const combined = buildGroupConditions(rules, ruleToWhereClause);

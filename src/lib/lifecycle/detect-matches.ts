@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
-import type { Rule, RuleGroup } from "@/lib/rules/types";
+import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { logger } from "@/lib/logger";
@@ -52,7 +52,7 @@ export async function detectAndSaveMatches(
   seerrData?: SeerrDataMap,
   fullReEval: boolean = false,
 ): Promise<{ items: Record<string, unknown>[]; count: number; episodeIdMap: Map<string, string[]>; currentItems: Record<string, unknown>[] }> {
-  const rules = ruleSet.rules as unknown as Rule[] | RuleGroup[];
+  const rules = ruleSet.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
 
   // SAFETY: Refuse to evaluate if no rules are active — would match everything
   if (!hasAnyActiveRules(rules)) {
@@ -435,7 +435,7 @@ export async function runDetection(userId: string, ruleSetId?: string, fullReEva
     const serverIds = rs.serverIds.filter((id) => allServerIds.includes(id));
     if (serverIds.length === 0) continue;
 
-    const rules = rs.rules as unknown as Rule[] | RuleGroup[];
+    const rules = rs.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
     if (!hasAnyActiveRules(rules)) continue;
 
     // Resolve Arr metadata

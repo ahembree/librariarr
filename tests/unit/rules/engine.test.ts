@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { hasArrRules, hasStreamRules, hasExternalIdFieldRules, groupSeriesResults, getMatchedCriteriaForItems, hasAnyActiveRules, evaluateAllRulesInMemory } from "@/lib/rules/lifecycle-engine";
-import type { Rule, RuleGroup } from "@/lib/rules/types";
+import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 
 describe("hasArrRules", () => {
   it("returns false for empty rules", () => {
@@ -8,21 +8,21 @@ describe("hasArrRules", () => {
   });
 
   it("returns false for flat rules with no arr fields", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "1", field: "playCount", operator: "greaterThan", value: 5, condition: "AND" },
     ];
     expect(hasArrRules(rules)).toBe(false);
   });
 
   it("returns true for flat rules with arr fields", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "1", field: "arrTag", operator: "contains", value: "test", condition: "AND" },
     ];
     expect(hasArrRules(rules)).toBe(true);
   });
 
   it("returns true for grouped rules with nested arr fields", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -47,7 +47,7 @@ describe("hasArrRules", () => {
   });
 
   it("returns false for grouped rules without arr fields", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -69,7 +69,7 @@ describe("hasStreamRules", () => {
   });
 
   it("returns false for non-stream fields", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "1", field: "playCount", operator: "greaterThan", value: 5, condition: "AND" },
       { id: "2", field: "audioCodec", operator: "equals", value: "aac", condition: "AND" },
     ];
@@ -77,35 +77,35 @@ describe("hasStreamRules", () => {
   });
 
   it("returns true for audioLanguage field", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "1", field: "audioLanguage", operator: "equals", value: "English", condition: "AND" },
     ];
     expect(hasStreamRules(rules)).toBe(true);
   });
 
   it("returns true for subtitleLanguage field", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "1", field: "subtitleLanguage", operator: "contains", value: "eng", condition: "AND" },
     ];
     expect(hasStreamRules(rules)).toBe(true);
   });
 
   it("returns true for streamAudioCodec field", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "1", field: "streamAudioCodec", operator: "equals", value: "aac", condition: "AND" },
     ];
     expect(hasStreamRules(rules)).toBe(true);
   });
 
   it("returns true for stream count fields", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "1", field: "audioStreamCount", operator: "greaterThan", value: 1, condition: "AND" },
     ];
     expect(hasStreamRules(rules)).toBe(true);
   });
 
   it("detects stream fields in nested groups", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -132,21 +132,21 @@ describe("hasExternalIdFieldRules", () => {
   });
 
   it("returns false for non-externalId fields", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "1", field: "playCount", operator: "greaterThan", value: 5, condition: "AND" },
     ];
     expect(hasExternalIdFieldRules(rules)).toBe(false);
   });
 
   it("returns true for hasExternalId field", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "1", field: "hasExternalId", operator: "equals", value: "TMDB", condition: "AND" },
     ];
     expect(hasExternalIdFieldRules(rules)).toBe(true);
   });
 
   it("detects hasExternalId in nested groups", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -236,7 +236,7 @@ describe("getMatchedCriteriaForItems", () => {
   });
 
   it("returns matched criteria for flat rules", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "r1", field: "playCount", operator: "greaterThan", value: 5, condition: "AND" },
     ];
     const items = [
@@ -252,7 +252,7 @@ describe("getMatchedCriteriaForItems", () => {
   });
 
   it("does not match rules that fail", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "r1", field: "playCount", operator: "greaterThan", value: 100, condition: "AND" },
     ];
     const items = [
@@ -265,7 +265,7 @@ describe("getMatchedCriteriaForItems", () => {
   });
 
   it("handles grouped rules", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -288,7 +288,7 @@ describe("getMatchedCriteriaForItems", () => {
   });
 
   it("matches genre rules against item genres array", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "r1", field: "genre", operator: "contains", value: "Action", condition: "AND" },
     ];
     const items = [
@@ -303,7 +303,7 @@ describe("getMatchedCriteriaForItems", () => {
   });
 
   it("matches hasExternalId rules", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "r1", field: "hasExternalId", operator: "equals", value: "TMDB", condition: "AND" },
     ];
     const items = [
@@ -318,7 +318,7 @@ describe("getMatchedCriteriaForItems", () => {
   });
 
   it("matches stream language rules", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "r1", field: "audioLanguage", operator: "equals", value: "English", condition: "AND" },
     ];
     const items = [
@@ -333,7 +333,7 @@ describe("getMatchedCriteriaForItems", () => {
   });
 
   it("matches duration rules (minutes to ms)", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "r1", field: "duration", operator: "greaterThan", value: 120, condition: "AND" },
     ];
     const items = [
@@ -349,28 +349,28 @@ describe("getMatchedCriteriaForItems", () => {
 });
 
 describe("hasAnyActiveRules", () => {
-  // ---- Flat rules (Rule[]) ----
+  // ---- Flat rules (LifecycleRule[]) ----
 
   it("returns false for empty rules array", () => {
     expect(hasAnyActiveRules([])).toBe(false);
   });
 
   it("returns true for flat rule with no enabled flag (defaults to enabled)", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "1", field: "playCount", operator: "greaterThan", value: 5, condition: "AND" },
     ];
     expect(hasAnyActiveRules(rules)).toBe(true);
   });
 
   it("returns true for flat rule with enabled: true", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "1", field: "playCount", operator: "greaterThan", value: 5, condition: "AND", enabled: true },
     ];
     expect(hasAnyActiveRules(rules)).toBe(true);
   });
 
   it("returns false when all flat rules are disabled", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "1", field: "playCount", operator: "greaterThan", value: 5, condition: "AND", enabled: false },
       { id: "2", field: "year", operator: "lessThan", value: 2020, condition: "AND", enabled: false },
     ];
@@ -378,17 +378,17 @@ describe("hasAnyActiveRules", () => {
   });
 
   it("returns true when at least one flat rule is enabled among disabled ones", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "1", field: "playCount", operator: "greaterThan", value: 5, condition: "AND", enabled: false },
       { id: "2", field: "year", operator: "lessThan", value: 2020, condition: "AND", enabled: true },
     ];
     expect(hasAnyActiveRules(rules)).toBe(true);
   });
 
-  // ---- Rule groups (RuleGroup[]) ----
+  // ---- LifecycleRule groups (LifecycleRuleGroup[]) ----
 
   it("returns false when all groups are disabled", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -404,7 +404,7 @@ describe("hasAnyActiveRules", () => {
   });
 
   it("returns false when group is enabled but all its rules are disabled", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -419,7 +419,7 @@ describe("hasAnyActiveRules", () => {
   });
 
   it("returns true when group has at least one enabled rule", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -435,7 +435,7 @@ describe("hasAnyActiveRules", () => {
   });
 
   it("returns true when enabled rule is in a nested sub-group", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -458,7 +458,7 @@ describe("hasAnyActiveRules", () => {
   });
 
   it("returns false when deeply nested sub-groups are all disabled", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -482,7 +482,7 @@ describe("hasAnyActiveRules", () => {
   });
 
   it("returns true with mixed enabled/disabled groups", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -512,7 +512,7 @@ describe("evaluateAllRulesInMemory — safety defaults", () => {
   });
 
   it("returns false when all flat rules are disabled", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "1", field: "playCount", operator: "greaterThan", value: 0, condition: "AND", enabled: false },
       { id: "2", field: "title", operator: "contains", value: "Test", condition: "AND", enabled: false },
     ];
@@ -520,7 +520,7 @@ describe("evaluateAllRulesInMemory — safety defaults", () => {
   });
 
   it("returns false when all groups are disabled", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -535,7 +535,7 @@ describe("evaluateAllRulesInMemory — safety defaults", () => {
   });
 
   it("returns false when all rules within enabled groups are disabled", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -549,7 +549,7 @@ describe("evaluateAllRulesInMemory — safety defaults", () => {
   });
 
   it("skips disabled groups without affecting active groups", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -575,7 +575,7 @@ describe("evaluateAllRulesInMemory — safety defaults", () => {
   });
 
   it("skips empty sub-groups without affecting active sibling rules", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -644,7 +644,7 @@ describe("evaluateAllRulesInMemory — invalid operators default to false", () =
   };
 
   it("returns false for an Arr field with an invalid operator", () => {
-    const groups: RuleGroup[] = [{
+    const groups: LifecycleRuleGroup[] = [{
       id: "g1", condition: "AND",
       rules: [{ id: "1", field: "arrTag", operator: "INVALID_OP" as never, value: "test", condition: "AND" }],
       groups: [],
@@ -653,7 +653,7 @@ describe("evaluateAllRulesInMemory — invalid operators default to false", () =
   });
 
   it("returns false for arrMonitored with an unsupported operator", () => {
-    const groups: RuleGroup[] = [{
+    const groups: LifecycleRuleGroup[] = [{
       id: "g1", condition: "AND",
       rules: [{ id: "1", field: "arrMonitored", operator: "contains" as never, value: "true", condition: "AND" }],
       groups: [],
@@ -662,7 +662,7 @@ describe("evaluateAllRulesInMemory — invalid operators default to false", () =
   });
 
   it("returns false for an unknown Arr field", () => {
-    const groups: RuleGroup[] = [{
+    const groups: LifecycleRuleGroup[] = [{
       id: "g1", condition: "AND",
       rules: [{ id: "1", field: "arrNonExistentField" as never, operator: "equals", value: "x", condition: "AND" }],
       groups: [],
@@ -671,7 +671,7 @@ describe("evaluateAllRulesInMemory — invalid operators default to false", () =
   });
 
   it("returns false for a Seerr field with an invalid operator", () => {
-    const groups: RuleGroup[] = [{
+    const groups: LifecycleRuleGroup[] = [{
       id: "g1", condition: "AND",
       rules: [{ id: "1", field: "seerrRequested", operator: "INVALID" as never, value: "true", condition: "AND" }],
       groups: [],
@@ -680,7 +680,7 @@ describe("evaluateAllRulesInMemory — invalid operators default to false", () =
   });
 
   it("returns false for an unknown Seerr field", () => {
-    const groups: RuleGroup[] = [{
+    const groups: LifecycleRuleGroup[] = [{
       id: "g1", condition: "AND",
       rules: [{ id: "1", field: "seerrFakeField" as never, operator: "equals", value: "x", condition: "AND" }],
       groups: [],
@@ -689,7 +689,7 @@ describe("evaluateAllRulesInMemory — invalid operators default to false", () =
   });
 
   it("does not match all items when only Arr rules have invalid operators", () => {
-    const groups: RuleGroup[] = [{
+    const groups: LifecycleRuleGroup[] = [{
       id: "g1", condition: "AND",
       rules: [
         { id: "1", field: "arrTag", operator: "INVALID" as never, value: "x", condition: "AND" },

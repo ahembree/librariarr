@@ -1,5 +1,5 @@
 import type { ArrMetadata, ArrDataMap } from "@/lib/rules/lifecycle-engine";
-import type { QueryRule, QueryGroup, RuleCondition } from "./types";
+import type { QueryRule, QueryGroup, LifecycleRuleCondition } from "./types";
 import { ARR_QUERY_FIELDS } from "./types";
 import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
 
@@ -424,7 +424,7 @@ function evaluateGroupArrRules(
   meta: ArrMetadata | undefined,
 ): boolean | null {
   if (group.enabled === false) return null;
-  const items: Array<{ condition: RuleCondition; result: boolean }> = [];
+  const items: Array<{ condition: LifecycleRuleCondition; result: boolean }> = [];
 
   for (const rule of group.rules) {
     if (rule.enabled === false) continue;

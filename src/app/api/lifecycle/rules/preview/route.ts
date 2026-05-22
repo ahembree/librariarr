@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
-import type { RuleGroup, Rule } from "@/lib/rules/types";
+import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { validateRequest, rulePreviewSchema } from "@/lib/validation";
@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
   if (error) return error;
 
   const { rules, type, seriesScope, serverIds } = data;
-  const typedRules = rules as unknown as Rule[] | RuleGroup[];
+  const typedRules = rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
 
   // SAFETY: Refuse to evaluate if no rules are active — would match everything
   if (!hasAnyActiveRules(typedRules)) {

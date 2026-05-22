@@ -23,16 +23,16 @@ import {
 } from "./builder/tree-utils";
 
 // Backward-compat type aliases for existing callers
-export type Rule = Condition;
-export type RuleGroup = ConditionGroup;
+export type LifecycleRule = Condition;
+export type LifecycleRuleGroup = ConditionGroup;
 
 // ─── Re-exports for backward compatibility ──────────────────────────────────
 
-export function countAllRules(groups: RuleGroup[]): number {
+export function countAllRules(groups: LifecycleRuleGroup[]): number {
   return _countAllRules(groups);
 }
 
-export function validateAllRules(groups: RuleGroup[]): boolean {
+export function validateAllRules(groups: LifecycleRuleGroup[]): boolean {
   return _validateAllRules(
     groups,
     (field) =>
@@ -45,7 +45,7 @@ export function validateAllRules(groups: RuleGroup[]): boolean {
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
-function createRule(): Rule {
+function createRule(): LifecycleRule {
   return {
     id: generateId(),
     field: "playCount",
@@ -55,7 +55,7 @@ function createRule(): Rule {
   };
 }
 
-export const ruleBuilderConfig: BuilderConfig<Rule, RuleGroup> = {
+export const ruleBuilderConfig: BuilderConfig<LifecycleRule, LifecycleRuleGroup> = {
   fields: CONDITION_FIELDS,
   operators: CONDITION_OPERATORS,
   sections: CONDITION_SECTIONS,
@@ -147,8 +147,8 @@ export const ruleBuilderConfig: BuilderConfig<Rule, RuleGroup> = {
 // ─── Component ──────────────────────────────────────────────────────────────
 
 interface RuleBuilderProps {
-  groups: RuleGroup[];
-  onChange: (groups: RuleGroup[]) => void;
+  groups: LifecycleRuleGroup[];
+  onChange: (groups: LifecycleRuleGroup[]) => void;
   distinctValues?: Record<string, string[]>;
   arrConnected?: boolean;
   arrUnreachable?: boolean;
@@ -175,7 +175,7 @@ export function RuleBuilder({
     libraryType,
   };
   return (
-    <BaseBuilder<Rule, RuleGroup>
+    <BaseBuilder<LifecycleRule, LifecycleRuleGroup>
       groups={groups}
       onChange={onChange}
       distinctValues={distinctValues}

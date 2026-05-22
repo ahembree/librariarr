@@ -3,7 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, groupSeriesResults } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
-import type { Rule, RuleGroup } from "@/lib/rules/types";
+import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
 
@@ -31,7 +31,7 @@ export async function POST(
     select: { id: true },
   });
 
-  const rules = ruleSet.rules as unknown as Rule[] | RuleGroup[];
+  const rules = ruleSet.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
 
   // SAFETY: Refuse to evaluate if no rules are active — would match everything
   if (!hasAnyActiveRules(rules)) {

@@ -31,13 +31,13 @@ import {
   isCrossSystemField,
   isStreamField,
 } from "@/lib/conditions";
-import type { Rule, RuleGroup } from "@/lib/rules/types";
+import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 
-function makeRule(overrides: Partial<Rule> & Pick<Rule, "field" | "operator" | "value">): Rule {
+function makeRule(overrides: Partial<LifecycleRule> & Pick<LifecycleRule, "field" | "operator" | "value">): LifecycleRule {
   return { id: "r1", condition: "AND", ...overrides };
 }
 
-function makeGroup(rules: Rule[], overrides?: Partial<RuleGroup>): RuleGroup {
+function makeGroup(rules: LifecycleRule[], overrides?: Partial<LifecycleRuleGroup>): LifecycleRuleGroup {
   return { id: "g1", condition: "AND", rules, groups: [], ...overrides };
 }
 
@@ -49,14 +49,14 @@ describe("hasAnyActiveRules — first defense against match-all", () => {
   });
 
   it("returns false when every group is disabled", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       makeGroup([makeRule({ field: "title", operator: "contains", value: "X" })], { enabled: false }),
     ];
     expect(hasAnyActiveRules(groups)).toBe(false);
   });
 
   it("returns false when every rule in every group is disabled", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       makeGroup([
         makeRule({ field: "title", operator: "contains", value: "X", enabled: false }),
       ]),
@@ -65,14 +65,14 @@ describe("hasAnyActiveRules — first defense against match-all", () => {
   });
 
   it("returns false for a group containing only an empty sub-group tree", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       makeGroup([], { groups: [makeGroup([], { enabled: false })] }),
     ];
     expect(hasAnyActiveRules(groups)).toBe(false);
   });
 
   it("returns true when at least one enabled rule exists", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       makeGroup([
         makeRule({ field: "title", operator: "contains", value: "X" }),
       ]),
@@ -218,11 +218,11 @@ describe("Unconfigured contains/notContains must not match the library", () => {
   const arrData: ArrDataMap = { "1": makeArrMeta(), "2": makeArrMeta(), "3": makeArrMeta() };
   const seerrData: SeerrDataMap = { "TMDB:1": makeSeerrMeta(), "TMDB:2": makeSeerrMeta(), "TMDB:3": makeSeerrMeta() };
 
-  function makeRule(o: Partial<Rule> & Pick<Rule, "field" | "operator" | "value">): Rule {
+  function makeRule(o: Partial<LifecycleRule> & Pick<LifecycleRule, "field" | "operator" | "value">): LifecycleRule {
     return { id: "r1", condition: "AND", ...o };
   }
 
-  function expectNoMatches(rules: Rule[] | RuleGroup[]) {
+  function expectNoMatches(rules: LifecycleRule[] | LifecycleRuleGroup[]) {
     const result = getMatchedCriteriaForItems(items, rules, "MOVIE", arrData, seerrData);
     for (const item of items) {
       expect(result.get(item.id) ?? []).toHaveLength(0);
@@ -284,7 +284,7 @@ describe("Unconfigured contains/notContains must not match the library", () => {
   it("unconfigured rule in an AND group makes the whole group match nothing", () => {
     // Use evaluateAllRulesInMemory directly — it applies AND/OR group logic,
     // whereas getMatchedCriteriaForItems reports per-rule matches independently.
-    const groups: RuleGroup[] = [{
+    const groups: LifecycleRuleGroup[] = [{
       id: "g", condition: "AND",
       rules: [
         makeRule({ field: "title", operator: "contains", value: "Movie", condition: "AND" }),
@@ -315,7 +315,7 @@ describe("Unconfigured contains/notContains must not match the library", () => {
         externalIds: [{ source: "TMDB", externalId: "2" }],
       },
     ];
-    const groups: RuleGroup[] = [{
+    const groups: LifecycleRuleGroup[] = [{
       id: "g", condition: "AND",
       streamQuery: { streamType: "audio", quantifier: "none" },
       rules: [makeRule({ field: "sqCodec", operator: "contains", value: "" })],
@@ -329,7 +329,7 @@ describe("Unconfigured contains/notContains must not match the library", () => {
   it("unconfigured rule in an OR group does not lift the whole group to match-all", () => {
     // OR with an unconfigured rule should defer to the other (configured) rule.
     // The configured rule here matches title === "Movie A", so only m1 should match.
-    const groups: RuleGroup[] = [{
+    const groups: LifecycleRuleGroup[] = [{
       id: "g", condition: "AND",
       rules: [
         makeRule({ field: "title", operator: "equals", value: "Movie A", condition: "AND" }),
@@ -353,7 +353,7 @@ describe("Unknown operator, type mismatch, or malformed value must not match the
     { id: "m2", title: "Movie B", playCount: 5, year: 2010, externalIds: [{ source: "TMDB", externalId: "2" }] },
   ];
 
-  function expectNoMatches(rules: RuleGroup[]) {
+  function expectNoMatches(rules: LifecycleRuleGroup[]) {
     for (const item of items) {
       expect(evaluateAllRulesInMemory(rules, item)).toBe(false);
     }
@@ -468,7 +468,7 @@ describe("Unknown operator, type mismatch, or malformed value must not match the
       };
     }
     const arrData: ArrDataMap = { "1": makeArrMeta(), "2": makeArrMeta() };
-    const groups: RuleGroup[] = [{
+    const groups: LifecycleRuleGroup[] = [{
       id: "g", condition: "AND",
       rules: [{ id: "r", field: "arrTag", operator: "isNull", value: "", negate: true, condition: "AND" }],
       groups: [],
@@ -495,7 +495,7 @@ describe("Unknown operator, type mismatch, or malformed value must not match the
       };
     }
     const seriesItem = { id: "s1", externalIds: [{ source: "TVDB", externalId: "1" }] };
-    const nullEndedRule: RuleGroup[] = [{
+    const nullEndedRule: LifecycleRuleGroup[] = [{
       id: "g", condition: "AND",
       rules: [{ id: "r", field: "arrEnded", operator: "isNull", value: "", condition: "AND" }],
       groups: [],

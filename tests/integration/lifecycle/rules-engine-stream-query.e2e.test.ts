@@ -13,7 +13,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
-import type { RuleGroup } from "@/lib/rules/types";
+import type { LifecycleRuleGroup } from "@/lib/rules/types";
 
 vi.mock("@/lib/db", async () => {
   const { getTestPrisma } = await import("../../setup/test-db");
@@ -79,7 +79,7 @@ afterAll(async () => {
 });
 
 async function streamMatchIds(quantifier: "any" | "none" | "all", rules: Array<{ field: string; operator: string; value: string; negate?: boolean }>): Promise<string[]> {
-  const group: RuleGroup = {
+  const group: LifecycleRuleGroup = {
     id: "g", condition: "AND",
     rules: rules.map((r, i) => ({ id: `r${i}`, field: r.field, operator: r.operator, value: r.value, condition: "AND", negate: r.negate ?? false })),
     groups: [],

@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
-import type { QueryRule, QueryGroup, QueryDefinition, RuleCondition } from "./types";
+import type { QueryRule, QueryGroup, QueryDefinition, LifecycleRuleCondition } from "./types";
 import { GENRE_FIELD, LABELS_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules } from "./types";
 import {
   isStreamQueryField, isStreamQueryGroup,
@@ -1430,7 +1430,7 @@ function evaluateQueryGroupInMemory(
     return evaluateStreamQueryGroupInMemory(group, item);
   }
 
-  const items: Array<{ condition: RuleCondition; result: boolean }> = [];
+  const items: Array<{ condition: LifecycleRuleCondition; result: boolean }> = [];
 
   for (const rule of group.rules) {
     if (rule.enabled === false) continue;
@@ -1465,7 +1465,7 @@ export function evaluateAllQueryRulesInMemory(
   arrMeta: ArrMetadata | undefined,
   seerrMeta: SeerrMetadata | undefined,
 ): boolean {
-  const results: Array<{ condition: RuleCondition; passed: boolean }> = [];
+  const results: Array<{ condition: LifecycleRuleCondition; passed: boolean }> = [];
 
   for (const group of groups) {
     const result = evaluateQueryGroupInMemory(group, item, arrMeta, seerrMeta);

@@ -24,7 +24,7 @@ import { CONDITION_FIELDS, CONDITION_OPERATORS } from "@/lib/conditions";
 import { isNonNullableField, isOperatorApplicable } from "@/lib/conditions/helpers";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
-import type { RuleGroup } from "@/lib/rules/types";
+import type { LifecycleRuleGroup } from "@/lib/rules/types";
 
 const TYPES = ["MOVIE", "SERIES", "MUSIC"] as const;
 type LibType = (typeof TYPES)[number];
@@ -60,7 +60,7 @@ const HAZARD_VARIANTS = [
   { name: "wildcard_question_only", value: "?" },
 ];
 
-function ruleGroup(rules: Array<{ field: string; operator: string; value: string; negate?: boolean; logic?: "AND" | "OR" }>, groupLogic: "AND" | "OR" = "AND"): RuleGroup[] {
+function ruleGroup(rules: Array<{ field: string; operator: string; value: string; negate?: boolean; logic?: "AND" | "OR" }>, groupLogic: "AND" | "OR" = "AND"): LifecycleRuleGroup[] {
   return [
     {
       id: randomUUID(),

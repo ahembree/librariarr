@@ -1,5 +1,5 @@
 import type { SeerrMetadata, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
-import type { QueryRule, QueryGroup, RuleCondition } from "./types";
+import type { QueryRule, QueryGroup, LifecycleRuleCondition } from "./types";
 import { SEERR_QUERY_FIELDS } from "./types";
 import { isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
 
@@ -170,7 +170,7 @@ function evaluateGroupSeerrRules(
   meta: SeerrMetadata | undefined,
 ): boolean | null {
   if (group.enabled === false) return null;
-  const items: Array<{ condition: RuleCondition; result: boolean }> = [];
+  const items: Array<{ condition: LifecycleRuleCondition; result: boolean }> = [];
 
   for (const rule of group.rules) {
     if (rule.enabled === false) continue;

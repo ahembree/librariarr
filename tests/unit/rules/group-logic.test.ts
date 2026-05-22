@@ -1,23 +1,23 @@
 import { describe, it, expect } from "vitest";
 import { getMatchedCriteriaForItems, evaluateAllRulesInMemory } from "@/lib/rules/lifecycle-engine";
 import type { ArrMetadata, SeerrMetadata, ArrDataMap } from "@/lib/rules/lifecycle-engine";
-import type { Rule, RuleGroup } from "@/lib/rules/types";
+import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeRule(overrides: Partial<Rule> & Pick<Rule, "field" | "operator" | "value">): Rule {
+function makeRule(overrides: Partial<LifecycleRule> & Pick<LifecycleRule, "field" | "operator" | "value">): LifecycleRule {
   return { id: "r1", condition: "AND", ...overrides };
 }
 
-function makeGroup(rules: Rule[], overrides?: Partial<RuleGroup>): RuleGroup {
+function makeGroup(rules: LifecycleRule[], overrides?: Partial<LifecycleRuleGroup>): LifecycleRuleGroup {
   return { id: "g1", condition: "AND", rules, groups: [], ...overrides };
 }
 
 function matched(
   items: Array<Record<string, unknown>>,
-  rules: Rule[] | RuleGroup[],
+  rules: LifecycleRule[] | LifecycleRuleGroup[],
   type: "MOVIE" | "SERIES" | "MUSIC" = "MOVIE",
   arrData?: ArrDataMap,
 ) {
@@ -50,7 +50,7 @@ describe("Single group with AND rules", () => {
   ];
 
   it("all AND rules must match for criteria to appear", () => {
-    const rules: RuleGroup[] = [makeGroup([
+    const rules: LifecycleRuleGroup[] = [makeGroup([
       makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5" }),
       makeRule({ id: "r2", field: "year", operator: "greaterThanOrEqual", value: "2020", condition: "AND" }),
     ])];
@@ -73,7 +73,7 @@ describe("Single group with OR rules", () => {
   ];
 
   it("any OR rule match produces criteria", () => {
-    const rules: RuleGroup[] = [makeGroup([
+    const rules: LifecycleRuleGroup[] = [makeGroup([
       makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5" }),
       makeRule({ id: "r2", field: "year", operator: "equals", value: "2020", condition: "OR" }),
     ])];
@@ -97,7 +97,7 @@ describe("Two groups connected by AND", () => {
   ];
 
   it("both groups must match", () => {
-    const rules: RuleGroup[] = [
+    const rules: LifecycleRuleGroup[] = [
       makeGroup(
         [makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5" })],
         { id: "g1", condition: "AND" },
@@ -125,7 +125,7 @@ describe("Two groups connected by OR", () => {
   ];
 
   it("either group matching produces criteria", () => {
-    const rules: RuleGroup[] = [
+    const rules: LifecycleRuleGroup[] = [
       makeGroup(
         [makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5" })],
         { id: "g1", condition: "AND" },
@@ -155,7 +155,7 @@ describe("Nested groups", () => {
       { id: "play_only", playCount: 10, title: "Other", year: 2015 },
     ];
     // Group: playCount > 5 AND (sub-group: title contains "Test" OR year = 2020)
-    const rules: RuleGroup[] = [{
+    const rules: LifecycleRuleGroup[] = [{
       id: "g1",
       condition: "AND",
       rules: [
@@ -184,7 +184,7 @@ describe("Nested groups", () => {
     const items = [
       { id: "deep", playCount: 10, title: "Deep Movie", year: 2020 },
     ];
-    const rules: RuleGroup[] = [{
+    const rules: LifecycleRuleGroup[] = [{
       id: "g1",
       condition: "AND",
       rules: [makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5" })],
@@ -212,7 +212,7 @@ describe("Nested groups", () => {
 describe("Disabled rules", () => {
   it("disabled rule is skipped — not included in matched criteria", () => {
     const items = [{ id: "1", playCount: 10, year: 2020 }];
-    const rules: RuleGroup[] = [makeGroup([
+    const rules: LifecycleRuleGroup[] = [makeGroup([
       makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5" }),
       makeRule({ id: "r2", field: "year", operator: "equals", value: "2020", enabled: false }),
     ])];
@@ -223,7 +223,7 @@ describe("Disabled rules", () => {
 
   it("all rules disabled produces empty criteria", () => {
     const items = [{ id: "1", playCount: 10 }];
-    const rules: RuleGroup[] = [makeGroup([
+    const rules: LifecycleRuleGroup[] = [makeGroup([
       makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5", enabled: false }),
     ])];
     const result = matched(items, rules);
@@ -238,7 +238,7 @@ describe("Disabled rules", () => {
 describe("Disabled groups", () => {
   it("disabled group's rules do not appear in matched criteria", () => {
     const items = [{ id: "1", playCount: 10 }];
-    const rules: RuleGroup[] = [
+    const rules: LifecycleRuleGroup[] = [
       makeGroup(
         [makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5" })],
         { id: "g1", condition: "AND", enabled: false },
@@ -250,7 +250,7 @@ describe("Disabled groups", () => {
 
   it("enabled group still works alongside disabled group", () => {
     const items = [{ id: "1", playCount: 10, year: 2020 }];
-    const rules: RuleGroup[] = [
+    const rules: LifecycleRuleGroup[] = [
       makeGroup(
         [makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5" })],
         { id: "g1", condition: "AND", enabled: false },
@@ -273,7 +273,7 @@ describe("Disabled groups", () => {
 describe("Negate on rules", () => {
   it("negate inverts a passing rule to fail", () => {
     const items = [{ id: "1", playCount: 10 }];
-    const rules: RuleGroup[] = [makeGroup([
+    const rules: LifecycleRuleGroup[] = [makeGroup([
       makeRule({ field: "playCount", operator: "greaterThan", value: "5", negate: true }),
     ])];
     const result = matched(items, rules);
@@ -283,7 +283,7 @@ describe("Negate on rules", () => {
 
   it("negate inverts a failing rule to pass", () => {
     const items = [{ id: "1", playCount: 2 }];
-    const rules: RuleGroup[] = [makeGroup([
+    const rules: LifecycleRuleGroup[] = [makeGroup([
       makeRule({ field: "playCount", operator: "greaterThan", value: "5", negate: true }),
     ])];
     const result = matched(items, rules);
@@ -296,7 +296,7 @@ describe("Negate on rules", () => {
       { id: "match", title: "Star Wars" },
       { id: "nomatch", title: "Star Trek" },
     ];
-    const rules: RuleGroup[] = [makeGroup([
+    const rules: LifecycleRuleGroup[] = [makeGroup([
       makeRule({ field: "title", operator: "notEquals", value: "Star Wars", negate: true }),
     ])];
     const result = matched(items, rules);
@@ -317,7 +317,7 @@ describe("Mixed field types in groups", () => {
       { id: "all", title: "Breaking Bad", playCount: 5, lastPlayedAt: "2024-06-01T00:00:00Z" },
       { id: "partial", title: "Breaking Bad", playCount: 0, lastPlayedAt: "2024-06-01T00:00:00Z" },
     ];
-    const rules: RuleGroup[] = [makeGroup([
+    const rules: LifecycleRuleGroup[] = [makeGroup([
       makeRule({ id: "r1", field: "title", operator: "contains", value: "Breaking" }),
       makeRule({ id: "r2", field: "playCount", operator: "greaterThanOrEqual", value: "5", condition: "AND" }),
       makeRule({ id: "r3", field: "lastPlayedAt", operator: "after", value: "2024-01-01", condition: "AND" }),
@@ -332,7 +332,7 @@ describe("Mixed field types in groups", () => {
     const extId = "tmdb-100";
     const items = [{ id: "1", playCount: 10, externalIds: [{ source: "TMDB", externalId: extId }] }];
     const arrData: ArrDataMap = { [extId]: makeArrMeta({ monitored: true }) };
-    const rules: RuleGroup[] = [makeGroup([
+    const rules: LifecycleRuleGroup[] = [makeGroup([
       makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5" }),
       makeRule({ id: "r2", field: "arrMonitored", operator: "equals", value: "true", condition: "AND" }),
     ])];
@@ -349,7 +349,7 @@ describe("Mixed field types in groups", () => {
         { streamType: 3, language: "Spanish", codec: "srt" },
       ],
     }];
-    const rules: RuleGroup[] = [makeGroup([
+    const rules: LifecycleRuleGroup[] = [makeGroup([
       makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5" }),
       makeRule({ id: "r2", field: "audioLanguage", operator: "equals", value: "english", condition: "AND" }),
     ])];
@@ -371,13 +371,13 @@ describe("Edge cases", () => {
 
   it("empty groups array: no criteria for any item", () => {
     const items = [{ id: "1", playCount: 10 }];
-    const result = matched(items, [] as RuleGroup[]);
+    const result = matched(items, [] as LifecycleRuleGroup[]);
     expect(result.get("1")).toHaveLength(0);
   });
 
   it("group with no rules but has sub-groups", () => {
     const items = [{ id: "1", playCount: 10 }];
-    const rules: RuleGroup[] = [{
+    const rules: LifecycleRuleGroup[] = [{
       id: "g1",
       condition: "AND",
       rules: [],
@@ -394,7 +394,7 @@ describe("Edge cases", () => {
 
   it("item with missing property defaults to empty string for text", () => {
     const items = [{ id: "1" }]; // no title property
-    const rules: RuleGroup[] = [makeGroup([
+    const rules: LifecycleRuleGroup[] = [makeGroup([
       makeRule({ field: "title", operator: "equals", value: "" }),
     ])];
     const result = matched(items, rules);
@@ -404,7 +404,7 @@ describe("Edge cases", () => {
 
   it("item with missing numeric property defaults to 0", () => {
     const items = [{ id: "1" }]; // no playCount
-    const rules: RuleGroup[] = [makeGroup([
+    const rules: LifecycleRuleGroup[] = [makeGroup([
       makeRule({ field: "playCount", operator: "equals", value: "0" }),
     ])];
     const result = matched(items, rules);
@@ -422,7 +422,7 @@ describe("Legacy flat rules (non-grouped)", () => {
       { id: "both", playCount: 10, year: 2020 },
       { id: "one", playCount: 10, year: 2015 },
     ];
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5", condition: "AND" }),
       makeRule({ id: "r2", field: "year", operator: "equals", value: "2020", condition: "AND" }),
     ];
@@ -437,7 +437,7 @@ describe("Legacy flat rules (non-grouped)", () => {
       { id: "year", playCount: 0, year: 2020 },
       { id: "none", playCount: 0, year: 2015 },
     ];
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5", condition: "OR" }),
       makeRule({ id: "r2", field: "year", operator: "equals", value: "2020", condition: "OR" }),
     ];
@@ -464,7 +464,7 @@ describe("evaluateAllRulesInMemory — mixed standard + external groups", () => 
   it("AND group with arr sub-group AND standard sub-group: both must pass", () => {
     const item = { id: "1", playCount: 10, streams: [] };
     const arrMeta = makeArrMeta({ rating: 8 });
-    const rules: RuleGroup[] = [{
+    const rules: LifecycleRuleGroup[] = [{
       id: "g1", condition: "AND", rules: [], groups: [
         {
           id: "sg1", condition: "AND", groups: [],
@@ -483,7 +483,7 @@ describe("evaluateAllRulesInMemory — mixed standard + external groups", () => 
   it("AND group with arr sub-group AND standard sub-group: standard fails → group fails", () => {
     const item = { id: "1", playCount: 1, streams: [] };
     const arrMeta = makeArrMeta({ rating: 8 });
-    const rules: RuleGroup[] = [{
+    const rules: LifecycleRuleGroup[] = [{
       id: "g1", condition: "AND", rules: [], groups: [
         {
           id: "sg1", condition: "AND", groups: [],
@@ -502,7 +502,7 @@ describe("evaluateAllRulesInMemory — mixed standard + external groups", () => 
   it("AND group with arr sub-group AND standard sub-group: arr fails → group fails", () => {
     const item = { id: "1", playCount: 10, streams: [] };
     const arrMeta = makeArrMeta({ rating: 3 });
-    const rules: RuleGroup[] = [{
+    const rules: LifecycleRuleGroup[] = [{
       id: "g1", condition: "AND", rules: [], groups: [
         {
           id: "sg1", condition: "AND", groups: [],
@@ -526,7 +526,7 @@ describe("evaluateAllRulesInMemory — mixed standard + external groups", () => 
     const arrMeta = makeArrMeta({ rating: 8 });
     const seerrMeta = makeSeerrMeta({ requested: false });
 
-    const rules: RuleGroup[] = [
+    const rules: LifecycleRuleGroup[] = [
       // Group 1 (AND): arr + standard sub-groups
       {
         id: "g1", condition: "AND", rules: [], groups: [
@@ -569,7 +569,7 @@ describe("evaluateAllRulesInMemory — mixed standard + external groups", () => 
     const arrMeta = makeArrMeta({ rating: 8 });
     const seerrMeta = makeSeerrMeta({ requested: false });
 
-    const rules: RuleGroup[] = [
+    const rules: LifecycleRuleGroup[] = [
       // Group 1 (AND): arr passes but standard fails
       {
         id: "g1", condition: "AND", rules: [], groups: [

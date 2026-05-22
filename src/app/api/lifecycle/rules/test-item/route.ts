@@ -11,7 +11,7 @@ import {
   hasStreamRules,
 } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
-import type { RuleGroup, Rule } from "@/lib/rules/types";
+import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { validateRequest, ruleTestItemSchema } from "@/lib/validation";
@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
   if (error) return error;
 
   const { rules, type, seriesScope, mediaItemId, serverIds } = data;
-  const typedRules = rules as unknown as Rule[] | RuleGroup[];
+  const typedRules = rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
 
   if (!hasAnyActiveRules(typedRules)) {
     return NextResponse.json(

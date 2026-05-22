@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { hasSeerrRules, getMatchedCriteriaForItems } from "@/lib/rules/lifecycle-engine";
 import type { SeerrMetadata, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { isSeerrField, isExternalField, SEERR_FIELDS } from "@/lib/rules/types";
-import type { Rule, RuleGroup } from "@/lib/rules/types";
+import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 
 // ---------------------------------------------------------------------------
 // Type helpers
@@ -77,7 +77,7 @@ describe("hasSeerrRules", () => {
   });
 
   it("returns false for rules with only regular fields", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "1", field: "playCount", operator: "greaterThan", value: 5, condition: "AND" },
       { id: "2", field: "title", operator: "contains", value: "test", condition: "AND" },
     ];
@@ -85,7 +85,7 @@ describe("hasSeerrRules", () => {
   });
 
   it("returns false for rules with only arr fields", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "1", field: "arrTag", operator: "contains", value: "action", condition: "AND" },
       { id: "2", field: "arrMonitored", operator: "equals", value: "true", condition: "AND" },
     ];
@@ -93,7 +93,7 @@ describe("hasSeerrRules", () => {
   });
 
   it("returns true when rules contain a seerr field", () => {
-    const rules: Rule[] = [
+    const rules: LifecycleRule[] = [
       { id: "1", field: "playCount", operator: "greaterThan", value: 5, condition: "AND" },
       { id: "2", field: "seerrRequested", operator: "equals", value: "true", condition: "AND" },
     ];
@@ -102,7 +102,7 @@ describe("hasSeerrRules", () => {
 
   it("returns true for each individual seerr field", () => {
     for (const seerrField of SEERR_FIELDS) {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "1", field: seerrField, operator: "equals", value: "test", condition: "AND" },
       ];
       expect(hasSeerrRules(rules)).toBe(true);
@@ -110,7 +110,7 @@ describe("hasSeerrRules", () => {
   });
 
   it("returns true when seerr field is nested inside a group", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -135,7 +135,7 @@ describe("hasSeerrRules", () => {
   });
 
   it("returns false for grouped rules without seerr fields", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -151,7 +151,7 @@ describe("hasSeerrRules", () => {
   });
 
   it("returns true when seerr field is deeply nested", () => {
-    const groups: RuleGroup[] = [
+    const groups: LifecycleRuleGroup[] = [
       {
         id: "g1",
         condition: "AND",
@@ -221,7 +221,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
 
   describe("seerrRequested", () => {
     it("matches when requested equals true", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequested", operator: "equals", value: "true", condition: "AND" },
       ];
       const items = [makeItem("item1", "123")];
@@ -234,7 +234,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("does not match when requested is false and rule expects true", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequested", operator: "equals", value: "true", condition: "AND" },
       ];
       const items = [makeItem("item1", "123")];
@@ -245,7 +245,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("matches notEquals when requested differs from value", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequested", operator: "notEquals", value: "true", condition: "AND" },
       ];
       const items = [makeItem("item1", "123")];
@@ -256,7 +256,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("uses default metadata (requested=false) when no seerr data exists", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequested", operator: "equals", value: "false", condition: "AND" },
       ];
       const items = [makeItem("item1", "123")];
@@ -271,7 +271,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
 
   describe("seerrRequestCount", () => {
     it("matches equals operator", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestCount", operator: "equals", value: "3", condition: "AND" },
       ];
       const items = [makeItem("item1", "42")];
@@ -282,7 +282,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("matches greaterThan operator", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestCount", operator: "greaterThan", value: "2", condition: "AND" },
       ];
       const items = [makeItem("item1", "42")];
@@ -293,7 +293,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("does not match greaterThan when count is less", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestCount", operator: "greaterThan", value: "10", condition: "AND" },
       ];
       const items = [makeItem("item1", "42")];
@@ -304,7 +304,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("matches lessThan operator", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestCount", operator: "lessThan", value: "10", condition: "AND" },
       ];
       const items = [makeItem("item1", "42")];
@@ -315,7 +315,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("matches notEquals operator", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestCount", operator: "notEquals", value: "0", condition: "AND" },
       ];
       const items = [makeItem("item1", "42")];
@@ -326,7 +326,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("defaults to requestCount 0 when no seerr data exists", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestCount", operator: "equals", value: "0", condition: "AND" },
       ];
       const items = [makeItem("item1", "42")];
@@ -340,7 +340,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
 
   describe("seerrRequestDate", () => {
     it("matches before operator", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestDate", operator: "before", value: "2025-01-01", condition: "AND" },
       ];
       const items = [makeItem("item1", "10")];
@@ -351,7 +351,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("matches after operator", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestDate", operator: "after", value: "2024-01-01", condition: "AND" },
       ];
       const items = [makeItem("item1", "10")];
@@ -362,7 +362,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("matches equals operator by date portion only", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestDate", operator: "equals", value: "2024-06-15", condition: "AND" },
       ];
       const items = [makeItem("item1", "10")];
@@ -373,7 +373,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("does not match when requestDate is null", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestDate", operator: "before", value: "2025-01-01", condition: "AND" },
       ];
       const items = [makeItem("item1", "10")];
@@ -386,7 +386,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     it("matches inLastDays operator", () => {
       const recentDate = new Date();
       recentDate.setDate(recentDate.getDate() - 5);
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestDate", operator: "inLastDays", value: "10", condition: "AND" },
       ];
       const items = [makeItem("item1", "10")];
@@ -397,7 +397,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("does not match inLastDays for old dates", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestDate", operator: "inLastDays", value: "10", condition: "AND" },
       ];
       const items = [makeItem("item1", "10")];
@@ -412,7 +412,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
 
   describe("seerrApprovalDate", () => {
     it("matches before operator", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrApprovalDate", operator: "before", value: "2025-06-01", condition: "AND" },
       ];
       const items = [makeItem("item1", "77")];
@@ -423,7 +423,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("does not match when approvalDate is null", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrApprovalDate", operator: "before", value: "2025-06-01", condition: "AND" },
       ];
       const items = [makeItem("item1", "77")];
@@ -438,7 +438,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
 
   describe("seerrDeclineDate", () => {
     it("matches after operator", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrDeclineDate", operator: "after", value: "2024-01-01", condition: "AND" },
       ];
       const items = [makeItem("item1", "88")];
@@ -449,7 +449,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("does not match when declineDate is null", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrDeclineDate", operator: "after", value: "2024-01-01", condition: "AND" },
       ];
       const items = [makeItem("item1", "88")];
@@ -464,7 +464,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
 
   describe("seerrRequestedBy", () => {
     it("matches equals when user is in the requestedBy list", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestedBy", operator: "equals", value: "alice", condition: "AND" },
       ];
       const items = [makeItem("item1", "55")];
@@ -475,7 +475,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("is case-insensitive for equals", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestedBy", operator: "equals", value: "ALICE", condition: "AND" },
       ];
       const items = [makeItem("item1", "55")];
@@ -486,7 +486,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("does not match equals when user is not in the list", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestedBy", operator: "equals", value: "charlie", condition: "AND" },
       ];
       const items = [makeItem("item1", "55")];
@@ -497,7 +497,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("matches notEquals when user is not in the list", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestedBy", operator: "notEquals", value: "charlie", condition: "AND" },
       ];
       const items = [makeItem("item1", "55")];
@@ -510,7 +510,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     it("contains (multi-select) is list membership, not substring", () => {
       // The UI shows a multi-select of usernames; selecting "ali" should not
       // match a user literally named "Alice" by substring.
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestedBy", operator: "contains", value: "ali", condition: "AND" },
       ];
       const items = [makeItem("item1", "55")];
@@ -521,7 +521,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("matches contains with an exact username", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestedBy", operator: "contains", value: "Alice", condition: "AND" },
       ];
       const items = [makeItem("item1", "55")];
@@ -532,7 +532,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("matches contains with pipe-separated values", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestedBy", operator: "contains", value: "charlie|bob", condition: "AND" },
       ];
       const items = [makeItem("item1", "55")];
@@ -543,7 +543,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("matches notContains when no user matches", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestedBy", operator: "notContains", value: "charlie", condition: "AND" },
       ];
       const items = [makeItem("item1", "55")];
@@ -554,7 +554,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("does not match notContains when a user does match", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestedBy", operator: "notContains", value: "alice", condition: "AND" },
       ];
       const items = [makeItem("item1", "55")];
@@ -566,7 +566,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
 
     it("defaults to empty requestedBy when no seerr data exists", () => {
       // With empty requestedBy, equals should fail and notEquals should pass
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestedBy", operator: "notEquals", value: "anyone", condition: "AND" },
       ];
       const items = [makeItem("item1", "55")];
@@ -580,7 +580,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
 
   describe("negate flag", () => {
     it("inverts seerrRequested equals result when negate is true", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequested", operator: "equals", value: "true", condition: "AND", negate: true },
       ];
       const items = [makeItem("item1", "99")];
@@ -592,7 +592,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("negate turns a non-match into a match", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequested", operator: "equals", value: "true", condition: "AND", negate: true },
       ];
       const items = [makeItem("item1", "99")];
@@ -604,7 +604,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
 
     it("negate works for seerrRequestCount", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestCount", operator: "greaterThan", value: "5", condition: "AND", negate: true },
       ];
       const items = [makeItem("item1", "99")];
@@ -620,7 +620,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
 
   describe("SERIES type uses TVDB ID for seerr lookup", () => {
     it("looks up seerr data by TVDB ID for series", () => {
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequested", operator: "equals", value: "true", condition: "AND" },
       ];
       const items = [
@@ -655,7 +655,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     it("unsupported operator for seerrRequested returns false (no match)", () => {
       // "contains" is not a valid operator for seerrRequested (boolean field)
       // The switch default returns result = false to prevent matching everything
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequested", operator: "contains", value: "true", condition: "AND" },
       ];
       const items = [makeItem("item1", "50")];
@@ -667,7 +667,7 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
 
     it("unsupported operator for seerrRequestCount returns false (no match)", () => {
       // "contains" is not valid for numeric fields
-      const rules: Rule[] = [
+      const rules: LifecycleRule[] = [
         { id: "r1", field: "seerrRequestCount", operator: "contains", value: "5", condition: "AND" },
       ];
       const items = [makeItem("item1", "50")];

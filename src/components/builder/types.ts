@@ -1,22 +1,22 @@
-import type { RuleCondition } from "@/lib/rules/types";
+import type { LifecycleRuleCondition } from "@/lib/rules/types";
 
-/** Constraint for any rule type (Rule & QueryRule both satisfy this) */
+/** Constraint for any rule type (LifecycleRule & QueryRule both satisfy this) */
 export interface BaseRule {
   id: string;
   field: string;
   operator: string;
   value: string | number;
-  condition: RuleCondition;
+  condition: LifecycleRuleCondition;
   negate?: boolean;
   enabled?: boolean;
 }
 
-/** Constraint for any group type (RuleGroup & QueryGroup both satisfy this) */
+/** Constraint for any group type (LifecycleRuleGroup & QueryGroup both satisfy this) */
 export interface BaseGroup<R extends BaseRule = BaseRule> {
   id: string;
   name?: string;
-  condition: RuleCondition;
-  operator?: RuleCondition;
+  condition: LifecycleRuleCondition;
+  operator?: LifecycleRuleCondition;
   rules: R[];
   groups: BaseGroup<R>[];
   enabled?: boolean;
@@ -72,7 +72,7 @@ export interface BuilderConfig<R extends BaseRule, G extends BaseGroup<R>> {
   operators: OperatorDef[];
   sections: SectionDef[];
   createRule: () => R;
-  createGroup: (condition?: RuleCondition) => G;
+  createGroup: (condition?: LifecycleRuleCondition) => G;
   isFieldDisabled: (field: string, ctx: FieldContext) => boolean;
   getDisabledTooltip: (field: string, ctx: FieldContext) => string | null;
   /**
@@ -89,7 +89,7 @@ export interface BuilderConfig<R extends BaseRule, G extends BaseGroup<R>> {
   streamQuerySections?: SectionDef[];
   /** Returns fields applicable to the given stream type */
   getStreamQueryFieldsForType?: (streamType: string) => FieldDef[];
-  createStreamQueryGroup?: (streamType: string, condition?: RuleCondition) => G;
+  createStreamQueryGroup?: (streamType: string, condition?: LifecycleRuleCondition) => G;
 }
 
 /** Props for BaseBuilder */
