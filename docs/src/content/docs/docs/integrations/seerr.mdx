@@ -38,6 +38,32 @@ Seerr integration makes request metadata available in Librariarr:
 | **Request count** | Number of requests for this media |
 | **Approval/decline date** | When the request was acted on |
 
+## Use on the Dashboard
+
+Once a Seerr instance is connected, the **Seerr Requests** card can be added from the dashboard's main tab (in **Edit Layout** mode). It shows per-user request statistics with watch follow-through:
+
+| Column | Description |
+|--------|-------------|
+| **Total** | Total requests submitted by the user |
+| **Movies** | Movie requests |
+| **Series** | TV series requests |
+| **Watched** | Movies watched + episodes watched of requested series, over the total available |
+| **%** | Overall watch percentage |
+
+The card has two views: a compact top-5 leaderboard (default) and a full sortable table (toggle via "View all"). Stats are fetched live from Seerr and cached for 60 seconds.
+
+### Watch correlation
+
+Watch history is correlated by matching the requester's **Plex username** in Seerr against the username in your Plex/Jellyfin/Emby watch history. Requirements:
+
+- The Seerr user must have a `plexUsername` set (visible in Seerr → Users)
+- The matching media server user must share that username
+- Watch history must have been synced from the media server
+
+Users without a linked Plex username appear in the card with an icon indicating that watch history can't be correlated.
+
+For series, the watched count is computed per-episode: the numerator is the number of episodes the user has played, the denominator is the total number of episodes available in your library for that series (matched via TVDB ID).
+
 ## Use in Lifecycle Rules
 
 Seerr data is available as rule conditions in the [lifecycle engine](/docs/features/lifecycle-rules/):
@@ -67,8 +93,9 @@ Create a rule set to find media that was requested but never watched:
 ## Limitations
 
 - Seerr data is fetched live during rule evaluation, which can be slower for large match sets
-- Only one Seerr instance is supported at a time
+- Multiple Seerr instances are supported; the dashboard card aggregates requests across all of them per Plex username
 - Request data availability depends on Seerr having been running when requests were made — historical data before Seerr was set up is not available
+- Watch correlation on the dashboard card relies on the Seerr user's `plexUsername` matching the username in your media server's watch history
 
 <Aside>
   Seerr integration is read-only from Librariarr's perspective. Request data is used in lifecycle rules only — approving/declining requests is done through Seerr's own interface.

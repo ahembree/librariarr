@@ -24,6 +24,7 @@ import { QualityChart } from "@/components/quality-chart";
 import { BreakdownChart } from "@/components/breakdown-chart";
 import { TopPlayed } from "@/components/top-played";
 import { RecentlyAdded } from "@/components/recently-added";
+import { SeerrRequestStats } from "@/components/seerr-request-stats";
 import {
   getCardDefinition,
   isCustomCardId,
@@ -369,6 +370,8 @@ export function DashboardCardGrid({
             onTrackClick={onTrackClick}
           />
         );
+      case "seerr-requests":
+        return <SeerrRequestStats />;
       default:
         return null;
     }
