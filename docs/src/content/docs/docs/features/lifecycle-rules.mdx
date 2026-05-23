@@ -158,6 +158,19 @@ Create a rule set with an OR group:
 - `resolution` equals `SD`
 - `videoCodec` equals `mpeg2video`
 
+### Converting a Query into a Rule Set
+
+The **Query Builder** at `/library/query` shares its rule shape with the lifecycle engine. If you build a query that you'd like to enforce on a schedule, use **Convert to Lifecycle Rule** on the query builder toolbar to create a rule set without re-entering the criteria.
+
+What the conversion does:
+
+- Copies the rule tree verbatim — no changes to fields, operators, or values.
+- Prompts you to pick a target library type when the query targets more than one (rule sets are scoped to a single type).
+- Drops any rules that don't apply to the chosen library type and shows you the list before submitting. For example, when targeting **Movies**, any series-aggregate or music-only rules are removed.
+- Creates the new rule set with **actionEnabled off** and no action configured — matches will be detected on the next scheduler run, but nothing is deleted or unmonitored until you choose an action.
+
+After conversion, you're redirected to the new rule set's editor so you can pick an action type, set the delay, configure tags, and re-evaluate.
+
 ## Previewing Matches
 
 Before executing any actions, use the **Preview** feature to see which media items match your rules:
