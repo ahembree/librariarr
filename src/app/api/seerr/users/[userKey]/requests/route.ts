@@ -160,126 +160,53 @@ async function resolveUserRequests(
     }
   }
 
-  // Series: tvdbId -> { show MediaItem, episodes }
+  // Series: tvdbId -> { representative episode id (used as link target since
+  // Librariarr's sync only stores episodes, not show-level items, for TV
+  // libraries — show detail page resolves the show via the episode's parentTitle),
+  // title, episodes list (for watch correlation). }
   interface SeriesEntry {
-    showItemId: string | null;
+    representativeEpisodeId: string | null;
     title: string | null;
-    year: number | null;
     episodes: { id: string; dedupKey: string | null }[];
   }
   const seriesMap = new Map<number, SeriesEntry>();
   const seriesDedupToTvdb = new Map<string, number>();
 
   if (tvdbIds.size > 0 && serverIds.length > 0) {
-    // Fetch every SERIES MediaItem matching any of the TVDB ids - both shows and
-    // episodes. Sync applies the show's GUIDs to each episode, so both share the
-    // same TVDB external id.
-    const seriesItems = await prisma.mediaItem.findMany({
+    const episodes = await prisma.mediaItem.findMany({
       where: {
         type: "SERIES",
+        episodeNumber: { not: null },
         dedupCanonical: true,
         library: { mediaServerId: { in: serverIds } },
         externalIds: { some: { source: "TVDB", externalId: { in: Array.from(tvdbIds) } } },
       },
       select: {
         id: true,
-        title: true,
-        year: true,
         dedupKey: true,
-        libraryId: true,
-        ratingKey: true,
-        grandparentRatingKey: true,
         parentTitle: true,
-        seasonNumber: true,
-        episodeNumber: true,
         externalIds: { where: { source: "TVDB" }, select: { externalId: true } },
       },
+      orderBy: [{ seasonNumber: "asc" }, { episodeNumber: "asc" }],
     });
 
-    interface EpisodeRow {
-      libraryId: string;
-      grandparentRatingKey: string | null;
-    }
-    const episodesByTvdb = new Map<number, EpisodeRow[]>();
-
-    for (const item of seriesItems) {
-      const tvdbStr = item.externalIds[0]?.externalId;
+    for (const ep of episodes) {
+      const tvdbStr = ep.externalIds[0]?.externalId;
       if (!tvdbStr) continue;
       const tvdb = Number(tvdbStr);
       if (!Number.isFinite(tvdb)) continue;
       let entry = seriesMap.get(tvdb);
       if (!entry) {
-        entry = { showItemId: null, title: null, year: null, episodes: [] };
+        entry = {
+          representativeEpisodeId: ep.id,
+          title: ep.parentTitle,
+          episodes: [],
+        };
         seriesMap.set(tvdb, entry);
       }
-      const isShow = item.seasonNumber === null && item.episodeNumber === null;
-      const isEpisode = item.episodeNumber !== null;
-      if (isShow) {
-        if (!entry.showItemId) {
-          entry.showItemId = item.id;
-          entry.title = item.title;
-          entry.year = item.year;
-        }
-      } else if (isEpisode) {
-        entry.episodes.push({ id: item.id, dedupKey: item.dedupKey });
-        if (item.dedupKey) seriesDedupToTvdb.set(item.dedupKey, tvdb);
-        if (!entry.title && item.parentTitle) entry.title = item.parentTitle;
-        let list = episodesByTvdb.get(tvdb);
-        if (!list) {
-          list = [];
-          episodesByTvdb.set(tvdb, list);
-        }
-        list.push({
-          libraryId: item.libraryId,
-          grandparentRatingKey: item.grandparentRatingKey,
-        });
-      }
-    }
-
-    // Fallback: for series where only episodes matched (no show-level item shares
-    // the TVDB id), look up the show via (libraryId, grandparentRatingKey).
-    const fallbackLookups: { libraryId: string; ratingKey: string; tvdb: number }[] = [];
-    const seenPairs = new Set<string>();
-    for (const [tvdb, entry] of seriesMap.entries()) {
-      if (entry.showItemId) continue;
-      const eps = episodesByTvdb.get(tvdb);
-      if (!eps) continue;
-      for (const ep of eps) {
-        if (!ep.grandparentRatingKey) continue;
-        const key = `${ep.libraryId}\x1f${ep.grandparentRatingKey}`;
-        if (seenPairs.has(key)) continue;
-        seenPairs.add(key);
-        fallbackLookups.push({
-          libraryId: ep.libraryId,
-          ratingKey: ep.grandparentRatingKey,
-          tvdb,
-        });
-      }
-    }
-    if (fallbackLookups.length > 0) {
-      const shows = await prisma.mediaItem.findMany({
-        where: {
-          type: "SERIES",
-          seasonNumber: null,
-          episodeNumber: null,
-          dedupCanonical: true,
-          OR: fallbackLookups.map((l) => ({ libraryId: l.libraryId, ratingKey: l.ratingKey })),
-        },
-        select: { id: true, title: true, year: true, libraryId: true, ratingKey: true },
-      });
-      const showByPair = new Map(
-        shows.map((s) => [`${s.libraryId}\x1f${s.ratingKey}`, s])
-      );
-      for (const lookup of fallbackLookups) {
-        const entry = seriesMap.get(lookup.tvdb);
-        if (!entry || entry.showItemId) continue;
-        const show = showByPair.get(`${lookup.libraryId}\x1f${lookup.ratingKey}`);
-        if (show) {
-          entry.showItemId = show.id;
-          if (!entry.title) entry.title = show.title;
-          if (entry.year == null) entry.year = show.year;
-        }
-      }
+      entry.episodes.push({ id: ep.id, dedupKey: ep.dedupKey });
+      if (ep.dedupKey) seriesDedupToTvdb.set(ep.dedupKey, tvdb);
+      if (!entry.title && ep.parentTitle) entry.title = ep.parentTitle;
     }
   }
 
@@ -424,11 +351,15 @@ async function resolveUserRequests(
         tmdbId: req.media?.tmdbId ?? 0,
         tvdbId: tvdb,
         title: local?.title ?? fallback?.title ?? `Series (TVDB ${tvdb})`,
-        year: local?.year ?? fallback?.year ?? null,
-        posterUrl: local?.showItemId
-          ? `/api/media/${local.showItemId}/image`
+        // Year on episodes is the episode's air year, not the show's — only use the
+        // Seerr-supplied first-air year so we don't show misleading season-specific years.
+        year: fallback?.year ?? null,
+        posterUrl: local?.representativeEpisodeId
+          ? `/api/media/${local.representativeEpisodeId}/image?type=parent`
           : fallback?.posterUrl ?? null,
-        mediaItem: local?.showItemId ? { id: local.showItemId, route: "show" } : null,
+        mediaItem: local?.representativeEpisodeId
+          ? { id: local.representativeEpisodeId, route: "show" }
+          : null,
         watch: {
           correlatable: plexUsername != null,
           watched: episodesWatched > 0,
