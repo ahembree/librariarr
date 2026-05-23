@@ -54,7 +54,7 @@ describe("convertQueryToRuleSetBody", () => {
     expect("actionType" in body).toBe(false);
   });
 
-  it("sets seriesScope=true only when target is SERIES", () => {
+  it("sets seriesScope only when target is SERIES, mirroring includeEpisodes", () => {
     const movieBody = convertQueryToRuleSetBody(makeQuery(), {
       name: "M",
       targetLibraryType: "MOVIE",
@@ -62,11 +62,24 @@ describe("convertQueryToRuleSetBody", () => {
     });
     expect("seriesScope" in movieBody).toBe(false);
 
-    const seriesBody = convertQueryToRuleSetBody(
-      makeQuery({ mediaTypes: ["SERIES"] }),
-      { name: "S", targetLibraryType: "SERIES", serverIds: ["srv1"] },
+    const seriesAggregate = convertQueryToRuleSetBody(
+      makeQuery({ mediaTypes: ["SERIES"], includeEpisodes: false }),
+      { name: "S-agg", targetLibraryType: "SERIES", serverIds: ["srv1"] },
     );
-    expect(seriesBody.seriesScope).toBe(true);
+    expect(seriesAggregate.seriesScope).toBe(true);
+
+    const seriesEpisodes = convertQueryToRuleSetBody(
+      makeQuery({ mediaTypes: ["SERIES"], includeEpisodes: true }),
+      { name: "S-ep", targetLibraryType: "SERIES", serverIds: ["srv1"] },
+    );
+    expect(seriesEpisodes.seriesScope).toBe(false);
+
+    // includeEpisodes undefined defaults to series-aggregate (seriesScope=true)
+    const seriesDefault = convertQueryToRuleSetBody(
+      makeQuery({ mediaTypes: ["SERIES"] }),
+      { name: "S-def", targetLibraryType: "SERIES", serverIds: ["srv1"] },
+    );
+    expect(seriesDefault.seriesScope).toBe(true);
   });
 
   it("removes incompatible rules from the cleaned rules tree", () => {
@@ -142,6 +155,52 @@ describe("convertQueryToRuleSetBody", () => {
       expect(err).toBeInstanceOf(ConvertQueryError);
       expect((err as ConvertQueryError).code).toBe("ALL_RULES_INCOMPATIBLE");
     }
+  });
+
+  it("throws when the cleaned tree has groups but no rules left", () => {
+    // Mixed input: one group with an incompatible rule + one empty
+    // placeholder group. After pruning, the first group is dropped and the
+    // placeholder is preserved (per fix #2/#3) — but the resulting rule set
+    // would have zero effective rules.
+    const query = makeQuery({
+      mediaTypes: ["SERIES"],
+      groups: [
+        {
+          id: "g1",
+          condition: "AND",
+          rules: [
+            { id: "r1", field: "availableEpisodeCount", operator: "greaterThan", value: 1, condition: "AND" },
+          ],
+          groups: [],
+        },
+        { id: "g2", condition: "AND", rules: [], groups: [] },
+      ],
+    });
+    try {
+      convertQueryToRuleSetBody(query, {
+        name: "n",
+        targetLibraryType: "MOVIE",
+        serverIds: ["srv1"],
+      });
+      expect.fail("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConvertQueryError);
+      expect((err as ConvertQueryError).code).toBe("ALL_RULES_INCOMPATIBLE");
+    }
+  });
+
+  it("throws when the input tree is structurally valid but has zero rules", () => {
+    const query = makeQuery({
+      mediaTypes: ["MOVIE"],
+      groups: [{ id: "g1", condition: "AND", rules: [], groups: [] }],
+    });
+    expect(() =>
+      convertQueryToRuleSetBody(query, {
+        name: "n",
+        targetLibraryType: "MOVIE",
+        serverIds: ["srv1"],
+      }),
+    ).toThrow(ConvertQueryError);
   });
 
   it("trims the name", () => {

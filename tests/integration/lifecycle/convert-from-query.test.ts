@@ -185,6 +185,36 @@ describe("Convert query → lifecycle rule set", () => {
     expect(persisted?.arrInstanceId).toBe("rdr-1");
   });
 
+  it("transfers seriesScope based on includeEpisodes", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    const aggBody = convertQueryToRuleSetBody(
+      makeQuery({ mediaTypes: ["SERIES"], includeEpisodes: false }),
+      { name: "Series Agg", targetLibraryType: "SERIES", serverIds: [server.id] },
+    );
+    const aggResponse = await callRoute(POST, {
+      url: "/api/lifecycle/rules",
+      method: "POST",
+      body: aggBody,
+    });
+    const aggPayload = await expectJson<{ ruleSet: { seriesScope: boolean } }>(aggResponse, 201);
+    expect(aggPayload.ruleSet.seriesScope).toBe(true);
+
+    const epBody = convertQueryToRuleSetBody(
+      makeQuery({ mediaTypes: ["SERIES"], includeEpisodes: true }),
+      { name: "Series Ep", targetLibraryType: "SERIES", serverIds: [server.id] },
+    );
+    const epResponse = await callRoute(POST, {
+      url: "/api/lifecycle/rules",
+      method: "POST",
+      body: epBody,
+    });
+    const epPayload = await expectJson<{ ruleSet: { seriesScope: boolean } }>(epResponse, 201);
+    expect(epPayload.ruleSet.seriesScope).toBe(false);
+  });
+
   it("rejects a duplicate name + type combination", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);

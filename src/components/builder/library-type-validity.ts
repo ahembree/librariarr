@@ -54,6 +54,23 @@ export function findIncompatibleRules(
   return out;
 }
 
+/**
+ * Count rules across the tree regardless of enabled-state, used by the
+ * convert-to-rule flow to detect when a conversion would leave a tree with
+ * placeholder groups but no actionable rules. `countAllRules` in tree-utils
+ * is enabled-aware and intended for a different purpose.
+ */
+export function countAllRulesIncludingDisabled(
+  groups: ConditionGroup[],
+): number {
+  let total = 0;
+  for (const g of groups) {
+    total += g.rules.length;
+    total += countAllRulesIncludingDisabled(g.groups ?? []);
+  }
+  return total;
+}
+
 export function dropIncompatibleRules(
   groups: ConditionGroup[],
   targetLibraryType: LibraryType,
@@ -65,7 +82,14 @@ export function dropIncompatibleRules(
         (r) => ruleIncompatibility(r.field, targetLibraryType) === null,
       );
       const keptSubGroups = prune(g.groups ?? []);
-      if (keptRules.length === 0 && keptSubGroups.length === 0) continue;
+      // Drop the group only when pruning actually emptied it. If the group
+      // started empty (e.g. a placeholder, or a stream-query group whose
+      // semantics live in its `streamQuery` field rather than its rules),
+      // preserve it verbatim — we shouldn't silently strip the user's tree.
+      const startedEmpty = g.rules.length === 0 && (g.groups?.length ?? 0) === 0;
+      const becameEmpty =
+        !startedEmpty && keptRules.length === 0 && keptSubGroups.length === 0;
+      if (becameEmpty) continue;
       result.push({ ...g, rules: keptRules, groups: keptSubGroups });
     }
     return result;

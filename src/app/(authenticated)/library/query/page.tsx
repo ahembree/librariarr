@@ -905,13 +905,17 @@ export default function QueryPage() {
           variant="outline"
           size="sm"
           onClick={() => setConvertDialogOpen(true)}
-          disabled={!isValid}
+          disabled={!isValid || mediaTypes.length === 0 || servers.length === 0}
           title={
             ruleCount === 0
               ? "Add at least one rule first"
               : !isValid
                 ? "Fill in all rule values first"
-                : "Create a lifecycle rule set from this query"
+                : mediaTypes.length === 0
+                  ? "Pick at least one media type first"
+                  : servers.length === 0
+                    ? "Connect a server first"
+                    : "Create a lifecycle rule set from this query"
           }
         >
           <ArrowRightLeft className="mr-1.5 h-3.5 w-3.5" />Convert to Lifecycle Rule
