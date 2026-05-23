@@ -319,6 +319,153 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     expect(body.requests[0].watch.watched).toBe(true);
   });
 
+  it("falls back to Seerr getTvShow when tvdbId is null (uses tmdbId)", async () => {
+    const user = await createTestUser();
+    await createTestSeerrInstance(user.id);
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    mockGetRequests.mockResolvedValueOnce({
+      pageInfo: { page: 1, pages: 1, results: 1 },
+      results: [
+        makeRequest(
+          1,
+          "tv",
+          { id: 1, username: "alice", plexUsername: "alice" },
+          { tmdbId: 1396, tvdbId: null }
+        ),
+      ],
+    });
+    mockGetTvShow.mockResolvedValueOnce({
+      id: 1396,
+      name: "Unmatched Show",
+      originalName: "",
+      posterPath: "/show-poster.jpg",
+      backdropPath: null,
+      overview: "",
+      firstAirDate: "2024-03-10",
+    });
+
+    const body = await expectJson<{
+      requests: {
+        title: string;
+        year: number | null;
+        posterUrl: string | null;
+        tvdbId: number | null;
+        tmdbId: number;
+        mediaItem: unknown;
+      }[];
+    }>(await callRouteWithParams(GET, { userKey: "alice" }), 200);
+
+    expect(mockGetTvShow).toHaveBeenCalledWith(1396);
+    expect(body.requests).toHaveLength(1);
+    expect(body.requests[0].title).toBe("Unmatched Show");
+    expect(body.requests[0].year).toBe(2024);
+    expect(body.requests[0].tvdbId).toBeNull();
+    expect(body.requests[0].tmdbId).toBe(1396);
+    expect(body.requests[0].posterUrl).toContain("image.tmdb.org");
+    expect(body.requests[0].posterUrl).toContain("/show-poster.jpg");
+    expect(body.requests[0].mediaItem).toBeNull();
+  });
+
+  it("falls back to Seerr getTvShow when tvdbId is 0 (Seerr couldn't match)", async () => {
+    const user = await createTestUser();
+    await createTestSeerrInstance(user.id);
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    mockGetRequests.mockResolvedValueOnce({
+      pageInfo: { page: 1, pages: 1, results: 1 },
+      results: [
+        makeRequest(
+          1,
+          "tv",
+          { id: 1, username: "alice", plexUsername: "alice" },
+          { tmdbId: 5000, tvdbId: 0 as unknown as number }
+        ),
+      ],
+    });
+    mockGetTvShow.mockResolvedValueOnce({
+      id: 5000,
+      name: "Zero TVDB Show",
+      originalName: "",
+      posterPath: null,
+      backdropPath: null,
+      overview: "",
+      firstAirDate: "2023-01-01",
+    });
+
+    const body = await expectJson<{
+      requests: { title: string; tvdbId: number | null; mediaItem: unknown }[];
+    }>(await callRouteWithParams(GET, { userKey: "alice" }), 200);
+
+    expect(mockGetTvShow).toHaveBeenCalledWith(5000);
+    expect(body.requests[0].title).toBe("Zero TVDB Show");
+    expect(body.requests[0].tvdbId).toBeNull();
+    expect(body.requests[0].mediaItem).toBeNull();
+  });
+
+  it("sorts resolved requests by createdAt descending (newest first)", async () => {
+    const user = await createTestUser();
+    await createTestSeerrInstance(user.id);
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    mockGetRequests.mockResolvedValueOnce({
+      pageInfo: { page: 1, pages: 1, results: 3 },
+      results: [
+        // Out of order on purpose
+        {
+          ...makeRequest(1, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 100 }),
+          createdAt: "2024-03-01T00:00:00Z",
+        },
+        {
+          ...makeRequest(2, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 200 }),
+          createdAt: "2024-08-15T00:00:00Z",
+        },
+        {
+          ...makeRequest(3, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 300 }),
+          createdAt: "2024-05-20T00:00:00Z",
+        },
+      ],
+    });
+
+    const body = await expectJson<{
+      requests: { seerrId: number; createdAt: string }[];
+    }>(await callRouteWithParams(GET, { userKey: "alice" }), 200);
+
+    expect(body.requests.map((r) => r.seerrId)).toEqual([2, 3, 1]);
+  });
+
+  it("aggregates requests for one user across multiple Seerr instances", async () => {
+    const user = await createTestUser();
+    await createTestSeerrInstance(user.id, { name: "Seerr A" });
+    await createTestSeerrInstance(user.id, { name: "Seerr B" });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    mockGetRequests
+      .mockResolvedValueOnce({
+        pageInfo: { page: 1, pages: 1, results: 1 },
+        results: [
+          makeRequest(101, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 100 }),
+        ],
+      })
+      .mockResolvedValueOnce({
+        pageInfo: { page: 1, pages: 1, results: 1 },
+        results: [
+          makeRequest(202, "movie", { id: 7, username: "alice", plexUsername: "alice" }, { tmdbId: 200 }),
+        ],
+      });
+
+    const body = await expectJson<{
+      requests: { seerrId: number; seerrInstanceId: string }[];
+    }>(await callRouteWithParams(GET, { userKey: "alice" }), 200);
+
+    expect(mockGetRequests).toHaveBeenCalledTimes(2);
+    expect(body.requests).toHaveLength(2);
+    expect(body.requests.map((r) => r.seerrId).sort()).toEqual([101, 202]);
+    // Different instance IDs are populated on each request
+    const instanceIds = new Set(body.requests.map((r) => r.seerrInstanceId));
+    expect(instanceIds.size).toBe(2);
+  });
+
   it("returns 4k flag and status fields on requests", async () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);
