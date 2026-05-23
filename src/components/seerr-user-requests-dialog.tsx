@@ -196,7 +196,7 @@ interface Props {
 export function SeerrUserRequestsDialog({ userKey, open, onClose }: Props) {
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-4xl gap-0 p-0 overflow-hidden">
+      <DialogContent className="max-w-[75vw] sm:max-w-[75vw] w-[75vw] gap-0 p-0 overflow-hidden">
         {userKey ? (
           <DialogBody key={userKey} userKey={userKey} onClose={onClose} />
         ) : null}
