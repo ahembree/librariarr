@@ -905,8 +905,14 @@ export default function QueryPage() {
           variant="outline"
           size="sm"
           onClick={() => setConvertDialogOpen(true)}
-          disabled={countAllRules(groups) === 0}
-          title={countAllRules(groups) === 0 ? "Add at least one rule first" : "Create a lifecycle rule set from this query"}
+          disabled={!isValid}
+          title={
+            ruleCount === 0
+              ? "Add at least one rule first"
+              : !isValid
+                ? "Fill in all rule values first"
+                : "Create a lifecycle rule set from this query"
+          }
         >
           <ArrowRightLeft className="mr-1.5 h-3.5 w-3.5" />Convert to Lifecycle Rule
         </Button>
