@@ -53,6 +53,20 @@ Once a Seerr instance is connected, the **Seerr Requests** card can be added fro
 
 The card has two views: a compact top-5 leaderboard (default) and a full sortable table (toggle via "View all"). Stats are fetched live from Seerr and cached for 60 seconds.
 
+### Drill down into a user's requests
+
+Click any user row to open a dialog with their full request history. Each entry shows:
+
+- Poster, title, and year (resolved from your library when available, or fetched from Seerr otherwise)
+- Media status badge (Available, Partial, Processing, Pending, Deleted)
+- 4K badge when applicable
+- Watch indicator (per-episode progress for series)
+- Created date
+
+Clicking a request that's in your library navigates to the corresponding library page (`/library/movies/[id]` for movies, `/library/series/show/[id]` for series). Requests for media that aren't in your library are shown but not clickable.
+
+The dialog supports filtering (All / Movies / Series / Watched / In progress) and free-text title search.
+
 ### Watch correlation
 
 Watch history is correlated by matching the requester's **Plex username** in Seerr against the username in your Plex/Jellyfin/Emby watch history. Requirements:

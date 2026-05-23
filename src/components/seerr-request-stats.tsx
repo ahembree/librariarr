@@ -35,6 +35,7 @@ import {
   ArrowUpDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SeerrUserRequestsDialog } from "@/components/seerr-user-requests-dialog";
 
 interface UserStats {
   userKey: string;
@@ -187,6 +188,7 @@ export function SeerrRequestStats() {
   const [showAll, setShowAll] = useState(false);
   const [sortColumn, setSortColumn] = useState<SortColumn>("total");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [openUserKey, setOpenUserKey] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -344,8 +346,17 @@ export function SeerrRequestStats() {
     );
   }
 
+  const dialog = (
+    <SeerrUserRequestsDialog
+      userKey={openUserKey}
+      open={openUserKey !== null}
+      onClose={() => setOpenUserKey(null)}
+    />
+  );
+
   if (showAll) {
     return (
+      <>
       <Card className="h-full flex flex-col">
         {header}
         <CardContent className="flex-1 min-h-0 overflow-auto p-0">
@@ -407,7 +418,11 @@ export function SeerrRequestStats() {
                 {sortedUsers.map((u) => {
                   const score = watchedScores(u);
                   return (
-                    <TableRow key={u.userKey}>
+                    <TableRow
+                      key={u.userKey}
+                      onClick={() => setOpenUserKey(u.userKey)}
+                      className="cursor-pointer hover:bg-muted/30"
+                    >
                       <TableCell className="font-medium">
                         <div className="flex items-center gap-2 min-w-0">
                           <UserAvatar name={u.seerrUsername} size="sm" />
@@ -490,12 +505,15 @@ export function SeerrRequestStats() {
           </TooltipProvider>
         </CardContent>
       </Card>
+      {dialog}
+      </>
     );
   }
 
   const topUsers = data.users.slice(0, 5);
 
   return (
+    <>
     <Card className="h-full flex flex-col">
       {header}
       <CardContent className="flex-1 min-h-0 overflow-auto">
@@ -506,7 +524,8 @@ export function SeerrRequestStats() {
               return (
                 <li
                   key={u.userKey}
-                  className="flex items-center gap-3 rounded-md px-1 py-1"
+                  onClick={() => setOpenUserKey(u.userKey)}
+                  className="flex items-center gap-3 rounded-md px-2 py-1.5 cursor-pointer hover:bg-muted/30 transition-colors"
                 >
                   <UserAvatar name={u.seerrUsername} />
                   <div className="flex-1 min-w-0">
@@ -588,5 +607,7 @@ export function SeerrRequestStats() {
         </TooltipProvider>
       </CardContent>
     </Card>
+    {dialog}
+    </>
   );
 }
