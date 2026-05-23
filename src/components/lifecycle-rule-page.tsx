@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { getServerTypeLabel } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
 import { toast } from "sonner";
@@ -710,6 +710,9 @@ export function LifecycleRulePage({
 
   // Router for navigation
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const ruleSetIdFromUrl = searchParams.get("ruleSet");
+  const hydratedFromUrlRef = useRef(false);
 
   // Dirty tracking — snapshot of last-saved/loaded state
   const [snapshot, setSnapshot] = useState<RuleSetSnapshot | null>(null);
@@ -1434,6 +1437,32 @@ export function LifecycleRulePage({
       serverIds: JSON.stringify([...(ruleSet.serverIds ?? [])].sort()),
     });
   };
+
+  // Hydrate active rule set from `?ruleSet=<id>` once rule sets load.
+  // Used by the "Convert query to lifecycle rule" flow to land the user on
+  // the freshly created rule set. Strips the search param after hydrating
+  // so refresh / back navigation doesn't re-trigger the load.
+  //
+  // Calling loadRuleSet (which cascades setState) from an effect is the
+  // legitimate URL→state bridge case the lint rule's escape hatch is for —
+  // there is no user interaction to hang off of, and the ref guard makes
+  // this a true one-shot.
+  useEffect(() => {
+    if (hydratedFromUrlRef.current || !ruleSetIdFromUrl) return;
+    if (savedRuleSets.length === 0) return;
+    const match = savedRuleSets.find((rs) => rs.id === ruleSetIdFromUrl);
+    if (!match) return;
+    hydratedFromUrlRef.current = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadRuleSet(match);
+    if (typeof window !== "undefined") {
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + window.location.hash,
+      );
+    }
+  }, [ruleSetIdFromUrl, savedRuleSets]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleRuleSetEnabled = async (id: string, currentEnabled: boolean) => {
     try {

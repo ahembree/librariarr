@@ -53,6 +53,7 @@ import {
   HardDrive,
   Layers,
   AlertTriangle,
+  ArrowRightLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { QueryBuilder, queryBuilderConfig, countAllRules, validateAllRules } from "@/components/query-builder";
@@ -73,6 +74,7 @@ import { formatFileSize, formatDuration } from "@/lib/format";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { generateId } from "@/lib/utils";
 import { EmptyState } from "@/components/empty-state";
+import { ConvertQueryToRuleDialog } from "@/components/convert-query-to-rule-dialog";
 
 interface SavedQuery {
   id: string;
@@ -271,6 +273,9 @@ export default function QueryPage() {
   const [activeQueryId, setActiveQueryId] = useState<string | null>(null);
   const [saveName, setSaveName] = useState("");
   const [savePopoverOpen, setSavePopoverOpen] = useState(false);
+
+  // Convert-to-lifecycle-rule dialog
+  const [convertDialogOpen, setConvertDialogOpen] = useState(false);
 
   // Distinct values for dropdowns
   const [distinctValues, setDistinctValues] = useState<Record<string, string[]>>({});
@@ -895,6 +900,16 @@ export default function QueryPage() {
         <Button variant="outline" size="sm" onClick={handleNew}>
           <Plus className="mr-1.5 h-3.5 w-3.5" />New
         </Button>
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setConvertDialogOpen(true)}
+          disabled={countAllRules(groups) === 0}
+          title={countAllRules(groups) === 0 ? "Add at least one rule first" : "Create a lifecycle rule set from this query"}
+        >
+          <ArrowRightLeft className="mr-1.5 h-3.5 w-3.5" />Convert to Lifecycle Rule
+        </Button>
       </div>
 
       {/* Scope: media types + servers */}
@@ -1345,6 +1360,22 @@ export default function QueryPage() {
           detailUrl={getItemDetailUrl(selectedItem)}
         />
       )}
+
+      <ConvertQueryToRuleDialog
+        open={convertDialogOpen}
+        onOpenChange={setConvertDialogOpen}
+        query={{
+          mediaTypes: mediaTypes as QueryDefinition["mediaTypes"],
+          serverIds: selectedServerIds,
+          groups,
+          sortBy,
+          sortOrder,
+          includeEpisodes,
+          ...(Object.values(arrServerIds).some(Boolean) && { arrServerIds }),
+        }}
+        availableServerIds={servers.map((s) => s.id)}
+        defaultName={activeQuery?.name}
+      />
     </>
   );
 }
