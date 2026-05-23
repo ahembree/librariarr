@@ -37,6 +37,7 @@ import {
   Users,
   Video,
   Sun,
+  Inbox,
   Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -266,6 +267,17 @@ export const CARD_REGISTRY: DashboardCardDefinition[] = [
     description: "Most recent additions to your library",
     icon: Clock,
     allowedTabs: ["main", "movies", "series", "music"],
+    defaultTabs: [],
+    minSize: 2,
+    maxSize: 12,
+    defaultSize: 12,
+  },
+  {
+    id: "seerr-requests",
+    label: "Seerr Requests",
+    description: "Top requesters with content type and watch follow-through",
+    icon: Inbox,
+    allowedTabs: ["main"],
     defaultTabs: [],
     minSize: 2,
     maxSize: 12,
