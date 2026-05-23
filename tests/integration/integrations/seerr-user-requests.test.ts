@@ -194,7 +194,64 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     expect(mockGetMovie).not.toHaveBeenCalled();
   });
 
-  it("resolves series requests to the show-level MediaItem", async () => {
+  it("resolves series via show-level TVDB external id (direct match)", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const prisma = getTestPrisma();
+
+    const show = await createTestMediaItem(library.id, {
+      type: "SERIES",
+      title: "Severance",
+      year: 2022,
+      ratingKey: "show-rk-sev",
+    });
+    await createTestExternalId(show.id, "TVDB", "371980");
+    // One episode also tagged with the show's TVDB id (typical sync behavior).
+    const ep = await createTestMediaItem(library.id, {
+      type: "SERIES",
+      title: "Good News About Hell",
+      parentTitle: "Severance",
+      seasonNumber: 1,
+      episodeNumber: 1,
+    });
+    await prisma.mediaItem.update({
+      where: { id: ep.id },
+      data: { dedupKey: "sev-s01e01", grandparentRatingKey: "show-rk-sev" },
+    });
+    await createTestExternalId(ep.id, "TVDB", "371980");
+
+    await createTestSeerrInstance(user.id);
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    mockGetRequests.mockResolvedValueOnce({
+      pageInfo: { page: 1, pages: 1, results: 1 },
+      results: [
+        makeRequest(1, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tvdbId: 371980 }),
+      ],
+    });
+
+    const body = await expectJson<{
+      requests: {
+        title: string;
+        year: number | null;
+        posterUrl: string;
+        mediaItem: { id: string; route: string } | null;
+        watch: { episodesAvailable: number };
+      }[];
+    }>(await callRouteWithParams(GET, { userKey: "alice" }), 200);
+
+    expect(body.requests).toHaveLength(1);
+    expect(body.requests[0].title).toBe("Severance");
+    expect(body.requests[0].year).toBe(2022);
+    expect(body.requests[0].mediaItem).toEqual({ id: show.id, route: "show" });
+    expect(body.requests[0].posterUrl).toBe(`/api/media/${show.id}/image`);
+    expect(body.requests[0].watch.episodesAvailable).toBe(1);
+    // Direct match means we shouldn't fall back to Seerr API
+    expect(mockGetTvShow).not.toHaveBeenCalled();
+  });
+
+  it("resolves series via episode's grandparentRatingKey (fallback)", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
     const library = await createTestLibrary(server.id, { type: "SERIES" });
