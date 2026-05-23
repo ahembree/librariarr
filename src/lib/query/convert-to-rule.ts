@@ -1,8 +1,11 @@
 import { z } from "zod/v4";
-import type { LibraryType } from "@/lib/conditions";
+import type { ConditionGroup, LibraryType } from "@/lib/conditions";
 import type { ruleSetCreateSchema } from "@/lib/validation";
 import type { QueryDefinition } from "@/lib/query/types";
-import { dropIncompatibleRules } from "@/components/builder/library-type-validity";
+import {
+  countAllRulesIncludingDisabled,
+  dropIncompatibleRules,
+} from "@/components/builder/library-type-validity";
 
 export type RuleSetCreateBody = z.infer<typeof ruleSetCreateSchema>;
 
@@ -27,7 +30,14 @@ export class ConvertQueryError extends Error {
 
 export function convertQueryToRuleSetBody(
   query: QueryDefinition,
-  opts: ConvertOptions,
+  opts: ConvertOptions & {
+    /**
+     * Optional pre-computed pruned tree. The dialog passes its memoized
+     * value to avoid running `dropIncompatibleRules` a second time on
+     * submit. When omitted, the helper computes it itself.
+     */
+    cleanedGroups?: ConditionGroup[];
+  },
 ): RuleSetCreateBody {
   if (!opts.name.trim()) {
     throw new ConvertQueryError("EMPTY_NAME", "Name is required");
@@ -38,8 +48,14 @@ export function convertQueryToRuleSetBody(
       "At least one server is required for a lifecycle rule set",
     );
   }
-  const cleaned = dropIncompatibleRules(query.groups, opts.targetLibraryType);
-  if (cleaned.length === 0) {
+  const cleaned =
+    opts.cleanedGroups ??
+    dropIncompatibleRules(query.groups, opts.targetLibraryType);
+  // Reject both the "every group got pruned to empty" case and the
+  // "some groups remain but they're all placeholders with no rules"
+  // case. Either would produce a rule set that the engine evaluates to
+  // a no-op, surprising the user.
+  if (cleaned.length === 0 || countAllRulesIncludingDisabled(cleaned) === 0) {
     throw new ConvertQueryError(
       "ALL_RULES_INCOMPATIBLE",
       `No rules in this query are compatible with library type ${opts.targetLibraryType}`,
@@ -56,7 +72,11 @@ export function convertQueryToRuleSetBody(
     serverIds: opts.serverIds,
     enabled: true,
     actionEnabled: false,
-    ...(opts.targetLibraryType === "SERIES" ? { seriesScope: true } : {}),
+    // `includeEpisodes: true` in the query means "match individual episodes",
+    // which corresponds to `seriesScope: false` on the rule set side.
+    ...(opts.targetLibraryType === "SERIES"
+      ? { seriesScope: !query.includeEpisodes }
+      : {}),
     ...(arrInstanceId ? { arrInstanceId } : {}),
   };
 }

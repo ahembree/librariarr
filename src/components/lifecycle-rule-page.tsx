@@ -1451,17 +1451,68 @@ export function LifecycleRulePage({
     if (hydratedFromUrlRef.current || !ruleSetIdFromUrl) return;
     if (savedRuleSets.length === 0) return;
     const match = savedRuleSets.find((rs) => rs.id === ruleSetIdFromUrl);
-    if (!match) return;
-    hydratedFromUrlRef.current = true;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadRuleSet(match);
-    if (typeof window !== "undefined") {
-      window.history.replaceState(
-        null,
-        "",
-        window.location.pathname + window.location.hash,
-      );
+    if (match) {
+      hydratedFromUrlRef.current = true;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      void loadRuleSet(match);
+      if (typeof window !== "undefined") {
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + window.location.hash,
+        );
+      }
+      return;
     }
+    // No match in this tab. The rule set might belong to a different library
+    // type — re-fetch unfiltered and either redirect to the right tab or
+    // surface a not-found message.
+    hydratedFromUrlRef.current = true;
+    void (async () => {
+      try {
+        const res = await fetch("/api/lifecycle/rules");
+        if (!res.ok) throw new Error("fetch failed");
+        const data = (await res.json()) as { ruleSets: SavedRuleSet[] };
+        const found = data.ruleSets.find((rs) => rs.id === ruleSetIdFromUrl);
+        if (!found) {
+          toast.error("Rule set not found", {
+            description: "It may have been deleted.",
+          });
+          if (typeof window !== "undefined") {
+            window.history.replaceState(
+              null,
+              "",
+              window.location.pathname + window.location.hash,
+            );
+          }
+          return;
+        }
+        const targetHash =
+          found.type === "MOVIE" ? "movies" : found.type === "SERIES" ? "series" : "music";
+        toast.info("Switching to the rule set's tab", {
+          description: `This rule set is in the ${targetHash} tab.`,
+        });
+        if (typeof window !== "undefined") {
+          window.location.replace(
+            `${window.location.pathname}?ruleSet=${encodeURIComponent(found.id)}#${targetHash}`,
+          );
+        }
+      } catch {
+        // Network failure — surface it so the user isn't stranded on the
+        // wrong tab with no explanation. Clear the param so refresh doesn't
+        // loop on the same failure.
+        toast.error("Couldn't locate the rule set", {
+          description: "Check your network and refresh.",
+        });
+        if (typeof window !== "undefined") {
+          window.history.replaceState(
+            null,
+            "",
+            window.location.pathname + window.location.hash,
+          );
+        }
+      }
+    })();
   }, [ruleSetIdFromUrl, savedRuleSets]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleRuleSetEnabled = async (id: string, currentEnabled: boolean) => {

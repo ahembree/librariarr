@@ -113,4 +113,49 @@ describe("dropIncompatibleRules", () => {
     dropIncompatibleRules(groups, "MUSIC");
     expect(JSON.stringify(groups)).toBe(snapshot);
   });
+
+  it("preserves groups that started empty (placeholder groups)", () => {
+    const empty: ConditionGroup = {
+      id: "g-empty",
+      condition: "AND",
+      rules: [],
+      groups: [],
+    };
+    const populated = group("g1", [{ field: "title" }]);
+    const out = dropIncompatibleRules([empty, populated], "MOVIE");
+    expect(out.map((g) => g.id)).toEqual(["g-empty", "g1"]);
+  });
+
+  it("preserves a stream-query group with no rules (semantics live on streamQuery)", () => {
+    const streamGroup: ConditionGroup = {
+      id: "g-stream",
+      condition: "AND",
+      rules: [],
+      groups: [],
+      streamQuery: { streamType: "audio", quantifier: "any" },
+    };
+    const out = dropIncompatibleRules([streamGroup], "MOVIE");
+    expect(out).toHaveLength(1);
+    expect(out[0].streamQuery).toEqual({ streamType: "audio", quantifier: "any" });
+  });
+
+  it("still drops a group that became empty due to pruning", () => {
+    const groups = [group("g1", [{ field: "arrTmdbRating" }])];
+    const out = dropIncompatibleRules(groups, "MUSIC");
+    expect(out).toEqual([]);
+  });
+
+  it("preserves the streamQuery field when only some rules are pruned", () => {
+    const streamGroup: ConditionGroup = {
+      id: "g-stream",
+      condition: "AND",
+      rules: [
+        { id: "r1", field: "audioLanguage", operator: "equals", value: "eng", condition: "AND" },
+      ],
+      groups: [],
+      streamQuery: { streamType: "audio" },
+    };
+    const out = dropIncompatibleRules([streamGroup], "MOVIE");
+    expect(out[0].streamQuery).toEqual({ streamType: "audio" });
+  });
 });
