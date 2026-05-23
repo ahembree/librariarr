@@ -163,9 +163,11 @@ function UserAvatar({ name }: { name: string }) {
 
 function PosterThumb({ url, type }: { url: string | null; type: "movie" | "tv" }) {
   const Icon = type === "movie" ? Film : Tv;
+  const [errored, setErrored] = useState(false);
+  const showImage = url && !errored;
   return (
     <div className="relative h-20 w-14 shrink-0 overflow-hidden rounded-md bg-muted/40 ring-1 ring-border/40">
-      {url ? (
+      {showImage ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={url}
@@ -173,10 +175,7 @@ function PosterThumb({ url, type }: { url: string | null; type: "movie" | "tv" }
           className="h-full w-full object-cover"
           loading="lazy"
           referrerPolicy="no-referrer"
-          onError={(e) => {
-            const el = e.currentTarget as HTMLImageElement;
-            el.style.display = "none";
-          }}
+          onError={() => setErrored(true)}
         />
       ) : (
         <div className="flex h-full w-full items-center justify-center">

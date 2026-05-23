@@ -249,13 +249,19 @@ async function resolveUserRequests(
   }
 
   // For requests not in the library, fetch title/poster from Seerr in parallel.
-  const missingMovieIds = new Set<number>();
-  const missingTvIds = new Set<number>();
+  // Keyed by TMDB id (always present on Seerr requests; TVDB can be null/0 for
+  // shows Seerr couldn't match), so we still get titles for those edge cases.
+  const missingMovieTmdbs = new Set<number>();
+  const missingTvTmdbs = new Set<number>();
   for (const { req } of matched) {
-    if (req.type === "movie" && req.media?.tmdbId && !movieMap.has(req.media.tmdbId)) {
-      missingMovieIds.add(req.media.tmdbId);
-    } else if (req.type === "tv" && req.media?.tvdbId && !seriesMap.has(req.media.tvdbId)) {
-      missingTvIds.add(req.media.tvdbId);
+    if (req.type === "movie") {
+      if (!req.media?.tmdbId) continue;
+      if (!movieMap.has(req.media.tmdbId)) missingMovieTmdbs.add(req.media.tmdbId);
+    } else if (req.type === "tv") {
+      if (!req.media?.tmdbId) continue;
+      const tvdb = req.media.tvdbId;
+      const inLibrary = tvdb != null && tvdb !== 0 && seriesMap.has(tvdb);
+      if (!inLibrary) missingTvTmdbs.add(req.media.tmdbId);
     }
   }
 
@@ -263,15 +269,15 @@ async function resolveUserRequests(
     number,
     { title: string | null; year: number | null; posterUrl: string | null }
   >();
-  const seerrTvDetails = new Map<
+  const seerrTvDetailsByTmdb = new Map<
     number,
     { title: string | null; year: number | null; posterUrl: string | null }
   >();
 
-  if (missingMovieIds.size > 0 || missingTvIds.size > 0) {
+  if (missingMovieTmdbs.size > 0 || missingTvTmdbs.size > 0) {
     const firstInstance = instances[0];
     const client = new SeerrClient(firstInstance.url, firstInstance.apiKey);
-    const movieFetches = Array.from(missingMovieIds).map(async (tmdb) => {
+    const movieFetches = Array.from(missingMovieTmdbs).map(async (tmdb) => {
       try {
         const detail = await client.getMovie(tmdb);
         const year = detail.releaseDate ? Number(detail.releaseDate.slice(0, 4)) : null;
@@ -284,18 +290,11 @@ async function resolveUserRequests(
         // ignore; fall back to placeholder label
       }
     });
-    // Seerr getTvShow uses TMDB id, but requests carry TVDB id; map via the request's tmdbId.
-    const tvFetchByTmdb = new Map<number, number>();
-    for (const { req } of matched) {
-      if (req.type === "tv" && req.media?.tvdbId != null && missingTvIds.has(req.media.tvdbId)) {
-        if (req.media.tmdbId) tvFetchByTmdb.set(req.media.tmdbId, req.media.tvdbId);
-      }
-    }
-    const tvFetches = Array.from(tvFetchByTmdb.entries()).map(async ([tmdb, tvdb]) => {
+    const tvFetches = Array.from(missingTvTmdbs).map(async (tmdb) => {
       try {
         const detail = await client.getTvShow(tmdb);
         const year = detail.firstAirDate ? Number(detail.firstAirDate.slice(0, 4)) : null;
-        seerrTvDetails.set(tvdb, {
+        seerrTvDetailsByTmdb.set(tmdb, {
           title: detail.name ?? null,
           year: Number.isFinite(year) ? year : null,
           posterUrl: tmdbPosterUrl(detail.posterPath),
@@ -336,10 +335,11 @@ async function resolveUserRequests(
       });
     } else {
       const tvdb = req.media?.tvdbId ?? 0;
-      const local = seriesMap.get(tvdb);
-      const fallback = seerrTvDetails.get(tvdb);
+      const tmdb = req.media?.tmdbId ?? 0;
+      const local = tvdb > 0 ? seriesMap.get(tvdb) : undefined;
+      const fallback = tmdb > 0 ? seerrTvDetailsByTmdb.get(tmdb) : undefined;
       const episodesAvailable = local?.episodes.length ?? 0;
-      const episodesWatched = watchedEpisodesByTvdb.get(tvdb)?.size ?? 0;
+      const episodesWatched = tvdb > 0 ? watchedEpisodesByTvdb.get(tvdb)?.size ?? 0 : 0;
       resolved.push({
         seerrId: req.id,
         seerrInstanceId: instanceId,
@@ -348,9 +348,12 @@ async function resolveUserRequests(
         mediaStatus: req.media?.status ?? 1,
         is4k: req.is4k ?? false,
         createdAt: req.createdAt,
-        tmdbId: req.media?.tmdbId ?? 0,
-        tvdbId: tvdb,
-        title: local?.title ?? fallback?.title ?? `Series (TVDB ${tvdb})`,
+        tmdbId: tmdb,
+        tvdbId: tvdb > 0 ? tvdb : null,
+        title:
+          local?.title ??
+          fallback?.title ??
+          (tvdb > 0 ? `Series (TVDB ${tvdb})` : tmdb > 0 ? `Series (TMDB ${tmdb})` : "Series"),
         // Year on episodes is the episode's air year, not the show's — only use the
         // Seerr-supplied first-air year so we don't show misleading season-specific years.
         year: fallback?.year ?? null,

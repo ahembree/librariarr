@@ -161,6 +161,44 @@ function SortIcon({ column, active, dir }: { column: SortColumn; active: SortCol
   return dir === "asc" ? <ArrowUp className="ml-1 inline h-3 w-3" /> : <ArrowDown className="ml-1 inline h-3 w-3" />;
 }
 
+function SortableHeader({
+  children,
+  column,
+  sortColumn,
+  sortDir,
+  align = "left",
+  className,
+  onClick,
+}: {
+  children: React.ReactNode;
+  column: SortColumn;
+  sortColumn: SortColumn | null;
+  sortDir: SortDir;
+  align?: "left" | "right";
+  className?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1 select-none hover:text-foreground focus:outline-none focus-visible:text-foreground focus-visible:ring-1 focus-visible:ring-ring rounded-sm px-0.5",
+        align === "right" && "justify-end ml-auto",
+        className
+      )}
+    >
+      {children}
+      <SortIcon column={column} active={sortColumn} dir={sortDir} />
+    </button>
+  );
+}
+
+function sortAria(active: boolean, dir: SortDir): "ascending" | "descending" | "none" {
+  if (!active) return "none";
+  return dir === "asc" ? "ascending" : "descending";
+}
+
 function sortValue(u: UserStats, col: SortColumn): number | string {
   const s = watchedScores(u);
   switch (col) {
@@ -364,53 +402,40 @@ export function SeerrRequestStats() {
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-card">
                 <TableRow>
-                  <TableHead
-                    className="cursor-pointer select-none hover:text-foreground"
-                    onClick={() => toggleSort("user")}
-                  >
-                    User <SortIcon column="user" active={sortColumn} dir={sortDir} />
+                  <TableHead aria-sort={sortAria(sortColumn === "user", sortDir)}>
+                    <SortableHeader column="user" sortColumn={sortColumn} sortDir={sortDir} onClick={() => toggleSort("user")}>
+                      User
+                    </SortableHeader>
                   </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none text-right hover:text-foreground"
-                    onClick={() => toggleSort("total")}
-                  >
-                    Total <SortIcon column="total" active={sortColumn} dir={sortDir} />
+                  <TableHead className="text-right" aria-sort={sortAria(sortColumn === "total", sortDir)}>
+                    <SortableHeader column="total" sortColumn={sortColumn} sortDir={sortDir} align="right" onClick={() => toggleSort("total")}>
+                      Total
+                    </SortableHeader>
                   </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none text-right hover:text-foreground"
-                    onClick={() => toggleSort("movies")}
-                  >
-                    <span className="inline-flex items-center justify-end gap-1">
+                  <TableHead className="text-right" aria-sort={sortAria(sortColumn === "movies", sortDir)}>
+                    <SortableHeader column="movies" sortColumn={sortColumn} sortDir={sortDir} align="right" onClick={() => toggleSort("movies")}>
                       <Film className="h-3.5 w-3.5" />
-                      <SortIcon column="movies" active={sortColumn} dir={sortDir} />
-                    </span>
+                    </SortableHeader>
                   </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none text-right hover:text-foreground"
-                    onClick={() => toggleSort("moviePct")}
-                  >
-                    Movie % <SortIcon column="moviePct" active={sortColumn} dir={sortDir} />
+                  <TableHead className="text-right" aria-sort={sortAria(sortColumn === "moviePct", sortDir)}>
+                    <SortableHeader column="moviePct" sortColumn={sortColumn} sortDir={sortDir} align="right" onClick={() => toggleSort("moviePct")}>
+                      Movie %
+                    </SortableHeader>
                   </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none text-right hover:text-foreground"
-                    onClick={() => toggleSort("series")}
-                  >
-                    <span className="inline-flex items-center justify-end gap-1">
+                  <TableHead className="text-right" aria-sort={sortAria(sortColumn === "series", sortDir)}>
+                    <SortableHeader column="series" sortColumn={sortColumn} sortDir={sortDir} align="right" onClick={() => toggleSort("series")}>
                       <Tv className="h-3.5 w-3.5" />
-                      <SortIcon column="series" active={sortColumn} dir={sortDir} />
-                    </span>
+                    </SortableHeader>
                   </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none text-right hover:text-foreground"
-                    onClick={() => toggleSort("seriesPct")}
-                  >
-                    Series % <SortIcon column="seriesPct" active={sortColumn} dir={sortDir} />
+                  <TableHead className="text-right" aria-sort={sortAria(sortColumn === "seriesPct", sortDir)}>
+                    <SortableHeader column="seriesPct" sortColumn={sortColumn} sortDir={sortDir} align="right" onClick={() => toggleSort("seriesPct")}>
+                      Series %
+                    </SortableHeader>
                   </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none text-right hover:text-foreground min-w-[120px]"
-                    onClick={() => toggleSort("overallPct")}
-                  >
-                    Overall <SortIcon column="overallPct" active={sortColumn} dir={sortDir} />
+                  <TableHead className="text-right min-w-[120px]" aria-sort={sortAria(sortColumn === "overallPct", sortDir)}>
+                    <SortableHeader column="overallPct" sortColumn={sortColumn} sortDir={sortDir} align="right" onClick={() => toggleSort("overallPct")}>
+                      Overall
+                    </SortableHeader>
                   </TableHead>
                 </TableRow>
               </TableHeader>
@@ -420,8 +445,16 @@ export function SeerrRequestStats() {
                   return (
                     <TableRow
                       key={u.userKey}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => setOpenUserKey(u.userKey)}
-                      className="cursor-pointer hover:bg-muted/30"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setOpenUserKey(u.userKey);
+                        }
+                      }}
+                      className="cursor-pointer hover:bg-muted/30 focus:outline-none focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring"
                     >
                       <TableCell className="font-medium">
                         <div className="flex items-center gap-2 min-w-0">
@@ -524,8 +557,16 @@ export function SeerrRequestStats() {
               return (
                 <li
                   key={u.userKey}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setOpenUserKey(u.userKey)}
-                  className="flex items-center gap-3 rounded-md px-2 py-1.5 cursor-pointer hover:bg-muted/30 transition-colors"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setOpenUserKey(u.userKey);
+                    }
+                  }}
+                  className="flex items-center gap-3 rounded-md px-2 py-1.5 cursor-pointer hover:bg-muted/30 transition-colors focus:outline-none focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   <UserAvatar name={u.seerrUsername} />
                   <div className="flex-1 min-w-0">
