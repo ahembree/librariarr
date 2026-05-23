@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.19.0](https://github.com/ahembree/librariarr/compare/v0.18.2...v0.19.0) (2026-05-23)
+
+
+### Features
+
+* **dashboard:** add Seerr request stats card ([c98188c](https://github.com/ahembree/librariarr/commit/c98188c03507a0d162668a66a74f0177e8246c65))
+* **dashboard:** drill into a user's Seerr requests with library links ([a87f822](https://github.com/ahembree/librariarr/commit/a87f8226ccf9e468b43439759107ed042c8ecfd4))
+* **dashboard:** redesign Seerr request stats card ([e28997a](https://github.com/ahembree/librariarr/commit/e28997aa463e46305043f34b5379ac640c10c9ea))
+* **dashboard:** split Seerr watch % into movie, series, and overall ([d508988](https://github.com/ahembree/librariarr/commit/d508988ae79f9e33a3e2d45050c666e6da9a97ef))
+* **query:** create rule from query ([5ec46d4](https://github.com/ahembree/librariarr/commit/5ec46d4b69b12e08e44a15c022f236be11f8e7ef))
+
+
+### Bug Fixes
+
+* **dashboard:** bug-fix pass on Seerr request stats card and modal ([3f5ca60](https://github.com/ahembree/librariarr/commit/3f5ca6061d417d0dfb9bce28c8de6e1ec24fbf29))
+* **dashboard:** force Seerr requests modal to 75vw ([8ea528e](https://github.com/ahembree/librariarr/commit/8ea528ebd9ac966a1f57cbbe1479df0870e310b7))
+* **dashboard:** resolve series via any canonical episode ([6217500](https://github.com/ahembree/librariarr/commit/6217500b74a956d6fd9b79fd91f9b6a81aab3abb))
+* **dashboard:** show series request links and posters correctly ([28f7421](https://github.com/ahembree/librariarr/commit/28f7421fa8ce4e0d02c9d0b28e76e6d1b4922599))
+* **query:** add value gate to rule conversion ([8179790](https://github.com/ahembree/librariarr/commit/8179790c1d724867dcd8fd6e89753b89f45c589a))
+* **query:** query-to-rule conversion bug fixes ([58c04ec](https://github.com/ahembree/librariarr/commit/58c04ec46c5a82d9182982670c109084c916948f))
+* **query:** query-to-rule conversion bug fixes ([4fbcbb3](https://github.com/ahembree/librariarr/commit/4fbcbb39fccb4e3b2296fe437c1b458c3f84ff45))
+
 ## [0.18.2](https://github.com/ahembree/librariarr/compare/v0.18.1...v0.18.2) (2026-05-22)
 
 
