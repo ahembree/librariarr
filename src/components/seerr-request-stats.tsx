@@ -52,11 +52,32 @@ interface Response {
   };
 }
 
-function watchedScore(u: UserStats): { num: number; denom: number; pct: number | null } {
-  const num = u.moviesWatched + u.episodesWatched;
-  const denom = u.movieCount + u.episodesAvailable;
-  const pct = denom > 0 ? Math.round((num / denom) * 100) : null;
-  return { num, denom, pct };
+function pct(num: number, denom: number): number | null {
+  return denom > 0 ? Math.round((num / denom) * 100) : null;
+}
+
+interface Scores {
+  moviePct: number | null;
+  seriesPct: number | null;
+  overallPct: number | null;
+  overallNum: number;
+  overallDenom: number;
+}
+
+function watchedScores(u: UserStats): Scores {
+  const overallNum = u.moviesWatched + u.episodesWatched;
+  const overallDenom = u.movieCount + u.episodesAvailable;
+  return {
+    moviePct: pct(u.moviesWatched, u.movieCount),
+    seriesPct: pct(u.episodesWatched, u.episodesAvailable),
+    overallPct: pct(overallNum, overallDenom),
+    overallNum,
+    overallDenom,
+  };
+}
+
+function fmtPct(p: number | null): string {
+  return p == null ? "—" : `${p}%`;
 }
 
 export function SeerrRequestStats() {
@@ -171,21 +192,22 @@ export function SeerrRequestStats() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[36%]">User</TableHead>
+                  <TableHead>User</TableHead>
                   <TableHead className="text-right">Total</TableHead>
                   <TableHead className="text-right">
                     <Film className="ml-auto h-3.5 w-3.5" />
                   </TableHead>
+                  <TableHead className="text-right">Movie %</TableHead>
                   <TableHead className="text-right">
                     <Tv className="ml-auto h-3.5 w-3.5" />
                   </TableHead>
-                  <TableHead className="text-right">Watched</TableHead>
-                  <TableHead className="text-right">%</TableHead>
+                  <TableHead className="text-right">Series %</TableHead>
+                  <TableHead className="text-right">Overall %</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {data.users.map((u) => {
-                  const score = watchedScore(u);
+                  const score = watchedScores(u);
                   return (
                     <TableRow key={u.userKey}>
                       <TableCell className="font-medium">
@@ -210,32 +232,51 @@ export function SeerrRequestStats() {
                         {u.movieCount.toLocaleString()}
                       </TableCell>
                       <TableCell className="text-right tabular-nums text-muted-foreground">
-                        {u.seriesCount.toLocaleString()}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">
-                        {u.correlatable ? (
+                        {u.correlatable && u.movieCount > 0 ? (
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <span>
-                                {score.num.toLocaleString()}
-                                <span className="text-muted-foreground/60">
-                                  {" "}
-                                  / {score.denom.toLocaleString()}
-                                </span>
-                              </span>
+                              <span>{fmtPct(score.moviePct)}</span>
                             </TooltipTrigger>
                             <TooltipContent>
-                              {u.moviesWatched} movies watched ·{" "}
-                              {u.seriesWithAnyEpisodeWatched} series started ·{" "}
-                              {u.episodesWatched} of {u.episodesAvailable} requested episodes
+                              {u.moviesWatched} of {u.movieCount} movies watched
                             </TooltipContent>
                           </Tooltip>
                         ) : (
-                          <span>—</span>
+                          "—"
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        {u.seriesCount.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        {u.correlatable && u.episodesAvailable > 0 ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span>{fmtPct(score.seriesPct)}</span>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              {u.episodesWatched} of {u.episodesAvailable} requested episodes watched
+                              {u.seriesWithAnyEpisodeWatched > 0 &&
+                                ` · ${u.seriesWithAnyEpisodeWatched} of ${u.seriesCount} series started`}
+                            </TooltipContent>
+                          </Tooltip>
+                        ) : (
+                          "—"
                         )}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
-                        {score.pct == null ? "—" : `${score.pct}%`}
+                        {u.correlatable && score.overallDenom > 0 ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span>{fmtPct(score.overallPct)}</span>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              {score.overallNum} of {score.overallDenom} units watched (movies + episodes)
+                            </TooltipContent>
+                          </Tooltip>
+                        ) : (
+                          "—"
+                        )}
                       </TableCell>
                     </TableRow>
                   );
@@ -258,8 +299,8 @@ export function SeerrRequestStats() {
         <TooltipProvider delayDuration={200}>
           <div className="space-y-1">
             {topUsers.map((u, i) => {
-              const score = watchedScore(u);
-              const pct = maxRequests > 0 ? (u.requestCount / maxRequests) * 100 : 0;
+              const score = watchedScores(u);
+              const barPct = maxRequests > 0 ? (u.requestCount / maxRequests) * 100 : 0;
               return (
                 <div
                   key={u.userKey}
@@ -267,7 +308,7 @@ export function SeerrRequestStats() {
                 >
                   <div
                     className="absolute inset-0 rounded-md bg-primary/5"
-                    style={{ width: `${pct}%` }}
+                    style={{ width: `${barPct}%` }}
                   />
                   <span className="relative w-5 text-right text-xs font-medium text-muted-foreground">
                     {i + 1}
@@ -291,30 +332,43 @@ export function SeerrRequestStats() {
                         <span className="flex items-center gap-1">
                           <Film className="h-3 w-3" />
                           {u.movieCount}
+                          {u.correlatable && u.movieCount > 0 && (
+                            <span className="text-muted-foreground/60">·{fmtPct(score.moviePct)}</span>
+                          )}
                         </span>
                       </TooltipTrigger>
-                      <TooltipContent>Movies requested</TooltipContent>
+                      <TooltipContent>
+                        {u.correlatable && u.movieCount > 0
+                          ? `${u.moviesWatched} of ${u.movieCount} movies watched`
+                          : "Movies requested"}
+                      </TooltipContent>
                     </Tooltip>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <span className="flex items-center gap-1">
                           <Tv className="h-3 w-3" />
                           {u.seriesCount}
+                          {u.correlatable && u.episodesAvailable > 0 && (
+                            <span className="text-muted-foreground/60">·{fmtPct(score.seriesPct)}</span>
+                          )}
                         </span>
                       </TooltipTrigger>
-                      <TooltipContent>Series requested</TooltipContent>
+                      <TooltipContent>
+                        {u.correlatable && u.episodesAvailable > 0
+                          ? `${u.episodesWatched} of ${u.episodesAvailable} requested episodes watched`
+                          : "Series requested"}
+                      </TooltipContent>
                     </Tooltip>
                     {u.correlatable && (
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <span className="flex items-center gap-1">
                             <Eye className="h-3 w-3" />
-                            {score.pct == null ? "—" : `${score.pct}%`}
+                            {fmtPct(score.overallPct)}
                           </span>
                         </TooltipTrigger>
                         <TooltipContent>
-                          {u.moviesWatched} of {u.movieCount} movies ·{" "}
-                          {u.episodesWatched} of {u.episodesAvailable} requested episodes
+                          Overall: {score.overallNum} of {score.overallDenom} units watched (movies + episodes)
                         </TooltipContent>
                       </Tooltip>
                     )}
