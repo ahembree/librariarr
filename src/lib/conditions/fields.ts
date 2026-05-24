@@ -19,6 +19,7 @@ export const CONDITION_FIELDS: ConditionField[] = [
 
   // ─── Activity ───────────────────────────────────────────────────────────
   { value: "playCount", label: "Play Count", type: "number", section: "activity" },
+  { value: "watchedByUser", label: "Watched By User", type: "text", section: "activity", enumerable: true },
   { value: "rating", label: "Rating", type: "number", section: "activity" },
   { value: "audienceRating", label: "Audience Rating", type: "number", section: "activity" },
   { value: "ratingCount", label: "Rating Count", type: "number", section: "activity" },

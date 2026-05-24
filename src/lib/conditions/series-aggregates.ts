@@ -22,6 +22,8 @@ export interface AggregableEpisode {
   parentSummary?: string | null;
   // Optional — only present when the caller `include`d streams
   streams?: unknown[];
+  // Optional — only present when the caller `include`d watchHistory
+  watchHistory?: Array<{ serverUsername: string | null }>;
 }
 
 /** A series-level aggregate, suitable for in-memory rule evaluation. */
@@ -33,6 +35,8 @@ export type SeriesAggregate<E extends AggregableEpisode> = Omit<E, "fileSize"> &
   latestEpisodeViewDate: Date | null;
   lastEpisodeAddedAt: Date | null;
   lastEpisodeAiredAt: Date | null;
+  /** Deduped usernames who played at least one episode (empty when not loaded). */
+  watchedByUsers: string[];
   allStreams?: unknown[];
   memberIds: string[];
 };
@@ -108,6 +112,20 @@ export function aggregateEpisodesIntoSeries<E extends AggregableEpisode>(
       ? eps.flatMap((ep) => (Array.isArray(ep.streams) ? ep.streams : []))
       : undefined;
 
+    // Deduped lowercase-cased usernames who played any episode in this series.
+    // Empty when no episode has watchHistory loaded (the caller didn't ask
+    // for it). The `watchedByUser` rule evaluator distinguishes by checking
+    // `Array.isArray(item.watchedByUsers)` — so we always emit the field.
+    const watchedByUsers = Array.from(
+      new Set(
+        eps.flatMap((ep) =>
+          Array.isArray(ep.watchHistory)
+            ? ep.watchHistory.map((h) => h.serverUsername).filter((u): u is string => !!u)
+            : [],
+        ),
+      ),
+    );
+
     aggregated.push({
       ...representative,
       // Use series name as title so "title" rules match against the series.
@@ -127,6 +145,7 @@ export function aggregateEpisodesIntoSeries<E extends AggregableEpisode>(
       latestEpisodeViewDate,
       lastEpisodeAddedAt: latestEpisodeAdded,
       lastEpisodeAiredAt: latestEpisodeAired,
+      watchedByUsers,
       allStreams,
       memberIds: eps.map((ep) => ep.id),
     } as SeriesAggregate<E>);
@@ -157,6 +176,7 @@ export function serializeSeriesAggregateForEval(
       : 0,
     lastEpisodeAddedAt: toIsoOrNull(series.lastEpisodeAddedAt),
     lastEpisodeAiredAt: toIsoOrNull(series.lastEpisodeAiredAt),
+    watchedByUsers: series.watchedByUsers,
   };
 }
 

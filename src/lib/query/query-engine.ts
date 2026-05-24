@@ -269,6 +269,10 @@ const ITEM_SELECT_FULL = {
     },
   },
   externalIds: { select: { source: true, externalId: true } },
+  // Per-user play log — used by the `watchedByUser` field. Selecting only
+  // `serverUsername` keeps the join cheap; the field is only meaningful when
+  // a rule references it, and the full-select path is already the slow path.
+  watchHistory: { select: { serverUsername: true } },
 };
 
 /** Build the shared WHERE clause from a query definition and resolved server IDs */
@@ -1112,6 +1116,60 @@ function evaluateQueryRuleInMemory(
       case "equals": result = item[field] === boolVal; break;
       case "notEquals": result = item[field] !== boolVal; break;
       default: return false;
+    }
+    return negate ? !result : result;
+  }
+
+  // Watched By User — series aggregates flatten episode history into
+  // `watchedByUsers: string[]`; individual items expose `watchHistory` directly.
+  if (field === "watchedByUser") {
+    const aggregated = Array.isArray(item.watchedByUsers)
+      ? (item.watchedByUsers as string[]).map((u) => u.toLowerCase())
+      : null;
+    const users = aggregated ?? (
+      Array.isArray(item.watchHistory)
+        ? (item.watchHistory as Array<{ serverUsername: string | null }>)
+            .map((h) => (h.serverUsername ?? "").toLowerCase())
+            .filter(Boolean)
+        : []
+    );
+    const strVal = String(value).toLowerCase();
+    let result: boolean;
+    switch (operator) {
+      case "equals":
+        result = users.some((u) => u === strVal);
+        break;
+      case "notEquals":
+        result = !users.some((u) => u === strVal);
+        break;
+      case "contains": {
+        const values = strVal.split("|").filter(Boolean);
+        result = values.some((v) => users.some((u) => u === v));
+        break;
+      }
+      case "notContains": {
+        const values = strVal.split("|").filter(Boolean);
+        result = !values.some((v) => users.some((u) => u === v));
+        break;
+      }
+      case "matchesWildcard": {
+        const re = wildcardToRegex(strVal);
+        result = users.some((u) => re.test(u));
+        break;
+      }
+      case "notMatchesWildcard": {
+        const re = wildcardToRegex(strVal);
+        result = !users.some((u) => re.test(u));
+        break;
+      }
+      case "isNull":
+        result = users.length === 0;
+        break;
+      case "isNotNull":
+        result = users.length > 0;
+        break;
+      default:
+        return false;
     }
     return negate ? !result : result;
   }

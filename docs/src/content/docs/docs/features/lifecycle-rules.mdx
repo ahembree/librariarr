@@ -41,6 +41,7 @@ Over 50 fields are available for rule conditions.
 | Field | Description | Operators |
 |-------|-------------|-----------|
 | `playCount` | Number of times played | equals, greaterThan, lessThan, etc. |
+| `watchedByUser` | Server username that played the item (Plex/Jellyfin/Emby) — multi-select | equals, notEquals, contains, notContains |
 | `lastPlayedAt` | When last played | before, after, inLastDays |
 | `addedAt` | When added to library | before, after, inLastDays |
 | `title` | Media title | equals, contains, matchesWildcard |
@@ -157,6 +158,16 @@ Create a rule set with an OR group:
 - `resolution` equals `480P`
 - `resolution` equals `SD`
 - `videoCodec` equals `mpeg2video`
+
+### Example: Watched Only By Departed Household Members
+
+Create a rule set with an AND group:
+
+- `watchedByUser` contains `alice|bob` — Only watched by people no longer in the household
+- `watchedByUser` notContains `carol|dave` — Never watched by current household members
+- `addedAt` notInLastDays `180` — Been in the library for at least 6 months
+
+The `watchedByUser` field reads from the per-user play history synced from Plex / Jellyfin / Emby. "Watched by" means **any play by that user**, regardless of how much of the item they actually consumed. The dropdown is populated with usernames the sync has seen on your connected servers.
 
 ### Converting a Query into a Rule Set
 

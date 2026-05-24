@@ -394,6 +394,20 @@ function hasExternalIdFieldRules(rules: LifecycleRule[] | LifecycleRuleGroup[]):
   return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "hasExternalId");
 }
 
+/** Check if any rule uses the watchedByUser field (requires WatchHistory eager-load) */
+function hasWatchedByUserRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+  if (rules.length === 0) return false;
+  if (isRuleGroups(rules)) {
+    for (const group of rules) {
+      if (group.enabled === false) continue;
+      if (group.rules.some((r) => r.enabled !== false && r.field === "watchedByUser")) return true;
+      if (hasWatchedByUserRules(group.groups ?? [])) return true;
+    }
+    return false;
+  }
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "watchedByUser");
+}
+
 /** Evaluate a single arr rule against arr metadata for an item */
 function evaluateArrRule(rule: LifecycleRule, meta: ArrMetadata | undefined): boolean {
   // Safety: unconfigured contains/notContains matches nothing. Negate is
@@ -1114,6 +1128,65 @@ function evaluateRuleAgainstItem(
     return negate ? !result : result;
   }
 
+  // Watched By User — checks the per-user WatchHistory rows attached to the
+  // item. For series/music aggregates, the engine flattens episode/track
+  // history into `watchedByUsers: string[]` (deduped lowercase usernames);
+  // for individual movies/episodes/tracks we read `watchHistory` directly.
+  // Either source produces the same `users` list, so the operator branches
+  // are identical to the seerrRequestedBy handler above.
+  if (field === "watchedByUser") {
+    const aggregated = Array.isArray(item.watchedByUsers)
+      ? (item.watchedByUsers as string[]).map((u) => u.toLowerCase())
+      : null;
+    const users = aggregated ?? (
+      Array.isArray(item.watchHistory)
+        ? (item.watchHistory as Array<{ serverUsername: string | null }>)
+            .map((h) => (h.serverUsername ?? "").toLowerCase())
+            .filter(Boolean)
+        : []
+    );
+    const strVal = String(value).toLowerCase();
+    let result: boolean;
+    switch (operator) {
+      case "equals":
+        result = users.some((u) => u === strVal);
+        break;
+      case "notEquals":
+        result = !users.some((u) => u === strVal);
+        break;
+      case "contains": {
+        // Enumerable multi-select — exact list membership against usernames.
+        const values = strVal.split("|").filter(Boolean);
+        result = values.some((v) => users.some((u) => u === v));
+        break;
+      }
+      case "notContains": {
+        const values = strVal.split("|").filter(Boolean);
+        result = !values.some((v) => users.some((u) => u === v));
+        break;
+      }
+      case "matchesWildcard": {
+        const re = wildcardToRegex(strVal);
+        result = users.some((u) => re.test(u));
+        break;
+      }
+      case "notMatchesWildcard": {
+        const re = wildcardToRegex(strVal);
+        result = !users.some((u) => re.test(u));
+        break;
+      }
+      case "isNull":
+        result = users.length === 0;
+        break;
+      case "isNotNull":
+        result = users.length > 0;
+        break;
+      default:
+        return false;
+    }
+    return negate ? !result : result;
+  }
+
   // Cross-system fields — enriched by fetchCrossSystemData before Phase 2
   if (isCrossSystemField(field)) {
     if (field === "serverCount") {
@@ -1552,6 +1625,22 @@ function getActualValueForField(
   // Is Watchlisted
   if (field === "isWatchlisted") return String(!!item.isWatchlisted);
 
+  // Watched By User — show the deduped list of usernames who played the item
+  if (field === "watchedByUser") {
+    const aggregated = Array.isArray(item.watchedByUsers)
+      ? (item.watchedByUsers as string[])
+      : null;
+    const users = aggregated ?? (
+      Array.isArray(item.watchHistory)
+        ? (item.watchHistory as Array<{ serverUsername: string | null }>)
+            .map((h) => h.serverUsername ?? "")
+            .filter(Boolean)
+        : []
+    );
+    const deduped = Array.from(new Set(users));
+    return deduped.length > 0 ? deduped.join(", ") : "none";
+  }
+
   // File size (bytes → human readable)
   if (field === "fileSize") {
     const bytes = item.fileSize ? Number(BigInt(item.fileSize as string)) : 0;
@@ -1963,6 +2052,7 @@ export async function evaluateSeriesScope(
   if (rules.length === 0 || !hasAnyActiveRules(rules)) return [];
 
   const needsStreams = hasStreamRules(rules);
+  const needsWatchHistory = hasWatchedByUserRules(rules);
 
   // Fetch ALL episodes across the user's SERIES libraries
   const allEpisodes = await prisma.mediaItem.findMany({
@@ -1973,6 +2063,7 @@ export async function evaluateSeriesScope(
     include: {
       externalIds: true,
       ...(needsStreams ? { streams: true } : {}),
+      ...(needsWatchHistory ? { watchHistory: { select: { serverUsername: true } } } : {}),
       library: {
         select: {
           title: true,
@@ -2005,6 +2096,7 @@ export async function evaluateSeriesScope(
       latestEpisodeViewDate: Date | null;
       lastEpisodeAddedAt: Date | null;
       lastEpisodeAiredAt: Date | null;
+      watchedByUsers: string[];
       memberIds: string[];
     }
   > = [];
@@ -2056,6 +2148,21 @@ export async function evaluateSeriesScope(
       ? episodes.flatMap((ep) => ("streams" in ep ? (ep.streams as unknown[]) : []))
       : undefined;
 
+    // Aggregate watch history into a deduped set of usernames who played any episode
+    const watchedByUsers = needsWatchHistory
+      ? Array.from(
+          new Set(
+            episodes.flatMap((ep) =>
+              "watchHistory" in ep
+                ? (ep.watchHistory as Array<{ serverUsername: string | null }>)
+                    .map((h) => h.serverUsername)
+                    .filter((u): u is string => !!u)
+                : [],
+            ),
+          ),
+        )
+      : [];
+
     aggregated.push({
       ...representative,
       // Use series name as title so "title" rules match against the series
@@ -2075,6 +2182,7 @@ export async function evaluateSeriesScope(
       latestEpisodeViewDate,
       lastEpisodeAddedAt: latestEpisodeAdded,
       lastEpisodeAiredAt: latestEpisodeAired,
+      watchedByUsers,
       allStreams,
       memberIds: episodes.map((ep) => ep.id),
     });
@@ -2120,6 +2228,7 @@ export async function evaluateSeriesScope(
           ? series.lastEpisodeAiredAt.toISOString()
           : series.lastEpisodeAiredAt
         : null,
+      watchedByUsers: series.watchedByUsers,
     };
 
     const extId = series.externalIds?.find(
@@ -2165,6 +2274,7 @@ export async function evaluateMusicScope(
   if (rules.length === 0 || !hasAnyActiveRules(rules)) return [];
 
   const needsStreams = hasStreamRules(rules);
+  const needsWatchHistory = hasWatchedByUserRules(rules);
 
   // Fetch ALL tracks across the user's MUSIC libraries
   const allTracks = await prisma.mediaItem.findMany({
@@ -2175,6 +2285,7 @@ export async function evaluateMusicScope(
     include: {
       externalIds: true,
       ...(needsStreams ? { streams: true } : {}),
+      ...(needsWatchHistory ? { watchHistory: { select: { serverUsername: true } } } : {}),
       library: {
         select: {
           title: true,
@@ -2199,7 +2310,7 @@ export async function evaluateMusicScope(
   // Aggregate each artist into a single record for rule evaluation
   type TrackRow = (typeof allTracks)[0];
   const aggregated: Array<
-    Omit<TrackRow, "fileSize"> & { trackCount: number; fileSize: string | null; allStreams?: unknown[]; memberIds: string[] }
+    Omit<TrackRow, "fileSize"> & { trackCount: number; fileSize: string | null; allStreams?: unknown[]; watchedByUsers: string[]; memberIds: string[] }
   > = [];
 
   for (const [, tracks] of artistMap) {
@@ -2227,6 +2338,21 @@ export async function evaluateMusicScope(
       ? tracks.flatMap((t) => ("streams" in t ? (t.streams as unknown[]) : []))
       : undefined;
 
+    // Aggregate watch history into a deduped set of usernames who played any track
+    const watchedByUsers = needsWatchHistory
+      ? Array.from(
+          new Set(
+            tracks.flatMap((t) =>
+              "watchHistory" in t
+                ? (t.watchHistory as Array<{ serverUsername: string | null }>)
+                    .map((h) => h.serverUsername)
+                    .filter((u): u is string => !!u)
+                : [],
+            ),
+          ),
+        )
+      : [];
+
     aggregated.push({
       ...representative,
       // Use artist name as title so "title" rules match against the artist
@@ -2241,6 +2367,7 @@ export async function evaluateMusicScope(
       addedAt: earliestAdded,
       trackCount: tracks.length,
       allStreams,
+      watchedByUsers,
       memberIds: tracks.map((t) => t.id),
     });
   }
@@ -2264,6 +2391,7 @@ export async function evaluateMusicScope(
           : artist.addedAt
         : null,
       streams: artist.allStreams ?? [],
+      watchedByUsers: artist.watchedByUsers,
     };
 
     const extId = artist.externalIds?.find(
@@ -2303,6 +2431,7 @@ export async function evaluateLifecycleRules(
   const hasExternal = (arrData && hasArrRules(rules)) || (seerrData && hasSeerrRules(rules));
   const needsExternalIds = !!hasExternal || hasExternalIdFieldRules(rules);
   const needsStreams = hasStreamRules(rules);
+  const needsWatchHistory = hasWatchedByUserRules(rules);
   const hasCrossSystem = hasCrossSystemFieldRules(rules);
   const needsInMemoryEval = hasWildcardRules(rules) || hasStreamCountRules(rules) || hasStreamQueryInMemoryRules(rules) || hasCrossSystem;
   const needsFullReeval = needsInMemoryEval || !!hasExternal;
@@ -2347,6 +2476,7 @@ export async function evaluateLifecycleRules(
     include: {
       ...(needsExternalIds ? { externalIds: true } : {}),
       ...(needsStreams ? { streams: true } : {}),
+      ...(needsWatchHistory ? { watchHistory: { select: { serverUsername: true } } } : {}),
       library: {
         select: {
           title: true,
@@ -2386,6 +2516,7 @@ export async function evaluateLifecycleRules(
         addedAt: item.addedAt?.toISOString() ?? null,
         originallyAvailableAt: item.originallyAvailableAt?.toISOString() ?? null,
         streams: "streams" in item ? item.streams : [],
+        watchHistory: "watchHistory" in item ? item.watchHistory : [],
         externalIds,
         ...(crossData ?? {}),
       };
