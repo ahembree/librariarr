@@ -1016,7 +1016,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
     );
 
     // Invalidate caches that depend on media data
-    appCache.invalidatePrefix("distinct-values:");
+    appCache.invalidate("distinct-values");
     appCache.invalidatePrefix("server-filter:");
     appCache.invalidatePrefix("stats:");
 

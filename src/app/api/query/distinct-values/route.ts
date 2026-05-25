@@ -6,7 +6,7 @@ import { normalizeResolutionLabel } from "@/lib/resolution";
 
 const STANDARD_RESOLUTIONS = ["4K", "1080P", "720P", "480P", "SD", "Other"];
 
-const CACHE_KEY_PREFIX = "query-distinct-values:";
+const CACHE_KEY = "query-distinct-values";
 const CACHE_TTL = 5 * 60_000;
 
 /** Deduplicate strings case-insensitively, preferring the title-cased variant. */
@@ -46,10 +46,7 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Cache is keyed per-user: the response contains user-scoped values
-  // (`matchedByRuleSet`, `watchedByUser`) that must not leak across tenants.
-  const cacheKey = `${CACHE_KEY_PREFIX}${session.userId}`;
-  const cached = appCache.get<Record<string, unknown>>(cacheKey);
+  const cached = appCache.get<Record<string, unknown>>(CACHE_KEY);
   if (cached) return NextResponse.json(cached);
 
   const [aggRows, genres, streamDistinct, sqDistinct, ruleSets, watchUsers] = await Promise.all([
@@ -118,8 +115,8 @@ export async function GET() {
       orderBy: { name: "asc" },
     }),
     // Distinct server usernames from per-user watch history for the
-    // `watchedByUser` field. Scoped to the session user's media servers so
-    // multi-tenant deployments don't leak usernames across users.
+    // `watchedByUser` field. Scoped via the user→server join to mirror the
+    // ruleSets query above; under single-user this matches every server.
     prisma.$queryRaw<{ serverUsername: string }[]>`
       SELECT DISTINCT wh."serverUsername" AS "serverUsername"
       FROM "WatchHistory" wh
@@ -181,6 +178,6 @@ export async function GET() {
     watchedByUser: watchUsers.map((u) => u.serverUsername),
   };
 
-  appCache.set(cacheKey, result, CACHE_TTL);
+  appCache.set(CACHE_KEY, result, CACHE_TTL);
   return NextResponse.json(result);
 }

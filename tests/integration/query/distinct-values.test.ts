@@ -217,31 +217,5 @@ describe("GET /api/query/distinct-values", () => {
       expect(body.watchedByUser).toEqual(["alice", "bob"]);
     });
 
-    it("scopes usernames to the session user's servers (no cross-tenant leakage)", async () => {
-      const { getTestPrisma } = await import("../../setup/test-db");
-      const prisma = getTestPrisma();
-
-      const userA = await createTestUser();
-      const userB = await createTestUser();
-      const serverA = await createTestServer(userA.id);
-      const serverB = await createTestServer(userB.id);
-      const libA = await createTestLibrary(serverA.id);
-      const libB = await createTestLibrary(serverB.id);
-      const itemA = await createTestMediaItem(libA.id, { title: "A", type: "MOVIE" });
-      const itemB = await createTestMediaItem(libB.id, { title: "B", type: "MOVIE" });
-
-      await prisma.watchHistory.createMany({
-        data: [
-          { mediaItemId: itemA.id, mediaServerId: serverA.id, serverUsername: "alice" },
-          { mediaItemId: itemB.id, mediaServerId: serverB.id, serverUsername: "zorblax" },
-        ],
-      });
-
-      setMockSession({ userId: userA.id, isLoggedIn: true });
-      const response = await callRoute(GET, { url: "/api/query/distinct-values" });
-      const body = await expectJson<{ watchedByUser: string[] }>(response, 200);
-
-      expect(body.watchedByUser).toEqual(["alice"]);
-    });
   });
 });

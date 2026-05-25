@@ -87,7 +87,7 @@ export async function PUT(
   // Invalidate caches when enabled state changes so media queries reflect immediately
   if (enabled !== undefined) {
     appCache.invalidatePrefix("server-filter:");
-    appCache.invalidatePrefix("distinct-values:");
+    appCache.invalidate("distinct-values");
     appCache.invalidatePrefix("stats:");
   }
 
@@ -188,7 +188,7 @@ export async function DELETE(
 
   // Invalidate caches that depend on server/media data
   appCache.invalidatePrefix("server-filter:");
-  appCache.invalidatePrefix("distinct-values:");
+  appCache.invalidate("distinct-values");
   appCache.invalidatePrefix("stats:");
 
   // Recompute canonical flags for remaining items

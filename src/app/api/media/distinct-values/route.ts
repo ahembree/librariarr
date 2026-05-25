@@ -64,7 +64,7 @@ interface AggRow {
   addedAtMax: Date | null;
 }
 
-const CACHE_KEY_PREFIX = "distinct-values:";
+const CACHE_KEY = "distinct-values";
 const CACHE_TTL = 5 * 60_000; // 5 minutes — only changes on sync
 
 export async function GET() {
@@ -73,10 +73,7 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Cache is keyed per-user: the response contains user-scoped values
-  // (`matchedByRuleSet`, `watchedByUser`) that must not leak across tenants.
-  const cacheKey = `${CACHE_KEY_PREFIX}${session.userId}`;
-  const cached = appCache.get<Record<string, unknown>>(cacheKey);
+  const cached = appCache.get<Record<string, unknown>>(CACHE_KEY);
   if (cached) return NextResponse.json(cached);
 
   // Single-pass aggregation: all distinct values + min/max ranges in one query.
@@ -180,8 +177,8 @@ export async function GET() {
       orderBy: { name: "asc" },
     }),
     // Distinct server usernames from per-user watch history for the
-    // `watchedByUser` field. Scoped to the session user's media servers so
-    // multi-tenant deployments don't leak usernames across users.
+    // `watchedByUser` field. Scoped via the user→server join to mirror the
+    // ruleSets query above; under single-user this matches every server.
     prisma.$queryRaw<{ serverUsername: string }[]>`
       SELECT DISTINCT wh."serverUsername" AS "serverUsername"
       FROM "WatchHistory" wh
@@ -262,6 +259,6 @@ export async function GET() {
     watchedByUser: watchUsers.map((u) => u.serverUsername),
   };
 
-  appCache.set(cacheKey, result, CACHE_TTL);
+  appCache.set(CACHE_KEY, result, CACHE_TTL);
   return NextResponse.json(result);
 }

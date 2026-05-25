@@ -33,7 +33,7 @@ export async function DELETE(request: NextRequest) {
     });
 
     appCache.invalidatePrefix("server-filter:");
-    appCache.invalidatePrefix("distinct-values:");
+    appCache.invalidate("distinct-values");
     appCache.invalidatePrefix("stats:");
 
     apiLogger.info(
@@ -80,7 +80,7 @@ export async function DELETE(request: NextRequest) {
   });
 
   appCache.invalidatePrefix("server-filter:");
-  appCache.invalidatePrefix("distinct-values:");
+  appCache.invalidate("distinct-values");
   appCache.invalidatePrefix("stats:");
 
   apiLogger.info(
