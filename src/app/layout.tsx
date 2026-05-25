@@ -29,12 +29,21 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     title: "Librariarr",
-    statusBarStyle: "black-translucent",
+    // `default` lets iOS pick a status-bar background from `theme_color` and
+    // an opaque inset; avoids the notch overlapping the authenticated
+    // header (which has no safe-area-inset padding).
+    statusBarStyle: "default",
+  },
+  // Next.js only emits the standard `mobile-web-app-capable` tag, but
+  // iOS 15–16 Safari still requires the apple-prefixed legacy name to
+  // enable standalone "Add to Home Screen" mode.
+  other: {
+    "apple-mobile-web-app-capable": "yes",
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0f1923",
+  themeColor: "#0c0d10",
 };
 
 export default function RootLayout({
