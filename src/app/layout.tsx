@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Sora, Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "sonner";
@@ -25,6 +25,16 @@ const mono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "Librariarr",
   description: "Media library management for Plex, Jellyfin, and Emby",
+  applicationName: "Librariarr",
+  appleWebApp: {
+    capable: true,
+    title: "Librariarr",
+    statusBarStyle: "black-translucent",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0f1923",
 };
 
 export default function RootLayout({
