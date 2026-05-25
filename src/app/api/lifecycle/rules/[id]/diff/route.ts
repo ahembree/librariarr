@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
@@ -175,7 +175,14 @@ export async function POST(
   if (removedIds.length > 0) {
     const fullRemovedItems = await prisma.mediaItem.findMany({
       where: { id: { in: removedIds } },
-      include: { library: { include: { mediaServer: { select: { id: true, name: true, type: true } } } }, streams: true, externalIds: true },
+      include: {
+        library: { include: { mediaServer: { select: { id: true, name: true, type: true } } } },
+        streams: true,
+        externalIds: true,
+        // Required for watchedByUser rules so the diff view displays
+        // accurate "actual value" and matched-criteria flags.
+        ...(hasWatchedByUserRules(typedRules) ? { watchHistory: { select: { serverUsername: true } } } : {}),
+      },
     });
     const removedRecords = fullRemovedItems.map((item) => item as unknown as Record<string, unknown>);
     const removedCriteriaMap = getMatchedCriteriaForItems(removedRecords, typedRules, type, arrData, seerrData);

@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { QueryRule, QueryGroup, QueryDefinition, LifecycleRuleCondition } from "./types";
-import { GENRE_FIELD, LABELS_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules } from "./types";
+import { GENRE_FIELD, LABELS_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules } from "./types";
 import {
   isStreamQueryField, isStreamQueryGroup,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
@@ -269,11 +269,20 @@ const ITEM_SELECT_FULL = {
     },
   },
   externalIds: { select: { source: true, externalId: true } },
-  // Per-user play log — used by the `watchedByUser` field. Selecting only
-  // `serverUsername` keeps the join cheap; the field is only meaningful when
-  // a rule references it, and the full-select path is already the slow path.
-  watchHistory: { select: { serverUsername: true } },
 };
+
+/**
+ * Build a full-select object, optionally including the `watchHistory` relation.
+ * `watchHistory` is only meaningful when a `watchedByUser` rule is present;
+ * joining it unconditionally costs O(plays) per query on large libraries.
+ */
+function buildItemSelectFull(opts: { includeWatchHistory: boolean }) {
+  if (!opts.includeWatchHistory) return ITEM_SELECT_FULL;
+  return {
+    ...ITEM_SELECT_FULL,
+    watchHistory: { select: { serverUsername: true } } as const,
+  };
+}
 
 /** Build the shared WHERE clause from a query definition and resolved server IDs */
 function buildBaseWhere(
@@ -554,7 +563,10 @@ export async function executeQuery(
     : mediaTypes.filter((t) => t !== "SERIES");
   const hasFlatTypes = flatTypes.length > 0;
 
-  const selectToUse = needsFullInMemoryEval ? ITEM_SELECT_FULL : ITEM_SELECT;
+  const needsWatchHistory = hasWatchedByUserRules(groups);
+  const selectToUse = needsFullInMemoryEval
+    ? buildItemSelectFull({ includeWatchHistory: needsWatchHistory })
+    : ITEM_SELECT;
 
   // Run queries in parallel
   const flatWhere: Prisma.MediaItemWhereInput = { ...where, type: { in: [...flatTypes] } };
@@ -645,7 +657,7 @@ async function aggregateSeriesAndFilter(
 
   const episodes = await prisma.mediaItem.findMany({
     where: seriesWhere,
-    select: ITEM_SELECT_FULL,
+    select: buildItemSelectFull({ includeWatchHistory: hasWatchedByUserRules(groups) }),
   });
 
   if (episodes.length === 0) return [];
@@ -689,7 +701,7 @@ async function filterAndGroupSeriesEpisodes(
   // Fetch full episode data for unified in-memory evaluation
   const episodes = await prisma.mediaItem.findMany({
     where: seriesWhere,
-    select: ITEM_SELECT_FULL,
+    select: buildItemSelectFull({ includeWatchHistory: hasWatchedByUserRules(groups) }),
   });
 
   if (episodes.length === 0) return [];
@@ -726,7 +738,9 @@ async function executeUngrouped(
   const hasCrossSystem = hasCrossSystemRules(groups);
   const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups);
   const useInMemoryPagination = needsFullInMemoryEval;
-  const selectToUse = needsFullInMemoryEval ? ITEM_SELECT_FULL : ITEM_SELECT;
+  const selectToUse = needsFullInMemoryEval
+    ? buildItemSelectFull({ includeWatchHistory: hasWatchedByUserRules(groups) })
+    : ITEM_SELECT;
 
   let orderBy: Prisma.MediaItemOrderByWithRelationInput | Prisma.MediaItemOrderByWithRelationInput[];
   const order = sortOrder === "desc" ? "desc" as const : "asc" as const;

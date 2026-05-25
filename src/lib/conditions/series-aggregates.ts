@@ -112,9 +112,10 @@ export function aggregateEpisodesIntoSeries<E extends AggregableEpisode>(
       ? eps.flatMap((ep) => (Array.isArray(ep.streams) ? ep.streams : []))
       : undefined;
 
-    // Deduped lowercase-cased usernames who played any episode in this series.
-    // Empty when no episode has watchHistory loaded (the caller didn't ask
-    // for it). The `watchedByUser` rule evaluator distinguishes by checking
+    // Deduped raw usernames who played any episode in this series. Casing
+    // is preserved (the rule evaluator lowercases at compare time). Empty
+    // when no episode has watchHistory loaded (the caller didn't ask for
+    // it). The `watchedByUser` rule evaluator distinguishes by checking
     // `Array.isArray(item.watchedByUsers)` — so we always emit the field.
     const watchedByUsers = Array.from(
       new Set(

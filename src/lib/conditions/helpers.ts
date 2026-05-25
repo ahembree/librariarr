@@ -251,3 +251,7 @@ export function hasCrossSystemRules(groups: ConditionGroup[]): boolean {
 export function hasSeriesAggregateRules(groups: ConditionGroup[]): boolean {
   return anyRuleMatches(groups, isSeriesAggregateField);
 }
+
+export function hasWatchedByUserRules(groups: ConditionGroup[]): boolean {
+  return anyRuleMatches(groups, (f) => f === "watchedByUser");
+}

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
@@ -319,6 +319,9 @@ export async function detectAndSaveMatches(
       include: {
         externalIds: true,
         streams: true,
+        // Re-evaluation needs per-user play history to compute accurate
+        // "no longer matching" reasons for watchedByUser rules.
+        ...(hasWatchedByUserRules(rules) ? { watchHistory: { select: { serverUsername: true } } } : {}),
         library: {
           select: {
             title: true,

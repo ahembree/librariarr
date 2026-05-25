@@ -6,7 +6,7 @@ import { normalizeResolutionLabel } from "@/lib/resolution";
 
 const STANDARD_RESOLUTIONS = ["4K", "1080P", "720P", "480P", "SD", "Other"];
 
-const CACHE_KEY = "query-distinct-values";
+const CACHE_KEY_PREFIX = "query-distinct-values:";
 const CACHE_TTL = 5 * 60_000;
 
 /** Deduplicate strings case-insensitively, preferring the title-cased variant. */
@@ -46,10 +46,13 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const cached = appCache.get<Record<string, unknown>>(CACHE_KEY);
+  // Cache is keyed per-user: the response contains user-scoped values
+  // (`matchedByRuleSet`, `watchedByUser`) that must not leak across tenants.
+  const cacheKey = `${CACHE_KEY_PREFIX}${session.userId}`;
+  const cached = appCache.get<Record<string, unknown>>(cacheKey);
   if (cached) return NextResponse.json(cached);
 
-  const [aggRows, genres, streamDistinct, sqDistinct, ruleSets] = await Promise.all([
+  const [aggRows, genres, streamDistinct, sqDistinct, ruleSets, watchUsers] = await Promise.all([
     prisma.$queryRaw<AggRow[]>`
       SELECT
         array_agg(DISTINCT resolution) FILTER (WHERE resolution IS NOT NULL) AS resolutions,
@@ -114,6 +117,18 @@ export async function GET() {
       select: { name: true },
       orderBy: { name: "asc" },
     }),
+    // Distinct server usernames from per-user watch history for the
+    // `watchedByUser` field. Scoped to the session user's media servers so
+    // multi-tenant deployments don't leak usernames across users.
+    prisma.$queryRaw<{ serverUsername: string }[]>`
+      SELECT DISTINCT wh."serverUsername" AS "serverUsername"
+      FROM "WatchHistory" wh
+      JOIN "MediaServer" ms ON wh."mediaServerId" = ms.id
+      WHERE ms."userId" = ${session.userId}
+        AND wh."serverUsername" IS NOT NULL
+        AND wh."serverUsername" != ''
+      ORDER BY wh."serverUsername" ASC
+    `,
   ]);
 
   const r = aggRows[0];
@@ -162,8 +177,10 @@ export async function GET() {
     sqAudioLayout: dedupeInsensitive(sqd?.audioLayouts ?? []).sort((a, b) => a.localeCompare(b)),
     // Cross-system distinct values
     matchedByRuleSet: ruleSets.map((rs) => rs.name),
+    // Per-user watch history — usernames who have ever played a media item.
+    watchedByUser: watchUsers.map((u) => u.serverUsername),
   };
 
-  appCache.set(CACHE_KEY, result, CACHE_TTL);
+  appCache.set(cacheKey, result, CACHE_TTL);
   return NextResponse.json(result);
 }

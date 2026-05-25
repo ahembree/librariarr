@@ -64,7 +64,7 @@ interface AggRow {
   addedAtMax: Date | null;
 }
 
-const CACHE_KEY = "distinct-values";
+const CACHE_KEY_PREFIX = "distinct-values:";
 const CACHE_TTL = 5 * 60_000; // 5 minutes — only changes on sync
 
 export async function GET() {
@@ -73,7 +73,10 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const cached = appCache.get<Record<string, unknown>>(CACHE_KEY);
+  // Cache is keyed per-user: the response contains user-scoped values
+  // (`matchedByRuleSet`, `watchedByUser`) that must not leak across tenants.
+  const cacheKey = `${CACHE_KEY_PREFIX}${session.userId}`;
+  const cached = appCache.get<Record<string, unknown>>(cacheKey);
   if (cached) return NextResponse.json(cached);
 
   // Single-pass aggregation: all distinct values + min/max ranges in one query.
@@ -259,6 +262,6 @@ export async function GET() {
     watchedByUser: watchUsers.map((u) => u.serverUsername),
   };
 
-  appCache.set(CACHE_KEY, result, CACHE_TTL);
+  appCache.set(cacheKey, result, CACHE_TTL);
   return NextResponse.json(result);
 }

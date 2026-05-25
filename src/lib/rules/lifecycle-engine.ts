@@ -7,7 +7,7 @@ import {
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
   RULE_FIELDS, STREAM_QUERY_FIELDS, type RuleField,
 } from "./types";
-import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
+import { isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWatchedByUserRules as hasWatchedByUserGroupRules } from "@/lib/conditions/helpers";
 import { detectStreamAudioProfile, detectStreamDynamicRange } from "./stream-detection";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import {
@@ -394,17 +394,14 @@ function hasExternalIdFieldRules(rules: LifecycleRule[] | LifecycleRuleGroup[]):
   return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "hasExternalId");
 }
 
-/** Check if any rule uses the watchedByUser field (requires WatchHistory eager-load) */
-function hasWatchedByUserRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+/**
+ * Check if any rule uses the watchedByUser field (requires WatchHistory eager-load).
+ * Accepts both grouped and flat rule shapes; the shared helper only handles groups,
+ * so we handle the legacy flat-rules path here.
+ */
+export function hasWatchedByUserRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
-  if (isRuleGroups(rules)) {
-    for (const group of rules) {
-      if (group.enabled === false) continue;
-      if (group.rules.some((r) => r.enabled !== false && r.field === "watchedByUser")) return true;
-      if (hasWatchedByUserRules(group.groups ?? [])) return true;
-    }
-    return false;
-  }
+  if (isRuleGroups(rules)) return hasWatchedByUserGroupRules(rules as LifecycleRuleGroup[]);
   return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "watchedByUser");
 }
 
