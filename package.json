@@ -47,6 +47,7 @@
     "docs:build": "pnpm --prefix docs build",
     "docs:preview": "pnpm --prefix docs preview",
     "seed": "pnpm exec tsx prisma/seed.ts",
+    "favicons": "node scripts/generate-favicons.mjs",
     "prepare": "husky"
   },
   "dependencies": {
