@@ -28,6 +28,6 @@ export const config = {
   // icon, and web app manifest without being bounced to /login. File patterns
   // are anchored with $ so paths like /icon.svg/anything are not bypassed.
   matcher: [
-    "/((?!_next/static/|_next/image$|favicon\\.ico$|icon\\.svg$|icon\\.png$|icon-[^/]+\\.(?:png|svg)$|apple-icon(?:-[^/]+)?\\.png$|manifest\\.(?:webmanifest|json)$|robots\\.txt$|sitemap\\.xml$|logo\\.svg$).*)",
+    "/((?!_next/static/|_next/image$|favicon\\.ico$|icon\\.svg$|icon\\.png$|icon-[^/]+\\.(?:png|svg)$|apple-icon(?:-[^/]+)?\\.png$|manifest\\.(?:webmanifest|json)$|robots\\.txt$|sitemap\\.xml$).*)",
   ],
 };
