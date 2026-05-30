@@ -821,7 +821,12 @@ export function LifecycleRulePage({
     try {
       const response = await fetch("/api/media/distinct-values");
       const data = await response.json();
-      setDistinctValues(data);
+      // Merge rather than replace: Seerr requester names (seerrRequestedBy) and
+      // Arr metadata (arrTag, arrQualityProfile) are fetched separately and
+      // merged into distinctValues. A bare setDistinctValues(data) would clobber
+      // them when this fetch resolves after those, dropping the enumerated
+      // "Requested By" dropdown back to a raw text input.
+      setDistinctValues((prev) => ({ ...prev, ...data }));
     } catch (error) {
       console.error("Failed to fetch distinct values:", error);
     }
