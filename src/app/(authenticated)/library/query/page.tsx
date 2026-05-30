@@ -296,7 +296,11 @@ export default function QueryPage() {
     fetch("/api/query/distinct-values")
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (data) setDistinctValues(data);
+        // Merge rather than replace: Seerr requester names and Arr metadata are
+        // fetched and merged separately. A bare setDistinctValues(data) would
+        // clobber seerrRequestedBy when this fetch resolves after the Seerr
+        // metadata fetch, dropping the enumerated dropdown back to a text input.
+        if (data) setDistinctValues((prev) => ({ ...prev, ...data }));
       })
       .catch(() => {});
 
