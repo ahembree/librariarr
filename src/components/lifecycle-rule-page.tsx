@@ -929,6 +929,13 @@ export function LifecycleRulePage({
           arrTag: data.tags?.map((t: { label: string }) => t.label) ?? [],
           arrQualityProfile: profiles.map((p) => p.name),
           arrOriginalLanguage: data.languages ?? [],
+          // Enumerable arr fields sourced per-type by the metadata route:
+          // Sonarr supplies statuses/seriesTypes, Radarr supplies qualityNames.
+          // Absent keys fall back to [] so the builder hides the dropdown only
+          // when there's genuinely nothing to enumerate.
+          arrStatus: data.statuses ?? [],
+          arrSeriesType: data.seriesTypes ?? [],
+          arrQualityName: data.qualityNames ?? [],
         }));
         setArrProfilesStatus("ready");
       } catch {
@@ -948,7 +955,15 @@ export function LifecycleRulePage({
     setArrQualityProfiles([]);
     setArrProfilesStatus(newId ? "loading" : "idle");
     if (!newId) {
-      setDistinctValues((prev) => ({ ...prev, arrTag: [], arrQualityProfile: [] }));
+      setDistinctValues((prev) => ({
+        ...prev,
+        arrTag: [],
+        arrQualityProfile: [],
+        arrOriginalLanguage: [],
+        arrStatus: [],
+        arrSeriesType: [],
+        arrQualityName: [],
+      }));
       setManageTagsEnabled(false);
       setAddArrTags([]);
       setRemoveArrTags([]);

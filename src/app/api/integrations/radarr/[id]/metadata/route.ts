@@ -60,5 +60,12 @@ export async function GET(
       .filter((l) => l.name && l.name !== "Unknown")
       .map((l) => l.name)
       .sort((a, b) => a.localeCompare(b)),
+    // Distinct downloaded-file quality names present in the library, for the
+    // enumerable arrQualityName field. Only movies carry a per-item quality
+    // name in fetch-arr-metadata (series/music leave it null), so it's sourced
+    // from Radarr only. Movies with no file have no quality name — filtered out.
+    qualityNames: [...new Set(
+      movies.map((m) => m.movieFile?.quality?.quality?.name).filter((v): v is string => !!v),
+    )].sort((a, b) => a.localeCompare(b)),
   });
 }

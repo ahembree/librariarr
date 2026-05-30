@@ -49,7 +49,7 @@ export async function GET() {
   const cached = appCache.get<Record<string, unknown>>(CACHE_KEY);
   if (cached) return NextResponse.json(cached);
 
-  const [aggRows, genres, streamDistinct, sqDistinct, ruleSets, watchUsers] = await Promise.all([
+  const [aggRows, genres, labelRows, streamDistinct, sqDistinct, ruleSets, watchUsers] = await Promise.all([
     prisma.$queryRaw<AggRow[]>`
       SELECT
         array_agg(DISTINCT resolution) FILTER (WHERE resolution IS NOT NULL) AS resolutions,
@@ -77,6 +77,14 @@ export async function GET() {
       WHERE mi.genres IS NOT NULL AND jsonb_typeof(mi.genres) = 'array'
       ORDER BY g.genre
     `,
+    // Labels (JSONB array, same shape as genres) for the enumerable `labels` field.
+    prisma.$queryRaw<{ label: string }[]>`
+      SELECT DISTINCT l.label AS "label"
+      FROM "MediaItem" mi
+      CROSS JOIN LATERAL jsonb_array_elements_text(mi.labels) AS l(label)
+      WHERE mi.labels IS NOT NULL AND jsonb_typeof(mi.labels) = 'array'
+      ORDER BY l.label
+    `,
     prisma.$queryRaw<{
       audioLanguages: string[] | null;
       subtitleLanguages: string[] | null;
@@ -97,6 +105,9 @@ export async function GET() {
       sqScanTypes: string[] | null;
       videoRangeTypes: string[] | null;
       audioLayouts: string[] | null;
+      colorPrimaries: string[] | null;
+      colorRanges: string[] | null;
+      chromaSubsamplings: string[] | null;
     }[]>`
       SELECT
         array_agg(DISTINCT codec) FILTER (WHERE codec IS NOT NULL) AS codecs,
@@ -105,7 +116,10 @@ export async function GET() {
         array_agg(DISTINCT "languageCode") FILTER (WHERE "languageCode" IS NOT NULL AND "languageCode" != '') AS "languageCodes",
         array_agg(DISTINCT "scanType") FILTER (WHERE "scanType" IS NOT NULL) AS "sqScanTypes",
         array_agg(DISTINCT "videoRangeType") FILTER (WHERE "videoRangeType" IS NOT NULL) AS "videoRangeTypes",
-        array_agg(DISTINCT "audioChannelLayout") FILTER (WHERE "audioChannelLayout" IS NOT NULL) AS "audioLayouts"
+        array_agg(DISTINCT "audioChannelLayout") FILTER (WHERE "audioChannelLayout" IS NOT NULL) AS "audioLayouts",
+        array_agg(DISTINCT "colorPrimaries") FILTER (WHERE "colorPrimaries" IS NOT NULL) AS "colorPrimaries",
+        array_agg(DISTINCT "colorRange") FILTER (WHERE "colorRange" IS NOT NULL) AS "colorRanges",
+        array_agg(DISTINCT "chromaSubsampling") FILTER (WHERE "chromaSubsampling" IS NOT NULL) AS "chromaSubsamplings"
       FROM "MediaStream"
     `,
     // Rule set names for cross-system "Matched By Rule Set" field
@@ -141,6 +155,15 @@ export async function GET() {
     }
   }
 
+  // Deduplicate labels the same way as genres.
+  const labelMap = new Map<string, string>();
+  for (const l of labelRows) {
+    const key = l.label.toLowerCase();
+    if (!labelMap.has(key)) {
+      labelMap.set(key, l.label);
+    }
+  }
+
   const result = {
     resolution: STANDARD_RESOLUTIONS.filter((std) =>
       (r.resolutions ?? []).some((v) => normalizeResolutionLabel(v) === std)
@@ -153,6 +176,7 @@ export async function GET() {
     contentRating: (r.contentRatings ?? []).sort((a, b) => a.localeCompare(b)),
     studio: (r.studios ?? []).sort((a, b) => a.localeCompare(b)),
     genre: Array.from(genreMap.values()).sort((a, b) => a.localeCompare(b)),
+    labels: Array.from(labelMap.values()).sort((a, b) => a.localeCompare(b)),
     year: (r.years ?? []).sort((a, b) => b - a),
     videoBitDepth: (r.videoBitDepths ?? []).sort((a, b) => b - a),
     videoProfile: (r.videoProfiles ?? []).sort((a, b) => a.localeCompare(b)),
@@ -172,6 +196,9 @@ export async function GET() {
     sqScanType: dedupeInsensitive(sqd?.sqScanTypes ?? []).sort((a, b) => a.localeCompare(b)),
     sqVideoRangeType: dedupeInsensitive(sqd?.videoRangeTypes ?? []).sort((a, b) => a.localeCompare(b)),
     sqAudioLayout: dedupeInsensitive(sqd?.audioLayouts ?? []).sort((a, b) => a.localeCompare(b)),
+    sqColorPrimaries: dedupeInsensitive(sqd?.colorPrimaries ?? []).sort((a, b) => a.localeCompare(b)),
+    sqColorRange: dedupeInsensitive(sqd?.colorRanges ?? []).sort((a, b) => a.localeCompare(b)),
+    sqChromaSubsampling: dedupeInsensitive(sqd?.chromaSubsamplings ?? []).sort((a, b) => a.localeCompare(b)),
     // Cross-system distinct values
     matchedByRuleSet: ruleSets.map((rs) => rs.name),
     // Per-user watch history — usernames who have ever played a media item.

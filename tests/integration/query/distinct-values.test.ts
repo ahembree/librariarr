@@ -190,6 +190,33 @@ describe("GET /api/query/distinct-values", () => {
     expect(actionCount).toBe(1);
   });
 
+  it("includes labels and stream-query color fields", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, isLoggedIn: true });
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id);
+    const item = await createTestMediaItem(lib.id, { title: "Doc", type: "MOVIE", labels: ["Docs"] });
+    await createTestMediaStream(item.id, {
+      streamType: 1,
+      colorPrimaries: "bt709",
+      colorRange: "pc",
+      chromaSubsampling: "4:4:4",
+    });
+
+    const response = await callRoute(GET, { url: "/api/query/distinct-values" });
+    const body = await expectJson<{
+      labels: string[];
+      sqColorPrimaries: string[];
+      sqColorRange: string[];
+      sqChromaSubsampling: string[];
+    }>(response, 200);
+
+    expect(body.labels).toContain("Docs");
+    expect(body.sqColorPrimaries).toContain("bt709");
+    expect(body.sqColorRange).toContain("pc");
+    expect(body.sqChromaSubsampling).toContain("4:4:4");
+  });
+
   describe("watchedByUser distinct values", () => {
     it("returns the distinct WatchHistory usernames for the session user's servers", async () => {
       const { getTestPrisma } = await import("../../setup/test-db");
