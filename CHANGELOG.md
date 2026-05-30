@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.20.0](https://github.com/ahembree/librariarr/compare/v0.19.0...v0.20.0) (2026-05-30)
+
+
+### Features
+
+* **rules:** add watchedByUser criterion for rule and query builders ([17be16d](https://github.com/ahembree/librariarr/commit/17be16deee7d0963c93c2bff4ad05efe4c19dbe8))
+* **rules:** add watchedByUser criterion for rule and query builders ([e9b29e9](https://github.com/ahembree/librariarr/commit/e9b29e93a2e69aa614ae6438bb022de116f6b9e5))
+
+
+### Bug Fixes
+
+* **favicon:** serve favicon, apple-touch icon, and PWA manifest ([f903446](https://github.com/ahembree/librariarr/commit/f9034463849f73bea775a87a392e638095bb27eb))
+* **logo:** import the SVG as an asset for content-hashed caching ([1ac1a8d](https://github.com/ahembree/librariarr/commit/1ac1a8d6dc5bf61baaf7e842a4432e99ed2e92e3))
+* **proxy:** anchor static-asset bypass patterns ([454ee13](https://github.com/ahembree/librariarr/commit/454ee1343cc8f4fcba7cbf23373e07bcdff1d5e0))
+* **pwa:** align splash colour, broaden iOS support, harden manifest ([129c3a8](https://github.com/ahembree/librariarr/commit/129c3a80110400751fcaa825cc545448df68c62d))
+* **rules:** close watchedByUser correctness and isolation gaps ([439b3d8](https://github.com/ahembree/librariarr/commit/439b3d8903602a0795dfbdd9efa68dc84d026b99))
+* **types:** declare *.svg module for type-check in CI ([2440075](https://github.com/ahembree/librariarr/commit/2440075d2fa506f43496184fd7c7a1c13b6be56c))
+
+
+### Reverts
+
+* drop multi-tenant defensiveness from distinct-values ([3e166db](https://github.com/ahembree/librariarr/commit/3e166db53fb2b2c4b5c8280006a45b318cb6fef7))
+
 ## [0.19.0](https://github.com/ahembree/librariarr/compare/v0.18.2...v0.19.0) (2026-05-23)
 
 
