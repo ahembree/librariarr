@@ -189,4 +189,33 @@ describe("GET /api/query/distinct-values", () => {
     const actionCount = body.genre.filter((g: string) => g === "Action").length;
     expect(actionCount).toBe(1);
   });
+
+  describe("watchedByUser distinct values", () => {
+    it("returns the distinct WatchHistory usernames for the session user's servers", async () => {
+      const { getTestPrisma } = await import("../../setup/test-db");
+      const prisma = getTestPrisma();
+
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id);
+
+      const itemA = await createTestMediaItem(lib.id, { title: "A", type: "MOVIE" });
+      const itemB = await createTestMediaItem(lib.id, { title: "B", type: "MOVIE" });
+
+      await prisma.watchHistory.createMany({
+        data: [
+          { mediaItemId: itemA.id, mediaServerId: server.id, serverUsername: "alice" },
+          { mediaItemId: itemA.id, mediaServerId: server.id, serverUsername: "alice" }, // duplicate
+          { mediaItemId: itemB.id, mediaServerId: server.id, serverUsername: "bob" },
+        ],
+      });
+
+      const response = await callRoute(GET, { url: "/api/query/distinct-values" });
+      const body = await expectJson<{ watchedByUser: string[] }>(response, 200);
+
+      expect(body.watchedByUser).toEqual(["alice", "bob"]);
+    });
+
+  });
 });

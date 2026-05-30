@@ -22,6 +22,7 @@ import {
   hasSeerrRules as _hasSeerrRules,
   hasCrossSystemRules as _hasCrossSystemRules,
   hasSeriesAggregateRules as _hasSeriesAggregateRules,
+  hasWatchedByUserRules as _hasWatchedByUserRules,
   isSeriesAggregateField as _isSeriesAggregateField,
   type Condition,
   type ConditionGroup,
@@ -67,6 +68,7 @@ export const hasArrRules = _hasArrRules;
 export const hasSeerrRules = _hasSeerrRules;
 export const hasCrossSystemRules = _hasCrossSystemRules;
 export const hasSeriesAggregateRules = _hasSeriesAggregateRules;
+export const hasWatchedByUserRules = _hasWatchedByUserRules;
 export const isSeriesAggregateField = _isSeriesAggregateField;
 
 // ─── Query definition shape ──────────────────────────────────────────────

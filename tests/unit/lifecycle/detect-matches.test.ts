@@ -25,6 +25,7 @@ const mockGroupSeriesResults = vi.hoisted(() => vi.fn());
 const mockHasAnyActiveRules = vi.hoisted(() => vi.fn());
 const mockHasArrRules = vi.hoisted(() => vi.fn());
 const mockHasSeerrRules = vi.hoisted(() => vi.fn());
+const mockHasWatchedByUserRules = vi.hoisted(() => vi.fn());
 const mockGetMatchedCriteriaForItems = vi.hoisted(() => vi.fn());
 const mockGetActualValuesForAllRules = vi.hoisted(() => vi.fn());
 const mockFetchArrMetadata = vi.hoisted(() => vi.fn());
@@ -43,6 +44,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   hasAnyActiveRules: mockHasAnyActiveRules,
   hasArrRules: mockHasArrRules,
   hasSeerrRules: mockHasSeerrRules,
+  hasWatchedByUserRules: mockHasWatchedByUserRules,
   getMatchedCriteriaForItems: mockGetMatchedCriteriaForItems,
   getActualValuesForAllRules: mockGetActualValuesForAllRules,
 }));

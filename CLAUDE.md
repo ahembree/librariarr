@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Librariarr is a media library management webapp for Plex, Jellyfin, and Emby servers. It uses Plex OAuth for authentication, syncs media metadata from connected servers, provides filterable library browsing, and includes a lifecycle rule engine for automated media management.
 
+**Librariarr is a single-user (single-admin) application.** Setup permits exactly one admin account, enforced by the `AppSettings.userId @unique` schema constraint and the setup gate in `src/app/api/auth/setup/route.ts`. A second user cannot exist. Do not add multi-tenant defensiveness — no per-user cache keys, no "cross-tenant leak" tests, no "tenant isolation" comments. See "Single-user model" under Critical Conventions for details.
+
 ## Commands
 
 ### Development (Docker-based, preferred)
@@ -129,6 +131,16 @@ pnpm exec vitest run tests/path/to/file.test.ts  # Run a single test file
   - `useIsMobile` — responsive breakpoint detection for sidebar/panel behavior
 
 ## Critical Conventions
+
+### Single-user model
+
+Librariarr runs with exactly one admin account. This is enforced by:
+
+- **Schema**: `AppSettings.userId @unique` in `prisma/schema.prisma` — the DB rejects a second admin row.
+- **Setup gate**: `src/app/api/auth/setup/route.ts` and `src/app/api/auth/plex/token/route.ts` reject creating a second user (see the "single-admin app" comment in the latter).
+- **Check-setup**: `src/app/api/auth/check-setup/route.ts` uses `findFirst()` because there is one and only one admin.
+
+Code references `session.userId` because per-user resources (`MediaServer`, `RuleSet`, `LifecycleAction`, etc.) carry a `userId` FK — that's a normal Prisma relation, not a signal that more than one user could be present concurrently. **Never** add per-user cache keys, multi-tenant invalidation patterns, or "no cross-tenant leak" tests. If you find yourself writing one, stop and reread this section.
 
 ### API Request Validation
 

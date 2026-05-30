@@ -355,4 +355,44 @@ describe("GET /api/media/distinct-values", () => {
     expect(body.playCountMin).toBe(0);
     expect(body.playCountMax).toBe(25);
   });
+
+  describe("watchedByUser distinct values", () => {
+    it("returns the list of distinct WatchHistory usernames for the session user's servers", async () => {
+      const { getTestPrisma } = await import("../../setup/test-db");
+      const prisma = getTestPrisma();
+
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id);
+
+      const movieA = await createTestMediaItem(lib.id, { title: "A", type: "MOVIE" });
+      const movieB = await createTestMediaItem(lib.id, { title: "B", type: "MOVIE" });
+
+      await prisma.watchHistory.createMany({
+        data: [
+          { mediaItemId: movieA.id, mediaServerId: server.id, serverUsername: "alice" },
+          { mediaItemId: movieA.id, mediaServerId: server.id, serverUsername: "alice" }, // duplicate
+          { mediaItemId: movieB.id, mediaServerId: server.id, serverUsername: "bob" },
+          { mediaItemId: movieB.id, mediaServerId: server.id, serverUsername: "carol" },
+        ],
+      });
+
+      const response = await callRoute(GET, { url: "/api/media/distinct-values" });
+      const body = await expectJson<{ watchedByUser: string[] }>(response, 200);
+
+      expect(body.watchedByUser).toEqual(["alice", "bob", "carol"]);
+    });
+
+    it("returns an empty list when no WatchHistory rows exist", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const response = await callRoute(GET, { url: "/api/media/distinct-values" });
+      const body = await expectJson<{ watchedByUser: string[] }>(response, 200);
+
+      expect(body.watchedByUser).toEqual([]);
+    });
+
+  });
 });

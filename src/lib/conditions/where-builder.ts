@@ -608,6 +608,55 @@ const streamRelationHandler: FieldHandler = (operator, value, field, negate) => 
 };
 
 /**
+ * WatchHistory relation handler for `watchedByUser`. Translates rules like
+ * `watchedByUser equals "alice"` or `watchedByUser contains "alice|bob"` into
+ * Prisma `watchHistory: { some/none: { serverUsername: ... } }` filters.
+ *
+ * The username comparison is case-insensitive (mirrors Phase 2 in-memory
+ * evaluation) and is matched against `WatchHistory.serverUsername`, which
+ * stores the per-server (Plex/Jellyfin/Emby) username that played the item.
+ * "Any play by that user" semantics — a single matching row satisfies the
+ * positive predicate.
+ */
+const watchedByUserHandler: FieldHandler = (operator, value, _field, negate) => {
+  // Wildcard operators defer to Phase 2 — Prisma can't express regex against
+  // a relation column, and `hasWildcardRules` already triggers in-memory re-eval.
+  if (operator === "matchesWildcard" || operator === "notMatchesWildcard") return {};
+  const strVal = String(value);
+  let clause: Prisma.MediaItemWhereInput;
+  switch (operator) {
+    case "equals":
+      clause = { watchHistory: { some: { serverUsername: { equals: strVal, mode: "insensitive" } } } };
+      break;
+    case "notEquals":
+      clause = { watchHistory: { none: { serverUsername: { equals: strVal, mode: "insensitive" } } } };
+      break;
+    case "contains": {
+      // Enumerable multi-select — exact list membership against any user.
+      const parts = strVal.split("|").filter(Boolean);
+      const matchValues = parts.length > 0 ? parts : [strVal];
+      clause = { watchHistory: { some: { serverUsername: { in: matchValues, mode: "insensitive" } } } };
+      break;
+    }
+    case "notContains": {
+      const parts = strVal.split("|").filter(Boolean);
+      const matchValues = parts.length > 0 ? parts : [strVal];
+      clause = { watchHistory: { none: { serverUsername: { in: matchValues, mode: "insensitive" } } } };
+      break;
+    }
+    case "isNull":
+      clause = { watchHistory: { none: {} } };
+      break;
+    case "isNotNull":
+      clause = { watchHistory: { some: {} } };
+      break;
+    default:
+      return {};
+  }
+  return applyNegate(clause, negate);
+};
+
+/**
  * Map of field name → handler. The dispatcher in each engine looks up the
  * handler here; misses fall back to `textGenericHandler`. Date and numeric
  * field sets are expanded so every member field maps to the same handler.
@@ -624,6 +673,7 @@ export const FIELD_HANDLERS: Record<string, FieldHandler> = (() => {
     audioLanguage: streamRelationHandler,
     subtitleLanguage: streamRelationHandler,
     streamAudioCodec: streamRelationHandler,
+    watchedByUser: watchedByUserHandler,
   };
   for (const f of DATE_HANDLER_FIELDS) handlers[f] = dateHandler;
   for (const f of NUMERIC_HANDLER_FIELDS) handlers[f] = numericHandler;

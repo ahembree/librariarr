@@ -49,7 +49,7 @@ export async function GET() {
   const cached = appCache.get<Record<string, unknown>>(CACHE_KEY);
   if (cached) return NextResponse.json(cached);
 
-  const [aggRows, genres, streamDistinct, sqDistinct, ruleSets] = await Promise.all([
+  const [aggRows, genres, streamDistinct, sqDistinct, ruleSets, watchUsers] = await Promise.all([
     prisma.$queryRaw<AggRow[]>`
       SELECT
         array_agg(DISTINCT resolution) FILTER (WHERE resolution IS NOT NULL) AS resolutions,
@@ -114,6 +114,18 @@ export async function GET() {
       select: { name: true },
       orderBy: { name: "asc" },
     }),
+    // Distinct server usernames from per-user watch history for the
+    // `watchedByUser` field. Scoped via the user→server join to mirror the
+    // ruleSets query above; under single-user this matches every server.
+    prisma.$queryRaw<{ serverUsername: string }[]>`
+      SELECT DISTINCT wh."serverUsername" AS "serverUsername"
+      FROM "WatchHistory" wh
+      JOIN "MediaServer" ms ON wh."mediaServerId" = ms.id
+      WHERE ms."userId" = ${session.userId}
+        AND wh."serverUsername" IS NOT NULL
+        AND wh."serverUsername" != ''
+      ORDER BY wh."serverUsername" ASC
+    `,
   ]);
 
   const r = aggRows[0];
@@ -162,6 +174,8 @@ export async function GET() {
     sqAudioLayout: dedupeInsensitive(sqd?.audioLayouts ?? []).sort((a, b) => a.localeCompare(b)),
     // Cross-system distinct values
     matchedByRuleSet: ruleSets.map((rs) => rs.name),
+    // Per-user watch history — usernames who have ever played a media item.
+    watchedByUser: watchUsers.map((u) => u.serverUsername),
   };
 
   appCache.set(CACHE_KEY, result, CACHE_TTL);
