@@ -155,6 +155,38 @@ describe("Lifecycle Rules CRUD", () => {
       expect(body.ruleSet.id).toBeTruthy();
     });
 
+    it("rejects fields invalid for the rule set's library type", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      // arrSeasonCount is series-only; sending it on a MOVIE rule set must 400.
+      const rules = [
+        {
+          id: "g1",
+          condition: "AND",
+          rules: [
+            { id: "r1", field: "arrSeasonCount", operator: "greaterThan", value: 2, condition: "AND" },
+          ],
+          groups: [],
+        },
+      ];
+
+      const response = await callRoute(POST, {
+        url: "/api/lifecycle/rules",
+        method: "POST",
+        body: { name: "Bad Movie Rule", type: "MOVIE", rules, serverIds: [server.id] },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toContain("arrSeasonCount");
+
+      // Nothing should have been persisted.
+      const prisma = getTestPrisma();
+      const count = await prisma.ruleSet.count({ where: { userId: user.id } });
+      expect(count).toBe(0);
+    });
+
     it("creates a rule set with all optional fields", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
@@ -421,6 +453,37 @@ describe("Lifecycle Rules CRUD", () => {
 
       const body = await expectJson<{ ruleSet: { name: string } }>(response, 200);
       expect(body.ruleSet.name).toBe("Updated Name");
+    });
+
+    it("rejects a rules update carrying fields invalid for the rule set's type", async () => {
+      const user = await createTestUser();
+      // Default type is MOVIE.
+      const ruleSet = await createTestRuleSet(user.id, { name: "Movie Rule" });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const rules = [
+        {
+          id: "g1",
+          condition: "AND",
+          rules: [
+            { id: "r1", field: "arrSeriesType", operator: "equals", value: "anime", condition: "AND" },
+          ],
+          groups: [],
+        },
+      ];
+
+      const response = await callRouteWithParams(
+        PUT,
+        { id: ruleSet.id },
+        {
+          url: `/api/lifecycle/rules/${ruleSet.id}`,
+          method: "PUT",
+          body: { rules },
+        }
+      );
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toContain("arrSeriesType");
     });
 
     it("updates multiple fields at once", async () => {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { validateRequest, savedQueryUpdateSchema } from "@/lib/validation";
+import { findFieldsInvalidForTypes, type LibraryType } from "@/lib/conditions";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -23,6 +24,20 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
 
   const { data, error } = await validateRequest(request, savedQueryUpdateSchema);
   if (error) return error;
+
+  // Reject fields invalid for every selected media type (see POST handler).
+  if (data.query !== undefined) {
+    const invalidFields = findFieldsInvalidForTypes(
+      data.query.groups,
+      data.query.mediaTypes as LibraryType[],
+    );
+    if (invalidFields.length > 0) {
+      return NextResponse.json(
+        { error: `These criteria are not valid for the selected media types: ${invalidFields.join(", ")}` },
+        { status: 400 }
+      );
+    }
+  }
 
   const updated = await prisma.savedQuery.update({
     where: { id },

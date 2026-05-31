@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { removePlexCollection } from "@/lib/lifecycle/collections";
 import { cleanupArrTags } from "@/lib/lifecycle/actions";
 import { validateRequest, ruleSetUpdateSchema } from "@/lib/validation";
+import { findFieldsInvalidForType } from "@/lib/conditions";
 
 export async function PUT(
   request: NextRequest,
@@ -29,7 +30,11 @@ export async function PUT(
     serverIds,
   } = data;
 
-  if (name !== undefined) {
+  // The rule set's type is fixed at creation and needed for both the duplicate-
+  // name check and the field-validity guard below. Fetch it once when either is
+  // relevant rather than twice.
+  let currentType: "MOVIE" | "SERIES" | "MUSIC" | undefined;
+  if (name !== undefined || rules !== undefined) {
     const current = await prisma.ruleSet.findFirst({
       where: { id, userId: session.userId },
       select: { type: true },
@@ -37,13 +42,31 @@ export async function PUT(
     if (!current) {
       return NextResponse.json({ error: "Rule set not found" }, { status: 404 });
     }
+    currentType = current.type;
+  }
+
+  if (name !== undefined) {
     const existing = await prisma.ruleSet.findFirst({
-      where: { userId: session.userId, name, type: current.type, id: { not: id } },
+      where: { userId: session.userId, name, type: currentType!, id: { not: id } },
     });
     if (existing) {
       return NextResponse.json(
         { error: "A rule set with this name already exists" },
         { status: 409 }
+      );
+    }
+  }
+
+  // Reject fields invalid for this rule set's library type (see POST handler
+  // for rationale). Only relevant when the update actually carries new rules.
+  if (rules !== undefined && currentType) {
+    const invalidFields = findFieldsInvalidForType(rules, currentType);
+    if (invalidFields.length > 0) {
+      return NextResponse.json(
+        {
+          error: `These criteria are not valid for ${currentType.toLowerCase()} rules: ${invalidFields.join(", ")}`,
+        },
+        { status: 400 }
       );
     }
   }
