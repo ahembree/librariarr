@@ -27,6 +27,8 @@ export interface RadarrMovie {
   originalLanguage?: { id: number; name: string };
   movieFile?: { quality?: { quality?: { name?: string } }; dateAdded?: string };
   qualityCutoffNotMet?: boolean;
+  // Radarr movie lifecycle status: tba | announced | inCinemas | released | deleted
+  status?: string;
 }
 
 export interface RadarrTag {

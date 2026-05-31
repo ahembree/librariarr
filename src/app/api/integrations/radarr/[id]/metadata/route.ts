@@ -67,5 +67,10 @@ export async function GET(
     qualityNames: [...new Set(
       movies.map((m) => m.movieFile?.quality?.quality?.name).filter((v): v is string => !!v),
     )].sort((a, b) => a.localeCompare(b)),
+    // Distinct movie statuses (tba | announced | inCinemas | released | deleted)
+    // present in the library, for the enumerable arrStatus field.
+    statuses: [...new Set(
+      movies.map((m) => m.status).filter((v): v is string => !!v),
+    )].sort((a, b) => a.localeCompare(b)),
   });
 }

@@ -22,6 +22,8 @@ export interface LidarrArtist {
     sizeOnDisk: number;
   };
   added?: string;
+  // Lidarr artist status: continuing | ended | deleted
+  status?: string;
 }
 
 export interface LidarrTag {

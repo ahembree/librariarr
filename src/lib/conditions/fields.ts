@@ -71,11 +71,11 @@ export const CONDITION_FIELDS: ConditionField[] = [
   { value: "arrMonitored", label: "Monitored", type: "boolean", section: "arrStatus", knownValues: ["true", "false"], requiresArr: true },
   { value: "arrTag", label: "Tag", type: "text", section: "arrStatus", enumerable: true, requiresArr: true },
   { value: "arrQualityProfile", label: "Quality Profile", type: "text", section: "arrStatus", enumerable: true, requiresArr: true },
-  { value: "arrQualityName", label: "Quality Name", type: "text", section: "arrStatus", enumerable: true, requiresArr: true },
+  { value: "arrQualityName", label: "Quality Name", type: "text", section: "arrStatus", enumerable: true, requiresArr: true, invalidForLibraryType: ["SERIES", "MUSIC"] },
   { value: "arrQualityCutoffMet", label: "Quality Cutoff Met", type: "boolean", section: "arrStatus", knownValues: ["true", "false"], requiresArr: true },
   { value: "arrStatus", label: "Status", type: "text", section: "arrStatus", enumerable: true, requiresArr: true },
   { value: "arrEnded", label: "Ended", type: "boolean", section: "arrStatus", knownValues: ["true", "false"], requiresArr: true },
-  { value: "arrSeriesType", label: "Series Type", type: "text", section: "arrStatus", enumerable: true, requiresArr: true },
+  { value: "arrSeriesType", label: "Series Type", type: "text", section: "arrStatus", enumerable: true, requiresArr: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
 
   // ─── Arr: Media ─────────────────────────────────────────────────────────
   { value: "arrRating", label: "IMDB Rating", type: "number", section: "arrMedia", requiresArr: true },

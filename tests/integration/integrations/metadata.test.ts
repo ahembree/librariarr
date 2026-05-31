@@ -201,6 +201,26 @@ describe("Integration metadata endpoints", () => {
 
       expect(body.artists["mb-1"].tags).toEqual(["99"]);
     });
+
+    it("derives distinct artist statuses for the enumerable arrStatus field", async () => {
+      const user = await createTestUser();
+      const instance = await createTestLidarrInstance(user.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      mockLidarrGetArtists.mockResolvedValue([
+        { foreignArtistId: "mb-1", tags: [], qualityProfileId: 1, monitored: true, status: "continuing" },
+        { foreignArtistId: "mb-2", tags: [], qualityProfileId: 1, monitored: true, status: "ended" },
+        // Duplicate dedupes; the artist with no status is filtered out.
+        { foreignArtistId: "mb-3", tags: [], qualityProfileId: 1, monitored: true, status: "continuing" },
+        { foreignArtistId: "mb-4", tags: [], qualityProfileId: 1, monitored: false },
+      ]);
+      mockLidarrGetQualityProfiles.mockResolvedValue([{ id: 1, name: "Lossless" }]);
+
+      const response = await callRouteWithParams(LidarrMetadataGET, { id: instance.id });
+      const body = await expectJson<{ statuses: string[] }>(response, 200);
+
+      expect(body.statuses).toEqual(["continuing", "ended"]);
+    });
   });
 
   // ===== Radarr metadata =====
@@ -244,6 +264,7 @@ describe("Integration metadata endpoints", () => {
           qualityProfileId: 1,
           monitored: true,
           ratings: { imdb: { value: 8.8 } },
+          status: "released",
         },
       ]);
       mockRadarrGetQualityProfiles.mockResolvedValue([{ id: 1, name: "HD-1080p" }]);
@@ -272,6 +293,26 @@ describe("Integration metadata endpoints", () => {
       expect(body.qualityProfiles).toEqual([{ id: 1, name: "HD-1080p" }]);
       // "Unknown" should be filtered out, remaining sorted alphabetically
       expect(body.languages).toEqual(["English", "French"]);
+    });
+
+    it("derives distinct movie statuses for the enumerable arrStatus field", async () => {
+      const user = await createTestUser();
+      const instance = await createTestRadarrInstance(user.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      mockRadarrGetMovies.mockResolvedValue([
+        { tmdbId: 1, tags: [], qualityProfileId: 1, monitored: true, status: "released" },
+        { tmdbId: 2, tags: [], qualityProfileId: 1, monitored: true, status: "announced" },
+        // Duplicate dedupes; the movie with no status is filtered out.
+        { tmdbId: 3, tags: [], qualityProfileId: 1, monitored: true, status: "released" },
+        { tmdbId: 4, tags: [], qualityProfileId: 1, monitored: false },
+      ]);
+      mockRadarrGetQualityProfiles.mockResolvedValue([{ id: 1, name: "HD" }]);
+
+      const response = await callRouteWithParams(RadarrMetadataGET, { id: instance.id });
+      const body = await expectJson<{ statuses: string[] }>(response, 200);
+
+      expect(body.statuses).toEqual(["announced", "released"]);
     });
 
     it("handles movie with no ratings", async () => {

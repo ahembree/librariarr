@@ -55,5 +55,10 @@ export async function GET(
     artists: artistLookup,
     tags: tags.map((t) => ({ id: t.id, label: t.label })),
     qualityProfiles: qualityProfiles.map((p) => ({ id: p.id, name: p.name })),
+    // Distinct artist statuses (continuing | ended | deleted) present in the
+    // library, for the enumerable arrStatus field.
+    statuses: [...new Set(
+      artists.map((a) => a.status).filter((v): v is string => !!v),
+    )].sort((a, b) => a.localeCompare(b)),
   });
 }
