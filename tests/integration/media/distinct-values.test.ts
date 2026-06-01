@@ -38,6 +38,22 @@ vi.mock("@/lib/cache/memory-cache", () => {
 
 // Import route handler AFTER mocks
 import { GET } from "@/app/api/media/distinct-values/route";
+import { CONDITION_FIELDS } from "@/lib/conditions";
+
+/**
+ * Enumerable fields whose dropdown values come from this endpoint (as opposed
+ * to hardcoded `knownValues`, or the Arr/Seerr metadata routes). Derived from
+ * the registry so a newly-added enumerable field forces a value source — this
+ * is the regression guard for the original "empty dropdown -> raw text input"
+ * bug (seerrRequestedBy, labels, sqColor*, etc.).
+ */
+const ENDPOINT_SOURCED_ENUMERABLE_FIELDS = CONDITION_FIELDS.filter(
+  (f) =>
+    f.enumerable &&
+    !f.requiresArr &&
+    !f.requiresSeerr &&
+    (f.knownValues?.length ?? 0) === 0,
+).map((f) => f.value);
 
 describe("GET /api/media/distinct-values", () => {
   beforeEach(async () => {
@@ -54,6 +70,24 @@ describe("GET /api/media/distinct-values", () => {
       url: "/api/media/distinct-values",
     });
     await expectJson<{ error: string }>(response, 401);
+  });
+
+  it("emits a same-named key for every endpoint-sourced enumerable field", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const response = await callRoute(GET, { url: "/api/media/distinct-values" });
+    const body = await expectJson<Record<string, unknown>>(response, 200);
+
+    // Sanity: the derived set isn't empty (would make this test vacuous).
+    expect(ENDPOINT_SOURCED_ENUMERABLE_FIELDS.length).toBeGreaterThan(0);
+    for (const field of ENDPOINT_SOURCED_ENUMERABLE_FIELDS) {
+      expect(
+        Object.prototype.hasOwnProperty.call(body, field),
+        `distinct-values response is missing a value source for enumerable field "${field}"`,
+      ).toBe(true);
+      expect(Array.isArray(body[field]), `"${field}" should be a string[]`).toBe(true);
+    }
   });
 
   it("returns data with authenticated session", async () => {

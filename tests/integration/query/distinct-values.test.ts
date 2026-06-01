@@ -38,6 +38,19 @@ vi.mock("@/lib/cache/memory-cache", () => {
 
 // Import route handler AFTER mocks
 import { GET } from "@/app/api/query/distinct-values/route";
+import { CONDITION_FIELDS } from "@/lib/conditions";
+
+// Enumerable fields whose values come from this endpoint (not knownValues or
+// the Arr/Seerr metadata routes). See the media distinct-values test for the
+// rationale — this is the regression guard against an enumerable field shipping
+// with no value source (empty dropdown -> raw text input).
+const ENDPOINT_SOURCED_ENUMERABLE_FIELDS = CONDITION_FIELDS.filter(
+  (f) =>
+    f.enumerable &&
+    !f.requiresArr &&
+    !f.requiresSeerr &&
+    (f.knownValues?.length ?? 0) === 0,
+).map((f) => f.value);
 
 describe("GET /api/query/distinct-values", () => {
   beforeEach(async () => {
@@ -54,6 +67,23 @@ describe("GET /api/query/distinct-values", () => {
       url: "/api/query/distinct-values",
     });
     await expectJson<{ error: string }>(response, 401);
+  });
+
+  it("emits a same-named key for every endpoint-sourced enumerable field", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const response = await callRoute(GET, { url: "/api/query/distinct-values" });
+    const body = await expectJson<Record<string, unknown>>(response, 200);
+
+    expect(ENDPOINT_SOURCED_ENUMERABLE_FIELDS.length).toBeGreaterThan(0);
+    for (const field of ENDPOINT_SOURCED_ENUMERABLE_FIELDS) {
+      expect(
+        Object.prototype.hasOwnProperty.call(body, field),
+        `query distinct-values response is missing a value source for enumerable field "${field}"`,
+      ).toBe(true);
+      expect(Array.isArray(body[field]), `"${field}" should be a string[]`).toBe(true);
+    }
   });
 
   it("returns empty arrays when no data exists", async () => {
