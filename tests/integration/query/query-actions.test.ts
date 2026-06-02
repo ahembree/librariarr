@@ -115,6 +115,19 @@ describe("POST /api/query/actions", () => {
     });
   });
 
+  it("rejects an unknown action type", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const radarr = await createTestRadarrInstance(user.id);
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { query: BASE_QUERY, mediaItemIds: ["a"], actionType: "DROP_TABLE", arrInstanceId: radarr.id },
+    });
+    await expectJson(response, 400);
+    expect(mockedExecuteQuery).not.toHaveBeenCalled();
+  });
+
   it("rejects an action that needs an Arr instance when none is given", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });
@@ -250,6 +263,42 @@ describe("POST /api/query/actions", () => {
     expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
     const passed = mockedExecuteAction.mock.calls[0][0];
     expect(new Set(passed.matchedMediaItemIds)).toEqual(new Set([ep1.id, ep2.id]));
+  });
+
+  it("does not bleed episodes across distinct shows that share a normalized title", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" });
+    // Two distinct shows that collapse under normalizeTitle ("office") but are
+    // separate groups under LOWER(TRIM(parentTitle)).
+    const usEp = await createTestMediaItem(library.id, { type: "SERIES", title: "US S1E1", parentTitle: "The Office (US)", seasonNumber: 1, episodeNumber: 1 });
+    const ukEp = await createTestMediaItem(library.id, { type: "SERIES", title: "UK S1E1", parentTitle: "The Office (UK)", seasonNumber: 1, episodeNumber: 1 });
+    const sonarr = await createTestSonarrInstance(user.id);
+
+    mockedExecuteQuery.mockImplementation(async (q: { includeEpisodes?: boolean }) => {
+      if (q.includeEpisodes) {
+        return queryResult([
+          { id: usEp.id, type: "SERIES", title: "US S1E1", parentTitle: "The Office (US)" },
+          { id: ukEp.id, type: "SERIES", title: "UK S1E1", parentTitle: "The Office (UK)" },
+        ]);
+      }
+      // Grouped result: representative row for the US show only.
+      return queryResult([{ id: usEp.id, type: "SERIES", title: "The Office (US)", parentTitle: null }]);
+    });
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: {
+        query: BASE_QUERY,
+        mediaItemIds: [usEp.id],
+        actionType: "DELETE_FILES_SONARR",
+        arrInstanceId: sonarr.id,
+      },
+    });
+    await expectJson(response, 200);
+    const passed = mockedExecuteAction.mock.calls[0][0];
+    // Only the US episode — must NOT include the UK show's episode.
+    expect(passed.matchedMediaItemIds).toEqual([usEp.id]);
   });
 
   it("records a FAILED action and surfaces the error when execution throws", async () => {

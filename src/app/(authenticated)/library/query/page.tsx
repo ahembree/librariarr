@@ -650,16 +650,23 @@ export default function QueryPage() {
     };
   }, [mediaTypes, selectedServerIds, groups, sortBy, sortOrder, includeEpisodes, arrServerIds, seerrInstanceId]);
 
+  // The definition that produced the currently displayed results. Ad-hoc actions
+  // must validate against THIS (not the live builder state, which the user may
+  // have edited without re-running), so the selection matches what's on screen.
+  const lastRunDefinitionRef = useRef<QueryDefinition | null>(null);
+
   const runQuery = useCallback(
     async () => {
       setLoading(true);
       setHasRun(true);
       setSelectedIds(new Set());
+      const definition = buildDefinition();
+      lastRunDefinitionRef.current = definition;
       try {
         const resp = await fetch("/api/query", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query: buildDefinition(), limit: 0 }),
+          body: JSON.stringify({ query: definition, limit: 0 }),
         });
 
         if (!resp.ok) throw new Error("Query failed");
@@ -704,7 +711,7 @@ export default function QueryPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            query: buildDefinition(),
+            query: lastRunDefinitionRef.current ?? buildDefinition(),
             mediaItemIds: [...selectedIds],
             ...config,
           }),

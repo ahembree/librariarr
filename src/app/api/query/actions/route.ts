@@ -3,12 +3,16 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeQuery } from "@/lib/query/query-engine";
-import { normalizeTitle } from "@/lib/lifecycle/actions";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
+import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES } from "@/lib/lifecycle/action-types";
 import { validateRequest, queryActionSchema } from "@/lib/validation";
 import type { QueryDefinition } from "@/lib/query/types";
 
 type MediaType = "MOVIE" | "SERIES" | "MUSIC";
+
+const VALID_ACTION_TYPES = new Set(
+  [...MOVIE_ACTION_TYPES, ...SERIES_ACTION_TYPES, ...MUSIC_ACTION_TYPES].map((a) => a.value),
+);
 
 /** Derive the target media type from an action type's Arr-family suffix. */
 function familyFromActionType(actionType: string): MediaType | null {
@@ -62,6 +66,10 @@ export async function POST(request: NextRequest) {
     addArrTags,
     removeArrTags,
   } = data;
+
+  if (!VALID_ACTION_TYPES.has(actionType)) {
+    return NextResponse.json({ error: "Unknown action type" }, { status: 400 });
+  }
 
   const hasTagOps = addArrTags.length > 0 || removeArrTags.length > 0;
 
@@ -126,17 +134,24 @@ export async function POST(request: NextRequest) {
         1,
         0,
       );
+      // Group by the SAME key the query engine uses for grouped shows
+      // (LOWER(TRIM(parentTitle))). Using a looser key (e.g. normalizeTitle)
+      // would collapse distinct shows like "The Office (US)" / "The Office (UK)"
+      // and act on the wrong episodes.
+      const showKey = (s: unknown) => String(s ?? "").trim().toLowerCase();
       const groups = new Map<string, string[]>();
       for (const ep of episodeResult.items) {
-        if (ep.type !== "SERIES") continue;
-        const key = normalizeTitle(String(ep.parentTitle ?? ep.title ?? ""));
+        if (ep.type !== "SERIES" || ep.parentTitle == null) continue;
+        const key = showKey(ep.parentTitle);
         const arr = groups.get(key) ?? [];
         arr.push(String(ep.id));
         groups.set(key, arr);
       }
       for (const id of validIds) {
+        // For grouped shows the representative row carries the show name in
+        // `title` (MIN(parentTitle)); episodes carry it in `parentTitle`.
         const item = liveOfType.find((it) => String(it.id) === id);
-        const key = normalizeTitle(String(item?.title ?? item?.parentTitle ?? ""));
+        const key = showKey(item?.title ?? item?.parentTitle);
         const members = groups.get(key);
         if (members && members.length > 0) episodeIdMap.set(id, members);
       }
