@@ -75,6 +75,8 @@ import { normalizeResolutionLabel } from "@/lib/resolution";
 import { generateId } from "@/lib/utils";
 import { EmptyState } from "@/components/empty-state";
 import { ConvertQueryToRuleDialog } from "@/components/convert-query-to-rule-dialog";
+import { QueryActionBar, type ArrFamily, type ArrFamilyMeta, type QueryActionConfig } from "@/components/query-action-bar";
+import { toast } from "sonner";
 
 interface SavedQuery {
   id: string;
@@ -201,6 +203,15 @@ export default function QueryPage() {
     maxWidth: 800,
   });
   const [selectedItem, setSelectedItem] = useState<QueryResultItem | null>(null);
+
+  // Result selection (for triggering ad-hoc lifecycle actions)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [executingAction, setExecutingAction] = useState(false);
+  const [arrMeta, setArrMeta] = useState<Record<ArrFamily, ArrFamilyMeta>>({
+    radarr: { qualityProfiles: [], tags: [] },
+    sonarr: { qualityProfiles: [], tags: [] },
+    lidarr: { qualityProfiles: [], tags: [] },
+  });
 
   // Query state
   const [mediaTypes, setMediaTypes] = useState<string[]>([]);
@@ -334,64 +345,54 @@ export default function QueryPage() {
       .catch(() => {});
   }, []);
 
-  // Fetch Arr metadata when selected Arr servers change (for dropdown distinct values)
+  // Fetch Arr metadata when selected Arr servers change (for dropdown distinct
+  // values AND the action bar's per-family quality profiles + tags).
   useEffect(() => {
     const fetchArrMetadata = async () => {
-      const newArrTags: string[] = [];
-      const newArrProfiles: string[] = [];
+      const meta: Record<ArrFamily, ArrFamilyMeta> = {
+        radarr: { qualityProfiles: [], tags: [] },
+        sonarr: { qualityProfiles: [], tags: [] },
+        lidarr: { qualityProfiles: [], tags: [] },
+      };
+
+      const fetchFamily = async (family: ArrFamily, id: string) => {
+        try {
+          const r = await fetch(`/api/integrations/${family}/${id}/metadata`);
+          if (!r.ok) return;
+          const data = await r.json();
+          meta[family] = {
+            qualityProfiles: (data?.qualityProfiles ?? []).map((p: { id: number; name: string }) => ({ id: p.id, name: p.name })),
+            tags: (data?.tags ?? []).map((t: { label: string }) => t.label),
+          };
+        } catch { /* ignore */ }
+      };
 
       const promises: Promise<void>[] = [];
-
-      if (arrServerIds.radarr) {
-        promises.push(
-          fetch(`/api/integrations/radarr/${arrServerIds.radarr}/metadata`)
-            .then((r) => r.ok ? r.json() : null)
-            .then((data) => {
-              if (data?.tags) newArrTags.push(...data.tags.map((t: { label: string }) => t.label));
-              if (data?.qualityProfiles) newArrProfiles.push(...data.qualityProfiles.map((p: { name: string }) => p.name));
-            })
-            .catch(() => {}),
-        );
-      }
-      if (arrServerIds.sonarr) {
-        promises.push(
-          fetch(`/api/integrations/sonarr/${arrServerIds.sonarr}/metadata`)
-            .then((r) => r.ok ? r.json() : null)
-            .then((data) => {
-              if (data?.tags) newArrTags.push(...data.tags.map((t: { label: string }) => t.label));
-              if (data?.qualityProfiles) newArrProfiles.push(...data.qualityProfiles.map((p: { name: string }) => p.name));
-            })
-            .catch(() => {}),
-        );
-      }
-      if (arrServerIds.lidarr) {
-        promises.push(
-          fetch(`/api/integrations/lidarr/${arrServerIds.lidarr}/metadata`)
-            .then((r) => r.ok ? r.json() : null)
-            .then((data) => {
-              if (data?.tags) newArrTags.push(...data.tags.map((t: { label: string }) => t.label));
-              if (data?.qualityProfiles) newArrProfiles.push(...data.qualityProfiles.map((p: { name: string }) => p.name));
-            })
-            .catch(() => {}),
-        );
-      }
-
+      if (arrServerIds.radarr) promises.push(fetchFamily("radarr", arrServerIds.radarr));
+      if (arrServerIds.sonarr) promises.push(fetchFamily("sonarr", arrServerIds.sonarr));
+      if (arrServerIds.lidarr) promises.push(fetchFamily("lidarr", arrServerIds.lidarr));
       await Promise.all(promises);
 
-      // Deduplicate and sort
-      const uniqueTags = [...new Set(newArrTags)].sort((a, b) => a.localeCompare(b));
-      const uniqueProfiles = [...new Set(newArrProfiles)].sort((a, b) => a.localeCompare(b));
+      setArrMeta(meta);
 
+      // Deduplicate and sort for the query builder dropdowns
+      const allTags = [meta.radarr, meta.sonarr, meta.lidarr].flatMap((m) => m.tags);
+      const allProfiles = [meta.radarr, meta.sonarr, meta.lidarr].flatMap((m) => m.qualityProfiles.map((p) => p.name));
       setDistinctValues((prev) => ({
         ...prev,
-        arrTag: uniqueTags,
-        arrQualityProfile: uniqueProfiles,
+        arrTag: [...new Set(allTags)].sort((a, b) => a.localeCompare(b)),
+        arrQualityProfile: [...new Set(allProfiles)].sort((a, b) => a.localeCompare(b)),
       }));
     };
 
     if (arrServerIds.radarr || arrServerIds.sonarr || arrServerIds.lidarr) {
       fetchArrMetadata();
     } else {
+      setArrMeta({
+        radarr: { qualityProfiles: [], tags: [] },
+        sonarr: { qualityProfiles: [], tags: [] },
+        lidarr: { qualityProfiles: [], tags: [] },
+      });
       setDistinctValues((prev) => ({ ...prev, arrTag: [], arrQualityProfile: [] }));
     }
   }, [arrServerIds]);
@@ -633,29 +634,32 @@ export default function QueryPage() {
     [groups, seerrConnected, mediaTypes],
   );
 
+  const buildDefinition = useCallback((): QueryDefinition => {
+    const cleanedArrServerIds = Object.fromEntries(
+      Object.entries(arrServerIds).filter(([, v]) => v),
+    );
+    return {
+      mediaTypes: mediaTypes as QueryDefinition["mediaTypes"],
+      serverIds: selectedServerIds,
+      groups,
+      sortBy,
+      sortOrder,
+      includeEpisodes,
+      ...(Object.keys(cleanedArrServerIds).length > 0 && { arrServerIds: cleanedArrServerIds }),
+      ...(seerrInstanceId && { seerrInstanceId }),
+    };
+  }, [mediaTypes, selectedServerIds, groups, sortBy, sortOrder, includeEpisodes, arrServerIds, seerrInstanceId]);
+
   const runQuery = useCallback(
     async () => {
       setLoading(true);
       setHasRun(true);
+      setSelectedIds(new Set());
       try {
-        const cleanedArrServerIds = Object.fromEntries(
-          Object.entries(arrServerIds).filter(([, v]) => v),
-        );
-        const definition: QueryDefinition = {
-          mediaTypes: mediaTypes as QueryDefinition["mediaTypes"],
-          serverIds: selectedServerIds,
-          groups,
-          sortBy,
-          sortOrder,
-          includeEpisodes,
-          ...(Object.keys(cleanedArrServerIds).length > 0 && { arrServerIds: cleanedArrServerIds }),
-          ...(seerrInstanceId && { seerrInstanceId }),
-        };
-
         const resp = await fetch("/api/query", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query: definition, limit: 0 }),
+          body: JSON.stringify({ query: buildDefinition(), limit: 0 }),
         });
 
         if (!resp.ok) throw new Error("Query failed");
@@ -667,8 +671,101 @@ export default function QueryPage() {
         setLoading(false);
       }
     },
-    [mediaTypes, selectedServerIds, groups, sortBy, sortOrder, includeEpisodes, arrServerIds, seerrInstanceId],
+    [buildDefinition],
   );
+
+  // ── Selection + ad-hoc action handlers ──
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+
+  const selectionTypeCounts = useMemo(() => {
+    const counts = { MOVIE: 0, SERIES: 0, MUSIC: 0 };
+    for (const r of results) {
+      if (selectedIds.has(r.id) && (r.type === "MOVIE" || r.type === "SERIES" || r.type === "MUSIC")) {
+        counts[r.type]++;
+      }
+    }
+    return counts;
+  }, [results, selectedIds]);
+
+  const executeAction = useCallback(
+    async (config: QueryActionConfig) => {
+      setExecutingAction(true);
+      try {
+        const resp = await fetch("/api/query/actions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: buildDefinition(),
+            mediaItemIds: [...selectedIds],
+            ...config,
+          }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          toast.error("Action failed", { description: data?.error ?? "Unknown error" });
+          return;
+        }
+        const parts = [`${data.executed} executed`];
+        if (data.failed > 0) parts.push(`${data.failed} failed`);
+        if (data.skipped > 0) parts.push(`${data.skipped} skipped`);
+        if (data.failed > 0) {
+          toast.warning("Action completed with errors", { description: parts.join(", ") });
+        } else {
+          toast.success("Action complete", { description: parts.join(", ") });
+        }
+        clearSelection();
+        runQuery();
+      } catch {
+        toast.error("Action failed", { description: "Could not reach the server" });
+      } finally {
+        setExecutingAction(false);
+      }
+    },
+    [buildDefinition, selectedIds, clearSelection, runQuery],
+  );
+
+  // Table columns with a leading selection checkbox column.
+  const tableColumns = useMemo<QueryColumn[]>(() => {
+    const allSelected = results.length > 0 && results.every((r) => selectedIds.has(r.id));
+    const someSelected = selectedIds.size > 0 && !allSelected;
+    const selectionColumn: QueryColumn = {
+      id: "__select",
+      group: "core",
+      defaultVisible: true,
+      sortable: false,
+      defaultWidth: 44,
+      className: "text-center",
+      headerClassName: "text-center",
+      header: (
+        <Checkbox
+          checked={allSelected ? true : someSelected ? "indeterminate" : false}
+          onClick={(e) => e.stopPropagation()}
+          onCheckedChange={() =>
+            setSelectedIds(allSelected ? new Set() : new Set(results.map((r) => r.id)))
+          }
+          aria-label="Select all results"
+        />
+      ),
+      accessor: (item) => (
+        <Checkbox
+          checked={selectedIds.has(item.id)}
+          onClick={(e) => e.stopPropagation()}
+          onCheckedChange={() => toggleSelect(item.id)}
+          aria-label={`Select ${item.title}`}
+        />
+      ),
+    };
+    return [selectionColumn, ...activeColumns];
+  }, [activeColumns, results, selectedIds, toggleSelect]);
 
   // ── Save/Load/Delete handlers ──
 
@@ -1208,7 +1305,7 @@ export default function QueryPage() {
           {results.length > 0 ? (
             viewMode === "table" ? (
               <DataTable
-                columns={activeColumns}
+                columns={tableColumns}
                 data={results}
                 onRowClick={navigateToItem}
                 keyExtractor={(item) => item.id}
@@ -1278,8 +1375,25 @@ export default function QueryPage() {
                           }}
                         >
                           {rowItems.map((item) => (
-                            <MediaCard
+                            <div
                               key={item.id}
+                              className={cn(
+                                "relative rounded-lg",
+                                selectedIds.has(item.id) && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+                              )}
+                            >
+                              <div
+                                className="absolute left-2 top-2 z-10 rounded bg-background/80 p-0.5 backdrop-blur"
+                                onClick={(e) => { e.stopPropagation(); toggleSelect(item.id); }}
+                              >
+                                <Checkbox
+                                  checked={selectedIds.has(item.id)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onCheckedChange={() => toggleSelect(item.id)}
+                                  aria-label={`Select ${item.title}`}
+                                />
+                              </div>
+                            <MediaCard
                               imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" || item.parentTitle ? "?type=parent" : ""}`}
                               title={item.title}
                               fallbackIcon={FALLBACK_ICONS[item.type] ?? "movie"}
@@ -1341,6 +1455,7 @@ export default function QueryPage() {
                                 />
                               }
                             />
+                            </div>
                           ))}
                         </div>
                       </div>
@@ -1357,6 +1472,18 @@ export default function QueryPage() {
             />
           ) : null}
         </div>
+      )}
+
+      {selectedIds.size > 0 && (
+        <QueryActionBar
+          selectedCount={selectedIds.size}
+          selectionTypeCounts={selectionTypeCounts}
+          arrServerIds={arrServerIds}
+          arrMeta={arrMeta}
+          executing={executingAction}
+          onExecute={executeAction}
+          onClear={clearSelection}
+        />
       )}
       </div>
 

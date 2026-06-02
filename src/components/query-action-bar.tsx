@@ -1,0 +1,336 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Loader2, Play, X, Tag, ChevronDown } from "lucide-react";
+import {
+  MOVIE_ACTION_TYPES,
+  SERIES_ACTION_TYPES,
+  MUSIC_ACTION_TYPES,
+  QUALITY_PROFILE_ACTION_TYPES,
+} from "@/lib/lifecycle/action-types";
+
+export type ArrFamily = "radarr" | "sonarr" | "lidarr";
+type MediaType = "MOVIE" | "SERIES" | "MUSIC";
+
+export interface ArrFamilyMeta {
+  qualityProfiles: Array<{ id: number; name: string }>;
+  tags: string[];
+}
+
+export interface QueryActionConfig {
+  actionType: string;
+  arrInstanceId: string;
+  targetQualityProfileId: number | null;
+  addImportExclusion: boolean;
+  searchAfterAction: boolean;
+  addArrTags: string[];
+  removeArrTags: string[];
+}
+
+interface QueryActionBarProps {
+  selectedCount: number;
+  /** Count of selected items per media type. */
+  selectionTypeCounts: Record<MediaType, number>;
+  /** Arr instance chosen on the page per family (id). */
+  arrServerIds: { radarr?: string; sonarr?: string; lidarr?: string };
+  /** Per-family metadata for the chosen instance (quality profiles + tags). */
+  arrMeta: Record<ArrFamily, ArrFamilyMeta>;
+  executing: boolean;
+  onExecute: (config: QueryActionConfig) => void;
+  onClear: () => void;
+}
+
+const FAMILY_BY_TYPE: Record<MediaType, ArrFamily> = {
+  MOVIE: "radarr",
+  SERIES: "sonarr",
+  MUSIC: "lidarr",
+};
+
+const ACTIONS_BY_FAMILY: Record<ArrFamily, { value: string; label: string }[]> = {
+  radarr: MOVIE_ACTION_TYPES,
+  sonarr: SERIES_ACTION_TYPES,
+  lidarr: MUSIC_ACTION_TYPES,
+};
+
+const FAMILY_LABEL: Record<ArrFamily, string> = {
+  radarr: "Movies",
+  sonarr: "Series",
+  lidarr: "Music",
+};
+
+function familyFromActionType(actionType: string): ArrFamily | null {
+  if (actionType.endsWith("RADARR")) return "radarr";
+  if (actionType.endsWith("SONARR")) return "sonarr";
+  if (actionType.endsWith("LIDARR")) return "lidarr";
+  return null;
+}
+
+/** Multi-select tag picker (free input + known tags), mirrors the page's server picker. */
+function TagPicker({
+  label,
+  options,
+  selected,
+  onChange,
+}: {
+  label: string;
+  options: string[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const toggle = (tag: string) =>
+    onChange(selected.includes(tag) ? selected.filter((t) => t !== tag) : [...selected, tag]);
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="h-8 gap-1.5">
+          <Tag className="h-3.5 w-3.5" />
+          {label}
+          {selected.length > 0 && <span className="text-xs text-muted-foreground">({selected.length})</span>}
+          <ChevronDown className="h-3.5 w-3.5 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-56 p-0" align="start">
+        <Command>
+          <CommandInput
+            placeholder="Add tag…"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const input = (e.target as HTMLInputElement).value.trim();
+                if (input && !selected.includes(input)) {
+                  onChange([...selected, input]);
+                  (e.target as HTMLInputElement).value = "";
+                }
+              }
+            }}
+          />
+          <CommandList>
+            <CommandEmpty>Press Enter to add a new tag</CommandEmpty>
+            <CommandGroup>
+              {options.map((tag) => (
+                <CommandItem key={tag} value={tag} onSelect={() => toggle(tag)}>
+                  <Checkbox checked={selected.includes(tag)} className="mr-2" />
+                  {tag}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+export function QueryActionBar({
+  selectedCount,
+  selectionTypeCounts,
+  arrServerIds,
+  arrMeta,
+  executing,
+  onExecute,
+  onClear,
+}: QueryActionBarProps) {
+  const [actionType, setActionType] = useState<string>("");
+  const [targetQualityProfileId, setTargetQualityProfileId] = useState<number | null>(null);
+  const [addArrTags, setAddArrTags] = useState<string[]>([]);
+  const [removeArrTags, setRemoveArrTags] = useState<string[]>([]);
+  const [addImportExclusion, setAddImportExclusion] = useState(false);
+  const [searchAfterAction, setSearchAfterAction] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // Families that have selected items AND an Arr instance configured on the page.
+  const actionableFamilies = useMemo(() => {
+    return (Object.keys(FAMILY_BY_TYPE) as MediaType[])
+      .filter((t) => selectionTypeCounts[t] > 0)
+      .map((t) => FAMILY_BY_TYPE[t])
+      .filter((fam) => Boolean(arrServerIds[fam]));
+  }, [selectionTypeCounts, arrServerIds]);
+
+  const family = familyFromActionType(actionType);
+  const arrInstanceId = family ? arrServerIds[family] : undefined;
+  const meta = family ? arrMeta[family] : undefined;
+  const needsProfile = QUALITY_PROFILE_ACTION_TYPES.has(actionType);
+  const isTagOnly = actionType === "DO_NOTHING";
+  const hasTags = addArrTags.length > 0 || removeArrTags.length > 0;
+
+  const targetCount = family
+    ? selectionTypeCounts[(Object.keys(FAMILY_BY_TYPE) as MediaType[]).find((t) => FAMILY_BY_TYPE[t] === family)!]
+    : 0;
+  const skippedCount = selectedCount - targetCount;
+
+  const canRun =
+    !!actionType &&
+    !!arrInstanceId &&
+    !executing &&
+    (!needsProfile || targetQualityProfileId != null) &&
+    (!isTagOnly || hasTags);
+
+  const resetAction = () => {
+    setActionType("");
+    setTargetQualityProfileId(null);
+    setAddArrTags([]);
+    setRemoveArrTags([]);
+    setAddImportExclusion(false);
+    setSearchAfterAction(false);
+  };
+
+  const handleConfirm = () => {
+    if (!actionType || !arrInstanceId) return;
+    onExecute({
+      actionType,
+      arrInstanceId,
+      targetQualityProfileId: needsProfile ? targetQualityProfileId : null,
+      addImportExclusion,
+      searchAfterAction,
+      addArrTags,
+      removeArrTags,
+    });
+    setConfirmOpen(false);
+    resetAction();
+  };
+
+  const actionLabel = useMemo(() => {
+    if (!family) return actionType;
+    return ACTIONS_BY_FAMILY[family].find((a) => a.value === actionType)?.label ?? actionType;
+  }, [family, actionType]);
+
+  const noFamilies = actionableFamilies.length === 0;
+
+  return (
+    <div className="sticky bottom-0 z-10 flex flex-wrap items-center gap-2 border-t bg-card/95 px-3 py-2 backdrop-blur">
+      <span className="text-sm font-medium">{selectedCount} selected</span>
+      <Button variant="ghost" size="sm" className="h-7 px-2 text-muted-foreground" onClick={onClear}>
+        <X className="h-3.5 w-3.5" />
+        Clear
+      </Button>
+
+      <div className="mx-1 h-5 w-px bg-border" />
+
+      {noFamilies ? (
+        <span className="text-xs text-muted-foreground">
+          Select an Arr instance above for the media type(s) you want to act on.
+        </span>
+      ) : (
+        <>
+          <Select value={actionType} onValueChange={(v) => { setActionType(v); setTargetQualityProfileId(null); }}>
+            <SelectTrigger className="h-8 w-64">
+              <SelectValue placeholder="Choose an action…" />
+            </SelectTrigger>
+            <SelectContent>
+              {actionableFamilies.map((fam) => (
+                <SelectGroup key={fam}>
+                  <SelectLabel>{FAMILY_LABEL[fam]}</SelectLabel>
+                  {ACTIONS_BY_FAMILY[fam]
+                    .filter((a) => a.value !== "DO_NOTHING")
+                    .map((a) => (
+                      <SelectItem key={a.value} value={a.value}>
+                        {a.label}
+                      </SelectItem>
+                    ))}
+                </SelectGroup>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {needsProfile && (
+            <Select
+              value={targetQualityProfileId != null ? String(targetQualityProfileId) : ""}
+              onValueChange={(v) => setTargetQualityProfileId(Number(v))}
+            >
+              <SelectTrigger className="h-8 w-48">
+                <SelectValue placeholder={meta && meta.qualityProfiles.length > 0 ? "Quality profile…" : "No profiles"} />
+              </SelectTrigger>
+              <SelectContent>
+                {(meta?.qualityProfiles ?? []).map((p) => (
+                  <SelectItem key={p.id} value={String(p.id)}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
+          {family && (
+            <>
+              <TagPicker label="Add tags" options={meta?.tags ?? []} selected={addArrTags} onChange={setAddArrTags} />
+              <TagPicker label="Remove tags" options={meta?.tags ?? []} selected={removeArrTags} onChange={setRemoveArrTags} />
+            </>
+          )}
+
+          {actionType.includes("DELETE") && (
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Checkbox checked={addImportExclusion} onCheckedChange={(c) => setAddImportExclusion(c === true)} />
+              Add import exclusion
+            </label>
+          )}
+          {actionType.includes("DELETE_FILES") && (
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Checkbox checked={searchAfterAction} onCheckedChange={(c) => setSearchAfterAction(c === true)} />
+              Search after
+            </label>
+          )}
+
+          <Button size="sm" className="h-8" disabled={!canRun} onClick={() => setConfirmOpen(true)}>
+            {executing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+            Run action
+          </Button>
+        </>
+      )}
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Run “{actionLabel}”?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will run <strong>{actionLabel}</strong> on <strong>{targetCount}</strong>{" "}
+              {family ? FAMILY_LABEL[family].toLowerCase() : ""} item{targetCount === 1 ? "" : "s"} immediately.
+              {skippedCount > 0 && (
+                <> {skippedCount} other selected item{skippedCount === 1 ? "" : "s"} of a different media type will be skipped.</>
+              )}{" "}
+              This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleConfirm} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Run action
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}

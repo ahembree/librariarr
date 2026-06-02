@@ -182,6 +182,21 @@ What the conversion does:
 
 After conversion, you're redirected to the new rule set's editor so you can pick an action type, set the delay, configure tags, and re-evaluate.
 
+### Running Actions Directly from the Query Page
+
+For one-off cleanups you don't want to schedule, you can run a lifecycle action on query results **without** creating a rule set:
+
+1. Pick the Arr instance(s) for the media types you want to act on in the query toolbar (Radarr for movies, Sonarr for series, Lidarr for music).
+2. Run the query, then tick the checkbox on each result you want to act on (in table or card view). A select-all checkbox is available in the table header.
+3. In the selection bar that appears, choose an action (e.g. *Delete from Radarr*, *Unmonitor & Delete Files*, *Change Quality Profile*), optionally add/remove Arr tags, then **Run action** and confirm.
+
+Notes:
+
+- **Runs immediately** — there is no delay, unlike scheduled rule actions.
+- **One Arr family per run** — an action applies only to selected results of its media type (e.g. *Delete from Radarr* acts on selected movies); selected items of other types are skipped and reported in the result toast.
+- Before acting, the query is re-run so only items that still match are affected, and items on the [Lifecycle Exceptions](/docs/features/deletion-safety/) list are skipped automatically.
+- Every run is recorded in the **Actions** history (and deletion stats) labelled *Ad-hoc query action*, so there's a full audit trail even though no rule set exists.
+
 ## Previewing Matches
 
 Before executing any actions, use the **Preview** feature to see which media items match your rules:

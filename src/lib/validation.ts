@@ -633,6 +633,19 @@ export const executeQuerySchema = z.object({
   limit: z.number().int().min(0).max(200).optional().default(50),
 });
 
+// Ad-hoc lifecycle action triggered on selected query results (no rule set).
+export const queryActionSchema = z.object({
+  query: queryDefinitionSchema,
+  mediaItemIds: z.array(z.string()).min(1, "At least one item is required").max(1000),
+  actionType: z.string().min(1),
+  arrInstanceId: z.string().nullable().optional(),
+  targetQualityProfileId: z.number().int().nullable().optional(),
+  addImportExclusion: z.boolean().optional().default(false),
+  searchAfterAction: z.boolean().optional().default(false),
+  addArrTags: z.array(z.string()).optional().default([]),
+  removeArrTags: z.array(z.string()).optional().default([]),
+});
+
 export const savedQueryCreateSchema = z.object({
   name: z.string().min(1).max(100),
   query: queryDefinitionSchema,
