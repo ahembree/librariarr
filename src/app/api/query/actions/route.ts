@@ -158,19 +158,39 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Exclude items with a LifecycleException.
+  // Exclude items via LifecycleException. Mirror the scheduler's execution-time
+  // filtering (processor.ts): drop a representative whose own id is excepted,
+  // and for grouped series filter individually-excepted member episodes out of
+  // matchedMediaItemIds — cancelling the item only if ALL its members are
+  // excepted. This keeps the deletion-safety guarantee for ad-hoc actions.
+  const memberIds = new Set<string>();
+  for (const members of episodeIdMap.values()) {
+    for (const m of members) memberIds.add(m);
+  }
   const exceptions = await prisma.lifecycleException.findMany({
-    where: { userId, mediaItemId: { in: validIds } },
+    where: { userId, mediaItemId: { in: [...new Set([...validIds, ...memberIds])] } },
     select: { mediaItemId: true },
   });
-  let actionableIds = validIds;
-  if (exceptions.length > 0) {
-    const excluded = new Set(exceptions.map((e) => e.mediaItemId));
-    actionableIds = validIds.filter((id) => !excluded.has(id));
-    skipped += validIds.length - actionableIds.length;
-    if (actionableIds.length === 0) {
-      return NextResponse.json({ executed: 0, failed: 0, skipped, errors: ["All selected items are excluded from lifecycle actions"] });
+  const excluded = new Set(exceptions.map((e) => e.mediaItemId));
+  const actionableIds: string[] = [];
+  for (const id of validIds) {
+    if (excluded.has(id)) continue; // representative item is excepted
+    const members = episodeIdMap.get(id);
+    if (members && members.length > 0) {
+      const remaining = members.filter((m) => !excluded.has(m));
+      if (remaining.length === 0) continue; // every targeted episode is excepted
+      episodeIdMap.set(id, remaining);
     }
+    actionableIds.push(id);
+  }
+  skipped += validIds.length - actionableIds.length;
+  if (actionableIds.length === 0) {
+    return NextResponse.json({
+      executed: 0,
+      failed: 0,
+      skipped,
+      errors: ["All selected items are excluded from lifecycle actions"],
+    });
   }
 
   // Fetch ownership-verified media items with external IDs.

@@ -181,11 +181,20 @@ export function QueryActionBar({
       .filter((fam) => Boolean(arrServerIds[fam]));
   }, [selectionTypeCounts, arrServerIds]);
 
-  const family = familyFromActionType(actionType);
+  // The bar stays mounted across selection changes, so a previously-chosen
+  // action can become invalid when its Arr family leaves the selection. Derive
+  // the effective action (treating an orphaned one as unset) instead of writing
+  // state from an effect — the dropdown then never shows a value absent from
+  // its current options.
+  const rawFamily = familyFromActionType(actionType);
+  const familyActive = rawFamily ? actionableFamilies.includes(rawFamily) : false;
+  const family = familyActive ? rawFamily : null;
+  const effectiveActionType = familyActive ? actionType : "";
+
   const arrInstanceId = family ? arrServerIds[family] : undefined;
   const meta = family ? arrMeta[family] : undefined;
-  const needsProfile = QUALITY_PROFILE_ACTION_TYPES.has(actionType);
-  const isTagOnly = actionType === "DO_NOTHING";
+  const needsProfile = QUALITY_PROFILE_ACTION_TYPES.has(effectiveActionType);
+  const isTagOnly = effectiveActionType === "DO_NOTHING";
   const hasTags = addArrTags.length > 0 || removeArrTags.length > 0;
 
   const targetCount = family
@@ -197,8 +206,9 @@ export function QueryActionBar({
 
   const canRun =
     !noSelection &&
-    !!actionType &&
+    !!effectiveActionType &&
     !!arrInstanceId &&
+    targetCount > 0 &&
     !executing &&
     (!needsProfile || targetQualityProfileId != null) &&
     (!isTagOnly || hasTags);
@@ -213,9 +223,9 @@ export function QueryActionBar({
   };
 
   const handleConfirm = () => {
-    if (!actionType || !arrInstanceId) return;
+    if (!effectiveActionType || !arrInstanceId) return;
     onExecute({
-      actionType,
+      actionType: effectiveActionType,
       arrInstanceId,
       targetQualityProfileId: needsProfile ? targetQualityProfileId : null,
       addImportExclusion,
@@ -228,9 +238,9 @@ export function QueryActionBar({
   };
 
   const actionLabel = useMemo(() => {
-    if (!family) return actionType;
-    return ACTIONS_BY_FAMILY[family].find((a) => a.value === actionType)?.label ?? actionType;
-  }, [family, actionType]);
+    if (!family) return effectiveActionType;
+    return ACTIONS_BY_FAMILY[family].find((a) => a.value === effectiveActionType)?.label ?? effectiveActionType;
+  }, [family, effectiveActionType]);
 
   const noFamilies = actionableFamilies.length === 0;
   const controlsDisabled = noSelection || noFamilies;
@@ -254,7 +264,7 @@ export function QueryActionBar({
       <div className="mx-1 h-5 w-px bg-border" />
 
       <Select
-        value={actionType}
+        value={effectiveActionType}
         onValueChange={(v) => { setActionType(v); setTargetQualityProfileId(null); }}
         disabled={controlsDisabled}
       >
@@ -303,13 +313,13 @@ export function QueryActionBar({
         </>
       )}
 
-      {actionType.includes("DELETE") && (
+      {effectiveActionType.includes("DELETE") && (
         <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Checkbox checked={addImportExclusion} onCheckedChange={(c) => setAddImportExclusion(c === true)} disabled={controlsDisabled} />
           Add import exclusion
         </label>
       )}
-      {actionType.includes("DELETE_FILES") && (
+      {effectiveActionType.includes("DELETE_FILES") && (
         <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Checkbox checked={searchAfterAction} onCheckedChange={(c) => setSearchAfterAction(c === true)} disabled={controlsDisabled} />
           Search after

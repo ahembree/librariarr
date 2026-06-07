@@ -265,6 +265,63 @@ describe("POST /api/query/actions", () => {
     expect(new Set(passed.matchedMediaItemIds)).toEqual(new Set([ep1.id, ep2.id]));
   });
 
+  it("filters individually-excepted member episodes out of a grouped-series action", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" });
+    const ep1 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E1", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
+    const ep2 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E2", parentTitle: "Show", seasonNumber: 1, episodeNumber: 2 });
+    const sonarr = await createTestSonarrInstance(user.id);
+    const prisma = getTestPrisma();
+    // Except just ep2 — it must not be in the deletion set.
+    await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: ep2.id } });
+
+    mockedExecuteQuery.mockImplementation(async (q: { includeEpisodes?: boolean }) => {
+      if (q.includeEpisodes) {
+        return queryResult([
+          { id: ep1.id, type: "SERIES", title: "S1E1", parentTitle: "Show" },
+          { id: ep2.id, type: "SERIES", title: "S1E2", parentTitle: "Show" },
+        ]);
+      }
+      return queryResult([{ id: ep1.id, type: "SERIES", title: "Show", parentTitle: null }]);
+    });
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { query: BASE_QUERY, mediaItemIds: [ep1.id], actionType: "DELETE_FILES_SONARR", arrInstanceId: sonarr.id },
+    });
+    const body = await expectJson<{ executed: number }>(response, 200);
+    expect(body.executed).toBe(1);
+    const passed = mockedExecuteAction.mock.calls[0][0];
+    expect(passed.matchedMediaItemIds).toEqual([ep1.id]); // ep2 excluded
+  });
+
+  it("skips a grouped-series action when every member episode is excepted", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" });
+    const ep1 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E1", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
+    const sonarr = await createTestSonarrInstance(user.id);
+    const prisma = getTestPrisma();
+    await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: ep1.id } });
+
+    mockedExecuteQuery.mockImplementation(async (q: { includeEpisodes?: boolean }) => {
+      if (q.includeEpisodes) {
+        return queryResult([{ id: ep1.id, type: "SERIES", title: "S1E1", parentTitle: "Show" }]);
+      }
+      return queryResult([{ id: ep1.id, type: "SERIES", title: "Show", parentTitle: null }]);
+    });
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { query: BASE_QUERY, mediaItemIds: [ep1.id], actionType: "DELETE_FILES_SONARR", arrInstanceId: sonarr.id },
+    });
+    const body = await expectJson<{ executed: number; skipped: number }>(response, 200);
+    expect(body.executed).toBe(0);
+    expect(body.skipped).toBe(1);
+    expect(mockedExecuteAction).not.toHaveBeenCalled();
+  });
+
   it("does not bleed episodes across distinct shows that share a normalized title", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });
