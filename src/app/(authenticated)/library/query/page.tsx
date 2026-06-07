@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
@@ -54,6 +54,7 @@ import {
   Layers,
   AlertTriangle,
   ArrowRightLeft,
+  Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { QueryBuilder, queryBuilderConfig, countAllRules, validateAllRules } from "@/components/query-builder";
@@ -156,6 +157,24 @@ function formatResolution(res: string | null) {
   const label = normalizeResolutionLabel(res);
   return label === "Other" ? res : label;
 }
+
+/** Aligned label + control row used inside the Query Scope card. */
+function ScopeRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-4">
+      <span className="pt-1.5 text-sm font-medium text-muted-foreground sm:w-24 sm:shrink-0">
+        {label}
+      </span>
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  );
+}
+
+const MEDIA_TYPE_LABELS: Record<"MOVIE" | "SERIES" | "MUSIC", string> = {
+  MOVIE: "Movies",
+  SERIES: "Series",
+  MUSIC: "Music",
+};
 
 // ── Column definitions ──────────────────────────────────────────
 
@@ -959,7 +978,7 @@ export default function QueryPage() {
       <div className="flex flex-wrap items-center gap-2">
         {savedQueries.length > 0 && (
           <Select value={activeQueryId ?? ""} onValueChange={(v) => handleLoad(v)}>
-            <SelectTrigger className="w-full sm:w-60">
+            <SelectTrigger className="w-full sm:w-56" size="sm">
               <SelectValue placeholder="Load saved query..." />
             </SelectTrigger>
             <SelectContent>
@@ -1005,6 +1024,8 @@ export default function QueryPage() {
           <Plus className="mr-1.5 h-3.5 w-3.5" />New
         </Button>
 
+        <div className="mx-1 hidden h-5 w-px bg-border sm:block" />
+
         <Button
           variant="outline"
           size="sm"
@@ -1026,146 +1047,165 @@ export default function QueryPage() {
         </Button>
       </div>
 
-      {/* Scope: media types + servers */}
-      <div className="space-y-3">
-        <div className="flex flex-wrap items-center gap-4">
-          <span className="text-sm font-medium text-muted-foreground">Media Types:</span>
-          <div className="flex gap-2">
-            {(["MOVIE", "SERIES", "MUSIC"] as const).map((type) => (
-              <label key={type} className="flex items-center gap-1.5 cursor-pointer">
-                <Checkbox checked={mediaTypes.includes(type)} onCheckedChange={() => toggleMediaType(type)} />
-                <span className="text-sm">{type === "MOVIE" ? "Movies" : type === "SERIES" ? "Series" : "Music"}</span>
-              </label>
-            ))}
-          </div>
-          <span className="text-xs text-muted-foreground">(empty = all types)</span>
-        </div>
-
-        {(mediaTypes.length === 0 || mediaTypes.includes("SERIES")) && (
-          <div className="flex items-center gap-4 sm:pl-27">
-            <label className="flex items-center gap-1.5 cursor-pointer">
-              <Checkbox checked={includeEpisodes} onCheckedChange={(checked) => setIncludeEpisodes(checked === true)} />
-              <span className="text-sm">Include individual episodes</span>
-            </label>
-            <span className="text-xs text-muted-foreground">
-              {includeEpisodes ? "Showing individual episodes" : "Grouping series by show"}
-            </span>
-          </div>
-        )}
-
-        {servers.length > 1 && (
-          <div className="flex flex-wrap items-center gap-4">
-            <span className="text-sm font-medium text-muted-foreground">Servers:</span>
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button variant="outline" size="sm">
-                  <span className="truncate">
-                    {selectedServerIds.length === 0 ? "All Servers" : `${selectedServerIds.length} selected`}
-                  </span>
-                  <ChevronDown className="ml-1.5 h-3.5 w-3.5 opacity-50" />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-56 max-w-[calc(100vw-2rem)] p-0" align="start">
-                <Command>
-                  <CommandInput placeholder="Search servers..." />
-                  <CommandList>
-                    <CommandEmpty>No servers found.</CommandEmpty>
-                    <CommandGroup>
-                      {servers.map((s) => {
-                        const isSelected = selectedServerIds.includes(s.id);
-                        return (
-                          <CommandItem key={s.id} onSelect={() => toggleServer(s.id)}>
-                            <Checkbox
-                              checked={isSelected}
-                              onCheckedChange={() => toggleServer(s.id)}
-                              onClick={(e) => e.stopPropagation()}
-                              className="mr-2"
-                            />
-                            {s.name}
-                            {s.type && <ServerTypeChip type={s.type} className="ml-1.5" />}
-                          </CommandItem>
-                        );
-                      })}
-                    </CommandGroup>
-                  </CommandList>
-                  {selectedServerIds.length > 0 && (
-                    <>
-                      <Separator />
-                      <div className="p-1">
-                        <Button variant="ghost" size="sm" className="w-full text-xs" onClick={() => setSelectedServerIds([])}>
-                          Clear all
-                        </Button>
-                      </div>
-                    </>
-                  )}
-                </Command>
-              </PopoverContent>
-            </Popover>
-          </div>
-        )}
-
-        {/* Arr server selectors — shown when any Arr type has instances */}
-        {(arrInstances.radarr.length > 0 || arrInstances.sonarr.length > 0 || arrInstances.lidarr.length > 0) && (() => {
-          const showRadarr = arrInstances.radarr.length > 0 && (mediaTypes.length === 0 || mediaTypes.includes("MOVIE"));
-          const showSonarr = arrInstances.sonarr.length > 0 && (mediaTypes.length === 0 || mediaTypes.includes("SERIES"));
-          const showLidarr = arrInstances.lidarr.length > 0 && (mediaTypes.length === 0 || mediaTypes.includes("MUSIC"));
-          if (!showRadarr && !showSonarr && !showLidarr) return null;
-          return (
-            <div className="flex flex-wrap items-center gap-4">
-              <span className="text-sm font-medium text-muted-foreground">Arr Servers:</span>
-              <div className="flex flex-wrap gap-2">
-                {showRadarr && (
-                  <Select
-                    value={arrServerIds.radarr ?? "none"}
-                    onValueChange={(v) => setArrServerIds((prev) => ({ ...prev, radarr: v === "none" ? undefined : v }))}
-                  >
-                    <SelectTrigger className="w-48 h-8">
-                      <SelectValue placeholder="Radarr" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Radarr: None</SelectItem>
-                      {arrInstances.radarr.map((inst) => (
-                        <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-                {showSonarr && (
-                  <Select
-                    value={arrServerIds.sonarr ?? "none"}
-                    onValueChange={(v) => setArrServerIds((prev) => ({ ...prev, sonarr: v === "none" ? undefined : v }))}
-                  >
-                    <SelectTrigger className="w-48 h-8">
-                      <SelectValue placeholder="Sonarr" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Sonarr: None</SelectItem>
-                      {arrInstances.sonarr.map((inst) => (
-                        <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-                {showLidarr && (
-                  <Select
-                    value={arrServerIds.lidarr ?? "none"}
-                    onValueChange={(v) => setArrServerIds((prev) => ({ ...prev, lidarr: v === "none" ? undefined : v }))}
-                  >
-                    <SelectTrigger className="w-48 h-8">
-                      <SelectValue placeholder="Lidarr" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Lidarr: None</SelectItem>
-                      {arrInstances.lidarr.map((inst) => (
-                        <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
+      {/* Query Scope */}
+      <div className="rounded-lg border bg-card/40 p-4">
+        <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Query Scope
+        </p>
+        <div className="space-y-3">
+          {/* Media types — segmented pills */}
+          <ScopeRow label="Media types">
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {(["MOVIE", "SERIES", "MUSIC"] as const).map((type) => {
+                  const selected = mediaTypes.includes(type);
+                  return (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => toggleMediaType(type)}
+                      aria-pressed={selected}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm transition-colors",
+                        selected
+                          ? "border-primary bg-primary/15 text-foreground"
+                          : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
+                      )}
+                    >
+                      {selected ? <Check className="h-3.5 w-3.5 text-primary" /> : null}
+                      {MEDIA_TYPE_LABELS[type]}
+                    </button>
+                  );
+                })}
+                <span className="ml-1 text-xs text-muted-foreground">
+                  {mediaTypes.length === 0 ? "All types" : "None selected = all types"}
+                </span>
               </div>
+
+              {(mediaTypes.length === 0 || mediaTypes.includes("SERIES")) && (
+                <label className="flex w-fit cursor-pointer items-center gap-1.5">
+                  <Checkbox checked={includeEpisodes} onCheckedChange={(checked) => setIncludeEpisodes(checked === true)} />
+                  <span className="text-sm">Include individual episodes</span>
+                  <span className="text-xs text-muted-foreground">
+                    — {includeEpisodes ? "showing individual episodes" : "grouping series by show"}
+                  </span>
+                </label>
+              )}
             </div>
-          );
-        })()}
+          </ScopeRow>
+
+          {servers.length > 1 && (
+            <ScopeRow label="Servers">
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" size="sm" className="w-full justify-between sm:w-56">
+                    <span className="truncate">
+                      {selectedServerIds.length === 0 ? "All servers" : `${selectedServerIds.length} selected`}
+                    </span>
+                    <ChevronDown className="ml-1.5 h-3.5 w-3.5 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-56 max-w-[calc(100vw-2rem)] p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Search servers..." />
+                    <CommandList>
+                      <CommandEmpty>No servers found.</CommandEmpty>
+                      <CommandGroup>
+                        {servers.map((s) => {
+                          const isSelected = selectedServerIds.includes(s.id);
+                          return (
+                            <CommandItem key={s.id} onSelect={() => toggleServer(s.id)}>
+                              <Checkbox
+                                checked={isSelected}
+                                onCheckedChange={() => toggleServer(s.id)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="mr-2"
+                              />
+                              {s.name}
+                              {s.type && <ServerTypeChip type={s.type} className="ml-1.5" />}
+                            </CommandItem>
+                          );
+                        })}
+                      </CommandGroup>
+                    </CommandList>
+                    {selectedServerIds.length > 0 && (
+                      <>
+                        <Separator />
+                        <div className="p-1">
+                          <Button variant="ghost" size="sm" className="w-full text-xs" onClick={() => setSelectedServerIds([])}>
+                            Clear all
+                          </Button>
+                        </div>
+                      </>
+                    )}
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            </ScopeRow>
+          )}
+
+          {/* Arr server selectors — shown when any Arr type has instances */}
+          {(arrInstances.radarr.length > 0 || arrInstances.sonarr.length > 0 || arrInstances.lidarr.length > 0) && (() => {
+            const showRadarr = arrInstances.radarr.length > 0 && (mediaTypes.length === 0 || mediaTypes.includes("MOVIE"));
+            const showSonarr = arrInstances.sonarr.length > 0 && (mediaTypes.length === 0 || mediaTypes.includes("SERIES"));
+            const showLidarr = arrInstances.lidarr.length > 0 && (mediaTypes.length === 0 || mediaTypes.includes("MUSIC"));
+            if (!showRadarr && !showSonarr && !showLidarr) return null;
+            return (
+              <ScopeRow label="Arr servers">
+                <div className="flex flex-wrap gap-2">
+                  {showRadarr && (
+                    <Select
+                      value={arrServerIds.radarr ?? "none"}
+                      onValueChange={(v) => setArrServerIds((prev) => ({ ...prev, radarr: v === "none" ? undefined : v }))}
+                    >
+                      <SelectTrigger className="h-8 w-44" size="sm">
+                        <SelectValue placeholder="Radarr" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Radarr: None</SelectItem>
+                        {arrInstances.radarr.map((inst) => (
+                          <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  {showSonarr && (
+                    <Select
+                      value={arrServerIds.sonarr ?? "none"}
+                      onValueChange={(v) => setArrServerIds((prev) => ({ ...prev, sonarr: v === "none" ? undefined : v }))}
+                    >
+                      <SelectTrigger className="h-8 w-44" size="sm">
+                        <SelectValue placeholder="Sonarr" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Sonarr: None</SelectItem>
+                        {arrInstances.sonarr.map((inst) => (
+                          <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  {showLidarr && (
+                    <Select
+                      value={arrServerIds.lidarr ?? "none"}
+                      onValueChange={(v) => setArrServerIds((prev) => ({ ...prev, lidarr: v === "none" ? undefined : v }))}
+                    >
+                      <SelectTrigger className="h-8 w-44" size="sm">
+                        <SelectValue placeholder="Lidarr" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Lidarr: None</SelectItem>
+                        {arrInstances.lidarr.map((inst) => (
+                          <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+              </ScopeRow>
+            );
+          })()}
+        </div>
       </div>
 
       {/* Connectivity warning: rules reference an integration that's configured but currently down */}
