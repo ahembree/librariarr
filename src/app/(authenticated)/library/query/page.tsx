@@ -1309,6 +1309,18 @@ export default function QueryPage() {
             {loading ? "Searching..." : `${results.length} result${results.length !== 1 ? "s" : ""} found`}
           </p>
 
+          {results.length > 0 && (
+            <QueryActionBar
+              selectedCount={selectedIds.size}
+              selectionTypeCounts={selectionTypeCounts}
+              arrServerIds={arrServerIds}
+              arrMeta={arrMeta}
+              executing={executingAction}
+              onExecute={executeAction}
+              onClear={clearSelection}
+            />
+          )}
+
           {results.length > 0 ? (
             viewMode === "table" ? (
               <DataTable
@@ -1479,18 +1491,6 @@ export default function QueryPage() {
             />
           ) : null}
         </div>
-      )}
-
-      {selectedIds.size > 0 && (
-        <QueryActionBar
-          selectedCount={selectedIds.size}
-          selectionTypeCounts={selectionTypeCounts}
-          arrServerIds={arrServerIds}
-          arrMeta={arrMeta}
-          executing={executingAction}
-          onExecute={executeAction}
-          onClear={clearSelection}
-        />
       )}
       </div>
 

@@ -105,18 +105,20 @@ function TagPicker({
   options,
   selected,
   onChange,
+  disabled,
 }: {
   label: string;
   options: string[];
   selected: string[];
   onChange: (next: string[]) => void;
+  disabled?: boolean;
 }) {
   const toggle = (tag: string) =>
     onChange(selected.includes(tag) ? selected.filter((t) => t !== tag) : [...selected, tag]);
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="h-8 gap-1.5">
+        <Button variant="outline" size="sm" className="h-8 gap-1.5" disabled={disabled}>
           <Tag className="h-3.5 w-3.5" />
           {label}
           {selected.length > 0 && <span className="text-xs text-muted-foreground">({selected.length})</span>}
@@ -191,7 +193,10 @@ export function QueryActionBar({
     : 0;
   const skippedCount = selectedCount - targetCount;
 
+  const noSelection = selectedCount === 0;
+
   const canRun =
+    !noSelection &&
     !!actionType &&
     !!arrInstanceId &&
     !executing &&
@@ -228,87 +233,101 @@ export function QueryActionBar({
   }, [family, actionType]);
 
   const noFamilies = actionableFamilies.length === 0;
+  const controlsDisabled = noSelection || noFamilies;
 
   return (
-    <div className="sticky bottom-0 z-10 flex flex-wrap items-center gap-2 border-t bg-card/95 px-3 py-2 backdrop-blur">
-      <span className="text-sm font-medium">{selectedCount} selected</span>
-      <Button variant="ghost" size="sm" className="h-7 px-2 text-muted-foreground" onClick={onClear}>
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2">
+      <span className="text-sm font-medium">
+        {noSelection ? "Actions" : `${selectedCount} selected`}
+      </span>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 px-2 text-muted-foreground"
+        onClick={onClear}
+        disabled={noSelection}
+      >
         <X className="h-3.5 w-3.5" />
         Clear
       </Button>
 
       <div className="mx-1 h-5 w-px bg-border" />
 
-      {noFamilies ? (
+      <Select
+        value={actionType}
+        onValueChange={(v) => { setActionType(v); setTargetQualityProfileId(null); }}
+        disabled={controlsDisabled}
+      >
+        <SelectTrigger className="h-8 w-64">
+          <SelectValue placeholder="Choose an action…" />
+        </SelectTrigger>
+        <SelectContent>
+          {actionableFamilies.map((fam) => (
+            <SelectGroup key={fam}>
+              <SelectLabel>{FAMILY_LABEL[fam]}</SelectLabel>
+              {ACTIONS_BY_FAMILY[fam]
+                .filter((a) => a.value !== "DO_NOTHING")
+                .map((a) => (
+                  <SelectItem key={a.value} value={a.value}>
+                    {a.label}
+                  </SelectItem>
+                ))}
+            </SelectGroup>
+          ))}
+        </SelectContent>
+      </Select>
+
+      {needsProfile && (
+        <Select
+          value={targetQualityProfileId != null ? String(targetQualityProfileId) : ""}
+          onValueChange={(v) => setTargetQualityProfileId(Number(v))}
+          disabled={controlsDisabled}
+        >
+          <SelectTrigger className="h-8 w-48">
+            <SelectValue placeholder={meta && meta.qualityProfiles.length > 0 ? "Quality profile…" : "No profiles"} />
+          </SelectTrigger>
+          <SelectContent>
+            {(meta?.qualityProfiles ?? []).map((p) => (
+              <SelectItem key={p.id} value={String(p.id)}>
+                {p.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+
+      {family && (
+        <>
+          <TagPicker label="Add tags" options={meta?.tags ?? []} selected={addArrTags} onChange={setAddArrTags} disabled={controlsDisabled} />
+          <TagPicker label="Remove tags" options={meta?.tags ?? []} selected={removeArrTags} onChange={setRemoveArrTags} disabled={controlsDisabled} />
+        </>
+      )}
+
+      {actionType.includes("DELETE") && (
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Checkbox checked={addImportExclusion} onCheckedChange={(c) => setAddImportExclusion(c === true)} disabled={controlsDisabled} />
+          Add import exclusion
+        </label>
+      )}
+      {actionType.includes("DELETE_FILES") && (
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Checkbox checked={searchAfterAction} onCheckedChange={(c) => setSearchAfterAction(c === true)} disabled={controlsDisabled} />
+          Search after
+        </label>
+      )}
+
+      <Button size="sm" className="h-8" disabled={!canRun} onClick={() => setConfirmOpen(true)}>
+        {executing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+        Run action
+      </Button>
+
+      {noSelection ? (
+        <span className="text-xs text-muted-foreground">Select results below to run an action.</span>
+      ) : noFamilies ? (
         <span className="text-xs text-muted-foreground">
           Select an Arr instance above for the media type(s) you want to act on.
         </span>
-      ) : (
-        <>
-          <Select value={actionType} onValueChange={(v) => { setActionType(v); setTargetQualityProfileId(null); }}>
-            <SelectTrigger className="h-8 w-64">
-              <SelectValue placeholder="Choose an action…" />
-            </SelectTrigger>
-            <SelectContent>
-              {actionableFamilies.map((fam) => (
-                <SelectGroup key={fam}>
-                  <SelectLabel>{FAMILY_LABEL[fam]}</SelectLabel>
-                  {ACTIONS_BY_FAMILY[fam]
-                    .filter((a) => a.value !== "DO_NOTHING")
-                    .map((a) => (
-                      <SelectItem key={a.value} value={a.value}>
-                        {a.label}
-                      </SelectItem>
-                    ))}
-                </SelectGroup>
-              ))}
-            </SelectContent>
-          </Select>
-
-          {needsProfile && (
-            <Select
-              value={targetQualityProfileId != null ? String(targetQualityProfileId) : ""}
-              onValueChange={(v) => setTargetQualityProfileId(Number(v))}
-            >
-              <SelectTrigger className="h-8 w-48">
-                <SelectValue placeholder={meta && meta.qualityProfiles.length > 0 ? "Quality profile…" : "No profiles"} />
-              </SelectTrigger>
-              <SelectContent>
-                {(meta?.qualityProfiles ?? []).map((p) => (
-                  <SelectItem key={p.id} value={String(p.id)}>
-                    {p.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-
-          {family && (
-            <>
-              <TagPicker label="Add tags" options={meta?.tags ?? []} selected={addArrTags} onChange={setAddArrTags} />
-              <TagPicker label="Remove tags" options={meta?.tags ?? []} selected={removeArrTags} onChange={setRemoveArrTags} />
-            </>
-          )}
-
-          {actionType.includes("DELETE") && (
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Checkbox checked={addImportExclusion} onCheckedChange={(c) => setAddImportExclusion(c === true)} />
-              Add import exclusion
-            </label>
-          )}
-          {actionType.includes("DELETE_FILES") && (
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Checkbox checked={searchAfterAction} onCheckedChange={(c) => setSearchAfterAction(c === true)} />
-              Search after
-            </label>
-          )}
-
-          <Button size="sm" className="h-8" disabled={!canRun} onClick={() => setConfirmOpen(true)}>
-            {executing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-            Run action
-          </Button>
-        </>
-      )}
+      ) : null}
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
