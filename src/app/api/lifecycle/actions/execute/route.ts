@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { executeAction, extractActionError } from "@/lib/lifecycle/actions";
+import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { validateRequest, actionExecuteSchema } from "@/lib/validation";
 import { sendDiscordNotification, buildFailureSummaryEmbed } from "@/lib/discord/client";
 
@@ -166,110 +166,26 @@ export async function POST(request: NextRequest) {
   // SAFETY: Log the bounded execution count before starting any destructive operations
   logger.info("Lifecycle", `Executing ${ruleSet.actionType ?? "DO_NOTHING"} on ${items.length} items for rule set "${ruleSet.id}" (${itemIds.length} match IDs, ${items.length} ownership-verified)`);
 
-  let executed = 0;
-  let failed = 0;
-  const errors: string[] = [];
-  const failures: { title: string; error: string }[] = [];
-
-  for (const item of items) {
-    const matchedMediaItemIds = episodeIdMap.get(item.id) ?? [];
-    try {
-      await executeAction({
-        id: "immediate",
-        actionType: ruleSet.actionType ?? "DO_NOTHING",
-        arrInstanceId: ruleSet.arrInstanceId,
-        targetQualityProfileId: ruleSet.targetQualityProfileId,
-        addImportExclusion: ruleSet.addImportExclusion,
-        searchAfterAction: ruleSet.searchAfterAction,
-        matchedMediaItemIds,
-        addArrTags: ruleSet.addArrTags,
-        removeArrTags: ruleSet.removeArrTags,
-        mediaItem: item,
-      });
-
-      // Compute deleted bytes for stats tracking (only for delete actions)
-      const actionType = ruleSet.actionType ?? "DO_NOTHING";
-      let deletedBytes: bigint | null = null;
-      if (actionType.includes("DELETE")) {
-        if (matchedMediaItemIds.length > 0) {
-          const memberSizes = await prisma.mediaItem.findMany({
-            where: { id: { in: matchedMediaItemIds } },
-            select: { fileSize: true },
-          });
-          const total = memberSizes.reduce((sum, m) => sum + (m.fileSize ?? BigInt(0)), BigInt(0));
-          if (total > BigInt(0)) deletedBytes = total;
-        } else if (item.fileSize) {
-          deletedBytes = item.fileSize;
-        }
-      }
-
-      // Atomically swap the PENDING/match records for the COMPLETED record
-      // so an interrupted process can't lose the audit trail.
-      await prisma.$transaction([
-        prisma.lifecycleAction.deleteMany({
-          where: { ruleSetId: ruleSet.id, mediaItemId: item.id, status: "PENDING" },
-        }),
-        prisma.ruleMatch.deleteMany({
-          where: { ruleSetId: ruleSet.id, mediaItemId: item.id },
-        }),
-        prisma.lifecycleAction.create({
-          data: {
-            userId: session.userId!,
-            mediaItemId: item.id,
-            mediaItemTitle: item.title,
-            mediaItemParentTitle: item.parentTitle,
-            ruleSetId: ruleSet.id,
-            ruleSetName: ruleSet.name,
-            ruleSetType: ruleSet.type,
-            actionType: ruleSet.actionType ?? "DO_NOTHING",
-            addImportExclusion: ruleSet.addImportExclusion,
-            searchAfterAction: ruleSet.searchAfterAction,
-            matchedMediaItemIds,
-            addArrTags: ruleSet.addArrTags,
-            removeArrTags: ruleSet.removeArrTags,
-            scheduledFor: new Date(),
-            executedAt: new Date(),
-            status: "COMPLETED",
-            deletedBytes,
-            arrInstanceId: ruleSet.arrInstanceId,
-            targetQualityProfileId: ruleSet.targetQualityProfileId,
-          },
-        }),
-      ]);
-
-      executed++;
-    } catch (error) {
-      const msg = extractActionError(error);
-      errors.push(`${item.title}: ${msg}`);
-      failures.push({ title: item.title, error: msg });
-      logger.error("Lifecycle", `Failed immediate ${ruleSet.actionType} for "${item.title}"`, { error: msg });
-
-      await prisma.lifecycleAction.create({
-        data: {
-          userId: session.userId!,
-          mediaItemId: item.id,
-          mediaItemTitle: item.title,
-          mediaItemParentTitle: item.parentTitle,
-          ruleSetId: ruleSet.id,
-          ruleSetName: ruleSet.name,
-          ruleSetType: ruleSet.type,
-          actionType: ruleSet.actionType ?? "DO_NOTHING",
-          addImportExclusion: ruleSet.addImportExclusion,
-          searchAfterAction: ruleSet.searchAfterAction,
-          matchedMediaItemIds,
-          addArrTags: ruleSet.addArrTags,
-          removeArrTags: ruleSet.removeArrTags,
-          scheduledFor: new Date(),
-          executedAt: new Date(),
-          status: "FAILED",
-          error: msg,
-          arrInstanceId: ruleSet.arrInstanceId,
-          targetQualityProfileId: ruleSet.targetQualityProfileId,
-        },
-      });
-      failed++;
-    }
-  }
+  const { executed, failed, errors, failures } = await executeActionsForItems(
+    session.userId!,
+    items,
+    {
+      actionType: ruleSet.actionType ?? "DO_NOTHING",
+      arrInstanceId: ruleSet.arrInstanceId,
+      targetQualityProfileId: ruleSet.targetQualityProfileId,
+      addImportExclusion: ruleSet.addImportExclusion,
+      searchAfterAction: ruleSet.searchAfterAction,
+      addArrTags: ruleSet.addArrTags,
+      removeArrTags: ruleSet.removeArrTags,
+    },
+    episodeIdMap,
+    {
+      ruleSetId: ruleSet.id,
+      ruleSetName: ruleSet.name,
+      ruleSetType: ruleSet.type,
+      cleanupMatches: true,
+    },
+  );
 
   // Send Discord notification for failures if the rule set has notifications enabled
   if (failed > 0 && ruleSet.discordNotifyOnAction) {

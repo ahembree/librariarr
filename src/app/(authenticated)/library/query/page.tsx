@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
@@ -54,6 +54,7 @@ import {
   Layers,
   AlertTriangle,
   ArrowRightLeft,
+  Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { QueryBuilder, queryBuilderConfig, countAllRules, validateAllRules } from "@/components/query-builder";
@@ -75,6 +76,8 @@ import { normalizeResolutionLabel } from "@/lib/resolution";
 import { generateId } from "@/lib/utils";
 import { EmptyState } from "@/components/empty-state";
 import { ConvertQueryToRuleDialog } from "@/components/convert-query-to-rule-dialog";
+import { QueryActionBar, type ArrFamily, type ArrFamilyMeta, type QueryActionConfig } from "@/components/query-action-bar";
+import { toast } from "sonner";
 
 interface SavedQuery {
   id: string;
@@ -155,6 +158,24 @@ function formatResolution(res: string | null) {
   return label === "Other" ? res : label;
 }
 
+/** Aligned label + control row used inside the Query Scope card. */
+function ScopeRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-4">
+      <span className="pt-1.5 text-sm font-medium text-muted-foreground sm:w-24 sm:shrink-0">
+        {label}
+      </span>
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  );
+}
+
+const MEDIA_TYPE_LABELS: Record<"MOVIE" | "SERIES" | "MUSIC", string> = {
+  MOVIE: "Movies",
+  SERIES: "Series",
+  MUSIC: "Music",
+};
+
 // ── Column definitions ──────────────────────────────────────────
 
 interface QueryColumn extends DataTableColumn<QueryResultItem> {
@@ -201,6 +222,15 @@ export default function QueryPage() {
     maxWidth: 800,
   });
   const [selectedItem, setSelectedItem] = useState<QueryResultItem | null>(null);
+
+  // Result selection (for triggering ad-hoc lifecycle actions)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [executingAction, setExecutingAction] = useState(false);
+  const [arrMeta, setArrMeta] = useState<Record<ArrFamily, ArrFamilyMeta>>({
+    radarr: { qualityProfiles: [], tags: [] },
+    sonarr: { qualityProfiles: [], tags: [] },
+    lidarr: { qualityProfiles: [], tags: [] },
+  });
 
   // Query state
   const [mediaTypes, setMediaTypes] = useState<string[]>([]);
@@ -338,72 +368,58 @@ export default function QueryPage() {
       .catch(() => {});
   }, []);
 
-  // Fetch Arr metadata when selected Arr servers change (for dropdown distinct values)
+  // Fetch Arr metadata when selected Arr servers change (for dropdown distinct
+  // values AND the action bar's per-family quality profiles + tags).
   useEffect(() => {
     const fetchArrMetadata = async () => {
-      const newArrTags: string[] = [];
-      const newArrProfiles: string[] = [];
+      const meta: Record<ArrFamily, ArrFamilyMeta> = {
+        radarr: { qualityProfiles: [], tags: [] },
+        sonarr: { qualityProfiles: [], tags: [] },
+        lidarr: { qualityProfiles: [], tags: [] },
+      };
       const newArrLanguages: string[] = [];
       const newArrStatuses: string[] = [];
       const newArrSeriesTypes: string[] = [];
       const newArrQualityNames: string[] = [];
 
-      // Shared per-instance collector. The metadata route only includes the
-      // keys relevant to its Arr type (Sonarr: statuses/seriesTypes; Radarr:
-      // qualityNames), so each spread is a no-op when the key is absent.
-      const collect = (data: {
-        tags?: { label: string }[];
-        qualityProfiles?: { name: string }[];
-        languages?: string[];
-        statuses?: string[];
-        seriesTypes?: string[];
-        qualityNames?: string[];
-      } | null) => {
-        if (!data) return;
-        if (data.tags) newArrTags.push(...data.tags.map((t) => t.label));
-        if (data.qualityProfiles) newArrProfiles.push(...data.qualityProfiles.map((p) => p.name));
-        if (data.languages) newArrLanguages.push(...data.languages);
-        if (data.statuses) newArrStatuses.push(...data.statuses);
-        if (data.seriesTypes) newArrSeriesTypes.push(...data.seriesTypes);
-        if (data.qualityNames) newArrQualityNames.push(...data.qualityNames);
+      const fetchFamily = async (family: ArrFamily, id: string) => {
+        try {
+          const r = await fetch(`/api/integrations/${family}/${id}/metadata`);
+          if (!r.ok) return;
+          const data = await r.json();
+          meta[family] = {
+            qualityProfiles: (data?.qualityProfiles ?? []).map((p: { id: number; name: string }) => ({ id: p.id, name: p.name })),
+            tags: (data?.tags ?? []).map((t: { label: string }) => t.label),
+          };
+          // The metadata route only includes the keys relevant to its Arr type
+          // (Sonarr: statuses/seriesTypes; Radarr: qualityNames), so each push is
+          // a no-op when the key is absent.
+          if (data?.languages) newArrLanguages.push(...data.languages);
+          if (data?.statuses) newArrStatuses.push(...data.statuses);
+          if (data?.seriesTypes) newArrSeriesTypes.push(...data.seriesTypes);
+          if (data?.qualityNames) newArrQualityNames.push(...data.qualityNames);
+        } catch { /* ignore */ }
       };
 
       const promises: Promise<void>[] = [];
-
-      if (arrServerIds.radarr) {
-        promises.push(
-          fetch(`/api/integrations/radarr/${arrServerIds.radarr}/metadata`)
-            .then((r) => r.ok ? r.json() : null)
-            .then(collect)
-            .catch(() => {}),
-        );
-      }
-      if (arrServerIds.sonarr) {
-        promises.push(
-          fetch(`/api/integrations/sonarr/${arrServerIds.sonarr}/metadata`)
-            .then((r) => r.ok ? r.json() : null)
-            .then(collect)
-            .catch(() => {}),
-        );
-      }
-      if (arrServerIds.lidarr) {
-        promises.push(
-          fetch(`/api/integrations/lidarr/${arrServerIds.lidarr}/metadata`)
-            .then((r) => r.ok ? r.json() : null)
-            .then(collect)
-            .catch(() => {}),
-        );
-      }
-
+      if (arrServerIds.radarr) promises.push(fetchFamily("radarr", arrServerIds.radarr));
+      if (arrServerIds.sonarr) promises.push(fetchFamily("sonarr", arrServerIds.sonarr));
+      if (arrServerIds.lidarr) promises.push(fetchFamily("lidarr", arrServerIds.lidarr));
       await Promise.all(promises);
+
+      setArrMeta(meta);
 
       const uniqueSorted = (vals: string[]) =>
         [...new Set(vals)].sort((a, b) => a.localeCompare(b));
 
+
+      // Deduplicate and sort for the query builder dropdowns
+      const allTags = [meta.radarr, meta.sonarr, meta.lidarr].flatMap((m) => m.tags);
+      const allProfiles = [meta.radarr, meta.sonarr, meta.lidarr].flatMap((m) => m.qualityProfiles.map((p) => p.name));
       setDistinctValues((prev) => ({
         ...prev,
-        arrTag: uniqueSorted(newArrTags),
-        arrQualityProfile: uniqueSorted(newArrProfiles),
+        arrTag: uniqueSorted(allTags),
+        arrQualityProfile: uniqueSorted(allProfiles),
         arrOriginalLanguage: uniqueSorted(newArrLanguages),
         arrStatus: uniqueSorted(newArrStatuses),
         arrSeriesType: uniqueSorted(newArrSeriesTypes),
@@ -414,6 +430,11 @@ export default function QueryPage() {
     if (arrServerIds.radarr || arrServerIds.sonarr || arrServerIds.lidarr) {
       fetchArrMetadata();
     } else {
+      setArrMeta({
+        radarr: { qualityProfiles: [], tags: [] },
+        sonarr: { qualityProfiles: [], tags: [] },
+        lidarr: { qualityProfiles: [], tags: [] },
+      });
       setDistinctValues((prev) => ({
         ...prev,
         arrTag: [],
@@ -663,25 +684,35 @@ export default function QueryPage() {
     [groups, seerrConnected, mediaTypes],
   );
 
+  const buildDefinition = useCallback((): QueryDefinition => {
+    const cleanedArrServerIds = Object.fromEntries(
+      Object.entries(arrServerIds).filter(([, v]) => v),
+    );
+    return {
+      mediaTypes: mediaTypes as QueryDefinition["mediaTypes"],
+      serverIds: selectedServerIds,
+      groups,
+      sortBy,
+      sortOrder,
+      includeEpisodes,
+      ...(Object.keys(cleanedArrServerIds).length > 0 && { arrServerIds: cleanedArrServerIds }),
+      ...(seerrInstanceId && { seerrInstanceId }),
+    };
+  }, [mediaTypes, selectedServerIds, groups, sortBy, sortOrder, includeEpisodes, arrServerIds, seerrInstanceId]);
+
+  // The definition that produced the currently displayed results. Ad-hoc actions
+  // must validate against THIS (not the live builder state, which the user may
+  // have edited without re-running), so the selection matches what's on screen.
+  const lastRunDefinitionRef = useRef<QueryDefinition | null>(null);
+
   const runQuery = useCallback(
     async () => {
       setLoading(true);
       setHasRun(true);
+      setSelectedIds(new Set());
+      const definition = buildDefinition();
+      lastRunDefinitionRef.current = definition;
       try {
-        const cleanedArrServerIds = Object.fromEntries(
-          Object.entries(arrServerIds).filter(([, v]) => v),
-        );
-        const definition: QueryDefinition = {
-          mediaTypes: mediaTypes as QueryDefinition["mediaTypes"],
-          serverIds: selectedServerIds,
-          groups,
-          sortBy,
-          sortOrder,
-          includeEpisodes,
-          ...(Object.keys(cleanedArrServerIds).length > 0 && { arrServerIds: cleanedArrServerIds }),
-          ...(seerrInstanceId && { seerrInstanceId }),
-        };
-
         const resp = await fetch("/api/query", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -697,8 +728,101 @@ export default function QueryPage() {
         setLoading(false);
       }
     },
-    [mediaTypes, selectedServerIds, groups, sortBy, sortOrder, includeEpisodes, arrServerIds, seerrInstanceId],
+    [buildDefinition],
   );
+
+  // ── Selection + ad-hoc action handlers ──
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+
+  const selectionTypeCounts = useMemo(() => {
+    const counts = { MOVIE: 0, SERIES: 0, MUSIC: 0 };
+    for (const r of results) {
+      if (selectedIds.has(r.id) && (r.type === "MOVIE" || r.type === "SERIES" || r.type === "MUSIC")) {
+        counts[r.type]++;
+      }
+    }
+    return counts;
+  }, [results, selectedIds]);
+
+  const executeAction = useCallback(
+    async (config: QueryActionConfig) => {
+      setExecutingAction(true);
+      try {
+        const resp = await fetch("/api/query/actions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: lastRunDefinitionRef.current ?? buildDefinition(),
+            mediaItemIds: [...selectedIds],
+            ...config,
+          }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          toast.error("Action failed", { description: data?.error ?? "Unknown error" });
+          return;
+        }
+        const parts = [`${data.executed} executed`];
+        if (data.failed > 0) parts.push(`${data.failed} failed`);
+        if (data.skipped > 0) parts.push(`${data.skipped} skipped`);
+        if (data.failed > 0) {
+          toast.warning("Action completed with errors", { description: parts.join(", ") });
+        } else {
+          toast.success("Action complete", { description: parts.join(", ") });
+        }
+        clearSelection();
+        runQuery();
+      } catch {
+        toast.error("Action failed", { description: "Could not reach the server" });
+      } finally {
+        setExecutingAction(false);
+      }
+    },
+    [buildDefinition, selectedIds, clearSelection, runQuery],
+  );
+
+  // Table columns with a leading selection checkbox column.
+  const tableColumns = useMemo<QueryColumn[]>(() => {
+    const allSelected = results.length > 0 && results.every((r) => selectedIds.has(r.id));
+    const someSelected = selectedIds.size > 0 && !allSelected;
+    const selectionColumn: QueryColumn = {
+      id: "__select",
+      group: "core",
+      defaultVisible: true,
+      sortable: false,
+      defaultWidth: 44,
+      className: "text-center",
+      headerClassName: "text-center",
+      header: (
+        <Checkbox
+          checked={allSelected ? true : someSelected ? "indeterminate" : false}
+          onClick={(e) => e.stopPropagation()}
+          onCheckedChange={() =>
+            setSelectedIds(allSelected ? new Set() : new Set(results.map((r) => r.id)))
+          }
+          aria-label="Select all results"
+        />
+      ),
+      accessor: (item) => (
+        <Checkbox
+          checked={selectedIds.has(item.id)}
+          onClick={(e) => e.stopPropagation()}
+          onCheckedChange={() => toggleSelect(item.id)}
+          aria-label={`Select ${item.title}`}
+        />
+      ),
+    };
+    return [selectionColumn, ...activeColumns];
+  }, [activeColumns, results, selectedIds, toggleSelect]);
 
   // ── Save/Load/Delete handlers ──
 
@@ -885,7 +1009,7 @@ export default function QueryPage() {
       <div className="flex flex-wrap items-center gap-2">
         {savedQueries.length > 0 && (
           <Select value={activeQueryId ?? ""} onValueChange={(v) => handleLoad(v)}>
-            <SelectTrigger className="w-full sm:w-60">
+            <SelectTrigger className="w-full sm:w-56" size="sm">
               <SelectValue placeholder="Load saved query..." />
             </SelectTrigger>
             <SelectContent>
@@ -931,6 +1055,8 @@ export default function QueryPage() {
           <Plus className="mr-1.5 h-3.5 w-3.5" />New
         </Button>
 
+        <div className="mx-1 hidden h-5 w-px bg-border sm:block" />
+
         <Button
           variant="outline"
           size="sm"
@@ -952,146 +1078,165 @@ export default function QueryPage() {
         </Button>
       </div>
 
-      {/* Scope: media types + servers */}
-      <div className="space-y-3">
-        <div className="flex flex-wrap items-center gap-4">
-          <span className="text-sm font-medium text-muted-foreground">Media Types:</span>
-          <div className="flex gap-2">
-            {(["MOVIE", "SERIES", "MUSIC"] as const).map((type) => (
-              <label key={type} className="flex items-center gap-1.5 cursor-pointer">
-                <Checkbox checked={mediaTypes.includes(type)} onCheckedChange={() => toggleMediaType(type)} />
-                <span className="text-sm">{type === "MOVIE" ? "Movies" : type === "SERIES" ? "Series" : "Music"}</span>
-              </label>
-            ))}
-          </div>
-          <span className="text-xs text-muted-foreground">(empty = all types)</span>
-        </div>
-
-        {(mediaTypes.length === 0 || mediaTypes.includes("SERIES")) && (
-          <div className="flex items-center gap-4 sm:pl-27">
-            <label className="flex items-center gap-1.5 cursor-pointer">
-              <Checkbox checked={includeEpisodes} onCheckedChange={(checked) => setIncludeEpisodes(checked === true)} />
-              <span className="text-sm">Include individual episodes</span>
-            </label>
-            <span className="text-xs text-muted-foreground">
-              {includeEpisodes ? "Showing individual episodes" : "Grouping series by show"}
-            </span>
-          </div>
-        )}
-
-        {servers.length > 1 && (
-          <div className="flex flex-wrap items-center gap-4">
-            <span className="text-sm font-medium text-muted-foreground">Servers:</span>
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button variant="outline" size="sm">
-                  <span className="truncate">
-                    {selectedServerIds.length === 0 ? "All Servers" : `${selectedServerIds.length} selected`}
-                  </span>
-                  <ChevronDown className="ml-1.5 h-3.5 w-3.5 opacity-50" />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-56 max-w-[calc(100vw-2rem)] p-0" align="start">
-                <Command>
-                  <CommandInput placeholder="Search servers..." />
-                  <CommandList>
-                    <CommandEmpty>No servers found.</CommandEmpty>
-                    <CommandGroup>
-                      {servers.map((s) => {
-                        const isSelected = selectedServerIds.includes(s.id);
-                        return (
-                          <CommandItem key={s.id} onSelect={() => toggleServer(s.id)}>
-                            <Checkbox
-                              checked={isSelected}
-                              onCheckedChange={() => toggleServer(s.id)}
-                              onClick={(e) => e.stopPropagation()}
-                              className="mr-2"
-                            />
-                            {s.name}
-                            {s.type && <ServerTypeChip type={s.type} className="ml-1.5" />}
-                          </CommandItem>
-                        );
-                      })}
-                    </CommandGroup>
-                  </CommandList>
-                  {selectedServerIds.length > 0 && (
-                    <>
-                      <Separator />
-                      <div className="p-1">
-                        <Button variant="ghost" size="sm" className="w-full text-xs" onClick={() => setSelectedServerIds([])}>
-                          Clear all
-                        </Button>
-                      </div>
-                    </>
-                  )}
-                </Command>
-              </PopoverContent>
-            </Popover>
-          </div>
-        )}
-
-        {/* Arr server selectors — shown when any Arr type has instances */}
-        {(arrInstances.radarr.length > 0 || arrInstances.sonarr.length > 0 || arrInstances.lidarr.length > 0) && (() => {
-          const showRadarr = arrInstances.radarr.length > 0 && (mediaTypes.length === 0 || mediaTypes.includes("MOVIE"));
-          const showSonarr = arrInstances.sonarr.length > 0 && (mediaTypes.length === 0 || mediaTypes.includes("SERIES"));
-          const showLidarr = arrInstances.lidarr.length > 0 && (mediaTypes.length === 0 || mediaTypes.includes("MUSIC"));
-          if (!showRadarr && !showSonarr && !showLidarr) return null;
-          return (
-            <div className="flex flex-wrap items-center gap-4">
-              <span className="text-sm font-medium text-muted-foreground">Arr Servers:</span>
-              <div className="flex flex-wrap gap-2">
-                {showRadarr && (
-                  <Select
-                    value={arrServerIds.radarr ?? "none"}
-                    onValueChange={(v) => setArrServerIds((prev) => ({ ...prev, radarr: v === "none" ? undefined : v }))}
-                  >
-                    <SelectTrigger className="w-48 h-8">
-                      <SelectValue placeholder="Radarr" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Radarr: None</SelectItem>
-                      {arrInstances.radarr.map((inst) => (
-                        <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-                {showSonarr && (
-                  <Select
-                    value={arrServerIds.sonarr ?? "none"}
-                    onValueChange={(v) => setArrServerIds((prev) => ({ ...prev, sonarr: v === "none" ? undefined : v }))}
-                  >
-                    <SelectTrigger className="w-48 h-8">
-                      <SelectValue placeholder="Sonarr" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Sonarr: None</SelectItem>
-                      {arrInstances.sonarr.map((inst) => (
-                        <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-                {showLidarr && (
-                  <Select
-                    value={arrServerIds.lidarr ?? "none"}
-                    onValueChange={(v) => setArrServerIds((prev) => ({ ...prev, lidarr: v === "none" ? undefined : v }))}
-                  >
-                    <SelectTrigger className="w-48 h-8">
-                      <SelectValue placeholder="Lidarr" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Lidarr: None</SelectItem>
-                      {arrInstances.lidarr.map((inst) => (
-                        <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
+      {/* Query Scope */}
+      <div className="rounded-lg border bg-card/40 p-4">
+        <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Query Scope
+        </p>
+        <div className="space-y-3">
+          {/* Media types — segmented pills */}
+          <ScopeRow label="Media types">
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {(["MOVIE", "SERIES", "MUSIC"] as const).map((type) => {
+                  const selected = mediaTypes.includes(type);
+                  return (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => toggleMediaType(type)}
+                      aria-pressed={selected}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm transition-colors",
+                        selected
+                          ? "border-primary bg-primary/15 text-foreground"
+                          : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
+                      )}
+                    >
+                      {selected ? <Check className="h-3.5 w-3.5 text-primary" /> : null}
+                      {MEDIA_TYPE_LABELS[type]}
+                    </button>
+                  );
+                })}
+                <span className="ml-1 text-xs text-muted-foreground">
+                  {mediaTypes.length === 0 ? "All types" : "None selected = all types"}
+                </span>
               </div>
+
+              {(mediaTypes.length === 0 || mediaTypes.includes("SERIES")) && (
+                <label className="flex w-fit cursor-pointer items-center gap-1.5">
+                  <Checkbox checked={includeEpisodes} onCheckedChange={(checked) => setIncludeEpisodes(checked === true)} />
+                  <span className="text-sm">Include individual episodes</span>
+                  <span className="text-xs text-muted-foreground">
+                    — {includeEpisodes ? "showing individual episodes" : "grouping series by show"}
+                  </span>
+                </label>
+              )}
             </div>
-          );
-        })()}
+          </ScopeRow>
+
+          {servers.length > 1 && (
+            <ScopeRow label="Servers">
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" size="sm" className="w-full justify-between sm:w-56">
+                    <span className="truncate">
+                      {selectedServerIds.length === 0 ? "All servers" : `${selectedServerIds.length} selected`}
+                    </span>
+                    <ChevronDown className="ml-1.5 h-3.5 w-3.5 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-56 max-w-[calc(100vw-2rem)] p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Search servers..." />
+                    <CommandList>
+                      <CommandEmpty>No servers found.</CommandEmpty>
+                      <CommandGroup>
+                        {servers.map((s) => {
+                          const isSelected = selectedServerIds.includes(s.id);
+                          return (
+                            <CommandItem key={s.id} onSelect={() => toggleServer(s.id)}>
+                              <Checkbox
+                                checked={isSelected}
+                                onCheckedChange={() => toggleServer(s.id)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="mr-2"
+                              />
+                              {s.name}
+                              {s.type && <ServerTypeChip type={s.type} className="ml-1.5" />}
+                            </CommandItem>
+                          );
+                        })}
+                      </CommandGroup>
+                    </CommandList>
+                    {selectedServerIds.length > 0 && (
+                      <>
+                        <Separator />
+                        <div className="p-1">
+                          <Button variant="ghost" size="sm" className="w-full text-xs" onClick={() => setSelectedServerIds([])}>
+                            Clear all
+                          </Button>
+                        </div>
+                      </>
+                    )}
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            </ScopeRow>
+          )}
+
+          {/* Arr server selectors — shown when any Arr type has instances */}
+          {(arrInstances.radarr.length > 0 || arrInstances.sonarr.length > 0 || arrInstances.lidarr.length > 0) && (() => {
+            const showRadarr = arrInstances.radarr.length > 0 && (mediaTypes.length === 0 || mediaTypes.includes("MOVIE"));
+            const showSonarr = arrInstances.sonarr.length > 0 && (mediaTypes.length === 0 || mediaTypes.includes("SERIES"));
+            const showLidarr = arrInstances.lidarr.length > 0 && (mediaTypes.length === 0 || mediaTypes.includes("MUSIC"));
+            if (!showRadarr && !showSonarr && !showLidarr) return null;
+            return (
+              <ScopeRow label="Arr servers">
+                <div className="flex flex-wrap gap-2">
+                  {showRadarr && (
+                    <Select
+                      value={arrServerIds.radarr ?? "none"}
+                      onValueChange={(v) => setArrServerIds((prev) => ({ ...prev, radarr: v === "none" ? undefined : v }))}
+                    >
+                      <SelectTrigger className="h-8 w-44" size="sm">
+                        <SelectValue placeholder="Radarr" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Radarr: None</SelectItem>
+                        {arrInstances.radarr.map((inst) => (
+                          <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  {showSonarr && (
+                    <Select
+                      value={arrServerIds.sonarr ?? "none"}
+                      onValueChange={(v) => setArrServerIds((prev) => ({ ...prev, sonarr: v === "none" ? undefined : v }))}
+                    >
+                      <SelectTrigger className="h-8 w-44" size="sm">
+                        <SelectValue placeholder="Sonarr" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Sonarr: None</SelectItem>
+                        {arrInstances.sonarr.map((inst) => (
+                          <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  {showLidarr && (
+                    <Select
+                      value={arrServerIds.lidarr ?? "none"}
+                      onValueChange={(v) => setArrServerIds((prev) => ({ ...prev, lidarr: v === "none" ? undefined : v }))}
+                    >
+                      <SelectTrigger className="h-8 w-44" size="sm">
+                        <SelectValue placeholder="Lidarr" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Lidarr: None</SelectItem>
+                        {arrInstances.lidarr.map((inst) => (
+                          <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+              </ScopeRow>
+            );
+          })()}
+        </div>
       </div>
 
       {/* Connectivity warning: rules reference an integration that's configured but currently down */}
@@ -1235,10 +1380,22 @@ export default function QueryPage() {
             {loading ? "Searching..." : `${results.length} result${results.length !== 1 ? "s" : ""} found`}
           </p>
 
+          {results.length > 0 && (
+            <QueryActionBar
+              selectedCount={selectedIds.size}
+              selectionTypeCounts={selectionTypeCounts}
+              arrServerIds={arrServerIds}
+              arrMeta={arrMeta}
+              executing={executingAction}
+              onExecute={executeAction}
+              onClear={clearSelection}
+            />
+          )}
+
           {results.length > 0 ? (
             viewMode === "table" ? (
               <DataTable
-                columns={activeColumns}
+                columns={tableColumns}
                 data={results}
                 onRowClick={navigateToItem}
                 keyExtractor={(item) => item.id}
@@ -1308,8 +1465,25 @@ export default function QueryPage() {
                           }}
                         >
                           {rowItems.map((item) => (
-                            <MediaCard
+                            <div
                               key={item.id}
+                              className={cn(
+                                "relative rounded-lg",
+                                selectedIds.has(item.id) && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+                              )}
+                            >
+                              <div
+                                className="absolute left-2 top-2 z-10 rounded bg-background/80 p-0.5 backdrop-blur"
+                                onClick={(e) => { e.stopPropagation(); toggleSelect(item.id); }}
+                              >
+                                <Checkbox
+                                  checked={selectedIds.has(item.id)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onCheckedChange={() => toggleSelect(item.id)}
+                                  aria-label={`Select ${item.title}`}
+                                />
+                              </div>
+                            <MediaCard
                               imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" || item.parentTitle ? "?type=parent" : ""}`}
                               title={item.title}
                               fallbackIcon={FALLBACK_ICONS[item.type] ?? "movie"}
@@ -1371,6 +1545,7 @@ export default function QueryPage() {
                                 />
                               }
                             />
+                            </div>
                           ))}
                         </div>
                       </div>

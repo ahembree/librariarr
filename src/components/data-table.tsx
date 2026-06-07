@@ -9,7 +9,7 @@ import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/h
 
 export interface DataTableColumn<T> {
   id: string;
-  header: string;
+  header: React.ReactNode;
   accessor: (item: T) => React.ReactNode;
   sortValue?: (item: T) => string | number | null;
   sortable?: boolean;
