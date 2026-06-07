@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.21.0](https://github.com/ahembree/librariarr/compare/v0.20.0...v0.21.0) (2026-06-07)
+
+
+### Features
+
+* **query:** always show the actions bar above results ([0291b8f](https://github.com/ahembree/librariarr/commit/0291b8f984578ab3bf260be2557b68e346d5e92d))
+* **query:** redesign the query scope controls ([7f9af61](https://github.com/ahembree/librariarr/commit/7f9af613741bb6f901ba901a49d10bd877eda694))
+* **query:** trigger lifecycle actions from the query page ([e6ef4f3](https://github.com/ahembree/librariarr/commit/e6ef4f32236750fa684d48d080223fca9e6fe65b))
+* **rules:** server-side enforcement of field library-type validity ([ffcf03d](https://github.com/ahembree/librariarr/commit/ffcf03d73bd52a5562465f04c45ba70c221b575c))
+
+
+### Bug Fixes
+
+* **lifecycle:** merge media distinct-values instead of replacing ([4188a48](https://github.com/ahembree/librariarr/commit/4188a482d07d9413a1eca21f001971eaa76a23bb))
+* **lifecycle:** populate Requested By Seerr dropdown reliably ([295d4f2](https://github.com/ahembree/librariarr/commit/295d4f236a21a2a6499e29f041e7259c04dab607))
+* **lifecycle:** populate Requested By Seerr dropdown reliably ([c0a991d](https://github.com/ahembree/librariarr/commit/c0a991dfd038a29251ccd3f4fa285fd509eb16ca))
+* **query:** correct grouped-series resolution and action validation ([b4c5403](https://github.com/ahembree/librariarr/commit/b4c5403b77a9e0564a589f99b3b686fbda9f8c3c))
+* **query:** honor episode exceptions and tidy ad-hoc action bar state ([3e1dbad](https://github.com/ahembree/librariarr/commit/3e1dbad54ff1575a407c437dabdb6a89cda473be))
+* **rules:** gate all type-specific Arr fields to their valid library types ([684f65f](https://github.com/ahembree/librariarr/commit/684f65f84f7bf4b5275bb3974c502782cec28d0e))
+* **rules:** gate type-specific arr fields and populate arrStatus everywhere ([76b545e](https://github.com/ahembree/librariarr/commit/76b545ef80fce510b06616e511373811df013513))
+* **rules:** populate all enumerable criteria dropdowns ([d6ee87f](https://github.com/ahembree/librariarr/commit/d6ee87f391e3e7eb5a4d3c2777f4083779abadd5))
+
 ## [0.20.0](https://github.com/ahembree/librariarr/compare/v0.19.0...v0.20.0) (2026-05-30)
 
 
