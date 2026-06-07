@@ -6,7 +6,6 @@
   <a href="https://github.com/ahembree/librariarr/actions/workflows/ci.yml"><img src="https://github.com/ahembree/librariarr/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://hub.docker.com/r/ahembree/librariarr"><img src="https://img.shields.io/docker/pulls/ahembree/librariarr" alt="Docker Hub" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue.svg" alt="License: AGPL-3.0" /></a>
-  <a href="https://discord.gg/cuVnryKSRD"><img src="https://dcbadge.limes.pink/api/server/cuVnryKSRD?style=plastic" alt="Discord" /></a>
 </p>
 
 > [!WARNING]
@@ -14,7 +13,7 @@
 
 Media library management for Plex, Jellyfin, and Emby. Track your media metadata, monitor quality breakdowns, and build lifecycle rules to manage your libraries.
 
-**Documentation:** [librariarr.dev](https://librariarr.dev) | **Discord:** [Join the community](https://discord.gg/cuVnryKSRD)
+**Documentation:** [librariarr.dev](https://librariarr.dev)
 
 ## Features
 
