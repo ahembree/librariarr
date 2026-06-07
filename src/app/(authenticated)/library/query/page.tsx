@@ -296,7 +296,11 @@ export default function QueryPage() {
     fetch("/api/query/distinct-values")
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (data) setDistinctValues(data);
+        // Merge rather than replace: Seerr requester names and Arr metadata are
+        // fetched and merged separately. A bare setDistinctValues(data) would
+        // clobber seerrRequestedBy when this fetch resolves after the Seerr
+        // metadata fetch, dropping the enumerated dropdown back to a text input.
+        if (data) setDistinctValues((prev) => ({ ...prev, ...data }));
       })
       .catch(() => {});
 
@@ -339,6 +343,30 @@ export default function QueryPage() {
     const fetchArrMetadata = async () => {
       const newArrTags: string[] = [];
       const newArrProfiles: string[] = [];
+      const newArrLanguages: string[] = [];
+      const newArrStatuses: string[] = [];
+      const newArrSeriesTypes: string[] = [];
+      const newArrQualityNames: string[] = [];
+
+      // Shared per-instance collector. The metadata route only includes the
+      // keys relevant to its Arr type (Sonarr: statuses/seriesTypes; Radarr:
+      // qualityNames), so each spread is a no-op when the key is absent.
+      const collect = (data: {
+        tags?: { label: string }[];
+        qualityProfiles?: { name: string }[];
+        languages?: string[];
+        statuses?: string[];
+        seriesTypes?: string[];
+        qualityNames?: string[];
+      } | null) => {
+        if (!data) return;
+        if (data.tags) newArrTags.push(...data.tags.map((t) => t.label));
+        if (data.qualityProfiles) newArrProfiles.push(...data.qualityProfiles.map((p) => p.name));
+        if (data.languages) newArrLanguages.push(...data.languages);
+        if (data.statuses) newArrStatuses.push(...data.statuses);
+        if (data.seriesTypes) newArrSeriesTypes.push(...data.seriesTypes);
+        if (data.qualityNames) newArrQualityNames.push(...data.qualityNames);
+      };
 
       const promises: Promise<void>[] = [];
 
@@ -346,10 +374,7 @@ export default function QueryPage() {
         promises.push(
           fetch(`/api/integrations/radarr/${arrServerIds.radarr}/metadata`)
             .then((r) => r.ok ? r.json() : null)
-            .then((data) => {
-              if (data?.tags) newArrTags.push(...data.tags.map((t: { label: string }) => t.label));
-              if (data?.qualityProfiles) newArrProfiles.push(...data.qualityProfiles.map((p: { name: string }) => p.name));
-            })
+            .then(collect)
             .catch(() => {}),
         );
       }
@@ -357,10 +382,7 @@ export default function QueryPage() {
         promises.push(
           fetch(`/api/integrations/sonarr/${arrServerIds.sonarr}/metadata`)
             .then((r) => r.ok ? r.json() : null)
-            .then((data) => {
-              if (data?.tags) newArrTags.push(...data.tags.map((t: { label: string }) => t.label));
-              if (data?.qualityProfiles) newArrProfiles.push(...data.qualityProfiles.map((p: { name: string }) => p.name));
-            })
+            .then(collect)
             .catch(() => {}),
         );
       }
@@ -368,31 +390,39 @@ export default function QueryPage() {
         promises.push(
           fetch(`/api/integrations/lidarr/${arrServerIds.lidarr}/metadata`)
             .then((r) => r.ok ? r.json() : null)
-            .then((data) => {
-              if (data?.tags) newArrTags.push(...data.tags.map((t: { label: string }) => t.label));
-              if (data?.qualityProfiles) newArrProfiles.push(...data.qualityProfiles.map((p: { name: string }) => p.name));
-            })
+            .then(collect)
             .catch(() => {}),
         );
       }
 
       await Promise.all(promises);
 
-      // Deduplicate and sort
-      const uniqueTags = [...new Set(newArrTags)].sort((a, b) => a.localeCompare(b));
-      const uniqueProfiles = [...new Set(newArrProfiles)].sort((a, b) => a.localeCompare(b));
+      const uniqueSorted = (vals: string[]) =>
+        [...new Set(vals)].sort((a, b) => a.localeCompare(b));
 
       setDistinctValues((prev) => ({
         ...prev,
-        arrTag: uniqueTags,
-        arrQualityProfile: uniqueProfiles,
+        arrTag: uniqueSorted(newArrTags),
+        arrQualityProfile: uniqueSorted(newArrProfiles),
+        arrOriginalLanguage: uniqueSorted(newArrLanguages),
+        arrStatus: uniqueSorted(newArrStatuses),
+        arrSeriesType: uniqueSorted(newArrSeriesTypes),
+        arrQualityName: uniqueSorted(newArrQualityNames),
       }));
     };
 
     if (arrServerIds.radarr || arrServerIds.sonarr || arrServerIds.lidarr) {
       fetchArrMetadata();
     } else {
-      setDistinctValues((prev) => ({ ...prev, arrTag: [], arrQualityProfile: [] }));
+      setDistinctValues((prev) => ({
+        ...prev,
+        arrTag: [],
+        arrQualityProfile: [],
+        arrOriginalLanguage: [],
+        arrStatus: [],
+        arrSeriesType: [],
+        arrQualityName: [],
+      }));
     }
   }, [arrServerIds]);
 

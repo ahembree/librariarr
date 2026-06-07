@@ -55,6 +55,62 @@ describe("CONDITION_FIELDS registry", () => {
     }
   });
 
+  // Guards against the "ungated but type-specific" bug class: an Arr field that
+  // the fetchers only populate for some media types must be marked invalid for
+  // the others, otherwise it renders as an accepted rule that silently matches
+  // nothing (and, for enumerable fields, as a non-functional raw text input).
+  // The expected gating mirrors which types fetch-arr-metadata / fetch-arr-data
+  // actually populate the underlying ArrDataMap value for.
+  it("gates Arr fields to only the library types whose data populates them", () => {
+    const expectedGates: Record<string, Array<"MOVIE" | "SERIES" | "MUSIC">> = {
+      // Movie + Series (not Music)
+      arrTmdbRating: ["MUSIC"],
+      arrRtCriticRating: ["MUSIC"],
+      arrOriginalLanguage: ["MUSIC"],
+      // Movie only
+      arrReleaseDate: ["SERIES", "MUSIC"],
+      arrInCinemasDate: ["SERIES", "MUSIC"],
+      arrRuntime: ["SERIES", "MUSIC"],
+      arrQualityName: ["SERIES", "MUSIC"],
+      arrQualityCutoffMet: ["SERIES", "MUSIC"],
+      arrDownloadDate: ["SERIES", "MUSIC"],
+      // Series only
+      arrFirstAired: ["MOVIE", "MUSIC"],
+      arrSeasonCount: ["MOVIE", "MUSIC"],
+      arrEpisodeCount: ["MOVIE", "MUSIC"],
+      arrEnded: ["MOVIE", "MUSIC"],
+      arrSeriesType: ["MOVIE", "MUSIC"],
+      arrHasUnaired: ["MOVIE", "MUSIC"],
+      arrMonitoredSeasonCount: ["MOVIE", "MUSIC"],
+      arrMonitoredEpisodeCount: ["MOVIE", "MUSIC"],
+    };
+    for (const [value, gate] of Object.entries(expectedGates)) {
+      const field = CONDITION_FIELDS.find((f) => f.value === value);
+      expect(field, `${value} should exist in the registry`).toBeDefined();
+      expect(
+        [...(field!.invalidForLibraryType ?? [])].sort(),
+        `${value} gating`,
+      ).toEqual([...gate].sort());
+    }
+  });
+
+  // The complement: Arr fields populated for every media type must stay
+  // ungated, so they remain usable in all rule/query builders.
+  it("leaves all-type Arr fields ungated", () => {
+    const allTypeArrFields = [
+      "foundInArr", "arrMonitored", "arrTag", "arrQualityProfile", "arrStatus",
+      "arrRating", "arrSizeOnDisk", "arrPath", "arrDateAdded",
+    ];
+    for (const value of allTypeArrFields) {
+      const field = CONDITION_FIELDS.find((f) => f.value === value);
+      expect(field, `${value} should exist in the registry`).toBeDefined();
+      expect(
+        field!.invalidForLibraryType,
+        `${value} should not be gated`,
+      ).toBeUndefined();
+    }
+  });
+
   it("includes labels and ratingCount (previously query-only)", () => {
     const values = CONDITION_FIELDS.map((f) => f.value);
     expect(values).toContain("labels");

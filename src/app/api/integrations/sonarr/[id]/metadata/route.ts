@@ -60,5 +60,11 @@ export async function GET(
       .filter((l) => l.name && l.name !== "Unknown")
       .map((l) => l.name)
       .sort((a, b) => a.localeCompare(b)),
+    // Distinct values present in the library for the enumerable arrStatus /
+    // arrSeriesType fields, so the builders can render dropdowns instead of
+    // a raw text input. Only series carry these (movies/music leave them null
+    // in fetch-arr-metadata), so they're sourced from Sonarr only.
+    statuses: [...new Set(series.map((s) => s.status).filter((v): v is string => !!v))].sort((a, b) => a.localeCompare(b)),
+    seriesTypes: [...new Set(series.map((s) => s.seriesType).filter((v): v is string => !!v))].sort((a, b) => a.localeCompare(b)),
   });
 }

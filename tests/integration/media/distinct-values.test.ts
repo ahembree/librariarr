@@ -8,6 +8,7 @@ import {
   createTestServer,
   createTestLibrary,
   createTestMediaItem,
+  createTestMediaStream,
 } from "../../setup/test-helpers";
 
 // Redirect prisma to test database
@@ -37,6 +38,22 @@ vi.mock("@/lib/cache/memory-cache", () => {
 
 // Import route handler AFTER mocks
 import { GET } from "@/app/api/media/distinct-values/route";
+import { CONDITION_FIELDS } from "@/lib/conditions";
+
+/**
+ * Enumerable fields whose dropdown values come from this endpoint (as opposed
+ * to hardcoded `knownValues`, or the Arr/Seerr metadata routes). Derived from
+ * the registry so a newly-added enumerable field forces a value source — this
+ * is the regression guard for the original "empty dropdown -> raw text input"
+ * bug (seerrRequestedBy, labels, sqColor*, etc.).
+ */
+const ENDPOINT_SOURCED_ENUMERABLE_FIELDS = CONDITION_FIELDS.filter(
+  (f) =>
+    f.enumerable &&
+    !f.requiresArr &&
+    !f.requiresSeerr &&
+    (f.knownValues?.length ?? 0) === 0,
+).map((f) => f.value);
 
 describe("GET /api/media/distinct-values", () => {
   beforeEach(async () => {
@@ -53,6 +70,24 @@ describe("GET /api/media/distinct-values", () => {
       url: "/api/media/distinct-values",
     });
     await expectJson<{ error: string }>(response, 401);
+  });
+
+  it("emits a same-named key for every endpoint-sourced enumerable field", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const response = await callRoute(GET, { url: "/api/media/distinct-values" });
+    const body = await expectJson<Record<string, unknown>>(response, 200);
+
+    // Sanity: the derived set isn't empty (would make this test vacuous).
+    expect(ENDPOINT_SOURCED_ENUMERABLE_FIELDS.length).toBeGreaterThan(0);
+    for (const field of ENDPOINT_SOURCED_ENUMERABLE_FIELDS) {
+      expect(
+        Object.prototype.hasOwnProperty.call(body, field),
+        `distinct-values response is missing a value source for enumerable field "${field}"`,
+      ).toBe(true);
+      expect(Array.isArray(body[field]), `"${field}" should be a string[]`).toBe(true);
+    }
   });
 
   it("returns data with authenticated session", async () => {
@@ -215,6 +250,49 @@ describe("GET /api/media/distinct-values", () => {
     expect(body.dynamicRange[0]).toBe("Dolby Vision");
     expect(body.dynamicRange[1]).toBe("HDR10");
     expect(body.dynamicRange[2]).toBe("SDR");
+  });
+
+  it("aggregates labels from the JSONB labels array deduplicated", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id);
+
+    await createTestMediaItem(lib.id, { title: "Movie 1", type: "MOVIE", labels: ["Favorites", "Kids"] });
+    await createTestMediaItem(lib.id, { title: "Movie 2", type: "MOVIE", labels: ["Favorites"] });
+
+    const response = await callRoute(GET, { url: "/api/media/distinct-values" });
+    const body = await expectJson<{ labels: string[] }>(response, 200);
+
+    expect(body.labels).toContain("Favorites");
+    expect(body.labels).toContain("Kids");
+    // Deduped across both items.
+    expect(body.labels.filter((l: string) => l === "Favorites")).toHaveLength(1);
+  });
+
+  it("aggregates stream-query color fields from streams", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id);
+    const item = await createTestMediaItem(lib.id, { title: "HDR Movie", type: "MOVIE" });
+    await createTestMediaStream(item.id, {
+      streamType: 1,
+      colorPrimaries: "bt2020",
+      colorRange: "tv",
+      chromaSubsampling: "4:2:0",
+    });
+
+    const response = await callRoute(GET, { url: "/api/media/distinct-values" });
+    const body = await expectJson<{
+      sqColorPrimaries: string[];
+      sqColorRange: string[];
+      sqChromaSubsampling: string[];
+    }>(response, 200);
+
+    expect(body.sqColorPrimaries).toContain("bt2020");
+    expect(body.sqColorRange).toContain("tv");
+    expect(body.sqChromaSubsampling).toContain("4:2:0");
   });
 
   it("returns distinct genres from JSONB arrays deduplicated", async () => {

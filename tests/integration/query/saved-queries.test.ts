@@ -191,6 +191,63 @@ describe("Saved queries API", () => {
       });
       expect(response.status).toBe(400);
     });
+
+    it("rejects fields invalid for every selected media type", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      // arrSeasonCount is series-only; a MUSIC-only query can never match it.
+      const query = makeQuery({
+        mediaTypes: ["MUSIC"],
+        groups: [
+          {
+            id: "g1",
+            condition: "AND",
+            rules: [
+              { id: "r1", field: "arrSeasonCount", operator: "greaterThan", value: 1, condition: "AND" },
+            ],
+            groups: [],
+          },
+        ],
+      });
+
+      const response = await callRoute(POST, {
+        url: "/api/saved-queries",
+        method: "POST",
+        body: { name: "Bad Music Query", query },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toContain("arrSeasonCount");
+    });
+
+    it("accepts a field valid for at least one of several selected types", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      // arrSeasonCount is valid for SERIES, so a Movie+Series query keeps it.
+      const query = makeQuery({
+        mediaTypes: ["MOVIE", "SERIES"],
+        groups: [
+          {
+            id: "g1",
+            condition: "AND",
+            rules: [
+              { id: "r1", field: "arrSeasonCount", operator: "greaterThan", value: 1, condition: "AND" },
+            ],
+            groups: [],
+          },
+        ],
+      });
+
+      const response = await callRoute(POST, {
+        url: "/api/saved-queries",
+        method: "POST",
+        body: { name: "OK Mixed Query", query },
+      });
+
+      await expectJson(response, 201);
+    });
   });
 
   // ===== PUT /api/saved-queries/[id] =====

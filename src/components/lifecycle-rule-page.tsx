@@ -821,7 +821,12 @@ export function LifecycleRulePage({
     try {
       const response = await fetch("/api/media/distinct-values");
       const data = await response.json();
-      setDistinctValues(data);
+      // Merge rather than replace: Seerr requester names (seerrRequestedBy) and
+      // Arr metadata (arrTag, arrQualityProfile) are fetched separately and
+      // merged into distinctValues. A bare setDistinctValues(data) would clobber
+      // them when this fetch resolves after those, dropping the enumerated
+      // "Requested By" dropdown back to a raw text input.
+      setDistinctValues((prev) => ({ ...prev, ...data }));
     } catch (error) {
       console.error("Failed to fetch distinct values:", error);
     }
@@ -924,6 +929,13 @@ export function LifecycleRulePage({
           arrTag: data.tags?.map((t: { label: string }) => t.label) ?? [],
           arrQualityProfile: profiles.map((p) => p.name),
           arrOriginalLanguage: data.languages ?? [],
+          // Enumerable arr fields sourced per-type by the metadata route:
+          // Sonarr supplies statuses/seriesTypes, Radarr supplies qualityNames.
+          // Absent keys fall back to [] so the builder hides the dropdown only
+          // when there's genuinely nothing to enumerate.
+          arrStatus: data.statuses ?? [],
+          arrSeriesType: data.seriesTypes ?? [],
+          arrQualityName: data.qualityNames ?? [],
         }));
         setArrProfilesStatus("ready");
       } catch {
@@ -943,7 +955,15 @@ export function LifecycleRulePage({
     setArrQualityProfiles([]);
     setArrProfilesStatus(newId ? "loading" : "idle");
     if (!newId) {
-      setDistinctValues((prev) => ({ ...prev, arrTag: [], arrQualityProfile: [] }));
+      setDistinctValues((prev) => ({
+        ...prev,
+        arrTag: [],
+        arrQualityProfile: [],
+        arrOriginalLanguage: [],
+        arrStatus: [],
+        arrSeriesType: [],
+        arrQualityName: [],
+      }));
       setManageTagsEnabled(false);
       setAddArrTags([]);
       setRemoveArrTags([]);
