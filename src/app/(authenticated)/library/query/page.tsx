@@ -326,7 +326,11 @@ export default function QueryPage() {
     fetch("/api/query/distinct-values")
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (data) setDistinctValues(data);
+        // Merge rather than replace: Seerr requester names and Arr metadata are
+        // fetched and merged separately. A bare setDistinctValues(data) would
+        // clobber seerrRequestedBy when this fetch resolves after the Seerr
+        // metadata fetch, dropping the enumerated dropdown back to a text input.
+        if (data) setDistinctValues((prev) => ({ ...prev, ...data }));
       })
       .catch(() => {});
 
@@ -373,6 +377,10 @@ export default function QueryPage() {
         sonarr: { qualityProfiles: [], tags: [] },
         lidarr: { qualityProfiles: [], tags: [] },
       };
+      const newArrLanguages: string[] = [];
+      const newArrStatuses: string[] = [];
+      const newArrSeriesTypes: string[] = [];
+      const newArrQualityNames: string[] = [];
 
       const fetchFamily = async (family: ArrFamily, id: string) => {
         try {
@@ -383,6 +391,13 @@ export default function QueryPage() {
             qualityProfiles: (data?.qualityProfiles ?? []).map((p: { id: number; name: string }) => ({ id: p.id, name: p.name })),
             tags: (data?.tags ?? []).map((t: { label: string }) => t.label),
           };
+          // The metadata route only includes the keys relevant to its Arr type
+          // (Sonarr: statuses/seriesTypes; Radarr: qualityNames), so each push is
+          // a no-op when the key is absent.
+          if (data?.languages) newArrLanguages.push(...data.languages);
+          if (data?.statuses) newArrStatuses.push(...data.statuses);
+          if (data?.seriesTypes) newArrSeriesTypes.push(...data.seriesTypes);
+          if (data?.qualityNames) newArrQualityNames.push(...data.qualityNames);
         } catch { /* ignore */ }
       };
 
@@ -394,13 +409,21 @@ export default function QueryPage() {
 
       setArrMeta(meta);
 
+      const uniqueSorted = (vals: string[]) =>
+        [...new Set(vals)].sort((a, b) => a.localeCompare(b));
+
+
       // Deduplicate and sort for the query builder dropdowns
       const allTags = [meta.radarr, meta.sonarr, meta.lidarr].flatMap((m) => m.tags);
       const allProfiles = [meta.radarr, meta.sonarr, meta.lidarr].flatMap((m) => m.qualityProfiles.map((p) => p.name));
       setDistinctValues((prev) => ({
         ...prev,
-        arrTag: [...new Set(allTags)].sort((a, b) => a.localeCompare(b)),
-        arrQualityProfile: [...new Set(allProfiles)].sort((a, b) => a.localeCompare(b)),
+        arrTag: uniqueSorted(allTags),
+        arrQualityProfile: uniqueSorted(allProfiles),
+        arrOriginalLanguage: uniqueSorted(newArrLanguages),
+        arrStatus: uniqueSorted(newArrStatuses),
+        arrSeriesType: uniqueSorted(newArrSeriesTypes),
+        arrQualityName: uniqueSorted(newArrQualityNames),
       }));
     };
 
@@ -412,7 +435,15 @@ export default function QueryPage() {
         sonarr: { qualityProfiles: [], tags: [] },
         lidarr: { qualityProfiles: [], tags: [] },
       });
-      setDistinctValues((prev) => ({ ...prev, arrTag: [], arrQualityProfile: [] }));
+      setDistinctValues((prev) => ({
+        ...prev,
+        arrTag: [],
+        arrQualityProfile: [],
+        arrOriginalLanguage: [],
+        arrStatus: [],
+        arrSeriesType: [],
+        arrQualityName: [],
+      }));
     }
   }, [arrServerIds]);
 

@@ -201,6 +201,26 @@ describe("Integration metadata endpoints", () => {
 
       expect(body.artists["mb-1"].tags).toEqual(["99"]);
     });
+
+    it("derives distinct artist statuses for the enumerable arrStatus field", async () => {
+      const user = await createTestUser();
+      const instance = await createTestLidarrInstance(user.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      mockLidarrGetArtists.mockResolvedValue([
+        { foreignArtistId: "mb-1", tags: [], qualityProfileId: 1, monitored: true, status: "continuing" },
+        { foreignArtistId: "mb-2", tags: [], qualityProfileId: 1, monitored: true, status: "ended" },
+        // Duplicate dedupes; the artist with no status is filtered out.
+        { foreignArtistId: "mb-3", tags: [], qualityProfileId: 1, monitored: true, status: "continuing" },
+        { foreignArtistId: "mb-4", tags: [], qualityProfileId: 1, monitored: false },
+      ]);
+      mockLidarrGetQualityProfiles.mockResolvedValue([{ id: 1, name: "Lossless" }]);
+
+      const response = await callRouteWithParams(LidarrMetadataGET, { id: instance.id });
+      const body = await expectJson<{ statuses: string[] }>(response, 200);
+
+      expect(body.statuses).toEqual(["continuing", "ended"]);
+    });
   });
 
   // ===== Radarr metadata =====
@@ -244,6 +264,7 @@ describe("Integration metadata endpoints", () => {
           qualityProfileId: 1,
           monitored: true,
           ratings: { imdb: { value: 8.8 } },
+          status: "released",
         },
       ]);
       mockRadarrGetQualityProfiles.mockResolvedValue([{ id: 1, name: "HD-1080p" }]);
@@ -274,6 +295,26 @@ describe("Integration metadata endpoints", () => {
       expect(body.languages).toEqual(["English", "French"]);
     });
 
+    it("derives distinct movie statuses for the enumerable arrStatus field", async () => {
+      const user = await createTestUser();
+      const instance = await createTestRadarrInstance(user.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      mockRadarrGetMovies.mockResolvedValue([
+        { tmdbId: 1, tags: [], qualityProfileId: 1, monitored: true, status: "released" },
+        { tmdbId: 2, tags: [], qualityProfileId: 1, monitored: true, status: "announced" },
+        // Duplicate dedupes; the movie with no status is filtered out.
+        { tmdbId: 3, tags: [], qualityProfileId: 1, monitored: true, status: "released" },
+        { tmdbId: 4, tags: [], qualityProfileId: 1, monitored: false },
+      ]);
+      mockRadarrGetQualityProfiles.mockResolvedValue([{ id: 1, name: "HD" }]);
+
+      const response = await callRouteWithParams(RadarrMetadataGET, { id: instance.id });
+      const body = await expectJson<{ statuses: string[] }>(response, 200);
+
+      expect(body.statuses).toEqual(["announced", "released"]);
+    });
+
     it("handles movie with no ratings", async () => {
       const user = await createTestUser();
       const instance = await createTestRadarrInstance(user.id);
@@ -293,6 +334,26 @@ describe("Integration metadata endpoints", () => {
 
       expect(body.movies["100"].rating).toBeNull();
       expect(body.movies["100"].qualityProfile).toBe("Unknown");
+    });
+
+    it("derives distinct downloaded-file quality names for the enumerable arrQualityName field", async () => {
+      const user = await createTestUser();
+      const instance = await createTestRadarrInstance(user.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      mockRadarrGetMovies.mockResolvedValue([
+        { tmdbId: 1, tags: [], qualityProfileId: 1, monitored: true, movieFile: { quality: { quality: { name: "Bluray-1080p" } } } },
+        { tmdbId: 2, tags: [], qualityProfileId: 1, monitored: true, movieFile: { quality: { quality: { name: "WEBDL-2160p" } } } },
+        // Duplicate name dedupes; the movie with no file is filtered out.
+        { tmdbId: 3, tags: [], qualityProfileId: 1, monitored: true, movieFile: { quality: { quality: { name: "Bluray-1080p" } } } },
+        { tmdbId: 4, tags: [], qualityProfileId: 1, monitored: false },
+      ]);
+      mockRadarrGetQualityProfiles.mockResolvedValue([{ id: 1, name: "HD" }]);
+
+      const response = await callRouteWithParams(RadarrMetadataGET, { id: instance.id });
+      const body = await expectJson<{ qualityNames: string[] }>(response, 200);
+
+      expect(body.qualityNames).toEqual(["Bluray-1080p", "WEBDL-2160p"]);
     });
   });
 
@@ -368,6 +429,39 @@ describe("Integration metadata endpoints", () => {
       expect(body.qualityProfiles).toEqual([{ id: 2, name: "Ultra-HD" }]);
       // "Unknown" filtered, rest sorted
       expect(body.languages).toEqual(["English", "Spanish"]);
+    });
+
+    it("derives distinct statuses and seriesTypes for the enumerable fields", async () => {
+      const user = await createTestUser();
+      const instance = await createTestSonarrInstance(user.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      mockSonarrGetSeries.mockResolvedValue([
+        { tvdbId: 1, tags: [], qualityProfileId: 1, monitored: true, status: "continuing", seriesType: "standard" },
+        { tvdbId: 2, tags: [], qualityProfileId: 1, monitored: true, status: "ended", seriesType: "anime" },
+        // Duplicate values dedupe; the series with no status/seriesType is filtered out.
+        { tvdbId: 3, tags: [], qualityProfileId: 1, monitored: true, status: "continuing", seriesType: "anime" },
+        { tvdbId: 4, tags: [], qualityProfileId: 1, monitored: true },
+      ]);
+      mockSonarrGetQualityProfiles.mockResolvedValue([{ id: 1, name: "HD" }]);
+
+      const response = await callRouteWithParams(SonarrMetadataGET, { id: instance.id });
+      const body = await expectJson<{ statuses: string[]; seriesTypes: string[] }>(response, 200);
+
+      expect(body.statuses).toEqual(["continuing", "ended"]);
+      expect(body.seriesTypes).toEqual(["anime", "standard"]);
+    });
+
+    it("returns empty statuses/seriesTypes when there are no series", async () => {
+      const user = await createTestUser();
+      const instance = await createTestSonarrInstance(user.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const response = await callRouteWithParams(SonarrMetadataGET, { id: instance.id });
+      const body = await expectJson<{ statuses: string[]; seriesTypes: string[] }>(response, 200);
+
+      expect(body.statuses).toEqual([]);
+      expect(body.seriesTypes).toEqual([]);
     });
 
     it("handles series with no ratings", async () => {

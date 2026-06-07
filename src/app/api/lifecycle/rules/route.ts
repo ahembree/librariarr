@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { validateRequest, ruleSetCreateSchema } from "@/lib/validation";
+import { findFieldsInvalidForType } from "@/lib/conditions";
 
 export async function GET() {
   const session = await getSession();
@@ -45,6 +46,21 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { error: "A rule set with this name already exists" },
       { status: 409 }
+    );
+  }
+
+  // Reject fields that can never be populated for this library type (e.g.
+  // arrSeasonCount on a MOVIE rule set). Such a clause evaluates against a
+  // null value — silently dead in an AND group, or match-all under negate —
+  // which is a correctness risk for the deletion pipeline. The builders gate
+  // these in the UI; this guards direct API writes and legacy payloads.
+  const invalidFields = findFieldsInvalidForType(rules, type);
+  if (invalidFields.length > 0) {
+    return NextResponse.json(
+      {
+        error: `These criteria are not valid for ${type.toLowerCase()} rules: ${invalidFields.join(", ")}`,
+      },
+      { status: 400 }
     );
   }
 

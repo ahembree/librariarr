@@ -190,6 +190,7 @@ export async function createTestMediaItem(
     container: string;
     duration: number;
     genres: string[];
+    labels: string[];
     contentRating: string;
     studio: string;
     filePath: string;
@@ -221,6 +222,7 @@ export async function createTestMediaItem(
       container: overrides?.container ?? "mkv",
       duration: overrides?.duration ?? 7200000,
       genres: overrides?.genres,
+      labels: overrides?.labels,
       contentRating: overrides?.contentRating,
       studio: overrides?.studio,
       filePath: overrides?.filePath,

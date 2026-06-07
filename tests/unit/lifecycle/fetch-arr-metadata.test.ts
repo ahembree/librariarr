@@ -73,6 +73,7 @@ describe("fetchArrMetadata", () => {
           qualityCutoffNotMet: false,
           hasFile: true,
           movieFileId: 99,
+          status: "released",
         },
       ]);
       mockRadarrClient.getQualityProfiles.mockResolvedValue([
@@ -102,6 +103,8 @@ describe("fetchArrMetadata", () => {
       expect(result["550"].qualityName).toBe("Bluray-1080p");
       expect(result["550"].qualityCutoffMet).toBe(true); // !false
       expect(result["550"].downloadDate).toBe("2024-02-01");
+      // Movie status is now populated (was previously hardcoded null).
+      expect(result["550"].status).toBe("released");
     });
 
     it("handles unknown tag IDs gracefully", async () => {
@@ -270,6 +273,7 @@ describe("fetchArrMetadata", () => {
           added: "2024-03-01",
           path: "/music/radiohead",
           statistics: { sizeOnDisk: 2000000000 },
+          status: "continuing",
         },
       ]);
       mockLidarrClient.getQualityProfiles.mockResolvedValue([
@@ -286,6 +290,8 @@ describe("fetchArrMetadata", () => {
       expect(result["mb-abc-123"].monitored).toBe(true);
       expect(result["mb-abc-123"].rating).toBe(7.5);
       expect(result["mb-abc-123"].path).toBe("/music/radiohead");
+      // Artist status is now populated (was previously hardcoded null).
+      expect(result["mb-abc-123"].status).toBe("continuing");
       // Music-specific nulls
       expect(result["mb-abc-123"].tmdbRating).toBeNull();
       expect(result["mb-abc-123"].rtCriticRating).toBeNull();
