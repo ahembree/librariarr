@@ -1,12 +1,17 @@
 export async function register() {
-  // Only run scheduler on the server side (not during build or in edge runtime)
+  // Only run background workers on the server side (not during build or in edge runtime)
   if (process.env.NEXT_RUNTIME === "nodejs") {
-    // Clean up sync jobs orphaned by a previous restart before starting the scheduler
+    // Clean up sync jobs orphaned by a previous restart before starting the worker
     const { cleanupOrphanedSyncJobs } = await import("@/lib/sync/cleanup-orphaned-syncs");
     cleanupOrphanedSyncJobs();
 
-    const { initializeScheduler } = await import("@/lib/scheduler/scheduler");
-    initializeScheduler();
+    // Start the Graphile Worker runner (durable, retrying background jobs).
+    // Awaited so the worker's migrations are applied before any request can
+    // enqueue a job.
+    const { startWorker } = await import("@/lib/jobs/worker");
+    await startWorker().catch(() => {
+      // startWorker already logs; don't block app boot if the queue is down.
+    });
 
     const { initializeMaintenanceEnforcer, initializePrerollEnforcer } = await import("@/lib/maintenance/enforcer");
     initializeMaintenanceEnforcer();

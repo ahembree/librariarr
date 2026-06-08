@@ -105,7 +105,7 @@ pnpm exec vitest run tests/path/to/file.test.ts  # Run a single test file
 - `src/lib/plex/` — Plex OAuth flow and API client
 - `src/lib/sso/` — OIDC (Authorization Code + PKCE) and forward-auth helpers. Manual-linking only: an admin must link an `ssoSubject` to a User before SSO login is accepted. When `AppSettings.ssoEnabled` is true, the local username/password form is hidden on the login page (Plex login remains by default). `AppSettings.plexLoginEnabled` (default true) independently controls whether the Plex login button is shown — toggling it off hides Plex from the login page without unlinking the Plex token from the User record (so server discovery and library sync still work). `/api/settings/auth` enforces a unified lockout guard: at least one of Plex login, local auth, or SSO must remain usable post-update.
 - `src/lib/sync/sync-server.ts` — Media sync engine (fetches metadata from Plex)
-- `src/lib/scheduler/` — node-cron scheduler, initialized via `instrumentation.ts`
+- `src/lib/jobs/` — [Graphile Worker](https://worker.graphile.org/) background job queue (Postgres-backed), initialized via `instrumentation.ts`. `worker.ts` runs the in-process worker + static crontab; `dispatch.ts` is the per-minute dispatcher that fans DB-configured schedules into durable jobs; `tasks.ts` holds the task handlers; `client.ts` exposes `enqueueJob()`; `schedule.ts` has the pure cron/preset helpers (`presetToCron`, `isScheduleDue`, `getSystemTimezone`)
 - `src/lib/rules/` — Lifecycle rule engine with recursive AND/OR groups
 - `src/lib/arr/` — Sonarr/Radarr/Lidarr API clients (15s timeout, title validation via `normalizeTitle()`)
 - `src/lib/lifecycle/` — Detection (`detect-matches.ts`), action execution (`actions.ts`), orchestration (`processor.ts`), Plex collection sync (`collections.ts`), Arr/Seerr metadata fetching
@@ -297,11 +297,13 @@ The lifecycle system operates in three phases, orchestrated by `src/lib/lifecycl
 - All persistent data paths are under `/config`: backups at `/config/backups`, image cache at `/config/cache/images`
 - `BACKUP_DIR` and `IMAGE_CACHE_DIR` env vars can override the defaults
 
-### Scheduler
+### Background Jobs (Graphile Worker)
 
-- Initialized in `src/instrumentation.ts` (guarded by `NEXT_RUNTIME === "nodejs"` — skipped during Edge/build)
-- Checks every minute for scheduled syncs and lifecycle rule processing
-- Also starts the maintenance enforcer (30s polling loop) in the same `instrumentation.ts`
+- Background work runs through [Graphile Worker](https://worker.graphile.org/), a Postgres-backed job queue. The worker runs **in-process** (not a separate container), started from `src/instrumentation.ts` (guarded by `NEXT_RUNTIME === "nodejs"` — skipped during Edge/build). `startWorker()` is awaited so the worker's own migrations (the `graphile_worker` schema, created automatically — the DB role needs `CREATE` privilege) are applied before any request can enqueue a job. This schema is separate from Prisma's `public` schema; `prisma db push` never touches it.
+- A static crontab (`src/lib/jobs/worker.ts`) drives recurring tasks: the **dispatcher** runs every minute, action cleanup every 15 minutes, log archival hourly.
+- The **dispatcher** (`dispatch.ts`) reads the user-configured, DB-stored schedules (`AppSettings.syncSchedule`, `lifecycleDetectionSchedule`, etc.), advances the `lastScheduled*` timestamp, and enqueues durable jobs for any work that is due. Heavy domain jobs (sync, lifecycle detection/execution, backup) share the serial `MAIN_QUEUE` so they run one-at-a-time (mirroring the original sequential scheduler); the dispatcher and housekeeping tasks omit a queue so a long sync never blocks scheduling. Jobs use a `jobKey` to deduplicate and are retried with backoff on failure.
+- Manual/API sync triggers (`/api/servers/[id]/sync`, `/api/sync/by-type`) enqueue durable `sync-server` jobs via `enqueueJob()` instead of fire-and-forget calls. `syncMediaServer` still self-serializes via its internal semaphore (`sync-semaphore.ts`), which guards all callers including the inline lifecycle re-sync.
+- Also starts the maintenance/preroll enforcers (30s `setInterval` polling loops) in the same `instrumentation.ts` — these keep cross-tick in-memory state and sub-minute cadence, so they intentionally remain outside the job queue.
 
 ### Documentation Site
 

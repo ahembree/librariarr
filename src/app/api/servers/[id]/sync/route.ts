@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { syncMediaServer } from "@/lib/sync/sync-server";
-import { logger } from "@/lib/logger";
+import { enqueueJob } from "@/lib/jobs/client";
+import { MAIN_QUEUE, TASK_SYNC_SERVER } from "@/lib/jobs/constants";
 
 export async function POST(
   request: NextRequest,
@@ -74,9 +74,12 @@ export async function POST(
     create: { userId: session.userId!, lastScheduledSync: new Date() },
   });
 
-  // Start sync in background
-  syncMediaServer(server.id, libraryKey).catch((err) =>
-    logger.error("Sync", "Sync failed", { error: String(err) })
+  // Enqueue a durable background sync job (serialized on the main queue,
+  // deduplicated per server, retried on transient failure).
+  await enqueueJob(
+    TASK_SYNC_SERVER,
+    { serverId: server.id, libraryKey },
+    { jobKey: `sync:${server.id}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
   );
 
   return NextResponse.json({ message: "Sync started" });

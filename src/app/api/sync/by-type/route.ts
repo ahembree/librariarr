@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { syncMediaServer } from "@/lib/sync/sync-server";
+import { enqueueJob } from "@/lib/jobs/client";
+import { MAIN_QUEUE, TASK_SYNC_SERVER } from "@/lib/jobs/constants";
 import { validateRequest, syncByTypeSchema } from "@/lib/validation";
-import { logger } from "@/lib/logger";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -48,8 +48,10 @@ export async function POST(request: NextRequest) {
     }
 
     for (const library of server.libraries) {
-      syncMediaServer(server.id, library.key, { skipWatchHistory: true }).catch((err) =>
-        logger.error("Sync", `Sync failed for ${server.name}`, { error: String(err) })
+      await enqueueJob(
+        TASK_SYNC_SERVER,
+        { serverId: server.id, libraryKey: library.key, skipWatchHistory: true },
+        { jobKey: `sync:${server.id}:${library.key}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
       );
     }
     syncedCount++;
