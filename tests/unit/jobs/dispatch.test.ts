@@ -106,10 +106,11 @@ describe("dispatchScheduledJobs", () => {
       { userId: "user-1" },
       expect.objectContaining({ jobKey: "detection:user-1", queueName: MAIN_QUEUE }),
     );
+    // Execution must not auto-retry destructive Arr actions.
     expect(enqueueJob).toHaveBeenCalledWith(
       TASK_LIFECYCLE_EXECUTION,
       { userId: "user-1" },
-      expect.objectContaining({ jobKey: "execution:user-1", queueName: MAIN_QUEUE }),
+      expect.objectContaining({ jobKey: "execution:user-1", queueName: MAIN_QUEUE, maxAttempts: 1 }),
     );
   });
 

@@ -192,7 +192,7 @@ describe("POST /api/servers/[id]/sync", () => {
     expect(mockEnqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_SERVER,
       { serverId: server.id, libraryKey: "lib-key" },
-      expect.objectContaining({ jobKey: `sync:${server.id}`, queueName: MAIN_QUEUE }),
+      expect.objectContaining({ jobKey: `sync:${server.id}:lib-key`, queueName: MAIN_QUEUE }),
     );
   });
 });

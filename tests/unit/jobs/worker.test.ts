@@ -57,4 +57,26 @@ describe("worker runner", () => {
     expect(run).toHaveBeenCalledTimes(2);
     await stopWorker();
   });
+
+  it("allows a restart after the runner dies unexpectedly", async () => {
+    // Runner whose promise rejects to simulate an unexpected death.
+    let rejectPromise: (e: unknown) => void = () => {};
+    const dyingRunner = {
+      promise: new Promise((_resolve, reject) => { rejectPromise = reject; }),
+      stop,
+    };
+    run.mockResolvedValueOnce(dyingRunner);
+
+    await startWorker();
+    expect(run).toHaveBeenCalledTimes(1);
+
+    // Trigger the unexpected-death handler and let microtasks flush.
+    rejectPromise(new Error("connection lost"));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // A subsequent start should spin up a brand new runner, not return stale state.
+    await startWorker();
+    expect(run).toHaveBeenCalledTimes(2);
+    await stopWorker();
+  });
 });

@@ -75,11 +75,14 @@ export async function POST(
   });
 
   // Enqueue a durable background sync job (serialized on the main queue,
-  // deduplicated per server, retried on transient failure).
+  // retried on transient failure). The jobKey is scoped to the library so a
+  // full-server sync and distinct library-scoped syncs don't collide and
+  // replace one another.
+  const jobKey = libraryKey ? `sync:${server.id}:${libraryKey}` : `sync:${server.id}`;
   await enqueueJob(
     TASK_SYNC_SERVER,
     { serverId: server.id, libraryKey },
-    { jobKey: `sync:${server.id}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
+    { jobKey, queueName: MAIN_QUEUE, maxAttempts: 3 },
   );
 
   return NextResponse.json({ message: "Sync started" });

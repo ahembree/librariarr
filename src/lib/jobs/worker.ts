@@ -42,10 +42,12 @@ export async function startWorker(): Promise<void> {
       parsedCronItems: parseCrontab(CRONTAB),
     });
 
-    // Surface unexpected runner termination; don't let the rejection go unhandled.
+    // Surface unexpected runner termination; don't let the rejection go
+    // unhandled. Reset both handles so a later startWorker() can restart it.
     runner.promise.catch((error) => {
       logger.error("Jobs", "Graphile worker stopped unexpectedly", { error: String(error) });
       runner = undefined;
+      startPromise = undefined;
     });
 
     logger.info("Jobs", "Graphile worker started — dispatcher checking every minute");

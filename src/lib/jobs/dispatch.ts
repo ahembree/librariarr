@@ -80,10 +80,15 @@ export async function dispatchScheduledJobs(): Promise<void> {
         where: { id: settings.id },
         data: { lastScheduledLifecycleExecution: now },
       });
+      // maxAttempts: 1 — execution performs destructive Arr actions (delete,
+      // unmonitor). It marks each action COMPLETED/FAILED individually, so a
+      // whole-job retry could re-attempt already-applied actions and skew the
+      // deletion stats. Any actions left PENDING are re-evaluated on the next
+      // scheduled execution, matching the original (non-retrying) scheduler.
       await enqueueJob(
         TASK_LIFECYCLE_EXECUTION,
         { userId: settings.userId },
-        { jobKey: `execution:${settings.userId}`, queueName: MAIN_QUEUE, maxAttempts: 2 },
+        { jobKey: `execution:${settings.userId}`, queueName: MAIN_QUEUE, maxAttempts: 1 },
       );
     }
   }
