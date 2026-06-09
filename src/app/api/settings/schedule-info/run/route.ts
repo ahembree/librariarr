@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { syncMediaServer } from "@/lib/sync/sync-server";
+import { enqueueJob } from "@/lib/jobs/client";
+import { MAIN_QUEUE, TASK_SYNC_SERVER } from "@/lib/jobs/constants";
 import {
   processLifecycleRules,
   executeLifecycleActions,
@@ -27,14 +28,22 @@ export async function POST(request: NextRequest) {
         include: { mediaServers: true },
       });
       if (user) {
+        // Enqueue a durable sync job per enabled server. Enqueueing is
+        // non-blocking and error-isolated, so one unreachable server can't
+        // abort syncing the rest (the worker retries each job independently).
         for (const server of user.mediaServers) {
-          const runningJob = await prisma.syncJob.findFirst({
-            where: { mediaServerId: server.id, status: "RUNNING" },
+          if (!server.enabled) continue;
+          const activeJob = await prisma.syncJob.findFirst({
+            where: { mediaServerId: server.id, status: { in: ["RUNNING", "PENDING"] } },
+            select: { id: true },
           });
-          if (!runningJob) {
-            logger.info("Scheduler", `Manual sync triggered for server "${server.name}"`);
-            await syncMediaServer(server.id);
-          }
+          if (activeJob) continue;
+          logger.info("Scheduler", `Manual sync triggered for server "${server.name}"`);
+          await enqueueJob(
+            TASK_SYNC_SERVER,
+            { serverId: server.id },
+            { jobKey: `sync:${server.id}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
+          );
         }
       }
       await prisma.appSettings.update({
