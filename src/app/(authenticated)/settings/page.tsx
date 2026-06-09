@@ -576,6 +576,12 @@ export default function SettingsPage() {
       if (data.scheduledJobTime) {
         setScheduledJobTime(data.scheduledJobTime);
       }
+      // Keep the cards' "Last run" values in sync. These states are otherwise
+      // only populated by fetchSyncSchedule/fetchLifecycleSchedule, so without
+      // this a "Run Now" (which refreshes schedule-info) wouldn't update them.
+      if (data.sync) setLastScheduledSync(data.sync.lastRun ?? null);
+      if (data.detection) setLastLcDetect(data.detection.lastRun ?? null);
+      if (data.execution) setLastLcExec(data.execution.lastRun ?? null);
     } catch (error) {
       console.error("Failed to fetch schedule info:", error);
     }
