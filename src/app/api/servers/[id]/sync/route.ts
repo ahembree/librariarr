@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { syncMediaServer } from "@/lib/sync/sync-server";
-import { logger } from "@/lib/logger";
+import { enqueueJob } from "@/lib/jobs/client";
+import { MAIN_QUEUE, TASK_SYNC_SERVER } from "@/lib/jobs/constants";
 
 export async function POST(
   request: NextRequest,
@@ -74,9 +74,15 @@ export async function POST(
     create: { userId: session.userId!, lastScheduledSync: new Date() },
   });
 
-  // Start sync in background
-  syncMediaServer(server.id, libraryKey).catch((err) =>
-    logger.error("Sync", "Sync failed", { error: String(err) })
+  // Enqueue a durable background sync job (serialized on the main queue,
+  // retried on transient failure). The jobKey is scoped to the library so a
+  // full-server sync and distinct library-scoped syncs don't collide and
+  // replace one another.
+  const jobKey = libraryKey ? `sync:${server.id}:${libraryKey}` : `sync:${server.id}`;
+  await enqueueJob(
+    TASK_SYNC_SERVER,
+    { serverId: server.id, libraryKey },
+    { jobKey, queueName: MAIN_QUEUE, maxAttempts: 3 },
   );
 
   return NextResponse.json({ message: "Sync started" });

@@ -1,0 +1,49 @@
+/**
+ * Graphile Worker task identifiers and queue names.
+ *
+ * Kept in a dependency-free module so the worker client (enqueue side) and the
+ * worker runner (execute side) can share them without creating import cycles.
+ */
+
+/** Per-minute dispatcher: evaluates DB-configured schedules and enqueues due work. */
+export const TASK_DISPATCH = "dispatch-scheduled";
+
+/** Sync a single media server (optionally scoped to one library). */
+export const TASK_SYNC_SERVER = "sync-server";
+
+/** Run lifecycle rule detection for a user. */
+export const TASK_LIFECYCLE_DETECTION = "lifecycle-detection";
+
+/** Execute pending lifecycle actions for a user. */
+export const TASK_LIFECYCLE_EXECUTION = "lifecycle-execution";
+
+/** Create a scheduled database backup and prune old backups. */
+export const TASK_SCHEDULED_BACKUP = "scheduled-backup";
+
+/** Archive old log entries to disk. */
+export const TASK_ARCHIVE_LOGS = "archive-logs";
+
+/** Remove completed/failed lifecycle actions older than the retention window. */
+export const TASK_CLEANUP_ACTIONS = "cleanup-old-actions";
+
+/**
+ * Serial queue for the heavy domain jobs (sync, lifecycle, backup).
+ *
+ * Jobs sharing a queue name run strictly one-at-a-time, mirroring the original
+ * node-cron scheduler which awaited each task sequentially within a single tick.
+ * The lightweight dispatcher and housekeeping tasks intentionally omit a queue
+ * so a long-running sync never blocks scheduling decisions.
+ */
+export const MAIN_QUEUE = "librariarr:main";
+
+/** Payload for {@link TASK_SYNC_SERVER}. */
+export interface SyncServerPayload {
+  serverId: string;
+  libraryKey?: string;
+  skipWatchHistory?: boolean;
+}
+
+/** Payload for lifecycle detection/execution tasks. */
+export interface UserPayload {
+  userId: string;
+}

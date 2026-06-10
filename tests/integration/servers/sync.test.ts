@@ -6,6 +6,7 @@ import {
   expectJson,
   createTestUser,
   createTestServer,
+  createTestLibrary,
 } from "../../setup/test-helpers";
 
 // Redirect prisma to test database
@@ -20,25 +21,24 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const { mockSyncMediaServer } = vi.hoisted(() => ({
-  mockSyncMediaServer: vi.fn(),
+const { mockEnqueueJob } = vi.hoisted(() => ({
+  mockEnqueueJob: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("@/lib/sync/sync-server", () => ({
-  syncMediaServer: mockSyncMediaServer,
-  detectDynamicRangeFromFilename: vi.fn(),
-  detectAudioProfileFromFilename: vi.fn(),
+vi.mock("@/lib/jobs/client", () => ({
+  enqueueJob: mockEnqueueJob,
 }));
 
 // Import route handler AFTER mocks
 import { POST } from "@/app/api/servers/[id]/sync/route";
+import { TASK_SYNC_SERVER, MAIN_QUEUE } from "@/lib/jobs/constants";
 
 describe("POST /api/servers/[id]/sync", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
-    mockSyncMediaServer.mockResolvedValue(undefined);
+    mockEnqueueJob.mockResolvedValue(undefined);
   });
 
   afterAll(async () => {
@@ -93,7 +93,7 @@ describe("POST /api/servers/[id]/sync", () => {
     expect(body.error).toBe("Server not found");
   });
 
-  it("starts sync and returns success message", async () => {
+  it("enqueues a sync job and returns success message", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
 
@@ -110,7 +110,11 @@ describe("POST /api/servers/[id]/sync", () => {
     const body = await expectJson<{ message: string }>(response, 200);
 
     expect(body.message).toBe("Sync started");
-    expect(mockSyncMediaServer).toHaveBeenCalledWith(server.id, undefined);
+    expect(mockEnqueueJob).toHaveBeenCalledWith(
+      TASK_SYNC_SERVER,
+      { serverId: server.id, libraryKey: undefined },
+      expect.objectContaining({ jobKey: `sync:${server.id}`, queueName: MAIN_QUEUE }),
+    );
   });
 
   it("returns 409 when a sync is already running for the server", async () => {
@@ -137,7 +141,7 @@ describe("POST /api/servers/[id]/sync", () => {
     );
     const body = await expectJson<{ error: string }>(response, 409);
     expect(body.error).toBe("A sync is already running for this server");
-    expect(mockSyncMediaServer).not.toHaveBeenCalled();
+    expect(mockEnqueueJob).not.toHaveBeenCalled();
   });
 
   it("returns 409 when a sync is pending for the server", async () => {
@@ -164,14 +168,13 @@ describe("POST /api/servers/[id]/sync", () => {
     );
     const body = await expectJson<{ error: string }>(response, 409);
     expect(body.error).toBe("A sync is already running for this server");
-    expect(mockSyncMediaServer).not.toHaveBeenCalled();
+    expect(mockEnqueueJob).not.toHaveBeenCalled();
   });
 
-  it("still returns success even if sync fails in background", async () => {
-    mockSyncMediaServer.mockRejectedValue(new Error("Sync failed"));
-
+  it("scopes the enqueued job to a specific library when provided", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { key: "lib-key", title: "Movies" });
 
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
@@ -181,10 +184,15 @@ describe("POST /api/servers/[id]/sync", () => {
       {
         url: `/api/servers/${server.id}/sync`,
         method: "POST",
+        body: { libraryKey: library.key },
       }
     );
-    const body = await expectJson<{ message: string }>(response, 200);
+    await expectJson<{ message: string }>(response, 200);
 
-    expect(body.message).toBe("Sync started");
+    expect(mockEnqueueJob).toHaveBeenCalledWith(
+      TASK_SYNC_SERVER,
+      { serverId: server.id, libraryKey: "lib-key" },
+      expect.objectContaining({ jobKey: `sync:${server.id}:lib-key`, queueName: MAIN_QUEUE }),
+    );
   });
 });

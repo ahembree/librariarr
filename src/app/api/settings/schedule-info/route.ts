@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { CronExpressionParser } from "cron-parser";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { presetToCron, getSystemTimezone } from "@/lib/scheduler/scheduler";
+import { presetToCron, getSystemTimezone } from "@/lib/jobs/schedule";
 
 function getNextRun(schedule: string, scheduledJobTime: string): string | null {
   if (schedule === "MANUAL") return null;
