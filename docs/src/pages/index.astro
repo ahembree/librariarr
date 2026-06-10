@@ -53,6 +53,9 @@
       href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
+    <script is:inline>
+      document.documentElement.classList.add("js");
+    </script>
     <style>
       /* Reset & base */
       *,
@@ -245,16 +248,27 @@
       }
 
       .btn:active {
-        transform: scale(0.98);
+        transform: translateY(-1px) scale(0.985);
+      }
+
+      .btn .arrow {
+        transition: transform 0.2s ease;
+      }
+
+      .btn:hover .arrow {
+        transform: translateX(3px);
       }
 
       .btn-primary {
         background: var(--accent);
         color: #fff;
+        box-shadow: 0 6px 18px -8px color-mix(in oklab, var(--accent) 75%, transparent);
       }
 
       .btn-primary:hover {
         background: var(--accent-hover);
+        transform: translateY(-2px);
+        box-shadow: 0 14px 28px -10px color-mix(in oklab, var(--accent) 85%, transparent);
       }
 
       .btn-secondary {
@@ -266,6 +280,7 @@
       .btn-secondary:hover {
         background: var(--bg-card-hover);
         border-color: var(--border-strong);
+        transform: translateY(-2px);
       }
 
       /* Browser-framed screenshot */
@@ -616,23 +631,186 @@
         position: relative;
       }
 
+      /* Accessibility */
+      .skip-link {
+        position: absolute;
+        left: 0.75rem;
+        top: 0.5rem;
+        z-index: 100;
+        padding: 0.5rem 0.9rem;
+        border-radius: 8px;
+        background: var(--accent);
+        color: #fff;
+        font-weight: 600;
+        font-size: 0.85rem;
+        text-decoration: none;
+        transform: translateY(-160%);
+        transition: transform 0.2s ease;
+      }
+
+      .skip-link:focus {
+        transform: translateY(0);
+      }
+
+      a:focus-visible,
+      button:focus-visible,
+      .integration-chip:focus-visible,
+      [tabindex]:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+        border-radius: 6px;
+      }
+
+      /* Nav CTA */
+      .nav-cta {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.45rem 0.95rem;
+        border-radius: 8px;
+        background: var(--accent);
+        color: #fff;
+        font-size: 0.85rem;
+        font-weight: 600;
+        text-decoration: none;
+        transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
+      }
+
+      .nav-cta:hover {
+        background: var(--accent-hover);
+        transform: translateY(-1px);
+        box-shadow: 0 8px 18px -8px color-mix(in oklab, var(--accent) 85%, transparent);
+      }
+
+      .nav-cta .arrow {
+        transition: transform 0.2s ease;
+      }
+
+      .nav-cta:hover .arrow {
+        transform: translateX(2px);
+      }
+
+      /* Live dot in the hero badge */
+      .badge-dot {
+        display: inline-block;
+        width: 0.5rem;
+        height: 0.5rem;
+        margin-right: 0.45rem;
+        border-radius: 50%;
+        background: oklch(0.72 0.17 150);
+        box-shadow: 0 0 0 0 oklch(0.72 0.17 150 / 60%);
+        animation: badge-pulse 2.4s ease-out infinite;
+        vertical-align: middle;
+      }
+
+      @keyframes badge-pulse {
+        0% { box-shadow: 0 0 0 0 oklch(0.72 0.17 150 / 55%); }
+        70% { box-shadow: 0 0 0 6px oklch(0.72 0.17 150 / 0%); }
+        100% { box-shadow: 0 0 0 0 oklch(0.72 0.17 150 / 0%); }
+      }
+
+      /* Scroll-reveal — only active when JS is present (no-JS shows everything) */
+      .js .reveal,
+      .js [data-reveal-stagger] > * {
+        opacity: 0;
+        transform: translateY(20px);
+        transition: opacity 0.7s cubic-bezier(0.22, 0.61, 0.36, 1),
+          transform 0.7s cubic-bezier(0.22, 0.61, 0.36, 1);
+        transition-delay: var(--reveal-delay, 0ms);
+        will-change: opacity, transform;
+      }
+
+      .js .reveal.in,
+      .js [data-reveal-stagger] > .in {
+        opacity: 1;
+        transform: none;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+        .badge-dot {
+          animation: none;
+        }
+        .js .reveal,
+        .js [data-reveal-stagger] > * {
+          opacity: 1 !important;
+          transform: none !important;
+          transition: none !important;
+        }
+      }
+
       /* Footer */
       .footer {
         border-top: 1px solid var(--border);
-        padding: 2rem 1.5rem;
-        text-align: center;
+        padding: 3rem 1.5rem 2.5rem;
         color: var(--text-muted);
         font-size: 0.85rem;
       }
 
-      .footer a {
+      .footer-inner {
+        max-width: var(--max-width);
+        margin: 0 auto;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1.25rem;
+      }
+
+      .footer-brand {
+        font-family: var(--font-display);
+        font-weight: 700;
+        font-size: 1.05rem;
+        color: var(--text);
+        text-decoration: none;
+        letter-spacing: -0.02em;
+      }
+
+      .footer-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.5rem;
+      }
+
+      .footer-links a {
+        color: var(--text-muted);
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+
+      .footer-links a:hover {
+        color: var(--text);
+      }
+
+      .footer-copy {
+        width: 100%;
+        text-align: center;
+        margin-top: 1.5rem;
+        padding-top: 1.5rem;
+        border-top: 1px solid var(--border);
+        font-size: 0.8rem;
+      }
+
+      .footer-copy a {
         color: var(--text-muted);
         text-decoration: underline;
         text-underline-offset: 2px;
       }
 
-      .footer a:hover {
+      .footer-copy a:hover {
         color: var(--text);
+      }
+
+      @media (max-width: 640px) {
+        .footer-inner {
+          flex-direction: column;
+          text-align: center;
+        }
+        .footer-links {
+          justify-content: center;
+        }
       }
 
       /* Lightbox */
@@ -773,6 +951,7 @@
   </head>
 
   <body>
+    <a href="#content" class="skip-link">Skip to content</a>
     <nav class="nav">
       <div class="nav-inner">
         <a href="/" class="nav-brand">
@@ -792,14 +971,18 @@
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.983 11.078h2.119a.186.186 0 0 0 .186-.185V9.006a.186.186 0 0 0-.186-.186h-2.119a.185.185 0 0 0-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 0 0 .186-.186V3.574a.186.186 0 0 0-.186-.185h-2.118a.185.185 0 0 0-.185.185v1.888c0 .102.082.186.185.186m0 2.716h2.118a.187.187 0 0 0 .186-.186V6.29a.186.186 0 0 0-.186-.185h-2.118a.185.185 0 0 0-.185.185v1.887c0 .102.082.186.185.186m-2.93 0h2.12a.186.186 0 0 0 .184-.186V6.29a.185.185 0 0 0-.185-.185H8.1a.185.185 0 0 0-.185.185v1.887c0 .102.083.186.185.186m-2.964 0h2.119a.186.186 0 0 0 .185-.186V6.29a.186.186 0 0 0-.185-.185H5.136a.186.186 0 0 0-.186.185v1.887c0 .102.084.186.186.186m5.893 2.715h2.118a.186.186 0 0 0 .186-.185V9.006a.186.186 0 0 0-.186-.186h-2.118a.185.185 0 0 0-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 0 0 .184-.185V9.006a.185.185 0 0 0-.184-.186h-2.12a.185.185 0 0 0-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 0 0 .185-.185V9.006a.186.186 0 0 0-.185-.186H5.136a.186.186 0 0 0-.186.185v1.888c0 .102.084.185.186.185m-2.92 0h2.12a.185.185 0 0 0 .184-.185V9.006a.185.185 0 0 0-.184-.186h-2.12a.185.185 0 0 0-.184.186v1.887c0 .102.082.185.185.185M23.763 9.89c-.065-.051-.672-.51-1.954-.51-.338.001-.676.03-1.01.087-.248-1.7-1.653-2.53-1.716-2.566l-.344-.199-.226.327c-.284.438-.49.922-.612 1.43-.23.97-.09 1.882.403 2.661-.595.332-1.55.413-1.744.42H.751a.751.751 0 0 0-.75.748 11.376 11.376 0 0 0 .692 4.062c.545 1.428 1.355 2.48 2.41 3.124 1.18.723 3.1 1.137 5.275 1.137.983.003 1.963-.086 2.93-.266a12.248 12.248 0 0 0 3.823-1.389c.98-.567 1.86-1.288 2.61-2.136 1.252-1.418 1.998-2.997 2.553-4.4h.221c1.372 0 2.215-.549 2.68-1.009.309-.293.55-.65.707-1.046l.098-.288Z"/></svg>
             <span>Docker Hub</span>
           </a>
+          <a href="/docs/getting-started/installation/" class="nav-cta">
+            Get Started
+            <svg class="arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+          </a>
         </div>
       </div>
     </nav>
 
-    <div class="hero-wrapper">
+    <div class="hero-wrapper" id="content">
       <div class="hero-gradient"></div>
-      <section class="hero">
-        <span class="hero-badge">Self-Hosted &middot; Open Source</span>
+      <section class="hero" data-reveal-stagger>
+        <span class="hero-badge"><span class="badge-dot"></span>Self-Hosted &middot; Open Source</span>
         <h1>
           Browse everything.<br /><span class="accent">Automate the rest.</span>
         </h1>
@@ -811,6 +994,7 @@
         <div class="hero-actions">
           <a href="/docs/getting-started/installation/" class="btn btn-primary">
             Get Started
+            <svg class="arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
           </a>
           <a
             href="https://github.com/ahembree/librariarr"
@@ -822,7 +1006,7 @@
         </div>
       </section>
 
-      <div class="hero-shot">
+      <div class="hero-shot reveal" style="--reveal-delay: 260ms">
         <div class="shot">
           <div class="shot-bar">
             <span class="shot-dot"></span>
@@ -841,7 +1025,7 @@
     </div>
 
     <section class="section">
-      <div class="section-heading">
+      <div class="section-heading reveal">
         <span class="section-eyebrow">Features</span>
         <h2>Everything you need to manage your media</h2>
         <p>
@@ -851,7 +1035,7 @@
       </div>
 
       <!-- Library browsing -->
-      <div class="feature-row">
+      <div class="feature-row reveal">
         <div class="feature-copy">
           <span class="feature-eyebrow">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
@@ -891,7 +1075,7 @@
       </div>
 
       <!-- Lifecycle rules -->
-      <div class="feature-row reverse">
+      <div class="feature-row reverse reveal">
         <div class="feature-copy">
           <span class="feature-eyebrow">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
@@ -931,7 +1115,7 @@
       </div>
 
       <!-- Stream manager -->
-      <div class="feature-row">
+      <div class="feature-row reveal">
         <div class="feature-copy">
           <span class="feature-eyebrow">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
@@ -972,7 +1156,7 @@
     </section>
 
     <section class="section" style="padding-top: 0;">
-      <div class="section-heading">
+      <div class="section-heading reveal">
         <span class="section-eyebrow">And more</span>
         <h2>A complete management toolkit</h2>
         <p>
@@ -981,7 +1165,7 @@
         </p>
       </div>
 
-      <div class="bento">
+      <div class="bento" data-reveal-stagger>
         <div class="bento-card">
           <div class="bento-media">
             <img src="/screenshots/logs.webp" width="1360" height="850" alt="System logs with filterable levels, categories, and sources" loading="lazy" />
@@ -1059,7 +1243,7 @@
     <section class="integrations">
       <h2>Built to integrate</h2>
       <p>Connect your existing media stack.</p>
-      <div class="integration-logos">
+      <div class="integration-logos" data-reveal-stagger>
         <span class="integration-chip" style="--brand: #EBAF00">
           <span class="integration-icon">
             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.987 8.409c-.96 0-1.587.28-2.12.933v-.72H0v8.88s.038.018.127.037c.138.03.821.187 1.331-.249.441-.377.542-.814.542-1.318v-1.283c.533.573 1.147.813 2 .813 1.84 0 3.253-1.493 3.253-3.48 0-2.12-1.36-3.613-3.266-3.613Zm16.748 5.595.406.591c.391.614.894.906 1.492.908.621-.012 1.064-.562 1.226-.755 0 0-.307-.27-.686-.72-.517-.614-1.214-1.755-1.24-1.803l-1.198 1.779Zm-3.205-1.955c0-2.08-1.52-3.64-3.52-3.64s-3.467 1.587-3.467 3.573a3.48 3.48 0 0 0 3.507 3.52c1.413 0 2.626-.84 3.253-2.293h-2.04l-.093.093c-.427.4-.72.533-1.227.533-.787 0-1.373-.506-1.453-1.266h4.986c.04-.214.054-.307.054-.52Zm-7.671-.219c0 .769.11 1.701.868 2.722l.056.069c-.306.526-.742.88-1.248.88-.399 0-.814-.211-1.138-.579a2.177 2.177 0 0 1-.538-1.441V6.409H9.86l-.001 5.421Zm9.283 3.46h-2.39l2.247-3.332-2.247-3.335h2.39l2.248 3.335-2.248 3.332Zm1.593-1.286Zm-17.162-.342c-.933 0-1.68-.773-1.68-1.72s.76-1.666 1.68-1.666c.92 0 1.68.733 1.68 1.68 0 .946-.733 1.706-1.68 1.706Zm18.361-1.974L24 8.622h-2.391l-.87 1.293 1.195 1.773Zm-9.404-.466c.16-.706.72-1.133 1.493-1.133.773 0 1.373.467 1.507 1.133h-3Z"></path></svg>
@@ -1106,7 +1290,7 @@
     </section>
 
     <section class="cta">
-      <div class="cta-box">
+      <div class="cta-box reveal">
         <h2>Ready to get started?</h2>
         <p>
           Deploy with Docker in minutes. One container, one database, full
@@ -1118,6 +1302,7 @@
             class="btn btn-primary"
           >
             Read the Docs
+            <svg class="arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
           </a>
           <a
             href="https://hub.docker.com/r/ahembree/librariarr"
@@ -1131,9 +1316,18 @@
     </section>
 
     <footer class="footer">
-      <p>
-        Librariarr is open-source software.
-        <a href="https://github.com/ahembree/librariarr">View on GitHub</a>
+      <div class="footer-inner">
+        <a href="/" class="footer-brand">Librariarr</a>
+        <nav class="footer-links" aria-label="Footer">
+          <a href="/docs/getting-started/installation/">Docs</a>
+          <a href="https://github.com/ahembree/librariarr">GitHub</a>
+          <a href="https://hub.docker.com/r/ahembree/librariarr">Docker Hub</a>
+          <a href="https://www.gnu.org/licenses/agpl-3.0.html">License</a>
+        </nav>
+      </div>
+      <p class="footer-copy">
+        Open-source software, licensed under
+        <a href="https://www.gnu.org/licenses/agpl-3.0.html">AGPL-3.0</a>.
       </p>
     </footer>
 
@@ -1203,6 +1397,39 @@
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape") closeLightbox();
       });
+
+      // Scroll-reveal: stagger children of [data-reveal-stagger], then reveal
+      // each element as it enters the viewport. Reduced-motion users get an
+      // instant reveal (also enforced in CSS).
+      const revealEls = [];
+      document.querySelectorAll("[data-reveal-stagger]").forEach((group) => {
+        [...group.children].forEach((child, i) => {
+          child.style.setProperty("--reveal-delay", `${Math.min(i, 9) * 70}ms`);
+          revealEls.push(child);
+        });
+      });
+      document.querySelectorAll(".reveal").forEach((el) => revealEls.push(el));
+
+      const reduceMotion = window.matchMedia(
+        "(prefers-reduced-motion: reduce)"
+      ).matches;
+
+      if (reduceMotion || !("IntersectionObserver" in window)) {
+        revealEls.forEach((el) => el.classList.add("in"));
+      } else {
+        const io = new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              if (entry.isIntersecting) {
+                entry.target.classList.add("in");
+                io.unobserve(entry.target);
+              }
+            }
+          },
+          { rootMargin: "0px 0px -8% 0px", threshold: 0.08 }
+        );
+        revealEls.forEach((el) => io.observe(el));
+      }
     </script>
   </body>
 </html>
