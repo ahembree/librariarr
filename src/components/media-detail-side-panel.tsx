@@ -213,12 +213,12 @@ export function MediaDetailSidePanel({
             <Badge
               key={i}
               variant="outline"
-              className={`text-xs ${criterion.negate ? "border-red-500/30 text-red-400" : ""}`}
+              className={`text-xs ${criterion.negate ? "border-red/30 text-red" : ""}`}
             >
               {criterion.groupName && (
-                <span className="text-blue-400 mr-1">[{criterion.groupName}]</span>
+                <span className="text-sky mr-1">[{criterion.groupName}]</span>
               )}
-              {criterion.negate && <span className="text-red-400 mr-1">NOT</span>}
+              {criterion.negate && <span className="text-red mr-1">NOT</span>}
               {criterion.field} {criterion.operator} {criterion.value}
             </Badge>
           );

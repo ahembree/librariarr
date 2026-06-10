@@ -135,9 +135,9 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  PENDING: "bg-amber-500/20 text-amber-400 border-amber-500/30",
-  COMPLETED: "bg-green-500/20 text-green-400 border-green-500/30",
-  FAILED: "bg-red-500/20 text-red-400 border-red-500/30",
+  PENDING: "bg-amber/20 text-amber border-amber/30",
+  COMPLETED: "bg-green/20 text-green border-green/30",
+  FAILED: "bg-red/20 text-red border-red/30",
 };
 
 function formatActionType(type: string, targetQualityProfileId?: number | null): string {
@@ -293,7 +293,7 @@ function VirtualizedActionTable({
                           {action.addArrTags.map((tag) => (
                             <ColorChip
                               key={tag}
-                              className="bg-green-500/20 text-green-400 border-green-500/30"
+                              className="bg-green/20 text-green border-green/30"
                             >
                               +{tag}
                             </ColorChip>
@@ -305,7 +305,7 @@ function VirtualizedActionTable({
                           {action.removeArrTags.map((tag) => (
                             <ColorChip
                               key={tag}
-                              className="bg-red-500/20 text-red-400 border-red-500/30"
+                              className="bg-red/20 text-red border-red/30"
                             >
                               -{tag}
                             </ColorChip>
@@ -335,7 +335,7 @@ function VirtualizedActionTable({
                     {action.error && (
                       <div className="mt-1 max-w-64">
                         <p
-                          className={`text-xs text-red-400 ${expandedErrors.has(action.id) ? "whitespace-pre-wrap wrap-break-word" : "truncate"}`}
+                          className={`text-xs text-red ${expandedErrors.has(action.id) ? "whitespace-pre-wrap wrap-break-word" : "truncate"}`}
                         >
                           {action.error}
                         </p>
@@ -1033,12 +1033,12 @@ export default function PendingActionsPage() {
               {deletionStats.pendingCount > 0 && (
                 <>
                   <span>
-                    <span className="font-medium text-amber-400">{formatFileSize(deletionStats.pendingBytes)}</span>
+                    <span className="font-medium text-amber">{formatFileSize(deletionStats.pendingBytes)}</span>
                     <span className="text-muted-foreground ml-1">pending</span>
                   </span>
                   <span className="text-muted-foreground">·</span>
                   <span>
-                    <span className="font-medium text-amber-400">{deletionStats.pendingCount}</span>
+                    <span className="font-medium text-amber">{deletionStats.pendingCount}</span>
                     <span className="text-muted-foreground ml-1">{deletionStats.pendingCount === 1 ? "action" : "actions"} queued</span>
                   </span>
                 </>
@@ -1194,7 +1194,7 @@ export default function PendingActionsPage() {
                                 {group.ruleSet.addArrTags?.map((tag) => (
                                   <ColorChip
                                     key={`add-${tag}`}
-                                    className="bg-green-500/20 text-green-400 border-green-500/30"
+                                    className="bg-green/20 text-green border-green/30"
                                   >
                                     +{tag}
                                   </ColorChip>
@@ -1202,7 +1202,7 @@ export default function PendingActionsPage() {
                                 {group.ruleSet.removeArrTags?.map((tag) => (
                                   <ColorChip
                                     key={`rm-${tag}`}
-                                    className="bg-red-500/20 text-red-400 border-red-500/30"
+                                    className="bg-red/20 text-red border-red/30"
                                   >
                                     -{tag}
                                   </ColorChip>
@@ -1220,7 +1220,7 @@ export default function PendingActionsPage() {
                                 <div className="flex items-center gap-3 text-xs text-muted-foreground">
                                   {showPending && rs.pendingCount > 0 && (
                                     <span>
-                                      <span className="text-amber-400">{formatFileSize(rs.pendingBytes)}</span> pending
+                                      <span className="text-amber">{formatFileSize(rs.pendingBytes)}</span> pending
                                     </span>
                                   )}
                                   {showDeleted && rs.deletedCount > 0 && (
@@ -1244,7 +1244,7 @@ export default function PendingActionsPage() {
                           {result && (
                             <span className="text-xs">
                               {result.failed === 0 ? (
-                                <span className="text-green-500 flex items-center gap-1">
+                                <span className="text-green flex items-center gap-1">
                                   <CheckCircle2 className="h-3.5 w-3.5" />
                                   {result.executed} executed
                                 </span>
