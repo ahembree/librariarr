@@ -1,13 +1,6 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
@@ -18,6 +11,7 @@ import {
   Webhook,
   XCircle,
 } from "lucide-react";
+import { SettingsSection } from "../components";
 import type { TestResult } from "../types";
 
 export interface NotificationsTabProps {
@@ -56,17 +50,12 @@ export function NotificationsTab({
         </p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Webhook className="h-4 w-4" />
-            Discord Webhook
-          </CardTitle>
-          <CardDescription>
-            Send notifications to a Discord channel via webhook. Copy the webhook URL from your Discord server&apos;s integration settings.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
+      <SettingsSection
+        icon={Webhook}
+        title="Discord Webhook"
+        description="Send notifications to a Discord channel via webhook. Copy the webhook URL from your Discord server's integration settings."
+        contentClassName="space-y-6"
+      >
           <div className="space-y-2">
             <Label htmlFor="discord-webhook-url">Webhook URL</Label>
             <SecretInput
@@ -129,8 +118,7 @@ export function NotificationsTab({
               )
             )}
           </div>
-        </CardContent>
-      </Card>
+      </SettingsSection>
     </div>
   );
 }
