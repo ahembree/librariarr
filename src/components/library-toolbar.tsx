@@ -96,15 +96,15 @@ export function LibraryToolbar({
         />
       )}
 
-      {/* View toggle */}
-      <div className="flex items-center gap-1 rounded-lg border p-1 h-9">
+      {/* View toggle — active uses the brand accent (handoff "accent when on") */}
+      <div className="flex h-9 items-center gap-1 rounded-lg border p-1">
         <button
           onClick={() => onViewModeChange("cards")}
           className={cn(
             "rounded-md p-1.5 transition-colors",
             viewMode === "cards"
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:text-foreground hover:bg-muted",
+              ? "bg-brand-dim text-brand-bright"
+              : "text-muted-foreground hover:bg-surface-2 hover:text-foreground",
           )}
           title="Card view"
           aria-label="Card view"
@@ -116,8 +116,8 @@ export function LibraryToolbar({
           className={cn(
             "rounded-md p-1.5 transition-colors",
             viewMode === "table"
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:text-foreground hover:bg-muted",
+              ? "bg-brand-dim text-brand-bright"
+              : "text-muted-foreground hover:bg-surface-2 hover:text-foreground",
           )}
           title="Table view"
           aria-label="Table view"
