@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.22.0](https://github.com/ahembree/librariarr/compare/v0.21.0...v0.22.0) (2026-06-10)
+
+
+### Features
+
+* **jobs:** migrate background work to Graphile Worker ([75008a0](https://github.com/ahembree/librariarr/commit/75008a06a220f0f451ffafa04c96a2e1a345d5f0))
+
+
+### Bug Fixes
+
+* **jobs:** address bugs found in deep review ([ed571e9](https://github.com/ahembree/librariarr/commit/ed571e916bc8adf29e0e65b142b358ce432edf24))
+* **settings:** refresh "Last run" timestamps after Run Now ([30ebe78](https://github.com/ahembree/librariarr/commit/30ebe78179bfe472f483a54e6fb3524446b5096c))
+* **settings:** Run Now syncs all servers instead of aborting on first error ([09cf5e9](https://github.com/ahembree/librariarr/commit/09cf5e97ff12bd035dae95550c12537c1ba938da))
+
 ## [0.21.0](https://github.com/ahembree/librariarr/compare/v0.20.0...v0.21.0) (2026-06-07)
 
 
