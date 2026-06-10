@@ -563,6 +563,7 @@ export function BreakdownChart({
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7"
+                aria-label="Previous page"
                 disabled={tablePage === 0}
                 onClick={() => setTablePage(tablePage - 1)}
               >
@@ -574,6 +575,8 @@ export function BreakdownChart({
                   variant={i === tablePage ? "default" : "ghost"}
                   size="icon"
                   className="h-7 w-7 text-xs"
+                  aria-label={`Page ${i + 1}`}
+                  aria-current={i === tablePage ? "page" : undefined}
                   onClick={() => setTablePage(i)}
                 >
                   {i + 1}
@@ -583,6 +586,7 @@ export function BreakdownChart({
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7"
+                aria-label="Next page"
                 disabled={tablePage >= tableTotalPages - 1}
                 onClick={() => setTablePage(tablePage + 1)}
               >

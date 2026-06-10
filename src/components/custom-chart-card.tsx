@@ -245,6 +245,7 @@ export function CustomChartCard({
               variant="ghost"
               size="icon"
               className="h-7 w-7"
+              aria-label="Edit chart settings"
               onClick={() => onEditConfig(config)}
             >
               <Settings2 className="h-3.5 w-3.5" />

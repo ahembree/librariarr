@@ -1792,6 +1792,7 @@ export function LifecycleRulePage({
                   <Button
                     variant="ghost"
                     size="icon"
+                    aria-label={`Delete rule set ${ruleSet.name}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       setDeleteConfirmId(ruleSet.id);

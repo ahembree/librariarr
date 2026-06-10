@@ -282,6 +282,7 @@ export function RecentlyAdded({
                     variant="ghost"
                     size="icon"
                     className="h-7 w-7"
+                    aria-label="Previous page"
                     disabled={page === 0}
                     onClick={() => setPage(page - 1)}
                   >
@@ -293,6 +294,8 @@ export function RecentlyAdded({
                       variant={i === page ? "default" : "ghost"}
                       size="icon"
                       className="h-7 w-7 text-xs"
+                      aria-label={`Page ${i + 1}`}
+                      aria-current={i === page ? "page" : undefined}
                       onClick={() => setPage(i)}
                     >
                       {i + 1}
@@ -302,6 +305,7 @@ export function RecentlyAdded({
                     variant="ghost"
                     size="icon"
                     className="h-7 w-7"
+                    aria-label="Next page"
                     disabled={page >= totalPages - 1}
                     onClick={() => setPage(page + 1)}
                   >

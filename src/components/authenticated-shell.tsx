@@ -64,6 +64,7 @@ export function AuthenticatedShell({ children }: { children: React.ReactNode }) 
             <Button
               variant="ghost"
               size="icon"
+              aria-label="Open navigation menu"
               onClick={() => setMobileOpen(true)}
             >
               <Menu className="h-5 w-5" />
