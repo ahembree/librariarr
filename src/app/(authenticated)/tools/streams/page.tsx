@@ -341,7 +341,7 @@ function getStateConfig(state: string) {
     case "playing":
       return { icon: Play, label: "Playing", className: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30" };
     case "paused":
-      return { icon: Pause, label: "Paused", className: "bg-amber-500/15 text-amber-400 border-amber-500/30" };
+      return { icon: Pause, label: "Paused", className: "bg-amber/15 text-amber border-amber/30" };
     default:
       return { icon: Loader2, label: "Buffering", className: "bg-sky-500/15 text-sky-400 border-sky-500/30" };
   }
@@ -631,8 +631,8 @@ function SessionCard({
                 </div>
 
                 {/* Transcode details — always rendered for consistent card height */}
-                <div className={`rounded-md px-2.5 py-1.5 space-y-0.5 ${isTranscoding && session.transcoding ? "bg-amber-500/5 border border-amber-500/20" : "invisible"}`}>
-                  <div className="flex items-center gap-1.5 text-[11px] text-amber-400">
+                <div className={`rounded-md px-2.5 py-1.5 space-y-0.5 ${isTranscoding && session.transcoding ? "bg-amber/5 border border-amber/20" : "invisible"}`}>
+                  <div className="flex items-center gap-1.5 text-[11px] text-amber">
                     <Cpu className="h-3 w-3" />
                     <span>Transcode Details</span>
                   </div>
@@ -706,7 +706,7 @@ function SessionCard({
                   </ColorChip>
                   <ColorChip
                     className={`gap-1 ${
-                      streamInfo.direct ? "" : "bg-amber-500/15 text-amber-400 border-amber-500/30"
+                      streamInfo.direct ? "" : "bg-amber/15 text-amber border-amber/30"
                     }`}
                   >
                     {streamInfo.direct ? (
@@ -1375,13 +1375,13 @@ export default function StreamManagerPage() {
             Maintenance Mode
           </h2>
 
-          <Card className={`overflow-hidden transition-colors ${maintenanceEnabled ? "border-amber-500/40 bg-amber-500/5 shadow-[0_0_12px] shadow-amber-500/10" : ""}`}>
+          <Card className={`overflow-hidden transition-colors ${maintenanceEnabled ? "border-amber/40 bg-amber/5 shadow-[0_0_12px] shadow-amber/10" : ""}`}>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="space-y-1 min-w-0">
                   <CardTitle className="text-base flex items-center gap-2">
                     {maintenanceEnabled && (
-                      <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+                      <AlertTriangle className="h-4 w-4 text-amber shrink-0" />
                     )}
                     {maintenanceEnabled ? "Maintenance Mode Active" : "Maintenance Mode"}
                   </CardTitle>
@@ -1472,13 +1472,13 @@ export default function StreamManagerPage() {
             Transcode Manager
           </h2>
 
-          <Card className={`overflow-hidden transition-colors ${transcodeEnabled ? "border-amber-500/40 bg-amber-500/5 shadow-[0_0_12px] shadow-amber-500/10" : ""}`}>
+          <Card className={`overflow-hidden transition-colors ${transcodeEnabled ? "border-amber/40 bg-amber/5 shadow-[0_0_12px] shadow-amber/10" : ""}`}>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="space-y-1 min-w-0">
                   <CardTitle className="text-base flex items-center gap-2">
                     {transcodeEnabled && (
-                      <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+                      <AlertTriangle className="h-4 w-4 text-amber shrink-0" />
                     )}
                     {transcodeEnabled ? "Transcode Manager Active" : "Transcode Manager"}
                   </CardTitle>
@@ -1600,7 +1600,7 @@ export default function StreamManagerPage() {
         ) : (
           <div className="space-y-3">
             {blackoutSchedules.map((schedule) => (
-              <Card key={schedule.id} className={schedule.enabled ? "border-amber-500/30 bg-amber-500/5" : ""}>
+              <Card key={schedule.id} className={schedule.enabled ? "border-amber/30 bg-amber/5" : ""}>
                 <CardContent className="p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0 space-y-1">
@@ -1614,7 +1614,7 @@ export default function StreamManagerPage() {
                             schedule.action === "terminate_immediate"
                               ? "text-red-400 bg-red-500/15 border-red-500/30"
                               : schedule.action === "warn_then_terminate"
-                                ? "text-amber-400 bg-amber-500/15 border-amber-500/30"
+                                ? "text-amber bg-amber/15 border-amber/30"
                                 : "text-blue-400 bg-blue-500/15 border-blue-500/30"
                           }
                         >
@@ -2104,12 +2104,12 @@ export default function StreamManagerPage() {
                     <h4 className="text-sm font-medium">Transcode Details</h4>
                     <div className="flex flex-wrap gap-1.5">
                       {sheetSession.transcoding.sourceVideoCodec && (
-                        <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-400 border-amber-500/30">
+                        <Badge variant="outline" className="text-[10px] bg-amber/10 text-amber border-amber/30">
                           Video: {sheetSession.transcoding.sourceVideoCodec.toUpperCase()} &rarr; {sheetSession.transcoding.videoDecision}
                         </Badge>
                       )}
                       {sheetSession.transcoding.sourceAudioCodec && (
-                        <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-400 border-amber-500/30">
+                        <Badge variant="outline" className="text-[10px] bg-amber/10 text-amber border-amber/30">
                           Audio: {sheetSession.transcoding.sourceAudioCodec.toUpperCase()} &rarr; {sheetSession.transcoding.audioDecision}
                         </Badge>
                       )}
