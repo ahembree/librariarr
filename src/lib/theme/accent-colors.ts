@@ -5,97 +5,74 @@ export interface AccentPreset {
   cssVars: Record<string, string>;
 }
 
+/**
+ * Build the CSS variable overrides for an accent.
+ *
+ * Accents drive the full `--brand` family (not just `--primary`) so the
+ * sidebar search affordance, mobile tab bar, canvas atmosphere, and any
+ * `text-brand-*` usage follow the user's choice. All accent hues sit at
+ * L ≥ 0.66, so dark-on-accent text stays legible across the set.
+ */
+function accentVars(base: string, bright: string): Record<string, string> {
+  const onBrand = "oklch(0.13 0.02 235)";
+  return {
+    "--brand": base,
+    "--brand-bright": bright,
+    "--brand-dim": `color-mix(in oklch, ${base} 15%, transparent)`,
+    "--brand-faint": `color-mix(in oklch, ${base} 7%, transparent)`,
+    "--on-brand": onBrand,
+    "--primary": base,
+    "--primary-foreground": onBrand,
+    "--ring": base,
+    "--sidebar-primary": base,
+    "--sidebar-primary-foreground": onBrand,
+    "--chart-1": base,
+  };
+}
+
 export const ACCENT_PRESETS: AccentPreset[] = [
   {
+    // Lagoon cyan — the stylesheet default; selecting it clears overrides.
     name: "default",
-    label: "Default",
-    color: "#e5e5e5",
-    cssVars: {
-      "--primary": "oklch(0.90 0 0)",
-      "--primary-foreground": "oklch(0.18 0.01 270)",
-      "--ring": "oklch(0.50 0.015 260)",
-      "--sidebar-primary": "oklch(0.55 0.26 264)",
-      "--sidebar-primary-foreground": "oklch(0.95 0.008 80)",
-      "--chart-1": "oklch(0.55 0.26 264)",
-    },
+    label: "Lagoon",
+    color: "#09b7dc",
+    cssVars: accentVars("oklch(0.72 0.13 220)", "oklch(0.8 0.11 215)"),
   },
   {
     name: "blue",
     label: "Blue",
-    color: "#3b82f6",
-    cssVars: {
-      "--primary": "oklch(0.65 0.24 260)",
-      "--primary-foreground": "oklch(0.95 0.008 80)",
-      "--ring": "oklch(0.65 0.24 260)",
-      "--sidebar-primary": "oklch(0.65 0.24 260)",
-      "--sidebar-primary-foreground": "oklch(0.95 0.008 80)",
-      "--chart-1": "oklch(0.65 0.24 260)",
-    },
+    color: "#3f93f7",
+    cssVars: accentVars("oklch(0.66 0.17 255)", "oklch(0.74 0.15 250)"),
   },
   {
     name: "violet",
     label: "Violet",
-    color: "#8b5cf6",
-    cssVars: {
-      "--primary": "oklch(0.65 0.28 304)",
-      "--primary-foreground": "oklch(0.95 0.008 80)",
-      "--ring": "oklch(0.65 0.28 304)",
-      "--sidebar-primary": "oklch(0.65 0.28 304)",
-      "--sidebar-primary-foreground": "oklch(0.95 0.008 80)",
-      "--chart-1": "oklch(0.65 0.28 304)",
-    },
+    color: "#ad74ff",
+    cssVars: accentVars("oklch(0.68 0.2 300)", "oklch(0.76 0.17 300)"),
   },
   {
     name: "green",
     label: "Green",
-    color: "#22c55e",
-    cssVars: {
-      "--primary": "oklch(0.72 0.19 162)",
-      "--primary-foreground": "oklch(0.95 0.008 80)",
-      "--ring": "oklch(0.72 0.19 162)",
-      "--sidebar-primary": "oklch(0.72 0.19 162)",
-      "--sidebar-primary-foreground": "oklch(0.95 0.008 80)",
-      "--chart-1": "oklch(0.72 0.19 162)",
-    },
+    color: "#2cce99",
+    cssVars: accentVars("oklch(0.76 0.15 165)", "oklch(0.82 0.13 163)"),
   },
   {
     name: "orange",
     label: "Orange",
-    color: "#f59e0b",
-    cssVars: {
-      "--primary": "oklch(0.78 0.20 70)",
-      "--primary-foreground": "oklch(0.18 0.01 270)",
-      "--ring": "oklch(0.78 0.20 70)",
-      "--sidebar-primary": "oklch(0.78 0.20 70)",
-      "--sidebar-primary-foreground": "oklch(0.18 0.01 270)",
-      "--chart-1": "oklch(0.78 0.20 70)",
-    },
+    color: "#f6922e",
+    cssVars: accentVars("oklch(0.75 0.16 60)", "oklch(0.82 0.14 65)"),
   },
   {
     name: "rose",
     label: "Rose",
-    color: "#f43f5e",
-    cssVars: {
-      "--primary": "oklch(0.67 0.26 16)",
-      "--primary-foreground": "oklch(0.95 0.008 80)",
-      "--ring": "oklch(0.67 0.26 16)",
-      "--sidebar-primary": "oklch(0.67 0.26 16)",
-      "--sidebar-primary-foreground": "oklch(0.95 0.008 80)",
-      "--chart-1": "oklch(0.67 0.26 16)",
-    },
+    color: "#fc6183",
+    cssVars: accentVars("oklch(0.7 0.19 10)", "oklch(0.78 0.16 12)"),
   },
   {
     name: "teal",
     label: "Teal",
-    color: "#14b8a6",
-    cssVars: {
-      "--primary": "oklch(0.65 0.14 185)",
-      "--primary-foreground": "oklch(0.95 0.008 80)",
-      "--ring": "oklch(0.65 0.14 185)",
-      "--sidebar-primary": "oklch(0.65 0.14 185)",
-      "--sidebar-primary-foreground": "oklch(0.95 0.008 80)",
-      "--chart-1": "oklch(0.65 0.14 185)",
-    },
+    color: "#1dc5ae",
+    cssVars: accentVars("oklch(0.74 0.13 180)", "oklch(0.81 0.11 178)"),
   },
 ];
 

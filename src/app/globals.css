@@ -39,9 +39,9 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
-  /* Overhaul design tokens — surfaces, brand accent, semantic colors.
-     These mirror the design handoff; --brand* is namespaced to avoid
-     clashing with shadcn's muted --accent (hover fill) token. */
+  /* Lagoon design tokens — surfaces, brand accent, semantic colors.
+     --brand* is namespaced to avoid clashing with shadcn's muted
+     --accent (hover fill) token. */
   --color-surface-0: var(--surface-0);
   --color-surface-1: var(--surface-1);
   --color-surface-2: var(--surface-2);
@@ -70,117 +70,126 @@
   --radius-4xl: calc(var(--radius) + 16px);
 }
 
-:root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+/* ────────────────────────────────────────────────────────────────────────
+   LAGOON — the Librariarr design system.
 
-  /* Overhaul tokens — light. Dark is the shipped default; these keep the
-     (currently unused) light path coherent. Bright accent flips toward
-     black on light surfaces so accent text stays legible. */
-  --surface-0: oklch(0.985 0.003 250);
+   A deep-ocean dark UI anchored to the product's own logo colors: the
+   cyan reel arc (--brand, hue 220) and the gold spine (--amber, hue 85).
+   Surfaces share a blue hue (~235) whose chroma *rises* with elevation,
+   so lifted panels read as warmer water above a dark floor. The sidebar
+   sits BELOW the canvas (chrome recedes, content lifts).
+
+   Light values exist to keep the (unused) light path coherent; dark is
+   the shipped default — `.dark` is hardcoded on <html>.
+   ──────────────────────────────────────────────────────────────────── */
+
+:root {
+  --radius: 0.75rem;
+  --background: oklch(0.98 0.004 220);
+  --foreground: oklch(0.17 0.015 235);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.17 0.015 235);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.17 0.015 235);
+  --primary: oklch(0.55 0.12 220);
+  --primary-foreground: oklch(0.99 0.003 220);
+  --secondary: oklch(0.94 0.008 220);
+  --secondary-foreground: oklch(0.2 0.015 235);
+  --muted: oklch(0.95 0.006 220);
+  --muted-foreground: oklch(0.5 0.02 230);
+  --accent: oklch(0.93 0.01 220);
+  --accent-foreground: oklch(0.2 0.015 235);
+  --destructive: oklch(0.6 0.2 18);
+  --border: oklch(0.2 0.03 235 / 10%);
+  --input: oklch(0.2 0.03 235 / 12%);
+  --ring: oklch(0.55 0.12 220);
+  --chart-1: oklch(0.55 0.12 220);
+  --chart-2: oklch(0.62 0.13 85);
+  --chart-3: oklch(0.55 0.14 165);
+  --chart-4: oklch(0.55 0.2 300);
+  --chart-5: oklch(0.58 0.19 10);
+  --sidebar: oklch(0.96 0.006 220);
+  --sidebar-foreground: oklch(0.17 0.015 235);
+  --sidebar-primary: oklch(0.55 0.12 220);
+  --sidebar-primary-foreground: oklch(0.99 0.003 220);
+  --sidebar-accent: oklch(0.92 0.01 220);
+  --sidebar-accent-foreground: oklch(0.2 0.015 235);
+  --sidebar-border: oklch(0.2 0.03 235 / 8%);
+  --sidebar-ring: oklch(0.55 0.12 220);
+
+  --surface-0: oklch(0.97 0.005 220);
   --surface-1: oklch(1 0 0);
-  --surface-2: oklch(0.975 0.004 255);
-  --surface-3: oklch(0.955 0.006 258);
-  --faint-foreground: oklch(0.62 0.012 262);
-  --border-strong: oklch(0.2 0.02 270 / 16%);
-  --brand: oklch(0.62 0.2 264);
+  --surface-2: oklch(0.95 0.008 220);
+  --surface-3: oklch(0.92 0.01 220);
+  --faint-foreground: oklch(0.58 0.02 230);
+  --border-strong: oklch(0.2 0.03 235 / 16%);
+  --brand: oklch(0.55 0.12 220);
   --brand-bright: color-mix(in oklch, var(--brand) 84%, black);
-  --brand-dim: oklch(0.62 0.2 264 / 0.12);
-  --brand-faint: oklch(0.62 0.2 264 / 0.06);
-  --on-brand: oklch(0.99 0.005 270);
-  --amber: oklch(0.66 0.15 78);
-  --amber-dim: oklch(0.8 0.15 78 / 0.16);
-  --green: oklch(0.6 0.16 158);
-  --green-dim: oklch(0.74 0.16 158 / 0.16);
+  --brand-dim: oklch(0.55 0.12 220 / 0.12);
+  --brand-faint: oklch(0.55 0.12 220 / 0.06);
+  --on-brand: oklch(0.99 0.003 220);
+  --amber: oklch(0.62 0.13 85);
+  --amber-dim: oklch(0.78 0.13 85 / 0.16);
+  --green: oklch(0.55 0.14 165);
+  --green-dim: oklch(0.72 0.14 165 / 0.16);
   --red: var(--destructive);
-  --red-dim: oklch(0.7 0.19 22 / 0.14);
-  --sky: oklch(0.56 0.13 235);
-  --sky-dim: oklch(0.72 0.13 235 / 0.14);
+  --red-dim: oklch(0.66 0.19 18 / 0.14);
+  --sky: oklch(0.55 0.11 230);
+  --sky-dim: oklch(0.72 0.11 230 / 0.14);
 }
 
 .dark {
-  --background: oklch(0.16 0.006 270);
-  --foreground: oklch(0.95 0.008 80);
-  --card: oklch(0.21 0.008 270);
-  --card-foreground: oklch(0.95 0.008 80);
-  --popover: oklch(0.23 0.01 270);
-  --popover-foreground: oklch(0.95 0.008 80);
+  --background: oklch(0.16 0.018 235);
+  --foreground: oklch(0.96 0.005 220);
+  --card: oklch(0.2 0.02 236);
+  --card-foreground: oklch(0.96 0.005 220);
+  --popover: oklch(0.22 0.02 236);
+  --popover-foreground: oklch(0.96 0.005 220);
   --primary: var(--brand);
   --primary-foreground: var(--on-brand);
-  --secondary: oklch(0.27 0.01 270);
-  --secondary-foreground: oklch(0.95 0.008 80);
-  --muted: oklch(0.25 0.01 265);
-  --muted-foreground: oklch(0.65 0.015 260);
-  --accent: oklch(0.27 0.015 270);
-  --accent-foreground: oklch(0.95 0.008 80);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0.01 270 / 12%);
-  --input: oklch(1 0.01 270 / 15%);
-  --ring: oklch(0.50 0.015 260);
-  --chart-1: oklch(0.55 0.26 264);
-  --chart-2: oklch(0.72 0.19 162);
-  --chart-3: oklch(0.78 0.20 70);
-  --chart-4: oklch(0.65 0.28 304);
-  --chart-5: oklch(0.67 0.26 16);
-  --sidebar: oklch(0.18 0.008 270);
-  --sidebar-foreground: oklch(0.95 0.008 80);
-  --sidebar-primary: oklch(0.55 0.26 264);
-  --sidebar-primary-foreground: oklch(0.95 0.008 80);
-  --sidebar-accent: oklch(0.25 0.012 270);
-  --sidebar-accent-foreground: oklch(0.95 0.008 80);
-  --sidebar-border: oklch(1 0.01 270 / 12%);
-  --sidebar-ring: oklch(0.50 0.015 260);
+  --secondary: oklch(0.28 0.024 236);
+  --secondary-foreground: oklch(0.96 0.005 220);
+  --muted: oklch(0.23 0.02 236);
+  --muted-foreground: oklch(0.7 0.02 228);
+  --accent: oklch(0.26 0.024 236);
+  --accent-foreground: oklch(0.96 0.005 220);
+  --destructive: oklch(0.68 0.19 18);
+  --border: oklch(0.85 0.06 220 / 10%);
+  --input: oklch(0.85 0.06 220 / 14%);
+  --ring: oklch(0.72 0.13 220);
+  --chart-1: oklch(0.72 0.13 220);
+  --chart-2: oklch(0.8 0.13 85);
+  --chart-3: oklch(0.76 0.15 165);
+  --chart-4: oklch(0.68 0.2 300);
+  --chart-5: oklch(0.7 0.19 10);
+  --sidebar: oklch(0.13 0.015 235);
+  --sidebar-foreground: oklch(0.96 0.005 220);
+  --sidebar-primary: var(--brand);
+  --sidebar-primary-foreground: var(--on-brand);
+  --sidebar-accent: oklch(0.2 0.02 236);
+  --sidebar-accent-foreground: oklch(0.96 0.005 220);
+  --sidebar-border: oklch(0.85 0.06 220 / 8%);
+  --sidebar-ring: var(--ring);
 
-  /* Overhaul tokens — dark (shipped default), lifted from the design handoff. */
   --surface-0: var(--background);
   --surface-1: var(--card);
-  --surface-2: oklch(0.245 0.01 270);
-  --surface-3: oklch(0.285 0.012 270);
-  --faint-foreground: oklch(0.52 0.012 262);
-  --border-strong: oklch(1 0.01 270 / 18%);
-  --brand: oklch(0.62 0.2 264);
-  --brand-bright: oklch(0.7 0.2 264);
-  --brand-dim: oklch(0.62 0.2 264 / 0.15);
-  --brand-faint: oklch(0.62 0.2 264 / 0.08);
-  --on-brand: oklch(0.98 0.005 270);
-  --amber: oklch(0.8 0.15 78);
-  --amber-dim: oklch(0.8 0.15 78 / 0.14);
-  --green: oklch(0.74 0.16 158);
-  --green-dim: oklch(0.74 0.16 158 / 0.14);
-  --red: oklch(0.7 0.19 22);
-  --red-dim: oklch(0.7 0.19 22 / 0.14);
-  --sky: oklch(0.72 0.13 235);
-  --sky-dim: oklch(0.72 0.13 235 / 0.14);
+  --surface-2: oklch(0.24 0.022 236);
+  --surface-3: oklch(0.28 0.024 236);
+  --faint-foreground: oklch(0.55 0.025 230);
+  --border-strong: oklch(0.85 0.06 220 / 16%);
+  --brand: oklch(0.72 0.13 220);
+  --brand-bright: oklch(0.8 0.11 215);
+  --brand-dim: oklch(0.72 0.13 220 / 0.15);
+  --brand-faint: oklch(0.72 0.13 220 / 0.07);
+  --on-brand: oklch(0.13 0.02 235);
+  --amber: oklch(0.8 0.13 85);
+  --amber-dim: oklch(0.8 0.13 85 / 0.15);
+  --green: oklch(0.76 0.15 165);
+  --green-dim: oklch(0.76 0.15 165 / 0.15);
+  --red: oklch(0.68 0.19 18);
+  --red-dim: oklch(0.68 0.19 18 / 0.15);
+  --sky: oklch(0.74 0.11 230);
+  --sky-dim: oklch(0.74 0.11 230 / 0.15);
 }
 
 @layer base {
@@ -189,30 +198,21 @@
   }
   *:focus-visible {
     outline: none;
-    box-shadow: 0 0 0 2px var(--ring), 0 0 12px oklch(0.50 0.15 270 / 0.2);
+    box-shadow:
+      0 0 0 2px var(--ring),
+      0 0 14px color-mix(in oklch, var(--brand) 30%, transparent);
   }
   html {
     overflow: hidden;
     height: 100%;
   }
   body {
-    @apply bg-background text-foreground;
+    /* font-sans must be applied here (not inherited from preflight's html
+       rule): next/font defines --font-sans on <body>, which <html> cannot
+       see, so without this the UI falls back to the system font stack. */
+    @apply bg-background text-foreground font-sans;
     height: 100%;
   }
-}
-
-/* Cinematic noise overlay */
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 9999;
-  opacity: 0.025;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
-  background-repeat: repeat;
-  background-size: 256px 256px;
-  mix-blend-mode: overlay;
 }
 
 /* Entry animations */
@@ -222,32 +222,33 @@ body::before {
 }
 
 .animate-fade-in-up {
-  animation: fade-in-up 400ms ease-out both;
+  animation: fade-in-up 350ms ease-out both;
 }
 
 /* Stagger children entrance */
 .stagger-children > * {
-  animation: fade-in-up 400ms ease-out both;
+  animation: fade-in-up 350ms ease-out both;
 }
 .stagger-children > *:nth-child(1) { animation-delay: 0ms; }
-.stagger-children > *:nth-child(2) { animation-delay: 50ms; }
-.stagger-children > *:nth-child(3) { animation-delay: 100ms; }
-.stagger-children > *:nth-child(4) { animation-delay: 150ms; }
-.stagger-children > *:nth-child(5) { animation-delay: 200ms; }
-.stagger-children > *:nth-child(6) { animation-delay: 250ms; }
-.stagger-children > *:nth-child(7) { animation-delay: 300ms; }
-.stagger-children > *:nth-child(8) { animation-delay: 350ms; }
-.stagger-children > *:nth-child(9) { animation-delay: 400ms; }
-.stagger-children > *:nth-child(10) { animation-delay: 450ms; }
-.stagger-children > *:nth-child(11) { animation-delay: 500ms; }
-.stagger-children > *:nth-child(12) { animation-delay: 550ms; }
+.stagger-children > *:nth-child(2) { animation-delay: 40ms; }
+.stagger-children > *:nth-child(3) { animation-delay: 80ms; }
+.stagger-children > *:nth-child(4) { animation-delay: 120ms; }
+.stagger-children > *:nth-child(5) { animation-delay: 160ms; }
+.stagger-children > *:nth-child(6) { animation-delay: 200ms; }
+.stagger-children > *:nth-child(7) { animation-delay: 240ms; }
+.stagger-children > *:nth-child(8) { animation-delay: 280ms; }
+.stagger-children > *:nth-child(9) { animation-delay: 320ms; }
+.stagger-children > *:nth-child(10) { animation-delay: 360ms; }
+.stagger-children > *:nth-child(11) { animation-delay: 400ms; }
+.stagger-children > *:nth-child(12) { animation-delay: 440ms; }
 
-/* Glass morphism */
+/* Glass morphism — translucent card surface for chrome that floats over
+   content (filter bars, mobile header, bottom tab bar, login card). */
 .glass {
   -webkit-backdrop-filter: blur(20px);
   backdrop-filter: blur(20px);
-  background: oklch(0.21 0.008 270 / 70%);
-  border: 1px solid oklch(1 0 0 / 5%);
+  background: color-mix(in oklch, var(--card) 72%, transparent);
+  border-color: oklch(1 0 0 / 6%);
 }
 
 /* Disable expensive backdrop-filter on mobile to prevent scroll lag */
@@ -255,11 +256,36 @@ body::before {
   .glass {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
-    background: oklch(0.21 0.008 270 / 97%);
+    background: color-mix(in oklch, var(--card) 97%, transparent);
   }
 }
 
-/* Card hover effects are handled via Tailwind utility classes on MediaCard */
+/* Canvas atmosphere — faint brand glow washing the top of the content
+   area. Replaces the old hardcoded radial gradient so it follows the
+   user's accent automatically. */
+.canvas-atmosphere {
+  background-image: radial-gradient(
+    120% 55% at 50% 0%,
+    color-mix(in oklch, var(--brand) 7%, transparent),
+    transparent 60%
+  );
+}
+
+/* Auth backdrop — full-screen gradient behind login/onboarding cards:
+   a brand bloom at the horizon over a deep vertical falloff. */
+.auth-backdrop {
+  background-image:
+    radial-gradient(
+      ellipse 70% 55% at 50% -5%,
+      color-mix(in oklch, var(--brand) 18%, transparent),
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse at center,
+      oklch(0.2 0.022 236),
+      oklch(0.13 0.015 235)
+    );
+}
 
 /* Custom scrollbar */
 * {
@@ -269,14 +295,14 @@ body::before {
 
 /* Selection color */
 ::selection {
-  background: oklch(0.50 0.15 270 / 30%);
-  color: oklch(0.95 0.008 80);
+  background: color-mix(in oklch, var(--brand) 35%, transparent);
+  color: oklch(0.97 0.005 220);
 }
 
 /* Logo glow animation */
 @keyframes logo-glow {
-  0%, 100% { box-shadow: 0 0 20px oklch(0.50 0.15 270 / 0.15); }
-  50% { box-shadow: 0 0 40px oklch(0.50 0.15 270 / 0.3); }
+  0%, 100% { box-shadow: 0 0 20px color-mix(in oklch, var(--brand) 18%, transparent); }
+  50% { box-shadow: 0 0 40px color-mix(in oklch, var(--brand) 35%, transparent); }
 }
 
 .animate-logo-glow {
@@ -311,14 +337,14 @@ body::before {
   contain-intrinsic-size: auto 400px;
 }
 
-/* Elevation tokens from the design handoff (use via shadow-[var(--shadow-card)]) */
+/* Elevation tokens (use via shadow-[var(--shadow-card)]) */
 :root {
-  --shadow-card: 0 1px 2px oklch(0.2 0.02 270 / 6%), 0 8px 24px -16px oklch(0.2 0.02 270 / 25%);
-  --shadow-pop: 0 24px 60px -20px oklch(0.2 0.02 270 / 30%);
+  --shadow-card: 0 1px 2px oklch(0.2 0.03 235 / 6%), 0 8px 24px -16px oklch(0.2 0.03 235 / 25%);
+  --shadow-pop: 0 24px 60px -20px oklch(0.2 0.03 235 / 30%);
 }
 .dark {
-  --shadow-card: 0 1px 0 oklch(1 0 0 / 4%) inset, 0 8px 24px -12px oklch(0 0 0 / 60%);
-  --shadow-pop: 0 24px 60px -20px oklch(0 0 0 / 75%);
+  --shadow-card: 0 1px 0 oklch(1 0 0 / 5%) inset, 0 10px 30px -14px oklch(0 0 0 / 65%);
+  --shadow-pop: 0 24px 60px -20px oklch(0 0 0 / 80%);
 }
 
 /* Eyebrow: mono, uppercase, wide-tracked, faint — the "mono-for-data" label
@@ -331,6 +357,28 @@ body::before {
   text-transform: uppercase;
   color: var(--faint-foreground);
   font-weight: 500;
+}
+
+/* Safe-area helpers for standalone PWA mode (env() resolves to 0 in
+   regular browser tabs, so these are no-ops outside the installed app). */
+.pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+/* Height of the mobile bottom tab bar; content scroll containers pad by
+   this so nothing hides behind the bar. */
+:root {
+  --tabbar-height: 4rem;
+}
+.pb-tabbar {
+  padding-bottom: calc(var(--tabbar-height) + env(safe-area-inset-bottom));
+}
+@media (min-width: 768px) {
+  .pb-tabbar {
+    padding-bottom: 0;
+  }
 }
 
 /* Honor reduced-motion: skip entrance animation, keep the resting (visible)

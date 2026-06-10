@@ -188,14 +188,15 @@ export function MediaDetailHero({
             />
           )}
 
-          {/* Dark vignette overlay for depth */}
+          {/* Dark vignette overlay for depth — scrims derive from the
+              background token so they track the active palette. */}
           <div
             className="absolute inset-0"
             style={{
               background: [
-                "linear-gradient(to bottom, oklch(0.16 0.006 270 / 0.3) 0%, transparent 30%)",
-                "linear-gradient(to bottom, transparent 40%, oklch(0.16 0.006 270 / 0.7) 70%, oklch(0.16 0.006 270) 100%)",
-                "linear-gradient(to right, oklch(0.16 0.006 270 / 0.5) 0%, transparent 50%)",
+                "linear-gradient(to bottom, color-mix(in oklch, var(--background) 30%, transparent) 0%, transparent 30%)",
+                "linear-gradient(to bottom, transparent 40%, color-mix(in oklch, var(--background) 70%, transparent) 70%, var(--background) 100%)",
+                "linear-gradient(to right, color-mix(in oklch, var(--background) 50%, transparent) 0%, transparent 50%)",
               ].join(", "),
             }}
           />
@@ -223,7 +224,7 @@ export function MediaDetailHero({
           style={{
             width: "min(56rem, 80%)",
             height: "70%",
-            background: "radial-gradient(ellipse at 10% 100%, oklch(0.16 0.006 270 / 0.7) 0%, oklch(0.16 0.006 270 / 0.35) 40%, transparent 70%)",
+            background: "radial-gradient(ellipse at 10% 100%, color-mix(in oklch, var(--background) 70%, transparent) 0%, color-mix(in oklch, var(--background) 35%, transparent) 40%, transparent 70%)",
           }}
         />
 
