@@ -634,22 +634,30 @@ const SortableRuleRow = memo(SortableRuleRowImpl) as typeof SortableRuleRowImpl;
 // ─── Shared constants ────────────────────────────────────────────────────────
 
 const BORDER_COLORS = [
-  "border-border",
-  "border-blue-500/30",
-  "border-purple-500/30",
-  "border-green-500/30",
+  "border-brand/25",
+  "border-sky/25",
+  "border-green/25",
+  "border-amber/25",
 ];
 const ACTIVE_BORDER_COLORS = [
-  "border-2 border-muted-foreground/70",
-  "border-2 border-blue-400/80",
-  "border-2 border-purple-400/80",
-  "border-2 border-green-400/80",
+  "border-2 border-brand/70",
+  "border-2 border-sky/70",
+  "border-2 border-green/70",
+  "border-2 border-amber/70",
 ];
 const BG_COLORS = [
-  "bg-muted/30",
-  "bg-blue-500/5",
-  "bg-purple-500/5",
-  "bg-green-500/5",
+  "bg-brand/5",
+  "bg-sky/5",
+  "bg-green/5",
+  "bg-amber/5",
+];
+// Colored left spine per nesting depth — the handoff's group-card spine
+// (accent → sky → green → amber, cycling).
+const SPINE_COLORS = [
+  "border-l-[3px] border-l-brand",
+  "border-l-[3px] border-l-sky",
+  "border-l-[3px] border-l-green",
+  "border-l-[3px] border-l-amber",
 ];
 
 // ─── GroupCard ───────────────────────────────────────────────────────────────
@@ -837,7 +845,7 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
   return (
     <Card
       ref={setDropRef}
-      className={`p-3 sm:p-4 space-y-2 overflow-hidden ${BG_COLORS[depth % BG_COLORS.length]} ${isOver ? ACTIVE_BORDER_COLORS[depth % ACTIVE_BORDER_COLORS.length] : BORDER_COLORS[depth % BORDER_COLORS.length]} ${group.enabled === false ? "opacity-50" : ""} ${isStreamQuery ? "border-primary/30" : ""}`}
+      className={`p-3 sm:p-4 space-y-2 overflow-hidden ${BG_COLORS[depth % BG_COLORS.length]} ${SPINE_COLORS[depth % SPINE_COLORS.length]} ${isOver ? ACTIVE_BORDER_COLORS[depth % ACTIVE_BORDER_COLORS.length] : BORDER_COLORS[depth % BORDER_COLORS.length]} ${group.enabled === false ? "opacity-50" : ""} ${isStreamQuery ? "border-primary/30" : ""}`}
     >
       {/* Stream query name - positioned at top-left, separate from the query logic */}
       {isStreamQuery && (

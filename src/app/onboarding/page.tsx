@@ -390,7 +390,7 @@ export default function OnboardingPage() {
 
   if (mode === "choose") {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))] p-8">
+      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_70%_55%_at_50%_-5%,oklch(0.55_0.2_264/0.2),transparent_60%),radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))] p-8">
         <div className="w-full max-w-3xl space-y-8">
           <div className="text-center">
             <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-primary/10 ring-1 ring-primary/20">
@@ -472,7 +472,7 @@ export default function OnboardingPage() {
 
   if (mode === "plex") {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))] p-8">
+      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_70%_55%_at_50%_-5%,oklch(0.55_0.2_264/0.2),transparent_60%),radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))] p-8">
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
           <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-150 h-150 rounded-full bg-amber-500/5 blur-3xl" />
         </div>
@@ -677,7 +677,7 @@ export default function OnboardingPage() {
   const typeLabel = manualType === "JELLYFIN" ? "Jellyfin" : "Emby";
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))] p-8">
+    <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_70%_55%_at_50%_-5%,oklch(0.55_0.2_264/0.2),transparent_60%),radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))] p-8">
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
         <div className={`absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-150 h-150 rounded-full ${colors.glow} blur-3xl`} />
       </div>

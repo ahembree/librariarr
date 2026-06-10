@@ -290,14 +290,14 @@ export default function LoginPage() {
 
   if (checkingSetup) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))]">
+      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_70%_55%_at_50%_-5%,oklch(0.55_0.2_264/0.2),transparent_60%),radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))]">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))] p-4">
+    <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_70%_55%_at_50%_-5%,oklch(0.55_0.2_264/0.2),transparent_60%),radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))] p-4">
       <Card className="w-full max-w-105 glass animate-fade-in-up">
         <CardHeader className="text-center">
           <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-primary/10 animate-logo-glow">
