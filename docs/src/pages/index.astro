@@ -68,6 +68,7 @@
         --bg-card: oklch(0.21 0.008 270);
         --bg-card-hover: oklch(0.25 0.01 270);
         --border: oklch(1 0.01 270 / 12%);
+        --border-strong: oklch(1 0.01 270 / 22%);
         --text: oklch(0.95 0.008 80);
         --text-muted: oklch(0.65 0.015 260);
         --accent: oklch(0.6 0.15 250);
@@ -75,7 +76,7 @@
         --accent-subtle: oklch(0.22 0.04 250);
         --radius: 10px;
         --radius-xl: 14px;
-        --max-width: 1100px;
+        --max-width: 1140px;
         --font-display: "Sora", sans-serif;
         --font-sans: "Plus Jakarta Sans", sans-serif;
         --font-mono: "JetBrains Mono", monospace;
@@ -88,6 +89,14 @@
         line-height: 1.6;
         scroll-behavior: smooth;
         -webkit-font-smoothing: antialiased;
+      }
+
+      body {
+        overflow-x: hidden;
+      }
+
+      section {
+        position: relative;
       }
 
       /* Nav */
@@ -171,7 +180,7 @@
         position: relative;
         max-width: var(--max-width);
         margin: 0 auto;
-        padding: 6rem 1.5rem 4rem;
+        padding: 5.5rem 1.5rem 0;
         text-align: center;
       }
 
@@ -194,7 +203,7 @@
         font-size: clamp(2.5rem, 6vw, 4rem);
         font-weight: 800;
         letter-spacing: -0.03em;
-        line-height: 1.1;
+        line-height: 1.08;
         margin-bottom: 1.25rem;
       }
 
@@ -205,11 +214,11 @@
         background-clip: text;
       }
 
-      .hero p {
+      .hero p.lead {
         font-size: 1.15rem;
         color: var(--text-muted);
-        max-width: 600px;
-        margin: 0 auto 2.5rem;
+        max-width: 640px;
+        margin: 0 auto 2.25rem;
         line-height: 1.7;
       }
 
@@ -256,69 +265,233 @@
 
       .btn-secondary:hover {
         background: var(--bg-card-hover);
-        border-color: oklch(1 0 0 / 20%);
+        border-color: var(--border-strong);
       }
 
-      /* Features */
-      .features {
+      /* Browser-framed screenshot */
+      .shot {
+        border-radius: 12px;
+        border: 1px solid var(--border-strong);
+        background: var(--bg-card);
+        overflow: hidden;
+        box-shadow:
+          0 1px 0 oklch(1 0 0 / 6%) inset,
+          0 40px 80px -32px oklch(0 0 0 / 80%);
+      }
+
+      .shot-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        height: 36px;
+        padding: 0 0.85rem;
+        background: oklch(0.19 0.008 270);
+        border-bottom: 1px solid var(--border);
+      }
+
+      .shot-dot {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: oklch(0.4 0.02 270);
+      }
+
+      .shot-dot:nth-child(1) { background: oklch(0.62 0.16 25); }
+      .shot-dot:nth-child(2) { background: oklch(0.78 0.14 85); }
+      .shot-dot:nth-child(3) { background: oklch(0.68 0.16 145); }
+
+      .shot img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      /* Hero screenshot */
+      .hero-shot {
+        position: relative;
+        max-width: 1040px;
+        margin: 3.5rem auto 0;
+        padding: 0 1.5rem;
+      }
+
+      .hero-shot::before {
+        content: "";
+        position: absolute;
+        inset: -10% 10% 30%;
+        background: radial-gradient(ellipse at center, oklch(0.5 0.18 255 / 35%) 0%, transparent 70%);
+        filter: blur(50px);
+        z-index: -1;
+        pointer-events: none;
+      }
+
+      /* Section scaffolding */
+      .section {
         max-width: var(--max-width);
         margin: 0 auto;
-        padding: 2rem 1.5rem 5rem;
+        padding: 5.5rem 1.5rem;
       }
 
-      .features-heading {
+      .section-heading {
         text-align: center;
-        margin-bottom: 3rem;
+        max-width: 640px;
+        margin: 0 auto 3.5rem;
       }
 
-      .features-heading h2 {
+      .section-eyebrow {
+        display: inline-block;
+        color: var(--accent);
+        font-size: 0.8rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        margin-bottom: 0.85rem;
+      }
+
+      .section-heading h2 {
         font-family: var(--font-display);
-        font-size: 1.75rem;
+        font-size: clamp(1.75rem, 4vw, 2.25rem);
         font-weight: 700;
         letter-spacing: -0.02em;
-        margin-bottom: 0.5rem;
+        margin-bottom: 0.75rem;
       }
 
-      .features-heading p {
+      .section-heading p {
         color: var(--text-muted);
-        font-size: 1rem;
+        font-size: 1.05rem;
       }
 
-      .features-grid {
+      /* Feature rows (alternating) */
+      .feature-row {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-        gap: 1.25rem;
+        grid-template-columns: 1fr 1fr;
+        gap: 3.5rem;
+        align-items: center;
+        padding: 3rem 0;
       }
 
-      .feature-card {
-        background: var(--bg-card);
-        border: 1px solid var(--border);
-        border-radius: var(--radius-xl);
-        padding: 1.75rem;
-        transition: border-color 0.3s, background 0.3s, transform 0.3s;
+      .feature-row + .feature-row {
+        border-top: 1px solid var(--border);
       }
 
-      .feature-card:hover {
-        border-color: oklch(1 0 0 / 20%);
-        background: var(--bg-card-hover);
-        transform: translateY(-2px);
+      .feature-row.reverse .feature-copy {
+        order: 2;
       }
 
-      .feature-icon {
-        width: 2.25rem;
-        height: 2.25rem;
+      .feature-eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: var(--accent);
+        font-size: 0.8rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
         margin-bottom: 1rem;
+      }
+
+      .feature-eyebrow svg {
+        width: 1.1rem;
+        height: 1.1rem;
+      }
+
+      .feature-copy h3 {
+        font-family: var(--font-display);
+        font-size: clamp(1.5rem, 3vw, 1.9rem);
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        line-height: 1.2;
+        margin-bottom: 1rem;
+      }
+
+      .feature-copy > p {
+        color: var(--text-muted);
+        font-size: 1.02rem;
+        margin-bottom: 1.5rem;
+      }
+
+      .feature-list {
+        list-style: none;
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      .feature-list li {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.65rem;
+        color: var(--text);
+        font-size: 0.95rem;
+      }
+
+      .feature-list svg {
+        width: 1.15rem;
+        height: 1.15rem;
+        flex-shrink: 0;
+        margin-top: 0.15rem;
         color: var(--accent);
       }
 
-      .feature-card h3 {
-        font-family: var(--font-display);
-        font-size: 1.1rem;
+      .feature-list strong {
         font-weight: 600;
-        margin-bottom: 0.5rem;
       }
 
-      .feature-card p {
+      .feature-list span {
+        color: var(--text-muted);
+      }
+
+      /* Bento grid */
+      .bento {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1.25rem;
+      }
+
+      .bento-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-xl);
+        overflow: hidden;
+        transition: border-color 0.3s, background 0.3s, transform 0.3s;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .bento-card:hover {
+        border-color: var(--border-strong);
+        background: var(--bg-card-hover);
+        transform: translateY(-3px);
+      }
+
+      .bento-media {
+        border-bottom: 1px solid var(--border);
+        background: oklch(0.16 0.006 270);
+      }
+
+      .bento-media img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      .bento-body {
+        padding: 1.4rem 1.5rem 1.6rem;
+      }
+
+      .bento-icon {
+        width: 2.1rem;
+        height: 2.1rem;
+        margin-bottom: 0.9rem;
+        color: var(--accent);
+      }
+
+      .bento-card h4 {
+        font-family: var(--font-display);
+        font-size: 1.08rem;
+        font-weight: 600;
+        margin-bottom: 0.4rem;
+      }
+
+      .bento-card p {
         color: var(--text-muted);
         font-size: 0.9rem;
         line-height: 1.6;
@@ -347,7 +520,7 @@
 
       .integration-logos {
         display: flex;
-        gap: 2rem;
+        gap: 1rem;
         justify-content: center;
         flex-wrap: wrap;
       }
@@ -367,7 +540,7 @@
       }
 
       .integration-chip:hover {
-        border-color: oklch(1 0 0 / 20%);
+        border-color: var(--border-strong);
         color: var(--text);
       }
 
@@ -385,7 +558,7 @@
         background: var(--bg-card);
         border: 1px solid var(--border);
         border-radius: var(--radius-xl);
-        padding: 3rem 2rem;
+        padding: 3.5rem 2rem;
       }
 
       .cta-box::before {
@@ -399,8 +572,9 @@
       .cta-box h2 {
         position: relative;
         font-family: var(--font-display);
-        font-size: 1.5rem;
+        font-size: 1.75rem;
         font-weight: 700;
+        letter-spacing: -0.02em;
         margin-bottom: 0.75rem;
       }
 
@@ -434,9 +608,29 @@
       }
 
       /* Responsive */
+      @media (max-width: 880px) {
+        .feature-row {
+          grid-template-columns: 1fr;
+          gap: 2rem;
+          padding: 2.5rem 0;
+        }
+
+        .feature-row.reverse .feature-copy {
+          order: 0;
+        }
+
+        .bento {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+
       @media (max-width: 640px) {
         .hero {
-          padding: 4rem 1rem 3rem;
+          padding: 4rem 1rem 0;
+        }
+
+        .section {
+          padding: 4rem 1.25rem;
         }
 
         .hero-actions {
@@ -448,6 +642,10 @@
           width: 100%;
           max-width: 280px;
           justify-content: center;
+        }
+
+        .bento {
+          grid-template-columns: 1fr;
         }
 
         .nav-brand span {
@@ -488,171 +686,259 @@
     <div class="hero-wrapper">
       <div class="hero-gradient"></div>
       <section class="hero">
-      <span class="hero-badge">Self-Hosted &middot; Open Source</span>
-      <h1>
-        Manage your <span class="accent">media libraries</span> with confidence
-      </h1>
-      <p>
-        A self-hosted webapp for Plex, Jellyfin, and Emby. Browse and filter
-        your libraries, automate media lifecycle with rules, manage streams, and
-        integrate with the *arr stack.
-      </p>
-      <div class="hero-actions">
-        <a href="/docs/getting-started/installation/" class="btn btn-primary">
-          Get Started
-        </a>
-        <a
-          href="https://github.com/ahembree/librariarr"
-          class="btn btn-secondary"
-        >
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="currentColor"
-            ><path
-              d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"
-            ></path></svg
+        <span class="hero-badge">Self-Hosted &middot; Open Source</span>
+        <h1>
+          Manage your <span class="accent">media library</span> with confidence
+        </h1>
+        <p class="lead">
+          A self-hosted webapp for Plex, Jellyfin, and Emby. Browse and filter
+          every title, automate cleanup with lifecycle rules, manage live
+          streams, and integrate with the *arr stack — all from one dashboard.
+        </p>
+        <div class="hero-actions">
+          <a href="/docs/getting-started/installation/" class="btn btn-primary">
+            Get Started
+          </a>
+          <a
+            href="https://github.com/ahembree/librariarr"
+            class="btn btn-secondary"
           >
-          GitHub
-        </a>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"></path></svg>
+            GitHub
+          </a>
+        </div>
+      </section>
+
+      <div class="hero-shot">
+        <div class="shot">
+          <div class="shot-bar">
+            <span class="shot-dot"></span>
+            <span class="shot-dot"></span>
+            <span class="shot-dot"></span>
+          </div>
+          <img
+            src="/screenshots/dashboard.webp"
+            width="2200"
+            height="1375"
+            alt="Librariarr dashboard showing library statistics and a quality breakdown chart"
+            fetchpriority="high"
+          />
+        </div>
       </div>
-    </section>
     </div>
 
-    <section class="features">
-      <div class="features-heading">
+    <section class="section">
+      <div class="section-heading">
+        <span class="section-eyebrow">Features</span>
         <h2>Everything you need to manage your media</h2>
         <p>
-          A comprehensive toolkit for understanding and automating your media
-          library.
+          A comprehensive toolkit for understanding, browsing, and automating
+          your media library across every server you run.
         </p>
       </div>
-      <div class="features-grid">
-        <div class="feature-card">
-          <svg
-            class="feature-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <rect x="2" y="3" width="20" height="14" rx="2"></rect>
-            <line x1="8" y1="21" x2="16" y2="21"></line>
-            <line x1="12" y1="17" x2="12" y2="21"></line>
-          </svg>
-          <h3>Library Browsing</h3>
+
+      <!-- Library browsing -->
+      <div class="feature-row">
+        <div class="feature-copy">
+          <span class="feature-eyebrow">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+            Library Browsing
+          </span>
+          <h3>Browse your whole library, beautifully</h3>
           <p>
-            Browse movies, series, and music with powerful filters. Grid and
-            table views with fast scrolling, even for large libraries.
+            Movies, series, and music in one place. Virtualized grid and table
+            views stay fast even across tens of thousands of titles, with
+            alphabet jumps and instant search.
           </p>
+          <ul class="feature-list">
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Powerful filters</strong> — resolution, codec, dynamic range, audio profile, year, genre, and more.</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Multi-server dedup</strong> — connect several servers and see each title once.</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Deep detail</strong> — drill into seasons, episodes, albums, and tracks.</span>
+            </li>
+          </ul>
+        </div>
+        <div class="feature-media">
+          <div class="shot">
+            <div class="shot-bar">
+              <span class="shot-dot"></span>
+              <span class="shot-dot"></span>
+              <span class="shot-dot"></span>
+            </div>
+            <img src="/screenshots/movies.webp" width="1760" height="1100" alt="Movie library grid with posters and quality details" loading="lazy" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Lifecycle rules -->
+      <div class="feature-row reverse">
+        <div class="feature-copy">
+          <span class="feature-eyebrow">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+            Lifecycle Rules
+          </span>
+          <h3>Automate the boring parts</h3>
+          <p>
+            Build rules with recursive AND/OR logic to find exactly the media
+            you care about, then act on it — delete, unmonitor, tag, or search
+            for an upgrade. Preview every match before anything runs.
+          </p>
+          <ul class="feature-list">
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Match preview</strong> — see what qualifies before scheduling a single action.</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Safe by default</strong> — delay windows, exceptions, and pending queues keep you in control.</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>*arr aware</strong> — act through Radarr, Sonarr, and Lidarr with tags and import exclusions.</span>
+            </li>
+          </ul>
+        </div>
+        <div class="feature-media">
+          <div class="shot">
+            <div class="shot-bar">
+              <span class="shot-dot"></span>
+              <span class="shot-dot"></span>
+              <span class="shot-dot"></span>
+            </div>
+            <img src="/screenshots/rules.webp" width="1760" height="1100" alt="Lifecycle rules page with saved rule sets and a rule builder" loading="lazy" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Stream manager -->
+      <div class="feature-row">
+        <div class="feature-copy">
+          <span class="feature-eyebrow">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
+            Stream Manager
+          </span>
+          <h3>Stay in control of streaming</h3>
+          <p>
+            Watch who's streaming in real time, then step in when you need to.
+            Flip on maintenance mode, rein in transcodes, and schedule blackout
+            windows — across all of your servers at once.
+          </p>
+          <ul class="feature-list">
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Live sessions</strong> — real-time playback with a one-click terminate.</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Maintenance mode</strong> — pause new streams with a custom message and delay.</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Transcode manager</strong> — stop streams that match criteria you define.</span>
+            </li>
+          </ul>
+        </div>
+        <div class="feature-media">
+          <div class="shot">
+            <div class="shot-bar">
+              <span class="shot-dot"></span>
+              <span class="shot-dot"></span>
+              <span class="shot-dot"></span>
+            </div>
+            <img src="/screenshots/streams.webp" width="1760" height="1100" alt="Stream manager showing active sessions, maintenance mode, and transcode manager" loading="lazy" />
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" style="padding-top: 0;">
+      <div class="section-heading">
+        <span class="section-eyebrow">And more</span>
+        <h2>A complete management toolkit</h2>
+        <p>
+          From system insight to backups and notifications — the details that
+          make a self-hosted setup feel effortless.
+        </p>
+      </div>
+
+      <div class="bento">
+        <div class="bento-card">
+          <div class="bento-media">
+            <img src="/screenshots/logs.webp" width="1360" height="850" alt="System logs with filterable levels, categories, and sources" loading="lazy" />
+          </div>
+          <div class="bento-body">
+            <h4>System Logs</h4>
+            <p>
+              Full visibility into backend, API, and database activity —
+              filterable by level, category, and source.
+            </p>
+          </div>
         </div>
 
-        <div class="feature-card">
-          <svg
-            class="feature-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
-          </svg>
-          <h3>Lifecycle Rules</h3>
-          <p>
-            Build rules to automatically find and act on media — delete,
-            unmonitor, tag, and more. Preview what matches before anything
-            runs.
-          </p>
+        <div class="bento-card">
+          <div class="bento-media">
+            <img src="/screenshots/preroll.webp" width="1360" height="850" alt="Preroll manager with presets, schedules, and combine modes" loading="lazy" />
+          </div>
+          <div class="bento-body">
+            <h4>Preroll Manager</h4>
+            <p>
+              Set Plex preroll videos from presets or schedules, and combine
+              them in sequential or random order.
+            </p>
+          </div>
         </div>
 
-        <div class="feature-card">
-          <svg
-            class="feature-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <polygon
-              points="23 7 16 12 23 17 23 7"
-              fill="currentColor"
-              stroke="none"></polygon>
-            <rect x="1" y="5" width="15" height="14" rx="2"></rect>
-          </svg>
-          <h3>Stream Manager</h3>
-          <p>
-            See who's streaming in real time, pause access with maintenance
-            mode, control transcoding, and set blackout schedules.
-          </p>
+        <div class="bento-card">
+          <div class="bento-media">
+            <img src="/screenshots/settings.webp" width="1360" height="850" alt="Settings page with accent color and badge color customization" loading="lazy" />
+          </div>
+          <div class="bento-body">
+            <h4>Make it yours</h4>
+            <p>
+              Theme accent colors, custom badge palettes, scheduling, and
+              retention — tune Librariarr to taste.
+            </p>
+          </div>
         </div>
 
-        <div class="feature-card">
-          <svg
-            class="feature-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <circle cx="12" cy="12" r="10"></circle>
-            <polyline points="12 6 12 12 16 14"></polyline>
-          </svg>
-          <h3>Scheduling</h3>
-          <p>
-            Schedule syncs and lifecycle tasks independently. Choose from
-            presets or set a custom schedule. Run anything manually on demand.
-          </p>
+        <div class="bento-card">
+          <div class="bento-body">
+            <svg class="bento-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"></path></svg>
+            <h4>Backup &amp; Restore</h4>
+            <p>
+              Automatic or manual backups with optional AES-256 encryption,
+              retention policies, and scheduled runs.
+            </p>
+          </div>
         </div>
 
-        <div class="feature-card">
-          <svg
-            class="feature-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path
-              d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"
-            ></path>
-          </svg>
-          <h3>Backup & Restore</h3>
-          <p>
-            Automatic or manual backups with optional encryption. Choose what
-            to include, set a retention policy, and schedule backups to run on
-            their own.
-          </p>
+        <div class="bento-card">
+          <div class="bento-body">
+            <svg class="bento-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 01-3.46 0"></path></svg>
+            <h4>Notifications</h4>
+            <p>
+              Discord webhooks for lifecycle actions, match changes, and
+              maintenance mode — pick the events you care about.
+            </p>
+          </div>
         </div>
 
-        <div class="feature-card">
-          <svg
-            class="feature-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-            <path d="M13.73 21a2 2 0 01-3.46 0"></path>
-          </svg>
-          <h3>Notifications</h3>
-          <p>
-            Get Discord notifications for lifecycle actions, maintenance mode
-            changes, and more. Choose which events you want to hear about.
-          </p>
+        <div class="bento-card">
+          <div class="bento-body">
+            <svg class="bento-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            <h4>Flexible Scheduling</h4>
+            <p>
+              Schedule syncs and lifecycle processing independently from
+              presets or a custom cadence — or run anything on demand.
+            </p>
+          </div>
         </div>
       </div>
     </section>
