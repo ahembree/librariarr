@@ -24,15 +24,18 @@ export function StatsCardsSkeleton({ count = 4 }: { count?: number }) {
   return (
     <div className={`grid gap-4 ${gridCols}`}>
       {Array.from({ length: count }).map((_, i) => (
-        <Card key={i}>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <Skeleton className="h-4 w-16" />
-            <Skeleton className="h-4 w-4 rounded" />
-          </CardHeader>
-          <CardContent>
-            <Skeleton className="h-8 w-24" />
-          </CardContent>
-        </Card>
+        <div
+          key={i}
+          className="rounded-[14px] border bg-card px-[18px] pt-[17px] pb-4 shadow-[var(--shadow-card)]"
+        >
+          <Skeleton className="mb-3.5 h-[34px] w-[34px] rounded-[9px]" />
+          <Skeleton className="h-7 w-24" />
+          <Skeleton className="mt-2.5 h-3.5 w-16" />
+          <div className="mt-4 space-y-2">
+            <Skeleton className="h-3 w-full" />
+            <Skeleton className="h-3 w-2/3" />
+          </div>
+        </div>
       ))}
     </div>
   );

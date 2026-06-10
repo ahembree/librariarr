@@ -123,6 +123,14 @@ export default function DashboardPage() {
   const [selectedMediaType, setSelectedMediaType] = useState<string>("all");
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [editingCustomCard, setEditingCustomCard] = useState<{ cardId: string; config: CustomCardConfig } | null>(null);
+  const [userName, setUserName] = useState<string>("");
+
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (data?.username) setUserName(data.username); })
+      .catch(() => {});
+  }, []);
 
   // Sync active tab to URL hash (replaceState avoids creating extra history
   // entries that break browser back/forward navigation in the App Router)
@@ -303,7 +311,33 @@ export default function DashboardPage() {
     <div className="p-4 sm:p-6 lg:p-8">
       <div className="flex flex-col gap-4 mb-6 sm:mb-8 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Dashboard</h1>
+          <p className="eyebrow">
+            {(() => {
+              const now = new Date();
+              const weekday = now.toLocaleDateString(undefined, { weekday: "long" });
+              const md = now.toLocaleDateString(undefined, { month: "long", day: "numeric" });
+              const serverPart = servers.length
+                ? ` · ${servers.length} server${servers.length > 1 ? "s" : ""}`
+                : "";
+              return `${weekday} · ${md}${serverPart}`;
+            })()}
+          </p>
+          <h1 className="mt-1.5 text-2xl sm:text-3xl font-bold font-display tracking-tight">
+            {(() => {
+              const hour = new Date().getHours();
+              const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+              return (
+                <>
+                  {greeting}
+                  {userName && (
+                    <>
+                      , <span className="text-brand-bright">{userName}</span>
+                    </>
+                  )}
+                </>
+              );
+            })()}
+          </h1>
           <p className="text-muted-foreground mt-1">
             Library statistics and activity at a glance — customize the layout per tab in edit mode.
           </p>
