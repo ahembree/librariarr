@@ -54,10 +54,12 @@ describe("GET /api/auth/me", () => {
   });
 
   it("labels a local-only admin as Local", async () => {
-    const user = await createTestUser({ username: "localadmin", plexId: null });
+    // The factory backfills a default plexId (?? treats null as nullish), so
+    // clear it explicitly to model a local-only admin.
+    const user = await createTestUser({ username: "localadmin" });
     await prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash: "hashed", localUsername: "localadmin" },
+      data: { passwordHash: "hashed", localUsername: "localadmin", plexId: null },
     });
     setMockSession({ userId: user.id, plexToken: "", isLoggedIn: true });
 
