@@ -169,20 +169,22 @@ export function LibraryPageSkeleton() {
   );
 }
 
-/** Logs table skeleton matching the system logs table layout */
-export function LogsTableSkeleton({ rows = 6 }: { rows?: number }) {
+/** Log console skeleton matching the system logs console layout */
+export function LogConsoleSkeleton({ rows = 14 }: { rows?: number }) {
   return (
-    <>
-      {Array.from({ length: rows }).map((_, i) => (
-        <tr key={i} className="border-b last:border-b-0">
-          <td className="px-4 py-3"><Skeleton className="h-4 w-28" /></td>
-          <td className="px-4 py-3"><Skeleton className="h-5 w-14 rounded-full" /></td>
-          <td className="hidden px-4 py-3 md:table-cell"><Skeleton className="h-5 w-16 rounded-full" /></td>
-          <td className="hidden px-4 py-3 md:table-cell"><Skeleton className="h-4 w-20" /></td>
-          <td className="px-4 py-3"><Skeleton className="h-4 w-full max-w-md" /></td>
-        </tr>
-      ))}
-    </>
+    <div className="overflow-hidden rounded-xl border bg-surface-0 shadow-[var(--shadow-card)]">
+      <div className="min-h-[200px] overflow-x-hidden py-2">
+        {Array.from({ length: rows }).map((_, i) => (
+          <div key={i} className="flex items-center gap-3 px-4 py-[5px]">
+            <Skeleton className="h-3.5 w-24 shrink-0" />
+            <Skeleton className="h-3.5 w-12 shrink-0" />
+            <Skeleton className="h-3.5 w-16 shrink-0" />
+            {/* Deterministic width variation so lines read as log messages */}
+            <Skeleton className="h-3.5" style={{ width: `${30 + ((i * 23) % 50)}%` }} />
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
