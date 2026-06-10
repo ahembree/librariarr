@@ -591,7 +591,7 @@ export const MediaTable = memo(function MediaTable({ items, onItemClick, sortBy,
 
     if (!onSort || !sortable) {
       return (
-        <TableHead key={key} className="font-display text-xs uppercase tracking-wider" style={{ width, position: "relative" }}>
+        <TableHead key={key} className="font-mono text-[11px] uppercase tracking-[0.08em] text-faint" style={{ width, position: "relative" }}>
           {label}
           <div
             className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/50 active:bg-primary z-10 touch-none"
@@ -607,7 +607,7 @@ export const MediaTable = memo(function MediaTable({ items, onItemClick, sortBy,
     return (
       <TableHead
         key={key}
-        className="cursor-pointer select-none hover:text-foreground font-display text-xs uppercase tracking-wider"
+        className="cursor-pointer select-none hover:text-foreground font-mono text-[11px] uppercase tracking-[0.08em] text-faint"
         style={{ width, position: "relative" }}
         onClick={() => onSort(field)}
       >
