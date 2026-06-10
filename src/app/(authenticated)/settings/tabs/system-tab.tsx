@@ -3,13 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { SettingsSection } from "../components";
 import {
   Collapsible,
   CollapsibleContent,
@@ -201,17 +195,7 @@ export function SystemTab({
       </div>
 
       {/* System Information */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Info className="h-4 w-4" />
-            System Information
-          </CardTitle>
-          <CardDescription>
-            Version, database, and library statistics.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <SettingsSection icon={Info} title="System Information" description="Version, database, and library statistics.">
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
             <div>
               <p className="text-sm text-muted-foreground">Application Version</p>
@@ -259,21 +243,10 @@ export function SystemTab({
               <p className="font-medium">{systemInfo?.stats.servers ?? "..."}</p>
             </div>
           </div>
-        </CardContent>
-      </Card>
+      </SettingsSection>
 
       {/* Image Cache */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <HardDrive className="h-4 w-4" />
-            Image Cache
-          </CardTitle>
-          <CardDescription>
-            Cached artwork from your media servers — clear to free disk space.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <SettingsSection icon={HardDrive} title="Image Cache" description="Cached artwork from your media servers — clear to free disk space.">
           <div className="flex items-center justify-between gap-4">
             <div>
               <p className="text-sm text-muted-foreground">Cached Images</p>
@@ -297,21 +270,10 @@ export function SystemTab({
               Clear Image Cache
             </Button>
           </div>
-        </CardContent>
-      </Card>
+      </SettingsSection>
 
       {/* Release Notes */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Newspaper className="h-4 w-4" />
-            Release Notes
-          </CardTitle>
-          <CardDescription>
-            Recent changes to Librariarr — click any version to expand.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <SettingsSection icon={Newspaper} title="Release Notes" description="Recent changes to Librariarr — click any version to expand.">
           {loadingChangelog ? (
             <div className="flex items-center justify-center py-6">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -331,8 +293,7 @@ export function SystemTab({
               Unable to load release notes. Version information may be unavailable.
             </p>
           )}
-        </CardContent>
-      </Card>
+      </SettingsSection>
     </div>
   );
 }
