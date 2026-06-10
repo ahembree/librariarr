@@ -18,7 +18,7 @@ import {
   Bell,
   Lock,
 } from "lucide-react";
-import { TabNav, type TabNavItem } from "@/components/tab-nav";
+import { cn } from "@/lib/utils";
 import { SettingsSkeleton } from "@/components/skeletons";
 
 // ─── Tab components ───
@@ -72,19 +72,53 @@ function getInitialSettingsTab(): SettingsTab {
 
 // ─── Tab navigation helpers ───
 
-function buildSettingsTabs(updateAvailable?: boolean, latestVersion?: string | null): TabNavItem<SettingsTab>[] {
-  return SETTINGS_TABS.map((tab) => ({
-    value: tab.value,
-    label: tab.label,
-    icon: tab.icon,
-    indicator:
-      tab.value === "system" && updateAvailable ? (
-        <span
-          className="h-2 w-2 rounded-full bg-emerald-400 shrink-0"
-          title={latestVersion ? `Update available: v${latestVersion}` : "Update available"}
-        />
-      ) : undefined,
-  }));
+/** Sticky vertical sub-nav for the settings panel (handoff §11). */
+function SettingsSubNav({
+  activeTab,
+  onTabChange,
+  updateAvailable,
+  latestVersion,
+}: {
+  activeTab: SettingsTab;
+  onTabChange: (tab: SettingsTab) => void;
+  updateAvailable?: boolean;
+  latestVersion?: string | null;
+}) {
+  return (
+    <nav
+      role="tablist"
+      aria-label="Settings sections"
+      className="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+    >
+      {SETTINGS_TABS.map((tab) => {
+        const Icon = tab.icon;
+        const isActive = activeTab === tab.value;
+        return (
+          <button
+            key={tab.value}
+            role="tab"
+            aria-selected={isActive}
+            onClick={() => onTabChange(tab.value)}
+            className={cn(
+              "flex shrink-0 items-center gap-2.5 rounded-[9px] px-3 py-2 text-sm font-medium whitespace-nowrap transition-colors",
+              isActive
+                ? "bg-brand-dim text-brand-bright"
+                : "text-muted-foreground hover:bg-surface-2 hover:text-foreground",
+            )}
+          >
+            <Icon className="h-[17px] w-[17px] shrink-0" />
+            <span className="flex-1 text-left">{tab.label}</span>
+            {tab.value === "system" && updateAvailable && (
+              <span
+                className="h-2 w-2 shrink-0 rounded-full bg-green shadow-[0_0_8px_var(--green)]"
+                title={latestVersion ? `Update available: v${latestVersion}` : "Update available"}
+              />
+            )}
+          </button>
+        );
+      })}
+    </nav>
+  );
 }
 
 // ─── Main component ───
@@ -1996,14 +2030,17 @@ export default function SettingsPage() {
         <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Settings</h1>
       </div>
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as SettingsTab)} className="space-y-6">
-        <TabNav
-          tabs={buildSettingsTabs(systemInfo?.updateInfo?.updateAvailable, systemInfo?.updateInfo?.latestVersion)}
-          activeTab={activeTab}
-          onTabChange={setActiveTab}
-          className="mb-6"
-        />
-
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as SettingsTab)}>
+        <div className="flex flex-col gap-6 lg:flex-row lg:gap-8">
+          <aside className="shrink-0 self-start lg:sticky lg:top-6 lg:w-[216px]">
+            <SettingsSubNav
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              updateAvailable={systemInfo?.updateInfo?.updateAvailable}
+              latestVersion={systemInfo?.updateInfo?.latestVersion}
+            />
+          </aside>
+          <div className="min-w-0 flex-1 space-y-6">
         <TabsContent value="general">
           <GeneralTab
             accentColor={accentColor}
@@ -2346,6 +2383,8 @@ export default function SettingsPage() {
             loadingChangelog={loadingChangelog}
           />
         </TabsContent>
+          </div>
+        </div>
       </Tabs>
     </div>
   );
