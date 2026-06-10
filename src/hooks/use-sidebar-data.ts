@@ -96,10 +96,16 @@ function buildNavigation(
   ].filter((group) => group.items.length > 0);
 }
 
+export interface CurrentUser {
+  username: string;
+  authMethod: string;
+}
+
 export function useSidebarData() {
   const router = useRouter();
   const [availableTypes, setAvailableTypes] = useState<LibraryType[]>(["MOVIE", "SERIES", "MUSIC"]);
   const [allKnownTypes, setAllKnownTypes] = useState<LibraryType[]>(["MOVIE", "SERIES", "MUSIC"]);
+  const [user, setUser] = useState<CurrentUser | null>(null);
   const [collapsed, setCollapsed] = useState(() => {
     if (typeof window === "undefined") return false;
     return localStorage.getItem("sidebar-collapsed") === "true";
@@ -134,6 +140,15 @@ export function useSidebarData() {
           setUpdateAvailable(true);
           setLatestVersion(data.latestVersion);
         }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.username) setUser({ username: data.username, authMethod: data.authMethod });
       })
       .catch(() => {});
   }, []);
@@ -195,5 +210,5 @@ export function useSidebarData() {
     router.push("/login");
   };
 
-  return { navigation, collapsed, setCollapsed, handleLogout };
+  return { navigation, collapsed, setCollapsed, handleLogout, user };
 }

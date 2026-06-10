@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Sidebar } from "@/components/sidebar";
+import { Topbar } from "@/components/topbar";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { Menu, AlertTriangle } from "lucide-react";
 import { Logo } from "@/components/logo";
@@ -58,7 +59,7 @@ export function AuthenticatedShell({ children }: { children: React.ReactNode }) 
     <div className="flex h-screen overflow-hidden">
       <Sidebar mobileOpen={mobileOpen} onMobileOpenChange={setMobileOpen} />
       <div className="flex flex-1 flex-col overflow-hidden border-l border-white/3">
-        {isMobile && (
+        {isMobile ? (
           <header className="flex h-14 shrink-0 items-center border-b border-white/5 glass px-4">
             <Button
               variant="ghost"
@@ -74,9 +75,13 @@ export function AuthenticatedShell({ children }: { children: React.ReactNode }) 
               }}
             >
               <Logo size={32} />
-              <span className="text-lg font-semibold font-display tracking-tight">Librariarr</span>
+              <span className="text-lg font-semibold font-display tracking-tight">
+                Librari<span className="text-brand-bright">arr</span>
+              </span>
             </button>
           </header>
+        ) : (
+          <Topbar />
         )}
         {unreachableServers.length > 0 && (
           <Link
