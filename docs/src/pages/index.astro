@@ -520,28 +520,56 @@
 
       .integration-logos {
         display: flex;
-        gap: 1rem;
+        gap: 0.85rem;
         justify-content: center;
         flex-wrap: wrap;
       }
 
       .integration-chip {
+        --brand: var(--text-muted);
         display: inline-flex;
         align-items: center;
-        gap: 0.5rem;
-        padding: 0.6rem 1.25rem;
+        gap: 0.6rem;
+        padding: 0.5rem 1.15rem 0.5rem 0.5rem;
         background: var(--bg-card);
-        border: 1px solid var(--border);
+        border: 1px solid color-mix(in oklab, var(--brand) 28%, var(--border));
         border-radius: 999px;
-        font-size: 0.9rem;
-        font-weight: 500;
-        color: var(--text-muted);
-        transition: border-color 0.2s, color 0.2s;
+        font-size: 0.92rem;
+        font-weight: 600;
+        color: var(--text);
+        transition: border-color 0.2s, color 0.2s, background 0.2s, box-shadow 0.25s,
+          transform 0.2s;
       }
 
       .integration-chip:hover {
-        border-color: var(--border-strong);
-        color: var(--text);
+        transform: translateY(-2px);
+        border-color: color-mix(in oklab, var(--brand) 70%, transparent);
+        background: color-mix(in oklab, var(--brand) 9%, var(--bg-card));
+        box-shadow: 0 12px 26px -12px color-mix(in oklab, var(--brand) 65%, transparent);
+      }
+
+      .integration-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.85rem;
+        height: 1.85rem;
+        border-radius: 50%;
+        color: var(--brand);
+        background: color-mix(in oklab, var(--brand) 16%, transparent);
+        border: 1px solid color-mix(in oklab, var(--brand) 32%, transparent);
+        transition: background 0.2s, color 0.2s, transform 0.2s;
+      }
+
+      .integration-icon svg {
+        width: 1.05rem;
+        height: 1.05rem;
+      }
+
+      .integration-chip:hover .integration-icon {
+        background: var(--brand);
+        color: var(--bg);
+        transform: scale(1.05);
       }
 
       /* CTA */
@@ -1032,13 +1060,48 @@
       <h2>Built to integrate</h2>
       <p>Connect your existing media stack.</p>
       <div class="integration-logos">
-        <span class="integration-chip">Plex</span>
-        <span class="integration-chip">Jellyfin</span>
-        <span class="integration-chip">Emby</span>
-        <span class="integration-chip">Sonarr</span>
-        <span class="integration-chip">Radarr</span>
-        <span class="integration-chip">Lidarr</span>
-        <span class="integration-chip">Seerr</span>
+        <span class="integration-chip" style="--brand: #e5a00d">
+          <span class="integration-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polygon points="10 8 16 12 10 16" fill="currentColor" stroke="none"></polygon></svg>
+          </span>
+          Plex
+        </span>
+        <span class="integration-chip" style="--brand: #aa5cc3">
+          <span class="integration-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"></circle><path d="M8 16a5.5 5.5 0 0 1 0-8"></path><path d="M16 8a5.5 5.5 0 0 1 0 8"></path><path d="M5 19a10 10 0 0 1 0-14"></path><path d="M19 5a10 10 0 0 1 0 14"></path></svg>
+          </span>
+          Jellyfin
+        </span>
+        <span class="integration-chip" style="--brand: #52b54b">
+          <span class="integration-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"></rect><rect x="3" y="13" width="18" height="7" rx="2"></rect><line x1="7" y1="7.5" x2="7.01" y2="7.5"></line><line x1="7" y1="16.5" x2="7.01" y2="16.5"></line></svg>
+          </span>
+          Emby
+        </span>
+        <span class="integration-chip" style="--brand: #3fbdf4">
+          <span class="integration-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="13" rx="2"></rect><polyline points="8 3 12 7 16 3"></polyline></svg>
+          </span>
+          Sonarr
+        </span>
+        <span class="integration-chip" style="--brand: #fec132">
+          <span class="integration-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="7.5" y1="4" x2="7.5" y2="20"></line><line x1="16.5" y1="4" x2="16.5" y2="20"></line><line x1="3" y1="12" x2="21" y2="12"></line></svg>
+          </span>
+          Radarr
+        </span>
+        <span class="integration-chip" style="--brand: #2ec46e">
+          <span class="integration-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l11-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="17" cy="16" r="3"></circle></svg>
+          </span>
+          Lidarr
+        </span>
+        <span class="integration-chip" style="--brand: #6366f1">
+          <span class="integration-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.5" y2="16.5"></line></svg>
+          </span>
+          Seerr
+        </span>
       </div>
     </section>
 
