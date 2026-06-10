@@ -2,14 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { SettingsSection } from "../components";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -173,17 +166,7 @@ export function GeneralTab({
       <section className="space-y-4">
         <h3 className="text-lg font-semibold">Appearance</h3>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Palette className="h-4 w-4" />
-              Accent Color
-            </CardTitle>
-            <CardDescription>
-              Choose a color theme for buttons, active items, and highlights.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+        <SettingsSection icon={Palette} title="Accent Color" description="Choose a color theme for buttons, active items, and highlights.">
             <div className="flex flex-wrap gap-3">
               {ACCENT_PRESETS.map((preset) => (
                 <button
@@ -204,30 +187,18 @@ export function GeneralTab({
                 </button>
               ))}
             </div>
-          </CardContent>
-        </Card>
+        </SettingsSection>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Paintbrush className="h-4 w-4" />
-              Badge & Chart Colors
-            </CardTitle>
-            <CardDescription>
-              Customize colors for resolution, dynamic range, and audio profile badges and charts.
-            </CardDescription>
-            <CardAction>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-xs"
-                onClick={onResetChipColors}
-              >
-                Reset to defaults
-              </Button>
-            </CardAction>
-          </CardHeader>
-          <CardContent>
+        <SettingsSection
+          icon={Paintbrush}
+          title="Badge & Chart Colors"
+          description="Customize colors for resolution, dynamic range, and audio profile badges and charts."
+          action={
+            <Button variant="ghost" size="sm" className="text-xs" onClick={onResetChipColors}>
+              Reset to defaults
+            </Button>
+          }
+        >
             <div className="space-y-5">
               {CHIP_CATEGORY_ORDER.map((category) => (
                 <div key={category}>
@@ -272,22 +243,11 @@ export function GeneralTab({
                 </div>
               ))}
             </div>
-          </CardContent>
-        </Card>
+        </SettingsSection>
       </section>
 
       {/* Display */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Eye className="h-4 w-4" />
-            Display
-          </CardTitle>
-          <CardDescription>
-            Configure how stats and library data are presented across the app.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
+      <SettingsSection icon={Eye} title="Display" description="Configure how stats and library data are presented across the app." contentClassName="space-y-6">
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
               <Label>Deduplicate stats across servers</Label>
@@ -360,21 +320,10 @@ export function GeneralTab({
               </div>
             </>
           )}
-        </CardContent>
-      </Card>
+      </SettingsSection>
 
       {/* Data Retention */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <History className="h-4 w-4" />
-            Data Retention
-          </CardTitle>
-          <CardDescription>
-            How long logs and action history are kept before being archived or pruned.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <SettingsSection icon={History} title="Data Retention" description="How long logs and action history are kept before being archived or pruned.">
           <div className="grid gap-6 sm:grid-cols-2">
             <div>
               <Label htmlFor="log-retention">Keep logs for</Label>
@@ -435,21 +384,10 @@ export function GeneralTab({
               </p>
             </div>
           </div>
-        </CardContent>
-      </Card>
+      </SettingsSection>
 
       {/* Backup & Restore */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <DatabaseBackup className="h-4 w-4" />
-            Backup & Restore
-          </CardTitle>
-          <CardDescription>
-            Schedule automatic backups, manage encryption, and restore from previous backups.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
+      <SettingsSection icon={DatabaseBackup} title="Backup & Restore" description="Schedule automatic backups, manage encryption, and restore from previous backups." contentClassName="space-y-6">
           {/* Schedule */}
           <div>
             <h4 className="text-sm font-medium mb-3">Schedule</h4>
@@ -696,8 +634,7 @@ export function GeneralTab({
               Loading backups...
             </div>
           )}
-        </CardContent>
-      </Card>
+      </SettingsSection>
 
     </div>
   );
