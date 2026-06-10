@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { toast } from "sonner";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
 import {
   DEFAULT_CHIP_COLORS,
@@ -807,8 +808,8 @@ export default function SettingsPage() {
         clearInterval(interval);
         setSyncingServer(null);
       }, 300000);
-    } catch (error) {
-      console.error("Failed to trigger sync:", error);
+    } catch {
+      toast.error("Failed to start sync");
       setSyncingServer(null);
     }
   };
@@ -817,14 +818,20 @@ export default function SettingsPage() {
     const enabledServers = servers.filter((s) => s.enabled);
     if (enabledServers.length === 0) return;
     try {
-      await Promise.allSettled(
+      const results = await Promise.allSettled(
         enabledServers.map((server) =>
           fetch(`/api/servers/${server.id}/sync`, { method: "POST" })
         )
       );
+      const failed = results.filter(
+        (r) => r.status === "rejected" || !r.value.ok
+      ).length;
+      if (failed > 0) {
+        toast.error(`Failed to start sync for ${failed} of ${enabledServers.length} servers`);
+      }
       await fetchServers();
-    } catch (error) {
-      console.error("Failed to trigger sync all:", error);
+    } catch {
+      toast.error("Failed to start sync");
     }
   };
 
@@ -847,11 +854,16 @@ export default function SettingsPage() {
     setRemovingServer(true);
     try {
       const qs = deleteData ? "?deleteData=true" : "";
-      await fetch(`/api/servers/${removeServerDialog.serverId}${qs}`, { method: "DELETE" });
+      const res = await fetch(`/api/servers/${removeServerDialog.serverId}${qs}`, { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Failed to remove server");
+        return;
+      }
+      toast.success(`${removeServerDialog.serverName} removed`);
       setRemoveServerDialog(null);
       await fetchServers();
-    } catch (error) {
-      console.error("Failed to remove server:", error);
+    } catch {
+      toast.error("Failed to remove server");
     } finally {
       setRemovingServer(false);
     }
@@ -1162,14 +1174,15 @@ export default function SettingsPage() {
     setScheduledJobTime(value);
     setSavingJobTime(true);
     try {
-      await fetch("/api/settings/scheduled-job-time", {
+      const res = await fetch("/api/settings/scheduled-job-time", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ scheduledJobTime: value }),
       });
+      if (!res.ok) toast.error("Failed to save scheduled job time");
       fetchScheduleInfo();
-    } catch (error) {
-      console.error("Failed to save scheduled job time:", error);
+    } catch {
+      toast.error("Failed to save scheduled job time");
     } finally {
       setSavingJobTime(false);
     }
@@ -1184,14 +1197,14 @@ export default function SettingsPage() {
         body: JSON.stringify({ job }),
       });
       if (!res.ok) {
-        const data = await res.json();
-        console.error("Run now failed:", data.error);
+        const data = await res.json().catch(() => null);
+        toast.error("Failed to start job", { description: data?.error });
       }
       // Refresh schedule info + sync status after completion
       fetchScheduleInfo();
       if (job === "sync") fetchServers();
-    } catch (error) {
-      console.error("Run now failed:", error);
+    } catch {
+      toast.error("Failed to start job");
     } finally {
       setRunningJob(null);
     }
@@ -1203,13 +1216,14 @@ export default function SettingsPage() {
     setAccentColor(name);
     window.dispatchEvent(new CustomEvent("accent-color-changed", { detail: name }));
     try {
-      await fetch("/api/settings/accent-color", {
+      const res = await fetch("/api/settings/accent-color", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accentColor: name }),
       });
-    } catch (error) {
-      console.error("Failed to save accent color:", error);
+      if (!res.ok) toast.error("Failed to save accent color");
+    } catch {
+      toast.error("Failed to save accent color");
     }
   };
 
@@ -1221,13 +1235,14 @@ export default function SettingsPage() {
     setChipColors(updated);
     updateChipColorContext(updated);
     try {
-      await fetch("/api/settings/chip-colors", {
+      const res = await fetch("/api/settings/chip-colors", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ chipColors: updated }),
       });
-    } catch (error) {
-      console.error("Failed to save chip colors:", error);
+      if (!res.ok) toast.error("Failed to save chip colors");
+    } catch {
+      toast.error("Failed to save chip colors");
     }
   };
 
@@ -1235,27 +1250,32 @@ export default function SettingsPage() {
     setChipColors(DEFAULT_CHIP_COLORS);
     updateChipColorContext(DEFAULT_CHIP_COLORS);
     try {
-      await fetch("/api/settings/chip-colors", {
+      const res = await fetch("/api/settings/chip-colors", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ chipColors: DEFAULT_CHIP_COLORS }),
       });
-    } catch (error) {
-      console.error("Failed to reset chip colors:", error);
+      if (!res.ok) toast.error("Failed to reset chip colors");
+    } catch {
+      toast.error("Failed to reset chip colors");
     }
   };
 
   const saveDedupSetting = async (value: boolean) => {
     setSavingDedup(true);
     try {
-      await fetch("/api/settings/dedup", {
+      const res = await fetch("/api/settings/dedup", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ dedupStats: value }),
       });
+      if (!res.ok) {
+        toast.error("Failed to save deduplication setting");
+        return;
+      }
       setDedupStats(value);
-    } catch (error) {
-      console.error("Failed to save dedup setting:", error);
+    } catch {
+      toast.error("Failed to save deduplication setting");
     } finally {
       setSavingDedup(false);
     }
@@ -1273,9 +1293,11 @@ export default function SettingsPage() {
       });
       if (response.ok) {
         setLogRetentionDays(days);
+      } else {
+        toast.error("Failed to save log retention");
       }
-    } catch (error) {
-      console.error("Failed to save log retention:", error);
+    } catch {
+      toast.error("Failed to save log retention");
     } finally {
       setSavingLogRetention(false);
     }
@@ -1293,9 +1315,11 @@ export default function SettingsPage() {
       });
       if (response.ok) {
         setActionRetentionDays(days);
+      } else {
+        toast.error("Failed to save action history retention");
       }
-    } catch (error) {
-      console.error("Failed to save action retention:", error);
+    } catch {
+      toast.error("Failed to save action history retention");
     } finally {
       setSavingActionRetention(false);
     }
@@ -1305,13 +1329,14 @@ export default function SettingsPage() {
     const newServerId = value === "none" ? null : value;
     setPreferredTitleServerId(newServerId);
     try {
-      await fetch("/api/settings/title-preference", {
+      const res = await fetch("/api/settings/title-preference", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ serverId: newServerId, field: "title" }),
       });
-    } catch (error) {
-      console.error("Failed to save title preference:", error);
+      if (!res.ok) toast.error("Failed to save title preference");
+    } catch {
+      toast.error("Failed to save title preference");
     }
   };
 
@@ -1319,13 +1344,14 @@ export default function SettingsPage() {
     const newServerId = value === "none" ? null : value;
     setPreferredArtworkServerId(newServerId);
     try {
-      await fetch("/api/settings/title-preference", {
+      const res = await fetch("/api/settings/title-preference", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ serverId: newServerId, field: "artwork" }),
       });
-    } catch (error) {
-      console.error("Failed to save artwork preference:", error);
+      if (!res.ok) toast.error("Failed to save artwork preference");
+    } catch {
+      toast.error("Failed to save artwork preference");
     }
   };
 
@@ -1333,12 +1359,15 @@ export default function SettingsPage() {
     setBackupSchedule(value);
     setBackupSaving(true);
     try {
-      await fetch("/api/settings/backup-schedule", {
+      const res = await fetch("/api/settings/backup-schedule", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ backupSchedule: value }),
       });
-    } catch {} finally {
+      if (!res.ok) toast.error("Failed to save backup schedule");
+    } catch {
+      toast.error("Failed to save backup schedule");
+    } finally {
       setBackupSaving(false);
     }
   };
@@ -1346,12 +1375,15 @@ export default function SettingsPage() {
   const handleSaveBackupRetention = async () => {
     setBackupSaving(true);
     try {
-      await fetch("/api/settings/backup-schedule", {
+      const res = await fetch("/api/settings/backup-schedule", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ backupRetentionCount }),
       });
-    } catch {} finally {
+      if (!res.ok) toast.error("Failed to save backup retention");
+    } catch {
+      toast.error("Failed to save backup retention");
+    } finally {
       setBackupSaving(false);
     }
   };
@@ -1364,8 +1396,16 @@ export default function SettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ includeMediaData }),
       });
-      if (res.ok) await fetchBackupSettings();
-    } catch {} finally {
+      if (res.ok) {
+        toast.success("Backup created");
+        await fetchBackupSettings();
+      } else {
+        const data = await res.json().catch(() => null);
+        toast.error("Failed to create backup", { description: data?.error });
+      }
+    } catch {
+      toast.error("Failed to create backup");
+    } finally {
       setCreatingBackup(false);
     }
   };
@@ -1381,8 +1421,13 @@ export default function SettingsPage() {
       if (res.ok) {
         const data = await res.json();
         setHasBackupPassword(data.hasPassword);
+        toast.success(password ? "Encryption password saved" : "Encryption password removed");
+      } else {
+        toast.error("Failed to save encryption password");
       }
-    } catch {} finally {
+    } catch {
+      toast.error("Failed to save encryption password");
+    } finally {
       setSavingBackupPassword(false);
     }
   };
@@ -1391,8 +1436,8 @@ export default function SettingsPage() {
     window.open(`/api/backup/${encodeURIComponent(filename)}`, "_blank");
   };
 
+  // Confirmation happens in the GeneralTab restore dialog before this is called.
   const handleRestoreBackup = async (filename: string, passphrase?: string) => {
-    if (!confirm(`Restore from "${filename}"?\n\nThis will replace ALL current data and log you out. This cannot be undone.`)) return;
     setRestoringBackup(filename);
     setRestoreProgress(null);
     try {
@@ -1402,7 +1447,7 @@ export default function SettingsPage() {
         body: JSON.stringify({ filename, ...(passphrase ? { passphrase } : {}) }),
       });
       if (!res.body) {
-        alert("Restore failed");
+        toast.error("Restore failed", { description: "The server returned an empty response." });
         return;
       }
 
@@ -1436,18 +1481,29 @@ export default function SettingsPage() {
       if (completed) {
         window.location.href = "/login";
       } else {
-        alert(lastError || "Restore failed");
+        toast.error("Restore failed", { description: lastError || undefined });
       }
-    } catch {} finally {
+    } catch {
+      toast.error("Restore failed", { description: "Network error while restoring the backup." });
+    } finally {
       setRestoringBackup(null);
       setRestoreProgress(null);
     }
   };
 
+  // Confirmation happens in the GeneralTab delete dialog before this is called.
   const handleDeleteBackup = async (filename: string) => {
-    if (!confirm(`Delete backup "${filename}"?`)) return;
-    await fetch(`/api/backup/${encodeURIComponent(filename)}`, { method: "DELETE" });
-    await fetchBackupSettings();
+    try {
+      const res = await fetch(`/api/backup/${encodeURIComponent(filename)}`, { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Failed to delete backup");
+        return;
+      }
+      toast.success("Backup deleted");
+      await fetchBackupSettings();
+    } catch {
+      toast.error("Failed to delete backup");
+    }
   };
 
   // ─── Integration handlers ───
@@ -1479,10 +1535,15 @@ export default function SettingsPage() {
 
   const deleteSonarrInstance = async (id: string) => {
     try {
-      await fetch(`/api/integrations/sonarr/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/integrations/sonarr/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Failed to remove Sonarr instance");
+        return;
+      }
+      toast.success("Sonarr instance removed");
       await fetchSonarrInstances();
-    } catch (error) {
-      console.error("Failed to delete Sonarr instance:", error);
+    } catch {
+      toast.error("Failed to remove Sonarr instance");
     }
   };
 
@@ -1513,10 +1574,15 @@ export default function SettingsPage() {
 
   const deleteRadarrInstance = async (id: string) => {
     try {
-      await fetch(`/api/integrations/radarr/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/integrations/radarr/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Failed to remove Radarr instance");
+        return;
+      }
+      toast.success("Radarr instance removed");
       await fetchRadarrInstances();
-    } catch (error) {
-      console.error("Failed to delete Radarr instance:", error);
+    } catch {
+      toast.error("Failed to remove Radarr instance");
     }
   };
 
@@ -1547,10 +1613,15 @@ export default function SettingsPage() {
 
   const deleteLidarrInstance = async (id: string) => {
     try {
-      await fetch(`/api/integrations/lidarr/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/integrations/lidarr/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Failed to remove Lidarr instance");
+        return;
+      }
+      toast.success("Lidarr instance removed");
       await fetchLidarrInstances();
-    } catch (error) {
-      console.error("Failed to delete Lidarr instance:", error);
+    } catch {
+      toast.error("Failed to remove Lidarr instance");
     }
   };
 
@@ -1581,10 +1652,15 @@ export default function SettingsPage() {
 
   const deleteSeerrInstance = async (id: string) => {
     try {
-      await fetch(`/api/integrations/seerr/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/integrations/seerr/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Failed to remove Seerr instance");
+        return;
+      }
+      toast.success("Seerr instance removed");
       await fetchSeerrInstances();
-    } catch (error) {
-      console.error("Failed to delete Seerr instance:", error);
+    } catch {
+      toast.error("Failed to remove Seerr instance");
     }
   };
 
@@ -1980,13 +2056,19 @@ export default function SettingsPage() {
 
   // ─── System handlers ───
 
+  // Confirmation happens in the SystemTab dialog before this is called.
   const handleClearImageCache = async () => {
     setClearingImageCache(true);
     try {
-      await fetch("/api/settings/image-cache", { method: "DELETE" });
+      const res = await fetch("/api/settings/image-cache", { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Failed to clear image cache");
+        return;
+      }
+      toast.success("Image cache cleared");
       await fetchImageCacheStats();
     } catch {
-      // Ignore
+      toast.error("Failed to clear image cache");
     } finally {
       setClearingImageCache(false);
     }
@@ -2028,6 +2110,9 @@ export default function SettingsPage() {
     <div className="p-4 sm:p-6 lg:p-8">
       <div className="mb-6">
         <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Settings</h1>
+        <p className="text-muted-foreground mt-1">
+          Manage servers, integrations, schedules, and application preferences.
+        </p>
       </div>
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as SettingsTab)}>

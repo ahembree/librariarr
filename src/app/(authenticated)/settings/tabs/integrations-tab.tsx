@@ -1,6 +1,17 @@
 "use client";
 
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Card,
   CardContent,
@@ -67,6 +78,40 @@ const INTEGRATION_TYPE_STYLES: Record<string, IntegrationTypeStyle> = {
 };
 
 // ─── Shared sub-components ───
+
+/** Confirmation before disconnecting an integration instance. */
+function ConfirmRemoveInstanceDialog({
+  instance,
+  productName,
+  onOpenChange,
+  onConfirm,
+}: {
+  instance: { id: string; name: string } | null;
+  productName: string;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <AlertDialog open={!!instance} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Remove {instance?.name}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This removes the {productName} connection from Librariarr — lifecycle rules will no
+            longer match or act on items through it. Nothing is changed in {productName} itself.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={onConfirm}>
+            <Trash2 className="mr-2 h-4 w-4" />
+            Remove
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
 
 function TestResultBadge({ result }: { result: TestResult }) {
   const Icon = result.ok ? CheckCircle : AlertCircle;
@@ -331,6 +376,7 @@ function ArrSection({
   const style = INTEGRATION_TYPE_STYLES[idPrefix] ?? INTEGRATION_TYPE_STYLES.sonarr;
   const disabledCount = instances.filter((i) => !i.enabled).length;
   const hasInstances = instances.length > 0;
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
 
   return (
     <section>
@@ -589,8 +635,9 @@ function ArrSection({
                         variant="ghost"
                         size="icon-sm"
                         className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        onClick={() => onDelete(instance.id)}
-                        title="Delete instance"
+                        onClick={() => setConfirmDelete({ id: instance.id, name: instance.name })}
+                        aria-label={`Remove ${instance.name}`}
+                        title="Remove instance"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
@@ -602,6 +649,16 @@ function ArrSection({
           ))}
         </div>
       )}
+
+      <ConfirmRemoveInstanceDialog
+        instance={confirmDelete}
+        productName={title}
+        onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
+        onConfirm={() => {
+          if (confirmDelete) onDelete(confirmDelete.id);
+          setConfirmDelete(null);
+        }}
+      />
     </section>
   );
 }
@@ -632,6 +689,7 @@ function SeerrSection({
   const style = INTEGRATION_TYPE_STYLES.seerr;
   const disabledCount = instances.filter((i) => !i.enabled).length;
   const hasInstances = instances.length > 0;
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
 
   return (
     <section>
@@ -859,8 +917,9 @@ function SeerrSection({
                         variant="ghost"
                         size="icon-sm"
                         className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        onClick={() => onDelete(instance.id)}
-                        title="Delete instance"
+                        onClick={() => setConfirmDelete({ id: instance.id, name: instance.name })}
+                        aria-label={`Remove ${instance.name}`}
+                        title="Remove instance"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
@@ -872,6 +931,16 @@ function SeerrSection({
           ))}
         </div>
       )}
+
+      <ConfirmRemoveInstanceDialog
+        instance={confirmDelete}
+        productName="Seerr"
+        onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
+        onConfirm={() => {
+          if (confirmDelete) onDelete(confirmDelete.id);
+          setConfirmDelete(null);
+        }}
+      />
     </section>
   );
 }
