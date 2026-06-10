@@ -607,6 +607,91 @@
         color: var(--text);
       }
 
+      /* Lightbox */
+      .shot img,
+      .bento-media img {
+        cursor: zoom-in;
+      }
+
+      .shot img:focus-visible,
+      .bento-media img:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      .lightbox {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: clamp(1rem, 4vw, 3rem);
+        background: oklch(0.1 0.005 270 / 82%);
+        backdrop-filter: blur(8px);
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.25s ease, visibility 0.25s ease;
+        cursor: zoom-out;
+      }
+
+      .lightbox.open {
+        opacity: 1;
+        visibility: visible;
+      }
+
+      .lightbox img {
+        max-width: min(1280px, 100%);
+        max-height: 88vh;
+        width: auto;
+        height: auto;
+        border-radius: 12px;
+        border: 1px solid var(--border-strong);
+        box-shadow: 0 40px 90px -20px oklch(0 0 0 / 85%);
+        transform: scale(0.97);
+        transition: transform 0.25s ease;
+        cursor: default;
+      }
+
+      .lightbox.open img {
+        transform: scale(1);
+      }
+
+      .lightbox-close {
+        position: absolute;
+        top: clamp(1rem, 3vw, 1.5rem);
+        right: clamp(1rem, 3vw, 1.5rem);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 2.5rem;
+        height: 2.5rem;
+        padding: 0;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--bg-card);
+        color: var(--text);
+        cursor: pointer;
+        transition: background 0.2s, border-color 0.2s;
+      }
+
+      .lightbox-close:hover {
+        background: var(--bg-card-hover);
+        border-color: var(--border-strong);
+      }
+
+      .lightbox-close svg {
+        width: 1.25rem;
+        height: 1.25rem;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .lightbox,
+        .lightbox img {
+          transition: none;
+        }
+      }
+
       /* Responsive */
       @media (max-width: 880px) {
         .feature-row {
@@ -988,5 +1073,73 @@
         <a href="https://github.com/ahembree/librariarr">View on GitHub</a>
       </p>
     </footer>
+
+    <div
+      class="lightbox"
+      id="lightbox"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Screenshot preview"
+      aria-hidden="true"
+    >
+      <button
+        class="lightbox-close"
+        id="lightbox-close"
+        type="button"
+        aria-label="Close preview"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
+      <img id="lightbox-img" src="" alt="" />
+    </div>
+
+    <script>
+      const lightbox = document.getElementById("lightbox");
+      const lightboxImg = document.getElementById("lightbox-img");
+      const closeBtn = document.getElementById("lightbox-close");
+      const triggers = document.querySelectorAll(".shot img, .bento-media img");
+      let lastFocused = null;
+
+      function openLightbox(img) {
+        lastFocused = document.activeElement;
+        lightboxImg.src = img.currentSrc || img.src;
+        lightboxImg.alt = img.alt || "";
+        lightbox.classList.add("open");
+        lightbox.setAttribute("aria-hidden", "false");
+        document.body.style.overflow = "hidden";
+        closeBtn.focus();
+      }
+
+      function closeLightbox() {
+        if (!lightbox.classList.contains("open")) return;
+        lightbox.classList.remove("open");
+        lightbox.setAttribute("aria-hidden", "true");
+        document.body.style.overflow = "";
+        if (lastFocused && typeof lastFocused.focus === "function") {
+          lastFocused.focus();
+        }
+      }
+
+      triggers.forEach((img) => {
+        img.setAttribute("role", "button");
+        img.setAttribute("tabindex", "0");
+        img.addEventListener("click", () => openLightbox(img));
+        img.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openLightbox(img);
+          }
+        });
+      });
+
+      closeBtn.addEventListener("click", closeLightbox);
+      // Click anywhere outside the image (backdrop or close button) dismisses.
+      lightbox.addEventListener("click", (event) => {
+        if (event.target !== lightboxImg) closeLightbox();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeLightbox();
+      });
+    </script>
   </body>
 </html>
