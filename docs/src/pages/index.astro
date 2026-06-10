@@ -188,8 +188,11 @@
       }
 
       .hero-badge {
-        display: inline-block;
-        padding: 0.35rem 1rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        line-height: 1;
+        padding: 0.4rem 1rem;
         border-radius: 999px;
         background: var(--accent-subtle);
         color: var(--accent);
@@ -692,15 +695,13 @@
 
       /* Live dot in the hero badge */
       .badge-dot {
-        display: inline-block;
+        flex-shrink: 0;
         width: 0.5rem;
         height: 0.5rem;
-        margin-right: 0.45rem;
         border-radius: 50%;
         background: oklch(0.72 0.17 150);
         box-shadow: 0 0 0 0 oklch(0.72 0.17 150 / 60%);
         animation: badge-pulse 2.4s ease-out infinite;
-        vertical-align: middle;
       }
 
       @keyframes badge-pulse {
