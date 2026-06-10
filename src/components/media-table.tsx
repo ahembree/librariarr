@@ -217,7 +217,7 @@ function buildColumns(getHex: (category: ChipColorCategory, value: string) => st
     className: "text-right",
     render: (item) =>
       item.playCount > 0 ? (
-        <span className="text-green-400">{item.playCount}</span>
+        <span className="text-green">{item.playCount}</span>
       ) : (
         <span className="text-muted-foreground">0</span>
       ),
