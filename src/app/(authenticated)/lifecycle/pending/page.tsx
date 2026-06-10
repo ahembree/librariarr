@@ -224,14 +224,14 @@ function VirtualizedActionTable({
         <table className="w-full caption-bottom text-sm">
           <thead className="sticky top-0 z-10 bg-background">
             <tr className="border-b bg-muted/50">
-              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Title</th>
-              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Size</th>
-              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Action</th>
-              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">{isPending ? "Scheduled" : "Date"}</th>
-              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Status</th>
-              {isPending && <th className="h-10 px-4 w-30 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground" />}
+              <th className="h-10 px-4 text-left align-middle font-mono text-[11px] uppercase tracking-[0.08em] text-faint">Title</th>
+              <th className="h-10 px-4 text-left align-middle font-mono text-[11px] uppercase tracking-[0.08em] text-faint">Size</th>
+              <th className="h-10 px-4 text-left align-middle font-mono text-[11px] uppercase tracking-[0.08em] text-faint">Action</th>
+              <th className="h-10 px-4 text-left align-middle font-mono text-[11px] uppercase tracking-[0.08em] text-faint">{isPending ? "Scheduled" : "Date"}</th>
+              <th className="h-10 px-4 text-left align-middle font-mono text-[11px] uppercase tracking-[0.08em] text-faint">Status</th>
+              {isPending && <th className="h-10 px-4 w-30 text-left align-middle font-mono text-[11px] uppercase tracking-[0.08em] text-faint" />}
               {!isPending && items.some((a) => a.status === "FAILED") && (
-                <th className="h-10 px-4 w-12 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground" />
+                <th className="h-10 px-4 w-12 text-left align-middle font-mono text-[11px] uppercase tracking-[0.08em] text-faint" />
               )}
             </tr>
           </thead>
