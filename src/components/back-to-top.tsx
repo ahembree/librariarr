@@ -38,7 +38,8 @@ export function BackToTop() {
       onClick={scrollToTop}
       aria-label="Back to top"
       className={cn(
-        "fixed bottom-16 right-6 z-30 flex h-10 w-10 items-center justify-center rounded-full",
+        // On mobile, sit above the bottom tab bar (+ any safe-area inset).
+        "fixed bottom-[calc(var(--tabbar-height)+env(safe-area-inset-bottom)+1rem)] right-6 z-30 flex h-10 w-10 items-center justify-center rounded-full md:bottom-16",
         "bg-primary text-primary-foreground shadow-lg",
         "transition-all duration-200",
         "hover:bg-primary/90 hover:scale-110",

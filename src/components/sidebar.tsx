@@ -336,7 +336,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
         <SheetContent side="left" className="w-[min(16rem,85vw)] p-0" showCloseButton={false}>
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <TooltipProvider>
-            <div className="relative flex h-full flex-col overflow-hidden bg-sidebar">
+            <div className="pt-safe pb-safe relative flex h-full flex-col overflow-hidden bg-sidebar">
               {sidebarInner(true)}
             </div>
           </TooltipProvider>
