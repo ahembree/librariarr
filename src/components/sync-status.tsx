@@ -129,7 +129,7 @@ export function SyncStatus({ onSyncComplete }: SyncStatusProps) {
           Library Sync
           {activeJobs.length > 0 && (
             <ColorChip
-              className="bg-blue-500/20 text-blue-400"
+              className="bg-sky/20 text-sky"
             >
               <Loader2 className="mr-1 h-3 w-3 animate-spin" />
               Syncing
@@ -170,10 +170,10 @@ function ActiveSyncJob({ job }: { job: SyncJob }) {
       : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;
 
   return (
-    <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 p-3">
+    <div className="rounded-lg border border-sky/30 bg-sky/5 p-3">
       <div className="flex items-center justify-between text-sm">
         <div className="flex items-center gap-2">
-          <RefreshCw className="h-3.5 w-3.5 animate-spin text-blue-400" />
+          <RefreshCw className="h-3.5 w-3.5 animate-spin text-sky" />
           <ServerTypeChip type={job.mediaServer.type} />
           <span className="font-medium">{job.mediaServer.name}</span>
         </div>
@@ -196,7 +196,7 @@ function ActiveSyncJob({ job }: { job: SyncJob }) {
           </div>
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
             <div
-              className="h-full rounded-full bg-blue-500 transition-all duration-500"
+              className="h-full rounded-full bg-sky transition-all duration-500"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -223,9 +223,9 @@ function RecentSyncJob({ job }: { job: SyncJob }) {
     <div className="flex items-center justify-between rounded-lg bg-muted/30 px-3 py-2 text-sm">
       <div className="flex items-center gap-2">
         {job.status === "COMPLETED" ? (
-          <CheckCircle className="h-3.5 w-3.5 text-green-400" />
+          <CheckCircle className="h-3.5 w-3.5 text-green" />
         ) : (
-          <XCircle className="h-3.5 w-3.5 text-red-400" />
+          <XCircle className="h-3.5 w-3.5 text-red" />
         )}
         <ServerTypeChip type={job.mediaServer.type} />
         <span className="text-muted-foreground">
@@ -237,7 +237,7 @@ function RecentSyncJob({ job }: { job: SyncJob }) {
           <span>{job.itemsProcessed.toLocaleString()} items</span>
         )}
         {job.status === "FAILED" && (
-          <span className="text-red-400 max-w-[200px] truncate">
+          <span className="text-red max-w-[200px] truncate">
             {job.error}
           </span>
         )}

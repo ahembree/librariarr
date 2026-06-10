@@ -390,7 +390,7 @@ export function SsoSection() {
   return (
     <div className="space-y-6">
       {config.overrideActive && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-400">
+        <div className="flex items-start gap-2 rounded-md border border-amber/30 bg-amber/10 p-3 text-sm text-amber">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
             <p className="font-medium">SSO disabled by environment override</p>
@@ -499,7 +499,7 @@ export function SsoSection() {
               {testResult && (
                 <span
                   className={
-                    testResult.ok ? "text-xs text-green-500" : "text-xs text-destructive"
+                    testResult.ok ? "text-xs text-green" : "text-xs text-destructive"
                   }
                 >
                   {testResult.message}
@@ -567,7 +567,7 @@ export function SsoSection() {
           </div>
         )}
         {savedAt && (
-          <div className="flex items-center gap-2 rounded-md bg-green-500/10 p-3 text-sm text-green-500">
+          <div className="flex items-center gap-2 rounded-md bg-green/10 p-3 text-sm text-green">
             <CheckCircle className="h-4 w-4 shrink-0" />
             Configuration saved
           </div>
@@ -616,7 +616,7 @@ export function SsoSection() {
         {link.ssoSubject ? (
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-sm">
-              <CheckCircle className="h-4 w-4 text-green-500" />
+              <CheckCircle className="h-4 w-4 text-green" />
               <span>
                 Linked to <strong>{link.ssoSubject}</strong>
                 {link.ssoProvider ? ` (${link.ssoProvider})` : ""}
@@ -750,7 +750,7 @@ export function SsoSection() {
           </div>
         )}
         {linkNotice && (
-          <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-400">
+          <div className="flex items-start gap-2 rounded-md border border-amber/30 bg-amber/10 p-3 text-sm text-amber">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>{linkNotice}</span>
           </div>
@@ -940,7 +940,7 @@ function StepCard({ number, title, description, status, disabled, children }: St
 function StepBadge({ number, status }: { number: number; status: StepStatus }) {
   if (status === "complete") {
     return (
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-500/10 text-green-500">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green/10 text-green">
         <CheckCircle className="h-5 w-5" />
       </div>
     );

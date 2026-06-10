@@ -174,10 +174,10 @@ function CollapsibleCriteria({ criteria }: { criteria: MatchedCriterion[] }) {
         className="border-border text-muted-foreground text-[11px] font-normal"
       >
         {c.groupName && (
-          <span className="text-blue-400 mr-0.5">[{c.groupName}]</span>
+          <span className="text-sky mr-0.5">[{c.groupName}]</span>
         )}
         {c.negate && (
-          <span className="text-red-400 mr-0.5">NOT</span>
+          <span className="text-red mr-0.5">NOT</span>
         )}
         <span className="text-muted-foreground">{c.field}</span>
         {" "}
@@ -1015,7 +1015,7 @@ export default function RuleMatchesPage() {
                             {match.ruleSet.addArrTags?.map((tag) => (
                               <ColorChip
                                 key={`add-${tag}`}
-                                className="bg-green-500/20 text-green-400 border-green-500/30"
+                                className="bg-green/20 text-green border-green/30"
                               >
                                 +{tag}
                               </ColorChip>
@@ -1023,7 +1023,7 @@ export default function RuleMatchesPage() {
                             {match.ruleSet.removeArrTags?.map((tag) => (
                               <ColorChip
                                 key={`rm-${tag}`}
-                                className="bg-red-500/20 text-red-400 border-red-500/30"
+                                className="bg-red/20 text-red border-red/30"
                               >
                                 -{tag}
                               </ColorChip>
@@ -1031,7 +1031,7 @@ export default function RuleMatchesPage() {
                           </div>
                         )}
                         {match.ruleSet.collectionEnabled && match.ruleSet.collectionName && (
-                          <span className="text-xs text-blue-400">
+                          <span className="text-xs text-sky">
                             Collection: {match.ruleSet.collectionName}
                           </span>
                         )}

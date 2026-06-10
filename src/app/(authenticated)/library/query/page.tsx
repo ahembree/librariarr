@@ -124,9 +124,9 @@ interface QueryResultItem {
 }
 
 const TYPE_BADGE_COLORS: Record<string, string> = {
-  MOVIE: "bg-blue-500/20 text-blue-400 border-blue-500/30",
+  MOVIE: "bg-sky/20 text-sky border-sky/30",
   SERIES: "bg-purple-500/20 text-purple-400 border-purple-500/30",
-  MUSIC: "bg-green-500/20 text-green-400 border-green-500/30",
+  MUSIC: "bg-green/20 text-green border-green/30",
 };
 
 const FALLBACK_ICONS: Record<string, "movie" | "series" | "music"> = {
@@ -1252,10 +1252,10 @@ export default function QueryPage() {
 
       {/* Hint: orphaned Arr/Seerr rules with no integration to evaluate them */}
       {(orphanArrRules || orphanSeerrRules || seerrWithMusic) && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
-          <AlertTriangle className="h-4 w-4 mt-0.5 text-amber-400 shrink-0" />
+        <div className="flex items-start gap-2 rounded-md border border-amber/30 bg-amber/10 p-3 text-sm">
+          <AlertTriangle className="h-4 w-4 mt-0.5 text-amber shrink-0" />
           <div className="space-y-1">
-            <p className="font-medium text-amber-400">Some criteria can&apos;t be evaluated</p>
+            <p className="font-medium text-amber">Some criteria can&apos;t be evaluated</p>
             {orphanArrRules && (
               <p className="text-muted-foreground">
                 This query uses Arr criteria but no Arr server is{" "}

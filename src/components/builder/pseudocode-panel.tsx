@@ -29,7 +29,7 @@ function PseudocodeLineItem({
   const paddingLeft = `${line.depth * 1.25}rem`;
 
   const highlightClass = green
-    ? "bg-green-500/20 border-l-2 border-green-500 rounded-sm px-2"
+    ? "bg-green/20 border-l-2 border-green rounded-sm px-2"
     : "";
 
   if (line.type === "connector") {
@@ -371,9 +371,9 @@ function renderSegments(
       if (seg.color === "eval-pass" || seg.color === "eval-fail" || seg.color === "eval") {
         const evalClass =
           seg.color === "eval-pass"
-            ? "bg-gradient-to-r from-green-500/10 to-transparent border-2 border-green-500/30"
+            ? "bg-gradient-to-r from-green/10 to-transparent border-2 border-green/30"
             : seg.color === "eval-fail"
-              ? "bg-gradient-to-r from-red-500/10 to-transparent border-2 border-red-500/30"
+              ? "bg-gradient-to-r from-red/10 to-transparent border-2 border-red/30"
               : "border-2 border-muted-foreground/20";
         return (
           <div
@@ -388,10 +388,10 @@ function renderSegments(
         seg.color === "neutral"
           ? "bg-muted-foreground/5 border-l-2 border-muted-foreground/20"
           : seg.color === "green"
-            ? "bg-green-500/15 border-l-2 border-green-500"
+            ? "bg-green/15 border-l-2 border-green"
             : seg.color === "yellow"
               ? "bg-yellow-500/15 border-l-2 border-yellow-500"
-              : "bg-red-500/15 border-l-2 border-red-500";
+              : "bg-red/15 border-l-2 border-red";
       return (
         <div key={seg.key} className={`${bgClass} rounded-sm px-2 space-y-0.5`}>
           {renderSegments(seg.segments, actualValues)}

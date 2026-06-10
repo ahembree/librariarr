@@ -100,7 +100,7 @@ export function AuthenticationTab({
       <SettingsSection icon={Link2} title="Plex Connection" description="Link your Plex account for server discovery and Plex OAuth login." contentClassName="space-y-4">
           {authInfo?.plexConnected ? (
             <div className="flex items-center gap-2 text-sm">
-              <CheckCircle className="h-4 w-4 text-green-500" />
+              <CheckCircle className="h-4 w-4 text-green" />
               <span>Connected as <strong>{authInfo.displayName}</strong></span>
             </div>
           ) : (
@@ -186,7 +186,7 @@ export function AuthenticationTab({
                   />
                 </div>
                 {wouldLockOut && (
-                  <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-400">
+                  <div className="flex items-start gap-2 rounded-md border border-amber/30 bg-amber/10 p-3 text-sm text-amber">
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                     <div>
                       <p className="font-medium">Local login is your only sign-in method</p>
@@ -209,7 +209,7 @@ export function AuthenticationTab({
             </div>
           )}
           {authInfo?.localAuthEnabled && authInfo?.localAuthHiddenBySso && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-400">
+            <div className="flex items-start gap-2 rounded-md border border-amber/30 bg-amber/10 p-3 text-sm text-amber">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
                 SSO is enabled, so the local username/password form is hidden
@@ -227,7 +227,7 @@ export function AuthenticationTab({
           {authInfo?.hasPassword && (
             <>
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <CheckCircle className="h-4 w-4 text-green-500" />
+                <CheckCircle className="h-4 w-4 text-green" />
                 Local username: <strong>{authInfo.localUsername}</strong>
               </div>
 
@@ -287,7 +287,7 @@ export function AuthenticationTab({
                   </div>
                 )}
                 {credentialsSuccess && (
-                  <div role="status" className="flex items-center gap-2 rounded-md bg-green-500/10 p-3 text-sm text-green-500">
+                  <div role="status" className="flex items-center gap-2 rounded-md bg-green/10 p-3 text-sm text-green">
                     <CheckCircle className="h-4 w-4 shrink-0" />
                     {credentialsSuccess}
                   </div>

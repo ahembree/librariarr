@@ -278,7 +278,7 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
                             className="ml-2 inline-flex shrink-0"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            <AlertTriangle className="h-4 w-4 text-amber-400" />
+                            <AlertTriangle className="h-4 w-4 text-amber" />
                           </span>
                         </TooltipTrigger>
                         <TooltipContent side="top" className="max-w-xs">
@@ -536,7 +536,7 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
           className="scale-75"
         />
         <span
-          className={`text-xs ${rule.negate ? "text-red-400 font-medium" : "text-muted-foreground"}`}
+          className={`text-xs ${rule.negate ? "text-red font-medium" : "text-muted-foreground"}`}
         >
           NOT
         </span>
