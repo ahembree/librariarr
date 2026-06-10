@@ -75,7 +75,7 @@ export const MediaCard = memo(function MediaCard({
   const card = (
     <Card
       className={cn(
-        "group cursor-pointer overflow-hidden py-0 gap-0 rounded-lg transition-all duration-300 ease-out hover:scale-[1.03] hover:shadow-[0_8px_32px_oklch(0_0_0/0.4)] hover:ring-1 hover:ring-white/10",
+        "group cursor-pointer overflow-hidden py-0 gap-0 rounded-xl transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-[5px] hover:shadow-[0_18px_40px_-12px_oklch(0_0_0/0.65)] hover:ring-1 hover:ring-white/10",
         !href && "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
       )}
       {...(!href && {
@@ -173,7 +173,7 @@ export const MediaCard = memo(function MediaCard({
     <Link
       href={href}
       onClick={onClick}
-      className="block rounded-lg focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
+      className="block rounded-xl focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
     >
       {card}
     </Link>
