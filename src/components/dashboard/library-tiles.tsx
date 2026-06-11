@@ -102,7 +102,12 @@ function Sparkline({
     setHoverIdx(idx);
   };
 
-  const hover = hoverIdx !== null ? { point: points[hoverIdx], coord: coords[hoverIdx] } : null;
+  // Guard the index against the points array shrinking while hovered
+  // (e.g. a server-filter refetch swapping in shorter history mid-hover).
+  const hover =
+    hoverIdx !== null && hoverIdx < points.length
+      ? { point: points[hoverIdx], coord: coords[hoverIdx] }
+      : null;
   const xPct = hover ? (hover.coord.x / W) * 100 : 0;
   const yPct = hover ? (hover.coord.y / H) * 100 : 0;
   // Keep the tooltip inside the tile (which clips overflow) near the edges.
@@ -201,7 +206,7 @@ function LibraryTile({
         {value}
       </div>
       <div className="mt-2 text-[13px] font-semibold">{label}</div>
-      <div className="mt-1 font-mono text-[11.5px] text-faint">{sub ?? " "}</div>
+      <div className="mt-1 font-mono text-[11.5px] text-faint">{sub ?? "\u00A0"}</div>
       {spark && (
         <div className="mt-3">
           <Sparkline points={spark} formatValue={sparkFormatValue} />

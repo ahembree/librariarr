@@ -323,6 +323,11 @@ export function DashboardCardGrid({
               }))}
             nullLabel="Unknown"
             hexColors={dynamicRangeHex}
+            // Dynamic-range values are normalized at sync time ("Dolby
+            // Vision", "HDR10+", …) and the chip-color keys match them
+            // case-sensitively — the default toUpperCase transform would
+            // break the lookup (and shout "DOLBY VISION").
+            labelTransform={(v) => v}
             filterType={filterType}
             lockedFilterType={lockedFilterType}
             availableTypes={noMusicTypes}

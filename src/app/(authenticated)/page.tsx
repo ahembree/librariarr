@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -149,8 +150,11 @@ export default function DashboardPage() {
         fetch("/api/media/library-types"),
         fetch("/api/settings/schedule-info"),
       ]);
-      const statsData = await statsRes.json();
-      setStats(statsData);
+      // An error body ({error}) is truthy — setting it as stats would crash
+      // the tiles. Leave stats null so the retry empty-state renders.
+      if (statsRes.ok) {
+        setStats(await statsRes.json());
+      }
 
       if (layoutRes.ok) {
         const layoutData = await layoutRes.json();
@@ -183,7 +187,12 @@ export default function DashboardPage() {
     }
   }, []);
 
+  // Monotonic token guards against out-of-order responses when the server
+  // filter flips quickly (a stale slow response must not win).
+  const statsReqToken = useRef(0);
+
   const fetchStats = useCallback(async () => {
+    const token = ++statsReqToken.current;
     try {
       const params = new URLSearchParams();
       if (selectedServerId !== "all") {
@@ -191,7 +200,9 @@ export default function DashboardPage() {
       }
       const url = `/api/media/stats${params.toString() ? `?${params}` : ""}`;
       const res = await fetch(url);
+      if (!res.ok || token !== statsReqToken.current) return;
       const data = await res.json();
+      if (token !== statsReqToken.current) return;
       setStats(data);
     } catch (error) {
       console.error("Failed to fetch stats:", error);
@@ -223,14 +234,19 @@ export default function DashboardPage() {
       };
       setLayout(newLayout);
 
-      // Persist to backend (fire-and-forget)
+      // Persist to backend; a rejected save (e.g. layout-size cap) would
+      // otherwise look applied and silently evaporate on reload.
       fetch("/api/settings/dashboard-layout", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ layout: newLayout }),
-      }).catch((error) => {
-        console.error("Failed to save dashboard layout:", error);
-      });
+      })
+        .then((res) => {
+          if (!res.ok) toast.error("Failed to save dashboard layout");
+        })
+        .catch(() => {
+          toast.error("Failed to save dashboard layout");
+        });
     },
     [resolvedLayout]
   );

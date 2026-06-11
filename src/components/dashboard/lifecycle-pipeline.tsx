@@ -58,6 +58,7 @@ function Stage({
 export function LifecyclePipeline({ scheduleInfo }: { scheduleInfo: ScheduleInfo | null }) {
   const [data, setData] = useState<PipelineData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,6 +69,14 @@ export function LifecyclePipeline({ scheduleInfo }: { scheduleInfo: ScheduleInfo
         fetch("/api/lifecycle/stats").then((r) => (r.ok ? r.json() : null)),
       ]);
       if (cancelled) return;
+
+      // Rules are the source of truth for "no rules yet" — if that fetch
+      // failed, don't show the create-your-first-rule CTA over an outage.
+      if (rulesRes.status !== "fulfilled" || rulesRes.value == null) {
+        setFailed(true);
+        setLoading(false);
+        return;
+      }
 
       const ruleSets: { enabled: boolean }[] =
         rulesRes.status === "fulfilled" ? (rulesRes.value?.ruleSets ?? []) : [];
@@ -94,6 +103,15 @@ export function LifecyclePipeline({ scheduleInfo }: { scheduleInfo: ScheduleInfo
 
   if (loading) {
     return <Skeleton className="h-[92px] w-full rounded-[14px]" />;
+  }
+
+  if (failed) {
+    return (
+      <div className="flex items-center gap-3 rounded-[14px] border bg-card px-5 py-4 shadow-[var(--shadow-card)] text-sm text-muted-foreground">
+        <Recycle className="h-4 w-4 shrink-0" />
+        Couldn&apos;t load lifecycle status — try reloading.
+      </div>
+    );
   }
 
   if (!data || data.ruleTotal === 0) {

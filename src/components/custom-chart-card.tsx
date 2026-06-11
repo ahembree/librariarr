@@ -846,7 +846,11 @@ function TimelineChart({ data, hiddenItems }: { data: TimelineData; hiddenItems:
             <defs>
               {hasSeries ? (
                 visibleSeries.map((label, i) => {
-                  const color = label === "Other" ? OTHER_HEX : AUTO_HEX[i % AUTO_HEX.length];
+                  // Color by the series' ORIGINAL index (same as the Area
+                  // strokes below) — using the visible index desyncs fill
+                  // hue from stroke/legend once any series is hidden.
+                  const origIdx = data.series.indexOf(label);
+                  const color = label === "Other" ? OTHER_HEX : AUTO_HEX[origIdx % AUTO_HEX.length];
                   return (
                     <linearGradient key={label} id={`tl-grad-${i}`} x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor={color} stopOpacity={0.3} />

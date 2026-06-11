@@ -99,8 +99,10 @@ interface SyncState {
  * the Arr instances) load non-blocking behind per-tile skeletons.
  */
 export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | null }) {
-  const [sessions, setSessions] = useState<SessionsState | null>(null);
-  const [health, setHealth] = useState<HealthState | null>(null);
+  // null = loading, "error" = the check itself failed (distinct from clean
+  // zero states, which would misreport an outage as "all idle").
+  const [sessions, setSessions] = useState<SessionsState | null | "error">(null);
+  const [health, setHealth] = useState<HealthState | null | "error">(null);
   const [sync, setSync] = useState<SyncState | null>(null);
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
 
@@ -108,20 +110,20 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
     fetch("/api/tools/sessions")
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (!data) return setSessions({ count: 0, unreachable: 0 });
+        if (!data) return setSessions("error");
         setSessions({
           count: (data.sessions ?? []).length,
           unreachable: (data.unreachableServers ?? []).length,
         });
       })
-      .catch(() => setSessions({ count: 0, unreachable: 0 }));
+      .catch(() => setSessions("error"));
 
     // No fresh=1: ride the server-side 30s cache instead of re-probing
     // every Arr instance on each dashboard visit.
     fetch("/api/integrations/health")
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (!data) return setHealth({ configured: 0, reachable: 0, down: [] });
+        if (!data) return setHealth("error");
         const types = [data.sonarr, data.radarr, data.lidarr, data.seerr];
         setHealth({
           configured: types.reduce((a, t) => a + (t?.configured ?? 0), 0),
@@ -134,7 +136,7 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
           ),
         });
       })
-      .catch(() => setHealth({ configured: 0, reachable: 0, down: [] }));
+      .catch(() => setHealth("error"));
 
     fetch("/api/system/update-check")
       .then((res) => (res.ok ? res.json() : null))
@@ -163,7 +165,12 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
   };
 
   useEffect(fetchSync, []);
+  // All three sync transitions matter: without started/failed the tile
+  // can't show "Syncing now" for syncs that begin after mount, and a
+  // failed sync would leave it stale.
+  useRealtime("sync:started", fetchSync);
   useRealtime("sync:completed", fetchSync);
+  useRealtime("sync:failed", fetchSync);
 
   const lastSync = sync?.lastRun ?? scheduleInfo?.sync.lastRun ?? null;
   const nextDetection = scheduleInfo?.detection.nextRun ?? null;
@@ -182,23 +189,29 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
         label="Streams"
         loading={sessions === null}
         value={
-          sessions
-            ? `${sessions.count} active`
-            : "—"
+          sessions === "error"
+            ? "Unavailable"
+            : sessions
+              ? `${sessions.count} active`
+              : "—"
         }
         sub={
-          sessions && sessions.unreachable > 0
-            ? `${sessions.unreachable} server${sessions.unreachable > 1 ? "s" : ""} unreachable`
-            : "watching now"
+          sessions === "error"
+            ? "couldn't check sessions"
+            : sessions && sessions.unreachable > 0
+              ? `${sessions.unreachable} server${sessions.unreachable > 1 ? "s" : ""} unreachable`
+              : "watching now"
         }
         tone={
-          sessions
-            ? sessions.unreachable > 0
-              ? "err"
-              : sessions.count > 0
-                ? "ok"
-                : "idle"
-            : undefined
+          sessions === "error"
+            ? "warn"
+            : sessions
+              ? sessions.unreachable > 0
+                ? "err"
+                : sessions.count > 0
+                  ? "ok"
+                  : "idle"
+              : undefined
         }
       />
       <StatusTile
@@ -226,27 +239,33 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
         label="Integrations"
         loading={health === null}
         value={
-          health
-            ? health.configured === 0
-              ? "None"
-              : `${health.reachable}/${health.configured} reachable`
-            : "—"
+          health === "error"
+            ? "Unavailable"
+            : health
+              ? health.configured === 0
+                ? "None"
+                : `${health.reachable}/${health.configured} reachable`
+              : "—"
         }
         sub={
-          health?.configured === 0
-            ? "connect Sonarr or Radarr"
-            : health && health.down.length > 0
-              ? `down: ${health.down.join(" · ")}`
-              : "Sonarr · Radarr · Seerr"
+          health === "error"
+            ? "couldn't check health"
+            : health && health.configured === 0
+              ? "connect Sonarr or Radarr"
+              : health && health.down.length > 0
+                ? `down: ${health.down.join(" · ")}`
+                : "Sonarr · Radarr · Seerr"
         }
         tone={
-          health && health.configured > 0
-            ? health.reachable === health.configured
-              ? "ok"
-              : health.reachable === 0
-                ? "err"
-                : "warn"
-            : "idle"
+          health === "error"
+            ? "warn"
+            : health && health.configured > 0
+              ? health.reachable === health.configured
+                ? "ok"
+                : health.reachable === 0
+                  ? "err"
+                  : "warn"
+              : "idle"
         }
       />
       <StatusTile

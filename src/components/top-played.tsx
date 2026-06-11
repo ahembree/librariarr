@@ -49,6 +49,16 @@ function Thumb({
   fallback: LucideIcon;
 }) {
   const [err, setErr] = useState(false);
+
+  // Reset the failure flag when the source changes (rows are keyed by
+  // title for series/music, so a re-sync can swap the image URL without
+  // remounting — a once-failed thumb must get a fresh chance).
+  const [prevSrc, setPrevSrc] = useState(src);
+  if (prevSrc !== src) {
+    setPrevSrc(src);
+    setErr(false);
+  }
+
   return (
     <div
       className={cn(

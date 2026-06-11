@@ -123,7 +123,7 @@ function ShelfTile({
         )}
       </div>
       <p className="mt-1.5 truncate text-xs font-medium">{primary}</p>
-      <p className="truncate font-mono text-[10.5px] text-faint">{secondary || " "}</p>
+      <p className="truncate font-mono text-[10.5px] text-faint">{secondary || "\u00A0"}</p>
     </button>
   );
 }
@@ -161,19 +161,26 @@ export function RecentlyAdded({
   const effectiveType = lockedFilterType ? filterType : localType;
   const effectiveServerId = localServerId ?? serverId;
 
+  // Token guards against a stale slow response landing after a quick
+  // filter/server flip and showing the wrong items for the selection.
+  const reqToken = useRef(0);
+
   const fetchData = useCallback(async () => {
+    const token = ++reqToken.current;
     try {
       const params = new URLSearchParams({ limit: String(SHELF_LIMIT) });
       if (effectiveType) params.set("type", effectiveType);
       if (effectiveServerId) params.set("serverId", effectiveServerId);
       const res = await fetch(`/api/media/recently-added?${params}`);
+      if (!res.ok || token !== reqToken.current) return;
       const data = await res.json();
+      if (token !== reqToken.current) return;
       setItems(data.items ?? []);
       setTotal(data.total ?? 0);
     } catch (error) {
       console.error("Failed to fetch recently added:", error);
     } finally {
-      setLoading(false);
+      if (token === reqToken.current) setLoading(false);
     }
   }, [effectiveType, effectiveServerId]);
 
@@ -190,13 +197,15 @@ export function RecentlyAdded({
     });
   }, []);
 
-  // Recompute chevron state when content or viewport changes; reset the
-  // shelf to the start when the filtered item set is replaced.
+  // Recompute chevron state when content or container size changes (the
+  // shelf can resize without a window resize — e.g. sidebar collapse);
+  // reset the shelf to the start when the filtered item set is replaced.
   useEffect(() => {
     shelfRef.current?.scrollTo({ left: 0 });
     updateScroll();
-    window.addEventListener("resize", updateScroll);
-    return () => window.removeEventListener("resize", updateScroll);
+    const observer = new ResizeObserver(updateScroll);
+    if (shelfRef.current) observer.observe(shelfRef.current);
+    return () => observer.disconnect();
   }, [items, updateScroll]);
 
   const scrollShelf = (dir: 1 | -1) => {

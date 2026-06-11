@@ -72,7 +72,10 @@ function Donut({
   total: number;
   unit: string;
 }) {
-  const [hovered, setHovered] = useState<number | null>(null);
+  // Track the hovered LABEL, not a positional index — the segment list can
+  // change while hovered (row toggled via keyboard, touch unmounts), and a
+  // stale index would highlight the wrong segment or dim everything.
+  const [hovered, setHovered] = useState<string | null>(null);
   const R = 42;
   const C = 2 * Math.PI * R;
 
@@ -84,7 +87,9 @@ function Donut({
     arcs.push({ len, start: prev ? prev.start + prev.len : 0 });
   }
 
-  const active = hovered !== null ? segments[hovered] : null;
+  const active = hovered !== null
+    ? segments.find((s) => s.label === hovered) ?? null
+    : null;
 
   return (
     <div className="relative mx-auto h-44 w-44">
@@ -100,12 +105,12 @@ function Donut({
               r={R}
               fill="none"
               stroke={seg.color}
-              strokeWidth={hovered === i ? 13 : 11}
+              strokeWidth={hovered === seg.label ? 13 : 11}
               strokeDasharray={`${Math.max(len - 0.8, 0.1)} ${C - Math.max(len - 0.8, 0.1)}`}
               strokeDashoffset={dashOffset}
               className="cursor-pointer transition-[stroke-width,opacity]"
-              opacity={hovered === null || hovered === i ? 1 : 0.35}
-              onMouseEnter={() => setHovered(i)}
+              opacity={hovered === null || hovered === seg.label ? 1 : 0.35}
+              onMouseEnter={() => setHovered(seg.label)}
               onMouseLeave={() => setHovered(null)}
             />
           );
@@ -178,8 +183,8 @@ export function BreakdownCard({
 
   let display = ranked;
   if (topN !== null && ranked.length > topN) {
-    const tail = ranked.slice(topN);
-    const other = tail.reduce(
+    const head = ranked.slice(0, topN);
+    const folded = ranked.slice(topN).reduce(
       (acc, e) => ({
         label: "Other",
         movies: acc.movies + e.movies,
@@ -189,7 +194,22 @@ export function BreakdownCard({
       }),
       { label: "Other", movies: 0, series: 0, music: 0, value: 0 },
     );
-    display = [...ranked.slice(0, topN), other];
+    // A genuine "Other" label (e.g. the genre "other") may already rank in
+    // the head — merge the fold into it instead of appending a duplicate
+    // key that would double-render and double-hide.
+    display = head.some((e) => e.label === "Other")
+      ? head.map((e) =>
+          e.label === "Other"
+            ? {
+                label: "Other",
+                movies: e.movies + folded.movies,
+                series: e.series + folded.series,
+                music: e.music + folded.music,
+                value: e.value + folded.value,
+              }
+            : e,
+        )
+      : [...head, folded];
   }
 
   const visible = display.filter((e) => !hidden.has(e.label));
@@ -205,8 +225,9 @@ export function BreakdownCard({
     });
   };
 
-  const colorOf = (label: string) =>
-    label === "Other" ? OTHER_HEX : colorFor(label);
+  // Adapters own color fallbacks (incl. the synthetic "Other" bucket) —
+  // forcing OTHER_HEX here would override user-configured chip colors.
+  const colorOf = colorFor;
 
   const typeSelect = !lockedFilterType && (
     <Select

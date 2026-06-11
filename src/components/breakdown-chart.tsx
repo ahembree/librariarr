@@ -62,7 +62,13 @@ export function BreakdownChart({
     hexMap[e.label] =
       e.label === "Other" && !hexColors?.[e.label]
         ? OTHER_HEX
-        : (hexColors?.[e.label] ?? AUTO_HEX[i % AUTO_HEX.length]);
+        : (hexColors?.[e.label] ??
+          // Past the palette, rotate hues deterministically instead of
+          // wrapping — a modulo wrap can hand two visible labels the same
+          // color once a type filter re-ranks ≥16 values into one view.
+          (i < AUTO_HEX.length
+            ? AUTO_HEX[i]
+            : `oklch(0.7 0.15 ${(i * 47) % 360})`));
   });
 
   return (
