@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Film, Tv, Music, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -75,26 +75,31 @@ function Thumb({
 }
 
 /** One ranked entry: rank, poster thumb, title, play count, with a
- *  share-of-max background fill. */
+ *  share-of-max background fill. Spreads rest props (and ref, via React 19
+ *  props) onto the root div so it works as a HoverCardTrigger asChild
+ *  target — without this the lazy popovers never open. */
 function RankedRow({
   rank,
   fillPct,
   thumb,
   title,
   plays,
-  onClick,
+  className,
+  ...rest
 }: {
   rank: number;
   fillPct: number;
   thumb: React.ReactNode;
   title: React.ReactNode;
   plays: number;
-  onClick?: () => void;
-}) {
+} & Omit<ComponentProps<"div">, "title">) {
   return (
     <div
-      className="group relative flex cursor-pointer items-center gap-2.5 overflow-hidden rounded-md px-2 py-1.5 transition-colors hover:bg-muted/50"
-      onClick={onClick}
+      {...rest}
+      className={cn(
+        "group relative flex cursor-pointer items-center gap-2.5 overflow-hidden rounded-md px-2 py-1.5 transition-colors hover:bg-muted/50",
+        className,
+      )}
     >
       <div
         className="absolute inset-y-0 left-0 rounded-md bg-brand-faint"

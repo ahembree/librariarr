@@ -6,10 +6,10 @@ import {
   getAccentPreset,
 } from "@/lib/theme/accent-colors";
 
-// Every accent must override the same variable set: ThemeProvider's
-// clearAccentColors() clears the union of keys across presets, so a preset
-// missing a key would leave a stale override behind when switching accents.
-const REQUIRED_VARS = [
+// ThemeProvider's clearAccentColors() clears the union of keys across
+// presets, so consistent key sets per preset kind keep switching accents
+// from leaving stale overrides behind.
+const CORE_VARS = [
   "--primary",
   "--primary-foreground",
   "--ring",
@@ -17,6 +17,11 @@ const REQUIRED_VARS = [
   "--sidebar-primary-foreground",
   "--chart-1",
 ];
+
+// Non-default accents must also drive the --brand token family — the
+// dashboard (sparklines, tile icons, tab bar, row fills) renders from
+// these, so an accent that skips them visibly "doesn't work".
+const BRAND_VARS = ["--brand", "--brand-bright", "--brand-dim", "--brand-faint"];
 
 describe("ACCENT_PRESETS", () => {
   it("keeps stored preset names stable", () => {
@@ -38,19 +43,34 @@ describe("ACCENT_PRESETS", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it("defines the same variable set on every preset", () => {
-    for (const preset of ACCENT_PRESETS) {
+  it("defines the core variable set on the default preset", () => {
+    const preset = getAccentPreset("default")!;
+    expect(Object.keys(preset.cssVars).sort()).toEqual([...CORE_VARS].sort());
+  });
+
+  it("defines core + brand variables on every non-default preset", () => {
+    for (const preset of ACCENT_PRESETS.filter((p) => p.name !== "default")) {
       expect(Object.keys(preset.cssVars).sort(), preset.name).toEqual(
-        [...REQUIRED_VARS].sort(),
+        [...CORE_VARS, ...BRAND_VARS].sort(),
       );
     }
   });
 
-  it("uses oklch values for every variable", () => {
+  it("uses oklch or oklch color-mix values for every variable", () => {
     for (const preset of ACCENT_PRESETS) {
       for (const [key, value] of Object.entries(preset.cssVars)) {
-        expect(value, `${preset.name} ${key}`).toMatch(/^oklch\(/);
+        expect(value, `${preset.name} ${key}`).toMatch(
+          /^(oklch\(|color-mix\(in oklch,)/,
+        );
       }
+    }
+  });
+
+  it("keeps --brand aligned with --primary on non-default presets", () => {
+    for (const preset of ACCENT_PRESETS.filter((p) => p.name !== "default")) {
+      expect(preset.cssVars["--brand"], preset.name).toBe(
+        preset.cssVars["--primary"],
+      );
     }
   });
 
