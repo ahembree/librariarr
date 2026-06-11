@@ -7,7 +7,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard } from "@/components/media-card";
+import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { Button } from "@/components/ui/button";
 import { Film, Calendar, Clock, HardDrive } from "lucide-react";
@@ -45,7 +45,6 @@ function formatResolution(resolution: string | null): string {
 }
 
 const GAP = 16; // 1rem grid gap
-const CARD_CONTENT_HEIGHT = 138; // Fixed content area below poster (matches h-34.5 in MediaCard)
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
 const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar between poster and content
 
@@ -236,7 +235,7 @@ export default function MoviesPage() {
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Movies</h1>
             {!loading && items.length > 0 && (
-              <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
+              <span className="font-mono text-xs text-faint">
                 {items.length.toLocaleString()} {items.length === 1 ? "movie" : "movies"}
               </span>
             )}

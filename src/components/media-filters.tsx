@@ -1555,7 +1555,9 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
     + (hasIsWatchlisted ? 1 : 0);
 
   return (
-    <div className="mb-6 glass rounded-lg px-4 py-3 space-y-2">
+    // Sticky: the toolbar + filters stay at hand while scrolling a large
+    // library (the page scrolls inside <main>, so top-0 sticks to it).
+    <div className="sticky top-2 z-20 mb-6 glass rounded-xl border border-white/5 px-3 py-2.5 space-y-2 shadow-[var(--shadow-card)]">
       {/* Toolbar row: prefix + search + filters button */}
       <div className="flex flex-wrap items-center gap-2">
         {prefix}

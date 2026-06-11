@@ -64,7 +64,7 @@ import { useIntegrationsHealth, deriveIntegrationsStatus, arrTypeForMediaType, t
 import { hasArrRules, hasSeerrRules, type QueryGroup, type QueryDefinition } from "@/lib/query/types";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
-import { MediaCard } from "@/components/media-card";
+import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { CardSizeControl } from "@/components/card-size-control";
@@ -206,7 +206,6 @@ function saveVisibleColumns(cols: Set<string>) {
 }
 
 const GAP = 16;
-const CARD_CONTENT_HEIGHT = 138; // Fixed content area below poster (matches h-34.5 in MediaCard)
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
 const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar (4px) + py-1 padding (8px)
 

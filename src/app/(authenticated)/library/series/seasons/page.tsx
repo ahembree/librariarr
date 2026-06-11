@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useChipColors } from "@/components/chip-color-provider";
 import { getChipBadgeStyle } from "@/lib/theme/chip-colors";
-import { MediaCard } from "@/components/media-card";
+import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { MediaFilters } from "@/components/media-filters";
 import { ColorChip } from "@/components/color-chip";
@@ -21,6 +21,7 @@ import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
+import { LibraryTabs, SERIES_TABS } from "@/components/library-tabs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 
 interface SeasonEntry {
@@ -48,7 +49,6 @@ interface SeasonEntry {
 import { QUALITY_ORDER } from "@/lib/resolution";
 
 const GAP = 16;
-const CARD_CONTENT_HEIGHT = 138;
 const CARD_BORDER = 2;
 const QUALITY_BAR_HEIGHT = 12;
 
@@ -295,29 +295,7 @@ export default function AllSeasonsPage() {
     <div className="p-4 sm:p-6 lg:p-8">
       <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight mb-4">Series</h1>
 
-      <nav className="mb-6 flex items-center gap-1 border-b overflow-x-auto">
-        <Link
-          href="/library/series"
-          className="flex items-center gap-2 border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 transition-colors"
-        >
-          <Tv className="h-4 w-4" />
-          Series
-        </Link>
-        <Link
-          href="/library/series/seasons"
-          className="flex items-center gap-2 border-b-2 border-primary px-4 py-2 text-sm font-medium text-foreground"
-        >
-          <Layers className="h-4 w-4" />
-          All Seasons
-        </Link>
-        <Link
-          href="/library/series/episodes"
-          className="flex items-center gap-2 border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 transition-colors"
-        >
-          <List className="h-4 w-4" />
-          All Episodes
-        </Link>
-      </nav>
+      <LibraryTabs tabs={SERIES_TABS} active="/library/series/seasons" />
 
       <MediaFilters
         onFilterChange={setFilters}

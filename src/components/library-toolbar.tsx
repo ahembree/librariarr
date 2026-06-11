@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { LayoutGrid, TableProperties, ArrowUpDown } from "lucide-react";
+import { LayoutGrid, TableProperties, ArrowUpDown, ArrowDownAZ, ArrowUpZA } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -138,12 +138,12 @@ export function LibraryToolbar({
         </>
       )}
 
-      {/* Sort controls */}
+      {/* Sort controls — one cohesive group */}
       {sortOptions && sortBy && onSortChange && onSortOrderToggle && (
-        <div className="flex items-center gap-2 min-w-0">
-          <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
+        <div className="flex min-w-0 items-center">
           <Select value={sortBy} onValueChange={onSortChange}>
-            <SelectTrigger className="w-full sm:w-40">
+            <SelectTrigger className="w-full rounded-r-none border-r-0 sm:w-36">
+              <ArrowUpDown className="mr-1 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -157,12 +157,16 @@ export function LibraryToolbar({
           <Button
             variant="outline"
             size="icon"
+            className="rounded-l-none"
             onClick={onSortOrderToggle}
             title={sortOrder === "asc" ? "Ascending" : "Descending"}
+            aria-label={sortOrder === "asc" ? "Sorted ascending" : "Sorted descending"}
           >
-            <span className="text-xs font-medium">
-              {sortOrder === "asc" ? "A-Z" : "Z-A"}
-            </span>
+            {sortOrder === "asc" ? (
+              <ArrowDownAZ className="h-4 w-4" />
+            ) : (
+              <ArrowUpZA className="h-4 w-4" />
+            )}
           </Button>
         </div>
       )}

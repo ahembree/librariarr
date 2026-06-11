@@ -7,7 +7,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { AUDIO_CODEC_ORDER, getChipBadgeStyle } from "@/lib/theme/chip-colors";
 import Link from "next/link";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard } from "@/components/media-card";
+import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
 import { ColorChip } from "@/components/color-chip";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { Button } from "@/components/ui/button";
@@ -26,12 +26,12 @@ import { formatFileSize } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { SyncLibraryButton } from "@/components/sync-library-button";
 import { MediaGridSkeleton } from "@/components/skeletons";
+import { LibraryTabs, MUSIC_TABS } from "@/components/library-tabs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useFilterPersistence } from "@/hooks/use-filter-persistence";
 import { useRealtime } from "@/hooks/use-realtime";
 
 const GAP = 16;
-const CARD_CONTENT_HEIGHT = 138; // Fixed content area below poster (matches h-34.5 in MediaCard)
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
 const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar (4px) + py-1 padding (8px)
 
@@ -314,11 +314,9 @@ export default function MusicPage() {
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Music</h1>
             {!loading && artistList.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{artistList.length.toLocaleString()} artists</span>
-                <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{artistList.reduce((sum, a) => sum + a.albumCount, 0).toLocaleString()} albums</span>
-                <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{artistList.reduce((sum, a) => sum + a.trackCount, 0).toLocaleString()} songs</span>
-              </div>
+              <span className="font-mono text-xs text-faint">
+                {artistList.length.toLocaleString()} artists · {artistList.reduce((sum, a) => sum + a.albumCount, 0).toLocaleString()} albums · {artistList.reduce((sum, a) => sum + a.trackCount, 0).toLocaleString()} songs
+              </span>
             )}
           </div>
           <p className="text-muted-foreground mt-1">
@@ -328,29 +326,7 @@ export default function MusicPage() {
         <SyncLibraryButton libraryType="MUSIC" onSyncComplete={fetchArtists} />
       </div>
 
-      <nav className="mb-6 flex items-center gap-1 border-b overflow-x-auto">
-        <Link
-          href="/library/music"
-          className="flex items-center gap-2 border-b-2 border-primary px-4 py-2 text-sm font-medium text-foreground"
-        >
-          <Music className="h-4 w-4" />
-          Artists
-        </Link>
-        <Link
-          href="/library/music/albums"
-          className="flex items-center gap-2 border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 transition-colors"
-        >
-          <Disc3 className="h-4 w-4" />
-          All Albums
-        </Link>
-        <Link
-          href="/library/music/tracks"
-          className="flex items-center gap-2 border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 transition-colors"
-        >
-          <ListMusic className="h-4 w-4" />
-          All Tracks
-        </Link>
-      </nav>
+      <LibraryTabs tabs={MUSIC_TABS} active="/library/music" />
 
       <MediaFilters
         onFilterChange={(f) => { setFilters(f); persistFilters(f); }}

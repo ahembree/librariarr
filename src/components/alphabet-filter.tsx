@@ -38,12 +38,12 @@ function LetterButton({
       aria-current={isActive ? "true" : undefined}
       data-letter={letter}
       className={cn(
-        "flex h-7 w-8 shrink-0 items-center justify-center rounded text-[16px] font-semibold leading-none transition-colors",
+        "flex h-[22px] w-6 shrink-0 items-center justify-center rounded-md font-mono text-[11px] font-medium leading-none transition-colors",
         isActive
           ? "bg-primary text-primary-foreground"
           : isAvailable
-            ? "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-            : "cursor-default text-muted-foreground/30",
+            ? "text-faint hover:bg-surface-2 hover:text-foreground"
+            : "cursor-default text-muted-foreground/25",
       )}
     >
       {letter}
@@ -90,7 +90,7 @@ export function AlphabetFilter({
 
   return (
     <nav
-      className="fixed right-1.5 top-1/2 z-30 hidden -translate-y-1/2 flex-col items-center md:flex"
+      className="fixed right-1.5 top-1/2 z-30 hidden -translate-y-1/2 flex-col items-center rounded-full border border-white/5 bg-card/70 px-0.5 py-1 backdrop-blur-sm md:flex"
       aria-label="Alphabetical navigation"
       role="toolbar"
       aria-orientation="vertical"
