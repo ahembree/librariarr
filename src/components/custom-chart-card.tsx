@@ -35,14 +35,8 @@ import { getDimensionMeta } from "@/lib/dashboard/custom-dimensions";
 import { CUSTOM_CARD_ICONS, HEATMAP_GRADIENTS, type CustomCardConfig } from "@/lib/dashboard/card-registry";
 import { useChipColors } from "@/components/chip-color-provider";
 import type { ChipColorCategory } from "@/lib/theme/chip-colors";
-
-const AUTO_HEX = [
-  "#3b82f6", "#a855f7", "#22c55e", "#f59e0b", "#ef4444",
-  "#06b6d4", "#ec4899", "#f97316", "#14b8a6", "#6366f1",
-  "#84cc16", "#f43f5e", "#0ea5e9", "#8b5cf6", "#d946ef",
-];
-
-const OTHER_HEX = "#6e7383";
+import { Skeleton } from "@/components/ui/skeleton";
+import { AUTO_HEX, OTHER_HEX } from "@/components/dashboard/chart-palette";
 
 const DIMENSION_CHIP_CATEGORY: Partial<Record<string, ChipColorCategory>> = {
   resolution: "resolution",
@@ -214,14 +208,22 @@ export function CustomChartCard({
 
   return (
     <Card className="h-full flex flex-col">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="flex items-center gap-2 text-base font-semibold">
-          {config.icon && CUSTOM_CARD_ICONS[config.icon] && (() => {
-            const Icon = CUSTOM_CARD_ICONS[config.icon];
-            return <Icon className="h-4 w-4 text-muted-foreground" />;
-          })()}
-          {cardTitle}
-        </CardTitle>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[8px] border border-border bg-surface-2 text-muted-foreground">
+            {(() => {
+              const Icon =
+                (config.icon && CUSTOM_CARD_ICONS[config.icon]) || Settings2;
+              return <Icon className="h-4 w-4" />;
+            })()}
+          </span>
+          <div className="min-w-0">
+            <CardTitle className="truncate text-sm font-semibold leading-tight">
+              {cardTitle}
+            </CardTitle>
+            <p className="truncate font-mono text-[10.5px] text-faint">custom chart</p>
+          </div>
+        </div>
         <div className="flex items-center gap-2">
           {/* Type filter (only if not locked) */}
           {!lockedFilterType && availableTypes && availableTypes.length > 1 && (
@@ -255,12 +257,17 @@ export function CustomChartCard({
       </CardHeader>
       <CardContent className="flex-1 min-h-0 flex flex-col">
         {loading ? (
-          <div className="flex flex-1 items-center justify-center">
-            <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          <div className="flex flex-1 flex-col justify-center gap-2">
+            <Skeleton className="h-32 w-full rounded-md" />
+            <div className="flex gap-3">
+              <Skeleton className="h-3 w-16" />
+              <Skeleton className="h-3 w-16" />
+              <Skeleton className="h-3 w-16" />
+            </div>
           </div>
         ) : isCount ? (
           <div className="flex flex-1 items-center justify-center">
-            <span className="text-5xl font-bold">
+            <span className="font-display text-5xl font-semibold tracking-tight tabular-nums">
               {allWithColors
                 .filter((e) => !config.countValues?.length || config.countValues.includes(e.label))
                 .reduce((sum, e) => sum + e.count, 0)

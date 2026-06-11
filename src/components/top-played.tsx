@@ -1,12 +1,11 @@
 "use client";
 
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { useState } from "react";
+import type { LucideIcon } from "lucide-react";
 import { Film, Tv, Music, Play } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { FadeImage } from "@/components/ui/fade-image";
+import { InsightCard, InsightEmpty } from "@/components/dashboard/insight-card";
 import { LazyMediaHoverPopover } from "@/components/lazy-media-hover-popover";
 import type { MediaHoverData } from "@/components/media-hover-popover";
 
@@ -39,7 +38,92 @@ interface TopPlayedProps {
   onArtistClick?: (mediaItemId: string) => void;
 }
 
-export function TopPlayed({ topMovies, topSeries, topMusic, filterType, onMovieClick, onSeriesClick, onArtistClick }: TopPlayedProps) {
+/** Artwork thumbnail with icon fallback; 2:3 for video, square for music. */
+function Thumb({
+  src,
+  square = false,
+  fallback: Icon,
+}: {
+  src: string | null;
+  square?: boolean;
+  fallback: LucideIcon;
+}) {
+  const [err, setErr] = useState(false);
+  return (
+    <div
+      className={cn(
+        "relative shrink-0 overflow-hidden rounded-[5px] border border-white/5 bg-muted",
+        square ? "h-9 w-9" : "h-[42px] w-7",
+      )}
+    >
+      {src && !err ? (
+        <FadeImage
+          src={src}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          className="absolute inset-0 h-full w-full object-cover"
+          onError={() => setErr(true)}
+        />
+      ) : (
+        <div className="flex h-full items-center justify-center">
+          <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One ranked entry: rank, poster thumb, title, play count, with a
+ *  share-of-max background fill. */
+function RankedRow({
+  rank,
+  fillPct,
+  thumb,
+  title,
+  plays,
+  onClick,
+}: {
+  rank: number;
+  fillPct: number;
+  thumb: React.ReactNode;
+  title: React.ReactNode;
+  plays: number;
+  onClick?: () => void;
+}) {
+  return (
+    <div
+      className="group relative flex cursor-pointer items-center gap-2.5 overflow-hidden rounded-md px-2 py-1.5 transition-colors hover:bg-muted/50"
+      onClick={onClick}
+    >
+      <div
+        className="absolute inset-y-0 left-0 rounded-md bg-brand-faint"
+        style={{ width: `${fillPct}%` }}
+      />
+      <span className="relative w-5 shrink-0 text-right font-mono text-[11px] text-faint">
+        {rank}
+      </span>
+      <span className="relative">{thumb}</span>
+      <span className="relative min-w-0 flex-1 truncate text-[13px] font-medium">
+        {title}
+      </span>
+      <span className="relative flex shrink-0 items-center gap-1 font-mono text-xs tabular-nums text-muted-foreground">
+        <Play className="h-3 w-3 fill-current" />
+        {plays.toLocaleString()}
+      </span>
+    </div>
+  );
+}
+
+export function TopPlayed({
+  topMovies,
+  topSeries,
+  topMusic,
+  filterType,
+  onMovieClick,
+  onSeriesClick,
+  onArtistClick,
+}: TopPlayedProps) {
   const showMovies = !filterType || filterType === "MOVIE";
   const showSeries = !filterType || filterType === "SERIES";
   const showMusic = !filterType || filterType === "MUSIC";
@@ -49,203 +133,169 @@ export function TopPlayed({ topMovies, topSeries, topMusic, filterType, onMovieC
   }
 
   const movieCard = (
-    <Card className="h-full flex flex-col">
-      <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Film className="h-4 w-4" />
-          Most Played Movies
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="flex-1 min-h-0 overflow-auto">
-        {topMovies.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No movie play data yet.
-          </p>
-        ) : (
-          <div className="space-y-1">
-            {topMovies.map((movie, i) => {
-              const maxPlays = topMovies[0].playCount;
-              const pct = maxPlays > 0 ? (movie.playCount / maxPlays) * 100 : 0;
-              const placeholder: MediaHoverData = {
-                title: movie.title,
-                year: movie.year,
-                playCount: movie.playCount,
-              };
-              const row = (
-                <div
-                  className="group relative flex items-center gap-3 rounded-md px-2 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors"
+    <InsightCard
+      icon={Film}
+      title="Most Played Movies"
+      sub={topMovies.length > 0 ? `top ${topMovies.length} · by play count` : undefined}
+    >
+      {topMovies.length === 0 ? (
+        <InsightEmpty icon={Film} message="No movie play data yet." />
+      ) : (
+        <div className="space-y-0.5">
+          {topMovies.map((movie, i) => {
+            const maxPlays = topMovies[0].playCount;
+            const placeholder: MediaHoverData = {
+              title: movie.title,
+              year: movie.year,
+              playCount: movie.playCount,
+            };
+            return (
+              <LazyMediaHoverPopover
+                key={movie.id}
+                fetchUrl={`/api/media/${movie.id}`}
+                extractData={(json) => (json as { item: MediaHoverData }).item}
+                placeholder={placeholder}
+                imageUrl={`/api/media/${movie.id}/image`}
+                imageAspect="poster"
+              >
+                <RankedRow
+                  rank={i + 1}
+                  fillPct={maxPlays > 0 ? (movie.playCount / maxPlays) * 100 : 0}
+                  thumb={<Thumb src={`/api/media/${movie.id}/image`} fallback={Film} />}
+                  title={
+                    <>
+                      {movie.title}
+                      {movie.year && (
+                        <span className="ml-1 font-normal text-muted-foreground">
+                          ({movie.year})
+                        </span>
+                      )}
+                    </>
+                  }
+                  plays={movie.playCount}
                   onClick={() => onMovieClick?.(movie.id)}
-                >
-                  <div
-                    className="absolute inset-0 rounded-md bg-primary/5"
-                    style={{ width: `${pct}%` }}
-                  />
-                  <span className="relative w-5 text-right text-xs font-medium text-muted-foreground">
-                    {i + 1}
-                  </span>
-                  <span className="relative flex-1 truncate text-sm">
-                    {movie.title}
-                    {movie.year && (
-                      <span className="ml-1 text-muted-foreground">
-                        ({movie.year})
-                      </span>
-                    )}
-                  </span>
-                  <span className="relative flex items-center gap-1 text-xs text-muted-foreground">
-                    <Play className="h-3 w-3 fill-current" />
-                    {movie.playCount.toLocaleString()}
-                  </span>
-                </div>
-              );
-              return (
-                <LazyMediaHoverPopover
-                  key={movie.id}
-                  fetchUrl={`/api/media/${movie.id}`}
-                  extractData={(json) => (json as { item: MediaHoverData }).item}
-                  placeholder={placeholder}
-                  imageUrl={`/api/media/${movie.id}/image`}
-                  imageAspect="poster"
-                >
-                  {row}
-                </LazyMediaHoverPopover>
-              );
-            })}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+                />
+              </LazyMediaHoverPopover>
+            );
+          })}
+        </div>
+      )}
+    </InsightCard>
   );
 
   const seriesCard = (
-    <Card className="h-full flex flex-col">
-      <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Tv className="h-4 w-4" />
-          Most Played Series
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="flex-1 min-h-0 overflow-auto">
-        {topSeries.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No series play data yet.
-          </p>
-        ) : (
-          <div className="space-y-1">
-            {topSeries.map((series, i) => {
-              const maxPlays = topSeries[0].totalPlays;
-              const pct =
-                maxPlays > 0 ? (series.totalPlays / maxPlays) * 100 : 0;
-              const placeholder: MediaHoverData = {
-                title: series.parentTitle,
-                playCount: series.totalPlays,
-              };
-              const row = (
-                <div
-                  className="group relative flex items-center gap-3 rounded-md px-2 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors"
-                  onClick={() => onSeriesClick?.(series.parentTitle, series.mediaItemId ?? undefined)}
-                >
-                  <div
-                    className="absolute inset-0 rounded-md bg-primary/5"
-                    style={{ width: `${pct}%` }}
+    <InsightCard
+      icon={Tv}
+      title="Most Played Series"
+      sub={topSeries.length > 0 ? `top ${topSeries.length} · by play count` : undefined}
+    >
+      {topSeries.length === 0 ? (
+        <InsightEmpty icon={Tv} message="No series play data yet." />
+      ) : (
+        <div className="space-y-0.5">
+          {topSeries.map((series, i) => {
+            const maxPlays = topSeries[0].totalPlays;
+            const placeholder: MediaHoverData = {
+              title: series.parentTitle,
+              playCount: series.totalPlays,
+            };
+            const row = (
+              <RankedRow
+                rank={i + 1}
+                fillPct={maxPlays > 0 ? (series.totalPlays / maxPlays) * 100 : 0}
+                thumb={
+                  <Thumb
+                    src={
+                      series.mediaItemId
+                        ? `/api/media/${series.mediaItemId}/image?type=parent`
+                        : null
+                    }
+                    fallback={Tv}
                   />
-                  <span className="relative w-5 text-right text-xs font-medium text-muted-foreground">
-                    {i + 1}
-                  </span>
-                  <span className="relative flex-1 truncate text-sm">
-                    {series.parentTitle}
-                  </span>
-                  <span className="relative flex items-center gap-1 text-xs text-muted-foreground">
-                    <Play className="h-3 w-3 fill-current" />
-                    {series.totalPlays.toLocaleString()}
-                  </span>
-                </div>
-              );
-              if (!series.mediaItemId) {
-                return <div key={series.parentTitle}>{row}</div>;
-              }
-              return (
-                <LazyMediaHoverPopover
-                  key={series.parentTitle}
-                  fetchUrl={`/api/media/${series.mediaItemId}/group-summary?type=SERIES`}
-                  extractData={(json) => json as MediaHoverData}
-                  placeholder={placeholder}
-                  imageUrl={`/api/media/${series.mediaItemId}/image?type=parent`}
-                  imageAspect="poster"
-                >
-                  {row}
-                </LazyMediaHoverPopover>
-              );
-            })}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+                }
+                title={series.parentTitle}
+                plays={series.totalPlays}
+                onClick={() =>
+                  onSeriesClick?.(series.parentTitle, series.mediaItemId ?? undefined)
+                }
+              />
+            );
+            if (!series.mediaItemId) {
+              return <div key={series.parentTitle}>{row}</div>;
+            }
+            return (
+              <LazyMediaHoverPopover
+                key={series.parentTitle}
+                fetchUrl={`/api/media/${series.mediaItemId}/group-summary?type=SERIES`}
+                extractData={(json) => json as MediaHoverData}
+                placeholder={placeholder}
+                imageUrl={`/api/media/${series.mediaItemId}/image?type=parent`}
+                imageAspect="poster"
+              >
+                {row}
+              </LazyMediaHoverPopover>
+            );
+          })}
+        </div>
+      )}
+    </InsightCard>
   );
 
   const musicCard = (
-    <Card className="h-full flex flex-col">
-      <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Music className="h-4 w-4" />
-          Most Played Artists
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="flex-1 min-h-0 overflow-auto">
-        {topMusic.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No music play data yet.
-          </p>
-        ) : (
-          <div className="space-y-1">
-            {topMusic.map((artist, i) => {
-              const maxPlays = topMusic[0].totalPlays;
-              const pct =
-                maxPlays > 0 ? (artist.totalPlays / maxPlays) * 100 : 0;
-              const placeholder: MediaHoverData = {
-                title: artist.parentTitle,
-                playCount: artist.totalPlays,
-              };
-              const row = (
-                <div
-                  className="group relative flex items-center gap-3 rounded-md px-2 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors"
-                  onClick={() => artist.mediaItemId && onArtistClick?.(artist.mediaItemId)}
-                >
-                  <div
-                    className="absolute inset-0 rounded-md bg-primary/5"
-                    style={{ width: `${pct}%` }}
+    <InsightCard
+      icon={Music}
+      title="Most Played Artists"
+      sub={topMusic.length > 0 ? `top ${topMusic.length} · by play count` : undefined}
+    >
+      {topMusic.length === 0 ? (
+        <InsightEmpty icon={Music} message="No music play data yet." />
+      ) : (
+        <div className="space-y-0.5">
+          {topMusic.map((artist, i) => {
+            const maxPlays = topMusic[0].totalPlays;
+            const placeholder: MediaHoverData = {
+              title: artist.parentTitle,
+              playCount: artist.totalPlays,
+            };
+            const row = (
+              <RankedRow
+                rank={i + 1}
+                fillPct={maxPlays > 0 ? (artist.totalPlays / maxPlays) * 100 : 0}
+                thumb={
+                  <Thumb
+                    src={
+                      artist.mediaItemId
+                        ? `/api/media/${artist.mediaItemId}/image?type=parent`
+                        : null
+                    }
+                    square
+                    fallback={Music}
                   />
-                  <span className="relative w-5 text-right text-xs font-medium text-muted-foreground">
-                    {i + 1}
-                  </span>
-                  <span className="relative flex-1 truncate text-sm">
-                    {artist.parentTitle}
-                  </span>
-                  <span className="relative flex items-center gap-1 text-xs text-muted-foreground">
-                    <Play className="h-3 w-3 fill-current" />
-                    {artist.totalPlays.toLocaleString()}
-                  </span>
-                </div>
-              );
-              if (!artist.mediaItemId) {
-                return <div key={artist.parentTitle}>{row}</div>;
-              }
-              return (
-                <LazyMediaHoverPopover
-                  key={artist.parentTitle}
-                  fetchUrl={`/api/media/${artist.mediaItemId}/group-summary?type=MUSIC`}
-                  extractData={(json) => json as MediaHoverData}
-                  placeholder={placeholder}
-                  imageUrl={`/api/media/${artist.mediaItemId}/image?type=parent`}
-                  imageAspect="square"
-                >
-                  {row}
-                </LazyMediaHoverPopover>
-              );
-            })}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+                }
+                title={artist.parentTitle}
+                plays={artist.totalPlays}
+                onClick={() => artist.mediaItemId && onArtistClick?.(artist.mediaItemId)}
+              />
+            );
+            if (!artist.mediaItemId) {
+              return <div key={artist.parentTitle}>{row}</div>;
+            }
+            return (
+              <LazyMediaHoverPopover
+                key={artist.parentTitle}
+                fetchUrl={`/api/media/${artist.mediaItemId}/group-summary?type=MUSIC`}
+                extractData={(json) => json as MediaHoverData}
+                placeholder={placeholder}
+                imageUrl={`/api/media/${artist.mediaItemId}/image?type=parent`}
+                imageAspect="square"
+              >
+                {row}
+              </LazyMediaHoverPopover>
+            );
+          })}
+        </div>
+      )}
+    </InsightCard>
   );
 
   const visibleCount = [showMovies, showSeries, showMusic].filter(Boolean).length;
