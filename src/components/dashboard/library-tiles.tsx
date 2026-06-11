@@ -176,7 +176,6 @@ function LibraryTile({
   spark,
   sparkCaption = `Added · last ${SPARK_MONTHS}mo`,
   sparkFormatValue,
-  accent = false,
 }: {
   href?: string;
   icon: LucideIcon;
@@ -187,19 +186,11 @@ function LibraryTile({
   spark?: SparkPoint[];
   sparkCaption?: string;
   sparkFormatValue?: (n: number) => string;
-  accent?: boolean;
 }) {
   const body = (
     <>
       <div className="mb-3.5 flex items-center justify-between">
-        <span
-          className={cn(
-            "grid h-[34px] w-[34px] place-items-center rounded-[9px] border",
-            accent
-              ? "border-transparent bg-brand-dim text-brand-bright"
-              : "border-border bg-surface-2 text-muted-foreground",
-          )}
-        >
+        <span className="grid h-[34px] w-[34px] place-items-center rounded-[9px] border border-transparent bg-brand-dim text-brand-bright">
           <Icon className="h-[18px] w-[18px]" />
         </span>
         {href && (
@@ -231,29 +222,18 @@ function LibraryTile({
   );
 
   const className = cn(
-    "group relative flex h-full flex-col overflow-hidden rounded-[14px] border bg-card px-[18px] pt-[17px] pb-4 shadow-[var(--shadow-card)]",
-    accent ? "border-brand-dim" : "border-border",
+    "group relative flex h-full flex-col overflow-hidden rounded-[14px] border border-border bg-card px-[18px] pt-[17px] pb-4 shadow-[var(--shadow-card)]",
     href && "transition-colors hover:border-border-strong",
   );
-  const style = accent
-    ? {
-        background:
-          "radial-gradient(120% 120% at 0% 0%, var(--brand-faint), transparent 60%), var(--card)",
-      }
-    : undefined;
 
   if (href) {
     return (
-      <Link href={href} className={className} style={style}>
+      <Link href={href} className={className}>
         {body}
       </Link>
     );
   }
-  return (
-    <div className={className} style={style}>
-      {body}
-    </div>
-  );
+  return <div className={className}>{body}</div>;
 }
 
 /**
@@ -335,7 +315,6 @@ export function LibraryTiles({
       : visibleCount === 3
         ? "sm:grid-cols-3"
         : "sm:grid-cols-2 lg:grid-cols-4";
-  const firstAccent = show.movie ? "movie" : show.series ? "series" : "music";
 
   return (
     <div className={`grid gap-4 ${gridCols}`}>
@@ -343,7 +322,6 @@ export function LibraryTiles({
         <LibraryTile
           href="/library/movies"
           icon={Film}
-          accent={firstAccent === "movie"}
           label="Movies"
           value={stats.movieCount.toLocaleString()}
           spark={sparks.MOVIE}
@@ -357,7 +335,6 @@ export function LibraryTiles({
         <LibraryTile
           href="/library/series"
           icon={Tv}
-          accent={firstAccent === "series"}
           label="Series"
           value={stats.seriesCount.toLocaleString()}
           sub={`${stats.seasonCount.toLocaleString()} seasons · ${stats.episodeCount.toLocaleString()} episodes`}
@@ -372,7 +349,6 @@ export function LibraryTiles({
         <LibraryTile
           href="/library/music"
           icon={Music}
-          accent={firstAccent === "music"}
           label="Music"
           value={stats.musicCount.toLocaleString()}
           sub={`${stats.artistCount.toLocaleString()} artists · ${stats.albumCount.toLocaleString()} albums`}
