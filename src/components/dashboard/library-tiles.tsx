@@ -43,10 +43,16 @@ interface LibraryStats {
 /** Months of addedAt history shown in each tile's growth sparkline. */
 const SPARK_MONTHS = 12;
 
-/** Additions-per-month sparkline (area + line, brand-tinted). Hovering
- *  snaps a cursor line + dot to the nearest month and shows a tooltip
- *  with the month and how many items were added. */
-function Sparkline({ points }: { points: SparkPoint[] }) {
+/** Per-month sparkline (area + line, brand-tinted). Hovering snaps a
+ *  cursor line + dot to the nearest month and shows a tooltip with the
+ *  month and that point's value (formatted via formatValue). */
+function Sparkline({
+  points,
+  formatValue = (n: number) => `${n.toLocaleString()} added`,
+}: {
+  points: SparkPoint[];
+  formatValue?: (n: number) => string;
+}) {
   const gradientId = useId();
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
@@ -151,7 +157,7 @@ function Sparkline({ points }: { points: SparkPoint[] }) {
             <span className="text-faint">{formatMonth(hover.point.date)}</span>
             <span className="mx-1 text-faint">·</span>
             <span className="font-medium text-foreground">
-              {hover.point.total.toLocaleString()} added
+              {formatValue(hover.point.total)}
             </span>
           </div>
         </>
@@ -168,6 +174,8 @@ function LibraryTile({
   sub,
   rows,
   spark,
+  sparkCaption = `Added · last ${SPARK_MONTHS}mo`,
+  sparkFormatValue,
   accent = false,
 }: {
   href?: string;
@@ -177,6 +185,8 @@ function LibraryTile({
   sub?: string;
   rows: { label: string; value: string }[];
   spark?: SparkPoint[];
+  sparkCaption?: string;
+  sparkFormatValue?: (n: number) => string;
   accent?: boolean;
 }) {
   const body = (
@@ -203,9 +213,9 @@ function LibraryTile({
       <div className="mt-1 font-mono text-[11.5px] text-faint">{sub ?? " "}</div>
       {spark && (
         <div className="mt-3">
-          <Sparkline points={spark} />
+          <Sparkline points={spark} formatValue={sparkFormatValue} />
           <div className="mt-1 font-mono text-[10px] tracking-[0.08em] text-faint uppercase">
-            Added · last {SPARK_MONTHS}mo
+            {sparkCaption}
           </div>
         </div>
       )}
@@ -282,16 +292,28 @@ export function LibraryTiles({
     Promise.all(
       types.map(async (type) => {
         const params = new URLSearchParams({ dateField: "addedAt", bin: "month" });
-        if (type) params.set("type", type);
+        if (type) {
+          params.set("type", type);
+        } else {
+          // Totals tile charts library size over time: per-month byte sums,
+          // accumulated below so each point is the size at that month.
+          params.set("measure", "size");
+        }
         if (serverId) params.set("serverId", serverId);
         try {
           const res = await fetch(`/api/media/stats/timeline?${params}`);
           if (!res.ok) return [type ?? "ALL", []] as const;
           const data = await res.json();
-          const values = ((data.points ?? []) as SparkPoint[])
-            .slice(-SPARK_MONTHS)
+          let points = ((data.points ?? []) as SparkPoint[])
             .map((p) => ({ date: p.date, total: p.total }));
-          return [type ?? "ALL", values] as const;
+          if (!type) {
+            // Running sum over the FULL history before slicing, so the
+            // window starts from the true size at its first month and the
+            // last point matches the tile's headline total.
+            let cum = 0;
+            points = points.map((p) => ({ date: p.date, total: (cum += p.total) }));
+          }
+          return [type ?? "ALL", points.slice(-SPARK_MONTHS)] as const;
         } catch {
           return [type ?? "ALL", []] as const;
         }
@@ -366,6 +388,8 @@ export function LibraryTiles({
         label="Library size"
         value={formatBytesNum(Number(stats.totalSize))}
         spark={sparks.ALL}
+        sparkCaption={`Size · last ${SPARK_MONTHS}mo`}
+        sparkFormatValue={formatBytesNum}
         rows={[
           {
             label: "Runtime",
