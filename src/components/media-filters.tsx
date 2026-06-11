@@ -1555,9 +1555,11 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
     + (hasIsWatchlisted ? 1 : 0);
 
   return (
-    // Sticky: the toolbar + filters stay at hand while scrolling a large
-    // library (the page scrolls inside <main>, so top-0 sticks to it).
-    <div className="sticky top-2 z-20 mb-6 glass rounded-xl border border-white/5 px-3 py-2.5 space-y-2 shadow-[var(--shadow-card)]">
+    // Sticky on md+ only: the toolbar + filters stay at hand while scrolling
+    // a large library (the page scrolls inside <main>). On mobile the
+    // stacked controls are tall enough to eat the viewport, so it scrolls
+    // away normally there.
+    <div className="md:sticky md:top-2 z-20 mb-6 glass rounded-xl border border-white/5 px-3 py-2.5 space-y-2 shadow-[var(--shadow-card)]">
       {/* Toolbar row: prefix + search + filters button */}
       <div className="flex flex-wrap items-center gap-2">
         {prefix}
