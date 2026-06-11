@@ -303,7 +303,7 @@ export default function LoginPage() {
           <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-primary/10 animate-logo-glow">
             <Logo size={96} />
           </div>
-          <CardTitle className="text-3xl font-display tracking-tight">Welcome to Librariarr</CardTitle>
+          <CardTitle className="text-2xl sm:text-3xl font-display tracking-tight">Welcome to Librariarr</CardTitle>
           <CardDescription>
             Manage and monitor your media libraries across Plex, Jellyfin, and
             Emby

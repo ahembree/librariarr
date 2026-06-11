@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -396,7 +397,7 @@ export default function OnboardingPage() {
             <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-primary/10 ring-1 ring-primary/20">
               <Logo size={96} />
             </div>
-            <h1 className="text-3xl font-bold font-display tracking-tight">Connect a Media Server</h1>
+            <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Connect a Media Server</h1>
             <p className="mt-2 text-muted-foreground">
               Choose your media server type to get started.
             </p>
@@ -491,21 +492,18 @@ export default function OnboardingPage() {
             <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/20">
               <Logo size={96} />
             </div>
-            <h1 className="text-3xl font-bold font-display tracking-tight bg-linear-to-r from-amber-400 to-orange-500 bg-clip-text text-transparent">Select Your Plex Servers</h1>
+            <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Select Your Plex Servers</h1>
             <p className="mt-2 text-muted-foreground">
               Choose which servers to connect. You can select which libraries to sync.
             </p>
           </div>
 
           {plexServers.length === 0 ? (
-            <Card>
-              <CardContent className="py-12 text-center">
-                <Server className="mx-auto h-12 w-12 text-muted-foreground" />
-                <p className="mt-4 text-muted-foreground">
-                  No Plex servers found on your account.
-                </p>
-              </CardContent>
-            </Card>
+            <EmptyState
+              icon={Server}
+              title="No Plex servers found"
+              description="No servers are linked to your Plex account."
+            />
           ) : (
             <div className="flex flex-wrap justify-center gap-4">
               {plexServers.map((server) => {

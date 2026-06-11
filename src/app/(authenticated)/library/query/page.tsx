@@ -1079,7 +1079,7 @@ export default function QueryPage() {
 
       {/* Query Scope */}
       <div className="rounded-lg border bg-card/40 p-4">
-        <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        <p className="mb-3 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
           Query Scope
         </p>
         <div className="space-y-3">
@@ -1344,7 +1344,7 @@ export default function QueryPage() {
                 if (groupCols.length === 0) return null;
                 return (
                   <div key={groupKey} className="mb-2 last:mb-0">
-                    <p className="text-xs font-medium text-muted-foreground mb-1 px-1">{groupLabel}</p>
+                    <p className="mb-1 px-1 font-mono text-[10.5px] font-semibold uppercase tracking-[0.12em] text-faint">{groupLabel}</p>
                     {groupCols.map((col) => (
                       <label key={col.id} className="flex items-center gap-2 px-1 py-1 cursor-pointer rounded hover:bg-muted/50">
                         <Checkbox

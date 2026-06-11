@@ -9,6 +9,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { ColorChip } from "@/components/color-chip";
 import { Input } from "@/components/ui/input";
@@ -1341,13 +1342,11 @@ export default function StreamManagerPage() {
 
         {/* Session list */}
         {!loading && sessions.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-              <Monitor className="h-12 w-12 mb-3 opacity-30" />
-              <p className="text-sm font-medium">No active streams</p>
-              <p className="text-xs mt-1">Streams will appear here when users start playing media</p>
-            </CardContent>
-          </Card>
+          <EmptyState
+            icon={Monitor}
+            title="No active streams"
+            description="Streams will appear here when users start playing media."
+          />
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 stagger-children">
             {sessions.map((s) => (
@@ -1375,7 +1374,7 @@ export default function StreamManagerPage() {
             Maintenance Mode
           </h2>
 
-          <Card className={`overflow-hidden transition-colors ${maintenanceEnabled ? "border-amber/40 bg-amber/5 shadow-[0_0_12px] shadow-amber/10" : ""}`}>
+          <Card className={`overflow-hidden transition-colors ${maintenanceEnabled ? "border-amber/40 bg-amber/5" : ""}`}>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="space-y-1 min-w-0">
@@ -1472,7 +1471,7 @@ export default function StreamManagerPage() {
             Transcode Manager
           </h2>
 
-          <Card className={`overflow-hidden transition-colors ${transcodeEnabled ? "border-amber/40 bg-amber/5 shadow-[0_0_12px] shadow-amber/10" : ""}`}>
+          <Card className={`overflow-hidden transition-colors ${transcodeEnabled ? "border-amber/40 bg-amber/5" : ""}`}>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="space-y-1 min-w-0">
@@ -1588,15 +1587,11 @@ export default function StreamManagerPage() {
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
         ) : blackoutSchedules.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-              <CalendarClock className="h-10 w-10 mb-3 opacity-30" />
-              <p className="text-sm font-medium">No blackout schedules</p>
-              <p className="text-xs mt-1">
-                Create schedules to automatically terminate streams during specific time periods
-              </p>
-            </CardContent>
-          </Card>
+          <EmptyState
+            icon={CalendarClock}
+            title="No blackout schedules"
+            description="Create schedules to automatically terminate streams during specific time periods."
+          />
         ) : (
           <div className="space-y-3">
             {blackoutSchedules.map((schedule) => (
