@@ -133,10 +133,14 @@ function UserChip({
   user,
   isCollapsed,
   onLogout,
+  withTooltip = true,
 }: {
   user: CurrentUser | null;
   isCollapsed: boolean;
   onLogout: () => void;
+  /** The hover tooltip is for the desktop rail; in the mobile drawer the
+   *  sheet's focus handling would open it persistently on touch. */
+  withTooltip?: boolean;
 }) {
   const initial = (user?.username?.trim()?.[0] ?? "A").toUpperCase();
   const avatar = (
@@ -175,8 +179,8 @@ function UserChip({
           </span>
         </span>
       </Link>
-      <Tooltip>
-        <TooltipTrigger asChild>
+      {(() => {
+        const logoutButton = (
           <button
             onClick={onLogout}
             aria-label="Logout"
@@ -184,9 +188,15 @@ function UserChip({
           >
             <LogOut className="h-[15px] w-[15px]" />
           </button>
-        </TooltipTrigger>
-        <TooltipContent side="top">Logout</TooltipContent>
-      </Tooltip>
+        );
+        if (!withTooltip) return logoutButton;
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>{logoutButton}</TooltipTrigger>
+            <TooltipContent side="top">Logout</TooltipContent>
+          </Tooltip>
+        );
+      })()}
     </div>
   );
 }
@@ -323,7 +333,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
                 <span>Collapse</span>
               </button>
             ))}
-          <UserChip user={user} isCollapsed={isCollapsed} onLogout={handleLogout} />
+          <UserChip user={user} isCollapsed={isCollapsed} onLogout={handleLogout} withTooltip={!forceExpanded} />
         </div>
       </>
     );
@@ -333,7 +343,15 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
   if (isMobile) {
     return (
       <Sheet open={mobileOpen} onOpenChange={onMobileOpenChange}>
-        <SheetContent side="left" className="w-[min(16rem,85vw)] p-0" showCloseButton={false}>
+        <SheetContent
+          side="left"
+          className="w-[min(16rem,85vw)] p-0"
+          showCloseButton={false}
+          // Opening focused the logout button (a destructive control) and
+          // popped its tooltip persistently on touch — keep focus on the
+          // hamburger instead; keyboard users can Tab into the drawer.
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <TooltipProvider>
             <div className="pt-safe pb-safe relative flex h-full flex-col overflow-hidden bg-sidebar">
