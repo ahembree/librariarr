@@ -303,7 +303,7 @@ export function SeerrRequestStats() {
   ) : null;
 
   const header = (
-    <CardHeader className="pb-3 flex flex-row items-start justify-between gap-2 space-y-0">
+    <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0">
       <div className="flex min-w-0 items-center gap-2.5">
         <span className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[8px] border border-border bg-surface-2 text-muted-foreground">
           <Inbox className="h-4 w-4" />
@@ -340,7 +340,7 @@ export function SeerrRequestStats() {
 
   if (loading) {
     return (
-      <Card className="h-full flex flex-col">
+      <Card className="h-full flex flex-col gap-3">
         {header}
         <CardContent className="flex-1 min-h-0 space-y-2">
           {Array.from({ length: 4 }).map((_, i) => (
@@ -357,7 +357,7 @@ export function SeerrRequestStats() {
 
   if (error) {
     return (
-      <Card className="h-full flex flex-col">
+      <Card className="h-full flex flex-col gap-3">
         {header}
         <CardContent className="flex-1 min-h-0">
           <p className="text-sm text-muted-foreground">Could not load Seerr stats: {error}</p>
@@ -368,7 +368,7 @@ export function SeerrRequestStats() {
 
   if (!data?.configured) {
     return (
-      <Card className="h-full flex flex-col">
+      <Card className="h-full flex flex-col gap-3">
         {header}
         <CardContent className="flex-1 min-h-0 flex flex-col items-center justify-center text-center gap-2 py-8">
           <div className="rounded-full bg-muted/40 p-3">
@@ -385,7 +385,7 @@ export function SeerrRequestStats() {
 
   if (data.users.length === 0) {
     return (
-      <Card className="h-full flex flex-col">
+      <Card className="h-full flex flex-col gap-3">
         {header}
         <CardContent className="flex-1 min-h-0 flex items-center justify-center py-8">
           <p className="text-sm text-muted-foreground">No Seerr requests found yet.</p>
@@ -405,7 +405,7 @@ export function SeerrRequestStats() {
   if (showAll) {
     return (
       <>
-      <Card className="h-full flex flex-col">
+      <Card className="h-full flex flex-col gap-3">
         {header}
         <CardContent className="flex-1 min-h-0 overflow-auto p-0">
           <TooltipProvider delayDuration={200}>
@@ -557,7 +557,7 @@ export function SeerrRequestStats() {
 
   return (
     <>
-    <Card className="h-full flex flex-col">
+    <Card className="h-full flex flex-col gap-3">
       {header}
       <CardContent className="flex-1 min-h-0 overflow-auto">
         <TooltipProvider delayDuration={200}>

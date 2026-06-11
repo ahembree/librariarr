@@ -216,8 +216,8 @@ export function RecentlyAdded({
   };
 
   return (
-    <Card className="h-full flex flex-col">
-      <CardHeader className="pb-3">
+    <Card className="h-full flex flex-col gap-3">
+      <CardHeader>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <CardTitle className="flex items-baseline gap-2 text-base">
             <span className="flex items-center gap-2">

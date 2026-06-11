@@ -25,8 +25,10 @@ export function InsightCard({
   contentClassName?: string;
 }) {
   return (
-    <Card className="h-full flex flex-col">
-      <CardHeader className="pb-3">
+    // Tighten the primitive's gap-6 — these headers carry their own sub-line,
+    // so the default spacing reads as a hole between title and content.
+    <Card className="h-full flex flex-col gap-3">
+      <CardHeader>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex min-w-0 items-center gap-2.5">
             <span className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[8px] border border-border bg-surface-2 text-muted-foreground">

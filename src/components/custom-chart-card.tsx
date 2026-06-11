@@ -207,8 +207,8 @@ export function CustomChartCard({
   const chartData = allWithColors.filter((entry) => !hiddenItems.has(entry.label));
 
   return (
-    <Card className="h-full flex flex-col">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+    <Card className="h-full flex flex-col gap-3">
+      <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <div className="flex min-w-0 items-center gap-2.5">
           <span className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[8px] border border-border bg-surface-2 text-muted-foreground">
             {(() => {
