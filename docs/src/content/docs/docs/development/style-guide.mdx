@@ -275,9 +275,9 @@ Apply `animate-fade-in-up` for single elements, or `stagger-children` on a paren
 
 Librariarr is installable as a PWA (`manifest.ts`, `display: standalone`, theme color `#0c0d10`) and the layout adapts below the `md` (768px) breakpoint:
 
-### Bottom Tab Bar
+### Navigation
 
-`MobileTabBar` (`src/components/mobile-tab-bar.tsx`) — fixed glass bar with five primary destinations: Home, Library, Lifecycle, Tools, Settings. The active tab renders in `text-brand-bright` with a `bg-brand-dim` pill behind the icon. The full navigation (sub-pages, Logs, Query) remains in the drawer behind the header menu button.
+Below `md`, the shell renders a glass header whose hamburger button opens the full navigation drawer (a `Sheet` containing the sidebar). There is no bottom tab bar — all destinations live in the drawer.
 
 ### Safe Areas
 
@@ -286,10 +286,7 @@ The viewport uses `viewport-fit=cover`; utilities pad content clear of notches a
 | Class | Padding |
 |-|-|
 | `.pt-safe` | `env(safe-area-inset-top)` — mobile header, drawer |
-| `.pb-safe` | `env(safe-area-inset-bottom)` — tab bar |
-| `.pb-tabbar` | tab bar height + bottom inset on the main scroll container (0 at `md+`) |
-
-The tab bar height is `--tabbar-height` (4rem). Floating elements (BackToTop, toasts via Sonner's `mobileOffset`) offset above it.
+| `.pb-safe` | `env(safe-area-inset-bottom)` — main scroll container, drawer |
 
 ---
 

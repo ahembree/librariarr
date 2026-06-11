@@ -371,20 +371,6 @@ body::before {
 .pb-safe {
   padding-bottom: env(safe-area-inset-bottom);
 }
-/* Height of the mobile bottom tab bar; content scroll containers pad by
-   this so nothing hides behind the bar. */
-:root {
-  --tabbar-height: 4rem;
-}
-.pb-tabbar {
-  padding-bottom: calc(var(--tabbar-height) + env(safe-area-inset-bottom));
-}
-@media (min-width: 768px) {
-  .pb-tabbar {
-    padding-bottom: 0;
-  }
-}
-
 /* Honor reduced-motion: skip entrance animation, keep the resting (visible)
    state. Animations use `both`, so without this the content could otherwise
    be left mid-keyframe. */

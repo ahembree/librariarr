@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Sidebar } from "@/components/sidebar";
 import { Topbar } from "@/components/topbar";
-import { MobileTabBar } from "@/components/mobile-tab-bar";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { Menu, AlertTriangle } from "lucide-react";
 import { Logo } from "@/components/logo";
@@ -109,9 +108,8 @@ export function AuthenticatedShell({ children }: { children: React.ReactNode }) 
             <span>Maintenance mode is active</span>
           </Link>
         )}
-        <main className="canvas-atmosphere pb-tabbar flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain bg-background">{children}</main>
+        <main className="canvas-atmosphere pb-safe flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain bg-background">{children}</main>
         <BackToTop />
-        {isMobile && <MobileTabBar />}
       </div>
     </div>
   );

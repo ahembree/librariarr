@@ -60,13 +60,7 @@ export default function RootLayout({
         className={`${display.variable} ${sans.variable} ${mono.variable} antialiased`}
       >
         <ThemeProvider>{children}</ThemeProvider>
-        {/* mobileOffset clears the bottom tab bar on small screens */}
-        <Toaster
-          position="bottom-right"
-          richColors
-          duration={5000}
-          mobileOffset={{ bottom: 88 }}
-        />
+        <Toaster position="bottom-right" richColors duration={5000} />
       </body>
     </html>
   );

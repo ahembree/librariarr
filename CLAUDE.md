@@ -120,7 +120,7 @@ pnpm exec vitest run tests/path/to/file.test.ts  # Run a single test file
 ### Component Patterns
 
 - `src/components/ui/` — shadcn/ui primitives (do not edit directly)
-- Custom components: `authenticated-shell.tsx` (app shell with sidebar, mobile header + bottom tab bar, global maintenance banner), `sidebar.tsx`, `mobile-tab-bar.tsx`, `media-table.tsx`, `media-filters.tsx`, `media-detail-panel.tsx`, `rule-builder.tsx`, `quality-chart.tsx`, `theme-provider.tsx`, `dashboard/` (fixed dashboard zones: `status-strip.tsx`, `library-tiles.tsx`, `lifecycle-pipeline.tsx`; the customizable Insights grid below them still uses `dashboard-card-grid.tsx` + `card-registry.ts`)
+- Custom components: `authenticated-shell.tsx` (app shell with sidebar, mobile glass header + drawer, global maintenance banner), `sidebar.tsx`, `media-table.tsx`, `media-filters.tsx`, `media-detail-panel.tsx`, `rule-builder.tsx`, `quality-chart.tsx`, `theme-provider.tsx`, `dashboard/` (fixed dashboard zones: `status-strip.tsx`, `library-tiles.tsx`, `lifecycle-pipeline.tsx`; the customizable Insights grid below them still uses `dashboard-card-grid.tsx` + `card-registry.ts`)
 - Hover popovers (`MediaHoverPopover`) must always pass the same universal set of fields regardless of page or view type — documented in `docs/src/content/docs/docs/development/style-guide.mdx` under "Hover Popovers". Table and card views within the same page must always pass identical fields.
 - `src/hooks/` — Custom React hooks:
   - `useVirtualGridAlphabet` / `useTableAlphabet` — alphabet navigation for virtualized grid vs table views (not interchangeable); provide `scrollToLetter`, `activeLetter`, and `availableLetters`
@@ -226,7 +226,7 @@ When users connect multiple servers, dedup prevents duplicate items from appeari
 - All page `<h1>` elements must use `text-2xl sm:text-3xl font-bold font-display tracking-tight`
 - Theme accent colors override CSS vars: `--primary`, `--primary-foreground`, `--ring`, `--sidebar-primary`. Preset names are persisted in `AppSettings.accentColor` — never rename them
 - shadcn/ui uses "new-york" style variant
-- **Mobile / PWA:** installable (`src/app/manifest.ts`, theme color `#0c0d10`, `viewport-fit=cover`). Below `md` (768px) the shell swaps the sidebar for a glass header + `MobileTabBar` (`src/components/mobile-tab-bar.tsx`, 5 primary destinations). Safe-area utilities: `.pt-safe`, `.pb-safe`, `.pb-tabbar` (tab bar height is `--tabbar-height`); floating mobile elements must offset above the bar (see BackToTop, Toaster `mobileOffset`)
+- **Mobile / PWA:** installable (`src/app/manifest.ts`, theme color `#0c0d10`, `viewport-fit=cover`). Below `md` (768px) the shell swaps the sidebar for a glass header whose hamburger opens the navigation drawer. Safe-area utilities: `.pt-safe`, `.pb-safe` (notch/home-indicator padding in standalone mode)
 - **Full style guide:** `docs/src/content/docs/docs/development/style-guide.mdx` — covers color palette, typography, effects, component patterns, and don'ts. Consult when making UI changes.
 
 ### Data Patterns
