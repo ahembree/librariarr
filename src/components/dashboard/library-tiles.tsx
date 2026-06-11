@@ -1,11 +1,27 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useState, useRef } from "react";
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
 import { ArrowUpRight, Film, HardDrive, Music, Tv } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatBytesNum, formatDurationLarge } from "@/lib/format";
+
+interface SparkPoint {
+  /** Month bucket label from the timeline API ("YYYY-MM"). */
+  date: string;
+  total: number;
+}
+
+/** "2026-03" → "Mar 2026" for the hover tooltip. */
+function formatMonth(bucket: string): string {
+  const [y, m] = bucket.split("-").map(Number);
+  if (!y || !m) return bucket;
+  return new Date(y, m - 1, 1).toLocaleDateString(undefined, {
+    month: "short",
+    year: "numeric",
+  });
+}
 
 interface LibraryStats {
   movieCount: number;
@@ -27,14 +43,18 @@ interface LibraryStats {
 /** Months of addedAt history shown in each tile's growth sparkline. */
 const SPARK_MONTHS = 12;
 
-/** Decorative additions-per-month sparkline (area + line, brand-tinted). */
-function Sparkline({ values }: { values: number[] }) {
+/** Additions-per-month sparkline (area + line, brand-tinted). Hovering
+ *  snaps a cursor line + dot to the nearest month and shows a tooltip
+ *  with the month and how many items were added. */
+function Sparkline({ points }: { points: SparkPoint[] }) {
   const gradientId = useId();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const W = 100;
   const H = 28;
   const PAD = 2;
 
-  if (values.length < 2 || values.every((v) => v === 0)) {
+  if (points.length < 2) {
     return (
       <svg
         viewBox={`0 0 ${W} ${H}`}
@@ -55,38 +75,88 @@ function Sparkline({ values }: { values: number[] }) {
     );
   }
 
-  const max = Math.max(...values);
-  const stepX = W / (values.length - 1);
-  const points = values.map((v, i) => ({
+  // Guard against all-zero months: keep a flat baseline that still hovers.
+  const max = Math.max(...points.map((p) => p.total), 1);
+  const stepX = W / (points.length - 1);
+  const coords = points.map((p, i) => ({
     x: i * stepX,
-    y: H - PAD - (v / max) * (H - PAD * 2),
+    y: H - PAD - (p.total / max) * (H - PAD * 2),
   }));
-  const line = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
+  const line = coords.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
   const area = `${line} L${W},${H} L0,${H} Z`;
 
+  const handlePointerMove = (e: React.PointerEvent) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return;
+    const frac = (e.clientX - rect.left) / rect.width;
+    const idx = Math.min(
+      points.length - 1,
+      Math.max(0, Math.round(frac * (points.length - 1))),
+    );
+    setHoverIdx(idx);
+  };
+
+  const hover = hoverIdx !== null ? { point: points[hoverIdx], coord: coords[hoverIdx] } : null;
+  const xPct = hover ? (hover.coord.x / W) * 100 : 0;
+  const yPct = hover ? (hover.coord.y / H) * 100 : 0;
+  // Keep the tooltip inside the tile (which clips overflow) near the edges.
+  const tooltipPct = Math.min(80, Math.max(20, xPct));
+
   return (
-    <svg
-      viewBox={`0 0 ${W} ${H}`}
-      preserveAspectRatio="none"
-      className="h-9 w-full"
+    <div
+      ref={containerRef}
+      className="relative h-9 w-full"
+      onPointerMove={handlePointerMove}
+      onPointerLeave={() => setHoverIdx(null)}
       aria-hidden
     >
-      <defs>
-        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="var(--brand)" stopOpacity={0.3} />
-          <stop offset="100%" stopColor="var(--brand)" stopOpacity={0} />
-        </linearGradient>
-      </defs>
-      <path d={area} fill={`url(#${gradientId})`} />
-      <path
-        d={line}
-        fill="none"
-        stroke="var(--brand-bright)"
-        strokeWidth={1.5}
-        vectorEffect="non-scaling-stroke"
-        strokeLinejoin="round"
-      />
-    </svg>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        className="h-full w-full"
+      >
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--brand)" stopOpacity={0.3} />
+            <stop offset="100%" stopColor="var(--brand)" stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <path d={area} fill={`url(#${gradientId})`} />
+        <path
+          d={line}
+          fill="none"
+          stroke="var(--brand-bright)"
+          strokeWidth={1.5}
+          vectorEffect="non-scaling-stroke"
+          strokeLinejoin="round"
+        />
+      </svg>
+      {/* Hover cursor: vertical line + dot on the curve + tooltip. Rendered
+          as HTML overlays — the SVG is stretched (preserveAspectRatio none),
+          so an SVG circle would distort into an ellipse. */}
+      {hover && (
+        <>
+          <div
+            className="pointer-events-none absolute inset-y-0 w-px bg-border-strong"
+            style={{ left: `${xPct}%` }}
+          />
+          <div
+            className="pointer-events-none absolute h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand-bright ring-2 ring-card"
+            style={{ left: `${xPct}%`, top: `${yPct}%` }}
+          />
+          <div
+            className="pointer-events-none absolute bottom-full z-10 mb-1.5 -translate-x-1/2 rounded-md border bg-popover px-2 py-1 font-mono text-[10px] leading-tight whitespace-nowrap shadow-[var(--shadow-pop)]"
+            style={{ left: `${tooltipPct}%` }}
+          >
+            <span className="text-faint">{formatMonth(hover.point.date)}</span>
+            <span className="mx-1 text-faint">·</span>
+            <span className="font-medium text-foreground">
+              {hover.point.total.toLocaleString()} added
+            </span>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -106,7 +176,7 @@ function LibraryTile({
   value: string;
   sub?: string;
   rows: { label: string; value: string }[];
-  spark?: number[];
+  spark?: SparkPoint[];
   accent?: boolean;
 }) {
   const body = (
@@ -133,7 +203,7 @@ function LibraryTile({
       <div className="mt-1 font-mono text-[11.5px] text-faint">{sub ?? " "}</div>
       {spark && (
         <div className="mt-3">
-          <Sparkline values={spark} />
+          <Sparkline points={spark} />
           <div className="mt-1 font-mono text-[10px] tracking-[0.08em] text-faint uppercase">
             Added · last {SPARK_MONTHS}mo
           </div>
@@ -191,7 +261,7 @@ export function LibraryTiles({
   availableTypes: string[];
   serverId?: string;
 }) {
-  const [sparks, setSparks] = useState<Record<string, number[]>>({});
+  const [sparks, setSparks] = useState<Record<string, SparkPoint[]>>({});
 
   const showAll = availableTypes.length === 0;
   const show = {
@@ -218,9 +288,9 @@ export function LibraryTiles({
           const res = await fetch(`/api/media/stats/timeline?${params}`);
           if (!res.ok) return [type ?? "ALL", []] as const;
           const data = await res.json();
-          const values = ((data.points ?? []) as { total: number }[])
+          const values = ((data.points ?? []) as SparkPoint[])
             .slice(-SPARK_MONTHS)
-            .map((p) => p.total);
+            .map((p) => ({ date: p.date, total: p.total }));
           return [type ?? "ALL", values] as const;
         } catch {
           return [type ?? "ALL", []] as const;
