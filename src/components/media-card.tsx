@@ -29,8 +29,9 @@ export interface QualitySegment {
 }
 
 /** Fixed height of the text block under the poster, in px. Exported so the
- *  library pages' virtualizer row math stays in lockstep with the card. */
-export const CARD_CONTENT_HEIGHT = 96;
+ *  library pages' virtualizer row math stays in lockstep with the card.
+ *  Sized for the stacked icon-row metadata (up to three rows). */
+export const CARD_CONTENT_HEIGHT = 138;
 
 export interface MediaCardProps {
   imageUrl: string;
@@ -127,8 +128,8 @@ export const MediaCard = memo(function MediaCard({
         {(!qualityBar || qualityBar.length === 0) && <div className="h-1" />}
       </div>
 
-      {/* Compact content block — fixed height for virtualizer stability:
-          title (2 lines reserved), mono metadata line, footer chips. */}
+      {/* Content block — fixed height for virtualizer stability:
+          title (2 lines reserved), stacked icon metadata rows, footer chips. */}
       <div
         className="flex flex-col overflow-hidden px-2.5 pt-1.5 pb-2"
         style={{ height: CARD_CONTENT_HEIGHT }}
@@ -140,8 +141,10 @@ export const MediaCard = memo(function MediaCard({
           {title}
         </h3>
 
-        {/* Mono metadata — clipped if it wraps past the footer */}
-        <div className="mt-0.5 min-h-0 flex-1 overflow-hidden">{metadata}</div>
+        {/* Metadata — stacked icon rows, clipped if they overflow */}
+        <div className="mt-1 min-h-0 flex-1 overflow-hidden text-xs text-muted-foreground">
+          {metadata}
+        </div>
 
         {/* Footer: badges + server chips + info button */}
         <div className="flex shrink-0 items-center gap-1 overflow-hidden pt-1">
