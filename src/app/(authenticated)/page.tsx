@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -14,6 +13,11 @@ import {
 import { DashboardCardGrid } from "@/components/dashboard-card-grid";
 import { AddCardDropdown } from "@/components/add-card-dropdown";
 import { SyncIndicator } from "@/components/sync-indicator";
+import { StatusStrip } from "@/components/dashboard/status-strip";
+import { LibraryTiles } from "@/components/dashboard/library-tiles";
+import { LifecyclePipeline } from "@/components/dashboard/lifecycle-pipeline";
+import { RecentlyAdded } from "@/components/recently-added";
+import type { ScheduleInfo } from "@/components/dashboard/types";
 import {
   resolveLayout,
   getDefaultLayout,
@@ -21,17 +25,15 @@ import {
   isCustomCardId,
   CUSTOM_CARD_DEFINITION,
   type CardEntry,
-  type DashboardTab,
   type DashboardLayout,
   type CustomCardConfig,
 } from "@/lib/dashboard/card-registry";
 import { CustomCardDialog } from "@/components/custom-card-dialog";
-import { AlertCircle, Check, Film, LayoutDashboard, Music, Pencil, Server, Tv } from "lucide-react";
+import { AlertCircle, Check, Film, Music, Pencil, Server, Tv } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
 import { generateId } from "@/lib/utils";
 import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
-import { TabNav, type TabNavItem } from "@/components/tab-nav";
 import { DashboardSkeleton } from "@/components/skeletons";
 import { useRealtime } from "@/hooks/use-realtime";
 
@@ -103,12 +105,18 @@ interface Stats {
   }[];
 }
 
-const VALID_DASHBOARD_TABS = new Set<string>(["main", "movies", "series", "music"]);
+// Cards that became fixed dashboard zones — excluded from the customizable
+// Insights grid (and from its add-card dropdown).
+const FIXED_ZONE_CARDS = ["stats", "sync-status", "recently-added"];
 
-function getInitialDashboardTab(): DashboardTab {
-  if (typeof window === "undefined") return "main";
-  const hash = window.location.hash.slice(1);
-  return VALID_DASHBOARD_TABS.has(hash) ? (hash as DashboardTab) : "main";
+/** Zone heading: mono eyebrow label + optional right-aligned controls. */
+function SectionHeader({ label, children }: { label: string; children?: React.ReactNode }) {
+  return (
+    <div className="mb-3 flex min-h-8 flex-wrap items-center justify-between gap-2">
+      <h2 className="eyebrow">{label}</h2>
+      {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
+    </div>
+  );
 }
 
 export default function DashboardPage() {
@@ -116,8 +124,8 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
   const [layout, setLayout] = useState<DashboardLayout | null>(null);
+  const [scheduleInfo, setScheduleInfo] = useState<ScheduleInfo | null>(null);
   const [editMode, setEditMode] = useState(false);
-  const [activeTab, setActiveTab] = useState<DashboardTab>(getInitialDashboardTab);
   const [servers, setServers] = useState<{ id: string; name: string; type: string }[]>([]);
   const [selectedServerId, setSelectedServerId] = useState<string>("all");
   const [selectedMediaType, setSelectedMediaType] = useState<string>("all");
@@ -132,22 +140,14 @@ export default function DashboardPage() {
       .catch(() => {});
   }, []);
 
-  // Sync active tab to URL hash (replaceState avoids creating extra history
-  // entries that break browser back/forward navigation in the App Router)
-  useEffect(() => {
-    const newHash = `#${activeTab}`;
-    if (window.location.hash !== newHash) {
-      window.history.replaceState(window.history.state, "", newHash);
-    }
-  }, [activeTab]);
-
   const fetchData = useCallback(async () => {
     try {
-      const [statsRes, layoutRes, serversRes, typesRes] = await Promise.all([
+      const [statsRes, layoutRes, serversRes, typesRes, scheduleRes] = await Promise.all([
         fetch("/api/media/stats"),
         fetch("/api/settings/dashboard-layout"),
         fetch("/api/servers"),
         fetch("/api/media/library-types"),
+        fetch("/api/settings/schedule-info"),
       ]);
       const statsData = await statsRes.json();
       setStats(statsData);
@@ -171,6 +171,10 @@ export default function DashboardPage() {
       if (typesRes.ok) {
         const typesData = await typesRes.json();
         setAvailableTypes(typesData.types ?? []);
+      }
+
+      if (scheduleRes.ok) {
+        setScheduleInfo(await scheduleRes.json());
       }
     } catch (error) {
       console.error("Failed to fetch dashboard data:", error);
@@ -207,12 +211,15 @@ export default function DashboardPage() {
   }, [selectedServerId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resolvedLayout = resolveLayout(layout) ?? getDefaultLayout();
+  // The Insights grid is the customizable remainder of the old "main" tab
+  // layout; cards that became fixed zones above it are filtered out.
+  const insightCards = resolvedLayout.main.filter((c) => !FIXED_ZONE_CARDS.includes(c.id));
 
-  const updateLayout = useCallback(
-    (tab: DashboardTab, newCards: CardEntry[]) => {
+  const updateInsights = useCallback(
+    (newCards: CardEntry[]) => {
       const newLayout = {
         ...resolvedLayout,
-        [tab]: newCards,
+        main: newCards,
       };
       setLayout(newLayout);
 
@@ -258,12 +265,12 @@ export default function DashboardPage() {
   const handleAddCustom = useCallback(
     (config: CustomCardConfig) => {
       const id = `custom-${generateId()}`;
-      updateLayout(activeTab, [
-        ...resolvedLayout[activeTab],
+      updateInsights([
+        ...insightCards,
         { id, size: CUSTOM_CARD_DEFINITION.defaultSize, config },
       ]);
     },
-    [activeTab, resolvedLayout, updateLayout]
+    [insightCards, updateInsights]
   );
 
   const handleConfigChange = useCallback(
@@ -278,12 +285,12 @@ export default function DashboardPage() {
   const handleConfigSave = useCallback(
     (newConfig: CustomCardConfig) => {
       if (!editingCustomCard) return;
-      updateLayout(activeTab, resolvedLayout[activeTab].map((c) =>
+      updateInsights(insightCards.map((c) =>
         c.id === editingCustomCard.cardId ? { ...c, config: newConfig } : c
       ));
       setEditingCustomCard(null);
     },
-    [editingCustomCard, activeTab, resolvedLayout, updateLayout]
+    [editingCustomCard, insightCards, updateInsights]
   );
 
   if (loading) {
@@ -307,9 +314,12 @@ export default function DashboardPage() {
     );
   }
 
+  const serverId = selectedServerId !== "all" ? selectedServerId : undefined;
+
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <div className="flex flex-col gap-4 mb-6 sm:mb-8 sm:flex-row sm:items-start sm:justify-between">
+      {/* ── Header ── */}
+      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="eyebrow">
             {(() => {
@@ -339,7 +349,7 @@ export default function DashboardPage() {
             })()}
           </h1>
           <p className="text-muted-foreground mt-1">
-            Library statistics and activity at a glance — customize the layout per tab in edit mode.
+            Your library, lifecycle pipeline, and activity at a glance.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -371,96 +381,105 @@ export default function DashboardPage() {
               </Select>
             );
           })()}
-          {activeTab === "main" && (availableTypes.length === 0 || availableTypes.length > 1) && (
-            <Select
-              value={selectedMediaType}
-              onValueChange={setSelectedMediaType}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-36 text-sm">
-                {selectedMediaType === "MOVIE" ? (
-                  <Film className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-                ) : selectedMediaType === "SERIES" ? (
-                  <Tv className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-                ) : selectedMediaType === "MUSIC" ? (
-                  <Music className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-                ) : null}
-                <SelectValue placeholder="All Types" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Types</SelectItem>
-                {(availableTypes.length === 0 || availableTypes.includes("MOVIE")) && (
-                  <SelectItem value="MOVIE">Movies</SelectItem>
-                )}
-                {(availableTypes.length === 0 || availableTypes.includes("SERIES")) && (
-                  <SelectItem value="SERIES">Series</SelectItem>
-                )}
-                {(availableTypes.length === 0 || availableTypes.includes("MUSIC")) && (
-                  <SelectItem value="MUSIC">Music</SelectItem>
-                )}
-              </SelectContent>
-            </Select>
-          )}
-          {editMode && (
-            <AddCardDropdown
-              tab={activeTab}
-              existingCards={resolvedLayout[activeTab].map((c) => c.id)}
-              onAdd={(cardId) => {
-                const def = getCardDefinition(cardId);
-                updateLayout(activeTab, [
-                  ...resolvedLayout[activeTab],
-                  { id: cardId, size: def?.defaultSize ?? 12 },
-                ]);
-              }}
-              onAddCustom={handleAddCustom}
-            />
-          )}
-          <Button
-            variant="outline"
-            onClick={() => setEditMode(!editMode)}
-          >
-            {editMode ? (
-              <Check className="mr-2 h-4 w-4" />
-            ) : (
-              <Pencil className="mr-2 h-4 w-4" />
-            )}
-            {editMode ? "Done" : "Edit Layout"}
-          </Button>
         </div>
       </div>
 
-      <Tabs
-        value={activeTab}
-        onValueChange={(v) => setActiveTab(v as DashboardTab)}
-        className=""
-      >
-        <TabNav
-          tabs={[
-            { value: "main" as DashboardTab, label: "Main", icon: LayoutDashboard },
-            ...(availableTypes.length === 0 || availableTypes.includes("MOVIE")
-              ? [{ value: "movies" as DashboardTab, label: "Movies", icon: Film }]
-              : []),
-            ...(availableTypes.length === 0 || availableTypes.includes("SERIES")
-              ? [{ value: "series" as DashboardTab, label: "Series", icon: Tv }]
-              : []),
-            ...(availableTypes.length === 0 || availableTypes.includes("MUSIC")
-              ? [{ value: "music" as DashboardTab, label: "Music", icon: Music }]
-              : []),
-          ] satisfies TabNavItem<DashboardTab>[]}
-          activeTab={activeTab}
-          onTabChange={(v) => setActiveTab(v)}
-          className="mb-6"
-        />
+      <div className="space-y-8">
+        {/* ── Zone 1: operational status ── */}
+        <StatusStrip scheduleInfo={scheduleInfo} />
 
-        <TabsContent value="main">
+        {/* ── Zone 2: library overview ── */}
+        <section>
+          <SectionHeader label="Library" />
+          <LibraryTiles stats={stats} availableTypes={availableTypes} serverId={serverId} />
+        </section>
+
+        {/* ── Zone 3: lifecycle pipeline ── */}
+        <section>
+          <SectionHeader label="Lifecycle pipeline" />
+          <LifecyclePipeline scheduleInfo={scheduleInfo} />
+        </section>
+
+        {/* ── Zone 4: recently added (component carries its own card title) ── */}
+        <section>
+          <RecentlyAdded
+            serverId={serverId}
+            servers={servers}
+            availableTypes={availableTypes}
+            onMovieClick={handleMovieClick}
+            onEpisodeClick={handleEpisodeClick}
+            onTrackClick={handleTrackClick}
+          />
+        </section>
+
+        {/* ── Zone 5: customizable insights ── */}
+        <section>
+          <SectionHeader label="Insights">
+            {(availableTypes.length === 0 || availableTypes.length > 1) && (
+              <Select
+                value={selectedMediaType}
+                onValueChange={setSelectedMediaType}
+              >
+                <SelectTrigger className="h-8 w-36 text-sm">
+                  {selectedMediaType === "MOVIE" ? (
+                    <Film className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                  ) : selectedMediaType === "SERIES" ? (
+                    <Tv className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                  ) : selectedMediaType === "MUSIC" ? (
+                    <Music className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                  ) : null}
+                  <SelectValue placeholder="All Types" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Types</SelectItem>
+                  {(availableTypes.length === 0 || availableTypes.includes("MOVIE")) && (
+                    <SelectItem value="MOVIE">Movies</SelectItem>
+                  )}
+                  {(availableTypes.length === 0 || availableTypes.includes("SERIES")) && (
+                    <SelectItem value="SERIES">Series</SelectItem>
+                  )}
+                  {(availableTypes.length === 0 || availableTypes.includes("MUSIC")) && (
+                    <SelectItem value="MUSIC">Music</SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+            )}
+            {editMode && (
+              <AddCardDropdown
+                tab="main"
+                existingCards={[...insightCards.map((c) => c.id), ...FIXED_ZONE_CARDS]}
+                onAdd={(cardId) => {
+                  const def = getCardDefinition(cardId);
+                  updateInsights([
+                    ...insightCards,
+                    { id: cardId, size: def?.defaultSize ?? 12 },
+                  ]);
+                }}
+                onAddCustom={handleAddCustom}
+              />
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setEditMode(!editMode)}
+            >
+              {editMode ? (
+                <Check className="mr-2 h-4 w-4" />
+              ) : (
+                <Pencil className="mr-2 h-4 w-4" />
+              )}
+              {editMode ? "Done" : "Customize"}
+            </Button>
+          </SectionHeader>
           <DashboardCardGrid
-            cards={resolvedLayout.main}
+            cards={insightCards}
             stats={stats}
             editMode={editMode}
             filterType={selectedMediaType !== "all" ? selectedMediaType as "MOVIE" | "SERIES" | "MUSIC" : undefined}
-            serverId={selectedServerId !== "all" ? selectedServerId : undefined}
+            serverId={serverId}
             servers={servers}
             availableTypes={availableTypes}
-            onLayoutChange={(cards) => updateLayout("main", cards)}
+            onLayoutChange={updateInsights}
             onMovieClick={handleMovieClick}
             onSeriesClick={handleSeriesClick}
             onArtistClick={handleArtistClick}
@@ -469,77 +488,8 @@ export default function DashboardPage() {
             onSyncComplete={fetchStats}
             onConfigChange={handleConfigChange}
           />
-        </TabsContent>
-
-        {(availableTypes.length === 0 || availableTypes.includes("MOVIE")) && (
-          <TabsContent value="movies">
-            <DashboardCardGrid
-              cards={resolvedLayout.movies}
-              stats={stats}
-              editMode={editMode}
-              filterType="MOVIE"
-              lockedFilterType
-              serverId={selectedServerId !== "all" ? selectedServerId : undefined}
-              servers={servers}
-              availableTypes={availableTypes}
-              onLayoutChange={(cards) => updateLayout("movies", cards)}
-              onMovieClick={handleMovieClick}
-              onSeriesClick={handleSeriesClick}
-              onArtistClick={handleArtistClick}
-              onEpisodeClick={handleEpisodeClick}
-              onTrackClick={handleTrackClick}
-              onSyncComplete={fetchStats}
-              onConfigChange={handleConfigChange}
-            />
-          </TabsContent>
-        )}
-
-        {(availableTypes.length === 0 || availableTypes.includes("SERIES")) && (
-          <TabsContent value="series">
-            <DashboardCardGrid
-              cards={resolvedLayout.series}
-              stats={stats}
-              editMode={editMode}
-              filterType="SERIES"
-              lockedFilterType
-              serverId={selectedServerId !== "all" ? selectedServerId : undefined}
-              servers={servers}
-              availableTypes={availableTypes}
-              onLayoutChange={(cards) => updateLayout("series", cards)}
-              onMovieClick={handleMovieClick}
-              onSeriesClick={handleSeriesClick}
-              onArtistClick={handleArtistClick}
-              onEpisodeClick={handleEpisodeClick}
-              onTrackClick={handleTrackClick}
-              onSyncComplete={fetchStats}
-              onConfigChange={handleConfigChange}
-            />
-          </TabsContent>
-        )}
-
-        {(availableTypes.length === 0 || availableTypes.includes("MUSIC")) && (
-          <TabsContent value="music">
-            <DashboardCardGrid
-              cards={resolvedLayout.music}
-              stats={stats}
-              editMode={editMode}
-              filterType="MUSIC"
-              lockedFilterType
-              serverId={selectedServerId !== "all" ? selectedServerId : undefined}
-              servers={servers}
-              availableTypes={availableTypes}
-              onLayoutChange={(cards) => updateLayout("music", cards)}
-              onMovieClick={handleMovieClick}
-              onSeriesClick={handleSeriesClick}
-              onArtistClick={handleArtistClick}
-              onEpisodeClick={handleEpisodeClick}
-              onTrackClick={handleTrackClick}
-              onSyncComplete={fetchStats}
-              onConfigChange={handleConfigChange}
-            />
-          </TabsContent>
-        )}
-      </Tabs>
+        </section>
+      </div>
 
       {/* Edit custom card dialog */}
       <CustomCardDialog

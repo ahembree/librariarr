@@ -5,27 +5,48 @@ description: Understand and customize the Librariarr dashboard.
 
 import { Aside } from "@astrojs/starlight/components";
 
-The dashboard is the landing page after login, providing an at-a-glance overview of your media libraries.
+The dashboard is the landing page after login — an operations console for your media libraries, organized into purpose-built zones from "what's happening right now" down to deep-dive charts.
 
-## Dashboard Tabs
+## Zones
 
-The dashboard is organized into tabs:
+### Status Strip
 
-- **Main** — Aggregate statistics across all media types
-- **Movies** — Quality breakdown for movies only
-- **Series** — Quality breakdown for series only
-- **Music** — Quality breakdown for music only
+A compact row of live operational tiles at the top of the page. Each tile links to the page where you can act on it:
 
-## Cards
+| Tile | Shows | Links to |
+|-|-|-|
+| Streams | Active playback session count; warns when a media server is unreachable | Tools → Streams |
+| Sync | Whether a sync is running, when the last one finished, and the next scheduled sync | Settings → Scheduling |
+| Integrations | How many Sonarr/Radarr/Lidarr/Seerr instances are reachable | Settings → Integrations |
+| Next runs | Countdown to the next lifecycle detection and execution runs | Settings → Scheduling |
+| Update | Appears only when a newer Librariarr version is available | Settings → System |
 
-The dashboard uses a card system that displays statistics, charts, and summaries.
+Slow data sources (streams and integration health probe your servers) load in the background without blocking the rest of the page.
 
-### Available Card Types
+### Library Overview
+
+One tile per media type — Movies, Series, Music — plus a Library Size total. Each type tile shows the item count, a **12-month additions sparkline**, and size/runtime details, and clicks through to that library's browse page.
+
+### Lifecycle Pipeline
+
+The lifecycle system as a funnel, each stage linking to its page:
+
+**Rule sets** (enabled count) → **Matches** (items currently matched) → **Pending actions** (scheduled work, with the next execution countdown) → **Reclaimed** (space freed by completed deletions).
+
+If you haven't created any rule sets yet, this zone shows a shortcut to create your first one.
+
+### Recently Added
+
+The newest additions across your libraries, with type and server filters plus hover details.
+
+### Insights
+
+A fully customizable chart grid — this is the only zone with a layout editor. Click **Customize** to rearrange, resize, remove, or add cards. Your layout is saved automatically and persists across sessions.
+
+#### Built-in Cards
 
 | Card | Description |
 |-|-|
-| Total Counts | Number of movies, shows, episodes, music tracks |
-| File Size | Total storage used by media type |
 | Quality Breakdown | Resolution distribution across your library |
 | Video Codec | Video codec distribution (H.264, HEVC, etc.) |
 | Audio Codec | Audio codec distribution (AAC, AC3, etc.) |
@@ -34,14 +55,15 @@ The dashboard uses a card system that displays statistics, charts, and summaries
 | Dynamic Range | HDR format distribution (Dolby Vision, HDR10, SDR, etc.) |
 | Audio Channels | Surround sound layout distribution (Stereo, 5.1, 7.1, etc.) |
 | Genre Breakdown | Genre distribution across your library |
-| Recently Added | Most recent additions to your library |
-| Sync Status | Library sync progress and recent sync jobs (Main tab only) |
+| Seerr Requests | Top requesters and watch follow-through |
 
-### Custom Cards
+The **media type filter** above the grid scopes every chart to Movies, Series, or Music.
 
-Custom cards let you create charts with any dimension and chart type. Click **Add Card → Custom Card** in edit mode.
+#### Custom Cards
 
-#### Chart Types
+Custom cards let you create charts with any dimension and chart type. Click **Customize → Add Card → Custom Card**.
+
+##### Chart Types
 
 | Type | Description |
 |-|-|
@@ -55,7 +77,7 @@ Custom cards let you create charts with any dimension and chart type. Click **Ad
 | Count | Large single number |
 | Timeline | Time-series chart with zoom slider; pick a date field for the X-axis, an optional breakdown dimension for colored series, and a time interval (day, week, month, quarter, year) |
 
-#### Available Dimensions
+##### Available Dimensions
 
 Custom cards can visualize data across many dimensions, grouped by category:
 
@@ -67,16 +89,9 @@ Custom cards can visualize data across many dimensions, grouped by category:
 - **Dates** — Added Date, Last Played, Release Date
 - **Engagement** — Critic Rating, Audience Rating, Play Count
 
-### Customizing the Dashboard
+## Server Filter
 
-Enter **Edit Mode** to:
-
-- **Rearrange cards** by dragging them to a new position
-- **Resize cards** by adjusting their column span
-- **Hide cards** you don't need
-- **Add cards** including built-in and custom chart cards
-
-Your layout is saved automatically and persists across sessions.
+When multiple servers are connected, the server selector in the page header scopes the library tiles, sparklines, recently added, and insight charts to a single server.
 
 ## Multi-Server Statistics
 

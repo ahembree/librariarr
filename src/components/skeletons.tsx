@@ -132,27 +132,37 @@ export function ChartCardSkeleton() {
   );
 }
 
-/** Dashboard page skeleton */
+/** Dashboard page skeleton matching the zoned layout (status strip,
+ *  library tiles, lifecycle pipeline, recently added shelf). */
 export function DashboardSkeleton() {
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 sm:mb-8">
-        <Skeleton className="h-8 w-40" />
-        <div className="flex items-center gap-2">
-          <Skeleton className="h-9 w-28 rounded-md" />
-          <Skeleton className="h-9 w-28 rounded-md" />
+      {/* Header: eyebrow + greeting */}
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
+        <div>
+          <Skeleton className="h-3 w-44" />
+          <Skeleton className="mt-2.5 h-8 w-64" />
+          <Skeleton className="mt-2.5 h-4 w-80" />
         </div>
+        <Skeleton className="h-9 w-28 rounded-md" />
       </div>
-      {/* Tab bar */}
-      <div className="flex items-center gap-1 border-b mb-6">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <Skeleton key={i} className="h-9 w-20 rounded-t-md" />
-        ))}
-      </div>
-      <StatsCardsSkeleton />
-      <div className="mt-6 grid gap-6 md:grid-cols-2">
-        <ChartCardSkeleton />
-        <ChartCardSkeleton />
+      <div className="space-y-8">
+        {/* Status strip */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-[66px] rounded-[14px]" />
+          ))}
+        </div>
+        {/* Library tiles */}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-56 rounded-[14px]" />
+          ))}
+        </div>
+        {/* Lifecycle pipeline */}
+        <Skeleton className="h-[92px] w-full rounded-[14px]" />
+        {/* Recently added shelf */}
+        <Skeleton className="h-64 w-full rounded-[14px]" />
       </div>
     </div>
   );

@@ -120,7 +120,7 @@ pnpm exec vitest run tests/path/to/file.test.ts  # Run a single test file
 ### Component Patterns
 
 - `src/components/ui/` — shadcn/ui primitives (do not edit directly)
-- Custom components: `authenticated-shell.tsx` (app shell with sidebar, mobile header + bottom tab bar, global maintenance banner), `sidebar.tsx`, `mobile-tab-bar.tsx`, `media-table.tsx`, `media-filters.tsx`, `media-detail-panel.tsx`, `rule-builder.tsx`, `quality-chart.tsx`, `theme-provider.tsx`
+- Custom components: `authenticated-shell.tsx` (app shell with sidebar, mobile header + bottom tab bar, global maintenance banner), `sidebar.tsx`, `mobile-tab-bar.tsx`, `media-table.tsx`, `media-filters.tsx`, `media-detail-panel.tsx`, `rule-builder.tsx`, `quality-chart.tsx`, `theme-provider.tsx`, `dashboard/` (fixed dashboard zones: `status-strip.tsx`, `library-tiles.tsx`, `lifecycle-pipeline.tsx`; the customizable Insights grid below them still uses `dashboard-card-grid.tsx` + `card-registry.ts`)
 - Hover popovers (`MediaHoverPopover`) must always pass the same universal set of fields regardless of page or view type — documented in `docs/src/content/docs/docs/development/style-guide.mdx` under "Hover Popovers". Table and card views within the same page must always pass identical fields.
 - `src/hooks/` — Custom React hooks:
   - `useVirtualGridAlphabet` / `useTableAlphabet` — alphabet navigation for virtualized grid vs table views (not interchangeable); provide `scrollToLetter`, `activeLetter`, and `availableLetters`
