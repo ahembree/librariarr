@@ -12,10 +12,10 @@ export default function manifest(): MetadataRoute.Manifest {
     start_url: "/",
     scope: "/",
     display: "standalone",
-    // Matches src/app/globals.css --background = oklch(0.16 0.018 235); avoids
+    // Matches src/app/globals.css --background = oklch(0.16 0.006 270); avoids
     // a colour flash between the PWA splash and the loaded app shell.
-    background_color: "#060f14",
-    theme_color: "#060f14",
+    background_color: "#0c0d10",
+    theme_color: "#0c0d10",
     icons: [
       {
         src: "/icon-192.png",

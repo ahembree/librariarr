@@ -10,11 +10,6 @@ import {
 // clearAccentColors() clears the union of keys across presets, so a preset
 // missing a key would leave a stale override behind when switching accents.
 const REQUIRED_VARS = [
-  "--brand",
-  "--brand-bright",
-  "--brand-dim",
-  "--brand-faint",
-  "--on-brand",
   "--primary",
   "--primary-foreground",
   "--ring",
@@ -43,7 +38,7 @@ describe("ACCENT_PRESETS", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it("defines the full brand-family variable set on every preset", () => {
+  it("defines the same variable set on every preset", () => {
     for (const preset of ACCENT_PRESETS) {
       expect(Object.keys(preset.cssVars).sort(), preset.name).toEqual(
         [...REQUIRED_VARS].sort(),
@@ -51,10 +46,10 @@ describe("ACCENT_PRESETS", () => {
     }
   });
 
-  it("uses oklch or color-mix values for every variable", () => {
+  it("uses oklch values for every variable", () => {
     for (const preset of ACCENT_PRESETS) {
       for (const [key, value] of Object.entries(preset.cssVars)) {
-        expect(value, `${preset.name} ${key}`).toMatch(/^(oklch\(|color-mix\(in oklch,)/);
+        expect(value, `${preset.name} ${key}`).toMatch(/^oklch\(/);
       }
     }
   });

@@ -1,148 +1,147 @@
 ---
 title: Style & Branding Guide
-description: The Lagoon design system — color palette, typography, and component patterns for Librariarr.
+description: Design system, color palette, typography, and component patterns for Librariarr.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 # Style & Branding Guide
 
-Librariarr uses the **Lagoon** design system — a deep-ocean dark interface anchored to the product's own logo colors: the cyan reel arc and the gold spine. Surfaces share a blue hue whose chroma *rises* with elevation, so lifted panels read like warmer water above a dark floor. Chrome recedes (the sidebar is darker than the canvas); content lifts.
+Librariarr uses a **modern cinematic** aesthetic — a layered dark interface with navy-tinted surfaces, atmospheric depth, and editorial typography. The design draws from premium streaming services while maintaining a functional media-management tool identity.
 
 ## Brand Identity
 
 ### Logo
 
-The logo is an SVG side view of a movie reel with a circular arrow (representing lifecycle/recycling) enclosing book spines (representing a media library). The design system derives directly from it:
+The logo is an SVG side view of a movie reel with a circular arrow (representing lifecycle/recycling) enclosing book spines (representing a media library). Primary brand colors within the logo:
 
-| Element | Color | Hex | System role |
-|-|-|-|-|
-| Circular arc / arrow | Cyan | `#00a4dc` | `--brand` (≈ `#09b7dc`) |
-| Spine 1 (gold) | Gold | `#e5a00d` | `--amber` highlight family |
-| Spine 2 (blue) | Blue | `#00a4dc` | — |
-| Spine 3 (green) | Green | `#52b54b` | `--green` semantic family |
-| Spine 4 (orange) | Orange | `#e4881c` | — |
-| Spine 5 (purple) | Purple | `#9b59b6` | — |
-| Background fill | Deep navy | `#0f1923` | Surface hue reference |
+| Element | Color | Hex |
+|-|-|-|
+| Circular arc / arrow | Plex blue | `#00a4dc` |
+| Spine 1 (gold) | Plex accent | `#e5a00d` |
+| Spine 2 (blue) | Primary blue | `#00a4dc` |
+| Spine 3 (green) | Success green | `#52b54b` |
+| Spine 4 (orange) | Warm orange | `#e4881c` |
+| Spine 5 (purple) | Purple accent | `#9b59b6` |
+| Background fill | Deep navy | `#0f1923` |
 
 ### Application Name
 
-"Librariarr" is displayed in the sidebar using the display font (Space Grotesk, semibold, tight tracking). The "arr" suffix renders in `text-brand-bright`.
+"Librariarr" is displayed in the sidebar using the display font:
+
+```
+font-family: Sora
+font-weight: 600 (semibold)
+letter-spacing: tight (-0.025em)
+```
 
 ---
 
 ## Color System
 
-All colors use the **OKLCH color model** for perceptual uniformity. The application enforces dark mode only (`className="dark"` on `<html>`). Derived tints use `color-mix(in oklch, …)` so they follow the active accent automatically.
+All colors use the **OKLCH color model** for perceptual uniformity. The application enforces dark mode only (`className="dark"` on `<html>`).
 
-### Surfaces
-
-Surfaces share hue ≈ 235–236 with chroma rising alongside lightness — elevation reads as both brighter *and* richer:
-
-| Token | OKLCH Value | Hex | Role |
-|-|-|-|-|
-| `--sidebar` | `oklch(0.13 0.015 235)` | `#03080c` | Navigation rail — **below** the canvas |
-| `--background` / `--surface-0` | `oklch(0.16 0.018 235)` | `#060f14` | Page canvas |
-| `--card` / `--surface-1` | `oklch(0.20 0.02 236)` | `#0d181e` | Cards and panels |
-| `--popover` | `oklch(0.22 0.02 236)` | `#111c23` | Popovers/dropdowns |
-| `--muted` | `oklch(0.23 0.02 236)` | — | Muted backgrounds |
-| `--surface-2` | `oklch(0.24 0.022 236)` | `#152128` | Hover fills, wells |
-| `--accent` | `oklch(0.26 0.024 236)` | — | shadcn hover fill |
-| `--secondary` / `--surface-3` | `oklch(0.28 0.024 236)` | `#1d2b33` | Highest resting surface |
-
-### Text
+### Core Palette
 
 | Token | OKLCH Value | Role |
 |-|-|-|
-| `--foreground` | `oklch(0.96 0.005 220)` | Primary text — cool white |
-| `--muted-foreground` | `oklch(0.70 0.02 228)` | Secondary/helper text |
-| `--faint-foreground` | `oklch(0.55 0.025 230)` | Eyebrows, metadata, disabled |
+| `--background` | `oklch(0.16 0.006 270)` | Page background — deep navy-grey |
+| `--foreground` | `oklch(0.95 0.008 80)` | Primary text — warm off-white |
+| `--card` | `oklch(0.21 0.008 270)` | Card/panel surfaces — lifted from background |
+| `--popover` | `oklch(0.23 0.01 270)` | Popover/dropdown surfaces |
+| `--primary` | `oklch(0.90 0 0)` | Primary actions — near-white |
+| `--primary-foreground` | `oklch(0.18 0.01 270)` | Text on primary — dark navy |
+| `--secondary` | `oklch(0.27 0.01 270)` | Secondary surfaces |
+| `--muted` | `oklch(0.25 0.01 265)` | Muted backgrounds |
+| `--muted-foreground` | `oklch(0.65 0.015 260)` | Secondary/helper text |
+| `--accent` | `oklch(0.27 0.015 270)` | Accent surfaces |
+| `--destructive` | `oklch(0.704 0.191 22.216)` | Error/danger actions |
+| `--border` | `oklch(1 0.01 270 / 12%)` | Borders — translucent white |
+| `--input` | `oklch(1 0.01 270 / 15%)` | Input field borders |
+| `--ring` | `oklch(0.50 0.015 260)` | Focus ring color |
 
-### Brand (Lagoon cyan)
+### Sidebar Palette
 
-| Token | OKLCH Value | Hex | Role |
-|-|-|-|-|
-| `--brand` | `oklch(0.72 0.13 220)` | `#09b7dc` | Primary actions, active states |
-| `--brand-bright` | `oklch(0.80 0.11 215)` | `#5cd0ea` | Accent text on dark surfaces |
-| `--brand-dim` | `--brand` @ 15% | — | Active-item fills, pills |
-| `--brand-faint` | `--brand` @ 7% | — | Atmosphere washes |
-| `--on-brand` | `oklch(0.13 0.02 235)` | — | Text on brand fills (dark) |
-
-`--primary` aliases `--brand`; `--primary-foreground` aliases `--on-brand`. Buttons and active controls are cyan with dark text.
-
-### Semantic Colors
-
-Each has a solid and a `-dim` (≈15% alpha) fill variant:
-
-| Token | OKLCH Value | Role |
-|-|-|-|
-| `--amber` | `oklch(0.80 0.13 85)` | Warnings, ratings gold |
-| `--green` | `oklch(0.76 0.15 165)` | Success, completed |
-| `--red` / `--destructive` | `oklch(0.68 0.19 18)` | Errors, destructive actions |
-| `--sky` | `oklch(0.74 0.11 230)` | Info |
-
-### Borders
-
-Hairlines carry a faint cyan tint: `--border` = `oklch(0.85 0.06 220 / 10%)`, `--input` @ 14%, `--border-strong` @ 16%.
+| Token | OKLCH Value |
+|-|-|
+| `--sidebar` | `oklch(0.18 0.008 270)` |
+| `--sidebar-foreground` | `oklch(0.95 0.008 80)` |
+| `--sidebar-primary` | `oklch(0.55 0.26 264)` |
+| `--sidebar-accent` | `oklch(0.25 0.012 270)` |
 
 ### Chart Colors
 
-| Token | OKLCH Value | Hue |
+| Token | OKLCH Value | Approximate hue |
 |-|-|-|
-| `--chart-1` | `oklch(0.72 0.13 220)` | Brand cyan (follows accent) |
-| `--chart-2` | `oklch(0.80 0.13 85)` | Gold |
-| `--chart-3` | `oklch(0.76 0.15 165)` | Green |
-| `--chart-4` | `oklch(0.68 0.20 300)` | Violet |
-| `--chart-5` | `oklch(0.70 0.19 10)` | Rose |
+| `--chart-1` | `oklch(0.55 0.26 264)` | Blue |
+| `--chart-2` | `oklch(0.72 0.19 162)` | Green |
+| `--chart-3` | `oklch(0.78 0.20 70)` | Amber |
+| `--chart-4` | `oklch(0.65 0.28 304)` | Violet |
+| `--chart-5` | `oklch(0.67 0.26 16)` | Rose |
 
-### Accent Presets
+### Surface Elevation
 
-Users choose from 7 accents in Settings. Presets override the **full brand family** (`--brand`, `--brand-bright`, `--brand-dim`, `--brand-faint`, `--on-brand`, `--primary`, `--primary-foreground`, `--ring`, `--sidebar-primary`, `--sidebar-primary-foreground`, `--chart-1`), so the sidebar, mobile tab bar, atmosphere, and charts all follow:
+The design uses **layered lightness** to create depth. Each surface level is incrementally brighter:
 
-| Preset | Base OKLCH | Swatch |
+```
+Background  0.16  ← deepest
+Sidebar     0.18
+Card        0.21
+Popover     0.23
+Muted       0.25
+Secondary   0.27  ← lightest surface
+```
+
+All surfaces share a blue hue angle (~270) with very low chroma (0.006–0.015), giving a cohesive navy tint rather than flat grey.
+
+### Accent Color Presets
+
+Users can choose from 7 accent colors in Settings. Each overrides `--primary`, `--ring`, `--sidebar-primary`, and `--chart-1`:
+
+| Preset | Primary OKLCH | Swatch |
 |-|-|-|
-| Lagoon (default) | `oklch(0.72 0.13 220)` | `#09b7dc` |
-| Blue | `oklch(0.66 0.17 255)` | `#3f93f7` |
-| Violet | `oklch(0.68 0.20 300)` | `#ad74ff` |
-| Green | `oklch(0.76 0.15 165)` | `#2cce99` |
-| Orange | `oklch(0.75 0.16 60)` | `#f6922e` |
-| Rose | `oklch(0.70 0.19 10)` | `#fc6183` |
-| Teal | `oklch(0.74 0.13 180)` | `#1dc5ae` |
-
-All accents sit at L ≥ 0.66 so dark-on-accent text stays legible. Preset *names* are persisted in `AppSettings.accentColor` — never rename them.
+| Default | `oklch(0.90 0 0)` | Neutral (near-white) |
+| Blue | `oklch(0.65 0.24 260)` | `#3b82f6` |
+| Violet | `oklch(0.65 0.28 304)` | `#8b5cf6` |
+| Green | `oklch(0.72 0.19 162)` | `#22c55e` |
+| Orange | `oklch(0.78 0.20 70)` | `#f59e0b` |
+| Rose | `oklch(0.67 0.26 16)` | `#f43f5e` |
+| Teal | `oklch(0.65 0.14 185)` | `#14b8a6` |
 
 ---
 
 ## Typography
 
-Three font families from Google Fonts (loaded via `next/font`):
+Three font families from Google Fonts, each serving a distinct role:
 
-### Space Grotesk (Display)
+### Sora (Display)
 
 **Usage:** Page headings, sidebar brand name, section titles.
 **Weights:** 400, 500, 600, 700
+**CSS variable:** `--font-display`
 **Tailwind class:** `font-display`
 
-A grotesque with distinctive ink traps and character — applied to all `<h1>` elements with `font-display tracking-tight`.
+Sora is a geometric sans-serif with clean letterforms and wide weight range. Applied to all `<h1>` elements with `font-display tracking-tight`.
 
-### Geist (Body)
+### Plus Jakarta Sans (Body)
 
 **Usage:** All body text, navigation items, labels, inputs, buttons.
+**Weights:** 300, 400, 500, 600, 700
+**CSS variable:** `--font-sans`
 **Tailwind class:** `font-sans` (default — applied on `<body>` in globals.css)
 
-Vercel's neutral geometric sans; crisp at UI sizes.
+A geometric humanist sans-serif — warm, readable at small sizes, and well-suited for UI text.
 
 <Aside type="caution">
 `font-sans` must stay applied on `body` in `globals.css`. The `next/font` CSS variables are defined on `<body>`, so Tailwind preflight's `html` font rule cannot see them — without the body rule the UI silently falls back to the system font stack.
 </Aside>
 
-### Geist Mono (Monospace)
+### JetBrains Mono (Monospace)
 
-**Usage:** System log console, eyebrows, technical data, `kbd` hints.
-**Weights:** 400, 500, 600
+**Usage:** System log messages, code blocks, technical data.
+**Weights:** 400, 500
+**CSS variable:** `--font-mono`
 **Tailwind class:** `font-mono`
-
-The **mono-for-data** pattern anchors the aesthetic: timestamps, counts, file sizes, and uppercase eyebrow labels (`.eyebrow`) always render in mono.
 
 ### Type Scale
 
@@ -153,22 +152,22 @@ The **mono-for-data** pattern anchors the aesthetic: timestamps, counts, file si
 | Section heading | `text-xl font-bold font-display` |
 | Body text | `text-sm` (14px) — default |
 | Helper/metadata | `text-xs text-muted-foreground` |
-| Eyebrow | `.eyebrow` (mono, 10.5px, uppercase, 0.18em tracking) |
+| Badge text | `text-xs font-medium` |
 | Micro text | `text-[10px]` or `text-[11px]` |
 
 ---
 
 ## Border Radius
 
-Base radius: `0.75rem` (12px) — softer and more app-like. Derived values:
+Base radius: `0.625rem` (10px). Derived values:
 
 | Token | Value | Usage |
 |-|-|-|
-| `radius-sm` | 8px | Small buttons, inputs |
-| `radius-md` | 10px | Buttons, badges |
-| `radius-lg` | 12px | Cards (inner elements) |
-| `radius-xl` | 16px | Cards (outer) |
-| `radius-full` | 9999px | Badges, avatars, tab pills |
+| `radius-sm` | 6px | Small buttons, inputs |
+| `radius-md` | 8px | Buttons, badges |
+| `radius-lg` | 10px | Cards (inner elements) |
+| `radius-xl` | 14px | Cards (outer) |
+| `radius-full` | 9999px | Badges, avatars |
 
 ---
 
@@ -176,39 +175,66 @@ Base radius: `0.75rem` (12px) — softer and more app-like. Derived values:
 
 ### Glass Morphism
 
-`.glass` — translucent card surface for chrome that floats over content (filter bars, mobile header, **bottom tab bar**, login card). Derived from `--card` via `color-mix`, with `backdrop-filter: blur(20px)` on desktop and a near-opaque fallback on mobile (blur is disabled < 768px to prevent scroll lag).
+Applied to filter bars, detail panels, login card, and mobile header:
 
-### Canvas Atmosphere
+```css
+.glass {
+  backdrop-filter: blur(20px);
+  background: oklch(0.21 0.008 270 / 70%);
+  border: 1px solid oklch(1 0 0 / 5%);
+}
+```
 
-`.canvas-atmosphere` — a faint brand-tinted radial wash at the top of the main content area (7% brand). Because it uses `color-mix(… var(--brand) …)`, it follows the user's accent.
+### Film Grain / Noise Overlay
 
-### Auth Backdrop
+A subtle SVG noise texture is overlaid on the entire page at 2.5% opacity using `mix-blend-mode: overlay`. This adds organic texture that prevents the dark surfaces from feeling digitally flat.
 
-`.auth-backdrop` — full-screen gradient behind login/onboarding cards: an 18% brand bloom at the horizon over a deep vertical falloff.
+### Atmospheric Gradient
+
+The main content area has a radial gradient at the top providing subtle ambient light (the `.canvas-atmosphere` utility):
+
+```
+radial-gradient(ellipse at 50% 0%, oklch(0.22 0.02 270) 0%, transparent 60%)
+```
+
+### Logo Glow
+
+On the login page, the logo has a pulsing glow animation:
+
+```css
+@keyframes logo-glow {
+  0%, 100% { box-shadow: 0 0 20px oklch(0.50 0.15 270 / 0.15); }
+  50% { box-shadow: 0 0 40px oklch(0.50 0.15 270 / 0.3); }
+}
+```
+
+### Custom Scrollbar
+
+All scrollable areas use thin, translucent scrollbars:
+
+```css
+scrollbar-width: thin;
+scrollbar-color: oklch(1 0 0 / 10%) transparent;
+```
 
 ### Focus Ring
 
-Focus-visible states use a cyan glow instead of a hard outline:
+Focus-visible states use a glow effect instead of a hard outline:
 
 ```css
-box-shadow: 0 0 0 2px var(--ring),
-            0 0 14px color-mix(in oklch, var(--brand) 30%, transparent);
+box-shadow: 0 0 0 2px var(--ring), 0 0 12px oklch(0.50 0.15 270 / 0.2);
 ```
 
 ### Selection
 
-Text selection uses the brand color at 35% opacity.
+Text selection uses the primary accent color at 30% opacity:
 
-### Custom Scrollbar
-
-All scrollable areas use thin, translucent scrollbars (`scrollbar-width: thin`).
-
-### Shadows
-
-| Token | Usage |
-|-|-|
-| `--shadow-card` | Resting cards — inset top light edge + soft ambient drop |
-| `--shadow-pop` | Popovers, dialogs, hover-lifted media cards |
+```css
+::selection {
+  background: oklch(0.50 0.15 270 / 30%);
+  color: oklch(0.95 0.008 80);
+}
+```
 
 ---
 
@@ -216,7 +242,16 @@ All scrollable areas use thin, translucent scrollbars (`scrollbar-width: thin`).
 
 ### Entry Animations
 
-Page elements use a staggered fade-in-up animation on load (350ms ease-out). Apply `animate-fade-in-up` for single elements, or `stagger-children` on a parent to auto-stagger up to 12 children (40ms intervals). Both are disabled under `prefers-reduced-motion`.
+Page elements use a staggered fade-in-up animation on load:
+
+```css
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+```
+
+Apply `animate-fade-in-up` for single elements, or `stagger-children` on a parent to auto-stagger up to 12 children (50ms intervals).
 
 ### Transitions
 
@@ -238,7 +273,7 @@ Page elements use a staggered fade-in-up animation on load (350ms ease-out). App
 
 ## Mobile Web App
 
-Librariarr is installable as a PWA (`manifest.ts`, `display: standalone`, theme color `#060f14`) and the layout adapts below the `md` (768px) breakpoint:
+Librariarr is installable as a PWA (`manifest.ts`, `display: standalone`, theme color `#0c0d10`) and the layout adapts below the `md` (768px) breakpoint:
 
 ### Bottom Tab Bar
 
@@ -256,24 +291,28 @@ The viewport uses `viewport-fit=cover`; utilities pad content clear of notches a
 
 The tab bar height is `--tabbar-height` (4rem). Floating elements (BackToTop, toasts via Sonner's `mobileOffset`) offset above it.
 
-### Touch
-
-Tab bar targets are full-height grid cells (≥ 64px). The iOS status bar style is `black-translucent`; the mobile header and drawer pad with `.pt-safe` so content clears the notch.
-
 ---
 
 ## Component Patterns
 
 ### Cards
 
-Default card styling: `bg-card rounded-xl border shadow-[var(--shadow-card)]` — an inset top highlight simulates a light edge for perceived depth.
+Default card styling:
+
+```
+bg-card rounded-xl
+border border-white/6
+shadow-[0_1px_3px_0_rgb(0_0_0/0.1),inset_0_1px_0_oklch(1_0_0/4%)]
+```
+
+Cards use an inset top highlight (`inset_0_1px_0`) to simulate a subtle light edge, adding perceived depth.
 
 ### Buttons
 
 Six variants: `default`, `destructive`, `outline`, `secondary`, `ghost`, `link`
 Eight sizes: `default` (h-9), `xs` (h-6), `sm` (h-8), `lg` (h-10), `icon` (9), `icon-xs` (6), `icon-sm` (8), `icon-lg` (10)
 
-All buttons include `active:scale-[0.98]` and `transition-all duration-200`. Default buttons are brand cyan with dark (`--on-brand`) text.
+All buttons include `active:scale-[0.98]` and `transition-all duration-200`.
 
 ### Badges
 
@@ -285,10 +324,12 @@ Poster-forward cards with cinematic hover:
 
 ```
 hover:scale-[1.03]
-hover:shadow-[var(--shadow-pop)]
+hover:shadow-[0_8px_32px_oklch(0_0_0/0.4)]
 hover:ring-1 hover:ring-white/10
 transition-all duration-300 ease-out
 ```
+
+Image zooms on hover: `group-hover:scale-105`
 
 ### Tab Navigation
 
@@ -299,16 +340,14 @@ Border-bottom style tabs with icon support:
 
 ### Sidebar Navigation
 
-The rail sits **below** the canvas (`--sidebar` is darker than `--background`):
-
-- **Active item:** `bg-brand-dim text-brand-bright` rounded fill
-- **Inactive item:** muted, hover to `bg-surface-2 text-foreground`
-- **Group labels:** `.eyebrow`-style mono uppercase
-- **Search affordance:** bordered well with `⌘K` kbd hint, routes to the Query workspace
+- **Active item:** `bg-sidebar-accent border-l-2 border-sidebar-primary` with inset shadow
+- **Inactive item:** `text-sidebar-foreground/70` with hover to `text-sidebar-foreground`
+- **Group labels:** `text-[11px] font-medium uppercase tracking-widest text-sidebar-foreground/60`
+- **Gradient overlay:** Top gradient from `primary/5` to transparent for atmospheric depth
 
 ### Dialogs
 
-Dialogs use `backdrop-blur-sm` on the overlay; destructive confirmations use `AlertDialog` with `variant="destructive"` actions.
+Dialogs use `backdrop-blur-sm` on the overlay and `border-white/6` on the content panel.
 
 ### Hover Popovers
 
@@ -333,12 +372,13 @@ For grouped data sources (series shows, seasons, music artists, albums), metadat
 
 ### Authenticated Pages
 
+All authenticated pages share this structure:
+
 ```
-Desktop:  Sidebar (collapsible 72px/248px) | Main content (flex-1, overflow-y-auto)
-Mobile:   Glass header (menu + logo) / Main content / Bottom tab bar
+Sidebar (collapsible 64px/256px) | Main content (flex-1, overflow-y-auto)
 ```
 
-The main content area carries `.canvas-atmosphere` and `.pb-tabbar`.
+The main content area includes the atmospheric radial gradient and a 1px `border-l border-white/3` separator.
 
 ### Page Headers
 
@@ -359,7 +399,7 @@ All lifecycle pages (Rules, Matches, Pending Actions, Exceptions) include a `Tab
 
 ### Login / Onboarding
 
-Full-screen `.auth-backdrop` with a glass-morphism card and the pulsing `animate-logo-glow` brand glow on the logo.
+Full-screen cinematic gradient background (the `.auth-backdrop` utility — a violet bloom at the horizon over a navy center falloff) with glass-morphism card.
 
 ---
 
@@ -367,26 +407,30 @@ Full-screen `.auth-backdrop` with a glass-morphism card and the pulsing `animate
 
 ### Log Levels
 
-The system log console renders levels as colored mono text: `DEBUG` faint, `INFO` sky, `WARN` amber, `ERROR` red (`LEVEL_TEXT` in the logs page).
+| Level | Badge classes |
+|-|-|
+| DEBUG | `bg-zinc-500/20 text-zinc-400 shadow-zinc-500/10` |
+| INFO | `bg-blue-500/20 text-blue-400 shadow-blue-500/15` |
+| WARN | `bg-amber-500/20 text-amber-400 shadow-amber-500/15` |
+| ERROR | `bg-red-500/20 text-red-400 shadow-red-500/20` |
+
+All log level badges include a subtle `shadow-[0_0_8px]` glow matching their color.
 
 ### Action Statuses
 
 | Status | Color |
 |-|-|
-| Pending | `--amber` |
-| Completed | `--green` |
-| Failed | `--red` |
+| Pending | `bg-yellow-500` |
+| Completed | `bg-green-500` |
+| Failed | `bg-red-500` |
 
 ---
 
 ## Don'ts
 
-- **Don't use flat grey** — all dark surfaces carry the blue tint (hue ~235)
+- **Don't use flat grey** — all dark surfaces should have the navy tint (hue ~270)
 - **Don't use HSL** — the entire color system is OKLCH for perceptual consistency
-- **Don't hardcode brand hues** — derive tints with `color-mix(in oklch, var(--brand) …)` so accents keep working
 - **Don't use generic fonts** — never fall back to Inter, Roboto, Arial, or system fonts
 - **Don't edit shadcn/ui primitives** in `src/components/ui/` unless adding project-wide enhancements
 - **Don't use light mode** — the application enforces dark mode only
-- **Don't rename accent preset names** — they're persisted in user settings
 - **Don't add emojis** — use Lucide icons for all iconography
-- **Don't block the bottom tab bar** — floating mobile elements must offset by `--tabbar-height` + safe-area inset

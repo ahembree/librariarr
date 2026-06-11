@@ -220,14 +220,13 @@ When users connect multiple servers, dedup prevents duplicate items from appeari
 
 ### Styling
 
-- **Lagoon design system** — deep-ocean dark UI (surface hue ~235, chroma rises with elevation) anchored to the logo's cyan (`--brand`, hue 220) and gold (`--amber`). The sidebar is darker than the canvas (chrome recedes, content lifts).
-- Tailwind CSS v4 with **OKLCH color model** (not HSL). CSS variables defined in `src/app/globals.css`; derived tints use `color-mix(in oklch, var(--brand) ...)` so they follow the user's accent — never hardcode brand hues
+- Tailwind CSS v4 with **OKLCH color model** (not HSL). CSS variables defined in `src/app/globals.css`
 - Dark mode is hardcoded (`className="dark"` on `<html>` tag in layout.tsx)
-- **Fonts:** Space Grotesk (display/headings via `font-display`), Geist (body via `font-sans` — applied on `body` in globals.css; next/font vars live on `<body>` so preflight's `html` rule can't see them), Geist Mono (code/data/eyebrows via `font-mono`)
+- **Fonts:** Sora (display/headings via `font-display`), Plus Jakarta Sans (body via `font-sans` — applied on `body` in globals.css; next/font vars live on `<body>` so preflight's `html` rule can't see them), JetBrains Mono (code via `font-mono`)
 - All page `<h1>` elements must use `text-2xl sm:text-3xl font-bold font-display tracking-tight`
-- Theme accent colors override the full brand family: `--brand`, `--brand-bright`, `--brand-dim`, `--brand-faint`, `--on-brand`, `--primary`, `--primary-foreground`, `--ring`, `--sidebar-primary`, `--sidebar-primary-foreground`, `--chart-1`. Preset names are persisted in `AppSettings.accentColor` — never rename them
+- Theme accent colors override CSS vars: `--primary`, `--primary-foreground`, `--ring`, `--sidebar-primary`. Preset names are persisted in `AppSettings.accentColor` — never rename them
 - shadcn/ui uses "new-york" style variant
-- **Mobile / PWA:** installable (`src/app/manifest.ts`, theme color `#060f14`, `viewport-fit=cover`). Below `md` (768px) the shell swaps the sidebar for a glass header + `MobileTabBar` (`src/components/mobile-tab-bar.tsx`, 5 primary destinations). Safe-area utilities: `.pt-safe`, `.pb-safe`, `.pb-tabbar` (tab bar height is `--tabbar-height`); floating mobile elements must offset above the bar (see BackToTop, Toaster `mobileOffset`)
+- **Mobile / PWA:** installable (`src/app/manifest.ts`, theme color `#0c0d10`, `viewport-fit=cover`). Below `md` (768px) the shell swaps the sidebar for a glass header + `MobileTabBar` (`src/components/mobile-tab-bar.tsx`, 5 primary destinations). Safe-area utilities: `.pt-safe`, `.pb-safe`, `.pb-tabbar` (tab bar height is `--tabbar-height`); floating mobile elements must offset above the bar (see BackToTop, Toaster `mobileOffset`)
 - **Full style guide:** `docs/src/content/docs/docs/development/style-guide.mdx` — covers color palette, typography, effects, component patterns, and don'ts. Consult when making UI changes.
 
 ### Data Patterns
