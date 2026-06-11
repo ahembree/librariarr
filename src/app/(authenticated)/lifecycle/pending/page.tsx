@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
+import { EmptyState } from "@/components/empty-state";
 import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
 import { useIntegrationsHealth } from "@/hooks/use-integrations-health";
 import { Button } from "@/components/ui/button";
@@ -1027,7 +1028,7 @@ export default function PendingActionsPage() {
 
         {/* Deletion stats banner */}
         {deletionStats && (deletionStats.actionCount > 0 || deletionStats.pendingCount > 0 || deletionStats.resetAt) && (
-          <div className="flex items-center gap-4 mb-6 rounded-lg border bg-muted/30 px-4 py-3">
+          <div className="flex items-center gap-4 mb-6 rounded-xl border bg-card px-4 py-3 shadow-[var(--shadow-card)]">
             <Trash2 className="h-4 w-4 text-muted-foreground shrink-0" />
             <div className="flex items-center gap-4 text-sm flex-wrap">
               {deletionStats.pendingCount > 0 && (
@@ -1119,37 +1120,27 @@ export default function PendingActionsPage() {
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
         ) : filteredGroups.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
-              <div className="rounded-full bg-muted p-4">
-                {statusFilter === "FAILED" ? (
-                  <CheckCircle2 className="h-8 w-8 text-muted-foreground" />
-                ) : (
-                  <Inbox className="h-8 w-8 text-muted-foreground" />
-                )}
-              </div>
-              <div className="space-y-1">
-                <p className="text-base font-medium">
-                  {statusFilter === "FAILED"
-                    ? "No failed actions"
-                    : statusFilter === "COMPLETED"
-                      ? "No completed actions yet"
-                      : statusFilter === "PENDING"
-                        ? "No pending actions"
-                        : "No actions"}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  {statusFilter === "FAILED"
-                    ? "Everything ran cleanly. Failed actions will appear here if any rule execution fails."
-                    : statusFilter === "COMPLETED"
-                      ? "Completed actions will appear here once your rules start running."
-                      : statusFilter === "PENDING"
-                        ? "Lifecycle rules will queue up actions here when items match."
-                        : "No actions matching this filter."}
-                </p>
-              </div>
-            </CardContent>
-          </Card>
+          <EmptyState
+            icon={statusFilter === "FAILED" ? CheckCircle2 : Inbox}
+            title={
+              statusFilter === "FAILED"
+                ? "No failed actions"
+                : statusFilter === "COMPLETED"
+                  ? "No completed actions yet"
+                  : statusFilter === "PENDING"
+                    ? "No pending actions"
+                    : "No actions"
+            }
+            description={
+              statusFilter === "FAILED"
+                ? "Everything ran cleanly. Failed actions will appear here if any rule execution fails."
+                : statusFilter === "COMPLETED"
+                  ? "Completed actions will appear here once your rules start running."
+                  : statusFilter === "PENDING"
+                    ? "Lifecycle rules will queue up actions here when items match."
+                    : "No actions matching this filter."
+            }
+          />
         ) : (
           <div className="space-y-4">
             {filteredGroups.map((group) => {
