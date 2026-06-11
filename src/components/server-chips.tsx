@@ -72,11 +72,15 @@ export function ServerChips({ servers }: ServerChipsProps) {
   const overflow = servers.length - visibleCount;
 
   return (
-    <div ref={containerRef} className="flex flex-nowrap gap-1 min-w-0 overflow-hidden">
-      {/* Hidden measuring container — renders all chips for measurement */}
+    // relative makes this the measurer's containing block so overflow-hidden
+    // actually clips it — unanchored, the absolute measurer escaped to a
+    // distant positioned ancestor and inflated the page's scroll width.
+    <div ref={containerRef} className="relative flex flex-nowrap gap-1 min-w-0 overflow-hidden">
+      {/* Hidden measuring container — renders all chips for measurement.
+          Chips are shrink-0, so clipping doesn't change their measured widths. */}
       <div
         ref={measuringRef}
-        className="flex flex-nowrap gap-1 absolute invisible pointer-events-none"
+        className="flex flex-nowrap gap-1 absolute left-0 top-0 invisible pointer-events-none"
         aria-hidden="true"
       >
         {servers.map((s) => {
