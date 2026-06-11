@@ -45,7 +45,8 @@ function PlayButton({ playServers }: { playServers: PlayServer[] }) {
     "backdrop-blur-sm transition-all duration-200 shadow-lg",
   );
 
-  // Single link — render as a direct button
+  // Single link — render as a direct button (hover color via CSS vars,
+  // not imperative style mutation)
   if (playServers.length === 1) {
     const server = playServers[0];
     const colors = getServerColors(server.serverType);
@@ -54,17 +55,14 @@ function PlayButton({ playServers }: { playServers: PlayServer[] }) {
         href={buildPlayUrl(server)}
         target="_blank"
         rel="noopener noreferrer"
-        className={baseClasses}
-        style={{
-          backgroundColor: colors.bg,
-          color: colors.text,
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.backgroundColor = colors.hover;
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.backgroundColor = colors.bg;
-        }}
+        className={cn(baseClasses, "bg-(--play-bg) hover:bg-(--play-hover)")}
+        style={
+          {
+            "--play-bg": colors.bg,
+            "--play-hover": colors.hover,
+            color: colors.text,
+          } as React.CSSProperties
+        }
       >
         <ExternalLink className="h-3 w-3 shrink-0" />
         <span className="truncate">Open in {server.serverName}</span>
@@ -81,11 +79,14 @@ function PlayButton({ playServers }: { playServers: PlayServer[] }) {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
-          className={baseClasses}
-          style={{
-            backgroundColor: primary.bg,
-            color: primary.text,
-          }}
+          className={cn(baseClasses, "bg-(--play-bg) hover:bg-(--play-hover)")}
+          style={
+            {
+              "--play-bg": primary.bg,
+              "--play-hover": primary.hover,
+              color: primary.text,
+            } as React.CSSProperties
+          }
         >
           <ExternalLink className="h-3 w-3" />
           Open in…
@@ -270,7 +271,7 @@ export function MediaDetailHero({
               )}
 
               {subtitle && (
-                <div className="mt-1.5 text-sm text-white/70 sm:text-base lg:text-lg">
+                <div className="mt-1.5 font-mono text-xs text-white/65 sm:text-sm">
                   {subtitle}
                 </div>
               )}
@@ -294,7 +295,10 @@ export function MediaDetailHero({
               )}
 
               {filePath && (
-                <p className="mt-2 hidden sm:block truncate text-xs font-mono text-white/40">
+                <p
+                  className="mt-2.5 hidden max-w-full truncate sm:inline-block rounded-md border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[10.5px] text-white/45"
+                  title={filePath}
+                >
                   {filePath.substring(0, filePath.lastIndexOf("/"))}
                 </p>
               )}
