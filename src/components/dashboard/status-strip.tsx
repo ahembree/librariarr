@@ -65,7 +65,10 @@ function StatusTile({
           </span>
         )}
         {sub && !loading && (
-          <span className="block truncate font-mono text-[11px] text-faint">{sub}</span>
+          // title carries the full text when the line truncates
+          <span title={sub} className="block truncate font-mono text-[11px] text-faint">
+            {sub}
+          </span>
         )}
       </span>
     </Link>
@@ -80,6 +83,8 @@ interface SessionsState {
 interface HealthState {
   configured: number;
   reachable: number;
+  /** Names of unreachable instances, for the tile sub-line. */
+  down: string[];
 }
 
 interface SyncState {
@@ -116,14 +121,20 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
     fetch("/api/integrations/health")
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (!data) return setHealth({ configured: 0, reachable: 0 });
+        if (!data) return setHealth({ configured: 0, reachable: 0, down: [] });
         const types = [data.sonarr, data.radarr, data.lidarr, data.seerr];
         setHealth({
           configured: types.reduce((a, t) => a + (t?.configured ?? 0), 0),
           reachable: types.reduce((a, t) => a + (t?.reachable ?? 0), 0),
+          down: types.flatMap(
+            (t) =>
+              (t?.instances ?? [])
+                .filter((i: { reachable: boolean }) => !i.reachable)
+                .map((i: { name: string }) => i.name) as string[],
+          ),
         });
       })
-      .catch(() => setHealth({ configured: 0, reachable: 0 }));
+      .catch(() => setHealth({ configured: 0, reachable: 0, down: [] }));
 
     fetch("/api/system/update-check")
       .then((res) => (res.ok ? res.json() : null))
@@ -221,7 +232,13 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
               : `${health.reachable}/${health.configured} reachable`
             : "—"
         }
-        sub={health?.configured === 0 ? "connect Sonarr or Radarr" : "Sonarr · Radarr · Seerr"}
+        sub={
+          health?.configured === 0
+            ? "connect Sonarr or Radarr"
+            : health && health.down.length > 0
+              ? `down: ${health.down.join(" · ")}`
+              : "Sonarr · Radarr · Seerr"
+        }
         tone={
           health && health.configured > 0
             ? health.reachable === health.configured
