@@ -98,6 +98,8 @@ function SettingsSubNav({
           <button
             key={tab.value}
             role="tab"
+            id={`settings-tab-${tab.value}`}
+            aria-controls={`settings-panel-${tab.value}`}
             aria-selected={isActive}
             onClick={() => onTabChange(tab.value)}
             className={cn(
@@ -2117,7 +2119,7 @@ export default function SettingsPage() {
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as SettingsTab)}>
         <div className="flex flex-col gap-6 lg:flex-row lg:gap-8">
-          <aside className="shrink-0 self-start lg:sticky lg:top-6 lg:w-[216px]">
+          <aside className="min-w-0 shrink-0 lg:self-start lg:sticky lg:top-6 lg:w-[216px]">
             <SettingsSubNav
               activeTab={activeTab}
               onTabChange={setActiveTab}
@@ -2126,7 +2128,7 @@ export default function SettingsPage() {
             />
           </aside>
           <div className="min-w-0 flex-1 space-y-6">
-        <TabsContent value="general">
+        <TabsContent value="general" id="settings-panel-general" aria-labelledby="settings-tab-general">
           <GeneralTab
             accentColor={accentColor}
             onSaveAccentColor={saveAccentColor}
@@ -2172,7 +2174,7 @@ export default function SettingsPage() {
           />
         </TabsContent>
 
-        <TabsContent value="scheduling">
+        <TabsContent value="scheduling" id="settings-panel-scheduling" aria-labelledby="settings-tab-scheduling">
           <SchedulingTab
             scheduledJobTime={scheduledJobTime}
             savingJobTime={savingJobTime}
@@ -2213,7 +2215,7 @@ export default function SettingsPage() {
           />
         </TabsContent>
 
-        <TabsContent value="servers">
+        <TabsContent value="servers" id="settings-panel-servers" aria-labelledby="settings-tab-servers">
           <ServersTab
             servers={servers}
             hasActiveSync={hasActiveSync}
@@ -2275,7 +2277,7 @@ export default function SettingsPage() {
           />
         </TabsContent>
 
-        <TabsContent value="integrations">
+        <TabsContent value="integrations" id="settings-panel-integrations" aria-labelledby="settings-tab-integrations">
           <IntegrationsTab
             sonarr={{
               instances: sonarrInstances,
@@ -2416,7 +2418,7 @@ export default function SettingsPage() {
           />
         </TabsContent>
 
-        <TabsContent value="notifications">
+        <TabsContent value="notifications" id="settings-panel-notifications" aria-labelledby="settings-tab-notifications">
           <NotificationsTab
             discordWebhookUrl={discordWebhookUrl}
             discordWebhookUsername={discordWebhookUsername}
@@ -2432,7 +2434,7 @@ export default function SettingsPage() {
           />
         </TabsContent>
 
-        <TabsContent value="authentication">
+        <TabsContent value="authentication" id="settings-panel-authentication" aria-labelledby="settings-tab-authentication">
           <AuthenticationTab
             authInfo={authInfo}
             authLoading={authLoading}
@@ -2458,7 +2460,7 @@ export default function SettingsPage() {
           />
         </TabsContent>
 
-        <TabsContent value="system">
+        <TabsContent value="system" id="settings-panel-system" aria-labelledby="settings-tab-system">
           <SystemTab
             systemInfo={systemInfo}
             imageCacheStats={imageCacheStats}

@@ -175,7 +175,7 @@ export function GeneralTab({
 
       {/* Appearance */}
       <section className="space-y-4">
-        <h3 className="text-lg font-semibold">Appearance</h3>
+        <h3 className="font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">Appearance</h3>
 
         <SettingsSection icon={Palette} title="Accent Color" description="Choose a color theme for buttons, active items, and highlights.">
             <div className="flex flex-wrap gap-3">
