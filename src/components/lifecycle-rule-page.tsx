@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { getServerTypeLabel } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
 import { ColorChip } from "@/components/color-chip";
+import { findScrollContainer } from "@/lib/scroll-utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -606,11 +607,12 @@ export function LifecycleRulePage({
     return (localStorage.getItem("lifecycle-preview-view-mode") as "cards" | "table") ?? "table";
   });
   const handlePreviewViewModeChange = useCallback((mode: "cards" | "table") => {
-    const scrollTop = scrollContainerRef.current?.scrollTop ?? 0;
+    const scroller = findScrollContainer();
+    const scrollTop = scroller?.scrollTop ?? 0;
     setPreviewViewMode(mode);
     localStorage.setItem("lifecycle-preview-view-mode", mode);
     requestAnimationFrame(() => {
-      scrollContainerRef.current?.scrollTo({ top: scrollTop, behavior: "instant" });
+      scroller?.scrollTo({ top: scrollTop, behavior: "instant" });
     });
   }, []);
   const { size: cardSize, setSize: setCardSize } = useCardSize();
@@ -821,7 +823,6 @@ export function LifecycleRulePage({
   const [previewDiffCounts, setPreviewDiffCounts] = useState<{ added: number; removed: number; retained: number } | null>(null);
 
   // Ref to the scroll container to preserve scroll position across re-renders
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Track previous collection state for Plex diff on save
   const [prevCollection, setPrevCollection] = useState<{
@@ -1256,12 +1257,11 @@ export function LifecycleRulePage({
       }
 
       // Preserve scroll position when preview results cause layout change
-      const scrollTop = scrollContainerRef.current?.scrollTop ?? 0;
+      const scroller = findScrollContainer();
+      const scrollTop = scroller?.scrollTop ?? 0;
       setPreview(mergedItems);
       requestAnimationFrame(() => {
-        if (scrollContainerRef.current) {
-          scrollContainerRef.current.scrollTo({ top: scrollTop, behavior: "instant" });
-        }
+        scroller?.scrollTo({ top: scrollTop, behavior: "instant" });
       });
     } catch (error) {
       console.error("Failed to preview:", error);
@@ -1728,7 +1728,7 @@ export function LifecycleRulePage({
 
   return (
     <>
-    <div className={embedded ? "flex-1 min-h-0 overflow-y-auto" : "h-full overflow-y-auto"} ref={scrollContainerRef}>
+    <div className={embedded ? undefined : "h-full overflow-y-auto"}>
         <div className={embedded ? "px-4 sm:px-6 lg:px-8 pb-4 sm:pb-6 lg:pb-8" : "p-4 sm:p-6 lg:p-8"}>
       {!embedded && (
         <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
