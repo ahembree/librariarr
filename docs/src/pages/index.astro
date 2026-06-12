@@ -53,6 +53,9 @@
       href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
+    <script is:inline>
+      document.documentElement.classList.add("js");
+    </script>
     <style>
       /* Reset & base */
       *,
@@ -68,14 +71,15 @@
         --bg-card: oklch(0.21 0.008 270);
         --bg-card-hover: oklch(0.25 0.01 270);
         --border: oklch(1 0.01 270 / 12%);
+        --border-strong: oklch(1 0.01 270 / 22%);
         --text: oklch(0.95 0.008 80);
         --text-muted: oklch(0.65 0.015 260);
-        --accent: oklch(0.6 0.15 250);
-        --accent-hover: oklch(0.55 0.18 250);
-        --accent-subtle: oklch(0.22 0.04 250);
+        --accent: oklch(0.62 0.2 264);
+        --accent-hover: oklch(0.55 0.2 264);
+        --accent-subtle: oklch(0.62 0.2 264 / 12%);
         --radius: 10px;
         --radius-xl: 14px;
-        --max-width: 1100px;
+        --max-width: 1140px;
         --font-display: "Sora", sans-serif;
         --font-sans: "Plus Jakarta Sans", sans-serif;
         --font-mono: "JetBrains Mono", monospace;
@@ -88,6 +92,14 @@
         line-height: 1.6;
         scroll-behavior: smooth;
         -webkit-font-smoothing: antialiased;
+      }
+
+      body {
+        overflow-x: hidden;
+      }
+
+      section {
+        position: relative;
       }
 
       /* Nav */
@@ -161,9 +173,9 @@
         position: absolute;
         inset: 0;
         background:
-          radial-gradient(ellipse 80% 50% at 50% -10%, oklch(0.35 0.15 250 / 40%) 0%, transparent 60%),
-          radial-gradient(ellipse 60% 40% at 30% 10%, oklch(0.30 0.10 280 / 25%) 0%, transparent 50%),
-          radial-gradient(ellipse 60% 40% at 70% 10%, oklch(0.28 0.12 230 / 20%) 0%, transparent 50%);
+          radial-gradient(ellipse 80% 50% at 50% -10%, oklch(0.35 0.15 264 / 40%) 0%, transparent 60%),
+          radial-gradient(ellipse 60% 40% at 30% 10%, oklch(0.30 0.10 292 / 25%) 0%, transparent 50%),
+          radial-gradient(ellipse 60% 40% at 70% 10%, oklch(0.28 0.12 240 / 20%) 0%, transparent 50%);
         pointer-events: none;
       }
 
@@ -171,13 +183,16 @@
         position: relative;
         max-width: var(--max-width);
         margin: 0 auto;
-        padding: 6rem 1.5rem 4rem;
+        padding: 5.5rem 1.5rem 0;
         text-align: center;
       }
 
       .hero-badge {
-        display: inline-block;
-        padding: 0.35rem 1rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        line-height: 1;
+        padding: 0.4rem 1rem;
         border-radius: 999px;
         background: var(--accent-subtle);
         color: var(--accent);
@@ -186,7 +201,7 @@
         font-weight: 600;
         letter-spacing: 0.03em;
         margin-bottom: 1.5rem;
-        border: 1px solid oklch(0.35 0.08 250);
+        border: 1px solid oklch(0.62 0.2 264 / 30%);
       }
 
       .hero h1 {
@@ -194,22 +209,22 @@
         font-size: clamp(2.5rem, 6vw, 4rem);
         font-weight: 800;
         letter-spacing: -0.03em;
-        line-height: 1.1;
+        line-height: 1.08;
         margin-bottom: 1.25rem;
       }
 
       .hero h1 .accent {
-        background: linear-gradient(135deg, oklch(0.65 0.20 250), oklch(0.55 0.22 280));
+        background: linear-gradient(135deg, oklch(0.7 0.2 264), oklch(0.6 0.22 292));
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
       }
 
-      .hero p {
+      .hero p.lead {
         font-size: 1.15rem;
         color: var(--text-muted);
-        max-width: 600px;
-        margin: 0 auto 2.5rem;
+        max-width: 640px;
+        margin: 0 auto 2.25rem;
         line-height: 1.7;
       }
 
@@ -236,16 +251,27 @@
       }
 
       .btn:active {
-        transform: scale(0.98);
+        transform: translateY(-1px) scale(0.985);
+      }
+
+      .btn .arrow {
+        transition: transform 0.2s ease;
+      }
+
+      .btn:hover .arrow {
+        transform: translateX(3px);
       }
 
       .btn-primary {
         background: var(--accent);
         color: #fff;
+        box-shadow: 0 6px 18px -8px color-mix(in oklab, var(--accent) 75%, transparent);
       }
 
       .btn-primary:hover {
         background: var(--accent-hover);
+        transform: translateY(-2px);
+        box-shadow: 0 14px 28px -10px color-mix(in oklab, var(--accent) 85%, transparent);
       }
 
       .btn-secondary {
@@ -256,69 +282,234 @@
 
       .btn-secondary:hover {
         background: var(--bg-card-hover);
-        border-color: oklch(1 0 0 / 20%);
-      }
-
-      /* Features */
-      .features {
-        max-width: var(--max-width);
-        margin: 0 auto;
-        padding: 2rem 1.5rem 5rem;
-      }
-
-      .features-heading {
-        text-align: center;
-        margin-bottom: 3rem;
-      }
-
-      .features-heading h2 {
-        font-family: var(--font-display);
-        font-size: 1.75rem;
-        font-weight: 700;
-        letter-spacing: -0.02em;
-        margin-bottom: 0.5rem;
-      }
-
-      .features-heading p {
-        color: var(--text-muted);
-        font-size: 1rem;
-      }
-
-      .features-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-        gap: 1.25rem;
-      }
-
-      .feature-card {
-        background: var(--bg-card);
-        border: 1px solid var(--border);
-        border-radius: var(--radius-xl);
-        padding: 1.75rem;
-        transition: border-color 0.3s, background 0.3s, transform 0.3s;
-      }
-
-      .feature-card:hover {
-        border-color: oklch(1 0 0 / 20%);
-        background: var(--bg-card-hover);
+        border-color: var(--border-strong);
         transform: translateY(-2px);
       }
 
-      .feature-icon {
-        width: 2.25rem;
-        height: 2.25rem;
+      /* Browser-framed screenshot */
+      .shot {
+        border-radius: 12px;
+        border: 1px solid var(--border-strong);
+        background: var(--bg-card);
+        overflow: hidden;
+        box-shadow:
+          0 1px 0 oklch(1 0 0 / 6%) inset,
+          0 40px 80px -32px oklch(0 0 0 / 80%);
+      }
+
+      .shot-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        height: 36px;
+        padding: 0 0.85rem;
+        background: oklch(0.19 0.008 270);
+        border-bottom: 1px solid var(--border);
+      }
+
+      .shot-dot {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: oklch(0.4 0.02 270);
+      }
+
+      .shot-dot:nth-child(1) { background: oklch(0.62 0.16 25); }
+      .shot-dot:nth-child(2) { background: oklch(0.78 0.14 85); }
+      .shot-dot:nth-child(3) { background: oklch(0.68 0.16 145); }
+
+      .shot img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      /* Hero screenshot */
+      .hero-shot {
+        position: relative;
+        max-width: 1040px;
+        margin: 3.5rem auto 0;
+        padding: 0 1.5rem;
+      }
+
+      .hero-shot::before {
+        content: "";
+        position: absolute;
+        inset: -10% 10% 30%;
+        background: radial-gradient(ellipse at center, oklch(0.5 0.18 264 / 35%) 0%, transparent 70%);
+        filter: blur(50px);
+        z-index: -1;
+        pointer-events: none;
+      }
+
+      /* Section scaffolding */
+      .section {
+        max-width: var(--max-width);
+        margin: 0 auto;
+        padding: 5.5rem 1.5rem;
+      }
+
+      .section-heading {
+        text-align: center;
+        max-width: 640px;
+        margin: 0 auto 3.5rem;
+      }
+
+      .section-eyebrow {
+        display: inline-block;
+        color: var(--accent);
+        font-size: 0.8rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        margin-bottom: 0.85rem;
+      }
+
+      .section-heading h2 {
+        font-family: var(--font-display);
+        font-size: clamp(1.75rem, 4vw, 2.25rem);
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        margin-bottom: 0.75rem;
+      }
+
+      .section-heading p {
+        color: var(--text-muted);
+        font-size: 1.05rem;
+      }
+
+      /* Feature rows (alternating) */
+      .feature-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 3.5rem;
+        align-items: center;
+        padding: 3rem 0;
+      }
+
+      .feature-row + .feature-row {
+        border-top: 1px solid var(--border);
+      }
+
+      .feature-row.reverse .feature-copy {
+        order: 2;
+      }
+
+      .feature-eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: var(--accent);
+        font-size: 0.8rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
         margin-bottom: 1rem;
+      }
+
+      .feature-eyebrow svg {
+        width: 1.1rem;
+        height: 1.1rem;
+      }
+
+      .feature-copy h3 {
+        font-family: var(--font-display);
+        font-size: clamp(1.5rem, 3vw, 1.9rem);
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        line-height: 1.2;
+        margin-bottom: 1rem;
+      }
+
+      .feature-copy > p {
+        color: var(--text-muted);
+        font-size: 1.02rem;
+        margin-bottom: 1.5rem;
+      }
+
+      .feature-list {
+        list-style: none;
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      .feature-list li {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.65rem;
+        color: var(--text);
+        font-size: 0.95rem;
+      }
+
+      .feature-list svg {
+        width: 1.15rem;
+        height: 1.15rem;
+        flex-shrink: 0;
+        margin-top: 0.15rem;
         color: var(--accent);
       }
 
-      .feature-card h3 {
-        font-family: var(--font-display);
-        font-size: 1.1rem;
+      .feature-list strong {
         font-weight: 600;
-        margin-bottom: 0.5rem;
       }
 
-      .feature-card p {
+      .feature-list span {
+        color: var(--text-muted);
+      }
+
+      /* Bento grid */
+      .bento {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1.25rem;
+      }
+
+      .bento-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-xl);
+        overflow: hidden;
+        transition: border-color 0.3s, background 0.3s, transform 0.3s;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .bento-card:hover {
+        border-color: var(--border-strong);
+        background: var(--bg-card-hover);
+        transform: translateY(-3px);
+      }
+
+      .bento-media {
+        border-bottom: 1px solid var(--border);
+        background: oklch(0.16 0.006 270);
+      }
+
+      .bento-media img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      .bento-body {
+        padding: 1.4rem 1.5rem 1.6rem;
+      }
+
+      .bento-icon {
+        width: 2.1rem;
+        height: 2.1rem;
+        margin-bottom: 0.9rem;
+        color: var(--accent);
+      }
+
+      .bento-card h4 {
+        font-family: var(--font-display);
+        font-size: 1.08rem;
+        font-weight: 600;
+        margin-bottom: 0.4rem;
+      }
+
+      .bento-card p {
         color: var(--text-muted);
         font-size: 0.9rem;
         line-height: 1.6;
@@ -347,28 +538,56 @@
 
       .integration-logos {
         display: flex;
-        gap: 2rem;
+        gap: 0.85rem;
         justify-content: center;
         flex-wrap: wrap;
       }
 
       .integration-chip {
+        --brand: var(--text-muted);
         display: inline-flex;
         align-items: center;
-        gap: 0.5rem;
-        padding: 0.6rem 1.25rem;
+        gap: 0.6rem;
+        padding: 0.5rem 1.15rem 0.5rem 0.5rem;
         background: var(--bg-card);
-        border: 1px solid var(--border);
+        border: 1px solid color-mix(in oklab, var(--brand) 28%, var(--border));
         border-radius: 999px;
-        font-size: 0.9rem;
-        font-weight: 500;
-        color: var(--text-muted);
-        transition: border-color 0.2s, color 0.2s;
+        font-size: 0.92rem;
+        font-weight: 600;
+        color: var(--text);
+        transition: border-color 0.2s, color 0.2s, background 0.2s, box-shadow 0.25s,
+          transform 0.2s;
       }
 
       .integration-chip:hover {
-        border-color: oklch(1 0 0 / 20%);
-        color: var(--text);
+        transform: translateY(-2px);
+        border-color: color-mix(in oklab, var(--brand) 70%, transparent);
+        background: color-mix(in oklab, var(--brand) 9%, var(--bg-card));
+        box-shadow: 0 12px 26px -12px color-mix(in oklab, var(--brand) 65%, transparent);
+      }
+
+      .integration-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.85rem;
+        height: 1.85rem;
+        border-radius: 50%;
+        color: var(--brand);
+        background: color-mix(in oklab, var(--brand) 16%, transparent);
+        border: 1px solid color-mix(in oklab, var(--brand) 32%, transparent);
+        transition: background 0.2s, color 0.2s, transform 0.2s;
+      }
+
+      .integration-icon svg {
+        width: 1.05rem;
+        height: 1.05rem;
+      }
+
+      .integration-chip:hover .integration-icon {
+        background: var(--brand);
+        color: var(--bg);
+        transform: scale(1.05);
       }
 
       /* CTA */
@@ -385,22 +604,23 @@
         background: var(--bg-card);
         border: 1px solid var(--border);
         border-radius: var(--radius-xl);
-        padding: 3rem 2rem;
+        padding: 3.5rem 2rem;
       }
 
       .cta-box::before {
         content: "";
         position: absolute;
         inset: 0;
-        background: radial-gradient(ellipse 80% 60% at 50% 0%, oklch(0.30 0.10 250 / 30%) 0%, transparent 60%);
+        background: radial-gradient(ellipse 80% 60% at 50% 0%, oklch(0.30 0.10 264 / 30%) 0%, transparent 60%);
         pointer-events: none;
       }
 
       .cta-box h2 {
         position: relative;
         font-family: var(--font-display);
-        font-size: 1.5rem;
+        font-size: 1.75rem;
         font-weight: 700;
+        letter-spacing: -0.02em;
         margin-bottom: 0.75rem;
       }
 
@@ -414,29 +634,295 @@
         position: relative;
       }
 
+      /* Accessibility */
+      .skip-link {
+        position: absolute;
+        left: 0.75rem;
+        top: 0.5rem;
+        z-index: 100;
+        padding: 0.5rem 0.9rem;
+        border-radius: 8px;
+        background: var(--accent);
+        color: #fff;
+        font-weight: 600;
+        font-size: 0.85rem;
+        text-decoration: none;
+        transform: translateY(-160%);
+        transition: transform 0.2s ease;
+      }
+
+      .skip-link:focus {
+        transform: translateY(0);
+      }
+
+      a:focus-visible,
+      button:focus-visible,
+      .integration-chip:focus-visible,
+      [tabindex]:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+        border-radius: 6px;
+      }
+
+      /* Nav CTA */
+      .nav-cta {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.45rem 0.95rem;
+        border-radius: 8px;
+        background: var(--accent);
+        color: #fff;
+        font-size: 0.85rem;
+        font-weight: 600;
+        text-decoration: none;
+        transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
+      }
+
+      .nav-cta:hover {
+        background: var(--accent-hover);
+        transform: translateY(-1px);
+        box-shadow: 0 8px 18px -8px color-mix(in oklab, var(--accent) 85%, transparent);
+      }
+
+      .nav-cta .arrow {
+        transition: transform 0.2s ease;
+      }
+
+      .nav-cta:hover .arrow {
+        transform: translateX(2px);
+      }
+
+      /* Live dot in the hero badge */
+      .badge-dot {
+        flex-shrink: 0;
+        width: 0.5rem;
+        height: 0.5rem;
+        border-radius: 50%;
+        background: oklch(0.72 0.17 150);
+        box-shadow: 0 0 0 0 oklch(0.72 0.17 150 / 60%);
+        animation: badge-pulse 2.4s ease-out infinite;
+      }
+
+      @keyframes badge-pulse {
+        0% { box-shadow: 0 0 0 0 oklch(0.72 0.17 150 / 55%); }
+        70% { box-shadow: 0 0 0 6px oklch(0.72 0.17 150 / 0%); }
+        100% { box-shadow: 0 0 0 0 oklch(0.72 0.17 150 / 0%); }
+      }
+
+      /* Scroll-reveal — only active when JS is present (no-JS shows everything) */
+      .js .reveal,
+      .js [data-reveal-stagger] > * {
+        opacity: 0;
+        transform: translateY(20px);
+        transition: opacity 0.7s cubic-bezier(0.22, 0.61, 0.36, 1),
+          transform 0.7s cubic-bezier(0.22, 0.61, 0.36, 1);
+        transition-delay: var(--reveal-delay, 0ms);
+        will-change: opacity, transform;
+      }
+
+      .js .reveal.in,
+      .js [data-reveal-stagger] > .in {
+        opacity: 1;
+        transform: none;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+        .badge-dot {
+          animation: none;
+        }
+        .js .reveal,
+        .js [data-reveal-stagger] > * {
+          opacity: 1 !important;
+          transform: none !important;
+          transition: none !important;
+        }
+      }
+
       /* Footer */
       .footer {
         border-top: 1px solid var(--border);
-        padding: 2rem 1.5rem;
-        text-align: center;
+        padding: 3rem 1.5rem 2.5rem;
         color: var(--text-muted);
         font-size: 0.85rem;
       }
 
-      .footer a {
+      .footer-inner {
+        max-width: var(--max-width);
+        margin: 0 auto;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1.25rem;
+      }
+
+      .footer-brand {
+        font-family: var(--font-display);
+        font-weight: 700;
+        font-size: 1.05rem;
+        color: var(--text);
+        text-decoration: none;
+        letter-spacing: -0.02em;
+      }
+
+      .footer-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.5rem;
+      }
+
+      .footer-links a {
+        color: var(--text-muted);
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+
+      .footer-links a:hover {
+        color: var(--text);
+      }
+
+      .footer-copy {
+        width: 100%;
+        text-align: center;
+        margin-top: 1.5rem;
+        padding-top: 1.5rem;
+        border-top: 1px solid var(--border);
+        font-size: 0.8rem;
+      }
+
+      .footer-copy a {
         color: var(--text-muted);
         text-decoration: underline;
         text-underline-offset: 2px;
       }
 
-      .footer a:hover {
+      .footer-copy a:hover {
         color: var(--text);
       }
 
+      @media (max-width: 640px) {
+        .footer-inner {
+          flex-direction: column;
+          text-align: center;
+        }
+        .footer-links {
+          justify-content: center;
+        }
+      }
+
+      /* Lightbox */
+      .shot img,
+      .bento-media img {
+        cursor: zoom-in;
+      }
+
+      .shot img:focus-visible,
+      .bento-media img:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      .lightbox {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: clamp(1rem, 4vw, 3rem);
+        background: oklch(0.1 0.005 270 / 82%);
+        backdrop-filter: blur(8px);
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.25s ease, visibility 0.25s ease;
+        cursor: zoom-out;
+      }
+
+      .lightbox.open {
+        opacity: 1;
+        visibility: visible;
+      }
+
+      .lightbox img {
+        max-width: min(1280px, 100%);
+        max-height: 88vh;
+        width: auto;
+        height: auto;
+        border-radius: 12px;
+        border: 1px solid var(--border-strong);
+        box-shadow: 0 40px 90px -20px oklch(0 0 0 / 85%);
+        transform: scale(0.97);
+        transition: transform 0.25s ease;
+        cursor: default;
+      }
+
+      .lightbox.open img {
+        transform: scale(1);
+      }
+
+      .lightbox-close {
+        position: absolute;
+        top: clamp(1rem, 3vw, 1.5rem);
+        right: clamp(1rem, 3vw, 1.5rem);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 2.5rem;
+        height: 2.5rem;
+        padding: 0;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--bg-card);
+        color: var(--text);
+        cursor: pointer;
+        transition: background 0.2s, border-color 0.2s;
+      }
+
+      .lightbox-close:hover {
+        background: var(--bg-card-hover);
+        border-color: var(--border-strong);
+      }
+
+      .lightbox-close svg {
+        width: 1.25rem;
+        height: 1.25rem;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .lightbox,
+        .lightbox img {
+          transition: none;
+        }
+      }
+
       /* Responsive */
+      @media (max-width: 880px) {
+        .feature-row {
+          grid-template-columns: 1fr;
+          gap: 2rem;
+          padding: 2.5rem 0;
+        }
+
+        .feature-row.reverse .feature-copy {
+          order: 0;
+        }
+
+        .bento {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+
       @media (max-width: 640px) {
         .hero {
-          padding: 4rem 1rem 3rem;
+          padding: 4rem 1rem 0;
+        }
+
+        .section {
+          padding: 4rem 1.25rem;
         }
 
         .hero-actions {
@@ -450,6 +936,10 @@
           justify-content: center;
         }
 
+        .bento {
+          grid-template-columns: 1fr;
+        }
+
         .nav-brand span {
           display: none;
         }
@@ -457,11 +947,26 @@
         .nav-link span {
           display: none;
         }
+
+        /* The full CTA overflows narrow viewports — keep just the arrow's
+           tap target wording short and the row inside the screen */
+        .nav-links {
+          gap: 0.5rem;
+        }
+
+        .nav-cta {
+          padding: 0.45rem 0.75rem;
+        }
+
+        .nav-cta .arrow {
+          display: none;
+        }
       }
     </style>
   </head>
 
   <body>
+    <a href="#content" class="skip-link">Skip to content</a>
     <nav class="nav">
       <div class="nav-inner">
         <a href="/" class="nav-brand">
@@ -481,178 +986,312 @@
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.983 11.078h2.119a.186.186 0 0 0 .186-.185V9.006a.186.186 0 0 0-.186-.186h-2.119a.185.185 0 0 0-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 0 0 .186-.186V3.574a.186.186 0 0 0-.186-.185h-2.118a.185.185 0 0 0-.185.185v1.888c0 .102.082.186.185.186m0 2.716h2.118a.187.187 0 0 0 .186-.186V6.29a.186.186 0 0 0-.186-.185h-2.118a.185.185 0 0 0-.185.185v1.887c0 .102.082.186.185.186m-2.93 0h2.12a.186.186 0 0 0 .184-.186V6.29a.185.185 0 0 0-.185-.185H8.1a.185.185 0 0 0-.185.185v1.887c0 .102.083.186.185.186m-2.964 0h2.119a.186.186 0 0 0 .185-.186V6.29a.186.186 0 0 0-.185-.185H5.136a.186.186 0 0 0-.186.185v1.887c0 .102.084.186.186.186m5.893 2.715h2.118a.186.186 0 0 0 .186-.185V9.006a.186.186 0 0 0-.186-.186h-2.118a.185.185 0 0 0-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 0 0 .184-.185V9.006a.185.185 0 0 0-.184-.186h-2.12a.185.185 0 0 0-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 0 0 .185-.185V9.006a.186.186 0 0 0-.185-.186H5.136a.186.186 0 0 0-.186.185v1.888c0 .102.084.185.186.185m-2.92 0h2.12a.185.185 0 0 0 .184-.185V9.006a.185.185 0 0 0-.184-.186h-2.12a.185.185 0 0 0-.184.186v1.887c0 .102.082.185.185.185M23.763 9.89c-.065-.051-.672-.51-1.954-.51-.338.001-.676.03-1.01.087-.248-1.7-1.653-2.53-1.716-2.566l-.344-.199-.226.327c-.284.438-.49.922-.612 1.43-.23.97-.09 1.882.403 2.661-.595.332-1.55.413-1.744.42H.751a.751.751 0 0 0-.75.748 11.376 11.376 0 0 0 .692 4.062c.545 1.428 1.355 2.48 2.41 3.124 1.18.723 3.1 1.137 5.275 1.137.983.003 1.963-.086 2.93-.266a12.248 12.248 0 0 0 3.823-1.389c.98-.567 1.86-1.288 2.61-2.136 1.252-1.418 1.998-2.997 2.553-4.4h.221c1.372 0 2.215-.549 2.68-1.009.309-.293.55-.65.707-1.046l.098-.288Z"/></svg>
             <span>Docker Hub</span>
           </a>
+          <a href="/docs/getting-started/installation/" class="nav-cta">
+            Get Started
+            <svg class="arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+          </a>
         </div>
       </div>
     </nav>
 
-    <div class="hero-wrapper">
+    <div class="hero-wrapper" id="content">
       <div class="hero-gradient"></div>
-      <section class="hero">
-      <span class="hero-badge">Self-Hosted &middot; Open Source</span>
-      <h1>
-        Manage your <span class="accent">media libraries</span> with confidence
-      </h1>
-      <p>
-        A self-hosted webapp for Plex, Jellyfin, and Emby. Browse and filter
-        your libraries, automate media lifecycle with rules, manage streams, and
-        integrate with the *arr stack.
-      </p>
-      <div class="hero-actions">
-        <a href="/docs/getting-started/installation/" class="btn btn-primary">
-          Get Started
-        </a>
-        <a
-          href="https://github.com/ahembree/librariarr"
-          class="btn btn-secondary"
-        >
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="currentColor"
-            ><path
-              d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"
-            ></path></svg
+      <section class="hero" data-reveal-stagger>
+        <span class="hero-badge"><span class="badge-dot"></span>Self-Hosted &middot; Open Source</span>
+        <h1>
+          Browse everything.<br /><span class="accent">Automate the rest.</span>
+        </h1>
+        <p class="lead">
+          A self-hosted webapp for Plex, Jellyfin, and Emby. Filter every title
+          by quality, automate cleanup with lifecycle rules, manage live
+          streams, and integrate with the *arr stack — all from one dashboard.
+        </p>
+        <div class="hero-actions">
+          <a href="/docs/getting-started/installation/" class="btn btn-primary">
+            Get Started
+            <svg class="arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+          </a>
+          <a
+            href="https://github.com/ahembree/librariarr"
+            class="btn btn-secondary"
           >
-          GitHub
-        </a>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"></path></svg>
+            GitHub
+          </a>
+        </div>
+      </section>
+
+      <div class="hero-shot reveal" style="--reveal-delay: 260ms">
+        <div class="shot">
+          <div class="shot-bar">
+            <span class="shot-dot"></span>
+            <span class="shot-dot"></span>
+            <span class="shot-dot"></span>
+          </div>
+          <img
+            src="/screenshots/dashboard.webp"
+            width="2200"
+            height="1375"
+            alt="Librariarr dashboard showing library statistics and a quality breakdown chart"
+            fetchpriority="high"
+          />
+        </div>
       </div>
-    </section>
     </div>
 
-    <section class="features">
-      <div class="features-heading">
+    <section class="section">
+      <div class="section-heading reveal">
+        <span class="section-eyebrow">Features</span>
         <h2>Everything you need to manage your media</h2>
         <p>
-          A comprehensive toolkit for understanding and automating your media
-          library.
+          A comprehensive toolkit for understanding, browsing, and automating
+          your media library across every server you run.
         </p>
       </div>
-      <div class="features-grid">
-        <div class="feature-card">
-          <svg
-            class="feature-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <rect x="2" y="3" width="20" height="14" rx="2"></rect>
-            <line x1="8" y1="21" x2="16" y2="21"></line>
-            <line x1="12" y1="17" x2="12" y2="21"></line>
-          </svg>
-          <h3>Library Browsing</h3>
+
+      <!-- Library browsing -->
+      <div class="feature-row reveal">
+        <div class="feature-copy">
+          <span class="feature-eyebrow">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+            Library Browsing
+          </span>
+          <h3>Browse your whole library, beautifully</h3>
           <p>
-            Browse movies, series, and music with powerful filters. Grid and
-            table views with fast scrolling, even for large libraries.
+            Movies, series, and music in one place. Grid and table views stay
+            quick and smooth no matter how big your library gets, with alphabet
+            jumps and instant search.
           </p>
+          <ul class="feature-list">
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Powerful filters</strong> — resolution, codec, dynamic range, audio profile, year, genre, and more.</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>No duplicates</strong> — connect several servers and still see each title only once.</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Deep detail</strong> — drill into seasons, episodes, albums, and tracks.</span>
+            </li>
+          </ul>
+        </div>
+        <div class="feature-media">
+          <div class="shot">
+            <div class="shot-bar">
+              <span class="shot-dot"></span>
+              <span class="shot-dot"></span>
+              <span class="shot-dot"></span>
+            </div>
+            <img src="/screenshots/movies.webp" width="1760" height="1100" alt="Movie library grid with posters and quality details" loading="lazy" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Lifecycle rules -->
+      <div class="feature-row reverse reveal">
+        <div class="feature-copy">
+          <span class="feature-eyebrow">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+            Lifecycle Rules
+          </span>
+          <h3>Automate the boring parts</h3>
+          <p>
+            Mix and match simple conditions — like "never watched" and "added
+            over a year ago" — into rules that find exactly the media you care
+            about, then act on it: delete, unmonitor, tag, or search for an
+            upgrade. Preview every match before anything runs.
+          </p>
+          <ul class="feature-list">
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Match preview</strong> — see what qualifies before scheduling a single action.</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Safe by default</strong> — delay windows, exceptions, and pending queues keep you in control.</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Works with your *arr stack</strong> — act through Radarr, Sonarr, and Lidarr, with tags and re-download protection.</span>
+            </li>
+          </ul>
+        </div>
+        <div class="feature-media">
+          <div class="shot">
+            <div class="shot-bar">
+              <span class="shot-dot"></span>
+              <span class="shot-dot"></span>
+              <span class="shot-dot"></span>
+            </div>
+            <img src="/screenshots/rules.webp" width="1760" height="1401" alt="Editing a lifecycle rule set with a nested condition group in the rule builder, alongside a live logic preview" loading="lazy" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Stream manager -->
+      <div class="feature-row reveal">
+        <div class="feature-copy">
+          <span class="feature-eyebrow">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
+            Stream Manager
+          </span>
+          <h3>Stay in control of streaming</h3>
+          <p>
+            Watch who's streaming in real time, then step in when you need to.
+            Flip on maintenance mode, rein in transcodes, and schedule blackout
+            windows — across all of your servers at once.
+          </p>
+          <ul class="feature-list">
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Live sessions</strong> — real-time playback with a one-click terminate.</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Maintenance mode</strong> — pause new streams with a custom message and delay.</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Transcode manager</strong> — stop streams that match criteria you define.</span>
+            </li>
+          </ul>
+        </div>
+        <div class="feature-media">
+          <div class="shot">
+            <div class="shot-bar">
+              <span class="shot-dot"></span>
+              <span class="shot-dot"></span>
+              <span class="shot-dot"></span>
+            </div>
+            <img src="/screenshots/streams.webp" width="1760" height="1222" alt="Stream manager showing live playback sessions, maintenance mode, and transcode manager" loading="lazy" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Dashboard insights -->
+      <div class="feature-row reverse reveal">
+        <div class="feature-copy">
+          <span class="feature-eyebrow">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><rect x="7" y="11" width="3" height="7"></rect><rect x="12" y="7" width="3" height="11"></rect><rect x="17" y="13" width="3" height="5"></rect></svg>
+            Dashboard Insights
+          </span>
+          <h3>A dashboard you design</h3>
+          <p>
+            The dashboard opens on live status, library, and lifecycle zones —
+            then hands you a fully customizable Insights grid. Rearrange,
+            resize, and build the charts you actually want to see.
+          </p>
+          <ul class="feature-list">
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Customizable grid</strong> — add, remove, resize, and rearrange insight cards; your layout sticks.</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Custom charts</strong> — build your own from any detail of your library, from codecs and genres to file sizes and play counts.</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Click to explore</strong> — hide values you don't care about, hover for detail, and focus on one media type or server.</span>
+            </li>
+          </ul>
+        </div>
+        <div class="feature-media">
+          <div class="shot">
+            <div class="shot-bar">
+              <span class="shot-dot"></span>
+              <span class="shot-dot"></span>
+              <span class="shot-dot"></span>
+            </div>
+            <img src="/screenshots/insights.webp" width="1760" height="1100" alt="Customizable Insights grid with the recently added shelf and distribution charts" loading="lazy" />
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" style="padding-top: 0;">
+      <div class="section-heading reveal">
+        <span class="section-eyebrow">And more</span>
+        <h2>A complete management toolkit</h2>
+        <p>
+          From system insight to backups and notifications — the details that
+          make a self-hosted setup feel effortless.
+        </p>
+      </div>
+
+      <div class="bento" data-reveal-stagger>
+        <div class="bento-card">
+          <div class="bento-media">
+            <img src="/screenshots/logs.webp" width="1360" height="850" alt="System logs with filterable levels, categories, and sources" loading="lazy" />
+          </div>
+          <div class="bento-body">
+            <h4>System Logs</h4>
+            <p>
+              Full visibility into backend, API, and database activity —
+              filterable by level, category, and source.
+            </p>
+          </div>
         </div>
 
-        <div class="feature-card">
-          <svg
-            class="feature-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
-          </svg>
-          <h3>Lifecycle Rules</h3>
-          <p>
-            Build rules to automatically find and act on media — delete,
-            unmonitor, tag, and more. Preview what matches before anything
-            runs.
-          </p>
+        <div class="bento-card">
+          <div class="bento-media">
+            <img src="/screenshots/preroll.webp" width="1360" height="883" alt="Preroll manager showing saved presets and recurring and seasonal schedules" loading="lazy" />
+          </div>
+          <div class="bento-body">
+            <h4>Preroll Manager</h4>
+            <p>
+              Set Plex preroll videos from presets or schedules, and combine
+              them in sequential or random order.
+            </p>
+          </div>
         </div>
 
-        <div class="feature-card">
-          <svg
-            class="feature-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <polygon
-              points="23 7 16 12 23 17 23 7"
-              fill="currentColor"
-              stroke="none"></polygon>
-            <rect x="1" y="5" width="15" height="14" rx="2"></rect>
-          </svg>
-          <h3>Stream Manager</h3>
-          <p>
-            See who's streaming in real time, pause access with maintenance
-            mode, control transcoding, and set blackout schedules.
-          </p>
+        <div class="bento-card">
+          <div class="bento-media">
+            <img src="/screenshots/settings.webp" width="1360" height="850" alt="Settings page with accent color and badge color customization" loading="lazy" />
+          </div>
+          <div class="bento-body">
+            <h4>Make it yours</h4>
+            <p>
+              Theme accent colors, custom badge palettes, scheduling, and
+              retention — tune Librariarr to taste.
+            </p>
+          </div>
         </div>
 
-        <div class="feature-card">
-          <svg
-            class="feature-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <circle cx="12" cy="12" r="10"></circle>
-            <polyline points="12 6 12 12 16 14"></polyline>
-          </svg>
-          <h3>Scheduling</h3>
-          <p>
-            Schedule syncs and lifecycle tasks independently. Choose from
-            presets or set a custom schedule. Run anything manually on demand.
-          </p>
+        <div class="bento-card">
+          <div class="bento-body">
+            <svg class="bento-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"></path></svg>
+            <h4>Backup &amp; Restore</h4>
+            <p>
+              Automatic or manual backups — optionally encrypted with a
+              passphrase — plus retention policies and scheduled runs.
+            </p>
+          </div>
         </div>
 
-        <div class="feature-card">
-          <svg
-            class="feature-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path
-              d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"
-            ></path>
-          </svg>
-          <h3>Backup & Restore</h3>
-          <p>
-            Automatic or manual backups with optional encryption. Choose what
-            to include, set a retention policy, and schedule backups to run on
-            their own.
-          </p>
+        <div class="bento-card">
+          <div class="bento-body">
+            <svg class="bento-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 01-3.46 0"></path></svg>
+            <h4>Notifications</h4>
+            <p>
+              Discord notifications for lifecycle actions, match changes, and
+              maintenance mode — pick the events you care about.
+            </p>
+          </div>
         </div>
 
-        <div class="feature-card">
-          <svg
-            class="feature-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-            <path d="M13.73 21a2 2 0 01-3.46 0"></path>
-          </svg>
-          <h3>Notifications</h3>
-          <p>
-            Get Discord notifications for lifecycle actions, maintenance mode
-            changes, and more. Choose which events you want to hear about.
-          </p>
+        <div class="bento-card">
+          <div class="bento-body">
+            <svg class="bento-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            <h4>Flexible Scheduling</h4>
+            <p>
+              Schedule syncs and lifecycle processing independently from
+              presets or a custom cadence — or run anything on demand.
+            </p>
+          </div>
         </div>
       </div>
     </section>
@@ -660,19 +1299,54 @@
     <section class="integrations">
       <h2>Built to integrate</h2>
       <p>Connect your existing media stack.</p>
-      <div class="integration-logos">
-        <span class="integration-chip">Plex</span>
-        <span class="integration-chip">Jellyfin</span>
-        <span class="integration-chip">Emby</span>
-        <span class="integration-chip">Sonarr</span>
-        <span class="integration-chip">Radarr</span>
-        <span class="integration-chip">Lidarr</span>
-        <span class="integration-chip">Seerr</span>
+      <div class="integration-logos" data-reveal-stagger>
+        <span class="integration-chip" style="--brand: #EBAF00">
+          <span class="integration-icon">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.987 8.409c-.96 0-1.587.28-2.12.933v-.72H0v8.88s.038.018.127.037c.138.03.821.187 1.331-.249.441-.377.542-.814.542-1.318v-1.283c.533.573 1.147.813 2 .813 1.84 0 3.253-1.493 3.253-3.48 0-2.12-1.36-3.613-3.266-3.613Zm16.748 5.595.406.591c.391.614.894.906 1.492.908.621-.012 1.064-.562 1.226-.755 0 0-.307-.27-.686-.72-.517-.614-1.214-1.755-1.24-1.803l-1.198 1.779Zm-3.205-1.955c0-2.08-1.52-3.64-3.52-3.64s-3.467 1.587-3.467 3.573a3.48 3.48 0 0 0 3.507 3.52c1.413 0 2.626-.84 3.253-2.293h-2.04l-.093.093c-.427.4-.72.533-1.227.533-.787 0-1.373-.506-1.453-1.266h4.986c.04-.214.054-.307.054-.52Zm-7.671-.219c0 .769.11 1.701.868 2.722l.056.069c-.306.526-.742.88-1.248.88-.399 0-.814-.211-1.138-.579a2.177 2.177 0 0 1-.538-1.441V6.409H9.86l-.001 5.421Zm9.283 3.46h-2.39l2.247-3.332-2.247-3.335h2.39l2.248 3.335-2.248 3.332Zm1.593-1.286Zm-17.162-.342c-.933 0-1.68-.773-1.68-1.72s.76-1.666 1.68-1.666c.92 0 1.68.733 1.68 1.68 0 .946-.733 1.706-1.68 1.706Zm18.361-1.974L24 8.622h-2.391l-.87 1.293 1.195 1.773Zm-9.404-.466c.16-.706.72-1.133 1.493-1.133.773 0 1.373.467 1.507 1.133h-3Z"></path></svg>
+          </span>
+          Plex
+        </span>
+        <span class="integration-chip" style="--brand: #00A4DC">
+          <span class="integration-icon">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .002C8.826.002-1.398 18.537.16 21.666c1.56 3.129 22.14 3.094 23.682 0C25.384 18.573 15.177 0 12 0zm7.76 18.949c-1.008 2.028-14.493 2.05-15.514 0C3.224 16.9 9.92 4.755 12.003 4.755c2.081 0 8.77 12.166 7.759 14.196zM12 9.198c-1.054 0-4.446 6.15-3.93 7.189.518 1.04 7.348 1.027 7.86 0 .511-1.027-2.874-7.19-3.93-7.19z"></path></svg>
+          </span>
+          Jellyfin
+        </span>
+        <span class="integration-chip" style="--brand: #52B54B">
+          <span class="integration-icon">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M11.041 0c-.007 0-1.456 1.43-3.219 3.176L4.615 6.352l.512.513.512.512-2.819 2.791L0 12.961l1.83 1.848c1.006 1.016 2.438 2.46 3.182 3.209l1.351 1.359.508-.496c.28-.273.515-.498.524-.498.008 0 1.266 1.264 2.794 2.808L12.97 24l.187-.182c.23-.225 5.007-4.95 5.717-5.656l.52-.516-.502-.513c-.276-.282-.5-.52-.496-.53.003-.009 1.264-1.26 2.802-2.783 1.538-1.522 2.8-2.776 2.803-2.785.005-.012-3.617-3.684-6.107-6.193L17.65 4.6l-.505.505c-.279.278-.517.501-.53.497-.013-.005-1.27-1.267-2.793-2.805A449.655 449.655 0 0011.041 0zM9.223 7.367c.091.038 7.951 4.608 7.957 4.627.003.013-1.781 1.056-3.965 2.32a999.898 999.898 0 01-3.996 2.307c-.019.006-.026-1.266-.026-4.629 0-3.7.007-4.634.03-4.625Z"></path></svg>
+          </span>
+          Emby
+        </span>
+        <span class="integration-chip" style="--brand: #2596BE">
+          <span class="integration-icon">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.212 4.282c1.851 2.204 2.777 4.776 2.777 7.718 0 2.848-.867 5.344-2.602 7.489a934.355 934.355 0 0 1-2.101-2.095c-1.477-1.477-1.792-3.293-1.792-5.278 0-2.224.127-3.486 1.577-4.935l2.478-2.478a13.209 13.209 0 0 0-.337-.421Zm-17.7 16.193C1.708 18.678.6 16.59.188 14.213A11.84 11.84 0 0 1 .011 12c0-.28.006-.548.017-.802 0-.026.007-.052.022-.078.153-2.601 1.076-4.889 2.767-6.865-.108.127-.214.256-.316.387 0 0 1.351 1.346 2.329 2.323 1.408 1.409 1.726 3.215 1.726 5.151 0 1.985-.249 3.762-1.781 5.295-1.035 1.035-2.119 2.124-2.119 2.124.112.136.229.271.349.404.029-.027 1.297-1.348 2.123-2.175 1.638-1.637 1.928-3.528 1.928-5.648 0-2.072-.365-3.997-1.873-5.504a620.045 620.045 0 0 0-2.366-2.357c.168-.196.342-.388.523-.576l3.117 3.106-.194.195 1.903 1.898.547-.549L6.81 6.432l-.196.196L3.495 3.52c.01-.009.436-.416.643-.597.009.011 2.28 2.283 2.28 2.283 1.538 1.537 3.5 1.955 5.621 1.955 2.18 0 4.134-.442 5.731-2.038.907-.908 2.153-2.149 2.162-2.16.17.151.491.461.56.528l.013.013-3.111 3.028-.001.002-.197-.194-1.876 1.903.552.543 1.875-1.903-.197-.194 3.109-3.026c.193.203.377.41.553.619-.03.025-2.495 2.546-2.495 2.546-1.556 1.556-1.723 2.9-1.723 5.288 0 2.121.361 4.054 1.939 5.632a576.91 576.91 0 0 0 2.133 2.124c-.183.208-.599.645-.613.66l-3.066-3.174.195-.196-1.995-1.986-.546.549 1.995 1.986.195-.196 3.065 3.172c-.021.019-.385.362-.552.506-.01-.013-1.974-1.978-1.974-1.978-1.842-1.842-3.299-2.039-5.731-2.039-2.338 0-3.92.239-5.632 1.95-.944.944-2.078 2.085-2.089 2.099-.275-.23-.649-.594-.649-.594l3.019-3.024.199.192 1.854-1.925-.558-.538-1.854 1.926.199.191-3.016 3.022ZM12 8.672A3.33 3.33 0 0 0 8.672 12 3.33 3.33 0 0 0 12 15.328 3.33 3.33 0 0 0 15.328 12 3.33 3.33 0 0 0 12 8.672ZM4.52 2.6C6.665.867 9.162 0 12.011 0c2.88 0 5.394.88 7.541 2.639 0 0-1.215 1.209-2.136 2.13-1.496 1.496-3.334 1.892-5.377 1.892-1.985 0-3.829-.37-5.267-1.809L4.52 2.6Zm14.837 18.909a9.507 9.507 0 0 1-.342.256C16.994 23.255 14.659 24 12.011 24c-2.652 0-4.983-.745-6.993-2.235-.104-.074-.208-.15-.31-.227 0 0 1.096-1.101 2.053-2.058 1.602-1.602 3.09-1.804 5.278-1.804 2.28 0 3.651.166 5.377 1.892l1.941 1.941Z"></path></svg>
+          </span>
+          Sonarr
+        </span>
+        <span class="integration-chip" style="--brand: #FFCB3D">
+          <span class="integration-icon">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5.274 0C3.189.039 1.19 1.547 1.19 4.705l.184 14.518c0 1.47 1.103 2.205 2.573 2.021L3.764 3.786c0-1.654.919-1.838 2.022-1.103l14.7 8.27c1.103.734 1.655 1.47 1.838 2.756.92-1.654.552-4.043-1.286-5.33L7.991.846A4.559 4.559 0 0 0 5.274.001zm1.982 6.91-.184 10.107 9.004-5.146Zm13.598 6.064-15.068 8.82c-.92.552-2.022.736-3.124.368.918 1.47 3.307 2.389 5.145 1.47l12.68-7.35c1.102-.736 1.286-2.022.367-3.308z"></path></svg>
+          </span>
+          Radarr
+        </span>
+        <span class="integration-chip" style="--brand: #21a366">
+          <span class="integration-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l11-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="17" cy="16" r="3"></circle></svg>
+          </span>
+          Lidarr
+        </span>
+        <span class="integration-chip" style="--brand: #6366f1">
+          <span class="integration-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.5" y2="16.5"></line></svg>
+          </span>
+          Seerr
+        </span>
       </div>
     </section>
 
     <section class="cta">
-      <div class="cta-box">
+      <div class="cta-box reveal">
         <h2>Ready to get started?</h2>
         <p>
           Deploy with Docker in minutes. One container, one database, full
@@ -684,6 +1358,7 @@
             class="btn btn-primary"
           >
             Read the Docs
+            <svg class="arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
           </a>
           <a
             href="https://hub.docker.com/r/ahembree/librariarr"
@@ -697,10 +1372,120 @@
     </section>
 
     <footer class="footer">
-      <p>
-        Librariarr is open-source software.
-        <a href="https://github.com/ahembree/librariarr">View on GitHub</a>
+      <div class="footer-inner">
+        <a href="/" class="footer-brand">Librariarr</a>
+        <nav class="footer-links" aria-label="Footer">
+          <a href="/docs/getting-started/installation/">Docs</a>
+          <a href="https://github.com/ahembree/librariarr">GitHub</a>
+          <a href="https://hub.docker.com/r/ahembree/librariarr">Docker Hub</a>
+          <a href="https://www.gnu.org/licenses/agpl-3.0.html">License</a>
+        </nav>
+      </div>
+      <p class="footer-copy">
+        Open-source software, licensed under
+        <a href="https://www.gnu.org/licenses/agpl-3.0.html">AGPL-3.0</a>.
       </p>
     </footer>
+
+    <div
+      class="lightbox"
+      id="lightbox"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Screenshot preview"
+      aria-hidden="true"
+    >
+      <button
+        class="lightbox-close"
+        id="lightbox-close"
+        type="button"
+        aria-label="Close preview"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
+      <img id="lightbox-img" src="" alt="" />
+    </div>
+
+    <script>
+      const lightbox = document.getElementById("lightbox");
+      const lightboxImg = document.getElementById("lightbox-img");
+      const closeBtn = document.getElementById("lightbox-close");
+      const triggers = document.querySelectorAll(".shot img, .bento-media img");
+      let lastFocused = null;
+
+      function openLightbox(img) {
+        lastFocused = document.activeElement;
+        lightboxImg.src = img.currentSrc || img.src;
+        lightboxImg.alt = img.alt || "";
+        lightbox.classList.add("open");
+        lightbox.setAttribute("aria-hidden", "false");
+        document.body.style.overflow = "hidden";
+        closeBtn.focus();
+      }
+
+      function closeLightbox() {
+        if (!lightbox.classList.contains("open")) return;
+        lightbox.classList.remove("open");
+        lightbox.setAttribute("aria-hidden", "true");
+        document.body.style.overflow = "";
+        if (lastFocused && typeof lastFocused.focus === "function") {
+          lastFocused.focus();
+        }
+      }
+
+      triggers.forEach((img) => {
+        img.setAttribute("role", "button");
+        img.setAttribute("tabindex", "0");
+        img.addEventListener("click", () => openLightbox(img));
+        img.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openLightbox(img);
+          }
+        });
+      });
+
+      closeBtn.addEventListener("click", closeLightbox);
+      // Click anywhere outside the image (backdrop or close button) dismisses.
+      lightbox.addEventListener("click", (event) => {
+        if (event.target !== lightboxImg) closeLightbox();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeLightbox();
+      });
+
+      // Scroll-reveal: stagger children of [data-reveal-stagger], then reveal
+      // each element as it enters the viewport. Reduced-motion users get an
+      // instant reveal (also enforced in CSS).
+      const revealEls = [];
+      document.querySelectorAll("[data-reveal-stagger]").forEach((group) => {
+        [...group.children].forEach((child, i) => {
+          child.style.setProperty("--reveal-delay", `${Math.min(i, 9) * 70}ms`);
+          revealEls.push(child);
+        });
+      });
+      document.querySelectorAll(".reveal").forEach((el) => revealEls.push(el));
+
+      const reduceMotion = window.matchMedia(
+        "(prefers-reduced-motion: reduce)"
+      ).matches;
+
+      if (reduceMotion || !("IntersectionObserver" in window)) {
+        revealEls.forEach((el) => el.classList.add("in"));
+      } else {
+        const io = new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              if (entry.isIntersecting) {
+                entry.target.classList.add("in");
+                io.unobserve(entry.target);
+              }
+            }
+          },
+          { rootMargin: "0px 0px -8% 0px", threshold: 0.08 }
+        );
+        revealEls.forEach((el) => io.observe(el));
+      }
+    </script>
   </body>
 </html>

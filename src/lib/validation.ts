@@ -605,6 +605,7 @@ const queryGroupSchema: z.ZodType = z.lazy(() =>
     rules: z.array(queryRuleSchema).max(50),
     groups: z.array(queryGroupSchema).max(10),
     enabled: z.boolean().optional(),
+    negate: z.boolean().optional(),
     streamQuery: z.object({
       streamType: z.enum(["audio", "video", "subtitle"]),
       quantifier: z.enum(["any", "none", "all"]).optional(),

@@ -7,6 +7,7 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -35,9 +36,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-  DropdownMenuSub,
-  DropdownMenuSubTrigger,
-  DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import { useState, useId, useCallback, memo } from "react";
 import {
@@ -69,12 +67,14 @@ import {
   Plus,
   Trash2,
   Layers,
+  Check,
   ChevronDown,
   GripVertical,
   Eye,
   EyeOff,
   Copy,
   ArrowUpToLine,
+  Info,
   MoreVertical,
   Film,
   Monitor,
@@ -93,6 +93,7 @@ import {
 } from "lucide-react";
 import type { LifecycleRuleCondition } from "@/lib/rules/types";
 import { isOperatorVisible } from "@/lib/conditions/helpers";
+import { useBuilderHoverSetter } from "./hover-context";
 import type {
   BaseRule,
   BaseGroup,
@@ -126,6 +127,83 @@ const STREAM_TYPE_LABELS: Record<string, string> = {
   video: "Video",
   subtitle: "Subtitle",
 };
+
+/** Connective tinting — AND reads brand, OR reads amber, everywhere one appears */
+const CONNECTIVE_CLASSES: Record<string, string> = {
+  AND: "border-primary/40 bg-primary/10 font-semibold text-primary",
+  OR: "border-amber/40 bg-amber-dim font-semibold text-amber",
+};
+
+/** Unit suffix shown inside value inputs: day-based operators always count
+ *  days; otherwise reuse the unit already declared in the field label,
+ *  e.g. "File Size (MB)" → "MB". */
+function fieldUnit(fieldLabel: string | undefined, operator: string): string | null {
+  if (operator === "inLastDays" || operator === "notInLastDays") return "days";
+  const match = fieldLabel?.match(/\(([^)]+)\)\s*$/);
+  return match ? match[1] : null;
+}
+
+/** Mirror of the engine/pseudocode mixed-connective detection: the sequence
+ *  is rules first then sub-groups, and the first item's connective is
+ *  ignored (it has nothing to combine with). */
+function hasMixedConnectives(items: Array<{ condition: LifecycleRuleCondition }>): boolean {
+  const conditions = items.slice(1).map((it) => it.condition);
+  return conditions.length >= 2 && new Set(conditions).size > 1;
+}
+
+// ─── Predicate (operator + negate) presentation ─────────────────────────────
+// Negation lives in the operator dropdown instead of a separate NOT switch.
+// Operators with dedicated negative twins keep using them; the rest get
+// synthesized "Not …" entries that write { operator, negate: true } — the
+// exact pair the old switch wrote, so stored rules are untouched.
+
+const NEGATIVE_TWIN: Record<string, string> = {
+  equals: "notEquals",
+  contains: "notContains",
+  inLastDays: "notInLastDays",
+  matchesWildcard: "notMatchesWildcard",
+  isNull: "isNotNull",
+};
+const POSITIVE_TWIN: Record<string, string> = Object.fromEntries(
+  Object.entries(NEGATIVE_TWIN).map(([pos, neg]) => [neg, pos]),
+);
+/** Operators with no stored twin — these get synthesized "Not …" entries */
+const SYNTH_NEGATABLE = new Set([
+  "greaterThan",
+  "greaterThanOrEqual",
+  "lessThan",
+  "lessThanOrEqual",
+  "before",
+  "after",
+  "between",
+]);
+const NOT_PREFIX = "not:";
+
+/** Dropdown value for a stored (operator, negate) pair. Legacy pairs like
+ *  {equals, negate} display as their twin ("Not Equals"); double negation
+ *  ({notEquals, negate}) resolves to the positive — both provably evaluate
+ *  identically (see where-builder.ts null-semantics helpers). The stored
+ *  pair is only rewritten if the user actually changes the predicate. */
+function predicateValue(operator: string, negate: boolean | undefined): string {
+  if (!negate) return operator;
+  if (NEGATIVE_TWIN[operator]) return NEGATIVE_TWIN[operator];
+  if (POSITIVE_TWIN[operator]) return POSITIVE_TWIN[operator];
+  return `${NOT_PREFIX}${operator}`;
+}
+
+/** Inline explainer shown when a group (or the root) mixes AND with OR. */
+function MixedLogicHint({ scope }: { scope: "conditions" | "groups" }) {
+  return (
+    <div className="flex items-start gap-1.5 rounded-md bg-surface-2/60 px-2.5 py-1.5 text-[11px] leading-snug text-muted-foreground">
+      <Info className="mt-px h-3.5 w-3.5 shrink-0 text-amber" />
+      <span>
+        Mixed AND/OR — {scope} combine top to bottom, each connector applying
+        to the result of everything above it. The Logic Preview shows the
+        exact grouping.
+      </span>
+    </div>
+  );
+}
 
 import {
   updateGroupInTree,
@@ -224,11 +302,36 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
     ? String(rule.value).split("|").filter(Boolean)
     : [];
 
+  const setHovered = useBuilderHoverSetter();
+  const [fieldOpen, setFieldOpen] = useState(false);
+  const unit = isNullOp ? null : fieldUnit(fieldDef?.label, rule.operator);
+
+  // Predicate dropdown: positives + synthesized "Not …" entries, plus a
+  // fallback so a legacy (operator, negate) pair whose entry isn't listed
+  // (e.g. operator hidden for this field) still displays.
+  const selectedPredicate = predicateValue(rule.operator, rule.negate);
+  const negatedOperatorOptions = applicableOperators.filter((o) =>
+    SYNTH_NEGATABLE.has(o.value),
+  );
+  const predicateFallback = (() => {
+    const listed =
+      applicableOperators.some((o) => o.value === selectedPredicate) ||
+      negatedOperatorOptions.some((o) => `${NOT_PREFIX}${o.value}` === selectedPredicate);
+    if (listed) return null;
+    const isNot = selectedPredicate.startsWith(NOT_PREFIX);
+    const base = isNot ? selectedPredicate.slice(NOT_PREFIX.length) : selectedPredicate;
+    const def = config.operators.find((o) => o.value === base);
+    const label = fieldType === "date" && def?.dateLabel ? def.dateLabel : (def?.label ?? base);
+    return { value: selectedPredicate, label: isNot ? `Not ${label}` : label };
+  })();
+
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className={`flex flex-wrap items-center gap-2 ${rule.enabled === false ? "opacity-40" : ""}`}
+      className={`group/row flex flex-wrap items-center gap-2 ${rule.enabled === false ? "opacity-40" : ""}`}
+      onMouseEnter={() => setHovered({ kind: "rule", id: rule.id })}
+      onMouseLeave={() => setHovered(null)}
     >
       <button
         type="button"
@@ -245,7 +348,7 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
           value={rule.condition}
           onValueChange={(v) => onConditionChange(rule.id, v as LifecycleRuleCondition)}
         >
-          <SelectTrigger className="w-20 h-8 text-xs shrink-0">
+          <SelectTrigger className={`w-20 h-8 text-xs shrink-0 ${CONNECTIVE_CLASSES[rule.condition] ?? ""}`}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -256,10 +359,15 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
       )}
 
       <div className="flex gap-2 w-full sm:w-auto">
-        {/* Field selector */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" className="flex-1 sm:flex-none sm:w-45 justify-between font-normal">
+        {/* Field selector — searchable, grouped by section */}
+        <Popover open={fieldOpen} onOpenChange={setFieldOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="outline"
+              role="combobox"
+              aria-expanded={fieldOpen}
+              className="flex-1 sm:flex-none sm:w-45 justify-between font-normal"
+            >
               <span className="truncate">{fieldDef?.label ?? rule.field}</span>
               {(() => {
                 const unreachableTooltip =
@@ -291,78 +399,90 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
                 );
               })()}
             </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-56 max-w-[90vw] max-h-(--radix-dropdown-menu-content-available-height) overflow-y-auto">
-            {config.sections.map((section) => {
-              if (config.isSectionHidden?.(section.key, fieldContext))
-                return null;
-              const sectionFields = config.fields.filter(
-                (f) => f.section === section.key,
-              );
-              if (sectionFields.length === 0) return null;
-              return (
-                <DropdownMenuSub key={section.key}>
-                  <DropdownMenuSubTrigger>
-                    {(() => {
-                      const Icon = SECTION_ICONS[section.key];
-                      return Icon ? <Icon className="mr-2 h-4 w-4 text-muted-foreground" /> : null;
-                    })()}
-                    {section.label}
-                  </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent className="w-52 max-w-[calc(100vw-2rem)] max-h-(--radix-dropdown-menu-content-available-height) overflow-y-auto">
-                    {sectionFields.map((f) => {
-                      const disabled = config.isFieldDisabled(
-                        f.value,
-                        fieldContext,
-                      );
-                      const tooltip = config.getDisabledTooltip(
-                        f.value,
-                        fieldContext,
-                      );
-                      if (disabled && tooltip) {
-                        return (
-                          <TooltipProvider key={f.value}>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <div>
-                                  <DropdownMenuItem disabled>
-                                    {f.label}
-                                  </DropdownMenuItem>
-                                </div>
-                              </TooltipTrigger>
-                              <TooltipContent side="left">
-                                {tooltip}
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
+          </PopoverTrigger>
+          <PopoverContent className="w-72 max-w-[90vw] p-0" align="start">
+            {/* Strict substring filter — cmdk's fuzzy default surfaces
+                surprising fields (e.g. "bitrate" → "Subtitle Track Count") */}
+            <Command
+              filter={(value, search) =>
+                value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0
+              }
+            >
+              <CommandInput placeholder="Search fields..." />
+              <CommandList className="max-h-72">
+                <CommandEmpty>No fields found.</CommandEmpty>
+                {config.sections.map((section) => {
+                  if (config.isSectionHidden?.(section.key, fieldContext))
+                    return null;
+                  const sectionFields = config.fields.filter(
+                    (f) => f.section === section.key,
+                  );
+                  if (sectionFields.length === 0) return null;
+                  const Icon = SECTION_ICONS[section.key];
+                  return (
+                    <CommandGroup key={section.key} heading={section.label}>
+                      {sectionFields.map((f) => {
+                        const disabled = config.isFieldDisabled(
+                          f.value,
+                          fieldContext,
                         );
-                      }
-                      return (
-                        <DropdownMenuItem
-                          key={f.value}
-                          onSelect={() =>
-                            onUpdate(groupId, rule.id, { field: f.value } as Partial<R>)
-                          }
-                        >
-                          {f.label}
-                        </DropdownMenuItem>
-                      );
-                    })}
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-              );
-            })}
-          </DropdownMenuContent>
-        </DropdownMenu>
+                        const tooltip = config.getDisabledTooltip(
+                          f.value,
+                          fieldContext,
+                        );
+                        const item = (
+                          <CommandItem
+                            key={f.value}
+                            // Section label included so searching "video"
+                            // surfaces that section's fields too
+                            value={`${section.label} ${f.label} ${f.value}`}
+                            disabled={disabled}
+                            onSelect={() => {
+                              onUpdate(groupId, rule.id, { field: f.value } as Partial<R>);
+                              setFieldOpen(false);
+                            }}
+                          >
+                            {Icon && <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+                            <span className="truncate">{f.label}</span>
+                            {rule.field === f.value && (
+                              <Check className="ml-auto h-3.5 w-3.5 shrink-0 text-primary" />
+                            )}
+                          </CommandItem>
+                        );
+                        if (disabled && tooltip) {
+                          return (
+                            <TooltipProvider key={f.value}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <div>{item}</div>
+                                </TooltipTrigger>
+                                <TooltipContent side="left">
+                                  {tooltip}
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          );
+                        }
+                        return item;
+                      })}
+                    </CommandGroup>
+                  );
+                })}
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
 
-        {/* Operator selector */}
+        {/* Predicate selector — operator + negation in one control */}
         <Select
-          value={rule.operator}
+          value={selectedPredicate}
           onValueChange={(v) => {
-            const update: Partial<R> = { operator: v } as Partial<R>;
-            if (v === "between" && !String(rule.value).includes(",")) {
+            const negate = v.startsWith(NOT_PREFIX);
+            const op = negate ? v.slice(NOT_PREFIX.length) : v;
+            const update: Partial<R> = { operator: op, negate } as Partial<R>;
+            if (op === "between" && !String(rule.value).includes(",")) {
               (update as Record<string, unknown>).value = `${rule.value},`;
-            } else if (v !== "between" && rule.operator === "between") {
+            } else if (op !== "between" && rule.operator === "between") {
               (update as Record<string, unknown>).value = String(rule.value).split(",")[0] ?? "";
             }
             onUpdate(groupId, rule.id, update);
@@ -377,6 +497,17 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
                 {fieldType === "date" && o.dateLabel ? o.dateLabel : o.label}
               </SelectItem>
             ))}
+            {negatedOperatorOptions.length > 0 && <SelectSeparator />}
+            {negatedOperatorOptions.map((o) => (
+              <SelectItem key={`${NOT_PREFIX}${o.value}`} value={`${NOT_PREFIX}${o.value}`}>
+                Not {fieldType === "date" && o.dateLabel ? o.dateLabel : o.label}
+              </SelectItem>
+            ))}
+            {predicateFallback && (
+              <SelectItem value={predicateFallback.value}>
+                {predicateFallback.label}
+              </SelectItem>
+            )}
           </SelectContent>
         </Select>
       </div>
@@ -391,7 +522,7 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
           <PopoverTrigger asChild>
             <Button
               variant="outline"
-              className="flex-1 justify-start font-normal h-9 px-3"
+              className="min-w-28 flex-1 justify-start font-normal h-9 px-3"
             >
               <span className="truncate">
                 {selectedValues.length === 0
@@ -498,56 +629,53 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
           />
         </div>
       ) : (
-        <Input
-          type={
-            fieldType === "number"
-              ? "number"
-              : fieldType === "date" && rule.operator !== "inLastDays" && rule.operator !== "notInLastDays"
-                ? "date"
-                : "text"
-          }
-          value={rule.value}
-          onChange={(e) =>
-            onUpdate(groupId, rule.id, {
-              value: e.target.value,
-            } as Partial<R>)
-          }
-          placeholder={
-            rule.operator === "inLastDays" || rule.operator === "notInLastDays"
-              ? "Number of days"
-              : rule.operator === "matchesWildcard" ||
-                  rule.operator === "notMatchesWildcard"
-                ? "e.g. *4k* or anime-??"
-                : fieldType === "date"
-                  ? "YYYY-MM-DD"
-                  : "Value"
-          }
-          className="flex-1"
-        />
+        <div className="relative min-w-28 flex-1">
+          <Input
+            type={
+              fieldType === "number"
+                ? "number"
+                : fieldType === "date" && rule.operator !== "inLastDays" && rule.operator !== "notInLastDays"
+                  ? "date"
+                  : "text"
+            }
+            value={rule.value}
+            onChange={(e) =>
+              onUpdate(groupId, rule.id, {
+                value: e.target.value,
+              } as Partial<R>)
+            }
+            placeholder={
+              rule.operator === "inLastDays" || rule.operator === "notInLastDays"
+                ? "Number of days"
+                : rule.operator === "matchesWildcard" ||
+                    rule.operator === "notMatchesWildcard"
+                  ? "e.g. *4k* or anime-??"
+                  : fieldType === "date"
+                    ? "YYYY-MM-DD"
+                    : "Value"
+            }
+            className={`w-full ${unit ? "pr-12" : ""}`}
+          />
+          {unit && (
+            <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-xs text-muted-foreground">
+              {unit}
+            </span>
+          )}
+        </div>
       )}
 
-      {/* Negate toggle */}
-      <div className="flex items-center gap-1 shrink-0" title="Negate this condition">
-        <Switch
-          checked={rule.negate ?? false}
-          onCheckedChange={(checked) =>
-            onUpdate(groupId, rule.id, { negate: checked } as Partial<R>)
-          }
-          className="scale-75"
-        />
-        <span
-          className={`text-xs ${rule.negate ? "text-red font-medium" : "text-muted-foreground"}`}
-        >
-          NOT
-        </span>
-      </div>
-
-      {/* Desktop: individual icon buttons */}
+      {/* Desktop: individual icon buttons. Enable/duplicate reveal on row
+          hover (or keyboard focus) to keep resting rows calm; a disabled
+          condition keeps its eye-off visible so the state stays findable. */}
       <Button
         variant="ghost"
         size="icon"
         onClick={() => onToggleEnabled(groupId, rule.id)}
-        className="shrink-0 hidden sm:inline-flex"
+        className={`shrink-0 hidden sm:inline-flex sm:transition-opacity ${
+          rule.enabled === false
+            ? ""
+            : "sm:opacity-0 sm:group-hover/row:opacity-100 sm:group-focus-within/row:opacity-100"
+        }`}
         aria-label={rule.enabled === false ? "Enable condition" : "Disable condition"}
         title={rule.enabled === false ? "Enable condition" : "Disable condition"}
       >
@@ -561,7 +689,7 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
         variant="ghost"
         size="icon"
         onClick={() => onDuplicate(groupId, rule.id)}
-        className="shrink-0 hidden sm:inline-flex"
+        className="shrink-0 hidden sm:inline-flex sm:opacity-0 sm:transition-opacity sm:group-hover/row:opacity-100 sm:group-focus-within/row:opacity-100"
         aria-label="Duplicate condition"
         title="Duplicate condition"
       >
@@ -833,6 +961,8 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
   const canDeleteGroup = depth > 0 || isEmptyGroup;
   const isStreamQuery = !!group.streamQuery;
 
+  const setHovered = useBuilderHoverSetter();
+
   // For stream query groups, swap in stream query fields/sections
   const effectiveConfig = isStreamQuery && config.getStreamQueryFieldsForType
     ? {
@@ -845,7 +975,7 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
   return (
     <Card
       ref={setDropRef}
-      className={`p-3 sm:p-4 space-y-2 overflow-hidden ${BG_COLORS[depth % BG_COLORS.length]} ${SPINE_COLORS[depth % SPINE_COLORS.length]} ${isOver ? ACTIVE_BORDER_COLORS[depth % ACTIVE_BORDER_COLORS.length] : BORDER_COLORS[depth % BORDER_COLORS.length]} ${group.enabled === false ? "opacity-50" : ""} ${isStreamQuery ? "border-primary/30" : ""}`}
+      className={`p-3 sm:p-4 space-y-2 overflow-hidden ${BG_COLORS[depth % BG_COLORS.length]} ${SPINE_COLORS[depth % SPINE_COLORS.length]} ${isOver ? ACTIVE_BORDER_COLORS[depth % ACTIVE_BORDER_COLORS.length] : group.negate ? "border-red/35" : BORDER_COLORS[depth % BORDER_COLORS.length]} ${group.enabled === false ? "opacity-50" : ""} ${isStreamQuery ? "border-primary/30" : ""}`}
     >
       {/* Stream query name - positioned at top-left, separate from the query logic */}
       {isStreamQuery && (
@@ -869,6 +999,11 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
               type="button"
               className="shrink-0 cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground touch-none"
               {...dragHandleProps}
+              // Hovering the handle spotlights this group's whole range in
+              // the Logic Preview (after the dnd listeners so they keep
+              // their pointer handlers)
+              onMouseEnter={() => setHovered({ kind: "group", id: group.id })}
+              onMouseLeave={() => setHovered(null)}
             >
               <GripVertical className="h-4 w-4" />
             </button>
@@ -938,6 +1073,29 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
           )}
         </div>
         <div className="flex items-center gap-0.5">
+          {/* Group NOT — matches items the group does NOT match. Stream
+              queries already negate via their ANY/NO quantifier. */}
+          {!isStreamQuery && (
+            <div
+              className="mr-1 flex shrink-0 items-center gap-1"
+              title="Invert this group — match items it does NOT match"
+            >
+              <Switch
+                checked={group.negate ?? false}
+                onCheckedChange={(checked) =>
+                  onUpdateTree(group.id, (g) => ({
+                    ...g,
+                    negate: checked || undefined,
+                  }))
+                }
+                className="scale-75"
+                aria-label="Negate group"
+              />
+              <span className={`text-xs ${group.negate ? "text-red font-medium" : "text-muted-foreground"}`}>
+                NOT
+              </span>
+            </div>
+          )}
           {/* Desktop: individual icon buttons */}
           {onToggleGroupEnabled && (
             <Button
@@ -1084,7 +1242,7 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
                     value={sub.condition}
                     onValueChange={(v) => handleUpdateSubGroupCondition(sub.id, v as LifecycleRuleCondition)}
                   >
-                    <SelectTrigger className="w-20 h-6 text-xs">
+                    <SelectTrigger className={`w-20 h-6 text-xs ${CONNECTIVE_CLASSES[sub.condition] ?? ""}`}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -1126,6 +1284,12 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
           ))}
         </SortableContext>
       )}
+
+      {/* Evaluation-order explainer when this group mixes AND and OR */}
+      {hasMixedConnectives([
+        ...group.rules,
+        ...(isStreamQuery ? [] : ((group.groups ?? []) as G[])),
+      ]) && <MixedLogicHint scope="conditions" />}
 
       {/* Action buttons */}
       <div className="flex flex-wrap gap-2 pt-1">
@@ -1770,7 +1934,7 @@ export function BaseBuilder<R extends BaseRule, G extends BaseGroup<R>>({
                       updateGroupCondition(group.id, v as LifecycleRuleCondition)
                     }
                   >
-                    <SelectTrigger className="w-20">
+                    <SelectTrigger className={`w-20 ${CONNECTIVE_CLASSES[group.condition] ?? ""}`}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -1828,6 +1992,9 @@ export function BaseBuilder<R extends BaseRule, G extends BaseGroup<R>>({
         >
           Drop here to create a new group
         </div>
+
+        {/* Evaluation-order explainer when top-level groups mix AND and OR */}
+        {hasMixedConnectives(groups) && <MixedLogicHint scope="groups" />}
 
         <Button onClick={addGroup} variant="outline" className="w-full">
           <Plus className="mr-2 h-4 w-4" />

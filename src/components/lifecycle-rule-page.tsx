@@ -4,6 +4,8 @@ import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } fr
 import { useRouter, useSearchParams } from "next/navigation";
 import { getServerTypeLabel } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
+import { ColorChip } from "@/components/color-chip";
+import { findScrollContainer } from "@/lib/scroll-utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -536,6 +538,27 @@ function PreviewCardGrid({
   );
 }
 
+/** Tinted chip for rule-set capability flags in the saved list. */
+function FeatureChip({
+  tone,
+  children,
+}: {
+  tone: "green" | "amber" | "sky" | "purple" | "cyan" | "muted";
+  children: React.ReactNode;
+}) {
+  const tones: Record<string, string> = {
+    green: "border-green/30 bg-green-dim text-green",
+    amber: "border-amber/30 bg-amber-dim text-amber",
+    sky: "border-sky/30 bg-sky-dim text-sky",
+    purple: "border-purple-400/30 bg-purple-400/15 text-purple-400",
+    cyan: "border-cyan-400/30 bg-cyan-400/15 text-cyan-400",
+    muted: "border-border bg-muted/40 text-muted-foreground",
+  };
+  return (
+    <ColorChip className={`text-[10px] font-medium ${tones[tone]}`}>{children}</ColorChip>
+  );
+}
+
 export function LifecycleRulePage({
   mediaType,
   pageTitle,
@@ -556,6 +579,8 @@ export function LifecycleRulePage({
   });
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [name, setName] = useState("");
+  // Only flag a missing name after the user has interacted with the field
+  const [nameTouched, setNameTouched] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importJson, setImportJson] = useState("");
@@ -582,11 +607,12 @@ export function LifecycleRulePage({
     return (localStorage.getItem("lifecycle-preview-view-mode") as "cards" | "table") ?? "table";
   });
   const handlePreviewViewModeChange = useCallback((mode: "cards" | "table") => {
-    const scrollTop = scrollContainerRef.current?.scrollTop ?? 0;
+    const scroller = findScrollContainer();
+    const scrollTop = scroller?.scrollTop ?? 0;
     setPreviewViewMode(mode);
     localStorage.setItem("lifecycle-preview-view-mode", mode);
     requestAnimationFrame(() => {
-      scrollContainerRef.current?.scrollTo({ top: scrollTop, behavior: "instant" });
+      scroller?.scrollTo({ top: scrollTop, behavior: "instant" });
     });
   }, []);
   const { size: cardSize, setSize: setCardSize } = useCardSize();
@@ -797,7 +823,6 @@ export function LifecycleRulePage({
   const [previewDiffCounts, setPreviewDiffCounts] = useState<{ added: number; removed: number; retained: number } | null>(null);
 
   // Ref to the scroll container to preserve scroll position across re-renders
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Track previous collection state for Plex diff on save
   const [prevCollection, setPrevCollection] = useState<{
@@ -1232,12 +1257,11 @@ export function LifecycleRulePage({
       }
 
       // Preserve scroll position when preview results cause layout change
-      const scrollTop = scrollContainerRef.current?.scrollTop ?? 0;
+      const scroller = findScrollContainer();
+      const scrollTop = scroller?.scrollTop ?? 0;
       setPreview(mergedItems);
       requestAnimationFrame(() => {
-        if (scrollContainerRef.current) {
-          scrollContainerRef.current.scrollTo({ top: scrollTop, behavior: "instant" });
-        }
+        scroller?.scrollTo({ top: scrollTop, behavior: "instant" });
       });
     } catch (error) {
       console.error("Failed to preview:", error);
@@ -1570,6 +1594,7 @@ export function LifecycleRulePage({
     // Bump token to invalidate any in-flight loadRuleSet visibility fetches.
     loadTokenRef.current++;
     setName("");
+    setNameTouched(false);
     setGroups([]);
     setActiveRuleSetId(null);
     setEnabled(true);
@@ -1703,7 +1728,7 @@ export function LifecycleRulePage({
 
   return (
     <>
-    <div className={embedded ? "flex-1 min-h-0 overflow-y-auto" : "h-full overflow-y-auto"} ref={scrollContainerRef}>
+    <div className={embedded ? undefined : "h-full overflow-y-auto"}>
         <div className={embedded ? "px-4 sm:px-6 lg:px-8 pb-4 sm:pb-6 lg:pb-8" : "p-4 sm:p-6 lg:p-8"}>
       {!embedded && (
         <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -1753,45 +1778,41 @@ export function LifecycleRulePage({
                     />
                     <div>
                       <p className="font-medium truncate">{ruleSet.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {countRules(ruleSet.rules)} rule
-                        {countRules(ruleSet.rules) !== 1 && "s"}
+                      <div className="mt-1 flex flex-wrap items-center gap-1">
+                        <span className="mr-1 font-mono text-[10.5px] text-faint">
+                          {countRules(ruleSet.rules)} rule{countRules(ruleSet.rules) !== 1 && "s"}
+                        </span>
                         {ruleSet.enabled ? (
-                          <span className="ml-2 text-green">Enabled</span>
+                          <FeatureChip tone="green">Enabled</FeatureChip>
                         ) : (
-                          <span className="ml-2 text-muted-foreground">Disabled</span>
+                          <FeatureChip tone="muted">Disabled</FeatureChip>
                         )}
                         {ruleSet.enabled && ruleSet.actionEnabled && (
-                          <span className="ml-2 text-orange-400">
-                            Action enabled
-                          </span>
+                          <FeatureChip tone="amber">Action</FeatureChip>
                         )}
                         {ruleSet.enabled && ruleSet.collectionEnabled && (
-                          <span className="ml-2 text-sky">
-                            Collection
-                          </span>
+                          <FeatureChip tone="sky">Collection</FeatureChip>
                         )}
                         {ruleSet.enabled && (ruleSet.addArrTags?.length > 0 || ruleSet.removeArrTags?.length > 0) && (
-                          <span className="ml-2 text-purple-400">
-                            Tags
-                          </span>
+                          <FeatureChip tone="purple">Tags</FeatureChip>
                         )}
                         {scopeConfig && (
-                          <span className="ml-2">
+                          <FeatureChip tone="muted">
                             {ruleSet.seriesScope !== false ? scopeConfig.ruleSetEnabledLabel : scopeConfig.ruleSetDisabledLabel}
-                          </span>
+                          </FeatureChip>
                         )}
                         {ruleSet.serverIds?.length > 0 && (
-                          <span className="ml-2 text-cyan-400">
+                          <FeatureChip tone="cyan">
                             {ruleSet.serverIds.length} server{ruleSet.serverIds.length !== 1 ? "s" : ""}
-                          </span>
+                          </FeatureChip>
                         )}
-                      </p>
+                      </div>
                     </div>
                   </div>
                   <Button
                     variant="ghost"
                     size="icon"
+                    aria-label={`Delete rule set ${ruleSet.name}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       setDeleteConfirmId(ruleSet.id);
@@ -1827,7 +1848,8 @@ export function LifecycleRulePage({
               placeholder="Rule set name (e.g., 'Old unwatched 720p movies')"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className={`flex-1 min-w-0${!name ? " border-destructive" : ""}`}
+              onBlur={() => setNameTouched(true)}
+              className={`flex-1 min-w-0${!name && nameTouched ? " border-destructive" : ""}`}
             />
             <div className="flex items-center gap-2 shrink-0">
               <Switch

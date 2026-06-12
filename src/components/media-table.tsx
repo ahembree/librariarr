@@ -609,6 +609,7 @@ export const MediaTable = memo(function MediaTable({ items, onItemClick, sortBy,
         key={key}
         className="cursor-pointer select-none hover:text-foreground font-mono text-[11px] uppercase tracking-[0.08em] text-faint"
         style={{ width, position: "relative" }}
+        aria-sort={isActive ? (sortOrder === "asc" ? "ascending" : "descending") : "none"}
         onClick={() => onSort(field)}
       >
         <div className="flex items-center gap-1">

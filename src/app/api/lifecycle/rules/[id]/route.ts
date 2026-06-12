@@ -5,6 +5,7 @@ import { removePlexCollection } from "@/lib/lifecycle/collections";
 import { cleanupArrTags } from "@/lib/lifecycle/actions";
 import { validateRequest, ruleSetUpdateSchema } from "@/lib/validation";
 import { findFieldsInvalidForType } from "@/lib/conditions";
+import { validateActionConfig } from "@/lib/lifecycle/action-config";
 
 export async function PUT(
   request: NextRequest,
@@ -99,6 +100,27 @@ export async function PUT(
     }
   }
 
+  // Validate the MERGED action configuration (PUT only sends changed
+  // fields): family of actionType must match the library type, and a
+  // referenced instance must exist in that family for this user.
+  if (actionType !== undefined || arrInstanceId !== undefined) {
+    const current = await prisma.ruleSet.findFirst({
+      where: { id, userId: session.userId },
+      select: { type: true, actionType: true, arrInstanceId: true },
+    });
+    if (current) {
+      const actionConfigError = await validateActionConfig({
+        userId: session.userId!,
+        libraryType: current.type,
+        actionType: actionType !== undefined ? actionType : current.actionType,
+        arrInstanceId: arrInstanceId !== undefined ? arrInstanceId : current.arrInstanceId,
+      });
+      if (actionConfigError) {
+        return NextResponse.json({ error: actionConfigError }, { status: 400 });
+      }
+    }
+  }
+
   const updateData: Record<string, unknown> = {};
   if (name !== undefined) updateData.name = name;
   if (rules !== undefined) updateData.rules = rules;
@@ -144,7 +166,11 @@ export async function PUT(
       await tx.lifecycleAction.deleteMany({
         where: { ruleSetId: id, status: "PENDING" },
       });
-    } else if (actionEnabled === false) {
+    } else if (actionEnabled === false || enabled === false) {
+      // Disabling the rule set (or just its action) must cancel armed
+      // PENDING actions — the execution-side enabled filter is the backstop,
+      // but cancelling here keeps the Pending page honest and prevents the
+      // actions lingering until the next detection run.
       await tx.lifecycleAction.deleteMany({
         where: { ruleSetId: id, status: "PENDING" },
       });

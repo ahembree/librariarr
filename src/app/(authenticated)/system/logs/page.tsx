@@ -27,7 +27,6 @@ import {
   CircleAlert,
   FileText,
   Info,
-  Loader2,
   Pause,
   Play,
   RefreshCw,
@@ -36,6 +35,7 @@ import {
   X,
 } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
+import { LogConsoleSkeleton } from "@/components/skeletons";
 
 interface LogEntry {
   id: string;
@@ -320,9 +320,7 @@ export default function LogsPage() {
 
       {/* Console */}
       {loading && logs.length === 0 ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-        </div>
+        <LogConsoleSkeleton />
       ) : logs.length === 0 ? (
         <EmptyState icon={FileText} title="No log entries found" description="Logs will appear here as activity occurs." />
       ) : (

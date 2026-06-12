@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { getMatchedCriteriaForItems } from "@/lib/rules/lifecycle-engine";
+import { getMatchedCriteriaForItems, evaluateAllRulesInMemory } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
+import { buildStreamQueryClause } from "@/lib/conditions/stream-query-where";
+import { UNSATISFIABLE_WHERE } from "@/lib/conditions/where-builder";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -352,5 +354,83 @@ describe("stream query groups - negate", () => {
     // The AAC stream satisfies this
     const result = matched([atmosItem], [group]);
     expect(result.get("atmos1")!.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Audit regressions — Phase 1/Phase 2 parity for stream queries
+// ---------------------------------------------------------------------------
+
+describe("audit regressions: stream-query parity", () => {
+
+  const sqGroup = (rules: Array<Record<string, unknown>>, quantifier: "any" | "none" | "all" = "any"): LifecycleRuleGroup => ({
+    id: "g", condition: "AND",
+    rules: rules.map((r, i) => ({ id: `r${i}`, condition: "AND", ...r } as never)),
+    groups: [],
+    streamQuery: { streamType: "audio", quantifier },
+  });
+
+  it("misplaced non-stream field fails the whole group in Phase 1 (no silent drop)", () => {
+    const clause = buildStreamQueryClause(sqGroup([{ field: "title", operator: "equals", value: "x" }]));
+    expect(clause).toEqual(UNSATISFIABLE_WHERE);
+  });
+
+  it("misplaced non-stream field fails the group in Phase 2 too (none stays closed)", () => {
+    const groups = [sqGroup([{ field: "title", operator: "equals", value: "x" }], "none")];
+    const item = { id: "1", streams: [{ streamType: 2, codec: "aac" }] };
+    expect(evaluateAllRulesInMemory(groups, item)).toBe(false);
+  });
+
+  it("stream-query field in a PLAIN group is a dead rule, not a dropped constraint", () => {
+    const groups: LifecycleRuleGroup[] = [{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", condition: "AND", field: "sqCodec", operator: "equals", value: "aac" } as never],
+      groups: [],
+    }];
+    expect(evaluateAllRulesInMemory(groups, { id: "1", streams: [{ streamType: 2, codec: "aac" }] })).toBe(false);
+  });
+
+  it("negated positive numeric includes NULL streams in Phase 1 (OR column IS NULL)", () => {
+    const clause = buildStreamQueryClause(sqGroup([
+      { field: "sqBitrate", operator: "greaterThan", value: "1000", negate: true },
+    ]));
+    expect(JSON.stringify(clause)).toContain('"bitrate":null');
+  });
+
+  it("Phase 2 matches NULL-bitrate streams for negated greaterThan (parity)", () => {
+    const groups = [sqGroup([{ field: "sqBitrate", operator: "greaterThan", value: "1000", negate: true }])];
+    expect(evaluateAllRulesInMemory(groups, { id: "1", streams: [{ streamType: 2, bitrate: null }] })).toBe(true);
+    expect(evaluateAllRulesInMemory(groups, { id: "2", streams: [{ streamType: 2, bitrate: 5000 }] })).toBe(false);
+  });
+
+  it("boolean equals false includes NULL streams in Phase 1 (Phase 2 coerces !!null)", () => {
+    const clause = buildStreamQueryClause(sqGroup([{ field: "sqForced", operator: "equals", value: "false" }]));
+    expect(JSON.stringify(clause)).toContain('"forced":null');
+    // Phase 2 agreement
+    const groups = [sqGroup([{ field: "sqForced", operator: "equals", value: "false" }])];
+    expect(evaluateAllRulesInMemory(groups, { id: "1", streams: [{ streamType: 2, forced: null }] })).toBe(true);
+  });
+
+  it("boolean isNull is expressible in both phases (was silently dropped from Phase 1)", () => {
+    const clause = buildStreamQueryClause(sqGroup([{ field: "sqForced", operator: "isNull", value: "" }]));
+    expect(JSON.stringify(clause)).toContain('"forced":null');
+    const groups = [sqGroup([{ field: "sqForced", operator: "isNull", value: "" }])];
+    expect(evaluateAllRulesInMemory(groups, { id: "1", streams: [{ streamType: 2, forced: null }] })).toBe(true);
+    expect(evaluateAllRulesInMemory(groups, { id: "2", streams: [{ streamType: 2, forced: true }] })).toBe(false);
+  });
+
+  it("stream counts support between / isNull / isNotNull in memory", () => {
+    const countGroup = (operator: string, value: string): LifecycleRuleGroup[] => [{
+      id: "g", condition: "AND",
+      rules: [{ id: "r", condition: "AND", field: "audioStreamCount", operator, value } as never],
+      groups: [],
+    }];
+    const twoAudio = { id: "1", streams: [{ streamType: 2 }, { streamType: 2 }, { streamType: 3 }] };
+    const noAudio = { id: "2", streams: [{ streamType: 3 }] };
+    expect(evaluateAllRulesInMemory(countGroup("between", "1,3"), twoAudio)).toBe(true);
+    expect(evaluateAllRulesInMemory(countGroup("between", "3,5"), twoAudio)).toBe(false);
+    expect(evaluateAllRulesInMemory(countGroup("isNull", ""), noAudio)).toBe(true);
+    expect(evaluateAllRulesInMemory(countGroup("isNotNull", ""), twoAudio)).toBe(true);
+    expect(evaluateAllRulesInMemory(countGroup("isNotNull", ""), noAudio)).toBe(false);
   });
 });

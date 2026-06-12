@@ -4,13 +4,7 @@ import { useState, memo } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-  CardFooter,
-} from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Film, Tv, Music, Info } from "lucide-react";
 import { ServerChips } from "@/components/server-chips";
 import { FadeImage } from "@/components/ui/fade-image";
@@ -33,6 +27,11 @@ export interface QualitySegment {
   weight: number;
   label?: string;
 }
+
+/** Fixed height of the text block under the poster, in px. Exported so the
+ *  library pages' virtualizer row math stays in lockstep with the card.
+ *  Sized for the stacked icon-row metadata (up to three rows). */
+export const CARD_CONTENT_HEIGHT = 138;
 
 export interface MediaCardProps {
   imageUrl: string;
@@ -129,25 +128,26 @@ export const MediaCard = memo(function MediaCard({
         {(!qualityBar || qualityBar.length === 0) && <div className="h-1" />}
       </div>
 
-      {/* Content below poster — fixed height for virtualizer stability */}
-      <div className="h-34.5 overflow-hidden flex flex-col">
-        {/* Title — min-h reserves 2 lines even for short titles */}
-        <CardHeader className="px-3 pt-2 pb-0 shrink-0 gap-0">
-          <CardTitle
-            className="text-sm leading-tight line-clamp-2 min-h-[2lh]"
-            title={title}
-          >
-            {title}
-          </CardTitle>
-        </CardHeader>
+      {/* Content block — fixed height for virtualizer stability:
+          title (2 lines reserved), stacked icon metadata rows, footer chips. */}
+      <div
+        className="flex flex-col overflow-hidden px-2.5 pt-1.5 pb-2"
+        style={{ height: CARD_CONTENT_HEIGHT }}
+      >
+        <h3
+          className="min-h-[2lh] text-[13px] font-medium leading-snug line-clamp-2 transition-colors group-hover:text-brand-bright"
+          title={title}
+        >
+          {title}
+        </h3>
 
-        {/* Metadata — fills remaining space between title and footer */}
-        <CardDescription className="px-3 pt-1 text-xs flex-1 min-h-0 overflow-hidden">
+        {/* Metadata — stacked icon rows, clipped if they overflow */}
+        <div className="mt-1 min-h-0 flex-1 overflow-hidden text-xs text-muted-foreground">
           {metadata}
-        </CardDescription>
+        </div>
 
         {/* Footer: badges + server chips + info button */}
-        <CardFooter className="px-3 pt-1 pb-2 gap-1 items-center shrink-0 overflow-hidden">
+        <div className="flex shrink-0 items-center gap-1 overflow-hidden pt-1">
           {badges}
           {servers && servers.length > 0 && <ServerChips servers={servers} />}
           {onInfo && (
@@ -161,10 +161,10 @@ export const MediaCard = memo(function MediaCard({
                 onInfo();
               }}
             >
-              <Info className="h-4 w-4" />
+              <Info className="h-3.5 w-3.5" />
             </button>
           )}
-        </CardFooter>
+        </div>
       </div>
     </Card>
   );

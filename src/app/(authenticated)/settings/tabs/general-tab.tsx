@@ -21,6 +21,16 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   CheckCircle,
   DatabaseBackup,
   Download,
@@ -147,8 +157,9 @@ export function GeneralTab({
 }: GeneralTabProps) {
   const [encryptionPasswordInput, setEncryptionPasswordInput] = useState("");
   const [showPasswordForm, setShowPasswordForm] = useState(false);
-  const [restorePassphraseFor, setRestorePassphraseFor] = useState<string | null>(null);
+  const [confirmRestore, setConfirmRestore] = useState<BackupEntry | null>(null);
   const [restorePassphraseInput, setRestorePassphraseInput] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [includeMediaData, setIncludeMediaData] = useState(false);
 
   const dupeNames = useMemo(() => getDuplicateServerNames(servers), [servers]);
@@ -164,7 +175,7 @@ export function GeneralTab({
 
       {/* Appearance */}
       <section className="space-y-4">
-        <h3 className="text-lg font-semibold">Appearance</h3>
+        <h3 className="font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">Appearance</h3>
 
         <SettingsSection icon={Palette} title="Accent Color" description="Choose a color theme for buttons, active items, and highlights.">
             <div className="flex flex-wrap gap-3">
@@ -545,6 +556,7 @@ export function GeneralTab({
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8"
+                          aria-label={`Download backup ${b.filename}`}
                           onClick={() => onDownloadBackup(b.filename)}
                         >
                           <Download className="h-3.5 w-3.5" />
@@ -553,14 +565,11 @@ export function GeneralTab({
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8"
+                          aria-label={`Restore backup ${b.filename}`}
                           disabled={restoringBackup === b.filename}
                           onClick={() => {
-                            if (b.encrypted) {
-                              setRestorePassphraseFor(b.filename);
-                              setRestorePassphraseInput("");
-                            } else {
-                              onRestoreBackup(b.filename);
-                            }
+                            setConfirmRestore(b);
+                            setRestorePassphraseInput("");
                           }}
                         >
                           {restoringBackup === b.filename ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
@@ -569,7 +578,8 @@ export function GeneralTab({
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 text-destructive hover:text-destructive"
-                          onClick={() => onDeleteBackup(b.filename)}
+                          aria-label={`Delete backup ${b.filename}`}
+                          onClick={() => setConfirmDelete(b.filename)}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
@@ -579,48 +589,6 @@ export function GeneralTab({
                       <div className="flex items-center gap-2 pt-1 text-xs text-muted-foreground">
                         <Loader2 className="h-3 w-3 animate-spin shrink-0" />
                         {restoreProgress}
-                      </div>
-                    )}
-                    {restorePassphraseFor === b.filename && !restoringBackup && (
-                      <div className="flex items-center gap-2 pt-1">
-                        <Input
-                          type="password"
-                          placeholder="Enter passphrase"
-                          value={restorePassphraseInput}
-                          onChange={(e) => setRestorePassphraseInput(e.target.value)}
-                          className="max-w-xs h-8 text-sm"
-                          autoFocus
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" && restorePassphraseInput) {
-                              onRestoreBackup(b.filename, restorePassphraseInput);
-                              setRestorePassphraseFor(null);
-                              setRestorePassphraseInput("");
-                            } else if (e.key === "Escape") {
-                              setRestorePassphraseFor(null);
-                              setRestorePassphraseInput("");
-                            }
-                          }}
-                        />
-                        <Button
-                          size="sm"
-                          className="h-8"
-                          disabled={!restorePassphraseInput}
-                          onClick={() => {
-                            onRestoreBackup(b.filename, restorePassphraseInput);
-                            setRestorePassphraseFor(null);
-                            setRestorePassphraseInput("");
-                          }}
-                        >
-                          Restore
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8"
-                          onClick={() => { setRestorePassphraseFor(null); setRestorePassphraseInput(""); }}
-                        >
-                          Cancel
-                        </Button>
                       </div>
                     )}
                   </div>
@@ -636,6 +604,89 @@ export function GeneralTab({
           )}
       </SettingsSection>
 
+      {/* Restore confirmation — destructive: wipes all data and logs out. */}
+      <AlertDialog
+        open={!!confirmRestore}
+        onOpenChange={(open) => {
+          if (!open) {
+            setConfirmRestore(null);
+            setRestorePassphraseInput("");
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Restore backup?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Restoring &quot;{confirmRestore?.filename}&quot; will replace all current data and
+              log you out. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {confirmRestore?.encrypted && (
+            <div className="space-y-1.5">
+              <Label htmlFor="restore-passphrase">Passphrase</Label>
+              <Input
+                id="restore-passphrase"
+                type="password"
+                placeholder="Enter the backup passphrase"
+                value={restorePassphraseInput}
+                onChange={(e) => setRestorePassphraseInput(e.target.value)}
+                autoFocus
+              />
+              <p className="text-xs text-muted-foreground">
+                This backup is encrypted and requires its passphrase to restore.
+              </p>
+            </div>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={!!confirmRestore?.encrypted && !restorePassphraseInput}
+              onClick={() => {
+                if (!confirmRestore) return;
+                onRestoreBackup(
+                  confirmRestore.filename,
+                  confirmRestore.encrypted ? restorePassphraseInput : undefined,
+                );
+                setConfirmRestore(null);
+                setRestorePassphraseInput("");
+              }}
+            >
+              <RotateCcw className="mr-2 h-4 w-4" />
+              Restore
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete backup confirmation */}
+      <AlertDialog
+        open={!!confirmDelete}
+        onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete backup?</AlertDialogTitle>
+            <AlertDialogDescription>
+              &quot;{confirmDelete}&quot; will be permanently deleted.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (confirmDelete) onDeleteBackup(confirmDelete);
+                setConfirmDelete(null);
+              }}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

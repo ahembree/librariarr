@@ -196,7 +196,10 @@
     height: 100%;
   }
   body {
-    @apply bg-background text-foreground;
+    /* font-sans must be applied here (not inherited from preflight's html
+       rule): next/font defines --font-sans on <body>, which <html> cannot
+       see, so without this the UI falls back to the system font stack. */
+    @apply bg-background text-foreground font-sans;
     height: 100%;
   }
 }
@@ -248,6 +251,33 @@ body::before {
   backdrop-filter: blur(20px);
   background: oklch(0.21 0.008 270 / 70%);
   border: 1px solid oklch(1 0 0 / 5%);
+}
+
+/* Canvas atmosphere — the subtle ambient-light radial at the top of the
+   main content area (extracted from an inline arbitrary value so the
+   shell and any future surfaces share one definition). */
+.canvas-atmosphere {
+  background-image: radial-gradient(
+    ellipse at 50% 0%,
+    oklch(0.22 0.02 270) 0%,
+    transparent 60%
+  );
+}
+
+/* Auth backdrop — full-screen cinematic gradient behind the login and
+   onboarding cards (shared by both pages). */
+.auth-backdrop {
+  background-image:
+    radial-gradient(
+      ellipse 70% 55% at 50% -5%,
+      oklch(0.55 0.2 264 / 0.2),
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse at center,
+      oklch(0.22 0.02 270),
+      oklch(0.14 0.006 270)
+    );
 }
 
 /* Disable expensive backdrop-filter on mobile to prevent scroll lag */
@@ -333,6 +363,14 @@ body::before {
   font-weight: 500;
 }
 
+/* Safe-area helpers for standalone PWA mode (env() resolves to 0 in
+   regular browser tabs, so these are no-ops outside the installed app). */
+.pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
 /* Honor reduced-motion: skip entrance animation, keep the resting (visible)
    state. Animations use `both`, so without this the content could otherwise
    be left mid-keyframe. */

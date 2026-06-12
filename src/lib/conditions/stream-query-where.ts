@@ -25,7 +25,7 @@
  */
 import { Prisma } from "@/generated/prisma/client";
 import type { ConditionGroup } from "./types";
-import { UNSATISFIABLE_WHERE, isUnconfiguredContainsRule } from "./where-builder";
+import { escapeLike, UNSATISFIABLE_WHERE, isUnconfiguredContainsRule } from "./where-builder";
 import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "./helpers";
 import {
   isStreamQueryComputedField,
@@ -84,20 +84,45 @@ export function buildStreamQueryClause(group: ConditionGroup): Prisma.MediaItemW
     }
 
     const column = streamQueryFieldToColumn(field);
-    if (!column) continue;
+    // A field that doesn't map to a stream column doesn't belong in a stream
+    // query — fail the group rather than silently dropping the constraint
+    // (a dropped conjunct widens `any`, and makes `none` vacuously true).
+    if (!column) return UNSATISFIABLE_WHERE;
 
     const { operator, value, negate } = rule;
     let cond: Prisma.MediaStreamWhereInput | null = null;
+    // How `negate` applies, mirroring Phase 2's NULL coalescing per shape:
+    //  - "positive": Phase 2 evaluates the coalesced/early-NULL predicate to
+    //    false for NULL streams, so its negation matches them — the SQL NOT
+    //    needs an `OR column IS NULL` union.
+    //  - "selfsafe": the clause already encodes its own NULL behavior
+    //    (notEquals/notContains OR-null shapes, isNull/isNotNull) and a plain
+    //    NOT inverts it exactly.
+    //  - "handled": negate already folded into the clause (booleans below).
+    let negateShape: "positive" | "selfsafe" | "handled" = "positive";
 
-    // Boolean fields
+    // Boolean fields — Phase 2 coerces `!!streamValue`, so NULL ≡ false.
+    // equals/notEquals/negate all reduce to "matches the true side or the
+    // false side"; the false side includes NULL rows.
     if (field === "sqIsDefault" || field === "sqForced") {
       const boolVal = String(value).toLowerCase() === "true";
-      switch (operator) {
-        case "equals": cond = { [column]: boolVal }; break;
-        case "notEquals": cond = { [column]: !boolVal }; break;
+      if (operator === "isNull") {
+        cond = { [column]: null };
+        negateShape = "selfsafe";
+      } else if (operator === "isNotNull") {
+        cond = { [column]: { not: null } };
+        negateShape = "selfsafe";
+      } else if (operator === "equals" || operator === "notEquals") {
+        let matchesTrue = operator === "equals" ? boolVal : !boolVal;
+        if (negate) matchesTrue = !matchesTrue;
+        cond = matchesTrue
+          ? { [column]: true }
+          : { OR: [{ [column]: false }, { [column]: null }] };
+        negateShape = "handled";
       }
     }
-    // Numeric fields
+    // Numeric fields — Phase 2 short-circuits NULL → (negate ? true : false)
+    // for every comparison including notEquals, so they are all "positive".
     else if (["sqChannels", "sqBitrate", "sqBitDepth", "sqWidth", "sqHeight", "sqFrameRate", "sqSamplingRate"].includes(field)) {
       const numValue = Number(value);
       switch (operator) {
@@ -107,8 +132,8 @@ export function buildStreamQueryClause(group: ConditionGroup): Prisma.MediaItemW
         case "greaterThanOrEqual": cond = { [column]: { gte: numValue } }; break;
         case "lessThan": cond = { [column]: { lt: numValue } }; break;
         case "lessThanOrEqual": cond = { [column]: { lte: numValue } }; break;
-        case "isNull": cond = { [column]: null }; break;
-        case "isNotNull": cond = { [column]: { not: null } }; break;
+        case "isNull": cond = { [column]: null }; negateShape = "selfsafe"; break;
+        case "isNotNull": cond = { [column]: { not: null } }; negateShape = "selfsafe"; break;
         case "between": {
           const [minStr, maxStr] = String(value).split(",");
           cond = { [column]: { gte: Number(minStr), lte: Number(maxStr) } };
@@ -116,24 +141,25 @@ export function buildStreamQueryClause(group: ConditionGroup): Prisma.MediaItemW
         }
       }
     }
-    // Text fields
+    // Text fields — Phase 2 coalesces NULL → "".
     else {
       const strValue = String(value);
       const enumerable = isEnumerableField(field);
       switch (operator) {
-        case "equals": cond = { [column]: { equals: strValue, mode: "insensitive" } }; break;
+        case "equals": cond = { [column]: { equals: escapeLike(strValue), mode: "insensitive" } }; break;
         case "notEquals":
           // Stream column is nullable; include NULL-language/codec streams to
           // match Phase 2's `String(streamValue ?? "")` coalesce behavior.
-          cond = { OR: [{ [column]: null }, { [column]: { not: strValue, mode: "insensitive" } }] };
+          cond = { OR: [{ [column]: null }, { [column]: { not: escapeLike(strValue), mode: "insensitive" } }] };
+          negateShape = "selfsafe";
           break;
         case "contains": {
           if (enumerable) {
             const parts = strValue.split("|").filter(Boolean);
             const matchValues = parts.length > 0 ? parts : [strValue];
-            cond = { OR: matchValues.map((v) => ({ [column]: { equals: v, mode: "insensitive" as const } })) };
+            cond = { OR: matchValues.map((v) => ({ [column]: { equals: escapeLike(v), mode: "insensitive" as const } })) };
           } else {
-            cond = { [column]: { contains: strValue, mode: "insensitive" } };
+            cond = { [column]: { contains: escapeLike(strValue), mode: "insensitive" } };
           }
           break;
         }
@@ -142,21 +168,29 @@ export function buildStreamQueryClause(group: ConditionGroup): Prisma.MediaItemW
           if (enumerable) {
             const parts = strValue.split("|").filter(Boolean);
             const matchValues = parts.length > 0 ? parts : [strValue];
-            notCond = { AND: matchValues.map((v) => ({ NOT: { [column]: { equals: v, mode: "insensitive" as const } } })) };
+            notCond = { AND: matchValues.map((v) => ({ NOT: { [column]: { equals: escapeLike(v), mode: "insensitive" as const } } })) };
           } else {
-            notCond = { NOT: { [column]: { contains: strValue, mode: "insensitive" } } };
+            notCond = { NOT: { [column]: { contains: escapeLike(strValue), mode: "insensitive" } } };
           }
           // Include NULL stream rows for the same Phase 2 parity reason.
           cond = { OR: [{ [column]: null }, notCond] };
+          negateShape = "selfsafe";
           break;
         }
-        case "isNull": cond = { [column]: null }; break;
-        case "isNotNull": cond = { [column]: { not: null } }; break;
+        // Phase 2 treats coalesced "" as empty too — match both forms.
+        case "isNull": cond = { OR: [{ [column]: null }, { [column]: "" }] }; negateShape = "selfsafe"; break;
+        case "isNotNull": cond = { AND: [{ [column]: { not: null } }, { NOT: { [column]: "" } }] }; negateShape = "selfsafe"; break;
       }
     }
 
     if (cond) {
-      conditions.push(negate ? { NOT: cond } : cond);
+      if (!negate || negateShape === "handled") {
+        conditions.push(cond);
+      } else if (negateShape === "selfsafe") {
+        conditions.push({ NOT: cond });
+      } else {
+        conditions.push({ OR: [{ [column]: null }, { NOT: cond }] });
+      }
     }
   }
 

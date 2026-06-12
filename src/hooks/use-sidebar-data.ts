@@ -101,21 +101,21 @@ export interface CurrentUser {
   authMethod: string;
 }
 
-export function useSidebarData() {
+export function useSidebarData(initialCollapsed = false) {
   const router = useRouter();
   const [availableTypes, setAvailableTypes] = useState<LibraryType[]>(["MOVIE", "SERIES", "MUSIC"]);
   const [allKnownTypes, setAllKnownTypes] = useState<LibraryType[]>(["MOVIE", "SERIES", "MUSIC"]);
   const [user, setUser] = useState<CurrentUser | null>(null);
-  const [collapsed, setCollapsed] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("sidebar-collapsed") === "true";
-  });
+  // Persisted in a cookie (not localStorage) so the server layout can read
+  // it and SSR the correct state — a client-only read here rendered the
+  // collapsed sidebar against expanded server HTML and tripped hydration.
+  const [collapsed, setCollapsed] = useState(initialCollapsed);
   const [activeSessionCount, setActiveSessionCount] = useState(0);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
 
   useEffect(() => {
-    localStorage.setItem("sidebar-collapsed", String(collapsed));
+    document.cookie = `sidebar-collapsed=${collapsed ? "1" : "0"}; path=/; max-age=31536000; samesite=lax`;
   }, [collapsed]);
 
   useEffect(() => {

@@ -24,7 +24,6 @@ import {
 } from "@/components/ui/tooltip";
 import {
   Inbox,
-  Loader2,
   Film,
   Tv,
   EyeOff,
@@ -35,6 +34,7 @@ import {
   ArrowUpDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Skeleton } from "@/components/ui/skeleton";
 import { SeerrUserRequestsDialog } from "@/components/seerr-user-requests-dialog";
 
 interface UserStats {
@@ -282,20 +282,20 @@ export function SeerrRequestStats() {
   }
 
   const headerSubtitle = data?.configured ? (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 font-mono text-[10.5px] text-faint">
       <span>
-        <span className="font-medium text-foreground">{data.totals.requestCount.toLocaleString()}</span> requests
+        <span className="text-foreground">{data.totals.requestCount.toLocaleString()}</span> requests
       </span>
       <span aria-hidden>·</span>
       <span>
-        <span className="font-medium text-foreground">{data.users.length}</span>{" "}
+        <span className="text-foreground">{data.users.length}</span>{" "}
         {data.users.length === 1 ? "user" : "users"}
       </span>
       {overallAvgPct != null && (
         <>
           <span aria-hidden>·</span>
           <span>
-            <span className={cn("font-medium", pctTone(overallAvgPct))}>{overallAvgPct}%</span> watched
+            <span className={cn(pctTone(overallAvgPct))}>{overallAvgPct}%</span> watched
           </span>
         </>
       )}
@@ -303,13 +303,17 @@ export function SeerrRequestStats() {
   ) : null;
 
   const header = (
-    <CardHeader className="pb-3 flex flex-row items-start justify-between gap-2 space-y-0">
-      <div className="min-w-0 space-y-1">
-        <CardTitle className="flex items-center gap-2 text-base">
+    <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[8px] border border-border bg-surface-2 text-muted-foreground">
           <Inbox className="h-4 w-4" />
-          Seerr Requests
-        </CardTitle>
-        {headerSubtitle}
+        </span>
+        <div className="min-w-0">
+          <CardTitle className="truncate text-sm font-semibold leading-tight">
+            Seerr Requests
+          </CardTitle>
+          {headerSubtitle}
+        </div>
       </div>
       {data?.configured && data.users.length > 5 && (
         <Button
@@ -336,10 +340,16 @@ export function SeerrRequestStats() {
 
   if (loading) {
     return (
-      <Card className="h-full flex flex-col">
+      <Card className="h-full flex flex-col gap-3">
         {header}
-        <CardContent className="flex-1 min-h-0 flex items-center justify-center">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <CardContent className="flex-1 min-h-0 space-y-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3 px-2 py-1.5">
+              <Skeleton className="h-7 w-7 rounded-full" />
+              <Skeleton className="h-3.5 flex-1" />
+              <Skeleton className="h-3.5 w-16" />
+            </div>
+          ))}
         </CardContent>
       </Card>
     );
@@ -347,7 +357,7 @@ export function SeerrRequestStats() {
 
   if (error) {
     return (
-      <Card className="h-full flex flex-col">
+      <Card className="h-full flex flex-col gap-3">
         {header}
         <CardContent className="flex-1 min-h-0">
           <p className="text-sm text-muted-foreground">Could not load Seerr stats: {error}</p>
@@ -358,7 +368,7 @@ export function SeerrRequestStats() {
 
   if (!data?.configured) {
     return (
-      <Card className="h-full flex flex-col">
+      <Card className="h-full flex flex-col gap-3">
         {header}
         <CardContent className="flex-1 min-h-0 flex flex-col items-center justify-center text-center gap-2 py-8">
           <div className="rounded-full bg-muted/40 p-3">
@@ -375,7 +385,7 @@ export function SeerrRequestStats() {
 
   if (data.users.length === 0) {
     return (
-      <Card className="h-full flex flex-col">
+      <Card className="h-full flex flex-col gap-3">
         {header}
         <CardContent className="flex-1 min-h-0 flex items-center justify-center py-8">
           <p className="text-sm text-muted-foreground">No Seerr requests found yet.</p>
@@ -395,7 +405,7 @@ export function SeerrRequestStats() {
   if (showAll) {
     return (
       <>
-      <Card className="h-full flex flex-col">
+      <Card className="h-full flex flex-col gap-3">
         {header}
         <CardContent className="flex-1 min-h-0 overflow-auto p-0">
           <TooltipProvider delayDuration={200}>
@@ -547,7 +557,7 @@ export function SeerrRequestStats() {
 
   return (
     <>
-    <Card className="h-full flex flex-col">
+    <Card className="h-full flex flex-col gap-3">
       {header}
       <CardContent className="flex-1 min-h-0 overflow-auto">
         <TooltipProvider delayDuration={200}>

@@ -167,6 +167,15 @@ export function DataTable<T>({
                     col.headerClassName,
                   )}
                   style={{ width: columnWidths[col.id] }}
+                  aria-sort={
+                    col.sortable !== false && col.sortValue
+                      ? sortId === col.id
+                        ? sortOrder === "asc"
+                          ? "ascending"
+                          : "descending"
+                        : "none"
+                      : undefined
+                  }
                   onClick={() => {
                     if (col.sortable !== false && col.sortValue) handleSort(col.id);
                   }}

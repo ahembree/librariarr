@@ -15,12 +15,14 @@ A **rule set** is a named collection of rules and actions. Each rule set targets
 
 ### Rule Groups
 
-Rules are organized into **groups** that use either **AND** or **OR** logic:
+Rules are organized into **groups**. Each condition (and each nested sub-group) connects to the one above it with **AND** or **OR**:
 
-- **AND**: All rules in the group must match
-- **OR**: At least one rule in the group must match
+- **AND**: must match together with everything above it
+- **OR**: matches if either side does
 
-Groups can be **nested** to create complex conditions.
+When a group uses a single connector throughout, this reads exactly as you'd expect — all conditions must match (AND) or any condition may match (OR). When AND and OR are **mixed**, conditions combine **top to bottom**, each connector applying to the combined result of everything above it — so `A OR B AND C` means `(A OR B) AND C`. The builder shows a hint whenever this applies, and the **Logic Preview** panel beside the builder always spells out the exact grouping with parentheses (hovering a condition highlights its line in the preview).
+
+Groups can be **nested** to make grouping explicit — a sub-group is evaluated on its own first, then joins its parent as a single result.
 
 ### Rules
 
@@ -30,7 +32,9 @@ Each individual rule consists of:
 2. **Operator** — how to compare (e.g., `equals`, `greaterThan`, `before`)
 3. **Value** — the target value
 
-Rules can be **negated** (NOT) to invert their logic.
+Negation is part of the operator choice: alongside each comparison the picker offers its inverse — `Not Equals`, `Not Contains`, `Not Greater Than`, `Not Between`, and so on.
+
+**Whole groups can be negated too.** Every group has a **NOT** toggle that inverts its entire result — for example `NOT (watched by Alice OR watched by Bob)` matches items watched by neither. The Logic Preview shows the negation in place, and items the group would have matched are excluded instead. (Stream query groups negate through their ANY/NO quantifier rather than a NOT toggle.)
 
 ## Available Fields
 
@@ -140,7 +144,7 @@ These fields require a configured [Seerr](/docs/integrations/seerr/) integration
 3. **Group rules**: Use AND/OR groups to combine conditions
 4. **Nest groups**: Create sub-groups for complex logic
 5. **Toggle rules**: Enable/disable individual rules or groups without deleting them
-6. **Negate rules**: Apply NOT to invert a rule's logic
+6. **Negate**: Pick a "Not …" operator to invert a condition, or flip a group's NOT toggle to invert the whole group
 7. **Reorder**: Drag rules to change their position within a group
 
 ### Example: Identify Old, Unwatched Movies

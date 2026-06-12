@@ -3,6 +3,16 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { SettingsSection } from "../components";
 import {
   Collapsible,
@@ -185,6 +195,8 @@ export function SystemTab({
   releaseNotes,
   loadingChangelog,
 }: SystemTabProps) {
+  const [confirmClearCache, setConfirmClearCache] = useState(false);
+
   return (
     <div className="space-y-6">
       <div className="space-y-1">
@@ -260,7 +272,7 @@ export function SystemTab({
               variant="outline"
               size="sm"
               disabled={clearingImageCache}
-              onClick={onClearImageCache}
+              onClick={() => setConfirmClearCache(true)}
             >
               {clearingImageCache ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -270,6 +282,31 @@ export function SystemTab({
               Clear Image Cache
             </Button>
           </div>
+
+          <AlertDialog open={confirmClearCache} onOpenChange={setConfirmClearCache}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Clear image cache?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  All cached artwork will be deleted and re-fetched from your media servers as
+                  pages are viewed. This may briefly slow down library browsing.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  variant="destructive"
+                  onClick={() => {
+                    setConfirmClearCache(false);
+                    onClearImageCache();
+                  }}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Clear Cache
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
       </SettingsSection>
 
       {/* Release Notes */}

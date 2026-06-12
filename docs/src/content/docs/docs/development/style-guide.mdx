@@ -128,9 +128,13 @@ Sora is a geometric sans-serif with clean letterforms and wide weight range. App
 **Usage:** All body text, navigation items, labels, inputs, buttons.
 **Weights:** 300, 400, 500, 600, 700
 **CSS variable:** `--font-sans`
-**Tailwind class:** `font-sans` (default)
+**Tailwind class:** `font-sans` (default — applied on `<body>` in globals.css)
 
 A geometric humanist sans-serif — warm, readable at small sizes, and well-suited for UI text.
+
+<Aside type="caution">
+`font-sans` must stay applied on `body` in `globals.css`. The `next/font` CSS variables are defined on `<body>`, so Tailwind preflight's `html` font rule cannot see them — without the body rule the UI silently falls back to the system font stack.
+</Aside>
 
 ### JetBrains Mono (Monospace)
 
@@ -187,7 +191,7 @@ A subtle SVG noise texture is overlaid on the entire page at 2.5% opacity using 
 
 ### Atmospheric Gradient
 
-The main content area has a radial gradient at the top providing subtle ambient light:
+The main content area has a radial gradient at the top providing subtle ambient light (the `.canvas-atmosphere` utility):
 
 ```
 radial-gradient(ellipse at 50% 0%, oklch(0.22 0.02 270) 0%, transparent 60%)
@@ -264,6 +268,25 @@ Apply `animate-fade-in-up` for single elements, or `stagger-children` on a paren
 - **Buttons:** `active:scale-[0.98]` press feedback
 - **Media cards:** `hover:scale-[1.03]` with image `group-hover:scale-105`
 - **Nav items:** `hover:translate-x-0.5` subtle rightward shift
+
+---
+
+## Mobile Web App
+
+Librariarr is installable as a PWA (`manifest.ts`, `display: standalone`, theme color `#0c0d10`) and the layout adapts below the `md` (768px) breakpoint:
+
+### Navigation
+
+Below `md`, the shell renders a glass header whose hamburger button opens the full navigation drawer (a `Sheet` containing the sidebar). There is no bottom tab bar — all destinations live in the drawer.
+
+### Safe Areas
+
+The viewport uses `viewport-fit=cover`; utilities pad content clear of notches and the home indicator (`env()` resolves to 0 in regular browser tabs):
+
+| Class | Padding |
+|-|-|
+| `.pt-safe` | `env(safe-area-inset-top)` — mobile header, drawer |
+| `.pb-safe` | `env(safe-area-inset-bottom)` — main scroll container, drawer |
 
 ---
 
@@ -373,11 +396,7 @@ All lifecycle pages (Rules, Matches, Pending Actions, Exceptions) include a `Tab
 
 ### Login / Onboarding
 
-Full-screen cinematic gradient background with glass-morphism card:
-
-```
-bg-[radial-gradient(ellipse_at_center,oklch(0.22_0.02_270),oklch(0.14_0.006_270))]
-```
+Full-screen cinematic gradient background (the `.auth-backdrop` utility — a violet bloom at the horizon over a navy center falloff) with glass-morphism card.
 
 ---
 

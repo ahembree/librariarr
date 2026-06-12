@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
+import { TableRowsSkeleton } from "@/components/skeletons";
 import { ColorChip } from "@/components/color-chip";
 import { ServerChips } from "@/components/server-chips";
 import { getDuplicateServerNames } from "@/lib/server-styles";
@@ -717,7 +718,7 @@ export default function HistoryPage() {
                   if (groupCols.length === 0) return null;
                   return (
                     <div key={groupKey} className="mb-2">
-                      <div className="px-2 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                      <div className="px-2 py-1 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
                         {groupLabel}
                       </div>
                       {groupCols.map((col) => (
@@ -741,9 +742,7 @@ export default function HistoryPage() {
 
           {/* Table */}
           {loading ? (
-            <div className="flex items-center justify-center py-20">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            </div>
+            <TableRowsSkeleton rows={10} columns={5} />
           ) : items.length === 0 && totalCount === 0 ? (
             <EmptyState
               icon={History}
@@ -809,7 +808,7 @@ export default function HistoryPage() {
               {/* Pagination */}
               {totalCount > 0 && (
                 <div className="flex items-center justify-between mt-6 text-sm text-muted-foreground">
-                  <span>
+                  <span className="font-mono text-xs text-muted-foreground tabular-nums">
                     {rangeStart.toLocaleString()}-{rangeEnd.toLocaleString()} of {totalCount.toLocaleString()}
                   </span>
                   <div className="flex items-center gap-1">

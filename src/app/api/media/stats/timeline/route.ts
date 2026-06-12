@@ -8,6 +8,17 @@ const ALLOWED_DATE_COLUMNS = new Set(["addedAt", "lastPlayedAt", "originallyAvai
 
 const VALID_BINS = new Set(["day", "week", "month", "quarter", "year"]);
 
+// What each bucket aggregates: item count, or total file size in bytes.
+const VALID_MEASURES = new Set(["count", "size"]);
+
+function aggregateExpr(measure: string): string {
+  // float8 keeps byte sums JSON-serializable (BigInt sums would need
+  // string conversion); precision loss is irrelevant at display scale.
+  return measure === "size"
+    ? `COALESCE(SUM(mi."fileSize"), 0)::float8`
+    : `COUNT(*)::int`;
+}
+
 function escapeSqlLiteral(value: string): string {
   return value.replace(/'/g, "''");
 }
@@ -75,6 +86,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const dateField = searchParams.get("dateField");
   const bin = searchParams.get("bin") ?? "month";
+  const measure = searchParams.get("measure") ?? "count";
   const breakdownDim = searchParams.get("breakdown");
   const serverId = searchParams.get("serverId");
   const typeFilter = searchParams.get("type");
@@ -86,6 +98,9 @@ export async function GET(request: NextRequest) {
   }
   if (!VALID_BINS.has(bin)) {
     return NextResponse.json({ error: "Invalid bin" }, { status: 400 });
+  }
+  if (!VALID_MEASURES.has(measure)) {
+    return NextResponse.json({ error: "Invalid measure" }, { status: 400 });
   }
 
   const [servers, settings] = await Promise.all([
@@ -120,10 +135,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Cannot use a date dimension as breakdown" }, { status: 400 });
   }
 
-  const cacheKey = `timeline:${dateField}:${bin}:${breakdownDim ?? ""}:${typeFilter ?? ""}:${topN ?? ""}:${serverIds.sort().join(",")}:${dedupEnabled ? "dedup" : "raw"}`;
+  const cacheKey = `timeline:${dateField}:${bin}:${measure}:${breakdownDim ?? ""}:${typeFilter ?? ""}:${topN ?? ""}:${serverIds.sort().join(",")}:${dedupEnabled ? "dedup" : "raw"}`;
 
   const result = await appCache.getOrSet(cacheKey, async () => {
-    return queryTimeline(dateField, bin, breakdownMeta, serverIds, typeFilter, topN, dedupEnabled);
+    return queryTimeline(dateField, bin, measure, breakdownMeta, serverIds, typeFilter, topN, dedupEnabled);
   }, 60_000);
 
   return NextResponse.json(result);
@@ -250,6 +265,7 @@ function fillGaps(points: TimelinePoint[], bin: string, series: string[]): Timel
 async function queryTimeline(
   dateField: string,
   bin: string,
+  measure: string,
   breakdownMeta: ReturnType<typeof getDimensionMeta> | null,
   serverIds: string[],
   typeFilter: string | null,
@@ -258,14 +274,15 @@ async function queryTimeline(
 ): Promise<{ points: TimelinePoint[]; series: string[] }> {
   const col = `mi."${dateField}"`;
   const bucketExpr = dateBucketExpr(col, bin);
+  const aggExpr = aggregateExpr(measure);
 
   const typeWhere = typeFilter ? ` AND mi.type = '${escapeSqlLiteral(typeFilter)}'` : "";
   const dedupWhere = dedupEnabled ? ` AND mi."dedupCanonical" = true` : "";
 
   if (!breakdownMeta) {
-    // Simple timeline: just date buckets with counts
+    // Simple timeline: just date buckets with aggregated totals
     const rows = await prisma.$queryRawUnsafe<{ date: string; total: number }[]>(
-      `SELECT ${bucketExpr} AS "date", COUNT(*)::int AS "total"
+      `SELECT ${bucketExpr} AS "date", ${aggExpr} AS "total"
        FROM "MediaItem" mi
        JOIN "Library" l ON mi."libraryId" = l.id
        WHERE l."mediaServerId" = ANY($1)
@@ -284,7 +301,7 @@ async function queryTimeline(
   if (!bExpr) {
     // Unsupported breakdown category (json_unnest, stream_group) — fall back to simple
     const rows = await prisma.$queryRawUnsafe<{ date: string; total: number }[]>(
-      `SELECT ${bucketExpr} AS "date", COUNT(*)::int AS "total"
+      `SELECT ${bucketExpr} AS "date", ${aggExpr} AS "total"
        FROM "MediaItem" mi
        JOIN "Library" l ON mi."libraryId" = l.id
        WHERE l."mediaServerId" = ANY($1)
@@ -299,7 +316,7 @@ async function queryTimeline(
 
   // Query with breakdown
   const rows = await prisma.$queryRawUnsafe<{ date: string; bk: string; cnt: number }[]>(
-    `SELECT ${bucketExpr} AS "date", ${bExpr} AS "bk", COUNT(*)::int AS "cnt"
+    `SELECT ${bucketExpr} AS "date", ${bExpr} AS "bk", ${aggExpr} AS "cnt"
      FROM "MediaItem" mi
      JOIN "Library" l ON mi."libraryId" = l.id
      WHERE l."mediaServerId" = ANY($1)

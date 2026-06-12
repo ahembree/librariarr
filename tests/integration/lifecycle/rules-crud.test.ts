@@ -8,6 +8,8 @@ import {
   createTestUser,
   createTestServer,
   createTestRuleSet,
+  createTestSonarrInstance,
+  createTestRadarrInstance,
 } from "../../setup/test-helpers";
 
 // Critical: redirect prisma to test database
@@ -190,6 +192,7 @@ describe("Lifecycle Rules CRUD", () => {
     it("creates a rule set with all optional fields", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
+      const sonarr = await createTestSonarrInstance(user.id);
       setMockSession({ isLoggedIn: true, userId: user.id });
 
       const response = await callRoute(POST, {
@@ -205,7 +208,7 @@ describe("Lifecycle Rules CRUD", () => {
           actionEnabled: true,
           actionType: "DELETE_SONARR",
           actionDelayDays: 14,
-          arrInstanceId: "some-arr-id",
+          arrInstanceId: sonarr.id,
           addImportExclusion: true,
           collectionEnabled: true,
           collectionName: "Test Collection",
@@ -239,7 +242,7 @@ describe("Lifecycle Rules CRUD", () => {
       expect(body.ruleSet.actionEnabled).toBe(true);
       expect(body.ruleSet.actionType).toBe("DELETE_SONARR");
       expect(body.ruleSet.actionDelayDays).toBe(14);
-      expect(body.ruleSet.arrInstanceId).toBe("some-arr-id");
+      expect(body.ruleSet.arrInstanceId).toBe(sonarr.id);
       expect(body.ruleSet.addImportExclusion).toBe(true);
       expect(body.ruleSet.collectionEnabled).toBe(true);
       expect(body.ruleSet.collectionName).toBe("Test Collection");
@@ -253,6 +256,7 @@ describe("Lifecycle Rules CRUD", () => {
       const server = await createTestServer(user.id);
       setMockSession({ isLoggedIn: true, userId: user.id });
 
+      const radarr = await createTestRadarrInstance(user.id);
       const response = await callRoute(POST, {
         url: "/api/lifecycle/rules",
         method: "POST",
@@ -263,7 +267,7 @@ describe("Lifecycle Rules CRUD", () => {
           serverIds: [server.id],
           actionEnabled: true,
           actionType: "CHANGE_QUALITY_PROFILE_RADARR",
-          arrInstanceId: "some-arr-id",
+          arrInstanceId: radarr.id,
           targetQualityProfileId: 7,
         },
       });
@@ -760,5 +764,78 @@ describe("Lifecycle Rules CRUD", () => {
       const body = await expectJson<{ success: boolean }>(response, 200);
       expect(body.success).toBe(true);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Audit regressions — action configuration must target the right Arr family
+// ---------------------------------------------------------------------------
+
+describe("action configuration validation", () => {
+  const base = (user: { id: string }, serverId: string) => ({
+    name: "Config Audit",
+    type: "MOVIE" as const,
+    rules: [{ id: "g1", condition: "AND", rules: [dummyRule], groups: [] }],
+    serverIds: [serverId],
+  });
+
+  it("rejects a MOVIE rule set with a Sonarr action type", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const response = await callRoute(POST, {
+      method: "POST",
+      url: "/api/lifecycle/rules",
+      body: { ...base(user, server.id), actionEnabled: true, actionType: "DELETE_SONARR" },
+    });
+    const json = await expectJson<{ error: string }>(response, 400);
+    expect(json.error).toMatch(/not valid for movie/i);
+  });
+
+  it("rejects an arrInstanceId that does not exist for the user/family", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const response = await callRoute(POST, {
+      method: "POST",
+      url: "/api/lifecycle/rules",
+      body: { ...base(user, server.id), actionType: "DELETE_RADARR", arrInstanceId: "nonexistent-id" },
+    });
+    const json = await expectJson<{ error: string }>(response, 400);
+    expect(json.error).toMatch(/instance not found/i);
+  });
+
+  it("rejects a Sonarr instance id attached to a MOVIE rule set", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const sonarr = await createTestSonarrInstance(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const response = await callRoute(POST, {
+      method: "POST",
+      url: "/api/lifecycle/rules",
+      body: { ...base(user, server.id), actionType: "DELETE_RADARR", arrInstanceId: sonarr.id },
+    });
+    await expectJson<{ error: string }>(response, 400);
+  });
+
+  it("accepts a matching Radarr instance and rejects a mismatched merged UPDATE", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const radarr = await createTestRadarrInstance(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const createRes = await callRoute(POST, {
+      method: "POST",
+      url: "/api/lifecycle/rules",
+      body: { ...base(user, server.id), actionType: "DELETE_RADARR", arrInstanceId: radarr.id },
+    });
+    const created = await expectJson<{ ruleSet: { id: string } }>(createRes, 201);
+
+    // merged-state check: switching only actionType to the wrong family fails
+    const updateRes = await callRouteWithParams(PUT, { id: created.ruleSet.id }, {
+      method: "PUT",
+      url: `/api/lifecycle/rules/${created.ruleSet.id}`,
+      body: { actionType: "DELETE_SONARR" },
+    });
+    await expectJson<{ error: string }>(updateRes, 400);
   });
 });

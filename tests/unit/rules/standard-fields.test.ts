@@ -104,19 +104,24 @@ describe("Text fields (title as representative)", () => {
     expect(result.get("2")!.length).toBeGreaterThan(0);
   });
 
-  it("null title treated as empty string for text operators", () => {
+  it("empty-string value matches equals empty; NULL does not", () => {
+    // Empty string is a real value: equals "" matches it. A NULL follows
+    // nullValueResult (equals is positive-shaped → no match), mirroring
+    // Phase 1's `{title: {equals: ""}}` which excludes NULL.
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "title", operator: "equals", value: "" })])];
     const result = matched(items, rules);
-    expect(result.get("3")!.length).toBeGreaterThan(0);
-    expect(result.get("4")!.length).toBeGreaterThan(0);
+    expect(result.get("4")!.length).toBeGreaterThan(0); // "" matches
+    expect(result.get("3") ?? []).toHaveLength(0); // null does not
   });
 
-  it("empty string title matches equals empty", () => {
+  it("notEquals empty excludes the empty-string value, matches non-empty and NULL", () => {
+    // notEquals is withNullSafety-wrapped in Phase 1 (OR field IS NULL), so
+    // a NULL value matches; the actual empty string does not.
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "title", operator: "notEquals", value: "" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
-    expect(result.get("3")).toHaveLength(0);
-    expect(result.get("4")).toHaveLength(0);
+    expect(result.get("1")!.length).toBeGreaterThan(0); // "The Matrix"
+    expect(result.get("4")).toHaveLength(0); // "" excluded
+    expect(result.get("3")!.length).toBeGreaterThan(0); // null matches
   });
 });
 
@@ -497,10 +502,12 @@ describe("Numeric fields (playCount as representative)", () => {
     expect(result.get("2")!.length).toBeGreaterThan(0);
   });
 
-  it("null defaults to 0", () => {
+  it("null playCount does not match equals 0 (Phase 1 parity)", () => {
+    // playCount is non-nullable @default(0) in the DB, so a real unwatched
+    // item has 0 (matches). A synthetic NULL no longer coerces to 0.
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "playCount", operator: "equals", value: 0 })])];
-    const result = matched(items, rules);
-    expect(result.get("3")!.length).toBeGreaterThan(0);
+    expect(matched(items, rules).get("3") ?? []).toHaveLength(0);
+    expect(matched([{ id: "z", playCount: 0 }], rules).get("z")!.length).toBeGreaterThan(0);
   });
 });
 
@@ -756,24 +763,30 @@ describe("Date fields (lastPlayedAt as representative)", () => {
     expect(result.get("old")!.length).toBeGreaterThan(0);
   });
 
-  it("null date returns false for all operators", () => {
-    const operators = ["before", "after", "equals", "notEquals", "inLastDays", "notInLastDays"] as const;
-    for (const op of operators) {
+  // Positive-shaped operators never match a NULL/invalid date (parity with
+  // Phase 1's applyNegateNullable, which only includes NULL on negate).
+  // `notEquals` is the exception: its clause is withNullSafety-wrapped, so
+  // NULL rows DO match — Phase 2 mirrors that (see nullValueResult).
+  it("null date returns false for positive operators, true for notEquals", () => {
+    const positive = ["before", "after", "equals", "inLastDays", "notInLastDays"] as const;
+    for (const op of positive) {
       const val = op === "inLastDays" || op === "notInLastDays" ? 30 : "2024-06-15";
       const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: op, value: val })])];
-      const result = matched(items, rules);
-      expect(result.get("3"), `null date should return false for ${op}`).toHaveLength(0);
+      expect(matched(items, rules).get("3") ?? [], `null date should not match ${op}`).toHaveLength(0);
     }
+    const neRules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: "notEquals", value: "2024-06-15" })])];
+    expect(matched(items, neRules).get("3")!.length).toBeGreaterThan(0);
   });
 
-  it("invalid date returns false for all operators", () => {
-    const operators = ["before", "after", "equals", "notEquals", "inLastDays", "notInLastDays"] as const;
-    for (const op of operators) {
+  it("invalid date returns false for positive operators, true for notEquals", () => {
+    const positive = ["before", "after", "equals", "inLastDays", "notInLastDays"] as const;
+    for (const op of positive) {
       const val = op === "inLastDays" || op === "notInLastDays" ? 30 : "2024-06-15";
       const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: op, value: val })])];
-      const result = matched(items, rules);
-      expect(result.get("4"), `invalid date should return false for ${op}`).toHaveLength(0);
+      expect(matched(items, rules).get("4") ?? [], `invalid date should not match ${op}`).toHaveLength(0);
     }
+    const neRules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: "notEquals", value: "2024-06-15" })])];
+    expect(matched(items, neRules).get("4")!.length).toBeGreaterThan(0);
   });
 });
 
@@ -1047,10 +1060,11 @@ describe("fileSize field (MB to bytes conversion)", () => {
     expect(result.get("2")!.length).toBeGreaterThan(0);
   });
 
-  it("null fileSize defaults to 0", () => {
+  it("null fileSize does not match equals 0 (Phase 1 parity)", () => {
+    // Phase 1 `fileSize equals 0` → `{fileSize: 0n}` excludes SQL NULL rows;
+    // Phase 2 must agree (was: NULL coerced to 0n and spuriously matched).
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "fileSize", operator: "equals", value: 0 })])];
-    const result = matched(items, rules);
-    expect(result.get("3")!.length).toBeGreaterThan(0);
+    expect(matched(items, rules).get("3") ?? []).toHaveLength(0);
   });
 });
 

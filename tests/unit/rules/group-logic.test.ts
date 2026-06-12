@@ -392,23 +392,26 @@ describe("Edge cases", () => {
     expect(result.get("1")!.length).toBe(1);
   });
 
-  it("item with missing property defaults to empty string for text", () => {
-    const items = [{ id: "1" }]; // no title property
+  it("NULL text value does not match equals (Phase 1 parity)", () => {
+    // A genuinely NULL column does not match `equals ""` in Phase 1
+    // (`{field: {equals: ""}}` excludes NULL), so Phase 2 must agree —
+    // a real empty-string value still matches (covered below).
     const rules: LifecycleRuleGroup[] = [makeGroup([
-      makeRule({ field: "title", operator: "equals", value: "" }),
+      makeRule({ field: "studio", operator: "equals", value: "" }),
     ])];
-    const result = matched(items, rules);
-    // Missing title → empty string → equals "" → true
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(matched([{ id: "1" }], rules).get("1") ?? []).toHaveLength(0);
+    // Actual empty-string value matches equals ""
+    expect(matched([{ id: "2", studio: "" }], rules).get("2")!.length).toBeGreaterThan(0);
   });
 
-  it("item with missing numeric property defaults to 0", () => {
-    const items = [{ id: "1" }]; // no playCount
+  it("present numeric value matches; NULL does not (Phase 1 parity)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([
       makeRule({ field: "playCount", operator: "equals", value: "0" }),
     ])];
-    const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    // Real unwatched item: playCount is non-nullable @default(0), always present
+    expect(matched([{ id: "1", playCount: 0 }], rules).get("1")!.length).toBeGreaterThan(0);
+    // Synthetic NULL no longer coerces to 0
+    expect(matched([{ id: "2" }], rules).get("2") ?? []).toHaveLength(0);
   });
 });
 

@@ -64,3 +64,9 @@ header {
 :focus-visible {
   outline-color: oklch(0.55 0.26 264);
 }
+
+/* Librariarr is dark-only — the docs are pinned to dark (see astro.config
+   head script), so hide the light/dark selector. */
+starlight-theme-select {
+  display: none;
+}

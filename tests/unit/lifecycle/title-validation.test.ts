@@ -165,3 +165,37 @@ describe("validateArrItem", () => {
     ).toThrow(/title mismatch/);
   });
 });
+
+describe("validateArrItem — year guard (remake collisions)", () => {
+  it("rejects same-title different-year records (Dune 1984 vs 2021)", () => {
+    expect(() =>
+      validateArrItem("Dune", "Dune", "Radarr movie", "438631", 2021, 1984)
+    ).toThrow(/year mismatch/i);
+  });
+
+  it("rejects even when titles match exactly but years are far apart", () => {
+    expect(() =>
+      validateArrItem("The Office", "The Office", "Sonarr series", "73244", 2005, 2001)
+    ).toThrow(/year mismatch/i);
+  });
+
+  it("allows a one-year drift (release-date rounding across regions)", () => {
+    expect(() =>
+      validateArrItem("Movie", "Movie", "Radarr movie", "1", 2020, 2021)
+    ).not.toThrow();
+  });
+
+  it("does not gate when either year is missing or zero", () => {
+    expect(() => validateArrItem("Movie", "Movie", "Radarr movie", "1", null, 1984)).not.toThrow();
+    expect(() => validateArrItem("Movie", "Movie", "Radarr movie", "1", 2021, null)).not.toThrow();
+    expect(() => validateArrItem("Movie", "Movie", "Radarr movie", "1", 2021, 0)).not.toThrow();
+  });
+
+  it("year guard overrides a would-be substring title pass", () => {
+    // "Alien" vs "Aliens" would pass the substring escape hatch, but a 7-year
+    // gap proves they're different works.
+    expect(() =>
+      validateArrItem("Alien", "Aliens", "Radarr movie", "1", 1979, 1986)
+    ).toThrow(/year mismatch/i);
+  });
+})

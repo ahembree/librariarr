@@ -120,7 +120,7 @@ pnpm exec vitest run tests/path/to/file.test.ts  # Run a single test file
 ### Component Patterns
 
 - `src/components/ui/` — shadcn/ui primitives (do not edit directly)
-- Custom components: `authenticated-shell.tsx` (app shell with sidebar + global maintenance banner), `sidebar.tsx`, `media-table.tsx`, `media-filters.tsx`, `media-detail-panel.tsx`, `rule-builder.tsx`, `quality-chart.tsx`, `theme-provider.tsx`
+- Custom components: `authenticated-shell.tsx` (app shell with sidebar, mobile glass header + drawer, global maintenance banner), `sidebar.tsx`, `media-table.tsx`, `media-filters.tsx`, `media-detail-panel.tsx`, `rule-builder.tsx`, `quality-chart.tsx`, `theme-provider.tsx`, `dashboard/` (fixed dashboard zones: `status-strip.tsx`, `library-tiles.tsx`, `lifecycle-pipeline.tsx`; the customizable Insights grid below them still uses `dashboard-card-grid.tsx` + `card-registry.ts`)
 - Hover popovers (`MediaHoverPopover`) must always pass the same universal set of fields regardless of page or view type — documented in `docs/src/content/docs/docs/development/style-guide.mdx` under "Hover Popovers". Table and card views within the same page must always pass identical fields.
 - `src/hooks/` — Custom React hooks:
   - `useVirtualGridAlphabet` / `useTableAlphabet` — alphabet navigation for virtualized grid vs table views (not interchangeable); provide `scrollToLetter`, `activeLetter`, and `availableLetters`
@@ -222,10 +222,11 @@ When users connect multiple servers, dedup prevents duplicate items from appeari
 
 - Tailwind CSS v4 with **OKLCH color model** (not HSL). CSS variables defined in `src/app/globals.css`
 - Dark mode is hardcoded (`className="dark"` on `<html>` tag in layout.tsx)
-- **Fonts:** Sora (display/headings via `font-display`), Plus Jakarta Sans (body via `font-sans`), JetBrains Mono (code via `font-mono`)
+- **Fonts:** Sora (display/headings via `font-display`), Plus Jakarta Sans (body via `font-sans` — applied on `body` in globals.css; next/font vars live on `<body>` so preflight's `html` rule can't see them), JetBrains Mono (code via `font-mono`)
 - All page `<h1>` elements must use `text-2xl sm:text-3xl font-bold font-display tracking-tight`
-- Theme accent colors override CSS vars: `--primary`, `--primary-foreground`, `--ring`, `--sidebar-primary`
+- Theme accent colors override CSS vars: `--primary`, `--primary-foreground`, `--ring`, `--sidebar-primary`. Preset names are persisted in `AppSettings.accentColor` — never rename them
 - shadcn/ui uses "new-york" style variant
+- **Mobile / PWA:** installable (`src/app/manifest.ts`, theme color `#0c0d10`, `viewport-fit=cover`). Below `md` (768px) the shell swaps the sidebar for a glass header whose hamburger opens the navigation drawer. Safe-area utilities: `.pt-safe`, `.pb-safe` (notch/home-indicator padding in standalone mode)
 - **Full style guide:** `docs/src/content/docs/docs/development/style-guide.mdx` — covers color palette, typography, effects, component patterns, and don'ts. Consult when making UI changes.
 
 ### Data Patterns
@@ -239,7 +240,7 @@ When users connect multiple servers, dedup prevents duplicate items from appeari
 
 ### Rule Engine
 
-- Rules are recursive `RuleGroup` structures with AND/OR operators, stored as JSON in `RuleSet`
+- Rules are recursive `RuleGroup` structures with AND/OR operators, stored as JSON in `RuleSet`. Rules and groups support `negate`; group-level negation is normalized away before evaluation by `pushDownGroupNegation` (`src/lib/conditions/negation.ts`, De Morgan push-down into per-rule negation) so both evaluation phases share NULL semantics
 - Two-phase evaluation: Phase 1 converts rules to Prisma WHERE clauses, Phase 2 post-filters in memory for Arr/Seerr metadata, stream aggregation, and wildcard pattern matching
 - File size rules: user inputs in MB, engine converts to bytes for DB queries
 

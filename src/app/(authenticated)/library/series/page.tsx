@@ -6,7 +6,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { getChipBadgeStyle } from "@/lib/theme/chip-colors";
 import { useRouter } from "next/navigation";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard } from "@/components/media-card";
+import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { ColorChip } from "@/components/color-chip";
 import { useServers } from "@/hooks/use-servers";
@@ -27,6 +27,7 @@ import { formatFileSize } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { SyncLibraryButton } from "@/components/sync-library-button";
 import { MediaGridSkeleton } from "@/components/skeletons";
+import { LibraryTabs, SERIES_TABS } from "@/components/library-tabs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useFilterPersistence } from "@/hooks/use-filter-persistence";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -179,7 +180,6 @@ function applyFiltersToGroupedSeries(
 }
 
 const GAP = 16;
-const CARD_CONTENT_HEIGHT = 138; // Fixed content area below poster (matches h-34.5 in MediaCard)
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
 const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar (4px) + py-1 padding (8px)
 
@@ -355,16 +355,14 @@ export default function SeriesPage() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
+      <div className="mb-6 flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Series</h1>
             {!loading && filteredSeries.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{filteredSeries.length.toLocaleString()} series</span>
-                <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{filteredSeries.reduce((sum, s) => sum + s.seasonCount, 0).toLocaleString()} seasons</span>
-                <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">{filteredSeries.reduce((sum, s) => sum + s.episodeCount, 0).toLocaleString()} episodes</span>
-              </div>
+              <span className="font-mono text-xs text-faint">
+                {filteredSeries.length.toLocaleString()} series · {filteredSeries.reduce((sum, s) => sum + s.seasonCount, 0).toLocaleString()} seasons · {filteredSeries.reduce((sum, s) => sum + s.episodeCount, 0).toLocaleString()} episodes
+              </span>
             )}
           </div>
           <p className="text-muted-foreground mt-1">
@@ -374,29 +372,7 @@ export default function SeriesPage() {
         <SyncLibraryButton libraryType="SERIES" onSyncComplete={fetchSeries} />
       </div>
 
-      <nav className="mb-6 flex items-center gap-1 border-b overflow-x-auto">
-        <Link
-          href="/library/series"
-          className="flex items-center gap-2 border-b-2 border-primary px-4 py-2 text-sm font-medium text-foreground"
-        >
-          <Tv className="h-4 w-4" />
-          Series
-        </Link>
-        <Link
-          href="/library/series/seasons"
-          className="flex items-center gap-2 border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 transition-colors"
-        >
-          <Layers className="h-4 w-4" />
-          All Seasons
-        </Link>
-        <Link
-          href="/library/series/episodes"
-          className="flex items-center gap-2 border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 transition-colors"
-        >
-          <List className="h-4 w-4" />
-          All Episodes
-        </Link>
-      </nav>
+      <LibraryTabs tabs={SERIES_TABS} active="/library/series" />
 
       <MediaFilters
         onFilterChange={(f) => { setFilters(f); persistFilters(f); }}

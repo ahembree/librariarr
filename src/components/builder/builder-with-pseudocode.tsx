@@ -9,6 +9,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { PseudocodePanel } from "./pseudocode-panel";
+import { BuilderHoverSetterContext, type BuilderHover } from "./hover-context";
 import type { BaseRule, BaseGroup, BuilderConfig } from "./types";
 
 interface BuilderWithPseudocodeProps<
@@ -25,15 +26,24 @@ export function BuilderWithPseudocode<
   G extends BaseGroup<R>,
 >({ groups, config, children }: BuilderWithPseudocodeProps<R, G>) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  // Hovered builder row / group handle → highlighted pseudocode line or range
+  const [hovered, setHovered] = useState<BuilderHover | null>(null);
+  const hoveredRuleId = hovered?.kind === "rule" ? hovered.id : null;
+  const hoveredGroupId = hovered?.kind === "group" ? hovered.id : null;
 
   return (
-    <>
+    <BuilderHoverSetterContext.Provider value={setHovered}>
       {/* Desktop: side-by-side 2/3 + 1/3 grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">{children}</div>
         <div className="hidden lg:block">
           <div className="sticky top-6 max-h-[calc(100vh-8rem)] overflow-y-auto">
-            <PseudocodePanel groups={groups} config={config} />
+            <PseudocodePanel
+              groups={groups}
+              config={config}
+              hoveredRuleId={hoveredRuleId}
+              hoveredGroupId={hoveredGroupId}
+            />
           </div>
         </div>
       </div>
@@ -48,10 +58,15 @@ export function BuilderWithPseudocode<
             </Button>
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-3">
-            <PseudocodePanel groups={groups} config={config} />
+            <PseudocodePanel
+              groups={groups}
+              config={config}
+              hoveredRuleId={hoveredRuleId}
+              hoveredGroupId={hoveredGroupId}
+            />
           </CollapsibleContent>
         </Collapsible>
       </div>
-    </>
+    </BuilderHoverSetterContext.Provider>
   );
 }

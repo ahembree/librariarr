@@ -18,7 +18,13 @@ interface UnreachableServer {
   type: string;
 }
 
-export function AuthenticatedShell({ children }: { children: React.ReactNode }) {
+export function AuthenticatedShell({
+  children,
+  initialSidebarCollapsed = false,
+}: {
+  children: React.ReactNode;
+  initialSidebarCollapsed?: boolean;
+}) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const isMobile = useIsMobile();
   const [maintenanceActive, setMaintenanceActive] = useState(false);
@@ -57,28 +63,35 @@ export function AuthenticatedShell({ children }: { children: React.ReactNode }) 
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar mobileOpen={mobileOpen} onMobileOpenChange={setMobileOpen} />
+      <Sidebar
+        mobileOpen={mobileOpen}
+        onMobileOpenChange={setMobileOpen}
+        initialCollapsed={initialSidebarCollapsed}
+      />
       <div className="flex flex-1 flex-col overflow-hidden border-l border-white/3">
         {isMobile ? (
-          <header className="flex h-14 shrink-0 items-center border-b border-white/5 glass px-4">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setMobileOpen(true)}
-            >
-              <Menu className="h-5 w-5" />
-            </Button>
-            <button
-              className="ml-3 flex flex-1 items-center gap-2"
-              onClick={() => {
-                findScrollContainer()?.scrollTo({ top: 0, behavior: "smooth" });
-              }}
-            >
-              <Logo size={32} />
-              <span className="text-lg font-semibold font-display tracking-tight">
-                Librari<span className="text-brand-bright">arr</span>
-              </span>
-            </button>
+          <header className="pt-safe shrink-0 border-b border-white/5 glass">
+            <div className="flex h-14 items-center px-4">
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Open navigation menu"
+                onClick={() => setMobileOpen(true)}
+              >
+                <Menu className="h-5 w-5" />
+              </Button>
+              <button
+                className="ml-3 flex flex-1 items-center gap-2"
+                onClick={() => {
+                  findScrollContainer()?.scrollTo({ top: 0, behavior: "smooth" });
+                }}
+              >
+                <Logo size={32} />
+                <span className="text-lg font-semibold font-display tracking-tight">
+                  Librari<span className="text-brand-bright">arr</span>
+                </span>
+              </button>
+            </div>
           </header>
         ) : (
           <Topbar />
@@ -105,7 +118,7 @@ export function AuthenticatedShell({ children }: { children: React.ReactNode }) 
             <span>Maintenance mode is active</span>
           </Link>
         )}
-        <main className="flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain bg-background bg-[radial-gradient(ellipse_at_50%_0%,oklch(0.22_0.02_270)_0%,transparent_60%)]">{children}</main>
+        <main className="canvas-atmosphere pb-safe flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain bg-background">{children}</main>
         <BackToTop />
       </div>
     </div>

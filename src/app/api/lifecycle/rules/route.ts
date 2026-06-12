@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { validateRequest, ruleSetCreateSchema } from "@/lib/validation";
 import { findFieldsInvalidForType } from "@/lib/conditions";
+import { validateActionConfig } from "@/lib/lifecycle/action-config";
 
 export async function GET() {
   const session = await getSession();
@@ -78,6 +79,18 @@ export async function POST(request: NextRequest) {
       { error: "Change Quality Profile actions require a target quality profile" },
       { status: 400 }
     );
+  }
+
+  // Action config must target the right Arr family for this library type,
+  // and any referenced instance must exist and belong to the user.
+  const actionConfigError = await validateActionConfig({
+    userId: session.userId!,
+    libraryType: type,
+    actionType,
+    arrInstanceId,
+  });
+  if (actionConfigError) {
+    return NextResponse.json({ error: actionConfigError }, { status: 400 });
   }
 
   const ruleSet = await prisma.ruleSet.create({

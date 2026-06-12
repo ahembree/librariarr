@@ -21,11 +21,13 @@ export function CardSizeControl({ size, onChange }: CardSizeControlProps) {
         <button
           key={s.value}
           onClick={() => onChange(s.value)}
+          aria-pressed={size === s.value}
           className={cn(
             "rounded-md px-2 py-1 text-xs font-medium transition-colors",
+            // Match the view-toggle idiom: brand accent when active.
             size === s.value
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:text-foreground hover:bg-muted",
+              ? "bg-brand-dim text-brand-bright"
+              : "text-muted-foreground hover:bg-surface-2 hover:text-foreground",
           )}
           title={`${s.value.charAt(0).toUpperCase()}${s.value.slice(1)} cards`}
           aria-label={`${s.value.charAt(0).toUpperCase()}${s.value.slice(1)} cards`}

@@ -64,7 +64,7 @@ import { useIntegrationsHealth, deriveIntegrationsStatus, arrTypeForMediaType, t
 import { hasArrRules, hasSeerrRules, type QueryGroup, type QueryDefinition } from "@/lib/query/types";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
-import { MediaCard } from "@/components/media-card";
+import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { CardSizeControl } from "@/components/card-size-control";
@@ -206,7 +206,6 @@ function saveVisibleColumns(cols: Set<string>) {
 }
 
 const GAP = 16;
-const CARD_CONTENT_HEIGHT = 138; // Fixed content area below poster (matches h-34.5 in MediaCard)
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
 const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar (4px) + py-1 padding (8px)
 
@@ -1080,7 +1079,7 @@ export default function QueryPage() {
 
       {/* Query Scope */}
       <div className="rounded-lg border bg-card/40 p-4">
-        <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        <p className="mb-3 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
           Query Scope
         </p>
         <div className="space-y-3">
@@ -1345,7 +1344,7 @@ export default function QueryPage() {
                 if (groupCols.length === 0) return null;
                 return (
                   <div key={groupKey} className="mb-2 last:mb-0">
-                    <p className="text-xs font-medium text-muted-foreground mb-1 px-1">{groupLabel}</p>
+                    <p className="mb-1 px-1 font-mono text-[10.5px] font-semibold uppercase tracking-[0.12em] text-faint">{groupLabel}</p>
                     {groupCols.map((col) => (
                       <label key={col.id} className="flex items-center gap-2 px-1 py-1 cursor-pointer rounded hover:bg-muted/50">
                         <Checkbox

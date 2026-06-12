@@ -5,6 +5,7 @@ import { IntegrationError } from "@/lib/integration-error";
 export interface SonarrSeries {
   id: number;
   title: string;
+  year?: number;
   titleSlug?: string;
   tvdbId: number;
   imdbId?: string;

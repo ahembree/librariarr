@@ -6,6 +6,7 @@ import {
   formatDurationClock,
   formatDate,
   formatRelativeDate,
+  formatUntil,
 } from "@/lib/format";
 
 describe("formatFileSize", () => {
@@ -291,5 +292,49 @@ describe("formatRelativeDate", () => {
     expect(formatRelativeDate("2023-06-16T12:00:00.000Z")).toBe("1y ago");
     // 730 days ago → 2y
     expect(formatRelativeDate("2022-06-16T12:00:00.000Z")).toBe("2y ago");
+  });
+});
+
+describe("formatUntil", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // Pin "now" to a known date: 2024-06-15T12:00:00.000Z
+    vi.setSystemTime(new Date("2024-06-15T12:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns '-' for null (manual-only schedules)", () => {
+    expect(formatUntil(null)).toBe("-");
+  });
+
+  it("returns 'now' for past dates", () => {
+    expect(formatUntil("2024-06-15T11:00:00.000Z")).toBe("now");
+  });
+
+  it("returns 'now' for dates less than a minute away", () => {
+    expect(formatUntil("2024-06-15T12:00:30.000Z")).toBe("now");
+  });
+
+  it("returns minutes for under an hour", () => {
+    expect(formatUntil("2024-06-15T12:05:00.000Z")).toBe("in 5m");
+    expect(formatUntil("2024-06-15T12:59:00.000Z")).toBe("in 59m");
+  });
+
+  it("returns hours for under a day", () => {
+    expect(formatUntil("2024-06-15T15:00:00.000Z")).toBe("in 3h");
+    expect(formatUntil("2024-06-16T11:00:00.000Z")).toBe("in 23h");
+  });
+
+  it("returns days for under a week", () => {
+    expect(formatUntil("2024-06-17T12:00:00.000Z")).toBe("in 2d");
+    expect(formatUntil("2024-06-21T12:00:00.000Z")).toBe("in 6d");
+  });
+
+  it("returns weeks for 7+ days", () => {
+    expect(formatUntil("2024-06-22T12:00:00.000Z")).toBe("in 1w");
+    expect(formatUntil("2024-06-29T12:00:00.000Z")).toBe("in 2w");
   });
 });

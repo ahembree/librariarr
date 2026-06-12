@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
   LogOut,
   PanelLeftClose,
@@ -21,6 +21,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useSidebarData, type NavItem, type CurrentUser } from "@/hooks/use-sidebar-data";
 import { Logo } from "@/components/logo";
+import { SearchPalette } from "@/components/search-palette";
 
 function NavItemLink({
   item,
@@ -133,10 +134,14 @@ function UserChip({
   user,
   isCollapsed,
   onLogout,
+  withTooltip = true,
 }: {
   user: CurrentUser | null;
   isCollapsed: boolean;
   onLogout: () => void;
+  /** The hover tooltip is for the desktop rail; in the mobile drawer the
+   *  sheet's focus handling would open it persistently on touch. */
+  withTooltip?: boolean;
 }) {
   const initial = (user?.username?.trim()?.[0] ?? "A").toUpperCase();
   const avatar = (
@@ -175,8 +180,8 @@ function UserChip({
           </span>
         </span>
       </Link>
-      <Tooltip>
-        <TooltipTrigger asChild>
+      {(() => {
+        const logoutButton = (
           <button
             onClick={onLogout}
             aria-label="Logout"
@@ -184,9 +189,15 @@ function UserChip({
           >
             <LogOut className="h-[15px] w-[15px]" />
           </button>
-        </TooltipTrigger>
-        <TooltipContent side="top">Logout</TooltipContent>
-      </Tooltip>
+        );
+        if (!withTooltip) return logoutButton;
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>{logoutButton}</TooltipTrigger>
+            <TooltipContent side="top">Logout</TooltipContent>
+          </Tooltip>
+        );
+      })()}
     </div>
   );
 }
@@ -194,30 +205,32 @@ function UserChip({
 interface SidebarProps {
   mobileOpen: boolean;
   onMobileOpenChange: (open: boolean) => void;
+  /** SSR-provided collapse state (from the sidebar-collapsed cookie) */
+  initialCollapsed?: boolean;
 }
 
-export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
+export function Sidebar({ mobileOpen, onMobileOpenChange, initialCollapsed = false }: SidebarProps) {
   const pathname = usePathname();
-  const router = useRouter();
   const isMobile = useIsMobile();
-  const { navigation, collapsed, setCollapsed, handleLogout, user } = useSidebarData();
+  const { navigation, collapsed, setCollapsed, handleLogout, user } = useSidebarData(initialCollapsed);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   // Auto-close mobile drawer on navigation
   useEffect(() => {
     if (isMobile) onMobileOpenChange(false);
   }, [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ⌘K / Ctrl+K jumps to the Query workspace (the search affordance).
+  // ⌘K / Ctrl+K opens the global title search palette.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        router.push("/library/query");
+        setSearchOpen(true);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [router]);
+  }, []);
 
   const sidebarInner = (forceExpanded: boolean) => {
     const isCollapsed = forceExpanded ? false : collapsed;
@@ -242,9 +255,13 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
           )}
         </div>
 
-        {/* Search affordance → Query */}
-        <Link
-          href="/library/query"
+        {/* Search affordance → global title search palette */}
+        <button
+          type="button"
+          onClick={() => {
+            if (forceExpanded) onMobileOpenChange(false);
+            setSearchOpen(true);
+          }}
           className={cn(
             "mx-3.5 mt-1 mb-2 flex h-9 items-center gap-2 rounded-[9px] border border-border bg-surface-0 text-[13px] text-muted-foreground transition-colors hover:border-border-strong",
             isCollapsed ? "justify-center px-0" : "px-[11px]"
@@ -253,13 +270,13 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
           <Search className="h-[15px] w-[15px] shrink-0" />
           {!isCollapsed && (
             <>
-              <span className="flex-1">Search library…</span>
+              <span className="flex-1 text-left">Search library…</span>
               <kbd className="rounded-[5px] border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-faint">
                 ⌘K
               </kbd>
             </>
           )}
-        </Link>
+        </button>
 
         {/* Navigation */}
         <nav className={cn("flex-1 overflow-y-auto px-3.5 pt-1.5 pb-3.5")}>
@@ -323,7 +340,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
                 <span>Collapse</span>
               </button>
             ))}
-          <UserChip user={user} isCollapsed={isCollapsed} onLogout={handleLogout} />
+          <UserChip user={user} isCollapsed={isCollapsed} onLogout={handleLogout} withTooltip={!forceExpanded} />
         </div>
       </>
     );
@@ -332,22 +349,38 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
   // Mobile: render as a Sheet drawer
   if (isMobile) {
     return (
-      <Sheet open={mobileOpen} onOpenChange={onMobileOpenChange}>
-        <SheetContent side="left" className="w-[min(16rem,85vw)] p-0" showCloseButton={false}>
-          <SheetTitle className="sr-only">Navigation</SheetTitle>
-          <TooltipProvider>
-            <div className="relative flex h-full flex-col overflow-hidden bg-sidebar">
-              {sidebarInner(true)}
-            </div>
-          </TooltipProvider>
-        </SheetContent>
-      </Sheet>
+      <>
+        <SearchPalette open={searchOpen} onOpenChange={setSearchOpen} />
+        <Sheet open={mobileOpen} onOpenChange={onMobileOpenChange}>
+          <SheetContent
+            side="left"
+            className="w-[min(16rem,85vw)] p-0"
+            showCloseButton={false}
+            // Opening focused the logout button (a destructive control) and
+            // popped its tooltip persistently on touch — keep focus on the
+            // hamburger instead; keyboard users can Tab into the drawer.
+            onOpenAutoFocus={(e) => e.preventDefault()}
+            // The drawer closes in the same tick the search palette opens;
+            // returning focus to the hamburger would steal it from the
+            // palette's input and dismiss the mobile keyboard.
+            onCloseAutoFocus={(e) => e.preventDefault()}
+          >
+            <SheetTitle className="sr-only">Navigation</SheetTitle>
+            <TooltipProvider>
+              <div className="pt-safe pb-safe relative flex h-full flex-col overflow-hidden bg-sidebar">
+                {sidebarInner(true)}
+              </div>
+            </TooltipProvider>
+          </SheetContent>
+        </Sheet>
+      </>
     );
   }
 
   // Desktop: render as permanent sidebar
   return (
     <TooltipProvider>
+      <SearchPalette open={searchOpen} onOpenChange={setSearchOpen} />
       <div
         className={cn(
           "relative flex h-screen flex-col overflow-hidden border-r bg-sidebar transition-[width] duration-300 ease-out",

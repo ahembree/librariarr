@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useColumnResize } from "@/hooks/use-column-resize";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
+import { EmptyState } from "@/components/empty-state";
 import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
 import { useIntegrationsHealth } from "@/hooks/use-integrations-health";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -959,22 +960,16 @@ export default function RuleMatchesPage() {
       <TabNav tabs={MEDIA_TYPE_TABS} activeTab={mediaTypeTab} onTabChange={setMediaTypeTab} className="mb-6 mt-6" />
 
       {filteredRuleMatches.length === 0 && (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
-            <div className="rounded-full bg-muted p-4">
-              <Inbox className="h-8 w-8 text-muted-foreground" />
-            </div>
-            <div className="space-y-1">
-              <p className="text-base font-medium">No enabled rule sets</p>
-              <p className="text-sm text-muted-foreground">
-                Create and enable a rule set to start matching media.
-              </p>
-            </div>
-            <Button asChild variant="outline" size="sm" className="mt-2">
+        <EmptyState
+          icon={Inbox}
+          title="No enabled rule sets"
+          description="Create and enable a rule set to start matching media."
+          action={
+            <Button asChild variant="outline" size="sm">
               <Link href="/lifecycle/rules">Manage Rules</Link>
             </Button>
-          </CardContent>
-        </Card>
+          }
+        />
       )}
 
       <div className="space-y-4">

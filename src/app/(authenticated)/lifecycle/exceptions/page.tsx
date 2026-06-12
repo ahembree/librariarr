@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
+import { EmptyState } from "@/components/empty-state";
+import { TabNav } from "@/components/tab-nav";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -722,49 +724,24 @@ export default function LifecycleExceptionsPage() {
         </div>
 
         {/* Tab navigation */}
-        <nav className="flex items-center gap-1 border-b overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {TABS.map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.value}
-                onClick={() => setActiveTab(tab.value)}
-                className={cn(
-                  "flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap shrink-0",
-                  activeTab === tab.value
-                    ? "border-primary text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30"
-                )}
-              >
-                <Icon className="h-4 w-4" />
-                {tab.label}
-              </button>
-            );
-          })}
-        </nav>
+        <TabNav tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab} />
 
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
         ) : groupedRows.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
-              <div className="rounded-full bg-muted p-4">
-                <ShieldOff className="h-8 w-8 text-muted-foreground" />
-              </div>
-              <div className="space-y-1">
-                <p className="text-base font-medium">No exceptions</p>
-                <p className="text-sm text-muted-foreground">
-                  No {TABS.find((t) => t.value === activeTab)?.label.toLowerCase()} are excluded from lifecycle actions.
-                </p>
-              </div>
-              <Button variant="outline" size="sm" className="mt-2" onClick={openAddDialog}>
+          <EmptyState
+            icon={ShieldOff}
+            title="No exceptions"
+            description={`No ${TABS.find((t) => t.value === activeTab)?.label.toLowerCase()} are excluded from lifecycle actions.`}
+            action={
+              <Button variant="outline" size="sm" onClick={openAddDialog}>
                 <Plus className="h-4 w-4 mr-2" />
                 Add Exception
               </Button>
-            </CardContent>
-          </Card>
+            }
+          />
         ) : (
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">

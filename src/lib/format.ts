@@ -100,6 +100,24 @@ export function formatDate(date: string | null, fallback: string = "-"): string 
 }
 
 /**
+ * Format a future date string as a compact countdown: "in 3m", "in 3h",
+ * "in 2d", "in 1w". Returns "now" for past or imminent (<1 minute) dates
+ * and "-" for null (e.g. manual-only schedules).
+ */
+export function formatUntil(dateStr: string | null): string {
+  if (!dateStr) return "-";
+  const diffMs = new Date(dateStr).getTime() - Date.now();
+  if (diffMs < 60_000) return "now";
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 60) return `in ${diffMin}m`;
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `in ${diffHour}h`;
+  const diffDay = Math.floor(diffHour / 24);
+  if (diffDay < 7) return `in ${diffDay}d`;
+  return `in ${Math.floor(diffDay / 7)}w`;
+}
+
+/**
  * Format a date string as a short relative time: "Today", "2d ago", "3w ago".
  */
 export function formatRelativeDate(dateStr: string): string {
