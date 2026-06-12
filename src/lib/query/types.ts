@@ -22,6 +22,7 @@ import {
   hasSeerrRules as _hasSeerrRules,
   hasCrossSystemRules as _hasCrossSystemRules,
   hasResolutionRules as _hasResolutionRules,
+  hasStreamCountRules as _hasStreamCountRules,
   hasSeriesAggregateRules as _hasSeriesAggregateRules,
   hasWatchedByUserRules as _hasWatchedByUserRules,
   isSeriesAggregateField as _isSeriesAggregateField,
@@ -70,6 +71,7 @@ export const hasSeerrRules = _hasSeerrRules;
 export const hasCrossSystemRules = _hasCrossSystemRules;
 export const hasSeriesAggregateRules = _hasSeriesAggregateRules;
 export const hasResolutionRules = _hasResolutionRules;
+export const hasStreamCountRules = _hasStreamCountRules;
 export const hasWatchedByUserRules = _hasWatchedByUserRules;
 export const isSeriesAggregateField = _isSeriesAggregateField;
 

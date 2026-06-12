@@ -23,6 +23,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { isNonNullableField, isNonNullableNonTextField, isNonNullableTextField } from "./field-metadata";
 import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "./helpers";
 import { MB_IN_BYTES, DURATION_MS_PER_MIN } from "./constants";
+import { wildcardToRegex } from "./wildcard";
 
 export function applyNegate(clause: Prisma.MediaItemWhereInput, negate?: boolean): Prisma.MediaItemWhereInput {
   if (!negate) return clause;
@@ -516,6 +517,10 @@ export const textGenericHandler: FieldHandler = (operator, value, field, negate)
  * for equals (has a row for that source) and isNull is an alias for
  * notEquals (no row for that source).
  */
+/** External-id sources written by sync — the finite domain hasExternalId
+ *  wildcards match against (both phases use the same list). */
+export const KNOWN_EXTERNAL_ID_SOURCES = ["TMDB", "TVDB", "IMDB", "MUSICBRAINZ"] as const;
+
 const hasExternalIdHandler: FieldHandler = (operator, value, _field, negate) => {
   // hasExternalId is enumerable, so the UI offers `contains`/`notContains`
   // as a multi-select over sources (e.g. "TMDB|IMDB"). Without these cases
@@ -538,6 +543,20 @@ const hasExternalIdHandler: FieldHandler = (operator, value, _field, negate) => 
     case "notContains":
       clause = { externalIds: { none: { source: { in: sources } } } };
       break;
+    case "matchesWildcard": {
+      const re = wildcardToRegex(String(value).toLowerCase());
+      const matched = KNOWN_EXTERNAL_ID_SOURCES.filter((src) => re.test(src.toLowerCase()));
+      clause = matched.length > 0
+        ? { externalIds: { some: { source: { in: matched } } } }
+        : UNSATISFIABLE_WHERE;
+      break;
+    }
+    case "notMatchesWildcard": {
+      const re = wildcardToRegex(String(value).toLowerCase());
+      const matched = KNOWN_EXTERNAL_ID_SOURCES.filter((src) => re.test(src.toLowerCase()));
+      clause = { externalIds: { none: { source: { in: matched } } } };
+      break;
+    }
     default:
       return {};
   }
@@ -560,8 +579,10 @@ const streamRelationHandler: FieldHandler = (operator, value, field, negate) => 
   const streamType = field === "subtitleLanguage" ? 3 : 2;
   const streamField = field === "streamAudioCodec" ? "codec" : "language";
   const isLangField = field === "audioLanguage" || field === "subtitleLanguage";
+  // mode:"insensitive" makes the placeholder exclusion catch "unknown" /
+  // "UNKNOWN" variants too — Phase 2 filters on the lowercased value.
   const knownLangFilter = isLangField
-    ? { language: { not: null, notIn: ["", "Unknown"] } }
+    ? { language: { not: null, notIn: ["", "unknown"], mode: "insensitive" as const } }
     : {};
   let clause: Prisma.MediaItemWhereInput;
   switch (operator) {

@@ -1,9 +1,9 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { QueryRule, QueryGroup, QueryDefinition, LifecycleRuleCondition } from "./types";
-import { GENRE_FIELD, LABELS_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules } from "./types";
+import { GENRE_FIELD, LABELS_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules, hasStreamCountRules } from "./types";
 import {
-  isStreamQueryField, isStreamQueryGroup,
+  isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
 } from "@/lib/rules/types";
 import { normalizeResolutionLabel } from "@/lib/resolution";
@@ -30,10 +30,11 @@ import {
   validateRulePreamble,
   FIELD_HANDLERS,
   textGenericHandler,
+  UNSATISFIABLE_WHERE,
 } from "@/lib/conditions/where-builder";
 import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
 import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
-import { buildGroupConditions } from "@/lib/conditions/group-composition";
+import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
 import { pushDownGroupNegation } from "@/lib/conditions/negation";
 import { nullValueResult } from "@/lib/conditions/helpers";
 
@@ -51,8 +52,10 @@ function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
   // Skip external (arr/seerr) fields — handled as post-filters
   if (isExternalQueryField(field)) return {};
 
-  // Skip stream query fields — handled at the group level via buildStreamQueryClause
-  if (isStreamQueryField(field)) return {};
+  // Stream query fields only make sense inside a stream-query group (whose
+  // rules go through buildStreamQueryClause, never this dispatcher). A
+  // misplaced one is a dead rule — never a dropped constraint.
+  if (isStreamQueryField(field)) return UNSATISFIABLE_WHERE;
 
   // Skip cross-system fields — enriched before Phase 2
   if (isCrossSystemQueryField(field)) return {};
@@ -87,24 +90,6 @@ function hasStreamQueryInMemoryRules(groups: QueryGroup[]): boolean {
 }
 
 
-/** Collect all stream count rules from the group tree */
-function collectStreamCountRules(groups: QueryGroup[]): QueryRule[] {
-  const rules: QueryRule[] = [];
-  function traverse(group: QueryGroup) {
-    if (group.enabled === false) return;
-    for (const rule of group.rules) {
-      if (rule.enabled === false) continue;
-      if (rule.field === "audioStreamCount" || rule.field === "subtitleStreamCount") {
-        rules.push(rule);
-      }
-    }
-    for (const sub of group.groups ?? []) {
-      traverse(sub);
-    }
-  }
-  for (const g of groups) traverse(g);
-  return rules;
-}
 
 /** Check if rules reference any wildcard operators on non-external fields */
 function hasWildcardRules(groups: QueryGroup[]): boolean {
@@ -120,83 +105,6 @@ function hasWildcardRules(groups: QueryGroup[]): boolean {
   return false;
 }
 
-function opToSql(op: string): string {
-  switch (op) {
-    case "greaterThan": return ">";
-    case "greaterThanOrEqual": return ">=";
-    case "lessThan": return "<";
-    case "lessThanOrEqual": return "<=";
-    case "notEquals": return "!=";
-    case "equals":
-    default: return "=";
-  }
-}
-
-function negateSqlOp(op: string): string {
-  switch (op) {
-    case ">": return "<=";
-    case ">=": return "<";
-    case "<": return ">=";
-    case "<=": return ">";
-    case "=": return "!=";
-    default: return op;
-  }
-}
-
-/**
- * Apply stream count conditions via raw SQL, returns matching media item IDs.
- */
-async function getStreamCountFilterIds(rules: QueryRule[]): Promise<string[] | null> {
-  if (rules.length === 0) return null;
-
-  const havingClauses: string[] = [];
-  const queryValues: number[] = [];
-  let idx = 1;
-
-  for (const rule of rules) {
-    const streamType = rule.field === "audioStreamCount" ? 2 : 3;
-    const countExprIsNull = `COUNT(*) FILTER (WHERE "streamType" = ${streamType})`;
-    if (rule.operator === "isNull") {
-      // isNull on stream count = 0 streams of this type
-      const op = rule.negate ? "> 0" : "= 0";
-      havingClauses.push(`${countExprIsNull} ${op}`);
-      continue;
-    }
-    if (rule.operator === "isNotNull") {
-      // isNotNull on stream count = at least 1 stream of this type
-      const op = rule.negate ? "= 0" : "> 0";
-      havingClauses.push(`${countExprIsNull} ${op}`);
-      continue;
-    }
-    if (rule.operator === "between") {
-      const [minStr, maxStr] = String(rule.value).split(",");
-      const countExpr = `COUNT(*) FILTER (WHERE "streamType" = ${streamType})`;
-      if (rule.negate) {
-        havingClauses.push(`(${countExpr} < $${idx} OR ${countExpr} > $${idx + 1})`);
-      } else {
-        havingClauses.push(`${countExpr} >= $${idx} AND ${countExpr} <= $${idx + 1}`);
-      }
-      queryValues.push(Number(minStr), Number(maxStr));
-      idx += 2;
-    } else {
-      const sqlOp = rule.negate ? negateSqlOp(opToSql(rule.operator)) : opToSql(rule.operator);
-      havingClauses.push(
-        `COUNT(*) FILTER (WHERE "streamType" = ${streamType}) ${sqlOp} $${idx}`
-      );
-      queryValues.push(Number(rule.value));
-      idx++;
-    }
-  }
-
-  const rows = await prisma.$queryRawUnsafe<{ mediaItemId: string }[]>(
-    `SELECT "mediaItemId" FROM "MediaStream"
-     GROUP BY "mediaItemId"
-     HAVING ${havingClauses.join(" AND ")}`,
-    ...queryValues,
-  );
-
-  return rows.map((r) => r.mediaItemId);
-}
 
 export interface QueryResult {
   items: Array<Record<string, unknown>>;
@@ -296,6 +204,7 @@ function buildItemSelectFull(opts: { includeWatchHistory: boolean }) {
 function buildBaseWhere(
   definition: QueryDefinition,
   effectiveServerIds: string[],
+  usePreFilter: boolean,
 ): Prisma.MediaItemWhereInput {
   const { mediaTypes, groups } = definition;
 
@@ -308,31 +217,19 @@ function buildBaseWhere(
   }
 
   if (groups.length > 0) {
-    const conditions = buildGroupConditions(groups, queryRuleToWhere);
+    // When Phase 2 will run, the rule WHERE is only a pre-filter and must be
+    // a SUPERSET of the in-memory result: dropped {} clauses in OR position
+    // (arr/seerr/wildcard/stream-count/resolution rules) would otherwise
+    // exclude rows Phase 2 should see (EXTERNAL-aware composition).
+    const conditions = usePreFilter
+      ? buildGroupConditionsPreFilter(groups, queryRuleToWhere)
+      : buildGroupConditions(groups, queryRuleToWhere);
     if (Object.keys(conditions).length > 0) {
       where.AND = [conditions];
     }
   }
 
   return where;
-}
-
-/** Add stream count filter IDs to a WHERE clause (mutates) */
-async function applyStreamCountFilter(
-  where: Prisma.MediaItemWhereInput,
-  groups: QueryGroup[],
-): Promise<void> {
-  const streamCountRules = collectStreamCountRules(groups);
-  const streamCountIds = await getStreamCountFilterIds(streamCountRules);
-  if (streamCountIds !== null) {
-    const andClauses: Prisma.MediaItemWhereInput[] = Array.isArray(where.AND)
-      ? [...where.AND]
-      : where.AND
-        ? [where.AND as Prisma.MediaItemWhereInput]
-        : [];
-    andClauses.push({ id: { in: streamCountIds } });
-    where.AND = andClauses;
-  }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -533,10 +430,6 @@ export async function executeQuery(
     return { items: [], pagination: { page, limit, hasMore: false, total: 0 } };
   }
 
-  // Build base WHERE (includes type filter + conditions)
-  const where = buildBaseWhere(definition, effectiveServerIds);
-  await applyStreamCountFilter(where, groups);
-
   // Fetch Arr data if query uses Arr rules and servers are selected
   const needsArr = hasArrRules(groups) && definition.arrServerIds &&
     (definition.arrServerIds.radarr || definition.arrServerIds.sonarr || definition.arrServerIds.lidarr);
@@ -554,7 +447,12 @@ export async function executeQuery(
 
   // Determine if we need unified in-memory evaluation
   const hasCrossSystem = hasCrossSystemRules(groups);
-  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups);
+  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasStreamCountRules(groups);
+
+  // Build base WHERE (includes type filter + conditions). Built AFTER the
+  // in-memory decision so pre-filter (superset) composition applies when
+  // Phase 2 runs.
+  const where = buildBaseWhere(definition, effectiveServerIds, needsFullInMemoryEval);
 
   // Check if we need to group series
   const seriesInScope = mediaTypes.length === 0 || mediaTypes.includes("SERIES");
@@ -744,7 +642,7 @@ async function executeUngrouped(
 ): Promise<QueryResult> {
   // When any in-memory evaluation is needed (external rules, wildcards, stream query computed fields), fetch all items
   const hasCrossSystem = hasCrossSystemRules(groups);
-  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups);
+  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasStreamCountRules(groups);
   const useInMemoryPagination = needsFullInMemoryEval;
   const selectToUse = needsFullInMemoryEval
     ? buildItemSelectFull({ includeWatchHistory: hasWatchedByUserRules(groups) })
@@ -752,10 +650,17 @@ async function executeUngrouped(
 
   let orderBy: Prisma.MediaItemOrderByWithRelationInput | Prisma.MediaItemOrderByWithRelationInput[];
   const order = sortOrder === "desc" ? "desc" as const : "asc" as const;
-  if (sortBy === "title") {
+  // Whitelist: an unknown column in orderBy is a Prisma validation error
+  // (HTTP 500) — fall back to title for anything unrecognized.
+  const SORTABLE = new Set([
+    "title", "year", "rating", "audienceRating", "fileSize", "playCount",
+    "lastPlayedAt", "addedAt", "duration", "resolution", "createdAt",
+  ]);
+  const sortField = SORTABLE.has(sortBy) ? sortBy : "title";
+  if (sortField === "title") {
     orderBy = [{ titleSort: { sort: order, nulls: "last" } }, { title: order }];
   } else {
-    orderBy = { [sortBy]: order };
+    orderBy = { [sortField]: order };
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -828,7 +733,9 @@ function compareNumeric(itemVal: number, operator: string, ruleVal: number): boo
     case "greaterThanOrEqual": return itemVal >= ruleVal;
     case "lessThan": return itemVal < ruleVal;
     case "lessThanOrEqual": return itemVal <= ruleVal;
-    default: return true;
+    // Unknown operator → match nothing; a vacuous `true` here let negate
+    // and quantifier logic sweep the library.
+    default: return false;
   }
 }
 
@@ -852,7 +759,7 @@ function evaluateStreamRuleInMemory(
   const typeStreams = streams.filter(s => s.streamType === streamType);
 
   const isKnownValue = (val: string | null) =>
-    val !== null && val !== "" && val !== "Unknown";
+    val !== null && val !== "" && val.toLowerCase() !== "unknown";
 
   const knownStreams = isLangField
     ? typeStreams.filter(s => isKnownValue(s[columnName]))
@@ -894,7 +801,8 @@ function evaluateStreamRuleInMemory(
       result = knownStreams.length > 0;
       break;
     default:
-      result = true;
+      // Unknown operator → match nothing (bypass negate), never fail open
+      return false;
   }
   return negate ? !result : result;
 }
@@ -912,7 +820,10 @@ function evaluateStreamCountInMemory(
   const streamType = field === "audioStreamCount" ? 2 : 3;
   const count = streams.filter(s => s.streamType === streamType).length;
   let result: boolean;
-  if (operator === "between") {
+  // Computed counts are never NULL — "is empty" reads as "has none".
+  if (operator === "isNull") { result = count === 0; }
+  else if (operator === "isNotNull") { result = count > 0; }
+  else if (operator === "between") {
     const [minStr, maxStr] = String(rawValue ?? value).split(",");
     result = count >= Number(minStr) && count <= Number(maxStr);
   } else {
@@ -1000,6 +911,16 @@ function evaluateExternalIdInMemory(
     case "notContains":
       result = !extIds.some(e => sources.includes(e.source));
       break;
+    case "matchesWildcard": {
+      const re = wildcardToRegex(value.toLowerCase());
+      result = extIds.some(e => re.test(e.source.toLowerCase()));
+      break;
+    }
+    case "notMatchesWildcard": {
+      const re = wildcardToRegex(value.toLowerCase());
+      result = !extIds.some(e => re.test(e.source.toLowerCase()));
+      break;
+    }
     default:
       // Unknown operator → match nothing (bypass negate), never the
       // fail-open `true` this previously returned.
@@ -1024,6 +945,11 @@ function evaluateQueryRuleInMemory(
   if (!isValueValidForRule(rule.operator, rule.value, rule.field)) return false;
 
   const { field, operator, value, negate } = rule;
+
+  // Misplaced stream-query field → dead rule (stream-query groups evaluate
+  // through evaluateStreamQueryGroupInMemory, not here).
+  if (isStreamQueryField(field)) return false;
+
 
   // Arr fields — delegate to existing evaluator
   if (ARR_QUERY_FIELDS.has(field)) {
@@ -1265,7 +1191,11 @@ function evaluateQueryRuleInMemory(
         case "between": {
           const [fromStr, toStr] = String(value).split(",");
           const itemDay = itemDate.toISOString().split("T")[0];
-          result = itemDay >= fromStr && itemDay <= toStr;
+          // Normalize bounds through Date so non-padded inputs ("2024-1-1")
+          // compare correctly — the raw strings were compared lexically.
+          const fromDay = new Date(fromStr).toISOString().split("T")[0];
+          const toDay = new Date(toStr).toISOString().split("T")[0];
+          result = itemDay >= fromDay && itemDay <= toDay;
           break;
         }
         default: return false;
@@ -1412,6 +1342,10 @@ function evaluateStreamQueryRuleAgainstStream(
 
   // Boolean fields
   if (field === "sqIsDefault" || field === "sqForced") {
+    if (operator === "isNull" || operator === "isNotNull") {
+      const result = operator === "isNull" ? streamValue == null : streamValue != null;
+      return negate ? !result : result;
+    }
     const boolVal = String(value).toLowerCase() === "true";
     const actual = !!streamValue;
     let result: boolean;
@@ -1516,7 +1450,10 @@ function evaluateStreamQueryGroupInMemory(
   if (activeRules.some((rule) =>
     isUnconfiguredContainsRule(rule.operator, rule.value) ||
     !isOperatorApplicable(rule.operator, rule.field) ||
-    !isValueValidForRule(rule.operator, rule.value, rule.field)
+    !isValueValidForRule(rule.operator, rule.value, rule.field) ||
+    // Misplaced field (no stream column, not computed) — same vacuous-"none"
+    // hazard; mirrors buildStreamQueryClause returning UNSATISFIABLE_WHERE.
+    (!isStreamQueryComputedField(rule.field) && !streamQueryFieldToColumn(rule.field as StreamQueryField))
   )) {
     return false;
   }

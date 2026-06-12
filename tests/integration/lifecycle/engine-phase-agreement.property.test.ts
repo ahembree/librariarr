@@ -415,3 +415,54 @@ describe("rule engine phase agreement (property audit)", () => {
     }
   }, 120_000);
 });
+
+// ---------------------------------------------------------------------------
+// Legacy flat rules — converted through the same group machinery, so the
+// phases must agree for the pre-groups format too (incl. disabled rules,
+// whose connectives previously moved Phase 1 bucket boundaries).
+// ---------------------------------------------------------------------------
+
+describe("legacy flat rules phase agreement", () => {
+  it(`agrees across 150 random flat rule sets`, async () => {
+    const rng = mulberry32(SEED ^ 0xf1a7);
+    const failures: string[] = [];
+    for (let t = 0; t < 150; t++) {
+      const ctx: GenContext = { valid: true, hasActive: false };
+      const count = 1 + Math.floor(rng() * 4);
+      const flat = Array.from({ length: count }, () => genRule(rng, ctx));
+
+      const engineItems = (await evaluateLifecycleRules(flat, "MOVIE", [serverId])) as Array<{ id: string }>;
+      const engineIds = new Set(engineItems.map((i) => i.id));
+      const memIds = new Set(
+        allItems.filter((item) => evaluateAllRulesInMemory(flat, serialize(item))).map((i) => i.id),
+      );
+      const expectedIds = ctx.hasActive ? memIds : new Set<string>();
+      if (engineIds.size !== expectedIds.size || [...engineIds].some((id) => !expectedIds.has(id))) {
+        failures.push(`flat #${t}: engine=${engineIds.size} mem=${expectedIds.size} rules=${JSON.stringify(flat)}`);
+        if (failures.length >= 5) break;
+      }
+    }
+    expect(failures, failures.join("\n\n")).toEqual([]);
+  }, 120_000);
+
+  it("disabled flat rules neither constrain nor move bucket boundaries", async () => {
+    // (A pc=0 OR) (B year<1980 AND, DISABLED) (C container=mkv) — enabled
+    // semantics: single bucket A ∨ C. The old Phase 1 evaluated
+    // (A ∨ B) ∧ C because B's connective split the buckets.
+    const flat = [
+      { id: "A", field: "playCount", operator: "equals", value: "0", condition: "OR" },
+      { id: "B", field: "year", operator: "lessThan", value: "1980", condition: "AND", enabled: false },
+      { id: "C", field: "container", operator: "equals", value: "mkv", condition: "AND" },
+    ] as never;
+    const engineIds = new Set(
+      ((await evaluateLifecycleRules(flat, "MOVIE", [serverId])) as Array<{ id: string }>).map((i) => i.id),
+    );
+    const memIds = new Set(
+      allItems.filter((item) => evaluateAllRulesInMemory(flat, serialize(item))).map((i) => i.id),
+    );
+    expect([...engineIds].sort()).toEqual([...memIds].sort());
+    // sanity: A ∨ C semantics — every playCount=0 item matches regardless of container
+    const unwatched = allItems.filter((i) => (i as { playCount?: number }).playCount === 0);
+    for (const it of unwatched) expect(engineIds.has(it.id)).toBe(true);
+  });
+});

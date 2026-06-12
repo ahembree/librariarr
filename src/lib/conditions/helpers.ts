@@ -154,7 +154,11 @@ const VALUELESS_OPERATORS = new Set(["isNull", "isNotNull"]);
  * match-all. */
 function isStrictFiniteNumeric(input: string): boolean {
   if (input.trim() === "") return false;
-  return Number.isFinite(Number(input));
+  const n = Number(input);
+  // Magnitude cap: unit conversions multiply user input (MB→bytes ×2^20),
+  // and a finite-but-huge value like 1.7e308 overflows to Infinity, which
+  // BigInt() then throws on — crashing the whole evaluation run.
+  return Number.isFinite(n) && Math.abs(n) <= Number.MAX_SAFE_INTEGER;
 }
 
 export function isValueValidForRule(
@@ -294,4 +298,11 @@ export function hasWatchedByUserRules(groups: ConditionGroup[]): boolean {
  *  express normalizeResolutionLabel semantics) — see resolutionHandler. */
 export function hasResolutionRules(groups: ConditionGroup[]): boolean {
   return anyRuleMatches(groups, (f) => f === "resolution");
+}
+
+/** Stream-count rules are evaluated in-memory (counts over the streams
+ *  relation can't honor OR position or group negation as a hoisted SQL
+ *  filter). */
+export function hasStreamCountRules(groups: ConditionGroup[]): boolean {
+  return anyRuleMatches(groups, (f) => f === "audioStreamCount" || f === "subtitleStreamCount");
 }
