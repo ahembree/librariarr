@@ -45,8 +45,11 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   themeColor: "#0c0d10",
   // Extend the canvas under notches/home indicators; safe-area-inset
-  // padding (.pt-safe / .pb-safe / .pb-tabbar) keeps content clear.
+  // padding (.pt-safe / .pb-safe) keeps content clear.
   viewportFit: "cover",
+  // Shrink the layout viewport when the soft keyboard opens so dvh-bound
+  // dialogs become scrollable instead of being clipped behind it.
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({
