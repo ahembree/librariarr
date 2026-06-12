@@ -194,6 +194,8 @@ export function QueryActionBar({
   const arrInstanceId = family ? arrServerIds[family] : undefined;
   const meta = family ? arrMeta[family] : undefined;
   const needsProfile = QUALITY_PROFILE_ACTION_TYPES.has(effectiveActionType);
+  const supportsImportExclusion = effectiveActionType.includes("DELETE");
+  const supportsSearchAfter = effectiveActionType.includes("DELETE_FILES") || needsProfile;
   const isTagOnly = effectiveActionType === "DO_NOTHING";
   const hasTags = addArrTags.length > 0 || removeArrTags.length > 0;
 
@@ -228,8 +230,10 @@ export function QueryActionBar({
       actionType: effectiveActionType,
       arrInstanceId,
       targetQualityProfileId: needsProfile ? targetQualityProfileId : null,
-      addImportExclusion,
-      searchAfterAction,
+      // Only submit toggles the current action actually exposes — a checkbox
+      // ticked under a previous action type must not leak into this run.
+      addImportExclusion: supportsImportExclusion && addImportExclusion,
+      searchAfterAction: supportsSearchAfter && searchAfterAction,
       addArrTags,
       removeArrTags,
     });
@@ -313,16 +317,16 @@ export function QueryActionBar({
         </>
       )}
 
-      {effectiveActionType.includes("DELETE") && (
+      {supportsImportExclusion && (
         <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Checkbox checked={addImportExclusion} onCheckedChange={(c) => setAddImportExclusion(c === true)} disabled={controlsDisabled} />
           Add import exclusion
         </label>
       )}
-      {effectiveActionType.includes("DELETE_FILES") && (
+      {supportsSearchAfter && (
         <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Checkbox checked={searchAfterAction} onCheckedChange={(c) => setSearchAfterAction(c === true)} disabled={controlsDisabled} />
-          Search after
+          {needsProfile ? "Search for upgrade" : "Search after"}
         </label>
       )}
 
