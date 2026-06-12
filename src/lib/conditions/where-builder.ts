@@ -382,14 +382,22 @@ const genreLabelsHandler: FieldHandler = (operator, value, field, negate) => {
   const matchValues = parts.length > 0 ? parts : [strValue];
   let clause: Prisma.MediaItemWhereInput;
   switch (operator) {
-    case "equals":
-      clause = { [column]: { array_contains: strValue } };
-      break;
-    case "contains":
-      clause = matchValues.length === 1
+    case "equals": {
+      const positive: Prisma.MediaItemWhereInput = { [column]: { array_contains: strValue } };
+      // On negate, a NULL JSON array must match (Phase 2 includes it) — union
+      // Prisma.DbNull, the array-column analogue of applyNegateNullable.
+      return negate
+        ? { OR: [{ [column]: { equals: Prisma.DbNull } }, { NOT: positive }] }
+        : positive;
+    }
+    case "contains": {
+      const positive: Prisma.MediaItemWhereInput = matchValues.length === 1
         ? { [column]: { array_contains: matchValues[0] } }
         : { OR: matchValues.map((v) => ({ [column]: { array_contains: v } })) };
-      break;
+      return negate
+        ? { OR: [{ [column]: { equals: Prisma.DbNull } }, { NOT: positive }] }
+        : positive;
+    }
     case "notEquals":
       // JSON column NULL needs Prisma.DbNull, not SQL null. The withNullSafety
       // helper uses `{ [col]: null }` which targets SQL NULL — for JSON arrays

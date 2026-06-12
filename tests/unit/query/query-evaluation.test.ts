@@ -332,3 +332,48 @@ describe("Series-aggregate fields against non-series items (safety)", () => {
     expect(evaluateAllQueryRulesInMemory(groups, oldMovie, undefined, undefined)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Audit regressions — Phase 2 fail-open fixes (genre/labels array evaluator,
+// videoProfile select gap surrogate, hasExternalId, isWatchlisted)
+// ---------------------------------------------------------------------------
+
+describe("evaluateAllQueryRulesInMemory — audit fail-open regressions", () => {
+  const grp = (rule: Partial<QueryRule> & Pick<QueryRule, "field" | "operator" | "value">): QueryGroup[] => [
+    { id: "g", condition: "AND", rules: [makeRule(rule)], groups: [] },
+  ];
+
+  it("genre notEquals does not match an item that HAS that genre", () => {
+    const item = { id: "1", genres: ["Horror", "Thriller"] };
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "genre", operator: "notEquals", value: "Horror" }), item, undefined, undefined)).toBe(false);
+  });
+
+  it("genre notEquals matches an item without the genre (and null genres)", () => {
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "genre", operator: "notEquals", value: "Horror" }), { id: "1", genres: ["Comedy"] }, undefined, undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "genre", operator: "notEquals", value: "Horror" }), { id: "2", genres: null }, undefined, undefined)).toBe(true);
+  });
+
+  it("genre matchesWildcard is NOT vacuously true (was: default → match everything)", () => {
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "genre", operator: "matchesWildcard", value: "Hor*" }), { id: "1", genres: ["Horror"] }, undefined, undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "genre", operator: "matchesWildcard", value: "Hor*" }), { id: "2", genres: ["Comedy"] }, undefined, undefined)).toBe(false);
+    // The fail-open case: an unrelated wildcard must not sweep every item
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "genre", operator: "matchesWildcard", value: "Sci*" }), { id: "3", genres: ["Drama"] }, undefined, undefined)).toBe(false);
+  });
+
+  it("hasExternalId contains is source list-membership, not match-everything", () => {
+    const withTmdb = { id: "1", externalIds: [{ source: "TMDB" }] };
+    const withNone = { id: "2", externalIds: [] };
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "hasExternalId", operator: "contains", value: "TMDB|IMDB" }), withTmdb, undefined, undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "hasExternalId", operator: "contains", value: "TMDB|IMDB" }), withNone, undefined, undefined)).toBe(false);
+  });
+
+  it("isWatchlisted isNotNull is the all-true tautology; isNull is all-false", () => {
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "isWatchlisted", operator: "isNotNull", value: "" }), { id: "1", isWatchlisted: false }, undefined, undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "isWatchlisted", operator: "isNull", value: "" }), { id: "1", isWatchlisted: true }, undefined, undefined)).toBe(false);
+  });
+
+  it("videoProfile notMatchesWildcard against a real value (no longer always-true on undefined)", () => {
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "videoProfile", operator: "notMatchesWildcard", value: "main 10*" }), { id: "1", videoProfile: "Main 10" }, undefined, undefined)).toBe(false);
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "videoProfile", operator: "notMatchesWildcard", value: "main 10*" }), { id: "2", videoProfile: "High" }, undefined, undefined)).toBe(true);
+  });
+});

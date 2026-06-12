@@ -260,6 +260,12 @@ const ITEM_SELECT_FULL = {
   ratingCount: true,
   libraryId: true,
   parentSummary: true,
+  // Condition fields that previously fell to `undefined` in Phase 2 — an
+  // unselected column read as null diverged from Phase 1 (e.g.
+  // `videoProfile notMatchesWildcard` matched every item).
+  albumTitle: true,
+  videoProfile: true,
+  scanType: true,
   streams: {
     select: {
       streamType: true, language: true, languageCode: true, codec: true,
@@ -930,6 +936,10 @@ function evaluateArrayFieldInMemory(
     case "equals":
       result = arr !== null && arr.includes(value);
       break;
+    case "notEquals":
+      // NULL array matches notEquals (Phase 1 unions Prisma.DbNull)
+      result = arr === null || !arr.includes(value);
+      break;
     case "contains": {
       const parts = value.split("|").filter(Boolean);
       const matchValues = parts.length > 0 ? parts : [value];
@@ -942,6 +952,16 @@ function evaluateArrayFieldInMemory(
       result = arr === null || !matchValues.some((v) => arr.includes(v));
       break;
     }
+    case "matchesWildcard": {
+      const re = wildcardToRegex(value.toLowerCase());
+      result = arr !== null && arr.some((v) => re.test(String(v).toLowerCase()));
+      break;
+    }
+    case "notMatchesWildcard": {
+      const re = wildcardToRegex(value.toLowerCase());
+      result = arr === null || !arr.some((v) => re.test(String(v).toLowerCase()));
+      break;
+    }
     case "isNull":
       result = arr === null || arr.length === 0;
       break;
@@ -949,7 +969,8 @@ function evaluateArrayFieldInMemory(
       result = arr !== null && arr.length > 0;
       break;
     default:
-      result = true;
+      // Unknown operator → match nothing (bypass negate), never fail open
+      return false;
   }
   return negate ? !result : result;
 }
