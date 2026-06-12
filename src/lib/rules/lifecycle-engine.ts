@@ -11,6 +11,7 @@ import { isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWatche
 import { detectStreamAudioProfile, detectStreamDynamicRange } from "./stream-detection";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import {
+  pushDownGroupNegation,
   MB_IN_BYTES,
   DURATION_MS_PER_MIN,
   wildcardToRegex,
@@ -245,9 +246,11 @@ function evaluateGroupPreFilter(group: LifecycleRuleGroup): PreFilterClause | nu
 }
 
 function buildGroupConditionsPreFilter(ruleGroups: LifecycleRuleGroup[]): Prisma.MediaItemWhereInput {
+  // Rewrite group-level NOT into per-rule negation first — see negation.ts.
+  const normalizedGroups = pushDownGroupNegation(ruleGroups);
   const groupClauses: Array<{ condition: "AND" | "OR"; clause: PreFilterClause }> = [];
 
-  for (const group of ruleGroups) {
+  for (const group of normalizedGroups) {
     const result = evaluateGroupPreFilter(group);
     if (result === null) continue;
     groupClauses.push({ condition: group.condition, clause: result });
@@ -1993,7 +1996,8 @@ export function evaluateAllRulesInMemory(
   if (rules.length === 0) return false;
 
   if (isRuleGroups(rules)) {
-    const groups = rules as LifecycleRuleGroup[];
+    // Same normalization as Phase 1 — the two phases must agree (negation.ts)
+    const groups = pushDownGroupNegation(rules as LifecycleRuleGroup[]);
     const results: Array<{ condition: LifecycleRuleCondition; result: boolean }> = [];
 
     for (let i = 0; i < groups.length; i++) {

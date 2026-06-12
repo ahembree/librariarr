@@ -7,6 +7,7 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -150,6 +151,46 @@ function hasMixedConnectives(items: Array<{ condition: LifecycleRuleCondition }>
   return conditions.length >= 2 && new Set(conditions).size > 1;
 }
 
+// ─── Predicate (operator + negate) presentation ─────────────────────────────
+// Negation lives in the operator dropdown instead of a separate NOT switch.
+// Operators with dedicated negative twins keep using them; the rest get
+// synthesized "Not …" entries that write { operator, negate: true } — the
+// exact pair the old switch wrote, so stored rules are untouched.
+
+const NEGATIVE_TWIN: Record<string, string> = {
+  equals: "notEquals",
+  contains: "notContains",
+  inLastDays: "notInLastDays",
+  matchesWildcard: "notMatchesWildcard",
+  isNull: "isNotNull",
+};
+const POSITIVE_TWIN: Record<string, string> = Object.fromEntries(
+  Object.entries(NEGATIVE_TWIN).map(([pos, neg]) => [neg, pos]),
+);
+/** Operators with no stored twin — these get synthesized "Not …" entries */
+const SYNTH_NEGATABLE = new Set([
+  "greaterThan",
+  "greaterThanOrEqual",
+  "lessThan",
+  "lessThanOrEqual",
+  "before",
+  "after",
+  "between",
+]);
+const NOT_PREFIX = "not:";
+
+/** Dropdown value for a stored (operator, negate) pair. Legacy pairs like
+ *  {equals, negate} display as their twin ("Not Equals"); double negation
+ *  ({notEquals, negate}) resolves to the positive — both provably evaluate
+ *  identically (see where-builder.ts null-semantics helpers). The stored
+ *  pair is only rewritten if the user actually changes the predicate. */
+function predicateValue(operator: string, negate: boolean | undefined): string {
+  if (!negate) return operator;
+  if (NEGATIVE_TWIN[operator]) return NEGATIVE_TWIN[operator];
+  if (POSITIVE_TWIN[operator]) return POSITIVE_TWIN[operator];
+  return `${NOT_PREFIX}${operator}`;
+}
+
 /** Inline explainer shown when a group (or the root) mixes AND with OR. */
 function MixedLogicHint({ scope }: { scope: "conditions" | "groups" }) {
   return (
@@ -264,6 +305,25 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
   const setHovered = useBuilderHoverSetter();
   const [fieldOpen, setFieldOpen] = useState(false);
   const unit = isNullOp ? null : fieldUnit(fieldDef?.label, rule.operator);
+
+  // Predicate dropdown: positives + synthesized "Not …" entries, plus a
+  // fallback so a legacy (operator, negate) pair whose entry isn't listed
+  // (e.g. operator hidden for this field) still displays.
+  const selectedPredicate = predicateValue(rule.operator, rule.negate);
+  const negatedOperatorOptions = applicableOperators.filter((o) =>
+    SYNTH_NEGATABLE.has(o.value),
+  );
+  const predicateFallback = (() => {
+    const listed =
+      applicableOperators.some((o) => o.value === selectedPredicate) ||
+      negatedOperatorOptions.some((o) => `${NOT_PREFIX}${o.value}` === selectedPredicate);
+    if (listed) return null;
+    const isNot = selectedPredicate.startsWith(NOT_PREFIX);
+    const base = isNot ? selectedPredicate.slice(NOT_PREFIX.length) : selectedPredicate;
+    const def = config.operators.find((o) => o.value === base);
+    const label = fieldType === "date" && def?.dateLabel ? def.dateLabel : (def?.label ?? base);
+    return { value: selectedPredicate, label: isNot ? `Not ${label}` : label };
+  })();
 
   return (
     <div
@@ -413,14 +473,16 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
           </PopoverContent>
         </Popover>
 
-        {/* Operator selector */}
+        {/* Predicate selector — operator + negation in one control */}
         <Select
-          value={rule.operator}
+          value={selectedPredicate}
           onValueChange={(v) => {
-            const update: Partial<R> = { operator: v } as Partial<R>;
-            if (v === "between" && !String(rule.value).includes(",")) {
+            const negate = v.startsWith(NOT_PREFIX);
+            const op = negate ? v.slice(NOT_PREFIX.length) : v;
+            const update: Partial<R> = { operator: op, negate } as Partial<R>;
+            if (op === "between" && !String(rule.value).includes(",")) {
               (update as Record<string, unknown>).value = `${rule.value},`;
-            } else if (v !== "between" && rule.operator === "between") {
+            } else if (op !== "between" && rule.operator === "between") {
               (update as Record<string, unknown>).value = String(rule.value).split(",")[0] ?? "";
             }
             onUpdate(groupId, rule.id, update);
@@ -435,6 +497,17 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
                 {fieldType === "date" && o.dateLabel ? o.dateLabel : o.label}
               </SelectItem>
             ))}
+            {negatedOperatorOptions.length > 0 && <SelectSeparator />}
+            {negatedOperatorOptions.map((o) => (
+              <SelectItem key={`${NOT_PREFIX}${o.value}`} value={`${NOT_PREFIX}${o.value}`}>
+                Not {fieldType === "date" && o.dateLabel ? o.dateLabel : o.label}
+              </SelectItem>
+            ))}
+            {predicateFallback && (
+              <SelectItem value={predicateFallback.value}>
+                {predicateFallback.label}
+              </SelectItem>
+            )}
           </SelectContent>
         </Select>
       </div>
@@ -590,22 +663,6 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
           )}
         </div>
       )}
-
-      {/* Negate toggle */}
-      <div className="flex items-center gap-1 shrink-0" title="Negate this condition">
-        <Switch
-          checked={rule.negate ?? false}
-          onCheckedChange={(checked) =>
-            onUpdate(groupId, rule.id, { negate: checked } as Partial<R>)
-          }
-          className="scale-75"
-        />
-        <span
-          className={`text-xs ${rule.negate ? "text-red font-medium" : "text-muted-foreground"}`}
-        >
-          NOT
-        </span>
-      </div>
 
       {/* Desktop: individual icon buttons. Enable/duplicate reveal on row
           hover (or keyboard focus) to keep resting rows calm; a disabled
@@ -918,7 +975,7 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
   return (
     <Card
       ref={setDropRef}
-      className={`p-3 sm:p-4 space-y-2 overflow-hidden ${BG_COLORS[depth % BG_COLORS.length]} ${SPINE_COLORS[depth % SPINE_COLORS.length]} ${isOver ? ACTIVE_BORDER_COLORS[depth % ACTIVE_BORDER_COLORS.length] : BORDER_COLORS[depth % BORDER_COLORS.length]} ${group.enabled === false ? "opacity-50" : ""} ${isStreamQuery ? "border-primary/30" : ""}`}
+      className={`p-3 sm:p-4 space-y-2 overflow-hidden ${BG_COLORS[depth % BG_COLORS.length]} ${SPINE_COLORS[depth % SPINE_COLORS.length]} ${isOver ? ACTIVE_BORDER_COLORS[depth % ACTIVE_BORDER_COLORS.length] : group.negate ? "border-red/35" : BORDER_COLORS[depth % BORDER_COLORS.length]} ${group.enabled === false ? "opacity-50" : ""} ${isStreamQuery ? "border-primary/30" : ""}`}
     >
       {/* Stream query name - positioned at top-left, separate from the query logic */}
       {isStreamQuery && (
@@ -1016,6 +1073,29 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
           )}
         </div>
         <div className="flex items-center gap-0.5">
+          {/* Group NOT — matches items the group does NOT match. Stream
+              queries already negate via their ANY/NO quantifier. */}
+          {!isStreamQuery && (
+            <div
+              className="mr-1 flex shrink-0 items-center gap-1"
+              title="Invert this group — match items it does NOT match"
+            >
+              <Switch
+                checked={group.negate ?? false}
+                onCheckedChange={(checked) =>
+                  onUpdateTree(group.id, (g) => ({
+                    ...g,
+                    negate: checked || undefined,
+                  }))
+                }
+                className="scale-75"
+                aria-label="Negate group"
+              />
+              <span className={`text-xs ${group.negate ? "text-red font-medium" : "text-muted-foreground"}`}>
+                NOT
+              </span>
+            </div>
+          )}
           {/* Desktop: individual icon buttons */}
           {onToggleGroupEnabled && (
             <Button

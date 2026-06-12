@@ -34,6 +34,7 @@ import {
 import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
 import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
 import { buildGroupConditions } from "@/lib/conditions/group-composition";
+import { pushDownGroupNegation } from "@/lib/conditions/negation";
 
 /**
  * Convert a single query rule to a Prisma WHERE clause.
@@ -1537,9 +1538,12 @@ export function evaluateAllQueryRulesInMemory(
   arrMeta: ArrMetadata | undefined,
   seerrMeta: SeerrMetadata | undefined,
 ): boolean {
+  // Rewrite group-level NOT into per-rule negation first (negation.ts) so
+  // this phase agrees with the Phase 1 WHERE built by buildGroupConditions.
+  const normalizedGroups = pushDownGroupNegation(groups);
   const results: Array<{ condition: LifecycleRuleCondition; passed: boolean }> = [];
 
-  for (const group of groups) {
+  for (const group of normalizedGroups) {
     const result = evaluateQueryGroupInMemory(group, item, arrMeta, seerrMeta);
     if (result === null) continue;
     results.push({ condition: group.condition, passed: result });

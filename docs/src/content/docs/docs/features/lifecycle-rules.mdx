@@ -32,7 +32,9 @@ Each individual rule consists of:
 2. **Operator** — how to compare (e.g., `equals`, `greaterThan`, `before`)
 3. **Value** — the target value
 
-Rules can be **negated** (NOT) to invert their logic.
+Negation is part of the operator choice: alongside each comparison the picker offers its inverse — `Not Equals`, `Not Contains`, `Not Greater Than`, `Not Between`, and so on.
+
+**Whole groups can be negated too.** Every group has a **NOT** toggle that inverts its entire result — for example `NOT (watched by Alice OR watched by Bob)` matches items watched by neither. The Logic Preview shows the negation in place, and items the group would have matched are excluded instead. (Stream query groups negate through their ANY/NO quantifier rather than a NOT toggle.)
 
 ## Available Fields
 
@@ -142,7 +144,7 @@ These fields require a configured [Seerr](/docs/integrations/seerr/) integration
 3. **Group rules**: Use AND/OR groups to combine conditions
 4. **Nest groups**: Create sub-groups for complex logic
 5. **Toggle rules**: Enable/disable individual rules or groups without deleting them
-6. **Negate rules**: Apply NOT to invert a rule's logic
+6. **Negate**: Pick a "Not …" operator to invert a condition, or flip a group's NOT toggle to invert the whole group
 7. **Reorder**: Drag rules to change their position within a group
 
 ### Example: Identify Old, Unwatched Movies

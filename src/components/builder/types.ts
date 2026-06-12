@@ -20,6 +20,8 @@ export interface BaseGroup<R extends BaseRule = BaseRule> {
   rules: R[];
   groups: BaseGroup<R>[];
   enabled?: boolean;
+  /** Invert the whole group's result (NOT) */
+  negate?: boolean;
   /** When set, this group is a stream query — rules apply to individual stream records */
   streamQuery?: { streamType: string; quantifier?: "any" | "none" | "all" };
 }

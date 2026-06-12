@@ -197,7 +197,10 @@ function computeGroupMatchStates<R extends BaseRule>(
       }
     }
 
-    const passes = combinedResult ?? true;
+    // Group-level NOT inverts the combined result (mirrors the engine's
+    // push-down normalization — see lib/conditions/negation.ts)
+    const combined = combinedResult ?? true;
+    const passes = group.negate ? !combined : combined;
 
     if (passes) {
       passing.add(group.id);

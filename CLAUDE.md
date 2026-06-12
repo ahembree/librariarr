@@ -240,7 +240,7 @@ When users connect multiple servers, dedup prevents duplicate items from appeari
 
 ### Rule Engine
 
-- Rules are recursive `RuleGroup` structures with AND/OR operators, stored as JSON in `RuleSet`
+- Rules are recursive `RuleGroup` structures with AND/OR operators, stored as JSON in `RuleSet`. Rules and groups support `negate`; group-level negation is normalized away before evaluation by `pushDownGroupNegation` (`src/lib/conditions/negation.ts`, De Morgan push-down into per-rule negation) so both evaluation phases share NULL semantics
 - Two-phase evaluation: Phase 1 converts rules to Prisma WHERE clauses, Phase 2 post-filters in memory for Arr/Seerr metadata, stream aggregation, and wildcard pattern matching
 - File size rules: user inputs in MB, engine converts to bytes for DB queries
 

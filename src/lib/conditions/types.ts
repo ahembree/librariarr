@@ -50,6 +50,9 @@ export interface ConditionGroup {
   rules: Condition[];
   groups: ConditionGroup[];
   enabled?: boolean;
+  /** Invert the whole group's result. Normalized away before evaluation by
+   *  pushDownGroupNegation (negation.ts) — neither engine phase sees it. */
+  negate?: boolean;
   /** When set, this group is a stream query — rules apply to individual stream records */
   streamQuery?: {
     streamType: StreamQueryStreamType;

@@ -14,6 +14,7 @@
 import { Prisma } from "@/generated/prisma/client";
 import type { Condition, ConditionGroup, ConditionLogic } from "./types";
 import { isStreamQueryGroup } from "./stream-query";
+import { pushDownGroupNegation } from "./negation";
 import { buildStreamQueryClause } from "./stream-query-where";
 
 export type RuleToWhereFn = (rule: Condition) => Prisma.MediaItemWhereInput;
@@ -72,9 +73,12 @@ export function buildGroupConditions(
   groups: ConditionGroup[],
   ruleToWhere: RuleToWhereFn,
 ): Prisma.MediaItemWhereInput {
+  // Rewrite group-level NOT into per-rule negation first — see negation.ts
+  // for why neither phase evaluates the flag directly.
+  const normalizedGroups = pushDownGroupNegation(groups);
   const groupClauses: Array<{ condition: ConditionLogic; where: Prisma.MediaItemWhereInput }> = [];
 
-  for (const group of groups) {
+  for (const group of normalizedGroups) {
     const where = evaluateGroup(group, ruleToWhere);
     if (!where) continue;
     groupClauses.push({ condition: group.condition, where });
