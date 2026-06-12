@@ -358,6 +358,10 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
             // popped its tooltip persistently on touch — keep focus on the
             // hamburger instead; keyboard users can Tab into the drawer.
             onOpenAutoFocus={(e) => e.preventDefault()}
+            // The drawer closes in the same tick the search palette opens;
+            // returning focus to the hamburger would steal it from the
+            // palette's input and dismiss the mobile keyboard.
+            onCloseAutoFocus={(e) => e.preventDefault()}
           >
             <SheetTitle className="sr-only">Navigation</SheetTitle>
             <TooltipProvider>

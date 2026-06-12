@@ -210,7 +210,9 @@ function PaletteBody({ onOpenChange }: { onOpenChange: (open: boolean) => void }
         onValueChange={setQuery}
         // The global *:focus-visible ring boxes the input awkwardly inside
         // the dialog — focus is already unambiguous here, so suppress it.
-        className="h-[52px] text-[15px] focus-visible:shadow-none"
+        // text-base below sm: anything under 16px makes iOS Safari zoom the
+        // whole page when the input focuses.
+        className="h-[52px] text-base focus-visible:shadow-none sm:text-[15px]"
       />
       {/* Zero-height anchor: the activity bar pulses over the divider while
           fetching, with no layout shift in either state */}
