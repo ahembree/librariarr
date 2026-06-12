@@ -80,7 +80,6 @@ import {
   SquareCheck,
   Square,
   Clock,
-  Timer,
   Cpu,
   Globe,
   Plus,
@@ -310,6 +309,44 @@ function formatMediaTitle(s: SessionWithServer): string {
   return s.year ? `${s.title} (${s.year})` : s.title;
 }
 
+/** Split a session into a primary line (what to lead with) and a
+ *  secondary context line, per media type. */
+function sessionTitleParts(s: SessionWithServer): { primary: string; secondary: string | null } {
+  if (s.type === "episode") {
+    const show = s.grandparentTitle || s.parentTitle;
+    if (show) {
+      const secondary = [s.parentTitle !== show ? s.parentTitle : null, s.title]
+        .filter(Boolean)
+        .join(" \u00b7 ");
+      return { primary: show, secondary: secondary || null };
+    }
+    return { primary: s.title, secondary: null };
+  }
+  if (s.type === "track") {
+    const secondary = [s.grandparentTitle, s.parentTitle].filter(Boolean).join(" \u00b7 ");
+    return { primary: s.title, secondary: secondary || null };
+  }
+  const meta = [s.year ? String(s.year) : null, s.contentRating ?? null]
+    .filter(Boolean)
+    .join(" \u00b7 ");
+  return { primary: s.title, secondary: meta || null };
+}
+
+/** One-line summary of what is being transcoded, e.g.
+ *  "video HEVC \u00b7 audio EAC3 \u00b7 1.4\u00d7 \u00b7 HW". */
+function transcodeSummary(t: SessionTranscoding): string {
+  const parts: string[] = [];
+  if (t.videoDecision === "transcode") {
+    parts.push(t.sourceVideoCodec ? `video ${t.sourceVideoCodec.toUpperCase()}` : "video");
+  }
+  if (t.audioDecision === "transcode") {
+    parts.push(t.sourceAudioCodec ? `audio ${t.sourceAudioCodec.toUpperCase()}` : "audio");
+  }
+  if (t.speed !== undefined) parts.push(`${t.speed.toFixed(1)}\u00d7`);
+  if (t.transcodeHwRequested !== undefined) parts.push(t.transcodeHwRequested ? "HW" : "SW");
+  return parts.join(" \u00b7 ");
+}
+
 
 
 function formatBandwidth(kbps: number): string {
@@ -340,11 +377,11 @@ function MediaTypeIcon({ type, className }: { type: string; className?: string }
 function getStateConfig(state: string) {
   switch (state) {
     case "playing":
-      return { icon: Play, label: "Playing", className: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30" };
+      return { icon: Play, label: "Playing", chip: "bg-green-dim text-green border-green/25", bar: "bg-primary" };
     case "paused":
-      return { icon: Pause, label: "Paused", className: "bg-amber/15 text-amber border-amber/30" };
+      return { icon: Pause, label: "Paused", chip: "bg-amber-dim text-amber border-amber/25", bar: "bg-amber" };
     default:
-      return { icon: Loader2, label: "Buffering", className: "bg-sky-500/15 text-sky-400 border-sky-500/30" };
+      return { icon: Loader2, label: "Buffering", chip: "bg-sky-dim text-sky border-sky/25", bar: "bg-sky" };
   }
 }
 
@@ -538,226 +575,221 @@ function SessionCard({
   onTerminate: (session: SessionWithServer) => void;
   onOpenDetail: (session: SessionWithServer) => void;
 }) {
+  const { getBadgeStyle } = useChipColors();
   const stateConfig = getStateConfig(session.player.state);
   const StateIcon = stateConfig.icon;
 
   const streamInfo = getStreamDecision(session.transcoding);
-  const progress = session.duration && session.viewOffset
-    ? Math.min((session.viewOffset / session.duration) * 100, 100)
+  const duration = session.duration ?? 0;
+  const hasDuration = duration > 0;
+  const progress = hasDuration
+    ? Math.min(((session.viewOffset ?? 0) / duration) * 100, 100)
     : 0;
   const artUrl = getSessionArtworkUrl(session);
-  const isTranscoding = session.transcoding && session.transcoding.videoDecision === "transcode";
-
-  const CheckIcon = selected ? SquareCheck : Square;
+  const isTranscoding =
+    !!session.transcoding &&
+    (session.transcoding.videoDecision === "transcode" ||
+      session.transcoding.audioDecision === "transcode");
+  const { primary, secondary } = sessionTitleParts(session);
+  const resolution = session.videoResolution
+    ? normalizeResolutionLabel(session.videoResolution)
+    : null;
+  const eta = formatEstimatedEnd(session);
+  const playerMeta = [session.player.product, session.player.platform, session.player.address]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
-    <Card
-      className={`overflow-hidden cursor-pointer transition-all duration-200 relative py-0 ${
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`View details for ${primary}`}
+      onClick={() => onOpenDetail(session)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpenDetail(session);
+        }
+      }}
+      className={`group relative flex cursor-pointer overflow-hidden rounded-xl border bg-card text-left shadow-[var(--shadow-card)] transition-[border-color,box-shadow] duration-200 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none ${
         selected
-          ? "ring-2 ring-primary bg-primary/5"
-          : "hover:ring-1 hover:ring-primary/30 hover:scale-[1.02] hover:shadow-lg hover:shadow-primary/5"
+          ? "border-primary/60 ring-1 ring-primary/60"
+          : "border-white/6 hover:border-border-strong"
       }`}
-      onClick={() => onToggleSelect(session)}
     >
-      {/* Blurred artwork background */}
+      {/* Blurred artwork wash behind the whole card */}
       {artUrl && (
-        <div className="absolute inset-0 z-0 overflow-hidden">
+        <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden" aria-hidden>
           <FadeImage
             src={artUrl}
             alt=""
             loading="lazy"
-            className="w-full h-full object-cover blur-xl scale-110 opacity-10"
+            className="h-full w-full scale-110 object-cover opacity-[0.08] blur-xl"
           />
         </div>
       )}
-      <CardContent className="p-0 relative z-10">
-        <div className="flex items-stretch">
-          {/* Artwork — flush left, constrained to content height */}
-          {artUrl && (
-            <div
-              className="shrink-0 w-40 overflow-hidden cursor-pointer transition-all duration-300 hover:scale-105 hover:shadow-xl hover:shadow-primary/20 hover:ring-2 hover:ring-primary/50 hover:z-20 relative self-stretch"
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpenDetail(session);
-              }}
-            >
-              <FadeImage
-                src={artUrl}
-                alt={session.title}
-                loading="lazy"
-                className="w-full h-full object-cover absolute inset-0"
-              />
-            </div>
-          )}
 
-          {/* Right side content */}
-          <div className="flex-1 min-w-0 p-4">
-            <div className="flex items-start gap-3">
-              {/* Selection checkbox */}
-              <div className="shrink-0 pt-0.5">
-                <CheckIcon className={`h-4 w-4 ${selected ? "text-primary" : "text-muted-foreground/50"}`} />
-              </div>
-
-              {/* Content */}
-              <div className="flex-1 min-w-0 space-y-2">
-                {/* Top row: avatar + user + state */}
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    {session.userThumb ? (
-                      <FadeImage
-                        src={session.userThumb}
-                        alt={session.username}
-                        loading="lazy"
-                        className="h-6 w-6 rounded-full object-cover shrink-0"
-                      />
-                    ) : (
-                      <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/15 text-primary font-semibold text-[10px] shrink-0">
-                        {session.username.charAt(0).toUpperCase()}
-                      </div>
-                    )}
-                    <span className="font-medium text-sm truncate">{session.username}</span>
-                  </div>
-                  <ColorChip className={`shrink-0 gap-1 text-[11px] ${stateConfig.className}`}>
-                    <StateIcon className={`h-3 w-3 ${session.player.state === "buffering" ? "animate-spin" : ""}`} />
-                    {stateConfig.label}
-                  </ColorChip>
-                </div>
-
-                {/* Media title — wraps instead of truncating */}
-                <div className="flex items-start gap-1.5">
-                  <MediaTypeIcon type={session.type} className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
-                  <p className="text-sm text-muted-foreground wrap-break-word">
-                    {formatMediaTitle(session)}
-                  </p>
-                </div>
-
-                {/* Transcode details — always rendered for consistent card height */}
-                <div className={`rounded-md px-2.5 py-1.5 space-y-0.5 ${isTranscoding && session.transcoding ? "bg-amber/5 border border-amber/20" : "invisible"}`}>
-                  <div className="flex items-center gap-1.5 text-[11px] text-amber">
-                    <Cpu className="h-3 w-3" />
-                    <span>Transcode Details</span>
-                  </div>
-                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
-                    {isTranscoding && session.transcoding ? (
-                      <>
-                        {session.transcoding.sourceVideoCodec && (
-                          <span>
-                            Video: {session.transcoding.sourceVideoCodec.toUpperCase()} &rarr; {session.transcoding.videoDecision}
-                          </span>
-                        )}
-                        {session.transcoding.sourceAudioCodec && (
-                          <span>
-                            Audio: {session.transcoding.sourceAudioCodec.toUpperCase()} &rarr; {session.transcoding.audioDecision}
-                          </span>
-                        )}
-                        {session.transcoding.transcodeHwRequested !== undefined && (
-                          <span>HW: {session.transcoding.transcodeHwRequested ? "Yes" : "No"}</span>
-                        )}
-                        {session.transcoding.speed !== undefined && (
-                          <span>Speed: {session.transcoding.speed.toFixed(1)}x</span>
-                        )}
-                      </>
-                    ) : (
-                      <span>&nbsp;</span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Progress bar */}
-                {session.duration && session.duration > 0 && (
-                  <div className="space-y-1">
-                    <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
-                      <div
-                        className="h-full rounded-full bg-primary transition-all duration-500"
-                        style={{ width: `${progress}%` }}
-                      />
-                    </div>
-                    <div className="flex justify-between text-[10px] text-muted-foreground">
-                      <span>{session.viewOffset ? formatDurationClock(session.viewOffset) : "0:00"}</span>
-                      <span>{formatDurationClock(session.duration)}</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Start time + estimated end */}
-                {session.startedAt > 0 && (
-                  <div className="flex flex-wrap justify-between text-[10px] text-muted-foreground gap-2">
-                    <span className="flex items-center gap-1">
-                      <Clock className="h-2.5 w-2.5" />
-                      Started {formatTime(session.startedAt)}
-                    </span>
-                    {session.duration && (
-                      <span className="flex items-center gap-1">
-                        <Timer className="h-2.5 w-2.5" />
-                        ETA {formatEstimatedEnd(session) ?? "N/A"}
-                      </span>
-                    )}
-                  </div>
-                )}
-
-                {/* Badges row */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <ColorChip className="gap-1">
-                    {session.player.local ? (
-                      <Wifi className="h-2.5 w-2.5" />
-                    ) : (
-                      <WifiOff className="h-2.5 w-2.5" />
-                    )}
-                    {session.player.local ? "LAN" : "WAN"}
-                  </ColorChip>
-                  <ColorChip
-                    className={`gap-1 ${
-                      streamInfo.direct ? "" : "bg-amber/15 text-amber border-amber/30"
-                    }`}
-                  >
-                    {streamInfo.direct ? (
-                      <Zap className="h-2.5 w-2.5" />
-                    ) : (
-                      <Radio className="h-2.5 w-2.5" />
-                    )}
-                    {streamInfo.label}
-                  </ColorChip>
-                  {session.session.bandwidth > 0 && (
-                    <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                      {formatBandwidth(session.session.bandwidth)}
-                    </Badge>
-                  )}
-                  <ColorChip className={`gap-1 ${(SERVER_TYPE_STYLES[session.serverType] ?? DEFAULT_SERVER_STYLE).classes}`}>
-                    <Server className="h-2.5 w-2.5" />
-                    {session.serverName}
-                  </ColorChip>
-                </div>
-
-                {/* Player info + IP + terminate */}
-                <div className="flex items-center justify-between gap-2 pt-1">
-                  <span className="text-[11px] text-muted-foreground truncate flex items-center gap-1">
-                    {session.player.product} &middot; {session.player.platform}
-                    {session.player.address && (
-                      <>
-                        <Globe className="h-2.5 w-2.5 ml-1" />
-                        {session.player.address}
-                      </>
-                    )}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="shrink-0 h-7 text-xs bg-destructive/15 text-destructive hover:bg-destructive hover:text-destructive-foreground"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onTerminate(session);
-                    }}
-                  >
-                    <XCircle className="h-3.5 w-3.5 mr-1" />
-                    Terminate
-                  </Button>
-                </div>
-              </div>
-            </div>
+      {/* Poster rail */}
+      <div className="relative z-10 w-[96px] shrink-0 self-stretch overflow-hidden border-r border-white/5 bg-surface-2 sm:w-[104px]">
+        {artUrl ? (
+          <FadeImage
+            src={artUrl}
+            alt=""
+            loading="lazy"
+            className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+          />
+        ) : (
+          <div className="absolute inset-0 grid place-items-center">
+            <MediaTypeIcon type={session.type} className="h-6 w-6 text-faint" />
           </div>
+        )}
+      </div>
+
+      {/* Body */}
+      <div className="relative z-10 flex min-w-0 flex-1 flex-col gap-2 p-3.5 pb-4">
+        {/* Who + playback state */}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-pressed={selected}
+            aria-label={selected ? "Deselect stream" : "Select stream"}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleSelect(session);
+            }}
+            className="-ml-1 grid h-6 w-6 shrink-0 place-items-center"
+          >
+            <span
+              className={`grid h-[18px] w-[18px] place-items-center rounded-[5px] border transition-colors ${
+                selected
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border-strong bg-surface-0/60 text-transparent hover:border-primary/60"
+              }`}
+            >
+              <Check className="h-3 w-3" strokeWidth={3} />
+            </span>
+          </button>
+          {session.userThumb ? (
+            <FadeImage
+              src={session.userThumb}
+              alt=""
+              loading="lazy"
+              className="h-5 w-5 shrink-0 rounded-full object-cover"
+            />
+          ) : (
+            <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary/15 text-[9px] font-semibold text-primary">
+              {session.username.charAt(0).toUpperCase()}
+            </span>
+          )}
+          <span className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
+            {session.username}
+          </span>
+          <ColorChip className={`gap-1 text-[11px] ${stateConfig.chip}`}>
+            <StateIcon className={`h-3 w-3 ${session.player.state === "buffering" ? "animate-spin" : ""}`} />
+            {stateConfig.label}
+          </ColorChip>
         </div>
-      </CardContent>
-    </Card>
+
+        {/* What's playing */}
+        <div className="min-w-0">
+          <p className="line-clamp-2 text-sm leading-snug font-semibold">{primary}</p>
+          {secondary && (
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">{secondary}</p>
+          )}
+        </div>
+
+        {/* Stream facts */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <ColorChip
+            className={`gap-1 ${
+              streamInfo.direct
+                ? "bg-green-dim text-green border-green/25"
+                : "bg-amber-dim text-amber border-amber/25"
+            }`}
+          >
+            {streamInfo.direct ? (
+              <Zap className="h-2.5 w-2.5" />
+            ) : (
+              <Radio className="h-2.5 w-2.5" />
+            )}
+            {streamInfo.label}
+          </ColorChip>
+          {resolution && (
+            <ColorChip style={getBadgeStyle("resolution", resolution)}>{resolution}</ColorChip>
+          )}
+          <ColorChip className="gap-1">
+            {session.player.local ? (
+              <Wifi className="h-2.5 w-2.5" />
+            ) : (
+              <WifiOff className="h-2.5 w-2.5" />
+            )}
+            {session.player.local ? "LAN" : "WAN"}
+          </ColorChip>
+          {session.session.bandwidth > 0 && (
+            <ColorChip className="font-mono tabular-nums">
+              {formatBandwidth(session.session.bandwidth)}
+            </ColorChip>
+          )}
+          <ColorChip className={`gap-1 ${(SERVER_TYPE_STYLES[session.serverType] ?? DEFAULT_SERVER_STYLE).classes}`}>
+            <Server className="h-2.5 w-2.5" />
+            {session.serverName}
+          </ColorChip>
+        </div>
+
+        {/* Transcode summary — only when actually transcoding */}
+        {isTranscoding && session.transcoding && (
+          <p className="flex items-center gap-1.5 text-amber">
+            <Cpu className="h-3 w-3 shrink-0" />
+            <span className="truncate font-mono text-[10.5px]">
+              {transcodeSummary(session.transcoding)}
+            </span>
+          </p>
+        )}
+
+        {/* Player meta + times + terminate */}
+        <div className="mt-auto flex items-end justify-between gap-3 pt-1.5">
+          <div className="min-w-0 space-y-0.5 text-[11px] leading-tight text-faint">
+            <p className="truncate">{playerMeta}</p>
+            <p className="truncate font-mono text-[10.5px] tabular-nums">
+              {hasDuration
+                ? `${formatDurationClock(session.viewOffset ?? 0)} / ${formatDurationClock(duration)}${eta ? ` · ends ${eta}` : ""}`
+                : session.startedAt > 0
+                  ? `started ${formatTime(session.startedAt)}`
+                  : "—"}
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 shrink-0 bg-destructive/15 text-xs text-destructive hover:bg-destructive hover:text-destructive-foreground"
+            onClick={(e) => {
+              e.stopPropagation();
+              onTerminate(session);
+            }}
+          >
+            <XCircle className="h-3.5 w-3.5 mr-1" />
+            Terminate
+          </Button>
+        </div>
+      </div>
+
+      {/* Playback progress — flush along the bottom edge */}
+      {hasDuration && (
+        <div
+          className="absolute inset-x-0 bottom-0 z-20 h-[3px] bg-white/8"
+          role="progressbar"
+          aria-valuenow={Math.round(progress)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label="Playback progress"
+        >
+          <div
+            className={`h-full ${stateConfig.bar} transition-[width] duration-500`}
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1290,12 +1322,12 @@ export default function StreamManagerPage() {
             )}
             {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
             <span
-              className={`h-2 w-2 rounded-full ${connected ? "bg-emerald-500 animate-pulse" : "bg-muted-foreground"}`}
+              className={`h-2 w-2 rounded-full ${connected ? "bg-green animate-pulse shadow-[0_0_8px_var(--green)]" : "bg-muted-foreground"}`}
               title={connected ? "Live — connected to server" : "Connecting..."}
               role="status"
               aria-label={connected ? "Live — connected to server" : "Connecting to server"}
             />
-            {connected && <span className="text-xs text-emerald-400 hidden sm:inline">Live</span>}
+            {connected && <span className="text-xs text-green hidden sm:inline">Live</span>}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {sessions.length > 0 && (
@@ -1348,7 +1380,7 @@ export default function StreamManagerPage() {
             description="Streams will appear here when users start playing media."
           />
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 stagger-children">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 stagger-children">
             {sessions.map((s) => (
               <SessionCard
                 key={sessionKey(s)}
