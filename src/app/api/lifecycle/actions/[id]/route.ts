@@ -77,6 +77,20 @@ export async function POST(
     );
   }
 
+  // Exceptions added AFTER an action failed must still protect the item —
+  // exception creation deletes PENDING actions, but FAILED rows survive and
+  // could otherwise be force-retried against an excluded item.
+  const exception = await prisma.lifecycleException.findFirst({
+    where: { userId: session.userId, mediaItemId: action.mediaItemId },
+    select: { id: true },
+  });
+  if (exception) {
+    return NextResponse.json(
+      { error: "This item has a lifecycle exception and cannot be actioned" },
+      { status: 400 }
+    );
+  }
+
   const mediaItem = action.mediaItem;
 
   try {

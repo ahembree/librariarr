@@ -5,6 +5,7 @@ import { removePlexCollection } from "@/lib/lifecycle/collections";
 import { cleanupArrTags } from "@/lib/lifecycle/actions";
 import { validateRequest, ruleSetUpdateSchema } from "@/lib/validation";
 import { findFieldsInvalidForType } from "@/lib/conditions";
+import { validateActionConfig } from "@/lib/lifecycle/action-config";
 
 export async function PUT(
   request: NextRequest,
@@ -95,6 +96,27 @@ export async function PUT(
           { error: "Change Quality Profile actions require a target quality profile" },
           { status: 400 }
         );
+      }
+    }
+  }
+
+  // Validate the MERGED action configuration (PUT only sends changed
+  // fields): family of actionType must match the library type, and a
+  // referenced instance must exist in that family for this user.
+  if (actionType !== undefined || arrInstanceId !== undefined) {
+    const current = await prisma.ruleSet.findFirst({
+      where: { id, userId: session.userId },
+      select: { type: true, actionType: true, arrInstanceId: true },
+    });
+    if (current) {
+      const actionConfigError = await validateActionConfig({
+        userId: session.userId!,
+        libraryType: current.type,
+        actionType: actionType !== undefined ? actionType : current.actionType,
+        arrInstanceId: arrInstanceId !== undefined ? arrInstanceId : current.arrInstanceId,
+      });
+      if (actionConfigError) {
+        return NextResponse.json({ error: actionConfigError }, { status: 400 });
       }
     }
   }
