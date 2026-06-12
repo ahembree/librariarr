@@ -170,11 +170,18 @@ export function isValueValidForRule(
     const parts = strValue.split(",");
     if (parts.length !== 2) return false;
     if (fieldType === "number") {
-      return isStrictFiniteNumeric(parts[0]) && isStrictFiniteNumeric(parts[1]);
+      if (!isStrictFiniteNumeric(parts[0]) || !isStrictFiniteNumeric(parts[1])) return false;
+      // Inverted ranges (min > max) are always-false clauses, which
+      // negate=true would flip into match-everything — reject as malformed
+      // so both phases treat the rule as dead (bypassing negate).
+      return Number(parts[0]) <= Number(parts[1]);
     }
     if (fieldType === "date") {
       if (parts[0].trim() === "" || parts[1].trim() === "") return false;
-      return !isNaN(new Date(parts[0]).getTime()) && !isNaN(new Date(parts[1]).getTime());
+      const from = new Date(parts[0]).getTime();
+      const to = new Date(parts[1]).getTime();
+      if (isNaN(from) || isNaN(to)) return false;
+      return from <= to;
     }
     return false;
   }
@@ -194,6 +201,33 @@ export function isValueValidForRule(
   }
   // text — any string is comparable
   return true;
+}
+
+/**
+ * Pre-negate Phase 2 result for a NULL (or absent) column value, mirroring
+ * the Phase 1 clause shapes exactly:
+ *
+ *  - `isNull` → true, `isNotNull` → false (literal NULL checks).
+ *  - Negative-shaped operators (`notEquals`, `notContains`,
+ *    `notMatchesWildcard`) are `withNullSafety`-wrapped in Phase 1
+ *    (`OR field IS NULL`), so NULL rows always match them.
+ *  - Every positive predicate (equals, ordered comparisons, between,
+ *    contains, matchesWildcard, date operators including `notInLastDays`,
+ *    which is positive-shaped `< cutoff`) is `applyNegateNullable`-wrapped:
+ *    NULL rows never match unless the rule itself is negated — which the
+ *    caller applies AFTER this result.
+ *
+ * Phase 2 evaluators must use this instead of coercing NULL to 0/"" and
+ * comparing: coerced comparisons make predicates like `lessThan` or
+ * `equals 0` spuriously TRUE for missing values, diverging from the SQL.
+ */
+export function nullValueResult(operator: string): boolean {
+  return (
+    operator === "isNull" ||
+    operator === "notEquals" ||
+    operator === "notContains" ||
+    operator === "notMatchesWildcard"
+  );
 }
 
 // Non-nullable field metadata lives in ./field-metadata.ts. Re-exported here
@@ -254,4 +288,10 @@ export function hasSeriesAggregateRules(groups: ConditionGroup[]): boolean {
 
 export function hasWatchedByUserRules(groups: ConditionGroup[]): boolean {
   return anyRuleMatches(groups, (f) => f === "watchedByUser");
+}
+
+/** Resolution rules are evaluated in-memory in both engines (Phase 1 cannot
+ *  express normalizeResolutionLabel semantics) — see resolutionHandler. */
+export function hasResolutionRules(groups: ConditionGroup[]): boolean {
+  return anyRuleMatches(groups, (f) => f === "resolution");
 }

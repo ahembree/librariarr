@@ -25,7 +25,7 @@
  */
 import { Prisma } from "@/generated/prisma/client";
 import type { ConditionGroup } from "./types";
-import { UNSATISFIABLE_WHERE, isUnconfiguredContainsRule } from "./where-builder";
+import { escapeLike, UNSATISFIABLE_WHERE, isUnconfiguredContainsRule } from "./where-builder";
 import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "./helpers";
 import {
   isStreamQueryComputedField,
@@ -121,19 +121,19 @@ export function buildStreamQueryClause(group: ConditionGroup): Prisma.MediaItemW
       const strValue = String(value);
       const enumerable = isEnumerableField(field);
       switch (operator) {
-        case "equals": cond = { [column]: { equals: strValue, mode: "insensitive" } }; break;
+        case "equals": cond = { [column]: { equals: escapeLike(strValue), mode: "insensitive" } }; break;
         case "notEquals":
           // Stream column is nullable; include NULL-language/codec streams to
           // match Phase 2's `String(streamValue ?? "")` coalesce behavior.
-          cond = { OR: [{ [column]: null }, { [column]: { not: strValue, mode: "insensitive" } }] };
+          cond = { OR: [{ [column]: null }, { [column]: { not: escapeLike(strValue), mode: "insensitive" } }] };
           break;
         case "contains": {
           if (enumerable) {
             const parts = strValue.split("|").filter(Boolean);
             const matchValues = parts.length > 0 ? parts : [strValue];
-            cond = { OR: matchValues.map((v) => ({ [column]: { equals: v, mode: "insensitive" as const } })) };
+            cond = { OR: matchValues.map((v) => ({ [column]: { equals: escapeLike(v), mode: "insensitive" as const } })) };
           } else {
-            cond = { [column]: { contains: strValue, mode: "insensitive" } };
+            cond = { [column]: { contains: escapeLike(strValue), mode: "insensitive" } };
           }
           break;
         }
@@ -142,9 +142,9 @@ export function buildStreamQueryClause(group: ConditionGroup): Prisma.MediaItemW
           if (enumerable) {
             const parts = strValue.split("|").filter(Boolean);
             const matchValues = parts.length > 0 ? parts : [strValue];
-            notCond = { AND: matchValues.map((v) => ({ NOT: { [column]: { equals: v, mode: "insensitive" as const } } })) };
+            notCond = { AND: matchValues.map((v) => ({ NOT: { [column]: { equals: escapeLike(v), mode: "insensitive" as const } } })) };
           } else {
-            notCond = { NOT: { [column]: { contains: strValue, mode: "insensitive" } } };
+            notCond = { NOT: { [column]: { contains: escapeLike(strValue), mode: "insensitive" } } };
           }
           // Include NULL stream rows for the same Phase 2 parity reason.
           cond = { OR: [{ [column]: null }, notCond] };

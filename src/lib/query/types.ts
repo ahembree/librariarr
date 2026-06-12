@@ -21,6 +21,7 @@ import {
   hasArrRules as _hasArrRules,
   hasSeerrRules as _hasSeerrRules,
   hasCrossSystemRules as _hasCrossSystemRules,
+  hasResolutionRules as _hasResolutionRules,
   hasSeriesAggregateRules as _hasSeriesAggregateRules,
   hasWatchedByUserRules as _hasWatchedByUserRules,
   isSeriesAggregateField as _isSeriesAggregateField,
@@ -68,6 +69,7 @@ export const hasArrRules = _hasArrRules;
 export const hasSeerrRules = _hasSeerrRules;
 export const hasCrossSystemRules = _hasCrossSystemRules;
 export const hasSeriesAggregateRules = _hasSeriesAggregateRules;
+export const hasResolutionRules = _hasResolutionRules;
 export const hasWatchedByUserRules = _hasWatchedByUserRules;
 export const isSeriesAggregateField = _isSeriesAggregateField;
 

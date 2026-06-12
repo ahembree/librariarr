@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { QueryRule, QueryGroup, QueryDefinition, LifecycleRuleCondition } from "./types";
-import { GENRE_FIELD, LABELS_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules } from "./types";
+import { GENRE_FIELD, LABELS_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules } from "./types";
 import {
   isStreamQueryField, isStreamQueryGroup,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
@@ -35,6 +35,7 @@ import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
 import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
 import { buildGroupConditions } from "@/lib/conditions/group-composition";
 import { pushDownGroupNegation } from "@/lib/conditions/negation";
+import { nullValueResult } from "@/lib/conditions/helpers";
 
 /**
  * Convert a single query rule to a Prisma WHERE clause.
@@ -547,7 +548,7 @@ export async function executeQuery(
 
   // Determine if we need unified in-memory evaluation
   const hasCrossSystem = hasCrossSystemRules(groups);
-  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups);
+  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups);
 
   // Check if we need to group series
   const seriesInScope = mediaTypes.length === 0 || mediaTypes.includes("SERIES");
@@ -737,7 +738,7 @@ async function executeUngrouped(
 ): Promise<QueryResult> {
   // When any in-memory evaluation is needed (external rules, wildcards, stream query computed fields), fetch all items
   const hasCrossSystem = hasCrossSystemRules(groups);
-  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups);
+  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups);
   const useInMemoryPagination = needsFullInMemoryEval;
   const selectToUse = needsFullInMemoryEval
     ? buildItemSelectFull({ includeWatchHistory: hasWatchedByUserRules(groups) })
@@ -961,6 +962,7 @@ function evaluateExternalIdInMemory(
   item: Record<string, unknown>,
 ): boolean {
   const extIds = (item.externalIds ?? []) as Array<{ source: string }>;
+  const sources = value.split("|").map((v) => v.trim()).filter(Boolean);
   let result: boolean;
   switch (operator) {
     case "equals":
@@ -971,8 +973,16 @@ function evaluateExternalIdInMemory(
     case "isNull":
       result = !extIds.some(e => e.source === value);
       break;
+    case "contains":
+      result = extIds.some(e => sources.includes(e.source));
+      break;
+    case "notContains":
+      result = !extIds.some(e => sources.includes(e.source));
+      break;
     default:
-      result = true;
+      // Unknown operator → match nothing (bypass negate), never the
+      // fail-open `true` this previously returned.
+      return false;
   }
   return negate ? !result : result;
 }
@@ -1092,9 +1102,10 @@ function evaluateQueryRuleInMemory(
     const itemBytes = raw != null ? Number(raw) : null;
     const userMB = Number(value);
     let result: boolean;
-    if (operator === "isNull") { result = itemBytes === null || itemBytes === 0; }
-    else if (operator === "isNotNull") { result = itemBytes !== null && itemBytes !== 0; }
-    else if (itemBytes === null) { result = false; }
+    if (operator === "isNull") { result = itemBytes === null; }
+    else if (operator === "isNotNull") { result = itemBytes !== null; }
+    // NULL semantics mirror the Phase 1 clause shapes — see nullValueResult
+    else if (itemBytes === null) { result = nullValueResult(operator); }
     else if (operator === "between") {
       const [minStr, maxStr] = String(value).split(",");
       const itemMB = itemBytes / MB_IN_BYTES;
@@ -1112,7 +1123,7 @@ function evaluateQueryRuleInMemory(
     let result: boolean;
     if (operator === "isNull") { result = itemMs === null; }
     else if (operator === "isNotNull") { result = itemMs !== null; }
-    else if (itemMs === null) { result = false; }
+    else if (itemMs === null) { result = nullValueResult(operator); }
     else if (operator === "between") {
       const [minStr, maxStr] = String(value).split(",");
       result = itemMs >= Number(minStr) * DURATION_MS_PER_MIN && itemMs <= Number(maxStr) * DURATION_MS_PER_MIN;
@@ -1125,6 +1136,9 @@ function evaluateQueryRuleInMemory(
 
   // Boolean
   if (field === "isWatchlisted") {
+    // Non-nullable Boolean tautology — mirrors Phase 1 MATCH_ALL/UNSATISFIABLE.
+    if (operator === "isNotNull") return negate ? false : true;
+    if (operator === "isNull") return negate ? true : false;
     const boolVal = String(value).toLowerCase() === "true";
     let result: boolean;
     switch (operator) {
@@ -1200,7 +1214,7 @@ function evaluateQueryRuleInMemory(
     } else if (operator === "isNotNull") {
       result = !!itemDate && !isNaN(itemDate.getTime());
     } else if (!itemDate || isNaN(itemDate.getTime())) {
-      result = false;
+      result = nullValueResult(operator);
     } else {
       switch (operator) {
         case "before": result = itemDate < new Date(String(value)); break;
@@ -1247,7 +1261,7 @@ function evaluateQueryRuleInMemory(
     let result: boolean;
     if (operator === "isNull") { result = itemVal === null; }
     else if (operator === "isNotNull") { result = itemVal !== null; }
-    else if (itemVal === null) { result = false; }
+    else if (itemVal === null) { result = nullValueResult(operator); }
     else if (operator === "between") { const [minStr, maxStr] = String(value).split(","); result = itemVal >= Number(minStr) && itemVal <= Number(maxStr); }
     else { result = compareNumeric(itemVal, operator, numVal); }
     return negate ? !result : result;
@@ -1263,27 +1277,31 @@ function evaluateQueryRuleInMemory(
       result = itemStr === null || itemStr === "";
     } else if (operator === "isNotNull") {
       result = itemStr !== null && itemStr !== "";
-    } else if (itemStr === null) {
-      result = false;
+    } else if (itemStr === null || itemStr === "") {
+      result = nullValueResult(operator);
     } else {
       const labelLower = normalizedLabel.toLowerCase();
-      const valLower = strVal.toLowerCase();
+      // Normalize the rule value too: stored rules may carry raw forms
+      // ("720", "4k") while the UI writes labels ("720P", "4K")
+      const valLower = normalizeResolutionLabel(strVal).toLowerCase();
       switch (operator) {
         case "equals": result = labelLower === valLower; break;
         case "notEquals": result = labelLower !== valLower; break;
         case "contains": {
           // Resolution is enumerable — `contains` is multi-select list membership.
-          const parts = valLower.split("|").filter(Boolean);
+          const parts = strVal.split("|").filter(Boolean).map((pp) => normalizeResolutionLabel(pp).toLowerCase());
           result = parts.some((p) => labelLower === p);
           break;
         }
         case "notContains": {
-          const parts = valLower.split("|").filter(Boolean);
+          const parts = strVal.split("|").filter(Boolean).map((pp) => normalizeResolutionLabel(pp).toLowerCase());
           result = !parts.some((p) => labelLower === p);
           break;
         }
-        case "matchesWildcard": result = wildcardToRegex(valLower).test(labelLower); break;
-        case "notMatchesWildcard": result = !wildcardToRegex(valLower).test(labelLower); break;
+        // Wildcards match against the raw value (patterns like "1080*"
+        // must not be normalized away)
+        case "matchesWildcard": result = wildcardToRegex(String(value).toLowerCase()).test(labelLower); break;
+        case "notMatchesWildcard": result = !wildcardToRegex(String(value).toLowerCase()).test(labelLower); break;
         default: return false;
       }
     }
@@ -1310,7 +1328,8 @@ function evaluateQueryRuleInMemory(
       result = !re.test(itemStr.toLowerCase());
     }
   } else if (itemStr === null) {
-    result = false;
+    // NULL semantics mirror the Phase 1 clause shapes — see nullValueResult
+    result = nullValueResult(operator);
   } else {
     const strVal = String(value).toLowerCase();
     const lower = itemStr.toLowerCase();

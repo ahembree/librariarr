@@ -12,6 +12,7 @@ import { detectStreamAudioProfile, detectStreamDynamicRange } from "./stream-det
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import {
   pushDownGroupNegation,
+  nullValueResult,
   MB_IN_BYTES,
   DURATION_MS_PER_MIN,
   wildcardToRegex,
@@ -324,6 +325,21 @@ function hasWildcardRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolea
     return false;
   }
   return (rules as LifecycleRule[]).some((r) => r.enabled !== false && !isExternalField(r.field) && (r.operator === "matchesWildcard" || r.operator === "notMatchesWildcard"));
+}
+
+/** Resolution rules always evaluate in-memory (Phase 1 raw-value lists
+ *  cannot express normalizeResolutionLabel semantics — see resolutionHandler) */
+function hasResolutionRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+  if (rules.length === 0) return false;
+  if (isRuleGroups(rules)) {
+    for (const group of rules) {
+      if (group.enabled === false) continue;
+      if (group.rules.some((r) => r.enabled !== false && r.field === "resolution")) return true;
+      if (hasResolutionRules(group.groups ?? [])) return true;
+    }
+    return false;
+  }
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "resolution");
 }
 
 /** Check if any rule uses stream fields or stream query groups */
@@ -1100,6 +1116,7 @@ function evaluateRuleAgainstItem(
   if (field === "hasExternalId") {
     const externalIds = (item.externalIds as Array<{ source: string }>) ?? [];
     const strValue = String(value);
+    const sources = strValue.split("|").map((v) => v.trim()).filter(Boolean);
     let result: boolean;
     switch (operator) {
       case "equals":
@@ -1110,6 +1127,12 @@ function evaluateRuleAgainstItem(
       case "isNull":
         result = !externalIds.some((e) => e.source === strValue);
         break;
+      case "contains":
+        result = externalIds.some((e) => sources.includes(e.source));
+        break;
+      case "notContains":
+        result = !externalIds.some((e) => sources.includes(e.source));
+        break;
       default: return false;
     }
     return negate ? !result : result;
@@ -1117,6 +1140,12 @@ function evaluateRuleAgainstItem(
 
   // Is Watchlisted (boolean)
   if (field === "isWatchlisted") {
+    // Non-nullable Boolean: isNotNull is the always-true tautology, isNull
+    // the always-false one (mirrors Phase 1's MATCH_ALL/UNSATISFIABLE — see
+    // isWatchlistedHandler). Without these, Phase 2's default:false diverged
+    // from a Phase 1 that matched the whole library.
+    if (operator === "isNotNull") return negate ? false : true;
+    if (operator === "isNull") return negate ? true : false;
     const boolVal = String(value).toLowerCase() === "true";
     const itemVal = !!item.isWatchlisted;
     let result: boolean;
@@ -1261,8 +1290,28 @@ function evaluateRuleAgainstItem(
 
   // File size: rule value is in MB, item.fileSize is serialized bytes string
   if (field === "fileSize") {
+    if (operator === "isNull" || operator === "isNotNull") {
+      const present = item.fileSize != null;
+      const r = operator === "isNull" ? !present : present;
+      return negate ? !r : r;
+    }
+    if (item.fileSize == null) {
+      // NULL semantics mirror the Phase 1 clause shapes — see nullValueResult
+      const r = nullValueResult(operator);
+      return negate ? !r : r;
+    }
+    const fileBytes = BigInt(item.fileSize as string);
+    // `between` carries a "min,max" pair — parse per-half before the
+    // single-value conversion below, which throws RangeError on BigInt(NaN)
+    // for any comma value.
+    if (operator === "between") {
+      const [minStr, maxStr] = String(value).split(",");
+      const minBytes = BigInt(Math.round(Number(minStr) * MB_IN_BYTES));
+      const maxBytes = BigInt(Math.round(Number(maxStr) * MB_IN_BYTES));
+      const result = fileBytes >= minBytes && fileBytes <= maxBytes;
+      return negate ? !result : result;
+    }
     const bytesValue = BigInt(Math.round(Number(value) * MB_IN_BYTES));
-    const fileBytes = item.fileSize ? BigInt(item.fileSize as string) : BigInt(0);
     let result: boolean;
     switch (operator) {
       case "greaterThan": result = fileBytes > bytesValue; break;
@@ -1271,13 +1320,6 @@ function evaluateRuleAgainstItem(
       case "lessThanOrEqual": result = fileBytes <= bytesValue; break;
       case "equals": result = fileBytes === bytesValue; break;
       case "notEquals": result = fileBytes !== bytesValue; break;
-      case "between": {
-        const [minStr, maxStr] = String(value).split(",");
-        const minBytes = BigInt(Math.round(Number(minStr) * MB_IN_BYTES));
-        const maxBytes = BigInt(Math.round(Number(maxStr) * MB_IN_BYTES));
-        result = fileBytes >= minBytes && fileBytes <= maxBytes;
-        break;
-      }
       default: return false;
     }
     return negate ? !result : result;
@@ -1285,8 +1327,18 @@ function evaluateRuleAgainstItem(
 
   // Duration: rule value is in minutes, item.duration is in milliseconds
   if (field === "duration") {
+    if (operator === "isNull" || operator === "isNotNull") {
+      const present = itemValue != null;
+      const r = operator === "isNull" ? !present : present;
+      return negate ? !r : r;
+    }
+    if (itemValue == null) {
+      // NULL semantics mirror the Phase 1 clause shapes — see nullValueResult
+      const r = nullValueResult(operator);
+      return negate ? !r : r;
+    }
     const msValue = Number(value) * DURATION_MS_PER_MIN;
-    const itemMs = Number(itemValue ?? 0);
+    const itemMs = Number(itemValue);
     let result: boolean;
     switch (operator) {
       case "greaterThan": result = itemMs > msValue; break;
@@ -1312,10 +1364,19 @@ function evaluateRuleAgainstItem(
   ]);
   if (dateFields.has(field)) {
     const itemDate = itemValue ? new Date(itemValue as string) : null;
+    const validDate = itemDate !== null && !isNaN(itemDate.getTime());
+    if (operator === "isNull" || operator === "isNotNull") {
+      const present = validDate;
+      const r = operator === "isNull" ? !present : present;
+      return negate ? !r : r;
+    }
+    if (!validDate) {
+      // NULL semantics mirror the Phase 1 clause shapes — see nullValueResult
+      const r = nullValueResult(operator);
+      return negate ? !r : r;
+    }
     let result: boolean;
-    if (!itemDate || isNaN(itemDate.getTime())) {
-      result = false;
-    } else {
+    {
       switch (operator) {
         case "before": result = itemDate < new Date(String(value)); break;
         case "after": result = itemDate > new Date(String(value)); break;
@@ -1357,8 +1418,18 @@ function evaluateRuleAgainstItem(
     "availableEpisodeCount", "watchedEpisodeCount", "watchedEpisodePercentage",
   ]);
   if (numericFields.has(field)) {
+    if (operator === "isNull" || operator === "isNotNull") {
+      const present = itemValue != null;
+      const r = operator === "isNull" ? !present : present;
+      return negate ? !r : r;
+    }
+    if (itemValue == null) {
+      // NULL semantics mirror the Phase 1 clause shapes — see nullValueResult
+      const r = nullValueResult(operator);
+      return negate ? !r : r;
+    }
     const numValue = Number(value);
-    const itemNum = Number(itemValue ?? 0);
+    const itemNum = Number(itemValue);
     let result: boolean;
     switch (operator) {
       case "equals": result = itemNum === numValue; break;
@@ -1380,30 +1451,41 @@ function evaluateRuleAgainstItem(
   // Resolution field — normalize DB value to display label before comparing
   if (field === "resolution") {
     const rawRes = itemValue != null ? String(itemValue) : null;
-    const normalizedLabel = normalizeResolutionLabel(rawRes);
-    const strVal = String(value);
-    let resResult: boolean;
+    if (operator === "isNull" || operator === "isNotNull") {
+      const present = rawRes !== null && rawRes !== "";
+      const r = operator === "isNull" ? !present : present;
+      return negate ? !r : r;
+    }
     if (rawRes === null || rawRes === "") {
-      resResult = false;
-    } else {
+      // NULL semantics mirror the Phase 1 clause shapes — see nullValueResult
+      const r = nullValueResult(operator);
+      return negate ? !r : r;
+    }
+    const normalizedLabel = normalizeResolutionLabel(rawRes);
+    let resResult: boolean;
+    {
       const labelLower = normalizedLabel.toLowerCase();
-      const valLower = strVal.toLowerCase();
+      // Normalize the rule value too: stored rules may carry raw forms
+      // ("720", "4k") while the UI writes labels ("720P", "4K")
+      const valLower = normalizeResolutionLabel(String(value)).toLowerCase();
       switch (operator) {
         case "equals": resResult = labelLower === valLower; break;
         case "notEquals": resResult = labelLower !== valLower; break;
         case "contains": {
           // Resolution is enumerable — `contains` is multi-select list membership.
-          const parts = valLower.split("|").filter(Boolean);
+          const parts = String(value).split("|").filter(Boolean).map((p) => normalizeResolutionLabel(p).toLowerCase());
           resResult = parts.some((p) => labelLower === p);
           break;
         }
         case "notContains": {
-          const parts = valLower.split("|").filter(Boolean);
+          const parts = String(value).split("|").filter(Boolean).map((p) => normalizeResolutionLabel(p).toLowerCase());
           resResult = !parts.some((p) => labelLower === p);
           break;
         }
-        case "matchesWildcard": resResult = wildcardToRegex(valLower).test(labelLower); break;
-        case "notMatchesWildcard": resResult = !wildcardToRegex(valLower).test(labelLower); break;
+        // Wildcards match against the raw value (patterns like "1080*"
+        // must not be normalized away)
+        case "matchesWildcard": resResult = wildcardToRegex(String(value).toLowerCase()).test(labelLower); break;
+        case "notMatchesWildcard": resResult = !wildcardToRegex(String(value).toLowerCase()).test(labelLower); break;
         default: resResult = false;
       }
     }
@@ -1413,8 +1495,18 @@ function evaluateRuleAgainstItem(
   // Text fields (case-insensitive to match Prisma behavior).
   // Enumerable fields use list-membership semantics for contains/notContains
   // (mirrors the multi-select UI), free-text fields use substring search.
+  if (operator === "isNull" || operator === "isNotNull") {
+    const present = itemValue != null && itemValue !== "";
+    const r = operator === "isNull" ? !present : present;
+    return negate ? !r : r;
+  }
+  if (itemValue == null) {
+    // NULL semantics mirror the Phase 1 clause shapes — see nullValueResult
+    const r = nullValueResult(operator);
+    return negate ? !r : r;
+  }
   const strValue = String(value).toLowerCase();
-  const itemStr = String(itemValue ?? "").toLowerCase();
+  const itemStr = String(itemValue).toLowerCase();
   const textEnumerable = isEnumerableField(field);
   let textResult: boolean;
   switch (operator) {
@@ -2434,7 +2526,7 @@ export async function evaluateLifecycleRules(
   const needsStreams = hasStreamRules(rules);
   const needsWatchHistory = hasWatchedByUserRules(rules);
   const hasCrossSystem = hasCrossSystemFieldRules(rules);
-  const needsInMemoryEval = hasWildcardRules(rules) || hasStreamCountRules(rules) || hasStreamQueryInMemoryRules(rules) || hasCrossSystem;
+  const needsInMemoryEval = hasWildcardRules(rules) || hasStreamCountRules(rules) || hasStreamQueryInMemoryRules(rules) || hasCrossSystem || hasResolutionRules(rules);
   const needsFullReeval = needsInMemoryEval || !!hasExternal;
 
   let andConditions: Prisma.MediaItemWhereInput[];
