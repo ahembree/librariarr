@@ -18,7 +18,13 @@ interface UnreachableServer {
   type: string;
 }
 
-export function AuthenticatedShell({ children }: { children: React.ReactNode }) {
+export function AuthenticatedShell({
+  children,
+  initialSidebarCollapsed = false,
+}: {
+  children: React.ReactNode;
+  initialSidebarCollapsed?: boolean;
+}) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const isMobile = useIsMobile();
   const [maintenanceActive, setMaintenanceActive] = useState(false);
@@ -57,7 +63,11 @@ export function AuthenticatedShell({ children }: { children: React.ReactNode }) 
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar mobileOpen={mobileOpen} onMobileOpenChange={setMobileOpen} />
+      <Sidebar
+        mobileOpen={mobileOpen}
+        onMobileOpenChange={setMobileOpen}
+        initialCollapsed={initialSidebarCollapsed}
+      />
       <div className="flex flex-1 flex-col overflow-hidden border-l border-white/3">
         {isMobile ? (
           <header className="pt-safe shrink-0 border-b border-white/5 glass">

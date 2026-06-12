@@ -270,7 +270,7 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
       ref={setNodeRef}
       style={style}
       className={`group/row flex flex-wrap items-center gap-2 ${rule.enabled === false ? "opacity-40" : ""}`}
-      onMouseEnter={() => setHovered(rule.id)}
+      onMouseEnter={() => setHovered({ kind: "rule", id: rule.id })}
       onMouseLeave={() => setHovered(null)}
     >
       <button
@@ -904,6 +904,8 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
   const canDeleteGroup = depth > 0 || isEmptyGroup;
   const isStreamQuery = !!group.streamQuery;
 
+  const setHovered = useBuilderHoverSetter();
+
   // For stream query groups, swap in stream query fields/sections
   const effectiveConfig = isStreamQuery && config.getStreamQueryFieldsForType
     ? {
@@ -940,6 +942,11 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
               type="button"
               className="shrink-0 cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground touch-none"
               {...dragHandleProps}
+              // Hovering the handle spotlights this group's whole range in
+              // the Logic Preview (after the dnd listeners so they keep
+              // their pointer handlers)
+              onMouseEnter={() => setHovered({ kind: "group", id: group.id })}
+              onMouseLeave={() => setHovered(null)}
             >
               <GripVertical className="h-4 w-4" />
             </button>

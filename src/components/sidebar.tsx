@@ -205,12 +205,14 @@ function UserChip({
 interface SidebarProps {
   mobileOpen: boolean;
   onMobileOpenChange: (open: boolean) => void;
+  /** SSR-provided collapse state (from the sidebar-collapsed cookie) */
+  initialCollapsed?: boolean;
 }
 
-export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps) {
+export function Sidebar({ mobileOpen, onMobileOpenChange, initialCollapsed = false }: SidebarProps) {
   const pathname = usePathname();
   const isMobile = useIsMobile();
-  const { navigation, collapsed, setCollapsed, handleLogout, user } = useSidebarData();
+  const { navigation, collapsed, setCollapsed, handleLogout, user } = useSidebarData(initialCollapsed);
   const [searchOpen, setSearchOpen] = useState(false);
 
   // Auto-close mobile drawer on navigation

@@ -1,3 +1,4 @@
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { isSessionValid } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
@@ -22,9 +23,17 @@ export default async function AuthenticatedLayout({
     redirect("/api/auth/logout");
   }
 
+  // Read the sidebar preference server-side so SSR HTML matches the
+  // client's first render (a client-only localStorage read tripped
+  // hydration for anyone with a collapsed sidebar).
+  const cookieStore = await cookies();
+  const sidebarCollapsed = cookieStore.get("sidebar-collapsed")?.value === "1";
+
   return (
     <ChipColorProvider>
-      <AuthenticatedShell>{children}</AuthenticatedShell>
+      <AuthenticatedShell initialSidebarCollapsed={sidebarCollapsed}>
+        {children}
+      </AuthenticatedShell>
     </ChipColorProvider>
   );
 }

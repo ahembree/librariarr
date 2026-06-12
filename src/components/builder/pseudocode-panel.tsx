@@ -13,6 +13,8 @@ interface PseudocodePanelProps<R extends BaseRule, G extends BaseGroup<R>> {
   actualValues?: Map<string, string>;
   /** Rule currently hovered in the builder — its line gets a spotlight */
   hoveredRuleId?: string | null;
+  /** Group whose drag handle is hovered in the builder — its whole range gets a spotlight */
+  hoveredGroupId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +247,8 @@ type Segment =
       segments: Segment[];
       color: "green" | "yellow" | "red" | "neutral" | "eval-pass" | "eval-fail" | "eval";
       key: string;
+      /** Present on group ranges — used for builder hover spotlighting */
+      groupId?: string;
     };
 
 function findGroupEndIndex(lines: PseudocodeLine[], startIdx: number): number {
@@ -316,6 +320,7 @@ function buildSegmentTree(
         segments: innerSegments,
         color,
         key: `range-${line.groupId}`,
+        groupId: line.groupId,
       });
 
       i = groupEndIdx + 1;
@@ -372,6 +377,7 @@ function renderSegments(
   segments: Segment[],
   actualValues?: Map<string, string>,
   hoveredRuleId?: string | null,
+  hoveredGroupId?: string | null,
 ): React.ReactNode[] {
   return segments.map((seg) => {
     if (seg.kind === "range") {
@@ -387,12 +393,17 @@ function renderSegments(
             key={seg.key}
             className={`${evalClass} rounded-sm px-2 space-y-0.5`}
           >
-            {renderSegments(seg.segments, actualValues, hoveredRuleId)}
+            {renderSegments(seg.segments, actualValues, hoveredRuleId, hoveredGroupId)}
           </div>
         );
       }
-      const bgClass =
-        seg.color === "neutral"
+      // Builder group-handle hover spotlights the whole range (only over
+      // the neutral palette — test-match colors take precedence)
+      const groupHovered =
+        seg.color === "neutral" && !!seg.groupId && seg.groupId === hoveredGroupId;
+      const bgClass = groupHovered
+        ? "bg-primary/10 border-l-2 border-primary"
+        : seg.color === "neutral"
           ? "bg-muted-foreground/5 border-l-2 border-muted-foreground/20"
           : seg.color === "green"
             ? "bg-green/15 border-l-2 border-green"
@@ -401,7 +412,7 @@ function renderSegments(
               : "bg-red/15 border-l-2 border-red";
       return (
         <div key={seg.key} className={`${bgClass} rounded-sm px-2 space-y-0.5`}>
-          {renderSegments(seg.segments, actualValues, hoveredRuleId)}
+          {renderSegments(seg.segments, actualValues, hoveredRuleId, hoveredGroupId)}
         </div>
       );
     }
@@ -432,7 +443,7 @@ function renderSegments(
 export function PseudocodePanel<
   R extends BaseRule,
   G extends BaseGroup<R>,
->({ groups, config, highlightedRuleIds, actualValues, hoveredRuleId }: PseudocodePanelProps<R, G>) {
+>({ groups, config, highlightedRuleIds, actualValues, hoveredRuleId, hoveredGroupId }: PseudocodePanelProps<R, G>) {
   const lines = useMemo(
     () => generatePseudocode(groups, config),
     [groups, config],
@@ -474,7 +485,7 @@ export function PseudocodePanel<
         Logic Preview
       </h3>
       <div className="font-mono text-sm leading-relaxed space-y-0.5">
-        {renderSegments(segments, actualValues, hoveredRuleId)}
+        {renderSegments(segments, actualValues, hoveredRuleId, hoveredGroupId)}
       </div>
     </div>
   );
