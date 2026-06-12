@@ -743,6 +743,22 @@ export default function QueryPage() {
 
   const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
 
+  // Whole-result-set selection state, shared by the table header checkbox and
+  // the card-view "Select all" control.
+  const { allSelected, someSelected } = useMemo(() => {
+    const all = results.length > 0 && results.every((r) => selectedIds.has(r.id));
+    return { allSelected: all, someSelected: selectedIds.size > 0 && !all };
+  }, [results, selectedIds]);
+
+  const toggleSelectAll = useCallback(() => {
+    // Re-derive from the latest selection inside the updater so the toggle is
+    // correct regardless of when it was last rendered.
+    setSelectedIds((prev) => {
+      const all = results.length > 0 && results.every((r) => prev.has(r.id));
+      return all ? new Set() : new Set(results.map((r) => r.id));
+    });
+  }, [results]);
+
   const selectionTypeCounts = useMemo(() => {
     const counts = { MOVIE: 0, SERIES: 0, MUSIC: 0 };
     for (const r of results) {
@@ -792,8 +808,6 @@ export default function QueryPage() {
 
   // Table columns with a leading selection checkbox column.
   const tableColumns = useMemo<QueryColumn[]>(() => {
-    const allSelected = results.length > 0 && results.every((r) => selectedIds.has(r.id));
-    const someSelected = selectedIds.size > 0 && !allSelected;
     const selectionColumn: QueryColumn = {
       id: "__select",
       group: "core",
@@ -806,9 +820,7 @@ export default function QueryPage() {
         <Checkbox
           checked={allSelected ? true : someSelected ? "indeterminate" : false}
           onClick={(e) => e.stopPropagation()}
-          onCheckedChange={() =>
-            setSelectedIds(allSelected ? new Set() : new Set(results.map((r) => r.id)))
-          }
+          onCheckedChange={toggleSelectAll}
           aria-label="Select all results"
         />
       ),
@@ -822,7 +834,7 @@ export default function QueryPage() {
       ),
     };
     return [selectionColumn, ...activeColumns];
-  }, [activeColumns, results, selectedIds, toggleSelect]);
+  }, [activeColumns, selectedIds, toggleSelect, allSelected, someSelected, toggleSelectAll]);
 
   // ── Save/Load/Delete handlers ──
 
@@ -1376,9 +1388,21 @@ export default function QueryPage() {
       {/* Results */}
       {hasRun && (
         <div className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            {loading ? "Searching..." : `${results.length} result${results.length !== 1 ? "s" : ""} found`}
-          </p>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              {loading ? "Searching..." : `${results.length} result${results.length !== 1 ? "s" : ""} found`}
+            </p>
+            {viewMode === "cards" && !loading && results.length > 0 && (
+              <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-muted-foreground">
+                <Checkbox
+                  checked={allSelected ? true : someSelected ? "indeterminate" : false}
+                  onCheckedChange={toggleSelectAll}
+                  aria-label="Select all results"
+                />
+                {allSelected ? "Deselect all" : "Select all"}
+              </label>
+            )}
+          </div>
 
           {results.length > 0 && (
             <QueryActionBar
