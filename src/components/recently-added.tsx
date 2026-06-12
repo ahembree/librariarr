@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef, type ComponentProps } from "react";
 import {
   Card,
   CardContent,
@@ -15,7 +15,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Clock, Film, Tv, Music, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { FadeImage } from "@/components/ui/fade-image";
+import { Clock, Film, Tv, Music, ChevronLeft, ChevronRight } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { formatRelativeDate } from "@/lib/format";
 import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
@@ -46,8 +49,16 @@ interface RecentlyAddedProps {
   onTrackClick?: (trackId: string) => void;
 }
 
-const PAGE_SIZE = 10;
+/** How many items the shelf fetches (scrolled horizontally, no paging). */
+const SHELF_LIMIT = 24;
 
+const TYPE_ICONS = { MOVIE: Film, SERIES: Tv, MUSIC: Music } as const;
+
+function pad2(n: number | null): string {
+  return (n ?? 0).toString().padStart(2, "0");
+}
+
+/** Full display name, used for popover placeholders and aria labels. */
 function formatEpisode(item: RecentItem): string {
   if (item.type === "MOVIE") {
     return item.year ? `${item.title} (${item.year})` : item.title;
@@ -55,9 +66,66 @@ function formatEpisode(item: RecentItem): string {
   if (item.type === "MUSIC") {
     return `${item.parentTitle ?? "Unknown"} — ${item.title}`;
   }
-  const s = item.seasonNumber?.toString().padStart(2, "0") ?? "00";
-  const e = item.episodeNumber?.toString().padStart(2, "0") ?? "00";
-  return `${item.parentTitle ?? "Unknown"} — S${s}E${e}`;
+  return `${item.parentTitle ?? "Unknown"} — S${pad2(item.seasonNumber)}E${pad2(item.episodeNumber)}`;
+}
+
+/** One poster tile on the shelf. Video uses 2:3 posters (episodes show the
+ *  series poster); music uses square album art — same height, Plex-style
+ *  mixed row. Spreads rest props (and ref, via React 19 props) onto the
+ *  button so it can serve as a HoverCardTrigger asChild target. */
+function ShelfTile({
+  item,
+  className,
+  ...rest
+}: { item: RecentItem } & ComponentProps<"button">) {
+  const [imgError, setImgError] = useState(false);
+  const isMusic = item.type === "MUSIC";
+  const Icon = TYPE_ICONS[item.type];
+
+  const primary = item.type === "SERIES" ? (item.parentTitle ?? item.title) : item.title;
+  const secondary =
+    item.type === "MOVIE"
+      ? item.year?.toString() ?? ""
+      : item.type === "SERIES"
+        ? `S${pad2(item.seasonNumber)} · E${pad2(item.episodeNumber)}`
+        : item.parentTitle ?? "";
+
+  return (
+    <button
+      {...rest}
+      type="button"
+      aria-label={formatEpisode(item)}
+      className={cn(
+        "group shrink-0 snap-start rounded-lg text-left transition-transform duration-300 ease-out hover:-translate-y-1",
+        isMusic ? "w-42" : "w-28",
+        className,
+      )}
+    >
+      <div className="relative h-42 overflow-hidden rounded-lg border bg-muted transition-shadow duration-300 group-hover:shadow-[0_12px_28px_-10px_oklch(0_0_0/0.65)] group-hover:ring-1 group-hover:ring-white/10">
+        {imgError ? (
+          <div className="flex h-full items-center justify-center">
+            <Icon className="h-7 w-7 text-muted-foreground" />
+          </div>
+        ) : (
+          <FadeImage
+            src={`/api/media/${item.id}/image${item.type === "SERIES" ? "?type=parent" : ""}`}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-105"
+            onError={() => setImgError(true)}
+          />
+        )}
+        {item.addedAt && (
+          <span className="absolute bottom-1.5 left-1.5 rounded-full bg-black/60 px-1.5 py-[3px] font-mono text-[10px] leading-none text-white/90 backdrop-blur-sm">
+            {formatRelativeDate(item.addedAt)}
+          </span>
+        )}
+      </div>
+      <p className="mt-1.5 truncate text-xs font-medium">{primary}</p>
+      <p className="truncate font-mono text-[10.5px] text-faint">{secondary || "\u00A0"}</p>
+    </button>
+  );
 }
 
 export function RecentlyAdded({
@@ -73,10 +141,10 @@ export function RecentlyAdded({
   const [items, setItems] = useState<RecentItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [limit, setLimit] = useState(10);
-  const [page, setPage] = useState(0);
   const [localType, setLocalType] = useState<"MOVIE" | "SERIES" | "MUSIC" | undefined>(filterType);
   const [localServerId, setLocalServerId] = useState<string | undefined>(undefined);
+  const shelfRef = useRef<HTMLDivElement>(null);
+  const [canScroll, setCanScroll] = useState({ left: false, right: false });
 
   // Sync local overrides to prop changes (React 19 idiom: store prev render).
   const [prevFilterType, setPrevFilterType] = useState(filterType);
@@ -93,51 +161,83 @@ export function RecentlyAdded({
   const effectiveType = lockedFilterType ? filterType : localType;
   const effectiveServerId = localServerId ?? serverId;
 
+  // Token guards against a stale slow response landing after a quick
+  // filter/server flip and showing the wrong items for the selection.
+  const reqToken = useRef(0);
+
   const fetchData = useCallback(async () => {
+    const token = ++reqToken.current;
     try {
-      const params = new URLSearchParams({ limit: String(limit) });
+      const params = new URLSearchParams({ limit: String(SHELF_LIMIT) });
       if (effectiveType) params.set("type", effectiveType);
       if (effectiveServerId) params.set("serverId", effectiveServerId);
       const res = await fetch(`/api/media/recently-added?${params}`);
+      if (!res.ok || token !== reqToken.current) return;
       const data = await res.json();
+      if (token !== reqToken.current) return;
       setItems(data.items ?? []);
       setTotal(data.total ?? 0);
     } catch (error) {
       console.error("Failed to fetch recently added:", error);
     } finally {
-      setLoading(false);
+      if (token === reqToken.current) setLoading(false);
     }
-  }, [limit, effectiveType, effectiveServerId]);
+  }, [effectiveType, effectiveServerId]);
 
   useEffect(() => {
     void (async () => { await fetchData(); })();
   }, [fetchData]);
 
-  // Reset paging when the inputs change.
-  const [prevLimit, setPrevLimit] = useState(limit);
-  const [prevEffectiveType, setPrevEffectiveType] = useState(effectiveType);
-  const [prevEffectiveServerId, setPrevEffectiveServerId] = useState(effectiveServerId);
-  if (
-    prevLimit !== limit ||
-    prevEffectiveType !== effectiveType ||
-    prevEffectiveServerId !== effectiveServerId
-  ) {
-    setPrevLimit(limit);
-    setPrevEffectiveType(effectiveType);
-    setPrevEffectiveServerId(effectiveServerId);
-    setPage(0);
-  }
+  const updateScroll = useCallback(() => {
+    const el = shelfRef.current;
+    if (!el) return;
+    setCanScroll({
+      left: el.scrollLeft > 4,
+      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 4,
+    });
+  }, []);
 
-  const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
-  const pageItems = items.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  // Recompute chevron state when content or container size changes (the
+  // shelf can resize without a window resize — e.g. sidebar collapse);
+  // reset the shelf to the start when the filtered item set is replaced.
+  useEffect(() => {
+    shelfRef.current?.scrollTo({ left: 0 });
+    updateScroll();
+    const observer = new ResizeObserver(updateScroll);
+    if (shelfRef.current) observer.observe(shelfRef.current);
+    return () => observer.disconnect();
+  }, [items, updateScroll]);
+
+  const scrollShelf = (dir: 1 | -1) => {
+    const el = shelfRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: "smooth" });
+  };
+
+  const handleClick = (item: RecentItem) => {
+    if (item.type === "MOVIE") {
+      onMovieClick?.(item.id);
+    } else if (item.type === "SERIES") {
+      onEpisodeClick?.(item.id);
+    } else if (item.type === "MUSIC") {
+      onTrackClick?.(item.id);
+    }
+  };
 
   return (
-    <Card className="h-full flex flex-col">
-      <CardHeader className="pb-3">
+    <Card className="h-full flex flex-col gap-3">
+      <CardHeader>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Clock className="h-4 w-4" />
-            Recently Added
+          <CardTitle className="flex items-baseline gap-2 text-base">
+            <span className="flex items-center gap-2">
+              <Clock className="h-4 w-4" />
+              Recently Added
+            </span>
+            {total > 0 && (
+              <span className="font-mono text-[11px] font-normal text-faint">
+                {Math.min(items.length, SHELF_LIMIT)} of {total.toLocaleString()}
+              </span>
+            )}
           </CardTitle>
           <div className="flex flex-wrap items-center gap-2">
             {!lockedFilterType && (
@@ -186,131 +286,75 @@ export function RecentlyAdded({
                 </SelectContent>
               </Select>
             )}
-            <Select value={String(limit)} onValueChange={(v) => setLimit(Number(v))}>
-              <SelectTrigger className="h-7 w-[70px] text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="10">10</SelectItem>
-                <SelectItem value="25">25</SelectItem>
-                <SelectItem value="50">50</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                aria-label="Scroll back"
+                disabled={!canScroll.left}
+                onClick={() => scrollShelf(-1)}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                aria-label="Scroll forward"
+                disabled={!canScroll.right}
+                onClick={() => scrollShelf(1)}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </div>
       </CardHeader>
-      <CardContent className="flex-1 min-h-0 overflow-auto">
+      <CardContent className="flex-1 min-h-0">
         {loading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <div className="flex gap-3 overflow-hidden">
+            {Array.from({ length: 9 }).map((_, i) => (
+              <div key={i} className="w-28 shrink-0">
+                <Skeleton className="h-42 w-28 rounded-lg" />
+                <Skeleton className="mt-1.5 h-3.5 w-24" />
+                <Skeleton className="mt-1 h-3 w-14" />
+              </div>
+            ))}
           </div>
         ) : items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No recent additions yet.
-          </p>
+          <div className="flex h-42 flex-col items-center justify-center gap-2 text-muted-foreground">
+            <Clock className="h-6 w-6" />
+            <p className="text-sm">No recent additions yet.</p>
+          </div>
         ) : (
-          <>
-            <div className="space-y-1">
-              {pageItems.map((item) => {
-                const handleClick = () => {
-                  if (item.type === "MOVIE") {
-                    onMovieClick?.(item.id);
-                  } else if (item.type === "SERIES") {
-                    onEpisodeClick?.(item.id);
-                  } else if (item.type === "MUSIC") {
-                    onTrackClick?.(item.id);
-                  }
-                };
-
-                const placeholder: MediaHoverData = {
+          <div
+            ref={shelfRef}
+            onScroll={updateScroll}
+            className="flex snap-x gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          >
+            {items.map((item) => (
+              <LazyMediaHoverPopover
+                key={item.id}
+                fetchUrl={`/api/media/${item.id}`}
+                extractData={(json) => {
+                  const data = (json as { item: MediaHoverData }).item;
+                  return item.type === "MOVIE"
+                    ? data
+                    : { ...data, title: formatEpisode(item) };
+                }}
+                placeholder={{
                   title: formatEpisode(item),
                   year: item.year,
                   addedAt: item.addedAt,
-                };
-
-                const row = (
-                  <div
-                    className="flex items-center gap-3 rounded-md px-2 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors"
-                    onClick={handleClick}
-                  >
-                    {item.type === "MOVIE" ? (
-                      <Film className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    ) : item.type === "MUSIC" ? (
-                      <Music className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <Tv className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    )}
-                    <span className="flex-1 truncate text-sm">
-                      {formatEpisode(item)}
-                    </span>
-                    {item.addedAt && (
-                      <span className="shrink-0 text-xs text-muted-foreground">
-                        {formatRelativeDate(item.addedAt)}
-                      </span>
-                    )}
-                  </div>
-                );
-
-                return (
-                  <LazyMediaHoverPopover
-                    key={item.id}
-                    fetchUrl={`/api/media/${item.id}`}
-                    extractData={(json) => {
-                      const data = (json as { item: MediaHoverData }).item;
-                      return item.type === "MOVIE"
-                        ? data
-                        : { ...data, title: formatEpisode(item) };
-                    }}
-                    placeholder={placeholder}
-                    imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" ? "?type=parent" : ""}`}
-                    imageAspect={item.type === "MUSIC" ? "square" : "poster"}
-                  >
-                    {row}
-                  </LazyMediaHoverPopover>
-                );
-              })}
-            </div>
-
-            {totalPages > 1 && (
-              <div className="flex items-center justify-between mt-4 pt-3 border-t">
-                <span className="text-xs text-muted-foreground">
-                  {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, items.length)} of {items.length}
-                  {total > items.length && ` (${total.toLocaleString()} total)`}
-                </span>
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
-                    disabled={page === 0}
-                    onClick={() => setPage(page - 1)}
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </Button>
-                  {Array.from({ length: totalPages }, (_, i) => (
-                    <Button
-                      key={i}
-                      variant={i === page ? "default" : "ghost"}
-                      size="icon"
-                      className="h-7 w-7 text-xs"
-                      onClick={() => setPage(i)}
-                    >
-                      {i + 1}
-                    </Button>
-                  ))}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
-                    disabled={page >= totalPages - 1}
-                    onClick={() => setPage(page + 1)}
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            )}
-          </>
+                }}
+                imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" ? "?type=parent" : ""}`}
+                imageAspect={item.type === "MUSIC" ? "square" : "poster"}
+              >
+                <ShelfTile item={item} onClick={() => handleClick(item)} />
+              </LazyMediaHoverPopover>
+            ))}
+          </div>
         )}
       </CardContent>
     </Card>

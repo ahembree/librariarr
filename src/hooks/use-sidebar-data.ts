@@ -96,20 +96,26 @@ function buildNavigation(
   ].filter((group) => group.items.length > 0);
 }
 
-export function useSidebarData() {
+export interface CurrentUser {
+  username: string;
+  authMethod: string;
+}
+
+export function useSidebarData(initialCollapsed = false) {
   const router = useRouter();
   const [availableTypes, setAvailableTypes] = useState<LibraryType[]>(["MOVIE", "SERIES", "MUSIC"]);
   const [allKnownTypes, setAllKnownTypes] = useState<LibraryType[]>(["MOVIE", "SERIES", "MUSIC"]);
-  const [collapsed, setCollapsed] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("sidebar-collapsed") === "true";
-  });
+  const [user, setUser] = useState<CurrentUser | null>(null);
+  // Persisted in a cookie (not localStorage) so the server layout can read
+  // it and SSR the correct state — a client-only read here rendered the
+  // collapsed sidebar against expanded server HTML and tripped hydration.
+  const [collapsed, setCollapsed] = useState(initialCollapsed);
   const [activeSessionCount, setActiveSessionCount] = useState(0);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
 
   useEffect(() => {
-    localStorage.setItem("sidebar-collapsed", String(collapsed));
+    document.cookie = `sidebar-collapsed=${collapsed ? "1" : "0"}; path=/; max-age=31536000; samesite=lax`;
   }, [collapsed]);
 
   useEffect(() => {
@@ -134,6 +140,15 @@ export function useSidebarData() {
           setUpdateAvailable(true);
           setLatestVersion(data.latestVersion);
         }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.username) setUser({ username: data.username, authMethod: data.authMethod });
       })
       .catch(() => {});
   }, []);
@@ -195,5 +210,5 @@ export function useSidebarData() {
     router.push("/login");
   };
 
-  return { navigation, collapsed, setCollapsed, handleLogout };
+  return { navigation, collapsed, setCollapsed, handleLogout, user };
 }

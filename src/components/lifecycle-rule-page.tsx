@@ -4,6 +4,8 @@ import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } fr
 import { useRouter, useSearchParams } from "next/navigation";
 import { getServerTypeLabel } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
+import { ColorChip } from "@/components/color-chip";
+import { findScrollContainer } from "@/lib/scroll-utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -451,7 +453,7 @@ function PreviewCardGrid({
                       className={cn(
                         "relative rounded-lg",
                         isDiffActive && diffStatus === "added" && "ring-1 ring-emerald-500/70",
-                        isDiffActive && diffStatus === "removed" && "ring-1 ring-amber-500/70 opacity-60",
+                        isDiffActive && diffStatus === "removed" && "ring-1 ring-amber/70 opacity-60",
                       )}
                     >
                       {exceptedItemIds.has(item.id) && (
@@ -536,6 +538,27 @@ function PreviewCardGrid({
   );
 }
 
+/** Tinted chip for rule-set capability flags in the saved list. */
+function FeatureChip({
+  tone,
+  children,
+}: {
+  tone: "green" | "amber" | "sky" | "purple" | "cyan" | "muted";
+  children: React.ReactNode;
+}) {
+  const tones: Record<string, string> = {
+    green: "border-green/30 bg-green-dim text-green",
+    amber: "border-amber/30 bg-amber-dim text-amber",
+    sky: "border-sky/30 bg-sky-dim text-sky",
+    purple: "border-purple-400/30 bg-purple-400/15 text-purple-400",
+    cyan: "border-cyan-400/30 bg-cyan-400/15 text-cyan-400",
+    muted: "border-border bg-muted/40 text-muted-foreground",
+  };
+  return (
+    <ColorChip className={`text-[10px] font-medium ${tones[tone]}`}>{children}</ColorChip>
+  );
+}
+
 export function LifecycleRulePage({
   mediaType,
   pageTitle,
@@ -556,6 +579,8 @@ export function LifecycleRulePage({
   });
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [name, setName] = useState("");
+  // Only flag a missing name after the user has interacted with the field
+  const [nameTouched, setNameTouched] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importJson, setImportJson] = useState("");
@@ -582,11 +607,12 @@ export function LifecycleRulePage({
     return (localStorage.getItem("lifecycle-preview-view-mode") as "cards" | "table") ?? "table";
   });
   const handlePreviewViewModeChange = useCallback((mode: "cards" | "table") => {
-    const scrollTop = scrollContainerRef.current?.scrollTop ?? 0;
+    const scroller = findScrollContainer();
+    const scrollTop = scroller?.scrollTop ?? 0;
     setPreviewViewMode(mode);
     localStorage.setItem("lifecycle-preview-view-mode", mode);
     requestAnimationFrame(() => {
-      scrollContainerRef.current?.scrollTo({ top: scrollTop, behavior: "instant" });
+      scroller?.scrollTo({ top: scrollTop, behavior: "instant" });
     });
   }, []);
   const { size: cardSize, setSize: setCardSize } = useCardSize();
@@ -797,7 +823,6 @@ export function LifecycleRulePage({
   const [previewDiffCounts, setPreviewDiffCounts] = useState<{ added: number; removed: number; retained: number } | null>(null);
 
   // Ref to the scroll container to preserve scroll position across re-renders
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Track previous collection state for Plex diff on save
   const [prevCollection, setPrevCollection] = useState<{
@@ -1232,12 +1257,11 @@ export function LifecycleRulePage({
       }
 
       // Preserve scroll position when preview results cause layout change
-      const scrollTop = scrollContainerRef.current?.scrollTop ?? 0;
+      const scroller = findScrollContainer();
+      const scrollTop = scroller?.scrollTop ?? 0;
       setPreview(mergedItems);
       requestAnimationFrame(() => {
-        if (scrollContainerRef.current) {
-          scrollContainerRef.current.scrollTo({ top: scrollTop, behavior: "instant" });
-        }
+        scroller?.scrollTo({ top: scrollTop, behavior: "instant" });
       });
     } catch (error) {
       console.error("Failed to preview:", error);
@@ -1570,6 +1594,7 @@ export function LifecycleRulePage({
     // Bump token to invalidate any in-flight loadRuleSet visibility fetches.
     loadTokenRef.current++;
     setName("");
+    setNameTouched(false);
     setGroups([]);
     setActiveRuleSetId(null);
     setEnabled(true);
@@ -1703,7 +1728,7 @@ export function LifecycleRulePage({
 
   return (
     <>
-    <div className={embedded ? "flex-1 min-h-0 overflow-y-auto" : "h-full overflow-y-auto"} ref={scrollContainerRef}>
+    <div className={embedded ? undefined : "h-full overflow-y-auto"}>
         <div className={embedded ? "px-4 sm:px-6 lg:px-8 pb-4 sm:pb-6 lg:pb-8" : "p-4 sm:p-6 lg:p-8"}>
       {!embedded && (
         <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -1753,45 +1778,41 @@ export function LifecycleRulePage({
                     />
                     <div>
                       <p className="font-medium truncate">{ruleSet.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {countRules(ruleSet.rules)} rule
-                        {countRules(ruleSet.rules) !== 1 && "s"}
+                      <div className="mt-1 flex flex-wrap items-center gap-1">
+                        <span className="mr-1 font-mono text-[10.5px] text-faint">
+                          {countRules(ruleSet.rules)} rule{countRules(ruleSet.rules) !== 1 && "s"}
+                        </span>
                         {ruleSet.enabled ? (
-                          <span className="ml-2 text-green-400">Enabled</span>
+                          <FeatureChip tone="green">Enabled</FeatureChip>
                         ) : (
-                          <span className="ml-2 text-muted-foreground">Disabled</span>
+                          <FeatureChip tone="muted">Disabled</FeatureChip>
                         )}
                         {ruleSet.enabled && ruleSet.actionEnabled && (
-                          <span className="ml-2 text-orange-400">
-                            Action enabled
-                          </span>
+                          <FeatureChip tone="amber">Action</FeatureChip>
                         )}
                         {ruleSet.enabled && ruleSet.collectionEnabled && (
-                          <span className="ml-2 text-blue-400">
-                            Collection
-                          </span>
+                          <FeatureChip tone="sky">Collection</FeatureChip>
                         )}
                         {ruleSet.enabled && (ruleSet.addArrTags?.length > 0 || ruleSet.removeArrTags?.length > 0) && (
-                          <span className="ml-2 text-purple-400">
-                            Tags
-                          </span>
+                          <FeatureChip tone="purple">Tags</FeatureChip>
                         )}
                         {scopeConfig && (
-                          <span className="ml-2">
+                          <FeatureChip tone="muted">
                             {ruleSet.seriesScope !== false ? scopeConfig.ruleSetEnabledLabel : scopeConfig.ruleSetDisabledLabel}
-                          </span>
+                          </FeatureChip>
                         )}
                         {ruleSet.serverIds?.length > 0 && (
-                          <span className="ml-2 text-cyan-400">
+                          <FeatureChip tone="cyan">
                             {ruleSet.serverIds.length} server{ruleSet.serverIds.length !== 1 ? "s" : ""}
-                          </span>
+                          </FeatureChip>
                         )}
-                      </p>
+                      </div>
                     </div>
                   </div>
                   <Button
                     variant="ghost"
                     size="icon"
+                    aria-label={`Delete rule set ${ruleSet.name}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       setDeleteConfirmId(ruleSet.id);
@@ -1827,7 +1848,8 @@ export function LifecycleRulePage({
               placeholder="Rule set name (e.g., 'Old unwatched 720p movies')"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className={`flex-1 min-w-0${!name ? " border-destructive" : ""}`}
+              onBlur={() => setNameTouched(true)}
+              className={`flex-1 min-w-0${!name && nameTouched ? " border-destructive" : ""}`}
             />
             <div className="flex items-center gap-2 shrink-0">
               <Switch
@@ -2080,7 +2102,7 @@ export function LifecycleRulePage({
                       </SelectContent>
                     </Select>
                     {recycleBinStatus?.enabled === false && isDestructiveAction(actionType) && (
-                      <p className="mt-2 text-xs text-amber-500 flex items-center gap-1.5">
+                      <p className="mt-2 text-xs text-amber flex items-center gap-1.5">
                         <AlertTriangle className="h-3.5 w-3.5" />
                         Recycle bin is disabled on this {arrServiceName} instance. Deletes will be permanent.
                       </p>
@@ -2328,8 +2350,8 @@ export function LifecycleRulePage({
                               key={tag}
                               className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs ${
                                 tagMode === "add"
-                                  ? "bg-green-500/15 text-green-400"
-                                  : "bg-red-500/15 text-red-400"
+                                  ? "bg-green/15 text-green"
+                                  : "bg-red/15 text-red"
                               }`}
                             >
                               {tagMode === "add" ? "+" : "-"}{tag}
@@ -2371,7 +2393,7 @@ export function LifecycleRulePage({
                 Sync matches to Plex collection
               </Label>
               {!collectionEnabled && prevCollection.enabled && prevCollection.name && (
-                <span className="text-xs text-amber-500">Pending disable on save</span>
+                <span className="text-xs text-amber">Pending disable on save</span>
               )}
             </div>
 
@@ -2474,10 +2496,10 @@ export function LifecycleRulePage({
           </div>
 
           {ruleUsesArr && !arrInstanceId && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
-              <AlertTriangle className="h-4 w-4 mt-0.5 text-amber-400 shrink-0" />
+            <div className="flex items-start gap-2 rounded-md border border-amber/30 bg-amber/10 p-3 text-sm">
+              <AlertTriangle className="h-4 w-4 mt-0.5 text-amber shrink-0" />
               <div className="space-y-1">
-                <p className="font-medium text-amber-400">
+                <p className="font-medium text-amber">
                   {arrServiceName} instance required
                 </p>
                 <p className="text-muted-foreground">
@@ -2530,7 +2552,7 @@ export function LifecycleRulePage({
                 }
               }}
               disabled={!isDirty || justSaved || !name || groups.length === 0 || !validateAllRules(groups) || loading || serverIds.length === 0 || (actionEnabled && (actionType !== "DO_NOTHING" || addArrTags.length > 0 || removeArrTags.length > 0) && !arrInstanceId) || (actionEnabled && isQualityProfileChangeAction(actionType) && targetQualityProfileId === null) || (actionEnabled && targetProfileMissing) || (actionEnabled && isQualityProfileChangeAction(actionType) && !!arrInstanceId && arrProfilesStatus !== "ready") || (collectionEnabled && !collectionName?.trim()) || (ruleUsesArr && !arrInstanceId)}
-              className={justSaved ? "bg-green-600 hover:bg-green-600 text-white" : ""}
+              className={justSaved ? "bg-green hover:bg-green text-white" : ""}
             >
               {loading ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -2589,7 +2611,7 @@ export function LifecycleRulePage({
                   </Badge>
                 )}
                 {previewDiffCounts.removed > 0 && (
-                  <Badge variant="outline" className="border-amber-500/50 text-amber-400">
+                  <Badge variant="outline" className="border-amber/50 text-amber">
                     -{previewDiffCounts.removed} removed
                   </Badge>
                 )}
@@ -2675,7 +2697,7 @@ export function LifecycleRulePage({
               rowClassName={previewDiffMap.size > 0 ? (item) => {
                 const status = previewDiffMap.get(item.id);
                 if (status === "added") return "border-l-2 border-l-emerald-500/70 bg-emerald-500/5";
-                if (status === "removed") return "border-l-2 border-l-amber-500/70 bg-amber-500/5 opacity-60";
+                if (status === "removed") return "border-l-2 border-l-amber/70 bg-amber/5 opacity-60";
                 return undefined;
               } : undefined}
             />
@@ -2866,7 +2888,7 @@ export function LifecycleRulePage({
                     <Badge
                       variant={testMediaResult.matches ? "default" : "secondary"}
                       className={testMediaResult.matches
-                        ? "bg-green-600 hover:bg-green-600 text-white"
+                        ? "bg-green hover:bg-green text-white"
                         : "text-muted-foreground"}
                     >
                       {testMediaResult.matches ? "Matches Rules" : "Does Not Match"}
@@ -2883,12 +2905,12 @@ export function LifecycleRulePage({
                             <Badge
                               key={i}
                               variant="outline"
-                              className={`text-xs ${criterion.negate ? "border-red-500/30 text-red-400" : ""}`}
+                              className={`text-xs ${criterion.negate ? "border-red/30 text-red" : ""}`}
                             >
                               {criterion.groupName && (
-                                <span className="text-blue-400 mr-1">[{criterion.groupName}]</span>
+                                <span className="text-sky mr-1">[{criterion.groupName}]</span>
                               )}
-                              {criterion.negate && <span className="text-red-400 mr-1">NOT</span>}
+                              {criterion.negate && <span className="text-red mr-1">NOT</span>}
                               {criterion.field} {criterion.operator} {criterion.value}
                             </Badge>
                           );
@@ -2945,8 +2967,8 @@ export function LifecycleRulePage({
                   )}
                 </p>
                 {deleteConfirmAddTags.length > 0 && (
-                  <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
-                    <p className="mb-2 text-amber-400">
+                  <div className="rounded-md border border-amber/30 bg-amber/10 p-3 text-sm">
+                    <p className="mb-2 text-amber">
                       This rule set adds tags [{deleteConfirmAddTags.join(", ")}] to items.
                     </p>
                     <label className="flex items-center gap-2 cursor-pointer">
@@ -3128,8 +3150,8 @@ export function LifecycleRulePage({
                 label="Removed"
                 count={diffData.counts.removed}
                 items={diffData.removed}
-                color="text-amber-400"
-                bgColor="bg-amber-500/10"
+                color="text-amber"
+                bgColor="bg-amber/10"
                 note={stickyMatches ? "Sticky matches enabled — items will be kept" : "Pending actions will be cancelled"}
                 expanded={diffExpanded.removed ?? false}
                 onToggle={() => setDiffExpanded((prev) => ({ ...prev, removed: !prev.removed }))}
@@ -3252,7 +3274,7 @@ export function LifecycleRulePage({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              <AlertTriangle className="h-5 w-5 text-amber" />
               Recycle Bin Disabled
             </AlertDialogTitle>
             <AlertDialogDescription asChild>

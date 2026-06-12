@@ -30,6 +30,28 @@ export const MUSIC_ACTION_TYPES = [
   { value: "CHANGE_QUALITY_PROFILE_LIDARR", label: "Change Quality Profile" },
 ];
 
+/**
+ * Action types whose executor acts only on the matched member ids
+ * (`matchedMediaItemIds`) when present — i.e. Sonarr episode-file deletes.
+ * Every OTHER destructive action operates on the WHOLE Arr record (series /
+ * artist / movie) and ignores the member list, so a partially-excepted
+ * member set cannot be honored by them.
+ */
+export const MEMBER_SCOPED_ACTION_TYPES = new Set<string>([
+  "UNMONITOR_DELETE_FILES_SONARR",
+  "MONITOR_DELETE_FILES_SONARR",
+  "DELETE_FILES_SONARR",
+]);
+
+export function actionHonorsMemberIds(actionType: string): boolean {
+  return MEMBER_SCOPED_ACTION_TYPES.has(actionType);
+}
+
+/** Whether the action removes media/files (not just monitoring/quality). */
+export function isDestructiveActionType(actionType: string): boolean {
+  return actionType.includes("DELETE");
+}
+
 /** Action types that change a Sonarr/Radarr/Lidarr item's quality profile. */
 export const QUALITY_PROFILE_ACTION_TYPES = new Set<string>([
   "CHANGE_QUALITY_PROFILE_RADARR",

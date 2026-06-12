@@ -1,13 +1,6 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -19,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Clock, Loader2, Play, RefreshCw, Workflow } from "lucide-react";
+import { SettingsSection } from "../components";
 import { SCHEDULE_OPTIONS } from "../types";
 import type { ScheduleInfo } from "../types";
 
@@ -239,17 +233,11 @@ export function SchedulingTab({
       </div>
 
       {/* Daily Run Time */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Clock className="h-4 w-4" />
-            Daily Run Time
-          </CardTitle>
-          <CardDescription>
-            Preset schedules (Daily, Weekly, Every 6h, Every 12h) run at this time, with sub-daily schedules using it as their starting anchor. Custom cron expressions ignore this setting and run at whatever times their expression specifies. All schedules use the server&apos;s local timezone.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <SettingsSection
+        icon={Clock}
+        title="Daily Run Time"
+        description="Preset schedules (Daily, Weekly, Every 6h, Every 12h) run at this time, with sub-daily schedules using it as their starting anchor. Custom cron expressions ignore this setting and run at whatever times their expression specifies. All schedules use the server's local timezone."
+      >
           <div>
             <Label htmlFor="scheduled-job-time">Time of day for scheduled jobs</Label>
             <div className="mt-1.5 flex items-center gap-2">
@@ -278,21 +266,14 @@ export function SchedulingTab({
               </p>
             )}
           </div>
-        </CardContent>
-      </Card>
+      </SettingsSection>
 
       {/* Library Sync */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <RefreshCw className="h-4 w-4" />
-            Library Sync
-          </CardTitle>
-          <CardDescription>
-            How often Librariarr fetches metadata from your connected media servers.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <SettingsSection
+        icon={RefreshCw}
+        title="Library Sync"
+        description="How often Librariarr fetches metadata from your connected media servers."
+      >
           <ScheduleRow
             jobKey="sync"
             selectId="sync-schedule"
@@ -312,21 +293,15 @@ export function SchedulingTab({
             formatDate={formatDate}
             formatNextRun={formatNextRun}
           />
-        </CardContent>
-      </Card>
+      </SettingsSection>
 
       {/* Lifecycle Rules */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Workflow className="h-4 w-4" />
-            Lifecycle Rules
-          </CardTitle>
-          <CardDescription>
-            Detection scans for media matching rules; execution applies the scheduled actions.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
+      <SettingsSection
+        icon={Workflow}
+        title="Lifecycle Rules"
+        description="Detection scans for media matching rules; execution applies the scheduled actions."
+        contentClassName="space-y-6"
+      >
           <div>
             <h4 className="text-sm font-medium mb-3">Detection</h4>
             <ScheduleRow
@@ -376,8 +351,7 @@ export function SchedulingTab({
               formatNextRun={formatNextRun}
             />
           </div>
-        </CardContent>
-      </Card>
+      </SettingsSection>
     </div>
   );
 }

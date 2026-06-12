@@ -1582,7 +1582,7 @@ export default function PrerollManagerPage() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-amber-400" />
+              <AlertTriangle className="h-5 w-5 text-amber" />
               File Not Found
             </AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">

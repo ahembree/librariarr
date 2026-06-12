@@ -418,9 +418,9 @@ function ConvertDialogBody({
         )}
 
         {targetType && !wouldHaveNoRules && incompatible.length > 0 && (
-          <div className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+          <div className="space-y-2 rounded-md border border-amber/40 bg-amber/10 p-3 text-sm">
             <div className="flex items-start gap-2">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber" />
               <p>
                 {incompatible.length}{" "}
                 {incompatible.length === 1 ? "rule" : "rules"} will be removed
@@ -451,9 +451,9 @@ function ConvertDialogBody({
         )}
 
         {query.serverIds.length === 0 && (
-          <div className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+          <div className="space-y-2 rounded-md border border-amber/40 bg-amber/10 p-3 text-sm">
             <div className="flex items-start gap-2">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber" />
               <p>
                 Lifecycle rule sets require at least one server. The query has
                 no servers selected.

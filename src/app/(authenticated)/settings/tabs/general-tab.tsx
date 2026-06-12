@@ -2,14 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { SettingsSection } from "../components";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,6 +20,16 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   CheckCircle,
   DatabaseBackup,
@@ -154,8 +157,9 @@ export function GeneralTab({
 }: GeneralTabProps) {
   const [encryptionPasswordInput, setEncryptionPasswordInput] = useState("");
   const [showPasswordForm, setShowPasswordForm] = useState(false);
-  const [restorePassphraseFor, setRestorePassphraseFor] = useState<string | null>(null);
+  const [confirmRestore, setConfirmRestore] = useState<BackupEntry | null>(null);
   const [restorePassphraseInput, setRestorePassphraseInput] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [includeMediaData, setIncludeMediaData] = useState(false);
 
   const dupeNames = useMemo(() => getDuplicateServerNames(servers), [servers]);
@@ -171,19 +175,9 @@ export function GeneralTab({
 
       {/* Appearance */}
       <section className="space-y-4">
-        <h3 className="text-lg font-semibold">Appearance</h3>
+        <h3 className="font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">Appearance</h3>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Palette className="h-4 w-4" />
-              Accent Color
-            </CardTitle>
-            <CardDescription>
-              Choose a color theme for buttons, active items, and highlights.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+        <SettingsSection icon={Palette} title="Accent Color" description="Choose a color theme for buttons, active items, and highlights.">
             <div className="flex flex-wrap gap-3">
               {ACCENT_PRESETS.map((preset) => (
                 <button
@@ -204,30 +198,18 @@ export function GeneralTab({
                 </button>
               ))}
             </div>
-          </CardContent>
-        </Card>
+        </SettingsSection>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Paintbrush className="h-4 w-4" />
-              Badge & Chart Colors
-            </CardTitle>
-            <CardDescription>
-              Customize colors for resolution, dynamic range, and audio profile badges and charts.
-            </CardDescription>
-            <CardAction>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-xs"
-                onClick={onResetChipColors}
-              >
-                Reset to defaults
-              </Button>
-            </CardAction>
-          </CardHeader>
-          <CardContent>
+        <SettingsSection
+          icon={Paintbrush}
+          title="Badge & Chart Colors"
+          description="Customize colors for resolution, dynamic range, and audio profile badges and charts."
+          action={
+            <Button variant="ghost" size="sm" className="text-xs" onClick={onResetChipColors}>
+              Reset to defaults
+            </Button>
+          }
+        >
             <div className="space-y-5">
               {CHIP_CATEGORY_ORDER.map((category) => (
                 <div key={category}>
@@ -272,22 +254,11 @@ export function GeneralTab({
                 </div>
               ))}
             </div>
-          </CardContent>
-        </Card>
+        </SettingsSection>
       </section>
 
       {/* Display */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Eye className="h-4 w-4" />
-            Display
-          </CardTitle>
-          <CardDescription>
-            Configure how stats and library data are presented across the app.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
+      <SettingsSection icon={Eye} title="Display" description="Configure how stats and library data are presented across the app." contentClassName="space-y-6">
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
               <Label>Deduplicate stats across servers</Label>
@@ -360,21 +331,10 @@ export function GeneralTab({
               </div>
             </>
           )}
-        </CardContent>
-      </Card>
+      </SettingsSection>
 
       {/* Data Retention */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <History className="h-4 w-4" />
-            Data Retention
-          </CardTitle>
-          <CardDescription>
-            How long logs and action history are kept before being archived or pruned.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <SettingsSection icon={History} title="Data Retention" description="How long logs and action history are kept before being archived or pruned.">
           <div className="grid gap-6 sm:grid-cols-2">
             <div>
               <Label htmlFor="log-retention">Keep logs for</Label>
@@ -435,21 +395,10 @@ export function GeneralTab({
               </p>
             </div>
           </div>
-        </CardContent>
-      </Card>
+      </SettingsSection>
 
       {/* Backup & Restore */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <DatabaseBackup className="h-4 w-4" />
-            Backup & Restore
-          </CardTitle>
-          <CardDescription>
-            Schedule automatic backups, manage encryption, and restore from previous backups.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
+      <SettingsSection icon={DatabaseBackup} title="Backup & Restore" description="Schedule automatic backups, manage encryption, and restore from previous backups." contentClassName="space-y-6">
           {/* Schedule */}
           <div>
             <h4 className="text-sm font-medium mb-3">Schedule</h4>
@@ -607,6 +556,7 @@ export function GeneralTab({
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8"
+                          aria-label={`Download backup ${b.filename}`}
                           onClick={() => onDownloadBackup(b.filename)}
                         >
                           <Download className="h-3.5 w-3.5" />
@@ -615,14 +565,11 @@ export function GeneralTab({
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8"
+                          aria-label={`Restore backup ${b.filename}`}
                           disabled={restoringBackup === b.filename}
                           onClick={() => {
-                            if (b.encrypted) {
-                              setRestorePassphraseFor(b.filename);
-                              setRestorePassphraseInput("");
-                            } else {
-                              onRestoreBackup(b.filename);
-                            }
+                            setConfirmRestore(b);
+                            setRestorePassphraseInput("");
                           }}
                         >
                           {restoringBackup === b.filename ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
@@ -631,7 +578,8 @@ export function GeneralTab({
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 text-destructive hover:text-destructive"
-                          onClick={() => onDeleteBackup(b.filename)}
+                          aria-label={`Delete backup ${b.filename}`}
+                          onClick={() => setConfirmDelete(b.filename)}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
@@ -641,48 +589,6 @@ export function GeneralTab({
                       <div className="flex items-center gap-2 pt-1 text-xs text-muted-foreground">
                         <Loader2 className="h-3 w-3 animate-spin shrink-0" />
                         {restoreProgress}
-                      </div>
-                    )}
-                    {restorePassphraseFor === b.filename && !restoringBackup && (
-                      <div className="flex items-center gap-2 pt-1">
-                        <Input
-                          type="password"
-                          placeholder="Enter passphrase"
-                          value={restorePassphraseInput}
-                          onChange={(e) => setRestorePassphraseInput(e.target.value)}
-                          className="max-w-xs h-8 text-sm"
-                          autoFocus
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" && restorePassphraseInput) {
-                              onRestoreBackup(b.filename, restorePassphraseInput);
-                              setRestorePassphraseFor(null);
-                              setRestorePassphraseInput("");
-                            } else if (e.key === "Escape") {
-                              setRestorePassphraseFor(null);
-                              setRestorePassphraseInput("");
-                            }
-                          }}
-                        />
-                        <Button
-                          size="sm"
-                          className="h-8"
-                          disabled={!restorePassphraseInput}
-                          onClick={() => {
-                            onRestoreBackup(b.filename, restorePassphraseInput);
-                            setRestorePassphraseFor(null);
-                            setRestorePassphraseInput("");
-                          }}
-                        >
-                          Restore
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8"
-                          onClick={() => { setRestorePassphraseFor(null); setRestorePassphraseInput(""); }}
-                        >
-                          Cancel
-                        </Button>
                       </div>
                     )}
                   </div>
@@ -696,9 +602,91 @@ export function GeneralTab({
               Loading backups...
             </div>
           )}
-        </CardContent>
-      </Card>
+      </SettingsSection>
 
+      {/* Restore confirmation — destructive: wipes all data and logs out. */}
+      <AlertDialog
+        open={!!confirmRestore}
+        onOpenChange={(open) => {
+          if (!open) {
+            setConfirmRestore(null);
+            setRestorePassphraseInput("");
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Restore backup?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Restoring &quot;{confirmRestore?.filename}&quot; will replace all current data and
+              log you out. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {confirmRestore?.encrypted && (
+            <div className="space-y-1.5">
+              <Label htmlFor="restore-passphrase">Passphrase</Label>
+              <Input
+                id="restore-passphrase"
+                type="password"
+                placeholder="Enter the backup passphrase"
+                value={restorePassphraseInput}
+                onChange={(e) => setRestorePassphraseInput(e.target.value)}
+                autoFocus
+              />
+              <p className="text-xs text-muted-foreground">
+                This backup is encrypted and requires its passphrase to restore.
+              </p>
+            </div>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={!!confirmRestore?.encrypted && !restorePassphraseInput}
+              onClick={() => {
+                if (!confirmRestore) return;
+                onRestoreBackup(
+                  confirmRestore.filename,
+                  confirmRestore.encrypted ? restorePassphraseInput : undefined,
+                );
+                setConfirmRestore(null);
+                setRestorePassphraseInput("");
+              }}
+            >
+              <RotateCcw className="mr-2 h-4 w-4" />
+              Restore
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete backup confirmation */}
+      <AlertDialog
+        open={!!confirmDelete}
+        onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete backup?</AlertDialogTitle>
+            <AlertDialogDescription>
+              &quot;{confirmDelete}&quot; will be permanently deleted.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (confirmDelete) onDeleteBackup(confirmDelete);
+                setConfirmDelete(null);
+              }}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

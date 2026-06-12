@@ -118,6 +118,7 @@ function processGroups<R extends BaseRule, G extends BaseGroup<R>>(
     // Group start
     const label = gi === 0 && depth === 0 ? "WHERE" : "";
     const nameStr = group.name ? `${group.name}: ` : "";
+    const groupNegatePrefix = group.negate ? "NOT " : "";
     const streamQueryPrefix = group.streamQuery
       ? `${(group.streamQuery.quantifier ?? "any") === "none" ? "NO" : (group.streamQuery.quantifier ?? "any") === "all" ? "ALL" : "ANY"} ${group.streamQuery.streamType} stream WHERE `
       : "";
@@ -125,9 +126,9 @@ function processGroups<R extends BaseRule, G extends BaseGroup<R>>(
       id: nextId(),
       depth,
       type: "group-start",
-      text: `${label}${label ? " " : ""}${streamQueryPrefix}(${nameStr}`.trimStart(),
+      text: `${label}${label ? " " : ""}${groupNegatePrefix}${streamQueryPrefix}(${nameStr}`.trimStart(),
       disabled: groupDisabled,
-      negated: false,
+      negated: !!group.negate,
       groupId: group.id,
       parentGroupId,
     });

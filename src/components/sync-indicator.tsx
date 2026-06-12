@@ -62,20 +62,20 @@ function ActiveSyncBar({ job }: { job: SyncJob }) {
     <TooltipProvider>
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="relative h-9 overflow-hidden rounded-md border border-blue-500/30 bg-blue-500/10 text-sm">
+          <div className="relative h-9 overflow-hidden rounded-md border border-sky/30 bg-sky/10 text-sm">
             <div className="flex h-full items-center gap-1.5 px-3">
-              <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
+              <Loader2 className="h-4 w-4 animate-spin text-sky" />
               <ServerTypeChip type={job.mediaServer.type} />
-              <span className="text-blue-300">
+              <span className="text-sky">
                 Syncing {job.mediaServer.name}
                 {job.totalItems > 0 && ` \u00b7 ${progress}%`}
                 {eta && ` \u00b7 ${eta}`}
               </span>
             </div>
             {job.totalItems > 0 && (
-              <div className="absolute inset-x-0 bottom-0 h-0.5 bg-blue-500/20">
+              <div className="absolute inset-x-0 bottom-0 h-0.5 bg-sky/20">
                 <div
-                  className="h-full bg-blue-400 transition-all duration-500"
+                  className="h-full bg-sky transition-all duration-500"
                   style={{ width: `${progress}%` }}
                 />
               </div>
@@ -205,7 +205,7 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
         <Tooltip>
           <TooltipTrigger asChild>
             <div className="flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm text-muted-foreground">
-              <CheckCircle className="h-4 w-4 text-green-400" />
+              <CheckCircle className="h-4 w-4 text-green" />
               <ServerTypeChip type={recentCompleted.mediaServer.type} />
               <span>
                 {recentCompleted.itemsProcessed.toLocaleString()} items

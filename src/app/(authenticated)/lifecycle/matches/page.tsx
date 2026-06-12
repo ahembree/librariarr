@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useColumnResize } from "@/hooks/use-column-resize";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
+import { EmptyState } from "@/components/empty-state";
 import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
 import { useIntegrationsHealth } from "@/hooks/use-integrations-health";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -174,10 +175,10 @@ function CollapsibleCriteria({ criteria }: { criteria: MatchedCriterion[] }) {
         className="border-border text-muted-foreground text-[11px] font-normal"
       >
         {c.groupName && (
-          <span className="text-blue-400 mr-0.5">[{c.groupName}]</span>
+          <span className="text-sky mr-0.5">[{c.groupName}]</span>
         )}
         {c.negate && (
-          <span className="text-red-400 mr-0.5">NOT</span>
+          <span className="text-red mr-0.5">NOT</span>
         )}
         <span className="text-muted-foreground">{c.field}</span>
         {" "}
@@ -959,22 +960,16 @@ export default function RuleMatchesPage() {
       <TabNav tabs={MEDIA_TYPE_TABS} activeTab={mediaTypeTab} onTabChange={setMediaTypeTab} className="mb-6 mt-6" />
 
       {filteredRuleMatches.length === 0 && (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
-            <div className="rounded-full bg-muted p-4">
-              <Inbox className="h-8 w-8 text-muted-foreground" />
-            </div>
-            <div className="space-y-1">
-              <p className="text-base font-medium">No enabled rule sets</p>
-              <p className="text-sm text-muted-foreground">
-                Create and enable a rule set to start matching media.
-              </p>
-            </div>
-            <Button asChild variant="outline" size="sm" className="mt-2">
+        <EmptyState
+          icon={Inbox}
+          title="No enabled rule sets"
+          description="Create and enable a rule set to start matching media."
+          action={
+            <Button asChild variant="outline" size="sm">
               <Link href="/lifecycle/rules">Manage Rules</Link>
             </Button>
-          </CardContent>
-        </Card>
+          }
+        />
       )}
 
       <div className="space-y-4">
@@ -1015,7 +1010,7 @@ export default function RuleMatchesPage() {
                             {match.ruleSet.addArrTags?.map((tag) => (
                               <ColorChip
                                 key={`add-${tag}`}
-                                className="bg-green-500/20 text-green-400 border-green-500/30"
+                                className="bg-green/20 text-green border-green/30"
                               >
                                 +{tag}
                               </ColorChip>
@@ -1023,7 +1018,7 @@ export default function RuleMatchesPage() {
                             {match.ruleSet.removeArrTags?.map((tag) => (
                               <ColorChip
                                 key={`rm-${tag}`}
-                                className="bg-red-500/20 text-red-400 border-red-500/30"
+                                className="bg-red/20 text-red border-red/30"
                               >
                                 -{tag}
                               </ColorChip>
@@ -1031,7 +1026,7 @@ export default function RuleMatchesPage() {
                           </div>
                         )}
                         {match.ruleSet.collectionEnabled && match.ruleSet.collectionName && (
-                          <span className="text-xs text-blue-400">
+                          <span className="text-xs text-sky">
                             Collection: {match.ruleSet.collectionName}
                           </span>
                         )}

@@ -39,6 +39,28 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  /* Overhaul design tokens — surfaces, brand accent, semantic colors.
+     These mirror the design handoff; --brand* is namespaced to avoid
+     clashing with shadcn's muted --accent (hover fill) token. */
+  --color-surface-0: var(--surface-0);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-faint: var(--faint-foreground);
+  --color-border-strong: var(--border-strong);
+  --color-brand: var(--brand);
+  --color-brand-bright: var(--brand-bright);
+  --color-brand-dim: var(--brand-dim);
+  --color-brand-faint: var(--brand-faint);
+  --color-on-brand: var(--on-brand);
+  --color-amber: var(--amber);
+  --color-amber-dim: var(--amber-dim);
+  --color-green: var(--green);
+  --color-green-dim: var(--green-dim);
+  --color-red: var(--red);
+  --color-red-dim: var(--red-dim);
+  --color-sky: var(--sky);
+  --color-sky-dim: var(--sky-dim);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -81,6 +103,29 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* Overhaul tokens — light. Dark is the shipped default; these keep the
+     (currently unused) light path coherent. Bright accent flips toward
+     black on light surfaces so accent text stays legible. */
+  --surface-0: oklch(0.985 0.003 250);
+  --surface-1: oklch(1 0 0);
+  --surface-2: oklch(0.975 0.004 255);
+  --surface-3: oklch(0.955 0.006 258);
+  --faint-foreground: oklch(0.62 0.012 262);
+  --border-strong: oklch(0.2 0.02 270 / 16%);
+  --brand: oklch(0.62 0.2 264);
+  --brand-bright: color-mix(in oklch, var(--brand) 84%, black);
+  --brand-dim: oklch(0.62 0.2 264 / 0.12);
+  --brand-faint: oklch(0.62 0.2 264 / 0.06);
+  --on-brand: oklch(0.99 0.005 270);
+  --amber: oklch(0.66 0.15 78);
+  --amber-dim: oklch(0.8 0.15 78 / 0.16);
+  --green: oklch(0.6 0.16 158);
+  --green-dim: oklch(0.74 0.16 158 / 0.16);
+  --red: var(--destructive);
+  --red-dim: oklch(0.7 0.19 22 / 0.14);
+  --sky: oklch(0.56 0.13 235);
+  --sky-dim: oklch(0.72 0.13 235 / 0.14);
 }
 
 .dark {
@@ -90,8 +135,8 @@
   --card-foreground: oklch(0.95 0.008 80);
   --popover: oklch(0.23 0.01 270);
   --popover-foreground: oklch(0.95 0.008 80);
-  --primary: oklch(0.90 0 0);
-  --primary-foreground: oklch(0.18 0.01 270);
+  --primary: var(--brand);
+  --primary-foreground: var(--on-brand);
   --secondary: oklch(0.27 0.01 270);
   --secondary-foreground: oklch(0.95 0.008 80);
   --muted: oklch(0.25 0.01 265);
@@ -115,6 +160,27 @@
   --sidebar-accent-foreground: oklch(0.95 0.008 80);
   --sidebar-border: oklch(1 0.01 270 / 12%);
   --sidebar-ring: oklch(0.50 0.015 260);
+
+  /* Overhaul tokens — dark (shipped default), lifted from the design handoff. */
+  --surface-0: var(--background);
+  --surface-1: var(--card);
+  --surface-2: oklch(0.245 0.01 270);
+  --surface-3: oklch(0.285 0.012 270);
+  --faint-foreground: oklch(0.52 0.012 262);
+  --border-strong: oklch(1 0.01 270 / 18%);
+  --brand: oklch(0.62 0.2 264);
+  --brand-bright: oklch(0.7 0.2 264);
+  --brand-dim: oklch(0.62 0.2 264 / 0.15);
+  --brand-faint: oklch(0.62 0.2 264 / 0.08);
+  --on-brand: oklch(0.98 0.005 270);
+  --amber: oklch(0.8 0.15 78);
+  --amber-dim: oklch(0.8 0.15 78 / 0.14);
+  --green: oklch(0.74 0.16 158);
+  --green-dim: oklch(0.74 0.16 158 / 0.14);
+  --red: oklch(0.7 0.19 22);
+  --red-dim: oklch(0.7 0.19 22 / 0.14);
+  --sky: oklch(0.72 0.13 235);
+  --sky-dim: oklch(0.72 0.13 235 / 0.14);
 }
 
 @layer base {
@@ -130,7 +196,10 @@
     height: 100%;
   }
   body {
-    @apply bg-background text-foreground;
+    /* font-sans must be applied here (not inherited from preflight's html
+       rule): next/font defines --font-sans on <body>, which <html> cannot
+       see, so without this the UI falls back to the system font stack. */
+    @apply bg-background text-foreground font-sans;
     height: 100%;
   }
 }
@@ -182,6 +251,33 @@ body::before {
   backdrop-filter: blur(20px);
   background: oklch(0.21 0.008 270 / 70%);
   border: 1px solid oklch(1 0 0 / 5%);
+}
+
+/* Canvas atmosphere — the subtle ambient-light radial at the top of the
+   main content area (extracted from an inline arbitrary value so the
+   shell and any future surfaces share one definition). */
+.canvas-atmosphere {
+  background-image: radial-gradient(
+    ellipse at 50% 0%,
+    oklch(0.22 0.02 270) 0%,
+    transparent 60%
+  );
+}
+
+/* Auth backdrop — full-screen cinematic gradient behind the login and
+   onboarding cards (shared by both pages). */
+.auth-backdrop {
+  background-image:
+    radial-gradient(
+      ellipse 70% 55% at 50% -5%,
+      oklch(0.55 0.2 264 / 0.2),
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse at center,
+      oklch(0.22 0.02 270),
+      oklch(0.14 0.006 270)
+    );
 }
 
 /* Disable expensive backdrop-filter on mobile to prevent scroll lag */
@@ -243,4 +339,44 @@ body::before {
 [data-alphabet-grid] > * {
   content-visibility: auto;
   contain-intrinsic-size: auto 400px;
+}
+
+/* Elevation tokens from the design handoff (use via shadow-[var(--shadow-card)]) */
+:root {
+  --shadow-card: 0 1px 2px oklch(0.2 0.02 270 / 6%), 0 8px 24px -16px oklch(0.2 0.02 270 / 25%);
+  --shadow-pop: 0 24px 60px -20px oklch(0.2 0.02 270 / 30%);
+}
+.dark {
+  --shadow-card: 0 1px 0 oklch(1 0 0 / 4%) inset, 0 8px 24px -12px oklch(0 0 0 / 60%);
+  --shadow-pop: 0 24px 60px -20px oklch(0 0 0 / 75%);
+}
+
+/* Eyebrow: mono, uppercase, wide-tracked, faint — the "mono-for-data" label
+   pattern that anchors the aesthetic. */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.4;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--faint-foreground);
+  font-weight: 500;
+}
+
+/* Safe-area helpers for standalone PWA mode (env() resolves to 0 in
+   regular browser tabs, so these are no-ops outside the installed app). */
+.pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+/* Honor reduced-motion: skip entrance animation, keep the resting (visible)
+   state. Animations use `both`, so without this the content could otherwise
+   be left mid-keyframe. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in-up,
+  .stagger-children > * {
+    animation: none;
+  }
 }

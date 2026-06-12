@@ -47,3 +47,4 @@ export * from "./constants";
 export * from "./wildcard";
 export * from "./series-aggregates";
 export * from "./library-type-guard";
+export * from "./negation";

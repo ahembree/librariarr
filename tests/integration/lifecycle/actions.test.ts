@@ -68,7 +68,7 @@ vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
 
 // Import AFTER mocks
 import { GET } from "@/app/api/lifecycle/actions/route";
-import { DELETE as actionDelete } from "@/app/api/lifecycle/actions/[id]/route";
+import { DELETE as actionDelete, POST as actionRetry } from "@/app/api/lifecycle/actions/[id]/route";
 import { POST as executePost } from "@/app/api/lifecycle/actions/execute/route";
 
 describe("Lifecycle Actions", () => {
@@ -699,4 +699,53 @@ describe("Lifecycle Actions", () => {
       expect(actions[0].mediaItemTitle).toBe("Failing Movie");
     });
   });
+  // ── Audit regression: exceptions must block FAILED-action retries ──
+  describe("POST /api/lifecycle/actions/[id] (retry)", () => {
+    it("refuses to retry when the item has a lifecycle exception", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { title: "Excepted Movie", type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, { name: "Retry Rule" });
+      const action = await createTestAction(user.id, item.id, ruleSet.id, { status: "FAILED" });
+      await createTestRuleMatch(ruleSet.id, item.id);
+
+      const prisma = getTestPrisma();
+      await prisma.lifecycleException.create({
+        data: { userId: user.id, mediaItemId: item.id, reason: "keep" },
+      });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRouteWithParams(actionRetry, { id: action.id }, {
+        url: `/api/lifecycle/actions/${action.id}`,
+        method: "POST",
+      });
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/exception/i);
+
+      // and the action was not executed
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
+    it("retries a FAILED action when no exception exists", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { title: "Retry Movie", type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, { name: "Retry Rule 2" });
+      const action = await createTestAction(user.id, item.id, ruleSet.id, { status: "FAILED" });
+      await createTestRuleMatch(ruleSet.id, item.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRouteWithParams(actionRetry, { id: action.id }, {
+        url: `/api/lifecycle/actions/${action.id}`,
+        method: "POST",
+      });
+      expect(response.status).toBeLessThan(300);
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).toHaveBeenCalledTimes(1);
+    });
+  });
+
 });

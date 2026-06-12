@@ -74,9 +74,9 @@
         --border-strong: oklch(1 0.01 270 / 22%);
         --text: oklch(0.95 0.008 80);
         --text-muted: oklch(0.65 0.015 260);
-        --accent: oklch(0.6 0.15 250);
-        --accent-hover: oklch(0.55 0.18 250);
-        --accent-subtle: oklch(0.22 0.04 250);
+        --accent: oklch(0.62 0.2 264);
+        --accent-hover: oklch(0.55 0.2 264);
+        --accent-subtle: oklch(0.62 0.2 264 / 12%);
         --radius: 10px;
         --radius-xl: 14px;
         --max-width: 1140px;
@@ -173,9 +173,9 @@
         position: absolute;
         inset: 0;
         background:
-          radial-gradient(ellipse 80% 50% at 50% -10%, oklch(0.35 0.15 250 / 40%) 0%, transparent 60%),
-          radial-gradient(ellipse 60% 40% at 30% 10%, oklch(0.30 0.10 280 / 25%) 0%, transparent 50%),
-          radial-gradient(ellipse 60% 40% at 70% 10%, oklch(0.28 0.12 230 / 20%) 0%, transparent 50%);
+          radial-gradient(ellipse 80% 50% at 50% -10%, oklch(0.35 0.15 264 / 40%) 0%, transparent 60%),
+          radial-gradient(ellipse 60% 40% at 30% 10%, oklch(0.30 0.10 292 / 25%) 0%, transparent 50%),
+          radial-gradient(ellipse 60% 40% at 70% 10%, oklch(0.28 0.12 240 / 20%) 0%, transparent 50%);
         pointer-events: none;
       }
 
@@ -201,7 +201,7 @@
         font-weight: 600;
         letter-spacing: 0.03em;
         margin-bottom: 1.5rem;
-        border: 1px solid oklch(0.35 0.08 250);
+        border: 1px solid oklch(0.62 0.2 264 / 30%);
       }
 
       .hero h1 {
@@ -214,7 +214,7 @@
       }
 
       .hero h1 .accent {
-        background: linear-gradient(135deg, oklch(0.65 0.20 250), oklch(0.55 0.22 280));
+        background: linear-gradient(135deg, oklch(0.7 0.2 264), oklch(0.6 0.22 292));
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
@@ -336,7 +336,7 @@
         content: "";
         position: absolute;
         inset: -10% 10% 30%;
-        background: radial-gradient(ellipse at center, oklch(0.5 0.18 255 / 35%) 0%, transparent 70%);
+        background: radial-gradient(ellipse at center, oklch(0.5 0.18 264 / 35%) 0%, transparent 70%);
         filter: blur(50px);
         z-index: -1;
         pointer-events: none;
@@ -611,7 +611,7 @@
         content: "";
         position: absolute;
         inset: 0;
-        background: radial-gradient(ellipse 80% 60% at 50% 0%, oklch(0.30 0.10 250 / 30%) 0%, transparent 60%);
+        background: radial-gradient(ellipse 80% 60% at 50% 0%, oklch(0.30 0.10 264 / 30%) 0%, transparent 60%);
         pointer-events: none;
       }
 
@@ -947,6 +947,20 @@
         .nav-link span {
           display: none;
         }
+
+        /* The full CTA overflows narrow viewports — keep just the arrow's
+           tap target wording short and the row inside the screen */
+        .nav-links {
+          gap: 0.5rem;
+        }
+
+        .nav-cta {
+          padding: 0.45rem 0.75rem;
+        }
+
+        .nav-cta .arrow {
+          display: none;
+        }
       }
     </style>
   </head>
@@ -1044,9 +1058,9 @@
           </span>
           <h3>Browse your whole library, beautifully</h3>
           <p>
-            Movies, series, and music in one place. Virtualized grid and table
-            views stay fast even across tens of thousands of titles, with
-            alphabet jumps and instant search.
+            Movies, series, and music in one place. Grid and table views stay
+            quick and smooth no matter how big your library gets, with alphabet
+            jumps and instant search.
           </p>
           <ul class="feature-list">
             <li>
@@ -1055,7 +1069,7 @@
             </li>
             <li>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-              <span><strong>Multi-server dedup</strong> — connect several servers and see each title once.</span>
+              <span><strong>No duplicates</strong> — connect several servers and still see each title only once.</span>
             </li>
             <li>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
@@ -1084,9 +1098,10 @@
           </span>
           <h3>Automate the boring parts</h3>
           <p>
-            Build rules with recursive AND/OR logic to find exactly the media
-            you care about, then act on it — delete, unmonitor, tag, or search
-            for an upgrade. Preview every match before anything runs.
+            Mix and match simple conditions — like "never watched" and "added
+            over a year ago" — into rules that find exactly the media you care
+            about, then act on it: delete, unmonitor, tag, or search for an
+            upgrade. Preview every match before anything runs.
           </p>
           <ul class="feature-list">
             <li>
@@ -1099,7 +1114,7 @@
             </li>
             <li>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-              <span><strong>*arr aware</strong> — act through Radarr, Sonarr, and Lidarr with tags and import exclusions.</span>
+              <span><strong>Works with your *arr stack</strong> — act through Radarr, Sonarr, and Lidarr, with tags and re-download protection.</span>
             </li>
           </ul>
         </div>
@@ -1110,7 +1125,7 @@
               <span class="shot-dot"></span>
               <span class="shot-dot"></span>
             </div>
-            <img src="/screenshots/rules.webp" width="1760" height="1401" alt="Editing a complex lifecycle rule set with nested groups, a sub-group, and stream queries, alongside a live logic preview" loading="lazy" />
+            <img src="/screenshots/rules.webp" width="1760" height="1401" alt="Editing a lifecycle rule set with a nested condition group in the rule builder, alongside a live logic preview" loading="lazy" />
           </div>
         </div>
       </div>
@@ -1151,6 +1166,46 @@
               <span class="shot-dot"></span>
             </div>
             <img src="/screenshots/streams.webp" width="1760" height="1222" alt="Stream manager showing live playback sessions, maintenance mode, and transcode manager" loading="lazy" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Dashboard insights -->
+      <div class="feature-row reverse reveal">
+        <div class="feature-copy">
+          <span class="feature-eyebrow">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><rect x="7" y="11" width="3" height="7"></rect><rect x="12" y="7" width="3" height="11"></rect><rect x="17" y="13" width="3" height="5"></rect></svg>
+            Dashboard Insights
+          </span>
+          <h3>A dashboard you design</h3>
+          <p>
+            The dashboard opens on live status, library, and lifecycle zones —
+            then hands you a fully customizable Insights grid. Rearrange,
+            resize, and build the charts you actually want to see.
+          </p>
+          <ul class="feature-list">
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Customizable grid</strong> — add, remove, resize, and rearrange insight cards; your layout sticks.</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Custom charts</strong> — build your own from any detail of your library, from codecs and genres to file sizes and play counts.</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong>Click to explore</strong> — hide values you don't care about, hover for detail, and focus on one media type or server.</span>
+            </li>
+          </ul>
+        </div>
+        <div class="feature-media">
+          <div class="shot">
+            <div class="shot-bar">
+              <span class="shot-dot"></span>
+              <span class="shot-dot"></span>
+              <span class="shot-dot"></span>
+            </div>
+            <img src="/screenshots/insights.webp" width="1760" height="1100" alt="Customizable Insights grid with the recently added shelf and distribution charts" loading="lazy" />
           </div>
         </div>
       </div>
@@ -1211,8 +1266,8 @@
             <svg class="bento-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"></path></svg>
             <h4>Backup &amp; Restore</h4>
             <p>
-              Automatic or manual backups with optional AES-256 encryption,
-              retention policies, and scheduled runs.
+              Automatic or manual backups — optionally encrypted with a
+              passphrase — plus retention policies and scheduled runs.
             </p>
           </div>
         </div>
@@ -1222,7 +1277,7 @@
             <svg class="bento-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 01-3.46 0"></path></svg>
             <h4>Notifications</h4>
             <p>
-              Discord webhooks for lifecycle actions, match changes, and
+              Discord notifications for lifecycle actions, match changes, and
               maintenance mode — pick the events you care about.
             </p>
           </div>

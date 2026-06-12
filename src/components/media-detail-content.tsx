@@ -11,7 +11,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { Loader2, ChevronDown, ChevronRight, Database, History, FileText, Play, Monitor, Volume2, Subtitles } from "lucide-react";
+import { Loader2, ChevronDown, ChevronRight, Database, History, FileText, Play, Monitor, Volume2, Subtitles, Users } from "lucide-react";
 import {
   Carousel,
   CarouselContent,
@@ -34,9 +34,9 @@ function formatResolution(resolution: string | null): string {
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex justify-between items-baseline py-1.5 border-b border-border/30 last:border-0">
-      <span className="text-xs text-muted-foreground uppercase tracking-wide">{label}</span>
-      <span className="font-medium text-sm">{value}</span>
+    <div className="flex items-baseline justify-between gap-3 border-b border-border/30 py-1.5 last:border-0">
+      <span className="shrink-0 font-mono text-[10.5px] tracking-[0.12em] text-faint uppercase">{label}</span>
+      <span className="text-right font-mono text-[12.5px] text-foreground">{value}</span>
     </div>
   );
 }
@@ -346,7 +346,11 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
           {/* Cast carousel */}
           {hasCast && (
             <>
-              <h3 className="mb-3 text-2xl text-white font-semibold tracking-wider">Cast</h3>
+              <h3 className="mb-3 flex items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
+                <Users className="h-3.5 w-3.5" />
+                Cast
+                <span className="text-xs font-normal normal-case">({castRoles.length})</span>
+              </h3>
               {hasCredits && <Separator className="mb-4" />}
               <div className="relative sm:px-10">
                 <Carousel
@@ -409,8 +413,8 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
 
       {/* Aggregate items: simplified playback stats (no episode-level detail columns) */}
       {isAggregate && (
-        <div className="rounded-xl border border-white/6 bg-muted/30 p-5 shadow-[inset_0_1px_0_oklch(1_0_0/3%)] space-y-3">
-          <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground"><Play className="h-3.5 w-3.5" />Playback</h3>
+        <div className="rounded-xl border border-white/6 bg-card p-5 shadow-[var(--shadow-card)] space-y-3">
+          <h3 className="mb-2 flex items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint"><Play className="h-3.5 w-3.5" />Playback</h3>
           <div className="text-sm">
             <DetailRow
               label="Total Play Count"
@@ -430,8 +434,8 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
       {/* ── Detail columns (individual items only) ─────────── */}
       {!isAggregate && <div className={compact ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 stagger-children"}>
         {/* Column 1: Watch/Listen History */}
-        <div className="rounded-xl border border-white/6 bg-muted/30 p-5 shadow-[inset_0_1px_0_oklch(1_0_0/3%)] space-y-3">
-          <div className="flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+        <div className="rounded-xl border border-white/6 bg-card p-5 shadow-[var(--shadow-card)] space-y-3">
+          <div className="flex items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
             <History className="h-3.5 w-3.5" />
             {merged.type === "MUSIC" ? "Listen History" : "Watch History"}
             {!historyLoading && history.length > 0 && (
@@ -476,7 +480,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                           </p>
                         )}
                       </div>
-                      <span className="text-muted-foreground">
+                      <span className="font-mono text-xs tabular-nums text-muted-foreground">
                         {entry.playCount} {entry.playCount === 1 ? "play" : "plays"}
                       </span>
                     </div>
@@ -496,7 +500,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                       </p>
                     )}
                   </div>
-                  <span className="text-muted-foreground">
+                  <span className="font-mono text-xs tabular-nums text-muted-foreground">
                     {entry.playCount} {entry.playCount === 1 ? "play" : "plays"}
                   </span>
                 </div>
@@ -506,10 +510,10 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
         </div>
 
         {/* Column 2: File, Playback, Subtitles, Metadata */}
-        <div className="rounded-xl border border-white/6 bg-muted/30 p-5 shadow-[inset_0_1px_0_oklch(1_0_0/3%)] space-y-5">
+        <div className="rounded-xl border border-white/6 bg-card p-5 shadow-[var(--shadow-card)] space-y-5">
           {/* File Section */}
           <section>
-            <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground"><FileText className="h-3.5 w-3.5" />File</h3>
+            <h3 className="mb-2 flex items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint"><FileText className="h-3.5 w-3.5" />File</h3>
             <div className="text-sm">
               <DetailRow label="Size" value={formatFileSize(merged.fileSize)} />
               <DetailRow label="Duration" value={formatDuration(merged.duration)} />
@@ -529,7 +533,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
 
           {/* Playback Section */}
           <section>
-            <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground"><Play className="h-3.5 w-3.5" />Playback</h3>
+            <h3 className="mb-2 flex items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint"><Play className="h-3.5 w-3.5" />Playback</h3>
             <div className="text-sm">
               <DetailRow
                 label="Play Count"
@@ -548,7 +552,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
           {/* Subtitles */}
           {subtitleStreams.length > 0 && (
             <section>
-              <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+              <h3 className="mb-2 flex items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
                 <Subtitles className="h-3.5 w-3.5" />
                 Subtitles ({subtitleStreams.length})
               </h3>
@@ -587,7 +591,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                   }
                 }}>
                   <CollapsibleTrigger asChild>
-                    <button className="flex w-full items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors">
+                    <button className="flex w-full items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint hover:text-foreground transition-colors">
                       {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                       {!isMultiServer && <Database className="h-3.5 w-3.5" />}
                       {style ? (
@@ -646,7 +650,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                 setMetadataOpenMap((prev) => ({ ...prev, ["__all__"]: open }));
               }}>
                 <CollapsibleTrigger asChild>
-                  <button className="flex w-full items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors">
+                  <button className="flex w-full items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint hover:text-foreground transition-colors">
                     {outerOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                     <Database className="h-3.5 w-3.5" />
                     All Database Metadata
@@ -664,10 +668,10 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
 
         {/* Column 3: Video */}
         {!hideVideo && merged.type !== "MUSIC" && (
-          <div className="rounded-xl border border-white/6 bg-muted/30 p-5 shadow-[inset_0_1px_0_oklch(1_0_0/3%)] space-y-3">
+          <div className="rounded-xl border border-white/6 bg-card p-5 shadow-[var(--shadow-card)] space-y-3">
             <Collapsible open={videoOpen} onOpenChange={setVideoOpen}>
               <CollapsibleTrigger asChild>
-                <button className="flex w-full items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors">
+                <button className="flex w-full items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint hover:text-foreground transition-colors">
                   {videoOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                   <Monitor className="h-3.5 w-3.5" />
                   Video
@@ -762,10 +766,10 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
         )}
 
         {/* Column 4: Audio */}
-        <div className="rounded-xl border border-white/6 bg-muted/30 p-5 shadow-[inset_0_1px_0_oklch(1_0_0/3%)] space-y-3">
+        <div className="rounded-xl border border-white/6 bg-card p-5 shadow-[var(--shadow-card)] space-y-3">
           <Collapsible open={audioOpen} onOpenChange={setAudioOpen}>
             <CollapsibleTrigger asChild>
-              <button className="flex w-full items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors">
+              <button className="flex w-full items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint hover:text-foreground transition-colors">
                 {audioOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                 <Volume2 className="h-3.5 w-3.5" />
                 Audio

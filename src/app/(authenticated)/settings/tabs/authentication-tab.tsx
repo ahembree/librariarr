@@ -1,13 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { SettingsSection } from "../components";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
@@ -103,20 +97,10 @@ export function AuthenticationTab({
       </div>
 
       {/* Plex Connection */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Link2 className="h-4 w-4" />
-            Plex Connection
-          </CardTitle>
-          <CardDescription>
-            Link your Plex account for server discovery and Plex OAuth login.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <SettingsSection icon={Link2} title="Plex Connection" description="Link your Plex account for server discovery and Plex OAuth login." contentClassName="space-y-4">
           {authInfo?.plexConnected ? (
             <div className="flex items-center gap-2 text-sm">
-              <CheckCircle className="h-4 w-4 text-green-500" />
+              <CheckCircle className="h-4 w-4 text-green" />
               <span>Connected as <strong>{authInfo.displayName}</strong></span>
             </div>
           ) : (
@@ -171,21 +155,10 @@ export function AuthenticationTab({
               )}
             </>
           )}
-        </CardContent>
-      </Card>
+      </SettingsSection>
 
       {/* Local Authentication */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <KeyRound className="h-4 w-4" />
-            Local Authentication
-          </CardTitle>
-          <CardDescription>
-            Enable username/password login in addition to Plex.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <SettingsSection icon={KeyRound} title="Local Authentication" description="Enable username/password login in addition to Plex." contentClassName="space-y-4">
           {/* Lockout protection: disabling local login is only safe when at
               least one other login method works. Mirrors the server-side
               guard in /api/settings/auth PUT so the UI doesn't pretend an
@@ -213,7 +186,7 @@ export function AuthenticationTab({
                   />
                 </div>
                 {wouldLockOut && (
-                  <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-400">
+                  <div className="flex items-start gap-2 rounded-md border border-amber/30 bg-amber/10 p-3 text-sm text-amber">
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                     <div>
                       <p className="font-medium">Local login is your only sign-in method</p>
@@ -236,7 +209,7 @@ export function AuthenticationTab({
             </div>
           )}
           {authInfo?.localAuthEnabled && authInfo?.localAuthHiddenBySso && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-400">
+            <div className="flex items-start gap-2 rounded-md border border-amber/30 bg-amber/10 p-3 text-sm text-amber">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
                 SSO is enabled, so the local username/password form is hidden
@@ -254,7 +227,7 @@ export function AuthenticationTab({
           {authInfo?.hasPassword && (
             <>
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <CheckCircle className="h-4 w-4 text-green-500" />
+                <CheckCircle className="h-4 w-4 text-green" />
                 Local username: <strong>{authInfo.localUsername}</strong>
               </div>
 
@@ -314,7 +287,7 @@ export function AuthenticationTab({
                   </div>
                 )}
                 {credentialsSuccess && (
-                  <div role="status" className="flex items-center gap-2 rounded-md bg-green-500/10 p-3 text-sm text-green-500">
+                  <div role="status" className="flex items-center gap-2 rounded-md bg-green/10 p-3 text-sm text-green">
                     <CheckCircle className="h-4 w-4 shrink-0" />
                     {credentialsSuccess}
                   </div>
@@ -334,8 +307,7 @@ export function AuthenticationTab({
               </div>
             </>
           )}
-        </CardContent>
-      </Card>
+      </SettingsSection>
 
       {/* SSO (OIDC + Forward Auth) */}
       <SsoSection />

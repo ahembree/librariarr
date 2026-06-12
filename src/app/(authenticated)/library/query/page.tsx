@@ -64,7 +64,7 @@ import { useIntegrationsHealth, deriveIntegrationsStatus, arrTypeForMediaType, t
 import { hasArrRules, hasSeerrRules, type QueryGroup, type QueryDefinition } from "@/lib/query/types";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
-import { MediaCard } from "@/components/media-card";
+import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { CardSizeControl } from "@/components/card-size-control";
@@ -124,9 +124,9 @@ interface QueryResultItem {
 }
 
 const TYPE_BADGE_COLORS: Record<string, string> = {
-  MOVIE: "bg-blue-500/20 text-blue-400 border-blue-500/30",
+  MOVIE: "bg-sky/20 text-sky border-sky/30",
   SERIES: "bg-purple-500/20 text-purple-400 border-purple-500/30",
-  MUSIC: "bg-green-500/20 text-green-400 border-green-500/30",
+  MUSIC: "bg-green/20 text-green border-green/30",
 };
 
 const FALLBACK_ICONS: Record<string, "movie" | "series" | "music"> = {
@@ -206,7 +206,6 @@ function saveVisibleColumns(cols: Set<string>) {
 }
 
 const GAP = 16;
-const CARD_CONTENT_HEIGHT = 138; // Fixed content area below poster (matches h-34.5 in MediaCard)
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
 const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar (4px) + py-1 padding (8px)
 
@@ -1080,7 +1079,7 @@ export default function QueryPage() {
 
       {/* Query Scope */}
       <div className="rounded-lg border bg-card/40 p-4">
-        <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        <p className="mb-3 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
           Query Scope
         </p>
         <div className="space-y-3">
@@ -1252,10 +1251,10 @@ export default function QueryPage() {
 
       {/* Hint: orphaned Arr/Seerr rules with no integration to evaluate them */}
       {(orphanArrRules || orphanSeerrRules || seerrWithMusic) && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
-          <AlertTriangle className="h-4 w-4 mt-0.5 text-amber-400 shrink-0" />
+        <div className="flex items-start gap-2 rounded-md border border-amber/30 bg-amber/10 p-3 text-sm">
+          <AlertTriangle className="h-4 w-4 mt-0.5 text-amber shrink-0" />
           <div className="space-y-1">
-            <p className="font-medium text-amber-400">Some criteria can&apos;t be evaluated</p>
+            <p className="font-medium text-amber">Some criteria can&apos;t be evaluated</p>
             {orphanArrRules && (
               <p className="text-muted-foreground">
                 This query uses Arr criteria but no Arr server is{" "}
@@ -1345,7 +1344,7 @@ export default function QueryPage() {
                 if (groupCols.length === 0) return null;
                 return (
                   <div key={groupKey} className="mb-2 last:mb-0">
-                    <p className="text-xs font-medium text-muted-foreground mb-1 px-1">{groupLabel}</p>
+                    <p className="mb-1 px-1 font-mono text-[10.5px] font-semibold uppercase tracking-[0.12em] text-faint">{groupLabel}</p>
                     {groupCols.map((col) => (
                       <label key={col.id} className="flex items-center gap-2 px-1 py-1 cursor-pointer rounded hover:bg-muted/50">
                         <Checkbox

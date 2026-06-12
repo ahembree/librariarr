@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
+import { EmptyState } from "@/components/empty-state";
 import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
 import { useIntegrationsHealth } from "@/hooks/use-integrations-health";
 import { Button } from "@/components/ui/button";
@@ -135,9 +136,9 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  PENDING: "bg-amber-500/20 text-amber-400 border-amber-500/30",
-  COMPLETED: "bg-green-500/20 text-green-400 border-green-500/30",
-  FAILED: "bg-red-500/20 text-red-400 border-red-500/30",
+  PENDING: "bg-amber/20 text-amber border-amber/30",
+  COMPLETED: "bg-green/20 text-green border-green/30",
+  FAILED: "bg-red/20 text-red border-red/30",
 };
 
 function formatActionType(type: string, targetQualityProfileId?: number | null): string {
@@ -224,14 +225,14 @@ function VirtualizedActionTable({
         <table className="w-full caption-bottom text-sm">
           <thead className="sticky top-0 z-10 bg-background">
             <tr className="border-b bg-muted/50">
-              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Title</th>
-              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Size</th>
-              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Action</th>
-              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">{isPending ? "Scheduled" : "Date"}</th>
-              <th className="h-10 px-4 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground">Status</th>
-              {isPending && <th className="h-10 px-4 w-30 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground" />}
+              <th className="h-10 px-4 text-left align-middle font-mono text-[11px] uppercase tracking-[0.08em] text-faint">Title</th>
+              <th className="h-10 px-4 text-left align-middle font-mono text-[11px] uppercase tracking-[0.08em] text-faint">Size</th>
+              <th className="h-10 px-4 text-left align-middle font-mono text-[11px] uppercase tracking-[0.08em] text-faint">Action</th>
+              <th className="h-10 px-4 text-left align-middle font-mono text-[11px] uppercase tracking-[0.08em] text-faint">{isPending ? "Scheduled" : "Date"}</th>
+              <th className="h-10 px-4 text-left align-middle font-mono text-[11px] uppercase tracking-[0.08em] text-faint">Status</th>
+              {isPending && <th className="h-10 px-4 w-30 text-left align-middle font-mono text-[11px] uppercase tracking-[0.08em] text-faint" />}
               {!isPending && items.some((a) => a.status === "FAILED") && (
-                <th className="h-10 px-4 w-12 text-left align-middle font-display text-xs uppercase tracking-wider text-muted-foreground" />
+                <th className="h-10 px-4 w-12 text-left align-middle font-mono text-[11px] uppercase tracking-[0.08em] text-faint" />
               )}
             </tr>
           </thead>
@@ -293,7 +294,7 @@ function VirtualizedActionTable({
                           {action.addArrTags.map((tag) => (
                             <ColorChip
                               key={tag}
-                              className="bg-green-500/20 text-green-400 border-green-500/30"
+                              className="bg-green/20 text-green border-green/30"
                             >
                               +{tag}
                             </ColorChip>
@@ -305,7 +306,7 @@ function VirtualizedActionTable({
                           {action.removeArrTags.map((tag) => (
                             <ColorChip
                               key={tag}
-                              className="bg-red-500/20 text-red-400 border-red-500/30"
+                              className="bg-red/20 text-red border-red/30"
                             >
                               -{tag}
                             </ColorChip>
@@ -335,7 +336,7 @@ function VirtualizedActionTable({
                     {action.error && (
                       <div className="mt-1 max-w-64">
                         <p
-                          className={`text-xs text-red-400 ${expandedErrors.has(action.id) ? "whitespace-pre-wrap wrap-break-word" : "truncate"}`}
+                          className={`text-xs text-red ${expandedErrors.has(action.id) ? "whitespace-pre-wrap wrap-break-word" : "truncate"}`}
                         >
                           {action.error}
                         </p>
@@ -1027,18 +1028,18 @@ export default function PendingActionsPage() {
 
         {/* Deletion stats banner */}
         {deletionStats && (deletionStats.actionCount > 0 || deletionStats.pendingCount > 0 || deletionStats.resetAt) && (
-          <div className="flex items-center gap-4 mb-6 rounded-lg border bg-muted/30 px-4 py-3">
+          <div className="flex items-center gap-4 mb-6 rounded-xl border bg-card px-4 py-3 shadow-[var(--shadow-card)]">
             <Trash2 className="h-4 w-4 text-muted-foreground shrink-0" />
             <div className="flex items-center gap-4 text-sm flex-wrap">
               {deletionStats.pendingCount > 0 && (
                 <>
                   <span>
-                    <span className="font-medium text-amber-400">{formatFileSize(deletionStats.pendingBytes)}</span>
+                    <span className="font-medium text-amber">{formatFileSize(deletionStats.pendingBytes)}</span>
                     <span className="text-muted-foreground ml-1">pending</span>
                   </span>
                   <span className="text-muted-foreground">·</span>
                   <span>
-                    <span className="font-medium text-amber-400">{deletionStats.pendingCount}</span>
+                    <span className="font-medium text-amber">{deletionStats.pendingCount}</span>
                     <span className="text-muted-foreground ml-1">{deletionStats.pendingCount === 1 ? "action" : "actions"} queued</span>
                   </span>
                 </>
@@ -1119,37 +1120,27 @@ export default function PendingActionsPage() {
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
         ) : filteredGroups.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
-              <div className="rounded-full bg-muted p-4">
-                {statusFilter === "FAILED" ? (
-                  <CheckCircle2 className="h-8 w-8 text-muted-foreground" />
-                ) : (
-                  <Inbox className="h-8 w-8 text-muted-foreground" />
-                )}
-              </div>
-              <div className="space-y-1">
-                <p className="text-base font-medium">
-                  {statusFilter === "FAILED"
-                    ? "No failed actions"
-                    : statusFilter === "COMPLETED"
-                      ? "No completed actions yet"
-                      : statusFilter === "PENDING"
-                        ? "No pending actions"
-                        : "No actions"}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  {statusFilter === "FAILED"
-                    ? "Everything ran cleanly. Failed actions will appear here if any rule execution fails."
-                    : statusFilter === "COMPLETED"
-                      ? "Completed actions will appear here once your rules start running."
-                      : statusFilter === "PENDING"
-                        ? "Lifecycle rules will queue up actions here when items match."
-                        : "No actions matching this filter."}
-                </p>
-              </div>
-            </CardContent>
-          </Card>
+          <EmptyState
+            icon={statusFilter === "FAILED" ? CheckCircle2 : Inbox}
+            title={
+              statusFilter === "FAILED"
+                ? "No failed actions"
+                : statusFilter === "COMPLETED"
+                  ? "No completed actions yet"
+                  : statusFilter === "PENDING"
+                    ? "No pending actions"
+                    : "No actions"
+            }
+            description={
+              statusFilter === "FAILED"
+                ? "Everything ran cleanly. Failed actions will appear here if any rule execution fails."
+                : statusFilter === "COMPLETED"
+                  ? "Completed actions will appear here once your rules start running."
+                  : statusFilter === "PENDING"
+                    ? "Lifecycle rules will queue up actions here when items match."
+                    : "No actions matching this filter."
+            }
+          />
         ) : (
           <div className="space-y-4">
             {filteredGroups.map((group) => {
@@ -1194,7 +1185,7 @@ export default function PendingActionsPage() {
                                 {group.ruleSet.addArrTags?.map((tag) => (
                                   <ColorChip
                                     key={`add-${tag}`}
-                                    className="bg-green-500/20 text-green-400 border-green-500/30"
+                                    className="bg-green/20 text-green border-green/30"
                                   >
                                     +{tag}
                                   </ColorChip>
@@ -1202,7 +1193,7 @@ export default function PendingActionsPage() {
                                 {group.ruleSet.removeArrTags?.map((tag) => (
                                   <ColorChip
                                     key={`rm-${tag}`}
-                                    className="bg-red-500/20 text-red-400 border-red-500/30"
+                                    className="bg-red/20 text-red border-red/30"
                                   >
                                     -{tag}
                                   </ColorChip>
@@ -1220,7 +1211,7 @@ export default function PendingActionsPage() {
                                 <div className="flex items-center gap-3 text-xs text-muted-foreground">
                                   {showPending && rs.pendingCount > 0 && (
                                     <span>
-                                      <span className="text-amber-400">{formatFileSize(rs.pendingBytes)}</span> pending
+                                      <span className="text-amber">{formatFileSize(rs.pendingBytes)}</span> pending
                                     </span>
                                   )}
                                   {showDeleted && rs.deletedCount > 0 && (
@@ -1244,7 +1235,7 @@ export default function PendingActionsPage() {
                           {result && (
                             <span className="text-xs">
                               {result.failed === 0 ? (
-                                <span className="text-green-500 flex items-center gap-1">
+                                <span className="text-green flex items-center gap-1">
                                   <CheckCircle2 className="h-3.5 w-3.5" />
                                   {result.executed} executed
                                 </span>

@@ -1,9 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { DataTable, type DataTableColumn } from "@/components/data-table";
+import { useState, useEffect, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
-import { ColorChip } from "@/components/color-chip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -29,7 +27,6 @@ import {
   CircleAlert,
   FileText,
   Info,
-  Loader2,
   Pause,
   Play,
   RefreshCw,
@@ -38,6 +35,7 @@ import {
   X,
 } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
+import { LogConsoleSkeleton } from "@/components/skeletons";
 
 interface LogEntry {
   id: string;
@@ -51,24 +49,20 @@ interface LogEntry {
 
 const LOG_LEVELS = ["DEBUG", "INFO", "WARN", "ERROR"] as const;
 
-const LEVEL_COLORS: Record<string, string> = {
-  DEBUG: "bg-zinc-500/20 text-zinc-400 border-zinc-500/30 shadow-[0_0_8px] shadow-zinc-500/10",
-  INFO: "bg-blue-500/20 text-blue-400 border-blue-500/30 shadow-[0_0_8px] shadow-blue-500/15",
-  WARN: "bg-amber-500/20 text-amber-400 border-amber-500/30 shadow-[0_0_8px] shadow-amber-500/15",
-  ERROR: "bg-red-500/20 text-red-400 border-red-500/30 shadow-[0_0_8px] shadow-red-500/20",
+// Console level colors from the handoff: debug=faint, info=sky, warn=amber,
+// error=red — rendered as colored mono text, not chips.
+const LEVEL_TEXT: Record<string, string> = {
+  DEBUG: "text-faint",
+  INFO: "text-sky",
+  WARN: "text-amber",
+  ERROR: "text-red",
 };
 
 const LEVEL_ICONS: Record<string, React.ReactNode> = {
-  DEBUG: <Bug className="h-4 w-4 text-zinc-400" />,
-  INFO: <Info className="h-4 w-4 text-blue-400" />,
-  WARN: <TriangleAlert className="h-4 w-4 text-amber-400" />,
-  ERROR: <CircleAlert className="h-4 w-4 text-red-400" />,
-};
-
-const CATEGORY_COLORS: Record<string, string> = {
-  BACKEND: "bg-purple-500/20 text-purple-400 border-purple-500/30",
-  API: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30",
-  DB: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
+  DEBUG: <Bug className="h-4 w-4 text-faint" />,
+  INFO: <Info className="h-4 w-4 text-sky" />,
+  WARN: <TriangleAlert className="h-4 w-4 text-amber" />,
+  ERROR: <CircleAlert className="h-4 w-4 text-red" />,
 };
 
 export default function LogsPage() {
@@ -181,79 +175,6 @@ export default function LogsPage() {
       hour12: false,
     });
   }
-
-  const logColumns: DataTableColumn<LogEntry>[] = useMemo(
-    () => [
-      {
-        id: "timestamp",
-        header: "Timestamp",
-        accessor: (log) => (
-          <span className="text-xs text-muted-foreground font-mono whitespace-nowrap">
-            {formatTimestamp(log.createdAt)}
-          </span>
-        ),
-        sortValue: (log) => new Date(log.createdAt).getTime(),
-        sortable: true,
-        defaultWidth: 160,
-      },
-      {
-        id: "level",
-        header: "Level",
-        accessor: (log) => (
-          <ColorChip className={LEVEL_COLORS[log.level] ?? ""}>
-            {log.level}
-          </ColorChip>
-        ),
-        sortValue: (log) => log.level,
-        sortable: true,
-        defaultWidth: 90,
-      },
-      {
-        id: "category",
-        header: "Category",
-        accessor: (log) => (
-          <ColorChip className={`text-xs ${CATEGORY_COLORS[log.category] ?? ""}`}>
-            {log.category}
-          </ColorChip>
-        ),
-        defaultWidth: 100,
-        className: "hidden md:table-cell",
-        headerClassName: "hidden md:table-cell",
-      },
-      {
-        id: "source",
-        header: "Source",
-        accessor: (log) => (
-          <span className="text-sm font-medium">{log.source}</span>
-        ),
-        defaultWidth: 120,
-        className: "hidden md:table-cell",
-        headerClassName: "hidden md:table-cell",
-      },
-      {
-        id: "message",
-        header: "Message",
-        accessor: (log) => (
-          <div className="text-sm text-muted-foreground font-mono">
-            <span className="mb-0.5 flex flex-wrap gap-1 md:hidden">
-              <ColorChip className={`text-xs ${CATEGORY_COLORS[log.category] ?? ""}`}>
-                {log.category}
-              </ColorChip>
-              <span className="text-xs text-muted-foreground/70">{log.source}</span>
-            </span>
-            <span className="block">{log.message}</span>
-            {log.meta && Object.keys(log.meta).length > 0 && (
-              <pre className="mt-1 text-xs text-muted-foreground/70 font-mono whitespace-pre-wrap break-all">
-                {JSON.stringify(log.meta, null, 2)}
-              </pre>
-            )}
-          </div>
-        ),
-        defaultWidth: 400,
-      },
-    ],
-    [],
-  );
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
@@ -397,20 +318,40 @@ export default function LogsPage() {
         </div>
       )}
 
-      {/* Log table */}
+      {/* Console */}
       {loading && logs.length === 0 ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-        </div>
+        <LogConsoleSkeleton />
       ) : logs.length === 0 ? (
         <EmptyState icon={FileText} title="No log entries found" description="Logs will appear here as activity occurs." />
       ) : (
-        <DataTable<LogEntry>
-          columns={logColumns}
-          data={logs}
-          keyExtractor={(log) => log.id}
-          resizeStorageKey="dt-widths-logs"
-        />
+        <div className="overflow-hidden rounded-xl border bg-surface-0 shadow-[var(--shadow-card)]">
+          <div className="min-h-[200px] overflow-x-hidden py-2">
+            {logs.map((log) => (
+              <div
+                key={log.id}
+                className="flex items-baseline gap-3 px-4 py-[5px] transition-colors hover:bg-white/[0.03]"
+              >
+                <span className="shrink-0 font-mono text-[11px] whitespace-nowrap text-faint tabular-nums">
+                  {formatTimestamp(log.createdAt)}
+                </span>
+                <span
+                  className={`w-12 shrink-0 font-mono text-[10px] font-semibold tracking-[0.05em] uppercase ${LEVEL_TEXT[log.level] ?? "text-faint"}`}
+                >
+                  {log.level}
+                </span>
+                <span className="shrink-0 font-mono text-[11.5px] text-brand-bright">{log.source}</span>
+                <span className="min-w-0 flex-1 font-mono text-[12px] break-words text-muted-foreground">
+                  {log.message}
+                  {log.meta && Object.keys(log.meta).length > 0 && (
+                    <span className="mt-0.5 block font-mono text-[11px] break-all whitespace-pre-wrap text-faint">
+                      {JSON.stringify(log.meta)}
+                    </span>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Pagination */}

@@ -98,10 +98,14 @@ describe("Bug 2: date notEquals in-memory evaluation", () => {
     expect(result.get("nomatch")).toHaveLength(0);
   });
 
-  it("lastPlayedAt notEquals returns false for null dates", () => {
+  it("lastPlayedAt notEquals matches null dates (Phase 1 withNullSafety parity)", () => {
+    // A never-played item (NULL lastPlayedAt) satisfies `notEquals <any date>`:
+    // Phase 1's notEquals clause is withNullSafety-wrapped (`OR field IS NULL`),
+    // so NULL rows match. Phase 2 must agree — see nullValueResult. (Previously
+    // Phase 2 hard-coded NULL→false for all date operators, diverging.)
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: "notEquals", value: "2024-01-15" })])];
     const result = matched(items, rules);
-    expect(result.get("nulldate")).toHaveLength(0);
+    expect(result.get("nulldate")!.length).toBeGreaterThan(0);
   });
 
   it("addedAt notEquals matches item with different date", () => {

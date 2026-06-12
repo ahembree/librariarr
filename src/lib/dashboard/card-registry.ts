@@ -374,12 +374,11 @@ function clampHeight(raw: unknown): number | undefined {
 }
 
 /** Normalize a raw tab array (may be old string[] or new CardEntry[]) into CardEntry[] */
-function normalizeTab(
-  raw: unknown[],
-  tab: DashboardTab,
-  defaults: CardEntry[]
-): CardEntry[] {
-  if (raw.length === 0) return defaults;
+function normalizeTab(raw: unknown[], tab: DashboardTab): CardEntry[] {
+  // An explicitly-saved empty array means "no cards on this tab" and must
+  // stay empty — falling back to defaults here would resurrect every
+  // removed card on the next render/reload. Defaults apply only when the
+  // tab is absent or malformed (handled by resolveLayout).
 
   // Old format: string[]
   if (typeof raw[0] === "string") {
@@ -435,16 +434,16 @@ export function resolveLayout(saved: DashboardLayout | null): DashboardLayout {
 
   return {
     main: Array.isArray(saved.main)
-      ? normalizeTab(saved.main, "main", defaults.main)
+      ? normalizeTab(saved.main, "main")
       : defaults.main,
     movies: Array.isArray(saved.movies)
-      ? normalizeTab(saved.movies, "movies", defaults.movies)
+      ? normalizeTab(saved.movies, "movies")
       : defaults.movies,
     series: Array.isArray(saved.series)
-      ? normalizeTab(saved.series, "series", defaults.series)
+      ? normalizeTab(saved.series, "series")
       : defaults.series,
     music: Array.isArray(saved.music)
-      ? normalizeTab(saved.music, "music", defaults.music)
+      ? normalizeTab(saved.music, "music")
       : defaults.music,
   };
 }

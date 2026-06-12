@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { toast } from "sonner";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
 import {
   DEFAULT_CHIP_COLORS,
@@ -18,7 +19,7 @@ import {
   Bell,
   Lock,
 } from "lucide-react";
-import { TabNav, type TabNavItem } from "@/components/tab-nav";
+import { cn } from "@/lib/utils";
 import { SettingsSkeleton } from "@/components/skeletons";
 
 // ─── Tab components ───
@@ -72,19 +73,55 @@ function getInitialSettingsTab(): SettingsTab {
 
 // ─── Tab navigation helpers ───
 
-function buildSettingsTabs(updateAvailable?: boolean, latestVersion?: string | null): TabNavItem<SettingsTab>[] {
-  return SETTINGS_TABS.map((tab) => ({
-    value: tab.value,
-    label: tab.label,
-    icon: tab.icon,
-    indicator:
-      tab.value === "system" && updateAvailable ? (
-        <span
-          className="h-2 w-2 rounded-full bg-emerald-400 shrink-0"
-          title={latestVersion ? `Update available: v${latestVersion}` : "Update available"}
-        />
-      ) : undefined,
-  }));
+/** Sticky vertical sub-nav for the settings panel (handoff §11). */
+function SettingsSubNav({
+  activeTab,
+  onTabChange,
+  updateAvailable,
+  latestVersion,
+}: {
+  activeTab: SettingsTab;
+  onTabChange: (tab: SettingsTab) => void;
+  updateAvailable?: boolean;
+  latestVersion?: string | null;
+}) {
+  return (
+    <nav
+      role="tablist"
+      aria-label="Settings sections"
+      className="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+    >
+      {SETTINGS_TABS.map((tab) => {
+        const Icon = tab.icon;
+        const isActive = activeTab === tab.value;
+        return (
+          <button
+            key={tab.value}
+            role="tab"
+            id={`settings-tab-${tab.value}`}
+            aria-controls={`settings-panel-${tab.value}`}
+            aria-selected={isActive}
+            onClick={() => onTabChange(tab.value)}
+            className={cn(
+              "flex shrink-0 items-center gap-2.5 rounded-[9px] px-3 py-2 text-sm font-medium whitespace-nowrap transition-colors",
+              isActive
+                ? "bg-brand-dim text-brand-bright"
+                : "text-muted-foreground hover:bg-surface-2 hover:text-foreground",
+            )}
+          >
+            <Icon className="h-[17px] w-[17px] shrink-0" />
+            <span className="flex-1 text-left">{tab.label}</span>
+            {tab.value === "system" && updateAvailable && (
+              <span
+                className="h-2 w-2 shrink-0 rounded-full bg-green shadow-[0_0_8px_var(--green)]"
+                title={latestVersion ? `Update available: v${latestVersion}` : "Update available"}
+              />
+            )}
+          </button>
+        );
+      })}
+    </nav>
+  );
 }
 
 // ─── Main component ───
@@ -773,8 +810,8 @@ export default function SettingsPage() {
         clearInterval(interval);
         setSyncingServer(null);
       }, 300000);
-    } catch (error) {
-      console.error("Failed to trigger sync:", error);
+    } catch {
+      toast.error("Failed to start sync");
       setSyncingServer(null);
     }
   };
@@ -783,14 +820,20 @@ export default function SettingsPage() {
     const enabledServers = servers.filter((s) => s.enabled);
     if (enabledServers.length === 0) return;
     try {
-      await Promise.allSettled(
+      const results = await Promise.allSettled(
         enabledServers.map((server) =>
           fetch(`/api/servers/${server.id}/sync`, { method: "POST" })
         )
       );
+      const failed = results.filter(
+        (r) => r.status === "rejected" || !r.value.ok
+      ).length;
+      if (failed > 0) {
+        toast.error(`Failed to start sync for ${failed} of ${enabledServers.length} servers`);
+      }
       await fetchServers();
-    } catch (error) {
-      console.error("Failed to trigger sync all:", error);
+    } catch {
+      toast.error("Failed to start sync");
     }
   };
 
@@ -813,11 +856,16 @@ export default function SettingsPage() {
     setRemovingServer(true);
     try {
       const qs = deleteData ? "?deleteData=true" : "";
-      await fetch(`/api/servers/${removeServerDialog.serverId}${qs}`, { method: "DELETE" });
+      const res = await fetch(`/api/servers/${removeServerDialog.serverId}${qs}`, { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Failed to remove server");
+        return;
+      }
+      toast.success(`${removeServerDialog.serverName} removed`);
       setRemoveServerDialog(null);
       await fetchServers();
-    } catch (error) {
-      console.error("Failed to remove server:", error);
+    } catch {
+      toast.error("Failed to remove server");
     } finally {
       setRemovingServer(false);
     }
@@ -1128,14 +1176,15 @@ export default function SettingsPage() {
     setScheduledJobTime(value);
     setSavingJobTime(true);
     try {
-      await fetch("/api/settings/scheduled-job-time", {
+      const res = await fetch("/api/settings/scheduled-job-time", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ scheduledJobTime: value }),
       });
+      if (!res.ok) toast.error("Failed to save scheduled job time");
       fetchScheduleInfo();
-    } catch (error) {
-      console.error("Failed to save scheduled job time:", error);
+    } catch {
+      toast.error("Failed to save scheduled job time");
     } finally {
       setSavingJobTime(false);
     }
@@ -1150,14 +1199,14 @@ export default function SettingsPage() {
         body: JSON.stringify({ job }),
       });
       if (!res.ok) {
-        const data = await res.json();
-        console.error("Run now failed:", data.error);
+        const data = await res.json().catch(() => null);
+        toast.error("Failed to start job", { description: data?.error });
       }
       // Refresh schedule info + sync status after completion
       fetchScheduleInfo();
       if (job === "sync") fetchServers();
-    } catch (error) {
-      console.error("Run now failed:", error);
+    } catch {
+      toast.error("Failed to start job");
     } finally {
       setRunningJob(null);
     }
@@ -1169,13 +1218,14 @@ export default function SettingsPage() {
     setAccentColor(name);
     window.dispatchEvent(new CustomEvent("accent-color-changed", { detail: name }));
     try {
-      await fetch("/api/settings/accent-color", {
+      const res = await fetch("/api/settings/accent-color", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accentColor: name }),
       });
-    } catch (error) {
-      console.error("Failed to save accent color:", error);
+      if (!res.ok) toast.error("Failed to save accent color");
+    } catch {
+      toast.error("Failed to save accent color");
     }
   };
 
@@ -1187,13 +1237,14 @@ export default function SettingsPage() {
     setChipColors(updated);
     updateChipColorContext(updated);
     try {
-      await fetch("/api/settings/chip-colors", {
+      const res = await fetch("/api/settings/chip-colors", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ chipColors: updated }),
       });
-    } catch (error) {
-      console.error("Failed to save chip colors:", error);
+      if (!res.ok) toast.error("Failed to save chip colors");
+    } catch {
+      toast.error("Failed to save chip colors");
     }
   };
 
@@ -1201,27 +1252,32 @@ export default function SettingsPage() {
     setChipColors(DEFAULT_CHIP_COLORS);
     updateChipColorContext(DEFAULT_CHIP_COLORS);
     try {
-      await fetch("/api/settings/chip-colors", {
+      const res = await fetch("/api/settings/chip-colors", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ chipColors: DEFAULT_CHIP_COLORS }),
       });
-    } catch (error) {
-      console.error("Failed to reset chip colors:", error);
+      if (!res.ok) toast.error("Failed to reset chip colors");
+    } catch {
+      toast.error("Failed to reset chip colors");
     }
   };
 
   const saveDedupSetting = async (value: boolean) => {
     setSavingDedup(true);
     try {
-      await fetch("/api/settings/dedup", {
+      const res = await fetch("/api/settings/dedup", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ dedupStats: value }),
       });
+      if (!res.ok) {
+        toast.error("Failed to save deduplication setting");
+        return;
+      }
       setDedupStats(value);
-    } catch (error) {
-      console.error("Failed to save dedup setting:", error);
+    } catch {
+      toast.error("Failed to save deduplication setting");
     } finally {
       setSavingDedup(false);
     }
@@ -1239,9 +1295,11 @@ export default function SettingsPage() {
       });
       if (response.ok) {
         setLogRetentionDays(days);
+      } else {
+        toast.error("Failed to save log retention");
       }
-    } catch (error) {
-      console.error("Failed to save log retention:", error);
+    } catch {
+      toast.error("Failed to save log retention");
     } finally {
       setSavingLogRetention(false);
     }
@@ -1259,9 +1317,11 @@ export default function SettingsPage() {
       });
       if (response.ok) {
         setActionRetentionDays(days);
+      } else {
+        toast.error("Failed to save action history retention");
       }
-    } catch (error) {
-      console.error("Failed to save action retention:", error);
+    } catch {
+      toast.error("Failed to save action history retention");
     } finally {
       setSavingActionRetention(false);
     }
@@ -1271,13 +1331,14 @@ export default function SettingsPage() {
     const newServerId = value === "none" ? null : value;
     setPreferredTitleServerId(newServerId);
     try {
-      await fetch("/api/settings/title-preference", {
+      const res = await fetch("/api/settings/title-preference", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ serverId: newServerId, field: "title" }),
       });
-    } catch (error) {
-      console.error("Failed to save title preference:", error);
+      if (!res.ok) toast.error("Failed to save title preference");
+    } catch {
+      toast.error("Failed to save title preference");
     }
   };
 
@@ -1285,13 +1346,14 @@ export default function SettingsPage() {
     const newServerId = value === "none" ? null : value;
     setPreferredArtworkServerId(newServerId);
     try {
-      await fetch("/api/settings/title-preference", {
+      const res = await fetch("/api/settings/title-preference", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ serverId: newServerId, field: "artwork" }),
       });
-    } catch (error) {
-      console.error("Failed to save artwork preference:", error);
+      if (!res.ok) toast.error("Failed to save artwork preference");
+    } catch {
+      toast.error("Failed to save artwork preference");
     }
   };
 
@@ -1299,12 +1361,15 @@ export default function SettingsPage() {
     setBackupSchedule(value);
     setBackupSaving(true);
     try {
-      await fetch("/api/settings/backup-schedule", {
+      const res = await fetch("/api/settings/backup-schedule", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ backupSchedule: value }),
       });
-    } catch {} finally {
+      if (!res.ok) toast.error("Failed to save backup schedule");
+    } catch {
+      toast.error("Failed to save backup schedule");
+    } finally {
       setBackupSaving(false);
     }
   };
@@ -1312,12 +1377,15 @@ export default function SettingsPage() {
   const handleSaveBackupRetention = async () => {
     setBackupSaving(true);
     try {
-      await fetch("/api/settings/backup-schedule", {
+      const res = await fetch("/api/settings/backup-schedule", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ backupRetentionCount }),
       });
-    } catch {} finally {
+      if (!res.ok) toast.error("Failed to save backup retention");
+    } catch {
+      toast.error("Failed to save backup retention");
+    } finally {
       setBackupSaving(false);
     }
   };
@@ -1330,8 +1398,16 @@ export default function SettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ includeMediaData }),
       });
-      if (res.ok) await fetchBackupSettings();
-    } catch {} finally {
+      if (res.ok) {
+        toast.success("Backup created");
+        await fetchBackupSettings();
+      } else {
+        const data = await res.json().catch(() => null);
+        toast.error("Failed to create backup", { description: data?.error });
+      }
+    } catch {
+      toast.error("Failed to create backup");
+    } finally {
       setCreatingBackup(false);
     }
   };
@@ -1347,8 +1423,13 @@ export default function SettingsPage() {
       if (res.ok) {
         const data = await res.json();
         setHasBackupPassword(data.hasPassword);
+        toast.success(password ? "Encryption password saved" : "Encryption password removed");
+      } else {
+        toast.error("Failed to save encryption password");
       }
-    } catch {} finally {
+    } catch {
+      toast.error("Failed to save encryption password");
+    } finally {
       setSavingBackupPassword(false);
     }
   };
@@ -1357,8 +1438,8 @@ export default function SettingsPage() {
     window.open(`/api/backup/${encodeURIComponent(filename)}`, "_blank");
   };
 
+  // Confirmation happens in the GeneralTab restore dialog before this is called.
   const handleRestoreBackup = async (filename: string, passphrase?: string) => {
-    if (!confirm(`Restore from "${filename}"?\n\nThis will replace ALL current data and log you out. This cannot be undone.`)) return;
     setRestoringBackup(filename);
     setRestoreProgress(null);
     try {
@@ -1368,7 +1449,7 @@ export default function SettingsPage() {
         body: JSON.stringify({ filename, ...(passphrase ? { passphrase } : {}) }),
       });
       if (!res.body) {
-        alert("Restore failed");
+        toast.error("Restore failed", { description: "The server returned an empty response." });
         return;
       }
 
@@ -1402,18 +1483,29 @@ export default function SettingsPage() {
       if (completed) {
         window.location.href = "/login";
       } else {
-        alert(lastError || "Restore failed");
+        toast.error("Restore failed", { description: lastError || undefined });
       }
-    } catch {} finally {
+    } catch {
+      toast.error("Restore failed", { description: "Network error while restoring the backup." });
+    } finally {
       setRestoringBackup(null);
       setRestoreProgress(null);
     }
   };
 
+  // Confirmation happens in the GeneralTab delete dialog before this is called.
   const handleDeleteBackup = async (filename: string) => {
-    if (!confirm(`Delete backup "${filename}"?`)) return;
-    await fetch(`/api/backup/${encodeURIComponent(filename)}`, { method: "DELETE" });
-    await fetchBackupSettings();
+    try {
+      const res = await fetch(`/api/backup/${encodeURIComponent(filename)}`, { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Failed to delete backup");
+        return;
+      }
+      toast.success("Backup deleted");
+      await fetchBackupSettings();
+    } catch {
+      toast.error("Failed to delete backup");
+    }
   };
 
   // ─── Integration handlers ───
@@ -1445,10 +1537,15 @@ export default function SettingsPage() {
 
   const deleteSonarrInstance = async (id: string) => {
     try {
-      await fetch(`/api/integrations/sonarr/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/integrations/sonarr/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Failed to remove Sonarr instance");
+        return;
+      }
+      toast.success("Sonarr instance removed");
       await fetchSonarrInstances();
-    } catch (error) {
-      console.error("Failed to delete Sonarr instance:", error);
+    } catch {
+      toast.error("Failed to remove Sonarr instance");
     }
   };
 
@@ -1479,10 +1576,15 @@ export default function SettingsPage() {
 
   const deleteRadarrInstance = async (id: string) => {
     try {
-      await fetch(`/api/integrations/radarr/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/integrations/radarr/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Failed to remove Radarr instance");
+        return;
+      }
+      toast.success("Radarr instance removed");
       await fetchRadarrInstances();
-    } catch (error) {
-      console.error("Failed to delete Radarr instance:", error);
+    } catch {
+      toast.error("Failed to remove Radarr instance");
     }
   };
 
@@ -1513,10 +1615,15 @@ export default function SettingsPage() {
 
   const deleteLidarrInstance = async (id: string) => {
     try {
-      await fetch(`/api/integrations/lidarr/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/integrations/lidarr/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Failed to remove Lidarr instance");
+        return;
+      }
+      toast.success("Lidarr instance removed");
       await fetchLidarrInstances();
-    } catch (error) {
-      console.error("Failed to delete Lidarr instance:", error);
+    } catch {
+      toast.error("Failed to remove Lidarr instance");
     }
   };
 
@@ -1547,10 +1654,15 @@ export default function SettingsPage() {
 
   const deleteSeerrInstance = async (id: string) => {
     try {
-      await fetch(`/api/integrations/seerr/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/integrations/seerr/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Failed to remove Seerr instance");
+        return;
+      }
+      toast.success("Seerr instance removed");
       await fetchSeerrInstances();
-    } catch (error) {
-      console.error("Failed to delete Seerr instance:", error);
+    } catch {
+      toast.error("Failed to remove Seerr instance");
     }
   };
 
@@ -1946,13 +2058,19 @@ export default function SettingsPage() {
 
   // ─── System handlers ───
 
+  // Confirmation happens in the SystemTab dialog before this is called.
   const handleClearImageCache = async () => {
     setClearingImageCache(true);
     try {
-      await fetch("/api/settings/image-cache", { method: "DELETE" });
+      const res = await fetch("/api/settings/image-cache", { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Failed to clear image cache");
+        return;
+      }
+      toast.success("Image cache cleared");
       await fetchImageCacheStats();
     } catch {
-      // Ignore
+      toast.error("Failed to clear image cache");
     } finally {
       setClearingImageCache(false);
     }
@@ -1994,17 +2112,23 @@ export default function SettingsPage() {
     <div className="p-4 sm:p-6 lg:p-8">
       <div className="mb-6">
         <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Settings</h1>
+        <p className="text-muted-foreground mt-1">
+          Manage servers, integrations, schedules, and application preferences.
+        </p>
       </div>
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as SettingsTab)} className="space-y-6">
-        <TabNav
-          tabs={buildSettingsTabs(systemInfo?.updateInfo?.updateAvailable, systemInfo?.updateInfo?.latestVersion)}
-          activeTab={activeTab}
-          onTabChange={setActiveTab}
-          className="mb-6"
-        />
-
-        <TabsContent value="general">
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as SettingsTab)}>
+        <div className="flex flex-col gap-6 lg:flex-row lg:gap-8">
+          <aside className="min-w-0 shrink-0 lg:self-start lg:sticky lg:top-6 lg:w-[216px]">
+            <SettingsSubNav
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              updateAvailable={systemInfo?.updateInfo?.updateAvailable}
+              latestVersion={systemInfo?.updateInfo?.latestVersion}
+            />
+          </aside>
+          <div className="min-w-0 flex-1 space-y-6">
+        <TabsContent value="general" id="settings-panel-general" aria-labelledby="settings-tab-general">
           <GeneralTab
             accentColor={accentColor}
             onSaveAccentColor={saveAccentColor}
@@ -2050,7 +2174,7 @@ export default function SettingsPage() {
           />
         </TabsContent>
 
-        <TabsContent value="scheduling">
+        <TabsContent value="scheduling" id="settings-panel-scheduling" aria-labelledby="settings-tab-scheduling">
           <SchedulingTab
             scheduledJobTime={scheduledJobTime}
             savingJobTime={savingJobTime}
@@ -2091,7 +2215,7 @@ export default function SettingsPage() {
           />
         </TabsContent>
 
-        <TabsContent value="servers">
+        <TabsContent value="servers" id="settings-panel-servers" aria-labelledby="settings-tab-servers">
           <ServersTab
             servers={servers}
             hasActiveSync={hasActiveSync}
@@ -2153,7 +2277,7 @@ export default function SettingsPage() {
           />
         </TabsContent>
 
-        <TabsContent value="integrations">
+        <TabsContent value="integrations" id="settings-panel-integrations" aria-labelledby="settings-tab-integrations">
           <IntegrationsTab
             sonarr={{
               instances: sonarrInstances,
@@ -2294,7 +2418,7 @@ export default function SettingsPage() {
           />
         </TabsContent>
 
-        <TabsContent value="notifications">
+        <TabsContent value="notifications" id="settings-panel-notifications" aria-labelledby="settings-tab-notifications">
           <NotificationsTab
             discordWebhookUrl={discordWebhookUrl}
             discordWebhookUsername={discordWebhookUsername}
@@ -2310,7 +2434,7 @@ export default function SettingsPage() {
           />
         </TabsContent>
 
-        <TabsContent value="authentication">
+        <TabsContent value="authentication" id="settings-panel-authentication" aria-labelledby="settings-tab-authentication">
           <AuthenticationTab
             authInfo={authInfo}
             authLoading={authLoading}
@@ -2336,7 +2460,7 @@ export default function SettingsPage() {
           />
         </TabsContent>
 
-        <TabsContent value="system">
+        <TabsContent value="system" id="settings-panel-system" aria-labelledby="settings-tab-system">
           <SystemTab
             systemInfo={systemInfo}
             imageCacheStats={imageCacheStats}
@@ -2346,6 +2470,8 @@ export default function SettingsPage() {
             loadingChangelog={loadingChangelog}
           />
         </TabsContent>
+          </div>
+        </div>
       </Tabs>
     </div>
   );

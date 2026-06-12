@@ -7,7 +7,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard } from "@/components/media-card";
+import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
 import { Tv, Layers, List, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import Link from "next/link";
@@ -20,6 +20,7 @@ import { formatFileSize, formatDuration } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { LibraryTabs, SERIES_TABS } from "@/components/library-tabs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 
 function formatResolution(resolution: string | null): string {
@@ -29,7 +30,6 @@ function formatResolution(resolution: string | null): string {
 }
 
 const GAP = 16;
-const CARD_CONTENT_HEIGHT = 138;
 const CARD_BORDER = 2;
 const QUALITY_BAR_HEIGHT = 12;
 
@@ -186,29 +186,7 @@ export default function AllEpisodesPage() {
     <div className="p-4 sm:p-6 lg:p-8">
       <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight mb-4">Series</h1>
 
-      <nav className="mb-6 flex items-center gap-1 border-b overflow-x-auto">
-        <Link
-          href="/library/series"
-          className="flex items-center gap-2 border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 transition-colors"
-        >
-          <Tv className="h-4 w-4" />
-          Series
-        </Link>
-        <Link
-          href="/library/series/seasons"
-          className="flex items-center gap-2 border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:border-muted-foreground/30 transition-colors"
-        >
-          <Layers className="h-4 w-4" />
-          All Seasons
-        </Link>
-        <Link
-          href="/library/series/episodes"
-          className="flex items-center gap-2 border-b-2 border-primary px-4 py-2 text-sm font-medium text-foreground"
-        >
-          <List className="h-4 w-4" />
-          All Episodes
-        </Link>
-      </nav>
+      <LibraryTabs tabs={SERIES_TABS} active="/library/series/episodes" />
 
       <MediaFilters
         onFilterChange={setFilters}

@@ -3,7 +3,7 @@ import type { LifecycleRule, LifecycleRuleGroup, LifecycleRuleCondition, StreamQ
 import {
   isArrField, isSeerrField, isExternalField, isStreamField, isSeriesAggregateField,
   isCrossSystemField,
-  isStreamQueryField, isStreamQueryGroup,
+  isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
   RULE_FIELDS, STREAM_QUERY_FIELDS, type RuleField,
 } from "./types";
@@ -11,6 +11,8 @@ import { isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWatche
 import { detectStreamAudioProfile, detectStreamDynamicRange } from "./stream-detection";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import {
+  pushDownGroupNegation,
+  nullValueResult,
   MB_IN_BYTES,
   DURATION_MS_PER_MIN,
   wildcardToRegex,
@@ -18,12 +20,13 @@ import {
 import {
   isUnconfiguredContainsRule,
   validateRulePreamble,
+  UNSATISFIABLE_WHERE,
   FIELD_HANDLERS,
   textGenericHandler,
 } from "@/lib/conditions/where-builder";
 import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
-import { buildStreamQueryClause, streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
-import { buildGroupConditions } from "@/lib/conditions/group-composition";
+import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
+import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
 import { Prisma } from "@/generated/prisma/client";
 
 const STREAM_COUNT_FIELDS = new Set(["audioStreamCount", "subtitleStreamCount"]);
@@ -118,8 +121,12 @@ function ruleToWhereClause(rule: LifecycleRule): Prisma.MediaItemWhereInput {
   // Skip cross-system fields — enriched before Phase 2
   if (isCrossSystemField(field)) return {};
 
-  // Stream query fields — handled at the group level via buildStreamQueryClause
-  if (isStreamQueryField(field)) return {};
+  // Stream query fields only make sense inside a stream-query group, whose
+  // rules never reach this dispatcher (they go through
+  // buildStreamQueryClause). One appearing HERE is a misplaced rule — fail
+  // it rather than dropping the constraint (a single-rule group would
+  // otherwise collapse to no WHERE at all and match the whole library).
+  if (isStreamQueryField(field)) return UNSATISFIABLE_WHERE;
 
   // Stream count fields — always post-filtered in-memory
   if (STREAM_COUNT_FIELDS.has(field)) return {};
@@ -169,116 +176,35 @@ export function hasAnyActiveRules(rules: LifecycleRule[] | LifecycleRuleGroup[])
 // will follow. Non-DB-expressible rules (Arr/Seerr fields, wildcards, stream
 // counts) produce EXTERNAL_RULE instead of being silently dropped.
 //
-// Propagation rules:
-//   EXTERNAL_RULE OR  X             = EXTERNAL_RULE  (dropped OR branch might match anything)
-//   X             OR  EXTERNAL_RULE = EXTERNAL_RULE
-//   EXTERNAL_RULE AND X             = X              (dropped AND constraint is safely relaxed)
-//   X             AND EXTERNAL_RULE = X
-//
-// This ensures the pre-filter WHERE is always a SUPERSET of the in-memory
-// result, so no items that would pass Phase 2 are excluded by Phase 1.
-// ---------------------------------------------------------------------------
-
-const EXTERNAL_RULE = "EXTERNAL_RULE" as const;
-type PreFilterClause = Prisma.MediaItemWhereInput | typeof EXTERNAL_RULE;
-
-function combinePreFilter(
-  left: PreFilterClause,
-  right: PreFilterClause,
-  condition: "AND" | "OR"
-): PreFilterClause {
-  if (condition === "OR") {
-    if (left === EXTERNAL_RULE || right === EXTERNAL_RULE) return EXTERNAL_RULE;
-    return { OR: [left, right] };
-  } else {
-    if (left === EXTERNAL_RULE) return right;
-    if (right === EXTERNAL_RULE) return left;
-    return { AND: [left, right] };
-  }
-}
-
 /**
- * Pre-filter variant of evaluateGroup. Non-DB-expressible rules (Arr/Seerr
- * fields, wildcards, stream counts) produce EXTERNAL_RULE so that OR branches
- * with external fields don't incorrectly narrow results. Returns null only for
- * disabled groups (truly skip), EXTERNAL_RULE for groups that can't be filtered
- * in DB, or a concrete Prisma clause.
+ * Convert legacy flat rules (pre-groups format) into the equivalent group
+ * tree so they route through the same machinery as grouped rule sets:
+ * buckets split after each rule whose `condition` is AND; rules within a
+ * bucket join with OR; buckets join with AND — i.e. (A ∨ B) ∧ (C ∨ D).
+ *
+ * Built from ENABLED rules only (the old in-memory evaluator filtered
+ * disabled rules but the old Phase 1 did not — and even let a disabled
+ * rule's connective move bucket boundaries, so the phases could disagree).
+ * Going through the group path also gives legacy sets the EXTERNAL-aware
+ * pre-filter: an Arr/wildcard rule in an OR bucket no longer narrows the
+ * Phase 1 fetch below what Phase 2 would match.
  */
-function evaluateGroupPreFilter(group: LifecycleRuleGroup): PreFilterClause | null {
-  if (group.enabled === false) return null;
-
-  // Stream query groups: build DB clause if possible, EXTERNAL_RULE if it has computed/wildcard rules
-  if (isStreamQueryGroup(group)) {
-    const dbClause = buildStreamQueryClause(group);
-    if (streamQueryNeedsInMemory(group)) {
-      // Has computed fields — the DB clause is a partial pre-filter at best
-      return dbClause ? combinePreFilter(dbClause, EXTERNAL_RULE, "AND") : EXTERNAL_RULE;
-    }
-    return dbClause ?? EXTERNAL_RULE;
-  }
-
-  const items: Array<{ condition: LifecycleRuleCondition; clause: PreFilterClause }> = [];
-
-  for (const rule of group.rules) {
-    if (rule.enabled === false) continue;
-    const clause = ruleToWhereClause(rule);
-    items.push({
-      condition: rule.condition,
-      clause: Object.keys(clause).length > 0 ? clause : EXTERNAL_RULE,
-    });
-  }
-
-  for (const sub of group.groups ?? []) {
-    const subClause = evaluateGroupPreFilter(sub);
-    if (subClause === null) continue; // Disabled sub-group, truly skip
-    items.push({ condition: sub.condition, clause: subClause });
-  }
-
-  if (items.length === 0) return null;
-  if (items.length === 1) return items[0].clause;
-
-  let result: PreFilterClause = items[0].clause;
-  for (let i = 1; i < items.length; i++) {
-    result = combinePreFilter(result, items[i].clause, items[i].condition);
-  }
-  return result;
-}
-
-function buildGroupConditionsPreFilter(ruleGroups: LifecycleRuleGroup[]): Prisma.MediaItemWhereInput {
-  const groupClauses: Array<{ condition: "AND" | "OR"; clause: PreFilterClause }> = [];
-
-  for (const group of ruleGroups) {
-    const result = evaluateGroupPreFilter(group);
-    if (result === null) continue;
-    groupClauses.push({ condition: group.condition, clause: result });
-  }
-
-  if (groupClauses.length === 0) return {};
-
-  let result: PreFilterClause = groupClauses[0].clause;
-  for (let i = 1; i < groupClauses.length; i++) {
-    result = combinePreFilter(result, groupClauses[i].clause, groupClauses[i].condition);
-  }
-  return result === EXTERNAL_RULE ? {} : result;
-}
-
-function legacyRulesToConditions(rules: LifecycleRule[]): Prisma.MediaItemWhereInput[] {
-  const groups: Prisma.MediaItemWhereInput[][] = [[]];
-  for (let i = 0; i < rules.length; i++) {
-    const clause = ruleToWhereClause(rules[i]);
-    if (Object.keys(clause).length > 0) {
-      groups[groups.length - 1].push(clause);
-    }
-    if (i < rules.length - 1 && rules[i].condition === "AND") {
-      groups.push([]);
+function legacyRulesToGroups(rules: LifecycleRule[]): LifecycleRuleGroup[] {
+  const flat = rules.filter((r) => r.enabled !== false);
+  if (flat.length === 0) return [];
+  const buckets: LifecycleRule[][] = [[]];
+  for (let i = 0; i < flat.length; i++) {
+    buckets[buckets.length - 1].push(flat[i]);
+    if (i < flat.length - 1 && flat[i].condition === "AND") {
+      buckets.push([]);
     }
   }
-  return groups
-    .filter((g) => g.length > 0)
-    .map((group) => {
-      if (group.length === 1) return group[0];
-      return { OR: group };
-    });
+  return buckets.map((bucket, bi) => ({
+    id: `legacy-bucket-${bi}`,
+    condition: "AND" as const,
+    rules: bucket.map((r, ri) => ({ ...r, condition: (ri === 0 ? "AND" : "OR") as LifecycleRuleCondition })),
+    groups: [],
+  }));
 }
 
 /** Check if any rule in the tree uses arr fields */
@@ -321,6 +247,21 @@ function hasWildcardRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolea
     return false;
   }
   return (rules as LifecycleRule[]).some((r) => r.enabled !== false && !isExternalField(r.field) && (r.operator === "matchesWildcard" || r.operator === "notMatchesWildcard"));
+}
+
+/** Resolution rules always evaluate in-memory (Phase 1 raw-value lists
+ *  cannot express normalizeResolutionLabel semantics — see resolutionHandler) */
+function hasResolutionRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+  if (rules.length === 0) return false;
+  if (isRuleGroups(rules)) {
+    for (const group of rules) {
+      if (group.enabled === false) continue;
+      if (group.rules.some((r) => r.enabled !== false && r.field === "resolution")) return true;
+      if (hasResolutionRules(group.groups ?? [])) return true;
+    }
+    return false;
+  }
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "resolution");
 }
 
 /** Check if any rule uses stream fields or stream query groups */
@@ -630,7 +571,11 @@ function evaluateArrRule(rule: LifecycleRule, meta: ArrMetadata | undefined): bo
         case "between": {
           const [fromStr, toStr] = String(value).split(",");
           const itemDay = itemDate.toISOString().split("T")[0];
-          result = itemDay >= fromStr && itemDay <= toStr;
+          // Normalize bounds through Date so non-padded inputs ("2024-1-1")
+          // compare correctly — the raw strings were compared lexically.
+          const fromDay = new Date(fromStr).toISOString().split("T")[0];
+          const toDay = new Date(toStr).toISOString().split("T")[0];
+          result = itemDay >= fromDay && itemDay <= toDay;
           break;
         }
         default:
@@ -886,7 +831,11 @@ function evaluateSeerrRule(rule: LifecycleRule, meta: SeerrMetadata | undefined)
         case "between": {
           const [fromStr, toStr] = String(value).split(",");
           const itemDay = itemDate.toISOString().split("T")[0];
-          result = itemDay >= fromStr && itemDay <= toStr;
+          // Normalize bounds through Date so non-padded inputs ("2024-1-1")
+          // compare correctly — the raw strings were compared lexically.
+          const fromDay = new Date(fromStr).toISOString().split("T")[0];
+          const toDay = new Date(toStr).toISOString().split("T")[0];
+          result = itemDay >= fromDay && itemDay <= toDay;
           break;
         }
         default:
@@ -960,6 +909,10 @@ function evaluateRuleAgainstItem(
 
   const { field, operator, value, negate } = rule;
 
+  // Misplaced stream-query field (only valid inside stream-query groups,
+  // which evaluate through evaluateStreamQueryGroupInMemory) → dead rule.
+  if (isStreamQueryField(field)) return false;
+
   if (isArrField(field)) {
     return evaluateArrRule(rule, arrMeta);
   }
@@ -980,9 +933,22 @@ function evaluateRuleAgainstItem(
       // For language fields, exclude unknown/empty values so they don't produce false matches
       .filter((sv) => !isLangField || (sv !== "" && sv !== "unknown"));
 
-    // isNull/isNotNull check whether any known values exist
+    // isNull/isNotNull check whether any known values exist. Codec parity:
+    // Phase 1 uses `codec IS NOT NULL`, which counts empty-string codecs as
+    // known — so test the RAW value here instead of the ""-coalesced list.
     if (operator === "isNull" || operator === "isNotNull") {
-      const result = operator === "isNull" ? streamValues.length === 0 : streamValues.length > 0;
+      const hasKnown = streams
+        .filter((st) => st.streamType === streamType)
+        .some((st) => {
+          const v = st[streamField];
+          if (v == null) return false;
+          if (isLangField) {
+            const lv = String(v).toLowerCase();
+            return lv !== "" && lv !== "unknown";
+          }
+          return true;
+        });
+      const result = operator === "isNull" ? !hasKnown : hasKnown;
       return negate ? !result : result;
     }
 
@@ -1038,6 +1004,14 @@ function evaluateRuleAgainstItem(
       case "greaterThanOrEqual": result = count >= numValue; break;
       case "lessThan": result = count < numValue; break;
       case "lessThanOrEqual": result = count <= numValue; break;
+      case "between": {
+        const [minStr, maxStr] = String(value).split(",");
+        result = count >= Number(minStr) && count <= Number(maxStr);
+        break;
+      }
+      // Computed counts are never NULL — "is empty" reads as "has none".
+      case "isNull": result = count === 0; break;
+      case "isNotNull": result = count > 0; break;
       default: return false;
     }
     return negate ? !result : result;
@@ -1097,6 +1071,7 @@ function evaluateRuleAgainstItem(
   if (field === "hasExternalId") {
     const externalIds = (item.externalIds as Array<{ source: string }>) ?? [];
     const strValue = String(value);
+    const sources = strValue.split("|").map((v) => v.trim()).filter(Boolean);
     let result: boolean;
     switch (operator) {
       case "equals":
@@ -1107,6 +1082,22 @@ function evaluateRuleAgainstItem(
       case "isNull":
         result = !externalIds.some((e) => e.source === strValue);
         break;
+      case "contains":
+        result = externalIds.some((e) => sources.includes(e.source));
+        break;
+      case "notContains":
+        result = !externalIds.some((e) => sources.includes(e.source));
+        break;
+      case "matchesWildcard": {
+        const re = wildcardToRegex(strValue.toLowerCase());
+        result = externalIds.some((e) => re.test(e.source.toLowerCase()));
+        break;
+      }
+      case "notMatchesWildcard": {
+        const re = wildcardToRegex(strValue.toLowerCase());
+        result = !externalIds.some((e) => re.test(e.source.toLowerCase()));
+        break;
+      }
       default: return false;
     }
     return negate ? !result : result;
@@ -1114,6 +1105,12 @@ function evaluateRuleAgainstItem(
 
   // Is Watchlisted (boolean)
   if (field === "isWatchlisted") {
+    // Non-nullable Boolean: isNotNull is the always-true tautology, isNull
+    // the always-false one (mirrors Phase 1's MATCH_ALL/UNSATISFIABLE — see
+    // isWatchlistedHandler). Without these, Phase 2's default:false diverged
+    // from a Phase 1 that matched the whole library.
+    if (operator === "isNotNull") return negate ? false : true;
+    if (operator === "isNull") return negate ? true : false;
     const boolVal = String(value).toLowerCase() === "true";
     const itemVal = !!item.isWatchlisted;
     let result: boolean;
@@ -1258,8 +1255,28 @@ function evaluateRuleAgainstItem(
 
   // File size: rule value is in MB, item.fileSize is serialized bytes string
   if (field === "fileSize") {
+    if (operator === "isNull" || operator === "isNotNull") {
+      const present = item.fileSize != null;
+      const r = operator === "isNull" ? !present : present;
+      return negate ? !r : r;
+    }
+    if (item.fileSize == null) {
+      // NULL semantics mirror the Phase 1 clause shapes — see nullValueResult
+      const r = nullValueResult(operator);
+      return negate ? !r : r;
+    }
+    const fileBytes = BigInt(item.fileSize as string);
+    // `between` carries a "min,max" pair — parse per-half before the
+    // single-value conversion below, which throws RangeError on BigInt(NaN)
+    // for any comma value.
+    if (operator === "between") {
+      const [minStr, maxStr] = String(value).split(",");
+      const minBytes = BigInt(Math.round(Number(minStr) * MB_IN_BYTES));
+      const maxBytes = BigInt(Math.round(Number(maxStr) * MB_IN_BYTES));
+      const result = fileBytes >= minBytes && fileBytes <= maxBytes;
+      return negate ? !result : result;
+    }
     const bytesValue = BigInt(Math.round(Number(value) * MB_IN_BYTES));
-    const fileBytes = item.fileSize ? BigInt(item.fileSize as string) : BigInt(0);
     let result: boolean;
     switch (operator) {
       case "greaterThan": result = fileBytes > bytesValue; break;
@@ -1268,13 +1285,6 @@ function evaluateRuleAgainstItem(
       case "lessThanOrEqual": result = fileBytes <= bytesValue; break;
       case "equals": result = fileBytes === bytesValue; break;
       case "notEquals": result = fileBytes !== bytesValue; break;
-      case "between": {
-        const [minStr, maxStr] = String(value).split(",");
-        const minBytes = BigInt(Math.round(Number(minStr) * MB_IN_BYTES));
-        const maxBytes = BigInt(Math.round(Number(maxStr) * MB_IN_BYTES));
-        result = fileBytes >= minBytes && fileBytes <= maxBytes;
-        break;
-      }
       default: return false;
     }
     return negate ? !result : result;
@@ -1282,8 +1292,18 @@ function evaluateRuleAgainstItem(
 
   // Duration: rule value is in minutes, item.duration is in milliseconds
   if (field === "duration") {
+    if (operator === "isNull" || operator === "isNotNull") {
+      const present = itemValue != null;
+      const r = operator === "isNull" ? !present : present;
+      return negate ? !r : r;
+    }
+    if (itemValue == null) {
+      // NULL semantics mirror the Phase 1 clause shapes — see nullValueResult
+      const r = nullValueResult(operator);
+      return negate ? !r : r;
+    }
     const msValue = Number(value) * DURATION_MS_PER_MIN;
-    const itemMs = Number(itemValue ?? 0);
+    const itemMs = Number(itemValue);
     let result: boolean;
     switch (operator) {
       case "greaterThan": result = itemMs > msValue; break;
@@ -1309,10 +1329,19 @@ function evaluateRuleAgainstItem(
   ]);
   if (dateFields.has(field)) {
     const itemDate = itemValue ? new Date(itemValue as string) : null;
+    const validDate = itemDate !== null && !isNaN(itemDate.getTime());
+    if (operator === "isNull" || operator === "isNotNull") {
+      const present = validDate;
+      const r = operator === "isNull" ? !present : present;
+      return negate ? !r : r;
+    }
+    if (!validDate) {
+      // NULL semantics mirror the Phase 1 clause shapes — see nullValueResult
+      const r = nullValueResult(operator);
+      return negate ? !r : r;
+    }
     let result: boolean;
-    if (!itemDate || isNaN(itemDate.getTime())) {
-      result = false;
-    } else {
+    {
       switch (operator) {
         case "before": result = itemDate < new Date(String(value)); break;
         case "after": result = itemDate > new Date(String(value)); break;
@@ -1337,7 +1366,11 @@ function evaluateRuleAgainstItem(
         case "between": {
           const [fromStr, toStr] = String(value).split(",");
           const itemDay = itemDate.toISOString().split("T")[0];
-          result = itemDay >= fromStr && itemDay <= toStr;
+          // Normalize bounds through Date so non-padded inputs ("2024-1-1")
+          // compare correctly — the raw strings were compared lexically.
+          const fromDay = new Date(fromStr).toISOString().split("T")[0];
+          const toDay = new Date(toStr).toISOString().split("T")[0];
+          result = itemDay >= fromDay && itemDay <= toDay;
           break;
         }
         default: return false;
@@ -1354,8 +1387,18 @@ function evaluateRuleAgainstItem(
     "availableEpisodeCount", "watchedEpisodeCount", "watchedEpisodePercentage",
   ]);
   if (numericFields.has(field)) {
+    if (operator === "isNull" || operator === "isNotNull") {
+      const present = itemValue != null;
+      const r = operator === "isNull" ? !present : present;
+      return negate ? !r : r;
+    }
+    if (itemValue == null) {
+      // NULL semantics mirror the Phase 1 clause shapes — see nullValueResult
+      const r = nullValueResult(operator);
+      return negate ? !r : r;
+    }
     const numValue = Number(value);
-    const itemNum = Number(itemValue ?? 0);
+    const itemNum = Number(itemValue);
     let result: boolean;
     switch (operator) {
       case "equals": result = itemNum === numValue; break;
@@ -1377,30 +1420,41 @@ function evaluateRuleAgainstItem(
   // Resolution field — normalize DB value to display label before comparing
   if (field === "resolution") {
     const rawRes = itemValue != null ? String(itemValue) : null;
-    const normalizedLabel = normalizeResolutionLabel(rawRes);
-    const strVal = String(value);
-    let resResult: boolean;
+    if (operator === "isNull" || operator === "isNotNull") {
+      const present = rawRes !== null && rawRes !== "";
+      const r = operator === "isNull" ? !present : present;
+      return negate ? !r : r;
+    }
     if (rawRes === null || rawRes === "") {
-      resResult = false;
-    } else {
+      // NULL semantics mirror the Phase 1 clause shapes — see nullValueResult
+      const r = nullValueResult(operator);
+      return negate ? !r : r;
+    }
+    const normalizedLabel = normalizeResolutionLabel(rawRes);
+    let resResult: boolean;
+    {
       const labelLower = normalizedLabel.toLowerCase();
-      const valLower = strVal.toLowerCase();
+      // Normalize the rule value too: stored rules may carry raw forms
+      // ("720", "4k") while the UI writes labels ("720P", "4K")
+      const valLower = normalizeResolutionLabel(String(value)).toLowerCase();
       switch (operator) {
         case "equals": resResult = labelLower === valLower; break;
         case "notEquals": resResult = labelLower !== valLower; break;
         case "contains": {
           // Resolution is enumerable — `contains` is multi-select list membership.
-          const parts = valLower.split("|").filter(Boolean);
+          const parts = String(value).split("|").filter(Boolean).map((p) => normalizeResolutionLabel(p).toLowerCase());
           resResult = parts.some((p) => labelLower === p);
           break;
         }
         case "notContains": {
-          const parts = valLower.split("|").filter(Boolean);
+          const parts = String(value).split("|").filter(Boolean).map((p) => normalizeResolutionLabel(p).toLowerCase());
           resResult = !parts.some((p) => labelLower === p);
           break;
         }
-        case "matchesWildcard": resResult = wildcardToRegex(valLower).test(labelLower); break;
-        case "notMatchesWildcard": resResult = !wildcardToRegex(valLower).test(labelLower); break;
+        // Wildcards match against the raw value (patterns like "1080*"
+        // must not be normalized away)
+        case "matchesWildcard": resResult = wildcardToRegex(String(value).toLowerCase()).test(labelLower); break;
+        case "notMatchesWildcard": resResult = !wildcardToRegex(String(value).toLowerCase()).test(labelLower); break;
         default: resResult = false;
       }
     }
@@ -1410,8 +1464,18 @@ function evaluateRuleAgainstItem(
   // Text fields (case-insensitive to match Prisma behavior).
   // Enumerable fields use list-membership semantics for contains/notContains
   // (mirrors the multi-select UI), free-text fields use substring search.
+  if (operator === "isNull" || operator === "isNotNull") {
+    const present = itemValue != null && itemValue !== "";
+    const r = operator === "isNull" ? !present : present;
+    return negate ? !r : r;
+  }
+  if (itemValue == null) {
+    // NULL semantics mirror the Phase 1 clause shapes — see nullValueResult
+    const r = nullValueResult(operator);
+    return negate ? !r : r;
+  }
   const strValue = String(value).toLowerCase();
-  const itemStr = String(itemValue ?? "").toLowerCase();
+  const itemStr = String(itemValue).toLowerCase();
   const textEnumerable = isEnumerableField(field);
   let textResult: boolean;
   switch (operator) {
@@ -1811,6 +1875,10 @@ function evaluateStreamQueryRuleAgainstStream(
 
   // Boolean fields
   if (field === "sqIsDefault" || field === "sqForced") {
+    if (operator === "isNull" || operator === "isNotNull") {
+      const result = operator === "isNull" ? streamValue == null : streamValue != null;
+      return negate ? !result : result;
+    }
     const boolVal = String(value).toLowerCase() === "true";
     const actual = !!streamValue;
     let result: boolean;
@@ -1923,7 +1991,11 @@ function evaluateStreamQueryGroupInMemory(
   if (activeRules.some((rule) =>
     isUnconfiguredContainsRule(rule.operator, rule.value) ||
     !isOperatorApplicable(rule.operator, rule.field) ||
-    !isValueValidForRule(rule.operator, rule.value, rule.field)
+    !isValueValidForRule(rule.operator, rule.value, rule.field) ||
+    // A field that maps to neither a stream column nor a computed stream
+    // value is misplaced — same vacuous-"none" hazard as the guards above
+    // (mirrors buildStreamQueryClause returning UNSATISFIABLE_WHERE).
+    (!isStreamQueryComputedField(rule.field) && !streamQueryFieldToColumn(rule.field as StreamQueryField))
   )) {
     return false;
   }
@@ -1993,7 +2065,8 @@ export function evaluateAllRulesInMemory(
   if (rules.length === 0) return false;
 
   if (isRuleGroups(rules)) {
-    const groups = rules as LifecycleRuleGroup[];
+    // Same normalization as Phase 1 — the two phases must agree (negation.ts)
+    const groups = pushDownGroupNegation(rules as LifecycleRuleGroup[]);
     const results: Array<{ condition: LifecycleRuleCondition; result: boolean }> = [];
 
     for (let i = 0; i < groups.length; i++) {
@@ -2017,19 +2090,12 @@ export function evaluateAllRulesInMemory(
     return combined;
   }
 
-  // Legacy flat rules: grouped by AND boundaries, within-group OR
-  const flat = (rules as LifecycleRule[]).filter((r) => r.enabled !== false);
-  if (flat.length === 0) return false;
-  const buckets: LifecycleRule[][] = [[]];
-  for (let i = 0; i < flat.length; i++) {
-    buckets[buckets.length - 1].push(flat[i]);
-    if (i < flat.length - 1 && flat[i].condition === "AND") {
-      buckets.push([]);
-    }
-  }
-  return buckets.every((bucket) =>
-    bucket.some((rule) => evaluateRuleAgainstItem(rule, item, arrMeta, seerrMeta))
-  );
+  // Legacy flat rules: convert to the equivalent group tree and evaluate
+  // through the same path as grouped rule sets (identical bucket semantics —
+  // OR within buckets, AND between them — see legacyRulesToGroups).
+  const converted = legacyRulesToGroups(rules as LifecycleRule[]);
+  if (converted.length === 0) return false;
+  return evaluateAllRulesInMemory(converted, item, arrMeta, seerrMeta);
 }
 
 export { hasArrRules, hasSeerrRules, hasStreamRules, hasExternalIdFieldRules, hasStreamQueryInMemoryRules };
@@ -2430,7 +2496,7 @@ export async function evaluateLifecycleRules(
   const needsStreams = hasStreamRules(rules);
   const needsWatchHistory = hasWatchedByUserRules(rules);
   const hasCrossSystem = hasCrossSystemFieldRules(rules);
-  const needsInMemoryEval = hasWildcardRules(rules) || hasStreamCountRules(rules) || hasStreamQueryInMemoryRules(rules) || hasCrossSystem;
+  const needsInMemoryEval = hasWildcardRules(rules) || hasStreamCountRules(rules) || hasStreamQueryInMemoryRules(rules) || hasCrossSystem || hasResolutionRules(rules);
   const needsFullReeval = needsInMemoryEval || !!hasExternal;
 
   let andConditions: Prisma.MediaItemWhereInput[];
@@ -2444,14 +2510,18 @@ export async function evaluateLifecycleRules(
   // correctly through AND/OR: EXTERNAL_RULE OR X = EXTERNAL_RULE (broadens),
   // EXTERNAL_RULE AND X = X (safe). This keeps DB-expressible conditions for
   // performance while guaranteeing the Phase 1 result is a superset of Phase 2.
-  if (needsFullReeval && isRuleGroups(rules)) {
-    const combined = buildGroupConditionsPreFilter(rules as unknown as LifecycleRuleGroup[]);
-    andConditions = Object.keys(combined).length > 0 ? [combined] : [];
-  } else if (isRuleGroups(rules)) {
-    const combined = buildGroupConditions(rules, ruleToWhereClause);
+  // Legacy flat rule sets are converted to the equivalent group tree so they
+  // share the pre-filter and disabled-rule handling (see legacyRulesToGroups).
+  const groupRules: LifecycleRuleGroup[] = isRuleGroups(rules)
+    ? (rules as LifecycleRuleGroup[])
+    : legacyRulesToGroups(rules as LifecycleRule[]);
+
+  if (needsFullReeval) {
+    const combined = buildGroupConditionsPreFilter(groupRules, ruleToWhereClause);
     andConditions = Object.keys(combined).length > 0 ? [combined] : [];
   } else {
-    andConditions = legacyRulesToConditions(rules);
+    const combined = buildGroupConditions(groupRules, ruleToWhereClause);
+    andConditions = Object.keys(combined).length > 0 ? [combined] : [];
   }
 
   const where: Prisma.MediaItemWhereInput = {

@@ -162,11 +162,20 @@ export function DataTable<T>({
                 <th
                   key={col.id}
                   className={cn(
-                    "px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap relative",
+                    "relative px-3 py-2.5 text-left font-mono text-[11px] font-medium tracking-[0.08em] whitespace-nowrap text-faint uppercase",
                     col.sortable !== false && col.sortValue && "cursor-pointer select-none hover:text-foreground transition-colors",
                     col.headerClassName,
                   )}
                   style={{ width: columnWidths[col.id] }}
+                  aria-sort={
+                    col.sortable !== false && col.sortValue
+                      ? sortId === col.id
+                        ? sortOrder === "asc"
+                          ? "ascending"
+                          : "descending"
+                        : "none"
+                      : undefined
+                  }
                   onClick={() => {
                     if (col.sortable !== false && col.sortValue) handleSort(col.id);
                   }}

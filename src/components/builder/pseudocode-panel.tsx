@@ -11,6 +11,10 @@ interface PseudocodePanelProps<R extends BaseRule, G extends BaseGroup<R>> {
   highlightedRuleIds?: Set<string>;
   /** Map of ruleId → actual item value (shown as hover tooltip on rule lines) */
   actualValues?: Map<string, string>;
+  /** Rule currently hovered in the builder — its line gets a spotlight */
+  hoveredRuleId?: string | null;
+  /** Group whose drag handle is hovered in the builder — its whole range gets a spotlight */
+  hoveredGroupId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -20,17 +24,21 @@ interface PseudocodePanelProps<R extends BaseRule, G extends BaseGroup<R>> {
 function PseudocodeLineItem({
   line,
   green,
+  hovered,
   actualValue,
 }: {
   line: PseudocodeLine;
   green?: boolean;
+  hovered?: boolean;
   actualValue?: string;
 }) {
   const paddingLeft = `${line.depth * 1.25}rem`;
 
   const highlightClass = green
-    ? "bg-green-500/20 border-l-2 border-green-500 rounded-sm px-2"
-    : "";
+    ? "bg-green/20 border-l-2 border-green rounded-sm px-2"
+    : hovered
+      ? "bg-primary/15 border-l-2 border-primary rounded-sm px-2"
+      : "";
 
   if (line.type === "connector") {
     return (
@@ -189,7 +197,10 @@ function computeGroupMatchStates<R extends BaseRule>(
       }
     }
 
-    const passes = combinedResult ?? true;
+    // Group-level NOT inverts the combined result (mirrors the engine's
+    // push-down normalization — see lib/conditions/negation.ts)
+    const combined = combinedResult ?? true;
+    const passes = group.negate ? !combined : combined;
 
     if (passes) {
       passing.add(group.id);
@@ -239,6 +250,8 @@ type Segment =
       segments: Segment[];
       color: "green" | "yellow" | "red" | "neutral" | "eval-pass" | "eval-fail" | "eval";
       key: string;
+      /** Present on group ranges — used for builder hover spotlighting */
+      groupId?: string;
     };
 
 function findGroupEndIndex(lines: PseudocodeLine[], startIdx: number): number {
@@ -310,6 +323,7 @@ function buildSegmentTree(
         segments: innerSegments,
         color,
         key: `range-${line.groupId}`,
+        groupId: line.groupId,
       });
 
       i = groupEndIdx + 1;
@@ -365,36 +379,43 @@ function buildSegmentTree(
 function renderSegments(
   segments: Segment[],
   actualValues?: Map<string, string>,
+  hoveredRuleId?: string | null,
+  hoveredGroupId?: string | null,
 ): React.ReactNode[] {
   return segments.map((seg) => {
     if (seg.kind === "range") {
       if (seg.color === "eval-pass" || seg.color === "eval-fail" || seg.color === "eval") {
         const evalClass =
           seg.color === "eval-pass"
-            ? "bg-gradient-to-r from-green-500/10 to-transparent border-2 border-green-500/30"
+            ? "bg-gradient-to-r from-green/10 to-transparent border-2 border-green/30"
             : seg.color === "eval-fail"
-              ? "bg-gradient-to-r from-red-500/10 to-transparent border-2 border-red-500/30"
+              ? "bg-gradient-to-r from-red/10 to-transparent border-2 border-red/30"
               : "border-2 border-muted-foreground/20";
         return (
           <div
             key={seg.key}
             className={`${evalClass} rounded-sm px-2 space-y-0.5`}
           >
-            {renderSegments(seg.segments, actualValues)}
+            {renderSegments(seg.segments, actualValues, hoveredRuleId, hoveredGroupId)}
           </div>
         );
       }
-      const bgClass =
-        seg.color === "neutral"
+      // Builder group-handle hover spotlights the whole range (only over
+      // the neutral palette — test-match colors take precedence)
+      const groupHovered =
+        seg.color === "neutral" && !!seg.groupId && seg.groupId === hoveredGroupId;
+      const bgClass = groupHovered
+        ? "bg-primary/10 border-l-2 border-primary"
+        : seg.color === "neutral"
           ? "bg-muted-foreground/5 border-l-2 border-muted-foreground/20"
           : seg.color === "green"
-            ? "bg-green-500/15 border-l-2 border-green-500"
+            ? "bg-green/15 border-l-2 border-green"
             : seg.color === "yellow"
               ? "bg-yellow-500/15 border-l-2 border-yellow-500"
-              : "bg-red-500/15 border-l-2 border-red-500";
+              : "bg-red/15 border-l-2 border-red";
       return (
         <div key={seg.key} className={`${bgClass} rounded-sm px-2 space-y-0.5`}>
-          {renderSegments(seg.segments, actualValues)}
+          {renderSegments(seg.segments, actualValues, hoveredRuleId, hoveredGroupId)}
         </div>
       );
     }
@@ -407,6 +428,11 @@ function renderSegments(
         key={seg.line.id}
         line={seg.line}
         green={seg.green}
+        hovered={
+          seg.line.type === "rule" &&
+          !!seg.line.ruleId &&
+          seg.line.ruleId === hoveredRuleId
+        }
         actualValue={ruleActualValue}
       />
     );
@@ -420,7 +446,7 @@ function renderSegments(
 export function PseudocodePanel<
   R extends BaseRule,
   G extends BaseGroup<R>,
->({ groups, config, highlightedRuleIds, actualValues }: PseudocodePanelProps<R, G>) {
+>({ groups, config, highlightedRuleIds, actualValues, hoveredRuleId, hoveredGroupId }: PseudocodePanelProps<R, G>) {
   const lines = useMemo(
     () => generatePseudocode(groups, config),
     [groups, config],
@@ -462,7 +488,7 @@ export function PseudocodePanel<
         Logic Preview
       </h3>
       <div className="font-mono text-sm leading-relaxed space-y-0.5">
-        {renderSegments(segments, actualValues)}
+        {renderSegments(segments, actualValues, hoveredRuleId, hoveredGroupId)}
       </div>
     </div>
   );
