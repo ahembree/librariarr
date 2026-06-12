@@ -77,6 +77,21 @@ export async function POST(
     );
   }
 
+  // Stale-match guard: a months-old FAILED action can be retried after the
+  // item stopped matching the rule. Only retry when the item is STILL a
+  // current match for this rule set (the same invariant the scheduled
+  // executor enforces).
+  const stillMatched = await prisma.ruleMatch.findFirst({
+    where: { ruleSetId: action.ruleSetId, mediaItemId: action.mediaItemId },
+    select: { id: true },
+  });
+  if (!stillMatched) {
+    return NextResponse.json(
+      { error: "This item is no longer a match for the rule set — re-run detection before retrying" },
+      { status: 400 }
+    );
+  }
+
   // Exceptions added AFTER an action failed must still protect the item —
   // exception creation deletes PENDING actions, but FAILED rows survive and
   // could otherwise be force-retried against an excluded item.

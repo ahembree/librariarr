@@ -166,7 +166,11 @@ export async function PUT(
       await tx.lifecycleAction.deleteMany({
         where: { ruleSetId: id, status: "PENDING" },
       });
-    } else if (actionEnabled === false) {
+    } else if (actionEnabled === false || enabled === false) {
+      // Disabling the rule set (or just its action) must cancel armed
+      // PENDING actions — the execution-side enabled filter is the backstop,
+      // but cancelling here keeps the Pending page honest and prevents the
+      // actions lingering until the next detection run.
       await tx.lifecycleAction.deleteMany({
         where: { ruleSetId: id, status: "PENDING" },
       });

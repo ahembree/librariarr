@@ -2,7 +2,8 @@ import { prisma } from "@/lib/db";
 import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { logger } from "@/lib/logger";
-import { executeAction, extractActionError } from "@/lib/lifecycle/actions";
+import { normalizeTitle, executeAction, extractActionError } from "@/lib/lifecycle/actions";
+import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
@@ -334,6 +335,10 @@ export async function executeLifecycleActions(userId?: string) {
       status: "PENDING",
       scheduledFor: { lte: new Date() },
       ruleSetId: { not: null },
+      // A disabled rule set must never fire actions — detection skips disabled
+      // sets so their matches are never cleaned up, leaving their PENDING
+      // actions armed. This relation filter is the execution-side backstop.
+      ruleSet: { is: { enabled: true } },
       ...(userId ? { userId } : {}),
     },
     include: {
@@ -422,6 +427,22 @@ export async function executeLifecycleActions(userId?: string) {
       continue;
     }
 
+    // Identity-swap guard: the action's title was snapshotted at creation;
+    // the joined mediaItem is the CURRENT row. If they no longer denote the
+    // same work (e.g. a Plex "Fix Match" / Jellyfin "Identify" rewrote this
+    // ratingKey's row to different content with different external ids before
+    // detection removed the now-stale match), the Arr resolution would target
+    // the NEW item — which never matched. Refuse rather than act on it.
+    if (
+      action.mediaItemTitle &&
+      mediaItem.title &&
+      normalizeTitle(action.mediaItemTitle) !== normalizeTitle(mediaItem.title)
+    ) {
+      await prisma.lifecycleAction.delete({ where: { id: action.id } });
+      logger.warn("Lifecycle", `Cancelled action ${action.id} — item identity changed since scheduling ("${action.mediaItemTitle}" → "${mediaItem.title}"); will re-evaluate on next detection`);
+      continue;
+    }
+
     // For grouped actions (series/music with episode-level tracking), filter out
     // any member IDs that were individually excepted since the action was scheduled
     let filteredMatchedIds = action.matchedMediaItemIds ?? [];
@@ -437,6 +458,17 @@ export async function executeLifecycleActions(userId?: string) {
         continue;
       }
       if (filteredMatchedIds.length < original.length) {
+        // Exception inviolability: a whole-record destructive action (e.g.
+        // DELETE_SONARR) ignores the member list and would destroy the
+        // excepted member along with the rest. We cannot partially exclude
+        // from a whole-record op, so refuse it entirely rather than delete a
+        // protected item. Member-scoped file deletes honor the filtered set
+        // below and are safe to proceed.
+        if (isDestructiveActionType(action.actionType) && !actionHonorsMemberIds(action.actionType)) {
+          await prisma.lifecycleAction.delete({ where: { id: action.id } });
+          logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${mediaItem.title}" — ${original.length - filteredMatchedIds.length} member(s) are excepted and a ${action.actionType} cannot exclude them`);
+          continue;
+        }
         logger.info("Lifecycle", `Filtered ${original.length - filteredMatchedIds.length} excepted episodes/tracks from action on "${mediaItem.title}"`);
       }
     }

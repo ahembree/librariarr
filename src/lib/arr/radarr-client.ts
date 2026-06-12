@@ -5,6 +5,7 @@ import { IntegrationError } from "@/lib/integration-error";
 export interface RadarrMovie {
   id: number;
   title: string;
+  year?: number;
   tmdbId: number;
   imdbId?: string;
   qualityProfileId: number;

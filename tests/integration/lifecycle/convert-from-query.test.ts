@@ -6,6 +6,7 @@ import {
   expectJson,
   createTestUser,
   createTestServer,
+  createTestRadarrInstance,
 } from "../../setup/test-helpers";
 import type { QueryDefinition } from "@/lib/query/types";
 import { convertQueryToRuleSetBody } from "@/lib/query/convert-to-rule";
@@ -159,11 +160,12 @@ describe("Convert query → lifecycle rule set", () => {
   it("transfers the matching Arr instance from the query", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
+    const radarr = await createTestRadarrInstance(user.id);
     setMockSession({ isLoggedIn: true, userId: user.id });
 
     const body = convertQueryToRuleSetBody(
       makeQuery({
-        arrServerIds: { radarr: "rdr-1", sonarr: "snr-2", lidarr: "ldr-3" },
+        arrServerIds: { radarr: radarr.id, sonarr: "snr-2", lidarr: "ldr-3" },
       }),
       { name: "Movies w/ Arr", targetLibraryType: "MOVIE", serverIds: [server.id] },
     );
@@ -176,13 +178,13 @@ describe("Convert query → lifecycle rule set", () => {
     const payload = await expectJson<{
       ruleSet: { id: string; arrInstanceId: string | null };
     }>(response, 201);
-    expect(payload.ruleSet.arrInstanceId).toBe("rdr-1");
+    expect(payload.ruleSet.arrInstanceId).toBe(radarr.id);
 
     const prisma = getTestPrisma();
     const persisted = await prisma.ruleSet.findUnique({
       where: { id: payload.ruleSet.id },
     });
-    expect(persisted?.arrInstanceId).toBe("rdr-1");
+    expect(persisted?.arrInstanceId).toBe(radarr.id);
   });
 
   it("transfers seriesScope based on includeEpisodes", async () => {

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { validateRequest, actionExecuteSchema } from "@/lib/validation";
+import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { sendDiscordNotification, buildFailureSummaryEmbed } from "@/lib/discord/client";
 
 export async function POST(request: NextRequest) {
@@ -133,18 +134,39 @@ export async function POST(request: NextRequest) {
     logger.info("Lifecycle", `Manual execute selected: ${itemIds.length} validated matches (${invalidIds.length} rejected) for rule set "${ruleSet.id}"`);
   }
 
-  // Filter out items that have a LifecycleException
+  // Filter out items that have a LifecycleException — both representative
+  // items AND episode/track MEMBERS (member ids never appear in itemIds, so
+  // they must be collected from episodeIdMap and checked too).
+  const memberIds = [...episodeIdMap.values()].flat();
+  const exceptionLookupIds = [...new Set([...itemIds, ...memberIds])];
   const exceptions = await prisma.lifecycleException.findMany({
     where: {
       userId: session.userId!,
-      mediaItemId: { in: itemIds },
+      mediaItemId: { in: exceptionLookupIds },
     },
     select: { mediaItemId: true },
   });
   if (exceptions.length > 0) {
     const excludedIds = new Set(exceptions.map((e) => e.mediaItemId));
+
+    // Drop excepted members from each item's member list; if a whole-record
+    // destructive action would still touch an excepted member it cannot
+    // exclude, drop the whole item rather than destroy a protected member.
+    const honorsMembers = actionHonorsMemberIds(ruleSet.actionType ?? "");
+    const destructive = isDestructiveActionType(ruleSet.actionType ?? "");
+    for (const [repId, members] of [...episodeIdMap.entries()]) {
+      const kept = members.filter((m) => !excludedIds.has(m));
+      if (kept.length === members.length) continue;
+      if (kept.length === 0 || (destructive && !honorsMembers)) {
+        episodeIdMap.delete(repId);
+        itemIds = itemIds.filter((id) => id !== repId);
+      } else {
+        episodeIdMap.set(repId, kept);
+      }
+    }
+
     itemIds = itemIds.filter((id) => !excludedIds.has(id));
-    logger.info("Lifecycle", `Skipped ${exceptions.length} excluded items during manual execution for rule set "${ruleSet.id}"`);
+    logger.info("Lifecycle", `Skipped excepted items/members during manual execution for rule set "${ruleSet.id}"`);
 
     if (itemIds.length === 0) {
       return NextResponse.json(

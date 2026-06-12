@@ -62,10 +62,15 @@ vi.mock("@/lib/logger", () => ({
 vi.mock("@/lib/lifecycle/detect-matches", () => ({
   detectAndSaveMatches: mockDetectAndSaveMatches,
 }));
-vi.mock("@/lib/lifecycle/actions", () => ({
-  executeAction: mockExecuteAction,
-  extractActionError: mockExtractActionError,
-}));
+vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/lifecycle/actions")>();
+  return {
+    // Keep the real normalizeTitle so the identity-swap guard behaves as in prod
+    normalizeTitle: actual.normalizeTitle,
+    executeAction: mockExecuteAction,
+    extractActionError: mockExtractActionError,
+  };
+});
 vi.mock("@/lib/lifecycle/collections", () => ({
   syncPlexCollection: mockSyncPlexCollection,
   removePlexCollection: mockRemovePlexCollection,
@@ -652,6 +657,105 @@ describe("executeLifecycleActions", () => {
       where: { id: "a1" },
     });
     expect(mockExecuteAction).not.toHaveBeenCalled();
+  });
+
+  it("cancels an action whose item identity changed since scheduling (Fix Match)", async () => {
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      {
+        id: "a1",
+        userId: "u1",
+        mediaItemId: "item1",
+        mediaItemTitle: "Alpha",            // snapshot at creation
+        mediaItem: { id: "item1", title: "Beta Reborn", parentTitle: null, library: { key: "1", mediaServerId: "s1" }, externalIds: [] }, // current row, re-matched in Plex
+        ruleSetId: "rs1",
+        actionType: "DELETE_RADARR",
+        matchedMediaItemIds: [],
+        ruleSet: { name: "Test", discordNotifyOnAction: false, userId: "u1" },
+      },
+    ]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "item1" }]);
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+    mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+
+    await executeLifecycleActions("u1");
+
+    expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(mockExecuteAction).not.toHaveBeenCalled();
+  });
+
+  it("does NOT cancel when only cosmetic title differences exist (article/year)", async () => {
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      {
+        id: "a1",
+        userId: "u1",
+        mediaItemId: "item1",
+        mediaItemTitle: "The Matrix",
+        mediaItem: { id: "item1", title: "Matrix, The", parentTitle: null, year: 1999, library: { key: "1", mediaServerId: "s1" }, externalIds: [] },
+        ruleSetId: "rs1",
+        actionType: "DELETE_RADARR",
+        matchedMediaItemIds: [],
+        ruleSet: { name: "Test", discordNotifyOnAction: false, userId: "u1" },
+      },
+    ]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "item1" }]);
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+    mockPrisma.lifecycleAction.update.mockResolvedValue({});
+    mockPrisma.$transaction.mockResolvedValue([{}, {}]);
+
+    await executeLifecycleActions("u1");
+
+    expect(mockExecuteAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a whole-record DELETE_SONARR when a member is excepted (exception inviolability)", async () => {
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      {
+        id: "a1",
+        userId: "u1",
+        mediaItemId: "show1",
+        mediaItemTitle: "Show",
+        mediaItem: { id: "show1", title: "Show", parentTitle: null, library: { key: "1", mediaServerId: "s1" }, externalIds: [] },
+        ruleSetId: "rs1",
+        actionType: "DELETE_SONARR",          // whole-record; ignores member list
+        matchedMediaItemIds: ["e1", "e2", "e3"],
+        ruleSet: { name: "Test", discordNotifyOnAction: false, userId: "u1" },
+      },
+    ]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "show1" }]);
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([{ userId: "u1", mediaItemId: "e2" }]); // one episode protected
+    mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+
+    await executeLifecycleActions("u1");
+
+    expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(mockExecuteAction).not.toHaveBeenCalled();  // whole series NOT deleted
+  });
+
+  it("proceeds with member-scoped DELETE_FILES_SONARR, passing only non-excepted members", async () => {
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      {
+        id: "a1",
+        userId: "u1",
+        mediaItemId: "show1",
+        mediaItemTitle: "Show",
+        mediaItem: { id: "show1", title: "Show", parentTitle: null, library: { key: "1", mediaServerId: "s1" }, externalIds: [] },
+        ruleSetId: "rs1",
+        actionType: "DELETE_FILES_SONARR",     // member-scoped
+        matchedMediaItemIds: ["e1", "e2", "e3"],
+        ruleSet: { name: "Test", discordNotifyOnAction: false, userId: "u1" },
+      },
+    ]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "show1" }]);
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([{ userId: "u1", mediaItemId: "e2" }]);
+    mockPrisma.mediaItem.findMany.mockResolvedValue([]);
+    mockPrisma.lifecycleAction.update.mockResolvedValue({});
+    mockPrisma.$transaction.mockResolvedValue([{}, {}]);
+
+    await executeLifecycleActions("u1");
+
+    expect(mockExecuteAction).toHaveBeenCalledTimes(1);
+    const passed = mockExecuteAction.mock.calls[0][0];
+    expect(passed.matchedMediaItemIds).toEqual(["e1", "e3"]); // e2 filtered, not deleted
   });
 
   it("deletes stale actions for items no longer in match set", async () => {

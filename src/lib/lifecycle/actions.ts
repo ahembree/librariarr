@@ -90,7 +90,24 @@ export function validateArrItem(
   arrTitle: string,
   arrType: string,
   externalId: string,
+  expectedYear?: number | null,
+  arrYear?: number | null,
 ): void {
+  // Year guard FIRST: title normalization strips the very disambiguators
+  // that separate remakes ("Dune (1984)" vs "(2021)" both normalize to
+  // "dune"), so a wrong external id pointing at the other remake would pass
+  // the title check. When both years are known and differ by more than one,
+  // the records are different works — refuse regardless of title.
+  if (
+    expectedYear != null && arrYear != null &&
+    expectedYear > 0 && arrYear > 0 &&
+    Math.abs(expectedYear - arrYear) > 1
+  ) {
+    throw new Error(
+      `${arrType} year mismatch: expected "${expectedTitle}" (${expectedYear}) but Arr returned "${arrTitle}" (${arrYear}) for external ID ${externalId}. Aborting to prevent acting on the wrong item.`
+    );
+  }
+
   const normalizedExpected = normalizeTitle(expectedTitle);
   const normalizedArr = normalizeTitle(arrTitle);
 
@@ -135,7 +152,7 @@ async function resolveRadarrMovie(action: ActionRecord) {
   if (!movie) throw new Error("Movie not found in Radarr");
 
   if (!action.skipTitleValidation) {
-    validateArrItem(action.mediaItem.parentTitle ?? action.mediaItem.title, movie.title, "Radarr movie", tmdbId.externalId);
+    validateArrItem(action.mediaItem.parentTitle ?? action.mediaItem.title, movie.title, "Radarr movie", tmdbId.externalId, action.mediaItem.year, movie.year);
   }
 
   return { client, movie };
@@ -157,7 +174,7 @@ async function resolveSonarrSeries(action: ActionRecord) {
   if (!series) throw new Error("Series not found in Sonarr");
 
   if (!action.skipTitleValidation) {
-    validateArrItem(action.mediaItem.parentTitle ?? action.mediaItem.title, series.title, "Sonarr series", tvdbId.externalId);
+    validateArrItem(action.mediaItem.parentTitle ?? action.mediaItem.title, series.title, "Sonarr series", tvdbId.externalId, action.mediaItem.year, series.year);
   }
 
   return { client, series };

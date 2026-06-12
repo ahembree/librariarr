@@ -708,6 +708,7 @@ describe("Lifecycle Actions", () => {
       const item = await createTestMediaItem(library.id, { title: "Excepted Movie", type: "MOVIE" });
       const ruleSet = await createTestRuleSet(user.id, { name: "Retry Rule" });
       const action = await createTestAction(user.id, item.id, ruleSet.id, { status: "FAILED" });
+      await createTestRuleMatch(ruleSet.id, item.id);
 
       const prisma = getTestPrisma();
       await prisma.lifecycleException.create({
@@ -734,6 +735,7 @@ describe("Lifecycle Actions", () => {
       const item = await createTestMediaItem(library.id, { title: "Retry Movie", type: "MOVIE" });
       const ruleSet = await createTestRuleSet(user.id, { name: "Retry Rule 2" });
       const action = await createTestAction(user.id, item.id, ruleSet.id, { status: "FAILED" });
+      await createTestRuleMatch(ruleSet.id, item.id);
 
       setMockSession({ isLoggedIn: true, userId: user.id });
       const response = await callRouteWithParams(actionRetry, { id: action.id }, {
