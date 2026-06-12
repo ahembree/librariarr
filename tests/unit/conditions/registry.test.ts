@@ -73,6 +73,7 @@ describe("CONDITION_FIELDS registry", () => {
       arrRuntime: ["SERIES", "MUSIC"],
       arrQualityName: ["SERIES", "MUSIC"],
       arrQualityCutoffMet: ["SERIES", "MUSIC"],
+      arrCustomFormatScore: ["SERIES", "MUSIC"],
       arrDownloadDate: ["SERIES", "MUSIC"],
       // Series only
       arrFirstAired: ["MOVIE", "MUSIC"],

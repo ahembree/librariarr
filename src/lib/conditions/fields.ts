@@ -73,6 +73,7 @@ export const CONDITION_FIELDS: ConditionField[] = [
   { value: "arrQualityProfile", label: "Quality Profile", type: "text", section: "arrStatus", enumerable: true, requiresArr: true },
   { value: "arrQualityName", label: "Quality Name", type: "text", section: "arrStatus", enumerable: true, requiresArr: true, invalidForLibraryType: ["SERIES", "MUSIC"] },
   { value: "arrQualityCutoffMet", label: "Quality Cutoff Met", type: "boolean", section: "arrStatus", knownValues: ["true", "false"], requiresArr: true, invalidForLibraryType: ["SERIES", "MUSIC"] },
+  { value: "arrCustomFormatScore", label: "Custom Format Score", type: "number", section: "arrStatus", requiresArr: true, invalidForLibraryType: ["SERIES", "MUSIC"] },
   { value: "arrStatus", label: "Status", type: "text", section: "arrStatus", enumerable: true, requiresArr: true },
   { value: "arrEnded", label: "Ended", type: "boolean", section: "arrStatus", knownValues: ["true", "false"], requiresArr: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
   { value: "arrSeriesType", label: "Series Type", type: "text", section: "arrStatus", enumerable: true, requiresArr: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },

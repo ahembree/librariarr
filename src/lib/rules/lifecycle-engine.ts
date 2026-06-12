@@ -50,6 +50,7 @@ export interface ArrMetadata {
   runtime: number | null;
   qualityName: string | null;
   qualityCutoffMet: boolean | null;
+  customFormatScore: number | null;
   downloadDate: string | null;
   // Sonarr-specific
   firstAired: string | null;
@@ -664,12 +665,14 @@ function evaluateArrRule(rule: LifecycleRule, meta: ArrMetadata | undefined): bo
     case "arrRuntime":
     case "arrSeasonCount":
     case "arrEpisodeCount":
+    case "arrCustomFormatScore":
     case "arrMonitoredSeasonCount":
     case "arrMonitoredEpisodeCount": {
       const metaVal =
         field === "arrRuntime" ? meta.runtime :
         field === "arrSeasonCount" ? meta.seasonCount :
         field === "arrEpisodeCount" ? meta.episodeCount :
+        field === "arrCustomFormatScore" ? meta.customFormatScore :
         field === "arrMonitoredSeasonCount" ? meta.monitoredSeasonCount :
         meta.monitoredEpisodeCount;
       if (operator === "isNull") { result = metaVal === null; break; }
@@ -1550,6 +1553,7 @@ function getActualValueForField(
       case "arrEpisodeCount": return arrMeta.episodeCount !== null ? String(arrMeta.episodeCount) : "N/A";
       case "arrMonitoredSeasonCount": return arrMeta.monitoredSeasonCount !== null ? String(arrMeta.monitoredSeasonCount) : "N/A";
       case "arrMonitoredEpisodeCount": return arrMeta.monitoredEpisodeCount !== null ? String(arrMeta.monitoredEpisodeCount) : "N/A";
+      case "arrCustomFormatScore": return arrMeta.customFormatScore !== null ? String(arrMeta.customFormatScore) : "N/A";
       case "arrQualityCutoffMet": return arrMeta.qualityCutoffMet !== null ? String(arrMeta.qualityCutoffMet) : "N/A";
       case "arrEnded": return arrMeta.ended !== null ? String(arrMeta.ended) : "N/A";
       case "arrHasUnaired": return arrMeta.hasUnaired !== null ? String(arrMeta.hasUnaired) : "N/A";

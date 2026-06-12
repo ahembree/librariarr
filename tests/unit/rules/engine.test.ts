@@ -622,6 +622,7 @@ describe("evaluateAllRulesInMemory — invalid operators default to false", () =
     runtime: null,
     qualityName: null,
     qualityCutoffMet: null,
+    customFormatScore: null,
     downloadDate: null,
     firstAired: null,
     seasonCount: null,

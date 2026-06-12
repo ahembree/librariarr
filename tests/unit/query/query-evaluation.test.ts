@@ -17,7 +17,7 @@ function makeArrMeta(overrides?: Partial<ArrMetadata>): ArrMetadata {
     rating: null, tmdbRating: null, rtCriticRating: null,
     dateAdded: null, path: null, sizeOnDisk: null, originalLanguage: null,
     releaseDate: null, inCinemasDate: null, runtime: null,
-    qualityName: null, qualityCutoffMet: null, downloadDate: null,
+    qualityName: null, qualityCutoffMet: null, customFormatScore: null, downloadDate: null,
     firstAired: null, seasonCount: null, episodeCount: null,
     status: null, ended: null, seriesType: null, hasUnaired: null,
     monitoredSeasonCount: null, monitoredEpisodeCount: null,
