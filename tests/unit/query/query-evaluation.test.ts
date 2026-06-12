@@ -377,3 +377,26 @@ describe("evaluateAllQueryRulesInMemory — audit fail-open regressions", () => 
     expect(evaluateAllQueryRulesInMemory(grp({ field: "videoProfile", operator: "notMatchesWildcard", value: "main 10*" }), { id: "2", videoProfile: "High" }, undefined, undefined)).toBe(true);
   });
 });
+
+describe("evaluateAllQueryRulesInMemory — series-aggregate comparisons (F3)", () => {
+  const grp = (rule: Partial<QueryRule> & Pick<QueryRule, "field" | "operator" | "value">): QueryGroup[] => [
+    { id: "g", condition: "AND", rules: [makeRule(rule)], groups: [] },
+  ];
+
+  it("watchedEpisodePercentage greaterThan now compares numerically (was always false)", () => {
+    const mostlyWatched = { id: "1", watchedEpisodePercentage: 92 };
+    const barelyWatched = { id: "2", watchedEpisodePercentage: 10 };
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "watchedEpisodePercentage", operator: "greaterThan", value: "80" }), mostlyWatched, undefined, undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "watchedEpisodePercentage", operator: "greaterThan", value: "80" }), barelyWatched, undefined, undefined)).toBe(false);
+  });
+
+  it("availableEpisodeCount between compares numerically", () => {
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "availableEpisodeCount", operator: "between", value: "5,20" }), { id: "1", availableEpisodeCount: 12 }, undefined, undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "availableEpisodeCount", operator: "between", value: "5,20" }), { id: "2", availableEpisodeCount: 30 }, undefined, undefined)).toBe(false);
+  });
+
+  it("latestEpisodeViewDate before compares as a date", () => {
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "latestEpisodeViewDate", operator: "before", value: "2024-01-01" }), { id: "1", latestEpisodeViewDate: "2023-06-01T00:00:00Z" }, undefined, undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "latestEpisodeViewDate", operator: "before", value: "2024-01-01" }), { id: "2", latestEpisodeViewDate: "2025-06-01T00:00:00Z" }, undefined, undefined)).toBe(false);
+  });
+});

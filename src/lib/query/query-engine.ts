@@ -1225,7 +1225,11 @@ function evaluateQueryRuleInMemory(
   }
 
   // Date fields
-  const dateFields = new Set(["lastPlayedAt", "addedAt", "originallyAvailableAt"]);
+  const dateFields = new Set(["lastPlayedAt", "addedAt", "originallyAvailableAt",
+    // Series-aggregate date fields (attached by serializeSeriesAggregateForEval).
+    // Without these, aggregate date comparisons fell through to the text
+    // default and every comparison operator returned false.
+    "latestEpisodeViewDate", "lastEpisodeAddedAt", "lastEpisodeAiredAt"]);
   if (dateFields.has(field)) {
     const raw = item[field];
     const itemDate = raw ? new Date(String(raw)) : null;
@@ -1275,6 +1279,8 @@ function evaluateQueryRuleInMemory(
     "playCount", "videoBitrate", "audioChannels", "year",
     "videoBitDepth", "audioSamplingRate", "audioBitrate",
     "rating", "audienceRating", "ratingCount",
+    // Series-aggregate numeric fields (attached by serializeSeriesAggregateForEval).
+    "availableEpisodeCount", "watchedEpisodeCount", "watchedEpisodePercentage",
   ]);
   if (numericFields.has(field)) {
     const itemVal = item[field] != null ? Number(item[field]) : null;
