@@ -3,6 +3,9 @@ import starlight from "@astrojs/starlight";
 
 export default defineConfig({
   site: "https://librariarr.dev",
+  // Astro 6 stopped applying GFM to MDX unless set explicitly — without
+  // this, every table in the docs renders as raw pipe text.
+  markdown: { gfm: true },
   integrations: [
     starlight({
       title: "Librariarr",
@@ -20,6 +23,14 @@ export default defineConfig({
         },
       ],
       head: [
+        // The app is dark-only; pin the docs to dark to match. Runs before
+        // paint so there's no light-mode flash, and overrides any previously
+        // saved theme choice. The theme select is hidden in custom.css.
+        {
+          tag: "script",
+          content:
+            'localStorage.setItem("starlight-theme","dark");document.documentElement.dataset.theme="dark";',
+        },
         {
           tag: "meta",
           attrs: {

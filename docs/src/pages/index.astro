@@ -64,15 +64,19 @@
       }
 
       :root {
+        /* Mirrors the app's dark theme tokens (src/app/globals.css):
+           --bg = --background, --bg-card = --card, accent family = --brand */
         --bg: oklch(0.16 0.006 270);
         --bg-card: oklch(0.21 0.008 270);
         --bg-card-hover: oklch(0.25 0.01 270);
         --border: oklch(1 0.01 270 / 12%);
         --text: oklch(0.95 0.008 80);
         --text-muted: oklch(0.65 0.015 260);
-        --accent: oklch(0.6 0.15 250);
-        --accent-hover: oklch(0.55 0.18 250);
-        --accent-subtle: oklch(0.22 0.04 250);
+        --text-faint: oklch(0.52 0.012 262);
+        --accent: oklch(0.62 0.2 264);
+        --accent-bright: oklch(0.7 0.2 264);
+        --accent-hover: oklch(0.55 0.2 264);
+        --accent-subtle: oklch(0.62 0.2 264 / 12%);
         --radius: 10px;
         --radius-xl: 14px;
         --max-width: 1100px;
@@ -161,9 +165,9 @@
         position: absolute;
         inset: 0;
         background:
-          radial-gradient(ellipse 80% 50% at 50% -10%, oklch(0.35 0.15 250 / 40%) 0%, transparent 60%),
-          radial-gradient(ellipse 60% 40% at 30% 10%, oklch(0.30 0.10 280 / 25%) 0%, transparent 50%),
-          radial-gradient(ellipse 60% 40% at 70% 10%, oklch(0.28 0.12 230 / 20%) 0%, transparent 50%);
+          radial-gradient(ellipse 80% 50% at 50% -10%, oklch(0.35 0.15 264 / 40%) 0%, transparent 60%),
+          radial-gradient(ellipse 60% 40% at 30% 10%, oklch(0.30 0.10 292 / 25%) 0%, transparent 50%),
+          radial-gradient(ellipse 60% 40% at 70% 10%, oklch(0.28 0.12 240 / 20%) 0%, transparent 50%);
         pointer-events: none;
       }
 
@@ -177,16 +181,17 @@
 
       .hero-badge {
         display: inline-block;
-        padding: 0.35rem 1rem;
+        padding: 0.4rem 1rem;
         border-radius: 999px;
         background: var(--accent-subtle);
-        color: var(--accent);
-        font-family: var(--font-sans);
-        font-size: 0.8rem;
-        font-weight: 600;
-        letter-spacing: 0.03em;
+        color: var(--accent-bright);
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.16em;
         margin-bottom: 1.5rem;
-        border: 1px solid oklch(0.35 0.08 250);
+        border: 1px solid oklch(0.62 0.2 264 / 30%);
       }
 
       .hero h1 {
@@ -199,7 +204,7 @@
       }
 
       .hero h1 .accent {
-        background: linear-gradient(135deg, oklch(0.65 0.20 250), oklch(0.55 0.22 280));
+        background: linear-gradient(135deg, oklch(0.7 0.2 264), oklch(0.6 0.22 292));
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
@@ -257,6 +262,157 @@
       .btn-secondary:hover {
         background: var(--bg-card-hover);
         border-color: oklch(1 0 0 / 20%);
+      }
+
+      /* Framed product shot under the hero */
+      .hero-shot {
+        position: relative;
+        max-width: 1060px;
+        margin: 3.5rem auto 0;
+        text-align: left;
+      }
+
+      .hero-shot::before {
+        content: "";
+        position: absolute;
+        inset: -8% -12%;
+        background: radial-gradient(ellipse 60% 50% at 50% 30%, oklch(0.62 0.2 264 / 20%), transparent 70%);
+        filter: blur(24px);
+        pointer-events: none;
+      }
+
+      .shot-frame {
+        position: relative;
+        border: 1px solid oklch(1 0.01 270 / 14%);
+        border-radius: var(--radius-xl);
+        overflow: hidden;
+        background: var(--bg-card);
+        box-shadow:
+          0 1px 0 oklch(1 0 0 / 6%) inset,
+          0 40px 80px -32px oklch(0 0 0 / 70%);
+      }
+
+      .shot-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.6rem 0.9rem;
+        border-bottom: 1px solid oklch(1 0.01 270 / 8%);
+        background: oklch(0.18 0.008 270);
+      }
+
+      .shot-bar span {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: oklch(1 0.01 270 / 14%);
+      }
+
+      .shot-url {
+        margin: 0 auto;
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        color: var(--text-faint);
+        background: var(--bg);
+        border: 1px solid oklch(1 0.01 270 / 8%);
+        padding: 0.2rem 1rem;
+        border-radius: 6px;
+      }
+
+      .shot-frame img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      /* Mono eyebrow labels — mirrors the app's section headers */
+      .eyebrow {
+        display: block;
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.16em;
+        color: var(--accent-bright);
+        margin-bottom: 0.75rem;
+      }
+
+      /* Product tour — alternating screenshot + copy rows */
+      .tour {
+        max-width: var(--max-width);
+        margin: 0 auto;
+        padding: 4rem 1.5rem 5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 4.5rem;
+      }
+
+      .tour-row {
+        display: grid;
+        grid-template-columns: 1.25fr 1fr;
+        gap: 3rem;
+        align-items: center;
+      }
+
+      .tour-row.flip {
+        grid-template-columns: 1fr 1.25fr;
+      }
+
+      .tour-row.flip .tour-media {
+        order: 2;
+      }
+
+      .tour-media {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+        background: var(--bg-card);
+        box-shadow: 0 24px 60px -28px oklch(0 0 0 / 65%);
+      }
+
+      .tour-media img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      .tour-copy h3 {
+        font-family: var(--font-display);
+        font-size: 1.4rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        margin-bottom: 0.75rem;
+      }
+
+      .tour-copy p {
+        color: var(--text-muted);
+        font-size: 0.95rem;
+        line-height: 1.7;
+        margin-bottom: 1rem;
+      }
+
+      .tour-link {
+        font-size: 0.875rem;
+        font-weight: 600;
+        color: var(--accent-bright);
+        text-decoration: none;
+      }
+
+      .tour-link:hover {
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+
+      @media (max-width: 860px) {
+        .tour-row,
+        .tour-row.flip {
+          grid-template-columns: 1fr;
+          gap: 1.25rem;
+        }
+
+        .tour-row.flip .tour-media {
+          order: 0;
+        }
       }
 
       /* Features */
@@ -494,8 +650,9 @@
       </h1>
       <p>
         A self-hosted webapp for Plex, Jellyfin, and Emby. Browse and filter
-        your libraries, automate media lifecycle with rules, manage streams, and
-        integrate with the *arr stack.
+        your libraries, automate cleanup with lifecycle rules, watch streams in
+        real time, and build your own insights dashboard — all integrated with
+        the *arr stack.
       </p>
       <div class="hero-actions">
         <a href="/docs/getting-started/installation/" class="btn btn-primary">
@@ -517,11 +674,123 @@
           GitHub
         </a>
       </div>
+
+      <div class="hero-shot">
+        <div class="shot-frame">
+          <div class="shot-bar" aria-hidden="true">
+            <span></span><span></span><span></span>
+            <div class="shot-url">librariarr.local</div>
+          </div>
+          <img
+            src="/screenshots/dashboard.jpg"
+            alt="Librariarr dashboard with live status tiles, library overview cards, and the lifecycle pipeline"
+            width="1440"
+            height="900"
+            loading="eager"
+            fetchpriority="high"
+          />
+        </div>
+      </div>
     </section>
     </div>
 
+    <section class="tour">
+      <div class="tour-row">
+        <div class="tour-media">
+          <img
+            src="/screenshots/insights.jpg"
+            alt="Customizable Insights grid with a recently added shelf and a quality breakdown chart"
+            width="1440"
+            height="900"
+            loading="lazy"
+          />
+        </div>
+        <div class="tour-copy">
+          <span class="eyebrow">Dashboard &middot; Insights</span>
+          <h3>A dashboard you design</h3>
+          <p>
+            Status, library, and lifecycle zones up top — and below them, a
+            fully customizable Insights grid. Rearrange and resize the built-in
+            cards or chart your own across thirty-plus dimensions, from codecs
+            and dynamic range to genres and play counts.
+          </p>
+          <a href="/docs/features/dashboard/" class="tour-link">Explore the dashboard &rarr;</a>
+        </div>
+      </div>
+
+      <div class="tour-row flip">
+        <div class="tour-media">
+          <img
+            src="/screenshots/library.jpg"
+            alt="Movie library in card view with poster artwork, quality strips, and alphabet navigation"
+            width="1440"
+            height="900"
+            loading="lazy"
+          />
+        </div>
+        <div class="tour-copy">
+          <span class="eyebrow">Library</span>
+          <h3>Browse huge libraries without the wait</h3>
+          <p>
+            Poster grids and data-dense tables that scroll smoothly through
+            tens of thousands of items. Filter by resolution, codec, dynamic
+            range, file size, watch history, and more — or press
+            <strong>⌘K</strong> and jump straight to any title.
+          </p>
+          <a href="/docs/features/library/" class="tour-link">Library browsing &rarr;</a>
+        </div>
+      </div>
+
+      <div class="tour-row">
+        <div class="tour-media">
+          <img
+            src="/screenshots/lifecycle.jpg"
+            alt="Lifecycle rules page with saved rule sets and the rule set builder"
+            width="1440"
+            height="900"
+            loading="lazy"
+          />
+        </div>
+        <div class="tour-copy">
+          <span class="eyebrow">Lifecycle</span>
+          <h3>Automate cleanup with rule sets</h3>
+          <p>
+            Describe the media you don't want to keep — unwatched for a year,
+            low quality, watched-and-done — and Librariarr finds the matches,
+            schedules actions with a grace period, and acts through Sonarr,
+            Radarr, and Lidarr.
+          </p>
+          <a href="/docs/features/lifecycle-rules/" class="tour-link">Lifecycle rules &rarr;</a>
+        </div>
+      </div>
+
+      <div class="tour-row flip">
+        <div class="tour-media">
+          <img
+            src="/screenshots/streams.jpg"
+            alt="Stream manager with live session cards showing playback state, quality, and transcode details"
+            width="1440"
+            height="900"
+            loading="lazy"
+          />
+        </div>
+        <div class="tour-copy">
+          <span class="eyebrow">Tools &middot; Streams</span>
+          <h3>Watch your streams in real time</h3>
+          <p>
+            Live session cards show who's playing what, stream quality, and
+            transcode load as it happens. Terminate with a message, flip on
+            maintenance mode, enforce transcode policies, or schedule blackout
+            windows.
+          </p>
+          <a href="/docs/features/stream-manager/" class="tour-link">Stream manager &rarr;</a>
+        </div>
+      </div>
+    </section>
+
     <section class="features">
       <div class="features-heading">
+        <span class="eyebrow">Features</span>
         <h2>Everything you need to manage your media</h2>
         <p>
           A comprehensive toolkit for understanding and automating your media
@@ -658,6 +927,7 @@
     </section>
 
     <section class="integrations">
+      <span class="eyebrow">Integrations</span>
       <h2>Built to integrate</h2>
       <p>Connect your existing media stack.</p>
       <div class="integration-logos">
