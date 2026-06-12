@@ -11,6 +11,8 @@ interface PseudocodePanelProps<R extends BaseRule, G extends BaseGroup<R>> {
   highlightedRuleIds?: Set<string>;
   /** Map of ruleId → actual item value (shown as hover tooltip on rule lines) */
   actualValues?: Map<string, string>;
+  /** Rule currently hovered in the builder — its line gets a spotlight */
+  hoveredRuleId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -20,17 +22,21 @@ interface PseudocodePanelProps<R extends BaseRule, G extends BaseGroup<R>> {
 function PseudocodeLineItem({
   line,
   green,
+  hovered,
   actualValue,
 }: {
   line: PseudocodeLine;
   green?: boolean;
+  hovered?: boolean;
   actualValue?: string;
 }) {
   const paddingLeft = `${line.depth * 1.25}rem`;
 
   const highlightClass = green
     ? "bg-green/20 border-l-2 border-green rounded-sm px-2"
-    : "";
+    : hovered
+      ? "bg-primary/15 border-l-2 border-primary rounded-sm px-2"
+      : "";
 
   if (line.type === "connector") {
     return (
@@ -365,6 +371,7 @@ function buildSegmentTree(
 function renderSegments(
   segments: Segment[],
   actualValues?: Map<string, string>,
+  hoveredRuleId?: string | null,
 ): React.ReactNode[] {
   return segments.map((seg) => {
     if (seg.kind === "range") {
@@ -380,7 +387,7 @@ function renderSegments(
             key={seg.key}
             className={`${evalClass} rounded-sm px-2 space-y-0.5`}
           >
-            {renderSegments(seg.segments, actualValues)}
+            {renderSegments(seg.segments, actualValues, hoveredRuleId)}
           </div>
         );
       }
@@ -394,7 +401,7 @@ function renderSegments(
               : "bg-red/15 border-l-2 border-red";
       return (
         <div key={seg.key} className={`${bgClass} rounded-sm px-2 space-y-0.5`}>
-          {renderSegments(seg.segments, actualValues)}
+          {renderSegments(seg.segments, actualValues, hoveredRuleId)}
         </div>
       );
     }
@@ -407,6 +414,11 @@ function renderSegments(
         key={seg.line.id}
         line={seg.line}
         green={seg.green}
+        hovered={
+          seg.line.type === "rule" &&
+          !!seg.line.ruleId &&
+          seg.line.ruleId === hoveredRuleId
+        }
         actualValue={ruleActualValue}
       />
     );
@@ -420,7 +432,7 @@ function renderSegments(
 export function PseudocodePanel<
   R extends BaseRule,
   G extends BaseGroup<R>,
->({ groups, config, highlightedRuleIds, actualValues }: PseudocodePanelProps<R, G>) {
+>({ groups, config, highlightedRuleIds, actualValues, hoveredRuleId }: PseudocodePanelProps<R, G>) {
   const lines = useMemo(
     () => generatePseudocode(groups, config),
     [groups, config],
@@ -462,7 +474,7 @@ export function PseudocodePanel<
         Logic Preview
       </h3>
       <div className="font-mono text-sm leading-relaxed space-y-0.5">
-        {renderSegments(segments, actualValues)}
+        {renderSegments(segments, actualValues, hoveredRuleId)}
       </div>
     </div>
   );

@@ -15,12 +15,14 @@ A **rule set** is a named collection of rules and actions. Each rule set targets
 
 ### Rule Groups
 
-Rules are organized into **groups** that use either **AND** or **OR** logic:
+Rules are organized into **groups**. Each condition (and each nested sub-group) connects to the one above it with **AND** or **OR**:
 
-- **AND**: All rules in the group must match
-- **OR**: At least one rule in the group must match
+- **AND**: must match together with everything above it
+- **OR**: matches if either side does
 
-Groups can be **nested** to create complex conditions.
+When a group uses a single connector throughout, this reads exactly as you'd expect — all conditions must match (AND) or any condition may match (OR). When AND and OR are **mixed**, conditions combine **top to bottom**, each connector applying to the combined result of everything above it — so `A OR B AND C` means `(A OR B) AND C`. The builder shows a hint whenever this applies, and the **Logic Preview** panel beside the builder always spells out the exact grouping with parentheses (hovering a condition highlights its line in the preview).
+
+Groups can be **nested** to make grouping explicit — a sub-group is evaluated on its own first, then joins its parent as a single result.
 
 ### Rules
 
