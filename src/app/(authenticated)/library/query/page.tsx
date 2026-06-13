@@ -931,6 +931,7 @@ export default function QueryPage() {
       defaultWidth: 44,
       className: "text-center",
       headerClassName: "text-center",
+      suppressRowHover: true,
       header: (
         <Checkbox
           checked={allSelected ? true : someSelected ? "indeterminate" : false}
@@ -1626,7 +1627,7 @@ export default function QueryPage() {
                               )}
                             >
                               <div
-                                className="absolute left-2 top-2 z-10 rounded bg-background/80 p-0.5 backdrop-blur"
+                                className="absolute left-2 top-2 z-10 flex rounded bg-background/80 p-0.5 backdrop-blur"
                                 onClick={(e) => { e.stopPropagation(); toggleSelect(item.id); }}
                               >
                                 <Checkbox

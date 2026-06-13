@@ -157,6 +157,64 @@ describe("executeAction", () => {
     expect(mockSonarrClient.deleteSeries).not.toHaveBeenCalled();
   });
 
+  it("executes SEARCH_RADARR — triggers a movie search without other changes", async () => {
+    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
+    });
+    mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
+      id: 1, title: "Test Movie", tmdbId: 12345, tags: [], monitored: true, hasFile: true, movieFileId: 99,
+    });
+
+    await executeAction(makeAction({ actionType: "SEARCH_RADARR" }));
+
+    expect(mockRadarrClient.triggerMovieSearch).toHaveBeenCalledWith(1);
+    // Must not mutate the movie or delete files — search only.
+    expect(mockRadarrClient.updateMovie).not.toHaveBeenCalled();
+    expect(mockRadarrClient.deleteMovieFile).not.toHaveBeenCalled();
+  });
+
+  it("executes SEARCH_SONARR — triggers a series search", async () => {
+    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
+    });
+    mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({
+      id: 2, title: "Test Show", tvdbId: 67890, tags: [],
+    });
+
+    await executeAction(makeAction({
+      actionType: "SEARCH_SONARR",
+      mediaItem: {
+        id: "item1", title: "Test Show", parentTitle: null, year: 2024,
+        externalIds: [{ source: "TVDB", externalId: "67890" }],
+      },
+    }));
+
+    expect(mockSonarrClient.triggerSeriesSearch).toHaveBeenCalledWith(2);
+    expect(mockSonarrClient.updateSeries).not.toHaveBeenCalled();
+    expect(mockSonarrClient.deleteEpisodeFiles).not.toHaveBeenCalled();
+  });
+
+  it("executes SEARCH_LIDARR — triggers an artist search", async () => {
+    mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true,
+    });
+    mockLidarrClient.getArtistByMusicBrainzId.mockResolvedValue({
+      id: 5, artistName: "Test Artist", foreignArtistId: "mb-123", tags: [],
+    });
+
+    await executeAction(makeAction({
+      actionType: "SEARCH_LIDARR",
+      mediaItem: {
+        id: "item1", title: "Test Artist", parentTitle: null, year: null,
+        externalIds: [{ source: "MUSICBRAINZ", externalId: "mb-123" }],
+      },
+    }));
+
+    expect(mockLidarrClient.triggerArtistSearch).toHaveBeenCalledWith(5);
+    expect(mockLidarrClient.updateArtist).not.toHaveBeenCalled();
+    expect(mockLidarrClient.deleteTrackFiles).not.toHaveBeenCalled();
+  });
+
   it("throws on unknown action type", async () => {
     const action = makeAction({ actionType: "TOTALLY_INVALID" });
     await expect(executeAction(action)).rejects.toThrow("Unknown action type: TOTALLY_INVALID");

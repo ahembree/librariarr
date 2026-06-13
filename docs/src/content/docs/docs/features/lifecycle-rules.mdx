@@ -226,6 +226,7 @@ Actions determine what happens to matched media. Configure them in the **Actions
 | **Delete** | Remove from *arr and optionally delete files | Sonarr/Radarr/Lidarr |
 | **Unmonitor** | Stop monitoring for upgrades in *arr | Sonarr/Radarr/Lidarr |
 | **Change Quality Profile** | Switch the *arr item to a different quality profile | Sonarr/Radarr/Lidarr |
+| **Search for New Copy** | Trigger an *arr search for a new copy of the item | Sonarr/Radarr/Lidarr |
 | **Do Nothing** | Track matches without taking action | — |
 
 Tags can be added or removed as a supplementary operation alongside any action (including Do Nothing).
@@ -239,6 +240,10 @@ This action switches a movie, series, or artist to a different quality profile i
 - Combining this action with `arrQualityProfile` rule conditions lets you upgrade or downgrade items that don't match your desired profile (for example: "any movie whose current quality profile is `SD` → switch to `HD-1080p`").
 - The target profile is required when the action is enabled — Save is disabled until one is selected.
 - Toggle **Search for upgrade after profile change** to trigger an immediate *arr search after the profile is updated. The search only fires when the profile actually changed — skipped (no-op) items don't trigger a search.
+
+### Search for New Copy
+
+This action triggers an *arr search for a new copy of the matched movie, series, or artist without changing monitoring, quality profile, or deleting anything. It is a standalone alternative to the **Search after** / **Search for upgrade** toggles that accompany the delete-files and quality-profile actions — use it when all you want is to kick off a fresh search.
 
 ### Configuring Actions
 
