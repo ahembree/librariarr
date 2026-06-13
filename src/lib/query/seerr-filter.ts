@@ -2,18 +2,7 @@ import type { SeerrMetadata, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { QueryRule, QueryGroup, LifecycleRuleCondition } from "./types";
 import { SEERR_QUERY_FIELDS } from "./types";
 import { isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
-
-/** See arr-filter.ts — unconfigured contains/notContains/wildcard rules
- * must never match anything, even with negate set. */
-function isUnconfiguredContainsRule(operator: string, value: string | number): boolean {
-  if (operator === "contains" || operator === "notContains") {
-    return String(value).split("|").map((s) => s.trim()).filter(Boolean).length === 0;
-  }
-  if (operator === "matchesWildcard" || operator === "notMatchesWildcard") {
-    return String(value).trim() === "";
-  }
-  return false;
-}
+import { isUnconfiguredContainsRule } from "@/lib/conditions/where-builder";
 
 /** Evaluate a single Seerr rule against Seerr metadata */
 export function evaluateQuerySeerrRule(rule: QueryRule, meta: SeerrMetadata | undefined): boolean {

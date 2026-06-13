@@ -2,13 +2,8 @@ import type { ArrMetadata, ArrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { QueryRule, QueryGroup, LifecycleRuleCondition } from "./types";
 import { ARR_QUERY_FIELDS } from "./types";
 import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
-
-/** Convert a glob-style wildcard pattern to a RegExp */
-function wildcardToRegex(pattern: string): RegExp {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  const regex = escaped.replace(/\*/g, ".*").replace(/\?/g, ".");
-  return new RegExp(`^${regex}$`, "i");
-}
+import { wildcardToRegex } from "@/lib/conditions/wildcard";
+import { isUnconfiguredContainsRule } from "@/lib/conditions/where-builder";
 
 /** Map media item type to external ID source for Arr lookups */
 function getExternalIdSource(type: string): string {
@@ -17,23 +12,6 @@ function getExternalIdSource(type: string): string {
     case "MUSIC": return "MUSICBRAINZ";
     default: return "TVDB"; // SERIES
   }
-}
-
-/**
- * A contains/notContains/wildcard rule with no meaningful value is
- * unconfigured. Returning false (ignoring negate) is required to prevent
- * partially configured rules from sweeping the library — for example
- * `notMatchesWildcard ""` would otherwise be regex `^$` and match every
- * item with a non-empty field.
- */
-function isUnconfiguredContainsRule(operator: string, value: string | number): boolean {
-  if (operator === "contains" || operator === "notContains") {
-    return String(value).split("|").map((s) => s.trim()).filter(Boolean).length === 0;
-  }
-  if (operator === "matchesWildcard" || operator === "notMatchesWildcard") {
-    return String(value).trim() === "";
-  }
-  return false;
 }
 
 /** Evaluate a single Arr rule against Arr metadata */
