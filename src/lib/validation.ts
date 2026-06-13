@@ -235,7 +235,10 @@ export const blackoutCreateSchema = z.object({
   endTime: z.string().nullable().optional(),
   action: z.enum(["terminate_immediate", "warn_then_terminate", "block_new_only"]),
   message: z.string().optional(),
-  delay: z.number().min(0).optional(),
+  // Bounded + integer to match the maintenance/transcode delays: an unbounded
+  // value makes warn_then_terminate effectively never fire, and a non-integer
+  // would 500 on write to the Int column.
+  delay: z.number().int().min(0).max(3600).optional(),
   enabled: z.boolean().optional(),
   excludedUsers: z.array(z.string()).optional(),
 });

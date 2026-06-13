@@ -4,6 +4,7 @@ import { restoreBackup, type RestoreProgress } from "@/lib/backup/backup-service
 import { validateRequest, backupRestoreSchema } from "@/lib/validation";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { appCache } from "@/lib/cache/memory-cache";
+import { clearImageCache } from "@/lib/image-cache/image-cache";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -34,6 +35,11 @@ export async function POST(request: NextRequest) {
 
           // Clear in-memory cache so stale server/filter data isn't served
           appCache.clear();
+
+          // Clear the on-disk image cache too — the MediaItem rows it was keyed
+          // to were truncated and recreated, so the cached artwork (and its
+          // stats) no longer correspond to the restored dataset.
+          await clearImageCache().catch(() => {});
 
           // Destroy current session since user data may have changed
           session.isLoggedIn = false;

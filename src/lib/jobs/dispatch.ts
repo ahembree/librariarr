@@ -38,19 +38,27 @@ export async function dispatchScheduledJobs(): Promise<void> {
     // --- Scheduled media sync ---
     if (isScheduleDue(settings.syncSchedule, settings.lastScheduledSync, now, settings.scheduledJobTime)) {
       try {
+        let allEnqueued = true;
         for (const server of settings.user.mediaServers) {
           if (!server.enabled) continue;
-          await enqueueJob(
+          const ok = await enqueueJob(
             TASK_SYNC_SERVER,
             { serverId: server.id },
             { jobKey: `sync:${server.id}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
           );
+          if (!ok) allEnqueued = false;
         }
-        // Advance the watermark only after the jobs are durably queued.
-        await prisma.appSettings.update({
-          where: { id: settings.id },
-          data: { lastScheduledSync: now },
-        });
+        // Advance the watermark only when every server's job is durably queued.
+        // On partial failure we leave it unadvanced so the next tick retries;
+        // the per-server jobKey dedupes the already-queued ones.
+        if (allEnqueued) {
+          await prisma.appSettings.update({
+            where: { id: settings.id },
+            data: { lastScheduledSync: now },
+          });
+        } else {
+          logger.error("Jobs", "Scheduled sync enqueue failed for one or more servers — leaving watermark unadvanced");
+        }
       } catch (error) {
         logger.error("Jobs", "Failed to dispatch scheduled sync — leaving watermark unadvanced", { error: String(error) });
       }
@@ -64,15 +72,19 @@ export async function dispatchScheduledJobs(): Promise<void> {
       settings.scheduledJobTime,
     )) {
       try {
-        await enqueueJob(
+        const ok = await enqueueJob(
           TASK_LIFECYCLE_DETECTION,
           { userId: settings.userId },
           { jobKey: `detection:${settings.userId}`, queueName: MAIN_QUEUE, maxAttempts: 2 },
         );
-        await prisma.appSettings.update({
-          where: { id: settings.id },
-          data: { lastScheduledLifecycleDetection: now },
-        });
+        if (ok) {
+          await prisma.appSettings.update({
+            where: { id: settings.id },
+            data: { lastScheduledLifecycleDetection: now },
+          });
+        } else {
+          logger.error("Jobs", "Lifecycle detection enqueue failed — leaving watermark unadvanced");
+        }
       } catch (error) {
         logger.error("Jobs", "Failed to dispatch lifecycle detection — leaving watermark unadvanced", { error: String(error) });
       }
@@ -91,15 +103,19 @@ export async function dispatchScheduledJobs(): Promise<void> {
         // whole-job retry could re-attempt already-applied actions and skew the
         // deletion stats. Any actions left PENDING are re-evaluated on the next
         // scheduled execution, matching the original (non-retrying) scheduler.
-        await enqueueJob(
+        const ok = await enqueueJob(
           TASK_LIFECYCLE_EXECUTION,
           { userId: settings.userId },
           { jobKey: `execution:${settings.userId}`, queueName: MAIN_QUEUE, maxAttempts: 1 },
         );
-        await prisma.appSettings.update({
-          where: { id: settings.id },
-          data: { lastScheduledLifecycleExecution: now },
-        });
+        if (ok) {
+          await prisma.appSettings.update({
+            where: { id: settings.id },
+            data: { lastScheduledLifecycleExecution: now },
+          });
+        } else {
+          logger.error("Jobs", "Lifecycle execution enqueue failed — leaving watermark unadvanced");
+        }
       } catch (error) {
         logger.error("Jobs", "Failed to dispatch lifecycle execution — leaving watermark unadvanced", { error: String(error) });
       }
@@ -117,18 +133,22 @@ export async function dispatchScheduledJobs(): Promise<void> {
     isScheduleDue(backupSettings.backupSchedule, backupSettings.lastBackupAt, now, backupSettings.scheduledJobTime)
   ) {
     try {
-      await enqueueJob(
+      const ok = await enqueueJob(
         TASK_SCHEDULED_BACKUP,
         {},
         { jobKey: "scheduled-backup", queueName: MAIN_QUEUE, maxAttempts: 3 },
       );
-      // Advance the watermark only after the job is durably queued, and scope
-      // the update to the single AppSettings row.
-      await prisma.appSettings.update({
-        where: { id: backupSettings.id },
-        data: { lastBackupAt: now },
-      });
-      logger.info("Jobs", "Enqueued scheduled backup");
+      if (ok) {
+        // Advance the watermark only after the job is durably queued, and scope
+        // the update to the single AppSettings row.
+        await prisma.appSettings.update({
+          where: { id: backupSettings.id },
+          data: { lastBackupAt: now },
+        });
+        logger.info("Jobs", "Enqueued scheduled backup");
+      } else {
+        logger.error("Jobs", "Scheduled backup enqueue failed — leaving watermark unadvanced");
+      }
     } catch (error) {
       logger.error("Jobs", "Failed to dispatch scheduled backup — leaving watermark unadvanced", { error: String(error) });
     }

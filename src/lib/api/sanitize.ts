@@ -56,9 +56,12 @@ export function sanitizeErrorDetail(
     /\b(?:127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|169\.254\.\d+\.\d+|0\.0\.0\.0)\b/g,
     "[internal]"
   );
-  // IPv6 loopback (::1), unique-local (fc00::/7 → fc../fd..) and link-local (fe80::/10).
+  // IPv6 loopback (::1), unique-local (fc00::/7 → fc../fd..) and link-local
+  // (fe80::/10). Each segment requires 1-4 hex digits (the old `{0,4}` allowed
+  // empty groups, which matched a bare `fc00:` prefix or unrelated hex-colon
+  // text), and at least one segment must follow the prefix.
   cleaned = cleaned.replace(
-    /(?:::1\b|\b(?:f[cd][0-9a-f]{2}|fe[89ab][0-9a-f])(?::[0-9a-f]{0,4}){1,7})/gi,
+    /(?:::1\b|\b(?:f[cd][0-9a-f]{2}|fe[89ab][0-9a-f])(?:::?[0-9a-f]{1,4})+\b)/gi,
     "[internal]"
   );
   return cleaned;

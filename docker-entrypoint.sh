@@ -78,11 +78,22 @@ echo "==> Applying schema..."
 export NODE_PATH=/opt/prisma/node_modules
 PRISMA="node /opt/prisma/node_modules/prisma/build/index.js"
 
-# 1. Try migrate deploy (applies pending migration files).
-if su-exec "$APP_USER" $PRISMA migrate deploy --schema ./prisma/schema.prisma 2>&1; then
+# 1. Try migrate deploy (applies pending migration files). Non-fatal: a
+#    db-push-provisioned database has no _prisma_migrations history (P3005),
+#    which is expected. db push below is the authoritative, fatal backstop.
+#    A failure for ANY OTHER reason is surfaced as a loud WARNING so a genuinely
+#    broken migration isn't silently masked behind the db-push reconcile.
+if MIGRATE_OUTPUT=$(su-exec "$APP_USER" $PRISMA migrate deploy --schema ./prisma/schema.prisma 2>&1); then
+  echo "$MIGRATE_OUTPUT"
   echo "    Migrations applied successfully."
 else
-  echo "    Migrate deploy failed (expected on first run from db-push installs)."
+  echo "$MIGRATE_OUTPUT"
+  if echo "$MIGRATE_OUTPUT" | grep -q "P3005"; then
+    echo "    No migration history (P3005) — expected for db-push-provisioned databases."
+  else
+    echo "    WARNING: migrate deploy failed for an unexpected reason (see above)."
+    echo "    Continuing to db push, but review the error — this may indicate a broken migration."
+  fi
 fi
 
 # 2. Always run db push to reconcile schema-only changes (columns, indexes)

@@ -44,8 +44,11 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
       interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 60s
+      retries: 18
+      # The e2e cold path is heavier than prod's (migrate deploy + db push +
+      # graphile-worker migrations before the first request), so give it more
+      # grace than the 60s default to avoid flaky aborts on slow CI runners.
+      start_period: 120s
 
   playwright:
     image: mcr.microsoft.com/playwright:v1.60.0-noble
@@ -70,4 +73,4 @@ services:
     command:
       - sh
       - -lc
-      - "corepack enable && pnpm install --frozen-lockfile && pnpm exec prisma generate && pnpm exec playwright test"
+      - "corepack enable && pnpm install --frozen-lockfile --shamefully-hoist && pnpm exec prisma generate && pnpm exec playwright test"

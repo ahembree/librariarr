@@ -33,7 +33,9 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const page = Math.max(1, parseInt(searchParams.get("page") ?? "1") || 1);
   const rawLimit = parseInt(searchParams.get("limit") ?? "50");
-  const limit = rawLimit === 0 ? 0 : Math.min(Number.isNaN(rawLimit) ? 50 : rawLimit, 100);
+  // 0 = "return all"; otherwise clamp to [1, 100]. A negative value previously
+  // produced a Prisma reverse-take and an always-true hasMore.
+  const limit = rawLimit === 0 ? 0 : Math.max(1, Math.min(Number.isNaN(rawLimit) ? 50 : rawLimit, 100));
   const search = searchParams.get("search");
   const rawSortBy = searchParams.get("sortBy") ?? "title";
   const sortBy = SORT_COLUMNS.has(rawSortBy) ? rawSortBy : "title";

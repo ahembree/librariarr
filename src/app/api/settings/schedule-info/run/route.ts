@@ -28,6 +28,7 @@ export async function POST(request: NextRequest) {
         where: { id: session.userId! },
         include: { mediaServers: true },
       });
+      let allEnqueued = true;
       if (user) {
         // Enqueue a durable sync job per enabled server. Enqueueing is
         // non-blocking and error-isolated, so one unreachable server can't
@@ -40,27 +41,35 @@ export async function POST(request: NextRequest) {
           });
           if (activeJob) continue;
           logger.info("Scheduler", `Manual sync triggered for server "${server.name}"`);
-          await enqueueJob(
+          const ok = await enqueueJob(
             TASK_SYNC_SERVER,
             { serverId: server.id },
             { jobKey: `sync:${server.id}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
           );
+          if (!ok) allEnqueued = false;
         }
       }
-      await prisma.appSettings.update({
-        where: { userId: session.userId! },
-        data: { lastScheduledSync: new Date() },
-      });
+      // Advance the watermark only when every enqueue succeeded, so a failed
+      // enqueue doesn't stamp "last run" and skip the next scheduled window.
+      if (allEnqueued) {
+        await prisma.appSettings.update({
+          where: { userId: session.userId! },
+          data: { lastScheduledSync: new Date() },
+        });
+      }
     } else if (job === "detection") {
       logger.info("Scheduler", "Manual lifecycle detection triggered");
       // Enqueue a durable job on MAIN_QUEUE with a stable jobKey so a
       // double-click or a collision with the per-minute dispatcher dedupes
       // into one run instead of executing detection concurrently.
-      await enqueueJob(
+      const ok = await enqueueJob(
         TASK_LIFECYCLE_DETECTION,
         { userId: session.userId! },
         { jobKey: `detection:${session.userId!}`, queueName: MAIN_QUEUE, maxAttempts: 2 },
       );
+      if (!ok) {
+        return NextResponse.json({ error: "Failed to enqueue detection job" }, { status: 500 });
+      }
       await prisma.appSettings.update({
         where: { userId: session.userId! },
         data: { lastScheduledLifecycleDetection: new Date() },
@@ -70,11 +79,14 @@ export async function POST(request: NextRequest) {
       // Same dedup guard as detection. maxAttempts: 1 mirrors the dispatcher —
       // execution applies destructive Arr actions and must not be retried as a
       // whole job.
-      await enqueueJob(
+      const ok = await enqueueJob(
         TASK_LIFECYCLE_EXECUTION,
         { userId: session.userId! },
         { jobKey: `execution:${session.userId!}`, queueName: MAIN_QUEUE, maxAttempts: 1 },
       );
+      if (!ok) {
+        return NextResponse.json({ error: "Failed to enqueue execution job" }, { status: 500 });
+      }
       await prisma.appSettings.update({
         where: { userId: session.userId! },
         data: { lastScheduledLifecycleExecution: new Date() },

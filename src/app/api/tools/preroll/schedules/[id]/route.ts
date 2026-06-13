@@ -6,7 +6,9 @@ import { checkConflict } from "@/lib/preroll/schedule-conflict";
 
 const VALID_SCHEDULE_TYPES = ["one_time", "recurring", "seasonal"];
 const VALID_DAYS = [0, 1, 2, 3, 4, 5, 6];
-const TIME_REGEX = /^\d{2}:\d{2}$/;
+// Match the blackout route's stricter validation — the loose /^\d{2}:\d{2}$/
+// accepted nonsense like "99:99", producing wrong minute math in the enforcer.
+const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 interface ScheduleInput {
   name?: string;

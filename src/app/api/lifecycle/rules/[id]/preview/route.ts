@@ -26,16 +26,25 @@ export async function POST(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const servers = await prisma.mediaServer.findMany({
+  const rules = ruleSet.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
+
+  // SAFETY: Refuse to evaluate if no rules are active — would match everything.
+  // Checked first as the more fundamental guard.
+  if (!hasAnyActiveRules(rules)) {
+    return NextResponse.json({ error: "No active rules to evaluate" }, { status: 400 });
+  }
+
+  const enabledServers = await prisma.mediaServer.findMany({
     where: { userId: session.userId, enabled: true },
     select: { id: true },
   });
-
-  const rules = ruleSet.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
-
-  // SAFETY: Refuse to evaluate if no rules are active — would match everything
-  if (!hasAnyActiveRules(rules)) {
-    return NextResponse.json({ error: "No active rules to evaluate" }, { status: 400 });
+  // Scope the preview to the rule set's own targeted servers (intersected with
+  // enabled servers), exactly as detection/collections do — otherwise the
+  // preview matches libraries the rule set won't actually act on.
+  const enabledServerIds = enabledServers.map((s) => s.id);
+  const serverIds = ruleSet.serverIds.filter((sid) => enabledServerIds.includes(sid));
+  if (serverIds.length === 0) {
+    return NextResponse.json({ items: [], count: 0 });
   }
 
   let arrData: ArrDataMap | undefined;
@@ -52,21 +61,21 @@ export async function POST(
   if (ruleSet.type === "SERIES" && ruleSet.seriesScope) {
     items = await evaluateSeriesScope(
       rules,
-      servers.map((s) => s.id),
+      serverIds,
       arrData,
       seerrData
     );
   } else if (ruleSet.type === "MUSIC" && ruleSet.seriesScope) {
     items = await evaluateMusicScope(
       rules,
-      servers.map((s) => s.id),
+      serverIds,
       arrData
     );
   } else {
     const rawItems = await evaluateLifecycleRules(
       rules,
       ruleSet.type,
-      servers.map((s) => s.id),
+      serverIds,
       arrData,
       seerrData
     );

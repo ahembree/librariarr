@@ -9,6 +9,7 @@ import {
   hasSeerrRules,
   hasAnyActiveRules,
   hasStreamRules,
+  lookupSeerrMeta,
 } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
@@ -167,7 +168,6 @@ export async function POST(request: NextRequest) {
   // Evaluate rules against the item
   const arrIdSource =
     type === "MOVIE" ? "TMDB" : type === "MUSIC" ? "MUSICBRAINZ" : "TVDB";
-  const seerrIdSource = type === "MOVIE" ? "TMDB" : "TVDB";
   const externalIds = (serialized.externalIds as Array<{
     source: string;
     externalId: string;
@@ -175,9 +175,10 @@ export async function POST(request: NextRequest) {
   const arrExtId = externalIds.find((e) => e.source === arrIdSource);
   const arrMeta =
     arrData && arrExtId ? arrData[arrExtId.externalId] : undefined;
-  const seerrExtId = externalIds.find((e) => e.source === seerrIdSource);
-  const seerrMeta =
-    seerrData && seerrExtId ? seerrData[seerrExtId.externalId] : undefined;
+  // Use the shared namespaced lookup — fetchSeerrMetadata keys entries as
+  // "TMDB:<id>" / "TVDB:<id>", so a bare externalId lookup always missed,
+  // making the `matches` result disagree with matchedCriteria for Seerr rules.
+  const seerrMeta = lookupSeerrMeta(externalIds, seerrData, type);
 
   const matches = evaluateAllRulesInMemory(
     typedRules,

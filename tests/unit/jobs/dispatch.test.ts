@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const m = vi.hoisted(() => ({
-  enqueueJob: vi.fn().mockResolvedValue(undefined),
+  enqueueJob: vi.fn().mockResolvedValue(true),
   isScheduleDue: vi.fn(),
   appSettings: {
     findMany: vi.fn(),

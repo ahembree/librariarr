@@ -94,7 +94,22 @@ function isPrerollScheduleActive(schedule: {
   startTime: string | null;
   endTime: string | null;
 }): boolean {
-  // Reuse blackout active check — same schedule structure
+  // Seasonal = an annually-recurring date range (compare month/day, ignore
+  // year). Not a blackout schedule type, so handle it here — otherwise
+  // isBlackoutActive falls through to `return false` and seasonal preroll
+  // schedules never activate.
+  if (schedule.scheduleType === "seasonal") {
+    if (!schedule.startDate || !schedule.endDate) return false;
+    const now = new Date();
+    const md = (d: Date) => (d.getMonth() + 1) * 100 + d.getDate();
+    const cur = md(now);
+    const start = md(schedule.startDate);
+    const end = md(schedule.endDate);
+    // Wrap across the year boundary (e.g. Dec 15 → Jan 5).
+    if (end < start) return cur >= start || cur <= end;
+    return cur >= start && cur <= end;
+  }
+  // one_time / recurring share the blackout active check (same structure).
   return isBlackoutActive(schedule);
 }
 

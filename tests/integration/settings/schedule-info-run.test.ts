@@ -20,7 +20,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 const { mockEnqueueJob } = vi.hoisted(() => ({
-  mockEnqueueJob: vi.fn().mockResolvedValue(undefined),
+  mockEnqueueJob: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("@/lib/jobs/client", () => ({ enqueueJob: mockEnqueueJob }));
@@ -47,7 +47,7 @@ describe("POST /api/settings/schedule-info/run", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
-    mockEnqueueJob.mockResolvedValue(undefined);
+    mockEnqueueJob.mockResolvedValue(true);
   });
 
   afterAll(async () => {

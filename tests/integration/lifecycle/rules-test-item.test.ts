@@ -40,6 +40,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   hasArrRules: mockHasArrRules,
   hasSeerrRules: mockHasSeerrRules,
   hasStreamRules: mockHasStreamRules,
+  lookupSeerrMeta: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock("@/lib/lifecycle/fetch-arr-metadata", () => ({

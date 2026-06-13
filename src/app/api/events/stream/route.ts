@@ -16,6 +16,11 @@ export async function GET() {
 
   const userId = session.userId!;
   let closed = false;
+  // Idempotent teardown — assigned in start(); called directly from cancel()
+  // and the lifetime timer so the eventBus subscription + timers are released
+  // immediately on disconnect rather than up to 1s later (which transiently
+  // inflated EventEmitter listeners toward the cap on busy reconnect cycles).
+  let cleanup: () => void = () => {};
 
   const stream = new ReadableStream({
     start(controller) {
@@ -49,28 +54,33 @@ export async function GET() {
         }
       }, HEARTBEAT_INTERVAL);
 
-      // Safety net: close after max lifetime
-      const maxLifetimeTimer = setTimeout(() => {
+      let cleanedUp = false;
+      cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
         closed = true;
-      }, MAX_STREAM_LIFETIME);
-
-      // Cleanup when client disconnects
-      const checkClosed = setInterval(() => {
-        if (closed) {
-          unsubscribe();
-          clearInterval(heartbeatTimer);
-          clearInterval(checkClosed);
-          clearTimeout(maxLifetimeTimer);
-          try {
-            controller.close();
-          } catch {
-            // Already closed
-          }
+        unsubscribe();
+        clearInterval(heartbeatTimer);
+        clearInterval(checkClosed);
+        clearTimeout(maxLifetimeTimer);
+        try {
+          controller.close();
+        } catch {
+          // Already closed
         }
+      };
+
+      // Safety net: tear down after max lifetime
+      const maxLifetimeTimer = setTimeout(cleanup, MAX_STREAM_LIFETIME);
+
+      // Backstop: catch a `closed` flip from a failed enqueue (where cancel()
+      // isn't invoked) and tear down promptly.
+      const checkClosed = setInterval(() => {
+        if (closed) cleanup();
       }, 1000);
     },
     cancel() {
-      closed = true;
+      cleanup();
     },
   });
 

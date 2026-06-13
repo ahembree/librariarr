@@ -35,5 +35,10 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: playwright-report
-          path: playwright-report/
+          # Include test-results/ — that's where traces, videos, and screenshots
+          # land (the HTML report references them by relative path), so a failed
+          # run keeps its diagnostics instead of an attachment-less report.
+          path: |
+            playwright-report/
+            test-results/
           retention-days: 7

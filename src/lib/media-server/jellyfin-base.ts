@@ -287,17 +287,26 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       // Fall through to /Users list fallback
     }
 
-    // Fallback: list users and pick the first admin
+    // Fallback: list users and pick an administrator. Sort by Id first so the
+    // selection is DETERMINISTIC across syncs (otherwise it depends on whatever
+    // order the API returns, which can attribute watch history to a different
+    // admin run-to-run). A non-admin fallback may have a restricted library
+    // view, so warn — it can cause incomplete syncs / wrongful stale deletion.
     const usersRes = await this.client.get<
       Array<{ Id: string; Name: string; Policy?: { IsAdministrator?: boolean } }>
     >("/Users");
-    const users = usersRes.data || [];
-    const admin = users.find((u) => u.Policy?.IsAdministrator) ?? users[0];
-    if (!admin) {
+    const users = [...(usersRes.data || [])].sort((a, b) => a.Id.localeCompare(b.Id));
+    const admin = users.find((u) => u.Policy?.IsAdministrator);
+    const selected = admin ?? users[0];
+    if (!selected) {
       throw new Error("No users found on server — cannot determine userId for API queries");
     }
-    logger.debug(this.logPrefix, `Using user "${admin.Name}" for API queries (API key auth)`);
-    this.cachedUserId = admin.Id;
+    if (admin) {
+      logger.debug(this.logPrefix, `Using admin user "${selected.Name}" for API queries (API key auth)`);
+    } else {
+      logger.warn(this.logPrefix, `No administrator user found; using "${selected.Name}" — library/watch-history queries may be incomplete (restricted view)`);
+    }
+    this.cachedUserId = selected.Id;
     return this.cachedUserId;
   }
 

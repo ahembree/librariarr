@@ -12,7 +12,9 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const page = Math.max(1, parseInt(searchParams.get("page") ?? "1") || 1);
   const rawLimit = parseInt(searchParams.get("limit") ?? "50");
-  const limit = Math.min(Number.isNaN(rawLimit) ? 50 : rawLimit, 200);
+  // Floor at 1 and cap at 200 — a negative/zero limit produced LIMIT 0 or a
+  // negative OFFSET (Postgres rejects negative OFFSET → 500).
+  const limit = Math.max(1, Math.min(Number.isNaN(rawLimit) ? 50 : rawLimit, 200));
   const search = searchParams.get("search");
   const sortBy = searchParams.get("sortBy") ?? "watchedAt";
   const sortOrder =
