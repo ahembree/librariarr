@@ -37,6 +37,10 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Documentation site has its own toolchain
     "docs/**",
+    // Browser E2E suite has its own (Playwright) toolchain
+    "e2e/**",
+    "playwright.config.ts",
+    "playwright-report/**",
   ]),
 ]);
 

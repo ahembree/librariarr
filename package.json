@@ -30,6 +30,10 @@
     "test:coverage": "vitest run --coverage",
     "test:unit": "VITEST_SKIP_DB_SETUP=true vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui",
+    "e2e:install": "playwright install chromium",
+    "e2e:report": "playwright show-report",
     "docker:dev": "docker compose -f docker-compose.dev.yml up --build",
     "docker:dev:detach": "docker compose -f docker-compose.dev.yml up --build -d",
     "docker:dev:down": "docker compose -f docker-compose.dev.yml down",
@@ -91,6 +95,7 @@
   "devDependencies": {
     "@commitlint/cli": "^21.0.2",
     "@commitlint/config-conventional": "^21.0.1",
+    "@playwright/test": "^1.60.0",
     "@tailwindcss/postcss": "^4.3.0",
     "@types/node": "^25.9.1",
     "@types/node-cron": "^3.0.11",

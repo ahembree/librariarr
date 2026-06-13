@@ -23,6 +23,15 @@ vitest.config.ts
 commitlint.config.ts
 .husky
 
+# Browser E2E (Playwright) — never part of the production image. @playwright/test
+# is a devDependency and is not traced into the Next.js standalone output; these
+# entries also keep the build context small.
+e2e
+playwright.config.ts
+playwright-report
+test-results
+blob-report
+
 # Recovery scripts are intentionally NOT bundled into the production image.
 # An admin running auth recovery is expected to `docker cp` the file in
 # temporarily and remove it afterward; this keeps it out of the running

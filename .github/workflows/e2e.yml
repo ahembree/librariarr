@@ -1,0 +1,73 @@
+name: E2E
+
+# Browser end-to-end tests (Playwright). Runs on PRs and on demand. Kept out of
+# the per-push CI to avoid slowing trunk; the Docker image never includes any of
+# this (see .dockerignore).
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NEXT_TELEMETRY_DISABLED: 1
+  E2E_DATABASE_URL: postgresql://librariarr:librariarr@localhost:5432/librariarr_e2e
+  DATABASE_URL: postgresql://librariarr:librariarr@localhost:5432/librariarr_e2e
+  SESSION_SECRET: e2e-session-secret-at-least-32-chars-long!!
+  E2E_SESSION_SECRET: e2e-session-secret-at-least-32-chars-long!!
+
+jobs:
+  e2e:
+    name: Browser E2E
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: librariarr
+          POSTGRES_PASSWORD: librariarr
+          POSTGRES_DB: librariarr_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U librariarr"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install pnpm
+        run: corepack enable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm exec prisma generate
+
+      - name: Build
+        run: pnpm build
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        run: pnpm e2e
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
