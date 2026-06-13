@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
-import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
+import { callRoute, expectJson, expectStreamResult, createTestUser } from "../../setup/test-helpers";
 
 // Mock the query executor to avoid complex dependency chain (Arr clients, Seerr, dedup, etc.)
 const mockExecuteQuery = vi.hoisted(() => vi.fn());
@@ -99,13 +99,14 @@ describe("POST /api/query", () => {
       method: "POST",
       body: { query: validQuery },
     });
-    const body = await expectJson<typeof mockResult>(response, 200);
+    const { result: body } = await expectStreamResult<typeof mockResult>(response);
 
     expect(body.items).toHaveLength(2);
     expect(body.items[0].title).toBe("Test Movie");
     expect(body.pagination.hasMore).toBe(false);
 
-    // Verify executeQuery was called with the right args
+    // Verify executeQuery was called with the right args (plus the streaming
+    // progress emitter as the final argument).
     expect(mockExecuteQuery).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaTypes: ["MOVIE"],
@@ -116,6 +117,7 @@ describe("POST /api/query", () => {
       user.id,
       1,   // default page
       50,  // default limit
+      expect.any(Function), // progress emitter
     );
   });
 
@@ -134,7 +136,7 @@ describe("POST /api/query", () => {
       method: "POST",
       body: { query: validQuery },
     });
-    const body = await expectJson<{ items: unknown[]; totalMatched: number }>(response, 200);
+    const { result: body } = await expectStreamResult<{ items: unknown[]; totalMatched: number }>(response);
     expect(body.items).toHaveLength(0);
     expect(body.totalMatched).toBe(0);
   });
@@ -154,13 +156,35 @@ describe("POST /api/query", () => {
       method: "POST",
       body: { query: validQuery, page: 2, limit: 25 },
     });
-    await expectJson(response, 200);
+    await expectStreamResult(response);
 
     expect(mockExecuteQuery).toHaveBeenCalledWith(
       expect.anything(),
       user.id,
       2,
       25,
+      expect.any(Function), // progress emitter
     );
+  });
+
+  it("streams phase progress events emitted by executeQuery before the result", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    // The mocked executor forwards progress through the emitter it receives.
+    mockExecuteQuery.mockImplementation(async (_def, _uid, _page, _limit, emit) => {
+      emit?.({ type: "plan", phases: [{ key: "query", label: "Querying library" }] });
+      emit?.({ type: "phase", key: "query" });
+      return { items: [], pagination: { page: 1, limit: 50, hasMore: false }, totalMatched: 0 };
+    });
+
+    const response = await callRoute(POST, {
+      url: "/api/query",
+      method: "POST",
+      body: { query: validQuery },
+    });
+    const { events } = await expectStreamResult(response);
+
+    expect(events.map((e) => e.type)).toEqual(["plan", "phase", "result"]);
   });
 });

@@ -78,6 +78,8 @@ import { normalizeResolutionLabel } from "@/lib/resolution";
 import { generateId } from "@/lib/utils";
 import { EmptyState } from "@/components/empty-state";
 import { ConvertQueryToRuleDialog } from "@/components/convert-query-to-rule-dialog";
+import { QueryProgress, useStreamProgress } from "@/components/query-progress";
+import { consumeProgressStream } from "@/lib/progress/client";
 import { QueryActionBar, type ArrFamily, type ArrFamilyMeta, type QueryActionConfig } from "@/components/query-action-bar";
 import { toast } from "sonner";
 
@@ -338,6 +340,7 @@ export default function QueryPage() {
   const [results, setResults] = useState<QueryResultItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasRun, setHasRun] = useState(false);
+  const { state: queryProgress, handleUpdate: onQueryProgress, reset: resetQueryProgress } = useStreamProgress();
 
   // View state
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
@@ -784,6 +787,7 @@ export default function QueryPage() {
       setLoading(true);
       setHasRun(true);
       setSelectedIds(new Set());
+      resetQueryProgress();
       const definition = buildDefinition();
       lastRunDefinitionRef.current = definition;
       try {
@@ -794,15 +798,16 @@ export default function QueryPage() {
         });
 
         if (!resp.ok) throw new Error("Query failed");
-        const data = await resp.json();
+        const data = await consumeProgressStream<{ items?: QueryResultItem[] }>(resp, onQueryProgress);
         setResults(data.items ?? []);
       } catch {
         setResults([]);
       } finally {
         setLoading(false);
+        resetQueryProgress();
       }
     },
-    [buildDefinition],
+    [buildDefinition, onQueryProgress, resetQueryProgress],
   );
 
   // Persist the in-progress query to sessionStorage so it survives navigating
@@ -1506,21 +1511,27 @@ export default function QueryPage() {
       {/* Results */}
       {hasRun && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm text-muted-foreground">
-              {loading ? "Searching..." : `${results.length} result${results.length !== 1 ? "s" : ""} found`}
-            </p>
-            {viewMode === "cards" && !loading && results.length > 0 && (
-              <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-muted-foreground">
-                <Checkbox
-                  checked={allSelected ? true : someSelected ? "indeterminate" : false}
-                  onCheckedChange={toggleSelectAll}
-                  aria-label="Select all results"
-                />
-                {allSelected ? "Deselect all" : "Select all"}
-              </label>
-            )}
-          </div>
+          {loading && queryProgress.phases.length > 0 ? (
+            <div className="rounded-lg border border-border/60 bg-card/40 px-4 py-3">
+              <QueryProgress state={queryProgress} />
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-muted-foreground">
+                {loading ? "Searching..." : `${results.length} result${results.length !== 1 ? "s" : ""} found`}
+              </p>
+              {viewMode === "cards" && !loading && results.length > 0 && (
+                <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-muted-foreground">
+                  <Checkbox
+                    checked={allSelected ? true : someSelected ? "indeterminate" : false}
+                    onCheckedChange={toggleSelectAll}
+                    aria-label="Select all results"
+                  />
+                  {allSelected ? "Deselect all" : "Select all"}
+                </label>
+              )}
+            </div>
+          )}
 
           {results.length > 0 && (
             <QueryActionBar

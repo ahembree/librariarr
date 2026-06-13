@@ -171,6 +171,66 @@ describe("RadarrClient", () => {
     });
   });
 
+  describe("getCustomFormatScores", () => {
+    it("returns an empty map without calling the API for no movie ids", async () => {
+      const result = await client.getCustomFormatScores([]);
+      expect(result.size).toBe(0);
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+    });
+
+    it("maps movieId to customFormatScore, preserving 0 and skipping null", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: [
+          { id: 1, movieId: 5, customFormatScore: 150 },
+          { id: 2, movieId: 6, customFormatScore: 0 },
+          { id: 3, movieId: 7, customFormatScore: -40 },
+          { id: 4, movieId: 8, customFormatScore: null },
+        ],
+      });
+      const result = await client.getCustomFormatScores([5, 6, 7, 8]);
+      expect(result.get(5)).toBe(150);
+      expect(result.get(6)).toBe(0);
+      expect(result.get(7)).toBe(-40);
+      expect(result.has(8)).toBe(false); // null score not recorded
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/moviefile", {
+        params: { movieId: [5, 6, 7, 8] },
+        paramsSerializer: { indexes: null },
+      });
+    });
+
+    it("chunks large id lists into separate requests and merges results", async () => {
+      const ids = Array.from({ length: 250 }, (_, i) => i + 1);
+      mockAxiosInstance.get
+        .mockResolvedValueOnce({ data: [{ id: 1, movieId: 1, customFormatScore: 10 }] })
+        .mockResolvedValueOnce({ data: [{ id: 2, movieId: 101, customFormatScore: 20 }] })
+        .mockResolvedValueOnce({ data: [{ id: 3, movieId: 201, customFormatScore: 30 }] });
+
+      const result = await client.getCustomFormatScores(ids);
+
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(3); // 100 + 100 + 50
+      expect(result.get(1)).toBe(10);
+      expect(result.get(101)).toBe(20);
+      expect(result.get(201)).toBe(30);
+      expect(mockAxiosInstance.get.mock.calls[0][1].params.movieId).toHaveLength(100);
+      expect(mockAxiosInstance.get.mock.calls[2][1].params.movieId).toHaveLength(50);
+    });
+
+    it("reports 0..1 progress after each chunk", async () => {
+      const ids = Array.from({ length: 250 }, (_, i) => i + 1);
+      mockAxiosInstance.get.mockResolvedValue({ data: [] });
+      const fractions: number[] = [];
+      await client.getCustomFormatScores(ids, (f) => fractions.push(f));
+      expect(fractions).toEqual([100 / 250, 200 / 250, 1]);
+    });
+
+    it("reports completion immediately for an empty id list", async () => {
+      const fractions: number[] = [];
+      await client.getCustomFormatScores([], (f) => fractions.push(f));
+      expect(fractions).toEqual([1]);
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+    });
+  });
+
   describe("deleteMovieFile", () => {
     it("sends delete for file id", async () => {
       mockAxiosInstance.delete.mockResolvedValueOnce({});

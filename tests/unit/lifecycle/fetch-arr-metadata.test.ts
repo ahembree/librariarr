@@ -10,6 +10,7 @@ const mockRadarrClient = vi.hoisted(() => ({
   getMovies: vi.fn(),
   getQualityProfiles: vi.fn(),
   getTags: vi.fn(),
+  getCustomFormatScores: vi.fn(),
 }));
 
 const mockSonarrClient = vi.hoisted(() => ({
@@ -40,6 +41,8 @@ import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 describe("fetchArrMetadata", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: no scores. Individual tests override as needed.
+    mockRadarrClient.getCustomFormatScores.mockResolvedValue(new Map());
   });
 
   describe("MOVIE type", () => {
@@ -105,6 +108,58 @@ describe("fetchArrMetadata", () => {
       expect(result["550"].downloadDate).toBe("2024-02-01");
       // Movie status is now populated (was previously hardcoded null).
       expect(result["550"].status).toBe("released");
+    });
+
+    it("merges customFormatScore from /moviefile, querying only movies with files", async () => {
+      mockPrisma.radarrInstance.findMany.mockResolvedValue([
+        { id: "r1", url: "http://radarr", apiKey: "key" },
+      ]);
+      mockRadarrClient.getMovies.mockResolvedValue([
+        { id: 1, tmdbId: 100, tags: [], qualityProfileId: 1, monitored: true, ratings: {}, hasFile: true, movieFile: { customFormatScore: 999 } },
+        { id: 2, tmdbId: 200, tags: [], qualityProfileId: 1, monitored: true, ratings: {}, hasFile: false, movieFile: null },
+      ]);
+      mockRadarrClient.getQualityProfiles.mockResolvedValue([]);
+      mockRadarrClient.getTags.mockResolvedValue([]);
+      // The real score (from /moviefile) differs from the stale embedded value.
+      mockRadarrClient.getCustomFormatScores.mockResolvedValue(new Map([[1, 50]]));
+
+      const result = await fetchArrMetadata("u1", "MOVIE");
+
+      // Only the movie with a file is queried for scores (plus a progress reporter).
+      expect(mockRadarrClient.getCustomFormatScores).toHaveBeenCalledWith([1], expect.any(Function));
+      // The /moviefile score wins over the unreliable embedded /movie value.
+      expect(result["100"].customFormatScore).toBe(50);
+      // No file → no score recorded → null.
+      expect(result["200"].customFormatScore).toBeNull();
+    });
+
+    it("reports monotonic progress fractions ending at 1", async () => {
+      mockPrisma.radarrInstance.findMany.mockResolvedValue([
+        { id: "r1", url: "http://radarr", apiKey: "key" },
+      ]);
+      mockRadarrClient.getMovies.mockResolvedValue([
+        { id: 1, tmdbId: 100, tags: [], qualityProfileId: 1, monitored: true, ratings: {}, hasFile: true, movieFile: null },
+      ]);
+      mockRadarrClient.getQualityProfiles.mockResolvedValue([]);
+      mockRadarrClient.getTags.mockResolvedValue([]);
+      // Simulate the moviefile sweep completing within its sub-range.
+      mockRadarrClient.getCustomFormatScores.mockImplementation(async (_ids, onProgress) => {
+        onProgress?.(1);
+        return new Map();
+      });
+
+      const fractions: number[] = [];
+      await fetchArrMetadata("u1", "MOVIE", (f) => fractions.push(f));
+
+      expect(fractions.length).toBeGreaterThan(0);
+      expect(fractions[fractions.length - 1]).toBe(1);
+      // Post-list checkpoint (0.1) and post-scores checkpoint (0.85, the top of
+      // the moviefile sweep's sub-range) are both reported.
+      expect(fractions).toContain(0.1);
+      expect(fractions).toContain(0.85);
+      for (let i = 1; i < fractions.length; i++) {
+        expect(fractions[i]).toBeGreaterThanOrEqual(fractions[i - 1]);
+      }
     });
 
     it("handles unknown tag IDs gracefully", async () => {
