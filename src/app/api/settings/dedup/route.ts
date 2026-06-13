@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { validateRequest, dedupSettingsSchema } from "@/lib/validation";
 
 export async function GET() {
@@ -34,6 +35,10 @@ export async function PUT(request: NextRequest) {
     update: { dedupStats },
     create: { userId: session.userId!, dedupStats },
   });
+
+  // Stats are cached per dedup-mode; drop them so the dashboard reflects the
+  // toggle immediately instead of after the TTL.
+  invalidateMediaCaches();
 
   return NextResponse.json({ dedupStats });
 }

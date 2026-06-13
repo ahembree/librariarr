@@ -536,6 +536,18 @@ export const arrTestSchema = z.object({
   apiKey: z.string().min(1, "API key is required"),
 });
 
+// For re-testing a saved instance: both fields optional (fall back to stored
+// values), but if provided the URL must be a well-formed http(s) string.
+// Internal/LAN addresses are intentionally allowed — Arr/Seerr commonly run on
+// the same host or a private network.
+export const arrTestConnectionSchema = z.object({
+  url: z.string().refine(
+    (val) => /^https?:\/\//i.test(val),
+    "URL must start with http:// or https://"
+  ).optional(),
+  apiKey: z.string().optional(),
+});
+
 // ─── Server schemas ───
 
 export const serverAddSchema = z.object({

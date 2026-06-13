@@ -6,7 +6,7 @@ import { apiLogger } from "@/lib/logger";
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
 import { validateRequest, serverEditSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
-import { appCache } from "@/lib/cache/memory-cache";
+import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 
 export async function PUT(
   request: NextRequest,
@@ -86,9 +86,7 @@ export async function PUT(
 
   // Invalidate caches when enabled state changes so media queries reflect immediately
   if (enabled !== undefined) {
-    appCache.invalidatePrefix("server-filter:");
-    appCache.invalidate("distinct-values");
-    appCache.invalidatePrefix("stats:");
+    invalidateMediaCaches();
   }
 
   return NextResponse.json({ server: sanitize(updated) });
@@ -187,9 +185,7 @@ export async function DELETE(
   apiLogger.info("Auth", `Media server "${server.name}" removed (deleteData=${deleteData})`);
 
   // Invalidate caches that depend on server/media data
-  appCache.invalidatePrefix("server-filter:");
-  appCache.invalidate("distinct-values");
-  appCache.invalidatePrefix("stats:");
+  invalidateMediaCaches();
 
   // Recompute canonical flags for remaining items
   await recomputeCanonical(userId);
