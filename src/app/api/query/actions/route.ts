@@ -114,8 +114,10 @@ export async function POST(request: NextRequest) {
 
   // Stream phase-by-phase progress, then the final result, as NDJSON so the
   // query page can render a live progress bar (re-validating the selection, then
-  // running the action item-by-item) instead of a bare spinner. request.signal
-  // aborts the run (and frees the connection) on disconnect.
+  // running the action item-by-item) instead of a bare spinner. A client
+  // disconnect aborts the stream/connection, but the in-flight action run is
+  // intentionally allowed to finish so a disconnect can't leave a half-applied
+  // destructive batch.
   return progressStreamResponse(
     async (emit) => {
       const phases: ProgressPhase[] = [
@@ -252,8 +254,9 @@ export async function POST(request: NextRequest) {
             key: "execute",
             fraction: total > 0 ? done / total : 1,
             // Per-item count plus the item + sub-step currently in flight.
+            // `current` is only reported pre-increment, so done < total here.
             detail: current
-              ? `${Math.min(done + 1, total)} / ${total} · ${current.title} — ${current.step}`
+              ? `${done + 1} / ${total} · ${current.title} — ${current.step}`
               : `${done} / ${total}`,
           }),
       );

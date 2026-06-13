@@ -41,6 +41,7 @@ import {
   SERIES_ACTION_TYPES,
   MUSIC_ACTION_TYPES,
   QUALITY_PROFILE_ACTION_TYPES,
+  supportsSearchAfter as canSearchAfter,
 } from "@/lib/lifecycle/action-types";
 
 export type ArrFamily = "radarr" | "sonarr" | "lidarr";
@@ -195,7 +196,7 @@ export function QueryActionBar({
   const meta = family ? arrMeta[family] : undefined;
   const needsProfile = QUALITY_PROFILE_ACTION_TYPES.has(effectiveActionType);
   const supportsImportExclusion = effectiveActionType.includes("DELETE");
-  const supportsSearchAfter = effectiveActionType.includes("DELETE_FILES") || needsProfile;
+  const supportsSearchAfter = canSearchAfter(effectiveActionType);
   const isTagOnly = effectiveActionType === "DO_NOTHING";
   const hasTags = addArrTags.length > 0 || removeArrTags.length > 0;
 

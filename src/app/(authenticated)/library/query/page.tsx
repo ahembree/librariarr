@@ -924,7 +924,10 @@ export default function QueryPage() {
         clearSelection();
         runQuery();
       } catch {
-        toast.error("Action failed", { description: "Could not reach the server" });
+        // Reached on a network failure OR an in-band stream error event. Keep
+        // the message neutral — the server's raw error isn't surfaced — and
+        // avoid implying a connectivity problem when the server did respond.
+        toast.error("Action failed", { description: "The action could not be completed." });
       } finally {
         setExecutingAction(false);
         resetActionProgress();

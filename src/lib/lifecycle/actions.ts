@@ -4,7 +4,7 @@ import { RadarrClient } from "@/lib/arr/radarr-client";
 import { SonarrClient } from "@/lib/arr/sonarr-client";
 import { LidarrClient } from "@/lib/arr/lidarr-client";
 import { logger } from "@/lib/logger";
-import { actionHonorsMemberIds, formatActionLabel, QUALITY_PROFILE_ACTION_TYPES } from "@/lib/lifecycle/action-types";
+import { actionHonorsMemberIds, formatActionLabel, supportsSearchAfter } from "@/lib/lifecycle/action-types";
 
 // Re-export constants so server-side consumers can import from here too
 export { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES } from "@/lib/lifecycle/action-types";
@@ -850,9 +850,7 @@ export async function executeAction(
   // follow-up search inside their executor when searchAfterAction is set, so
   // note that here rather than instrumenting every executor.
   if (action.actionType !== "DO_NOTHING") {
-    const willSearchAfter =
-      action.searchAfterAction &&
-      (action.actionType.includes("DELETE_FILES") || QUALITY_PROFILE_ACTION_TYPES.has(action.actionType));
+    const willSearchAfter = action.searchAfterAction && supportsSearchAfter(action.actionType);
     onStep?.(formatActionLabel(action.actionType) + (willSearchAfter ? " → search" : ""));
   }
 
