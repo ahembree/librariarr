@@ -98,23 +98,6 @@ export const COLOR_PALETTE: ColorPreset[] = [
 
 // ── Helpers: derive badge/chart styles from hex ───────────────────
 
-/** Get hex color for a chip value. Falls back through user overrides → defaults → fallback. */
-export function getChipHex(
-  colors: ChipColorMap,
-  category: ChipColorCategory,
-  value: string
-): string {
-  const map = colors[category];
-  // Try exact match first
-  if (map[value]) return map[value];
-  // Try case-insensitive match
-  const lower = value.toLowerCase();
-  for (const [k, v] of Object.entries(map)) {
-    if (k.toLowerCase() === lower) return v;
-  }
-  return FALLBACK_HEX;
-}
-
 /** Convert hex (#rgb or #rrggbb) to rgba string. Falls back to the neutral color on malformed input. */
 function hexToRgba(hex: string, alpha: number): string {
   let h = hex.replace(/^#/, "");
