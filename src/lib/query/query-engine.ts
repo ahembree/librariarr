@@ -458,18 +458,23 @@ export async function executeQuery(
   // Fetch Arr data if query uses Arr rules and servers are selected
   const needsArr = hasArrRules(groups) && definition.arrServerIds &&
     (definition.arrServerIds.radarr || definition.arrServerIds.sonarr || definition.arrServerIds.lidarr);
+  // Adapts a phase key into a 0..1 fraction reporter that emits phase events,
+  // so the fetchers can drive determinate sub-progress within their phase.
+  const phaseReporter = (key: string) =>
+    onProgress ? (f: number) => onProgress({ type: "phase", key, fraction: f }) : undefined;
+
   let arrDataByType: Record<string, ArrDataMap> | undefined;
   if (needsArr) {
-    onProgress?.({ type: "phase", key: "arr" });
-    arrDataByType = await fetchArrDataForQuery(userId, definition.arrServerIds!, mediaTypes);
+    onProgress?.({ type: "phase", key: "arr", fraction: 0 });
+    arrDataByType = await fetchArrDataForQuery(userId, definition.arrServerIds!, mediaTypes, phaseReporter("arr"));
   }
 
   // Fetch Seerr data if query uses Seerr rules and instance is selected
   const needsSeerr = hasSeerrRules(groups) && definition.seerrInstanceId;
   let seerrDataByType: Record<string, SeerrDataMap> | undefined;
   if (needsSeerr) {
-    onProgress?.({ type: "phase", key: "seerr" });
-    seerrDataByType = await fetchSeerrDataForQuery(userId, definition.seerrInstanceId!, mediaTypes);
+    onProgress?.({ type: "phase", key: "seerr", fraction: 0 });
+    seerrDataByType = await fetchSeerrDataForQuery(userId, definition.seerrInstanceId!, mediaTypes, phaseReporter("seerr"));
   }
 
   // Determine if we need unified in-memory evaluation

@@ -70,12 +70,36 @@ describe("fetchArrDataForQuery", () => {
 
     const result = await fetchArrDataForQuery("u1", { radarr: "r1" }, ["MOVIE"]);
 
-    // Only the movie with a file is queried for scores.
-    expect(mockRadarrClient.getCustomFormatScores).toHaveBeenCalledWith([1]);
+    // Only the movie with a file is queried for scores (plus a progress reporter).
+    expect(mockRadarrClient.getCustomFormatScores).toHaveBeenCalledWith([1], expect.any(Function));
     // The /moviefile score wins over the unreliable embedded /movie value.
     expect(result.MOVIE["100"].customFormatScore).toBe(50);
     // No file → no score recorded → null.
     expect(result.MOVIE["200"].customFormatScore).toBeNull();
+  });
+
+  it("reports combined progress across active fetches, ending at 1", async () => {
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({ id: "r1", url: "http://radarr", apiKey: "key" });
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue({ id: "n1", url: "http://sonarr", apiKey: "key" });
+    mockRadarrClient.getMovies.mockResolvedValue([
+      { id: 1, tmdbId: 100, tags: [], qualityProfileId: 1, monitored: true, ratings: {}, hasFile: true, movieFile: null },
+    ]);
+    mockRadarrClient.getQualityProfiles.mockResolvedValue([]);
+    mockRadarrClient.getTags.mockResolvedValue([]);
+    mockRadarrClient.getCustomFormatScores.mockResolvedValue(new Map());
+    mockSonarrClient.getSeries.mockResolvedValue([
+      { id: 1, tvdbId: 200, tags: [], qualityProfileId: 1, monitored: true, ratings: {}, statistics: {}, seasons: [] },
+    ]);
+    mockSonarrClient.getQualityProfiles.mockResolvedValue([]);
+    mockSonarrClient.getTags.mockResolvedValue([]);
+
+    const fractions: number[] = [];
+    await fetchArrDataForQuery("u1", { radarr: "r1", sonarr: "n1" }, ["MOVIE", "SERIES"], (f) => fractions.push(f));
+
+    expect(fractions.length).toBeGreaterThan(0);
+    expect(fractions[fractions.length - 1]).toBe(1);
+    // Combined across two fetches, so intermediate values never exceed 1.
+    expect(Math.max(...fractions)).toBeLessThanOrEqual(1);
   });
 
   it("scopes the Radarr lookup to the user and selected instance", async () => {

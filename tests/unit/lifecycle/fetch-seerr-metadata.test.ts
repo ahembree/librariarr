@@ -219,6 +219,32 @@ describe("fetchSeerrMetadata", () => {
     expect(Object.keys(result)).toHaveLength(101);
   });
 
+  it("reports determinate progress from pageInfo.results, ending at 1", async () => {
+    mockPrisma.seerrInstance.findMany.mockResolvedValue([
+      { id: "s1", url: "http://overseerr", apiKey: "key" },
+    ]);
+    const firstPage = Array.from({ length: 100 }, (_, i) => ({
+      media: { tmdbId: i + 1 },
+      requestedBy: { plexUsername: "user", username: null, email: null },
+      createdAt: "2024-01-01", updatedAt: null, status: 1,
+    }));
+    const secondPage = [{
+      media: { tmdbId: 101 },
+      requestedBy: { plexUsername: "user", username: null, email: null },
+      createdAt: "2024-01-01", updatedAt: null, status: 1,
+    }];
+    mockSeerrClient.getRequests
+      .mockResolvedValueOnce({ results: firstPage, pageInfo: { page: 1, pages: 2, results: 101 } })
+      .mockResolvedValueOnce({ results: secondPage, pageInfo: { page: 2, pages: 2, results: 101 } });
+
+    const fractions: number[] = [];
+    await fetchSeerrMetadata("u1", "MOVIE", (f) => fractions.push(f));
+
+    expect(fractions[fractions.length - 1]).toBe(1);
+    // After the first page: 100/101 ≈ 0.99 (determinate, not yet complete).
+    expect(fractions.some((f) => f > 0.9 && f < 1)).toBe(true);
+  });
+
   it("uses 'tv' media type for SERIES", async () => {
     mockPrisma.seerrInstance.findMany.mockResolvedValue([
       { id: "s1", url: "http://overseerr", apiKey: "key" },

@@ -40,14 +40,19 @@ export async function POST(request: NextRequest) {
 
     let arrData: ArrDataMap | undefined;
     if (willFetchArr) {
-      emit({ type: "phase", key: "arr" });
-      arrData = await fetchArrMetadata(session.userId!, type);
+      emit({ type: "phase", key: "arr", fraction: 0 });
+      arrData = await fetchArrMetadata(session.userId!, type, (f) =>
+        emit({ type: "phase", key: "arr", fraction: f }),
+      );
     }
 
     let seerrData: SeerrDataMap | undefined;
     if (willFetchSeerr) {
-      emit({ type: "phase", key: "seerr" });
-      seerrData = await fetchSeerrMetadata(session.userId!, type);
+      emit({ type: "phase", key: "seerr", fraction: 0 });
+      // willFetchSeerr already guarantees type !== "MUSIC".
+      seerrData = await fetchSeerrMetadata(session.userId!, type as "MOVIE" | "SERIES", (f) =>
+        emit({ type: "phase", key: "seerr", fraction: f }),
+      );
     }
 
     emit({ type: "phase", key: "evaluate" });

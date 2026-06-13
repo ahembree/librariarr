@@ -214,6 +214,21 @@ describe("RadarrClient", () => {
       expect(mockAxiosInstance.get.mock.calls[0][1].params.movieId).toHaveLength(100);
       expect(mockAxiosInstance.get.mock.calls[2][1].params.movieId).toHaveLength(50);
     });
+
+    it("reports 0..1 progress after each chunk", async () => {
+      const ids = Array.from({ length: 250 }, (_, i) => i + 1);
+      mockAxiosInstance.get.mockResolvedValue({ data: [] });
+      const fractions: number[] = [];
+      await client.getCustomFormatScores(ids, (f) => fractions.push(f));
+      expect(fractions).toEqual([100 / 250, 200 / 250, 1]);
+    });
+
+    it("reports completion immediately for an empty id list", async () => {
+      const fractions: number[] = [];
+      await client.getCustomFormatScores([], (f) => fractions.push(f));
+      expect(fractions).toEqual([1]);
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+    });
   });
 
   describe("deleteMovieFile", () => {

@@ -1,10 +1,12 @@
 import { prisma } from "@/lib/db";
 import { SeerrClient } from "@/lib/seerr/seerr-client";
+import { splitProgress, type FractionReporter } from "@/lib/progress/fraction";
 import type { SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 
 export async function fetchSeerrMetadata(
   userId: string,
-  type: "MOVIE" | "SERIES"
+  type: "MOVIE" | "SERIES",
+  onProgress?: FractionReporter,
 ): Promise<SeerrDataMap> {
   const seerrData: SeerrDataMap = {};
 
@@ -12,7 +14,10 @@ export async function fetchSeerrMetadata(
     where: { userId, enabled: true },
   });
 
-  for (const inst of instances) {
+  const reporters = splitProgress(onProgress, instances.length);
+  for (let idx = 0; idx < instances.length; idx++) {
+    const inst = instances[idx];
+    const report = reporters[idx];
     const client = new SeerrClient(inst.url, inst.apiKey);
     const mediaType = type === "MOVIE" ? "movie" : "tv";
 
@@ -20,6 +25,7 @@ export async function fetchSeerrMetadata(
     let skip = 0;
     const take = 100;
     let hasMore = true;
+    let processed = 0;
 
     while (hasMore) {
       const response = await client.getRequests({ take, skip, mediaType });
@@ -74,8 +80,14 @@ export async function fetchSeerrMetadata(
       }
 
       skip += take;
+      processed += response.results.length;
       hasMore = response.results.length === take;
+      // pageInfo.results is the total across all pages; use it to report a
+      // determinate fraction (fall back to "done" when nothing to fetch).
+      const total = response.pageInfo?.results ?? processed;
+      report(total > 0 ? Math.min(1, processed / total) : 1);
     }
+    report(1);
   }
 
   return seerrData;

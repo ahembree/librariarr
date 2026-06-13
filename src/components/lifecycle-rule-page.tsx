@@ -2593,7 +2593,9 @@ export function LifecycleRulePage({
           </div>
 
           {previewing && previewProgress.phases.length > 0 && (
-            <QueryProgress state={previewProgress} />
+            <div className="rounded-lg border border-border/60 bg-card/40 px-4 py-3">
+              <QueryProgress state={previewProgress} />
+            </div>
           )}
 
           {saveError && (
