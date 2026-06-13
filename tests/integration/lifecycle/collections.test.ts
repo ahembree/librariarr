@@ -55,6 +55,7 @@ vi.mock("@/lib/arr/radarr-client", () => ({
       getMovies: vi.fn().mockResolvedValue([]),
       getQualityProfiles: vi.fn().mockResolvedValue([]),
       getTags: vi.fn().mockResolvedValue([]),
+      getCustomFormatScores: vi.fn().mockResolvedValue(new Map()),
     };
   }),
 }));

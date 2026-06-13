@@ -92,6 +92,30 @@ export async function expectJson<T = unknown>(
   return (await response.json()) as T;
 }
 
+/**
+ * Read an NDJSON progress stream (from `progressStreamResponse`) and return the
+ * terminal `result` payload plus the ordered list of progress events. Asserts a
+ * 200 status and throws if the stream emits an `error` event.
+ */
+export async function expectStreamResult<T = unknown>(
+  response: Response,
+): Promise<{ result: T; events: Array<Record<string, unknown>> }> {
+  expect(response.status).toBe(200);
+  const text = await response.text();
+  const events = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => JSON.parse(l) as Record<string, unknown>);
+
+  const errorEvent = events.find((e) => e.type === "error");
+  if (errorEvent) throw new Error(String(errorEvent.message));
+
+  const resultEvent = events.find((e) => e.type === "result");
+  if (!resultEvent) throw new Error("Stream had no result event");
+  return { result: resultEvent.result as T, events };
+}
+
 // ---- Data Factories ----
 
 let counter = 0;

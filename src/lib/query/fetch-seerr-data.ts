@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { SeerrClient } from "@/lib/seerr/seerr-client";
 import { logger } from "@/lib/logger";
+import { splitProgress, type FractionReporter } from "@/lib/progress/fraction";
 import type { SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 
 // Hard ceiling on Seerr request pagination so a huge or looping instance can't
@@ -10,11 +11,15 @@ const MAX_PAGES = 1000;
 /**
  * Fetch Seerr metadata for the query builder from a specific instance.
  * Returns a map keyed by media type: { MOVIE: SeerrDataMap, SERIES: SeerrDataMap }
+ *
+ * `onProgress` (optional) reports combined 0..1 completion across the per-type
+ * request sweeps.
  */
 export async function fetchSeerrDataForQuery(
   userId: string,
   seerrInstanceId: string,
   mediaTypes: string[],
+  onProgress?: FractionReporter,
 ): Promise<Record<string, SeerrDataMap>> {
   const instance = await prisma.seerrInstance.findFirst({
     where: { id: seerrInstanceId, userId, enabled: true },
@@ -28,7 +33,10 @@ export async function fetchSeerrDataForQuery(
     ? ["MOVIE", "SERIES"]
     : mediaTypes.filter((t) => t === "MOVIE" || t === "SERIES");
 
-  for (const type of typesInScope) {
+  const reporters = splitProgress(onProgress, typesInScope.length);
+  for (let idx = 0; idx < typesInScope.length; idx++) {
+    const type = typesInScope[idx];
+    const report = reporters[idx];
     const mediaType = type === "MOVIE" ? "movie" : "tv";
     const seerrData: SeerrDataMap = {};
 
@@ -36,6 +44,7 @@ export async function fetchSeerrDataForQuery(
     const take = 100;
     let hasMore = true;
     let pages = 0;
+    let processed = 0;
 
     while (hasMore) {
       if (pages >= MAX_PAGES) {
@@ -93,8 +102,12 @@ export async function fetchSeerrDataForQuery(
       }
 
       skip += take;
+      processed += response.results.length;
       hasMore = response.results.length === take;
+      const total = response.pageInfo?.results ?? processed;
+      report(total > 0 ? Math.min(1, processed / total) : 1);
     }
+    report(1);
 
     result[type] = seerrData;
   }

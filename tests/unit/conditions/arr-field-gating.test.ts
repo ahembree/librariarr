@@ -25,7 +25,7 @@ const mockPrisma = vi.hoisted(() => ({
   sonarrInstance: { findMany: vi.fn() },
   lidarrInstance: { findMany: vi.fn() },
 }));
-const mockRadarr = vi.hoisted(() => ({ getMovies: vi.fn(), getQualityProfiles: vi.fn(), getTags: vi.fn() }));
+const mockRadarr = vi.hoisted(() => ({ getMovies: vi.fn(), getQualityProfiles: vi.fn(), getTags: vi.fn(), getCustomFormatScores: vi.fn() }));
 const mockSonarr = vi.hoisted(() => ({ getSeries: vi.fn(), getQualityProfiles: vi.fn(), getTags: vi.fn() }));
 const mockLidarr = vi.hoisted(() => ({ getArtists: vi.fn(), getQualityProfiles: vi.fn(), getTags: vi.fn() }));
 
@@ -84,7 +84,7 @@ const fullMovie = {
   ratings: { imdb: { value: 8 }, tmdb: { value: 7 }, rottenTomatoes: { value: 90 } },
   added: "2024-01-01", path: "/m", sizeOnDisk: 1000, originalLanguage: { name: "English" },
   digitalRelease: "2024-02-01", physicalRelease: "2024-03-01", inCinemas: "2024-01-15",
-  runtime: 120, movieFile: { quality: { quality: { name: "Bluray-1080p" } }, dateAdded: "2024-02-02", customFormatScore: 50 },
+  runtime: 120, hasFile: true, movieFile: { quality: { quality: { name: "Bluray-1080p" } }, dateAdded: "2024-02-02" },
   qualityCutoffNotMet: false, status: "released",
 };
 const fullSeries = {
@@ -114,6 +114,9 @@ describe("Arr field gating mirrors fetcher population (regression guard)", () =>
     mockPrisma.sonarrInstance.findMany.mockResolvedValue([{ id: "s", url: "u", apiKey: "k" }]);
     mockPrisma.lidarrInstance.findMany.mockResolvedValue([{ id: "l", url: "u", apiKey: "k" }]);
     mockRadarr.getMovies.mockResolvedValue([fullMovie]);
+    // customFormatScore is sourced from the /moviefile endpoint, not the /movie
+    // listing — supply it here so the movie's backing value is non-null.
+    mockRadarr.getCustomFormatScores.mockResolvedValue(new Map([[fullMovie.id, 50]]));
     mockSonarr.getSeries.mockResolvedValue([fullSeries]);
     mockLidarr.getArtists.mockResolvedValue([fullArtist]);
 

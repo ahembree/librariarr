@@ -725,6 +725,23 @@ async function executeChangeQualityProfileLidarr(action: ActionRecord) {
   }
 }
 
+// --- Search executors (trigger a fresh search for a new copy, no other change) ---
+
+async function executeSearchRadarr(action: ActionRecord) {
+  const { client, movie } = await resolveRadarrMovie(action);
+  await client.triggerMovieSearch(movie.id);
+}
+
+async function executeSearchSonarr(action: ActionRecord) {
+  const { client, series } = await resolveSonarrSeries(action);
+  await client.triggerSeriesSearch(series.id);
+}
+
+async function executeSearchLidarr(action: ActionRecord) {
+  const { client, artist } = await resolveLidarrArtist(action);
+  await client.triggerArtistSearch(artist.id);
+}
+
 // --- Main dispatch ---
 
 export async function executeAction(action: ActionRecord): Promise<void> {
@@ -796,6 +813,15 @@ export async function executeAction(action: ActionRecord): Promise<void> {
       break;
     case "CHANGE_QUALITY_PROFILE_LIDARR":
       await executeChangeQualityProfileLidarr(action);
+      break;
+    case "SEARCH_RADARR":
+      await executeSearchRadarr(action);
+      break;
+    case "SEARCH_SONARR":
+      await executeSearchSonarr(action);
+      break;
+    case "SEARCH_LIDARR":
+      await executeSearchLidarr(action);
       break;
     default:
       throw new Error(`Unknown action type: ${action.actionType}`);

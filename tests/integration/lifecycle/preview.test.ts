@@ -5,6 +5,7 @@ import {
   callRoute,
   callRouteWithParams,
   expectJson,
+  expectStreamResult,
   createTestUser,
   createTestServer,
   createTestLibrary,
@@ -32,6 +33,7 @@ vi.mock("@/lib/arr/radarr-client", () => ({
       getMovies: vi.fn().mockResolvedValue([]),
       getQualityProfiles: vi.fn().mockResolvedValue([]),
       getTags: vi.fn().mockResolvedValue([]),
+      getCustomFormatScores: vi.fn().mockResolvedValue(new Map()),
     };
   }),
 }));
@@ -302,9 +304,8 @@ describe("Lifecycle Rules Preview", () => {
         },
       });
 
-      const body = await expectJson<{ items: { title: string }[]; count: number }>(
+      const { result: body } = await expectStreamResult<{ items: { title: string }[]; count: number }>(
         response,
-        200
       );
       expect(body.count).toBe(1);
       expect(body.items[0].title).toBe("Old Movie");
@@ -364,9 +365,8 @@ describe("Lifecycle Rules Preview", () => {
         },
       });
 
-      const body = await expectJson<{ items: { title: string }[]; count: number }>(
+      const { result: body } = await expectStreamResult<{ items: { title: string }[]; count: number }>(
         response,
-        200
       );
       expect(body.count).toBe(1);
       expect(body.items[0].title).toBe("User1 Movie");

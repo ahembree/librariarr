@@ -8,6 +8,7 @@ export const MOVIE_ACTION_TYPES = [
   { value: "DELETE_FILES_RADARR", label: "Delete Files Only" },
   { value: "UNMONITOR_RADARR", label: "Unmonitor Only" },
   { value: "CHANGE_QUALITY_PROFILE_RADARR", label: "Change Quality Profile" },
+  { value: "SEARCH_RADARR", label: "Search for New Copy" },
 ];
 
 export const SERIES_ACTION_TYPES = [
@@ -18,6 +19,7 @@ export const SERIES_ACTION_TYPES = [
   { value: "DELETE_FILES_SONARR", label: "Delete Files Only" },
   { value: "UNMONITOR_SONARR", label: "Unmonitor Only" },
   { value: "CHANGE_QUALITY_PROFILE_SONARR", label: "Change Quality Profile" },
+  { value: "SEARCH_SONARR", label: "Search for New Copy" },
 ];
 
 export const MUSIC_ACTION_TYPES = [
@@ -28,6 +30,7 @@ export const MUSIC_ACTION_TYPES = [
   { value: "DELETE_FILES_LIDARR", label: "Delete Files Only" },
   { value: "UNMONITOR_LIDARR", label: "Unmonitor Only" },
   { value: "CHANGE_QUALITY_PROFILE_LIDARR", label: "Change Quality Profile" },
+  { value: "SEARCH_LIDARR", label: "Search for New Copy" },
 ];
 
 /**
@@ -80,6 +83,9 @@ export const ACTION_LABELS: Record<string, string> = {
   CHANGE_QUALITY_PROFILE_RADARR: "Change Quality Profile (Radarr)",
   CHANGE_QUALITY_PROFILE_SONARR: "Change Quality Profile (Sonarr)",
   CHANGE_QUALITY_PROFILE_LIDARR: "Change Quality Profile (Lidarr)",
+  SEARCH_RADARR: "Search for New Copy (Radarr)",
+  SEARCH_SONARR: "Search for New Copy (Sonarr)",
+  SEARCH_LIDARR: "Search for New Copy (Lidarr)",
 };
 
 /** Format an action type for display, falling back to the raw value. */

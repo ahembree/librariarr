@@ -332,6 +332,22 @@ body::before {
   to { height: 0; opacity: 0; }
 }
 
+/* Progress bar animations (query / rule-preview phase bar) */
+@keyframes progress-shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+.animate-progress-shimmer {
+  animation: progress-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes progress-indeterminate {
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+.animate-progress-indeterminate {
+  animation: progress-indeterminate 1.15s ease-in-out infinite;
+}
+
 /* Lazy-render off-screen grid cards for large libraries */
 [data-alphabet-grid] {
   contain: layout style paint;
@@ -378,5 +394,16 @@ body::before {
   .animate-fade-in-up,
   .stagger-children > * {
     animation: none;
+  }
+  /* Keep the progress bar's determinate width transition, but drop the
+     looping shimmer/indeterminate slider for reduced-motion users. */
+  .animate-progress-shimmer {
+    animation: none;
+  }
+  .animate-progress-indeterminate {
+    animation: none;
+    left: 0;
+    width: 100%;
+    opacity: 0.5;
   }
 }

@@ -75,7 +75,14 @@ export interface RadarrMovieFile {
   movieId: number;
   relativePath: string;
   size: number;
+  // Only the /moviefile endpoint computes this (it passes Radarr's custom
+  // format calculation service); the /movie listing always leaves it null.
+  customFormatScore?: number;
 }
+
+// Movie ids are sent as repeated `movieId=` query params; chunk them so the
+// request line stays well under Radarr's ~8 KB Kestrel limit on large libraries.
+const MOVIE_FILE_QUERY_CHUNK = 100;
 
 export interface RadarrExclusion {
   id?: number;
@@ -185,6 +192,43 @@ export class RadarrClient {
       paramsSerializer: { indexes: null },
     });
     return data;
+  }
+
+  /**
+   * Custom format scores keyed by movie id.
+   *
+   * Radarr only computes `customFormatScore` in the /moviefile endpoint (the
+   * /movie list and /movie/{id} endpoints leave the embedded movieFile's score
+   * null), so rule/query evaluation must pull the real score from here and merge
+   * it back onto each movie. Ids are chunked to keep the query string small.
+   *
+   * `onProgress` (optional) reports 0..1 completion after each chunk so callers
+   * can drive a progress bar through what is usually the slowest part of a
+   * movie-metadata fetch on large libraries.
+   */
+  async getCustomFormatScores(
+    movieIds: number[],
+    onProgress?: (fraction: number) => void,
+  ): Promise<Map<number, number>> {
+    const scores = new Map<number, number>();
+    if (movieIds.length === 0) {
+      onProgress?.(1);
+      return scores;
+    }
+    for (let i = 0; i < movieIds.length; i += MOVIE_FILE_QUERY_CHUNK) {
+      const chunk = movieIds.slice(i, i + MOVIE_FILE_QUERY_CHUNK);
+      const { data } = await this.client.get<RadarrMovieFile[]>("/api/v3/moviefile", {
+        params: { movieId: chunk },
+        paramsSerializer: { indexes: null },
+      });
+      for (const file of data) {
+        if (file.customFormatScore != null) {
+          scores.set(file.movieId, file.customFormatScore);
+        }
+      }
+      onProgress?.(Math.min(1, (i + chunk.length) / movieIds.length));
+    }
+    return scores;
   }
 
   async deleteMovieFile(movieFileId: number): Promise<void> {
