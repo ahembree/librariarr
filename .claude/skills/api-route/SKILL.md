@@ -206,4 +206,4 @@ if (!sf.isSingleServer) where.dedupCanonical = true;
 2. If a new Zod schema is needed, add it to `src/lib/validation.ts` using `zod/v4`
 3. Create `src/app/api/<route-path>/route.ts` using the patterns above
 4. If the route has dynamic params like `[id]`, use the Next.js 16 async params pattern
-5. Run `npx next lint --quiet` to verify no lint errors
+5. Run `pnpm lint` to verify no lint errors

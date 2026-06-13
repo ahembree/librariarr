@@ -29,7 +29,7 @@ try {
   ({ chromium } = await import("playwright"));
 } catch {
   console.error(
-    "could not import 'playwright' — install with: pnpm dlx playwright@1.49.0 install chromium"
+    "could not import 'playwright' — install with: pnpm dlx playwright@1.60.0 install chromium"
   );
   process.exit(2);
 }

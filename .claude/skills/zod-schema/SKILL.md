@@ -95,4 +95,4 @@ if (error) return error;
 2. Define the schema following existing patterns
 3. Export the schema
 4. If a corresponding update schema is needed, create it with `.partial()`
-5. Run `npx next lint --quiet` to verify
+5. Run `pnpm lint` to verify

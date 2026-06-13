@@ -175,4 +175,4 @@ it("returns 404 when resource belongs to another user", async () => {
 3. Identify which data factories are needed based on Prisma models used
 4. Create test file at `tests/integration/<category>/<name>.test.ts`
 5. Include all standard test cases plus route-specific edge cases
-6. Run the test to verify: `npx vitest run tests/integration/<category>/<name>.test.ts`
+6. Run the test to verify: `pnpm exec vitest run tests/integration/<category>/<name>.test.ts`

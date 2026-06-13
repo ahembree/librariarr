@@ -7,7 +7,7 @@ description: Launch, build, run, start, screenshot, or smoke-test the Librariarr
 
 Drive a clean Librariarr dev stack to authenticated dashboard, then verify behaviour via curl smoke checks or headless-Chromium screenshots. The orchestration is `driver.sh` (in this directory); SKILL.md is its man page.
 
-All paths below are relative to the **repo root** (`/opt/git_repos/librariarr`). `driver.sh` resolves the repo root from its own location, so you can invoke it via the absolute path from anywhere.
+All paths below are relative to the **repo root**. `driver.sh` resolves the repo root from its own location, so you can invoke it via the absolute path from anywhere.
 
 ## Prerequisites
 
@@ -33,7 +33,7 @@ Defaults — override via env:
 | `LIBRARIARR_ADMIN_USER` | `admin` |
 | `LIBRARIARR_ADMIN_PASS` | `librariarr-dev-pw-1234` (8-char min per `authSetupSchema`) |
 | `LIBRARIARR_APP_CONTAINER` | `librariarr-dev` |
-| `LIBRARIARR_PLAYWRIGHT_IMAGE` | `mcr.microsoft.com/playwright:v1.49.0-jammy` |
+| `LIBRARIARR_PLAYWRIGHT_IMAGE` | `mcr.microsoft.com/playwright:v1.60.0-noble` |
 
 ## Run (human path)
 
@@ -116,6 +116,6 @@ Pick these because they don't depend on any user-supplied state. Adding more (me
   SKILL.md          ← this file
   driver.sh         ← bash dispatcher (up | setup | smoke | logs | down | clean | screenshot)
   screenshot.mjs    ← Playwright helper called from `driver.sh screenshot`
-  package.json      ← declares playwright@1.49.0 (installed via --ignore-workspace)
+  package.json      ← declares playwright@1.60.0 (installed via --ignore-workspace)
   .gitignore        ← excludes node_modules/, pnpm-lock.yaml, .cookies, screenshots/
 ```
