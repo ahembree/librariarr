@@ -27,17 +27,21 @@ test.describe("settings", () => {
       );
 
     // Accent swatches are title-labelled buttons; the selected one shows a check.
-    const violet = page.getByRole("button", { name: "Violet" });
+    // exact: true avoids matching e.g. the "Reset to defaults" button.
+    const violet = page.getByRole("button", { name: "Violet", exact: true });
     await Promise.all([savedPut(), violet.click()]);
     await expect(violet.locator("svg")).toBeVisible();
 
     // The saved accent is re-fetched on load, so it survives a reload.
     await page.reload();
-    await expect(page.getByRole("button", { name: "Violet" }).locator("svg")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Violet", exact: true }).locator("svg"),
+    ).toBeVisible();
 
     // Reset to the default accent so other specs see a clean baseline.
-    await Promise.all([savedPut(), page.getByRole("button", { name: "Default" }).click()]);
-    await expect(page.getByRole("button", { name: "Default" }).locator("svg")).toBeVisible();
+    const defaultSwatch = page.getByRole("button", { name: "Default", exact: true });
+    await Promise.all([savedPut(), defaultSwatch.click()]);
+    await expect(defaultSwatch.locator("svg")).toBeVisible();
   });
 
   test("media servers tab shows the empty state and add control", async ({ page }) => {
