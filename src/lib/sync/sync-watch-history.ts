@@ -3,7 +3,16 @@ import { createMediaServerClient } from "@/lib/media-server/factory";
 import { logger } from "@/lib/logger";
 import type { MediaServerType } from "@/generated/prisma/client";
 
-const BATCH_SIZE = 100;
+// 500 rows × 8 params = 4000 bind params per INSERT — well under Postgres's
+// 65535 limit, but ~5× fewer round-trips than 100, which keeps the full-replace
+// transaction comfortably inside its timeout on large histories.
+const BATCH_SIZE = 500;
+
+// The full-replace runs as a single interactive transaction (DELETE + all
+// INSERTs) so a mid-insert failure rolls back rather than leaving the table
+// empty. A large history easily exceeds Prisma's 5s default, so give the
+// transaction a generous window (and a longer connection wait under load).
+const TX_OPTIONS = { timeout: 120_000, maxWait: 15_000 } as const;
 
 export async function syncWatchHistory(
   serverId: string
@@ -145,6 +154,9 @@ export async function syncWatchHistory(
       }
 
       if (values.length > 0) {
+        // No setImmediate yield between batches: the awaited DB round-trip
+        // already yields the event loop, and an extra macrotask only burns the
+        // interactive-transaction timeout budget.
         await tx.$executeRawUnsafe(
           `INSERT INTO "WatchHistory" ("id","mediaItemId","mediaServerId","serverUsername","watchedAt","deviceName","platform","createdAt")
            VALUES ${values.join(",")}`,
@@ -152,15 +164,8 @@ export async function syncWatchHistory(
         );
         insertedCount += values.length;
       }
-
-      // Yield between batches
-      if (i + BATCH_SIZE < dedupedEntries.length) {
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-      }
     }
-  });
+  }, TX_OPTIONS);
 
   logger.info(
     "WatchHistory",

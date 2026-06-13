@@ -164,8 +164,8 @@ describe("syncWatchHistory", () => {
       enabled: true,
     }]);
 
-    // Generate 150 entries (batch size is 100)
-    const entries = Array.from({ length: 150 }, (_, i) => ({
+    // Generate 600 entries (batch size is 500 → splits into 2 batches)
+    const entries = Array.from({ length: 600 }, (_, i) => ({
       ratingKey: String(i),
       username: "Admin",
       watchedAt: "2024-01-01T00:00:00Z",
@@ -175,7 +175,7 @@ describe("syncWatchHistory", () => {
     mockClient.getDetailedWatchHistory.mockResolvedValueOnce(entries);
 
     // Media items (all match)
-    const mediaItems = Array.from({ length: 150 }, (_, i) => ({
+    const mediaItems = Array.from({ length: 600 }, (_, i) => ({
       id: `item-${i}`,
       ratingKey: String(i),
     }));
@@ -184,14 +184,14 @@ describe("syncWatchHistory", () => {
     // DELETE from WatchHistory
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
 
-    // INSERT batch 1 (100 items) and batch 2 (50 items)
+    // INSERT batch 1 (500 items) and batch 2 (100 items)
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
 
     const result = await syncWatchHistory("server-1");
-    expect(result).toEqual({ count: 150 });
+    expect(result).toEqual({ count: 600 });
 
-    // Should have 2 INSERT calls (batches of 100 + 50)
+    // Should have 2 INSERT calls (batches of 500 + 100)
     const insertCalls = mockPrisma.$queryRawUnsafe.mock.calls
       .filter((args) => (args[0] as string).includes('INSERT INTO "WatchHistory"'));
     expect(insertCalls.length).toBe(2);
