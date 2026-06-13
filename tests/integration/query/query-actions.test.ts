@@ -4,6 +4,7 @@ import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
   expectJson,
+  expectStreamResult,
   createTestUser,
   createTestServer,
   createTestLibrary,
@@ -33,9 +34,16 @@ vi.mock("@/lib/query/query-engine", () => ({
 }));
 
 // Mock executeAction to avoid real Arr API calls (keep normalizeTitle/extractActionError real).
+// The no-op still echoes the action type as its in-flight sub-step, so the
+// per-item progress reporting in executeActionsForItems is exercised end-to-end.
 vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/lifecycle/actions")>();
-  return { ...actual, executeAction: vi.fn().mockResolvedValue(undefined) };
+  return {
+    ...actual,
+    executeAction: vi.fn(async (action: { actionType: string }, onStep?: (step: string) => void) => {
+      onStep?.(action.actionType);
+    }),
+  };
 });
 
 // Import AFTER mocks
@@ -99,7 +107,7 @@ describe("POST /api/query/actions", () => {
       },
     });
 
-    const body = await expectJson<{ executed: number; failed: number; skipped: number }>(response, 200);
+    const { result: body } = await expectStreamResult<{ executed: number; failed: number; skipped: number }>(response);
     expect(body).toMatchObject({ executed: 1, failed: 0, skipped: 0 });
     expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
 
@@ -113,6 +121,82 @@ describe("POST /api/query/actions", () => {
       ruleSetType: "MOVIE",
       actionType: "DELETE_RADARR",
     });
+  });
+
+  it("streams phase progress events with determinate per-item execute progress", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+    const m1 = await createTestMediaItem(library.id, { type: "MOVIE", title: "A" });
+    const m2 = await createTestMediaItem(library.id, { type: "MOVIE", title: "B" });
+    const radarr = await createTestRadarrInstance(user.id);
+
+    // The safety re-query forwards its own phase progress through the emitter it
+    // receives; the route surfaces those as the "validate" phase sub-status.
+    mockedExecuteQuery.mockImplementation(async (_def, _uid, _page, _limit, emit) => {
+      emit?.({
+        type: "plan",
+        phases: [
+          { key: "query", label: "Querying library" },
+          { key: "evaluate", label: "Evaluating rules" },
+        ],
+      });
+      emit?.({ type: "phase", key: "query" });
+      emit?.({ type: "phase", key: "evaluate", fraction: 0.5 });
+      return queryResult([
+        { id: m1.id, type: "MOVIE", title: "A", parentTitle: null },
+        { id: m2.id, type: "MOVIE", title: "B", parentTitle: null },
+      ]);
+    });
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: {
+        query: BASE_QUERY,
+        mediaItemIds: [m1.id, m2.id],
+        actionType: "DELETE_RADARR",
+        arrInstanceId: radarr.id,
+      },
+    });
+
+    const { result, events } = await expectStreamResult<{ executed: number }>(response);
+    expect(result.executed).toBe(2);
+
+    // The plan announces the three action phases up front.
+    const plan = events.find((e) => e.type === "plan") as { phases: Array<{ key: string }> } | undefined;
+    expect(plan?.phases.map((p) => p.key)).toEqual(["validate", "execute", "finalize"]);
+
+    // The execute phase reports a determinate, monotonic fraction that ends at 1.
+    const execEvents = events.filter((e) => e.type === "phase" && e.key === "execute");
+    const execFractions = execEvents
+      .filter((e) => typeof e.fraction === "number")
+      .map((e) => e.fraction as number);
+    expect(execFractions.length).toBeGreaterThan(1);
+    expect(execFractions[execFractions.length - 1]).toBe(1);
+    for (let i = 1; i < execFractions.length; i++) {
+      expect(execFractions[i]).toBeGreaterThanOrEqual(execFractions[i - 1]);
+    }
+
+    // The execute phase carries a per-item count, advancing through both items
+    // and surfacing the in-flight sub-step (here the echoed action type). Item
+    // processing order is whatever findMany returns, so assert order-independently.
+    const details = execEvents.map((e) => e.detail).filter((d): d is string => typeof d === "string");
+    expect(details).toContain("2 / 2"); // final boundary update, no item in flight
+    expect(details.some((d) => /^1 \/ 2 · [AB] — DELETE_RADARR$/.test(d))).toBe(true);
+    expect(details.some((d) => /^2 \/ 2 · [AB] — DELETE_RADARR$/.test(d))).toBe(true);
+    expect(details.some((d) => d.includes("· A — "))).toBe(true);
+    expect(details.some((d) => d.includes("· B — "))).toBe(true);
+
+    // The validate phase narrates its steps: the re-query's own phase labels are
+    // forwarded (with a percentage when determinate), and the direct steps appear.
+    const validateDetails = events
+      .filter((e) => e.type === "phase" && e.key === "validate")
+      .map((e) => e.detail)
+      .filter((d): d is string => typeof d === "string");
+    expect(validateDetails).toContain("Re-checking your selection — Querying library");
+    expect(validateDetails).toContain("Re-checking your selection — Evaluating rules (50%)");
+    expect(validateDetails).toContain("Checking the exception list");
+    expect(validateDetails).toContain("Loading items to act on");
   });
 
   it("rejects an unknown action type", async () => {
@@ -179,7 +263,7 @@ describe("POST /api/query/actions", () => {
       },
     });
 
-    const body = await expectJson<{ executed: number; failed: number; skipped: number }>(response, 200);
+    const { result: body } = await expectStreamResult<{ executed: number; failed: number; skipped: number }>(response);
     expect(body).toMatchObject({ executed: 1, failed: 0, skipped: 0 });
     expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
     expect(mockedExecuteAction.mock.calls[0][0]).toMatchObject({
@@ -217,7 +301,7 @@ describe("POST /api/query/actions", () => {
         arrInstanceId: radarr.id,
       },
     });
-    const body = await expectJson<{ executed: number; skipped: number }>(response, 200);
+    const { result: body } = await expectStreamResult<{ executed: number; skipped: number }>(response);
     expect(body).toMatchObject({ executed: 0, skipped: 1 });
     expect(mockedExecuteAction).not.toHaveBeenCalled();
   });
@@ -241,7 +325,7 @@ describe("POST /api/query/actions", () => {
         arrInstanceId: radarr.id,
       },
     });
-    const body = await expectJson<{ executed: number; skipped: number }>(response, 200);
+    const { result: body } = await expectStreamResult<{ executed: number; skipped: number }>(response);
     expect(body).toMatchObject({ executed: 0, skipped: 1 });
     expect(mockedExecuteAction).not.toHaveBeenCalled();
   });
@@ -266,7 +350,7 @@ describe("POST /api/query/actions", () => {
         arrInstanceId: radarr.id,
       },
     });
-    const body = await expectJson<{ executed: number; skipped: number; errors: string[] }>(response, 200);
+    const { result: body } = await expectStreamResult<{ executed: number; skipped: number; errors: string[] }>(response);
     expect(body.executed).toBe(0);
     expect(mockedExecuteAction).not.toHaveBeenCalled();
   });
@@ -302,7 +386,7 @@ describe("POST /api/query/actions", () => {
         arrInstanceId: sonarr.id,
       },
     });
-    const body = await expectJson<{ executed: number }>(response, 200);
+    const { result: body } = await expectStreamResult<{ executed: number }>(response);
     expect(body.executed).toBe(1);
     expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
     const passed = mockedExecuteAction.mock.calls[0][0];
@@ -334,7 +418,7 @@ describe("POST /api/query/actions", () => {
       method: "POST",
       body: { query: BASE_QUERY, mediaItemIds: [ep1.id], actionType: "DELETE_FILES_SONARR", arrInstanceId: sonarr.id },
     });
-    const body = await expectJson<{ executed: number }>(response, 200);
+    const { result: body } = await expectStreamResult<{ executed: number }>(response);
     expect(body.executed).toBe(1);
     const passed = mockedExecuteAction.mock.calls[0][0];
     expect(passed.matchedMediaItemIds).toEqual([ep1.id]); // ep2 excluded
@@ -360,7 +444,7 @@ describe("POST /api/query/actions", () => {
       method: "POST",
       body: { query: BASE_QUERY, mediaItemIds: [ep1.id], actionType: "DELETE_FILES_SONARR", arrInstanceId: sonarr.id },
     });
-    const body = await expectJson<{ executed: number; skipped: number }>(response, 200);
+    const { result: body } = await expectStreamResult<{ executed: number; skipped: number }>(response);
     expect(body.executed).toBe(0);
     expect(body.skipped).toBe(1);
     expect(mockedExecuteAction).not.toHaveBeenCalled();
@@ -396,7 +480,7 @@ describe("POST /api/query/actions", () => {
         arrInstanceId: sonarr.id,
       },
     });
-    await expectJson(response, 200);
+    await expectStreamResult(response);
     const passed = mockedExecuteAction.mock.calls[0][0];
     // Only the US episode — must NOT include the UK show's episode.
     expect(passed.matchedMediaItemIds).toEqual([usEp.id]);
@@ -421,7 +505,7 @@ describe("POST /api/query/actions", () => {
         arrInstanceId: radarr.id,
       },
     });
-    const body = await expectJson<{ executed: number; failed: number; errors: string[] }>(response, 200);
+    const { result: body } = await expectStreamResult<{ executed: number; failed: number; errors: string[] }>(response);
     expect(body).toMatchObject({ executed: 0, failed: 1 });
     expect(body.errors[0]).toContain("Radarr exploded");
 

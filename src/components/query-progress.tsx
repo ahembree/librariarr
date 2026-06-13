@@ -12,9 +12,11 @@ interface ProgressState {
   fraction: number;
   /** Whether the current phase reports a measurable fraction (vs. indeterminate). */
   determinate: boolean;
+  /** Optional sub-status line for the active phase (e.g. "3 / 12 · Dune — …"). */
+  detail: string | null;
 }
 
-const EMPTY: ProgressState = { phases: [], currentKey: null, fraction: 0, determinate: false };
+const EMPTY: ProgressState = { phases: [], currentKey: null, fraction: 0, determinate: false, detail: null };
 
 /**
  * Drives a {@link QueryProgress} bar from an NDJSON progress stream. Feed
@@ -26,13 +28,16 @@ export function useStreamProgress() {
   const handleUpdate = useCallback((update: ProgressUpdate) => {
     setState((prev) => {
       if (update.type === "plan") {
-        return { phases: update.phases, currentKey: null, fraction: 0, determinate: false };
+        return { phases: update.phases, currentKey: null, fraction: 0, determinate: false, detail: null };
       }
       return {
         ...prev,
         currentKey: update.key,
         fraction: update.fraction ?? 0,
         determinate: update.fraction !== undefined,
+        // A phase event without a detail clears any prior sub-status (e.g. when
+        // advancing from the per-item "execute" phase to "finalize").
+        detail: update.detail ?? null,
       };
     });
   }, []);
@@ -56,7 +61,7 @@ export function QueryProgress({
   state: ProgressState;
   className?: string;
 }) {
-  const { phases, currentKey, fraction, determinate } = state;
+  const { phases, currentKey, fraction, determinate, detail } = state;
   if (phases.length === 0) return null;
 
   const rawIdx = currentKey ? phases.findIndex((p) => p.key === currentKey) : -1;
@@ -74,7 +79,7 @@ export function QueryProgress({
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.round(overall * 100)}
-      aria-label={current?.label ?? "Loading"}
+      aria-label={detail ? `${current?.label ?? "Loading"} — ${detail}` : current?.label ?? "Loading"}
       aria-live="polite"
     >
       <div className="flex items-center justify-between gap-3">
@@ -89,6 +94,11 @@ export function QueryProgress({
           </span>
         </span>
       </div>
+
+      {/* Optional per-item sub-status (e.g. "3 / 12 · Dune — Change Quality Profile"). */}
+      {detail && (
+        <p className="truncate pl-[1.375rem] text-xs tabular-nums text-muted-foreground">{detail}</p>
+      )}
 
       <div className="flex items-center gap-1.5">
         {phases.map((phase, i) => {

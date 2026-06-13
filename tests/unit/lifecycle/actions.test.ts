@@ -751,6 +751,84 @@ describe("executeAction", () => {
     expect(mockLidarrClient.deleteArtist).not.toHaveBeenCalled();
   });
 
+  // --- onStep sub-step reporting (drives the query-page action progress bar) ---
+
+  it("reports 'Updating tags' then the main-action label (with → search) to onStep", async () => {
+    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
+    });
+    mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
+      id: 1, title: "Test Movie", tmdbId: 12345, tags: [], qualityProfileId: 3,
+    });
+    mockRadarrClient.getTags.mockResolvedValue([]);
+    mockRadarrClient.createTag.mockResolvedValue({ id: 9, label: "keep" });
+    mockRadarrClient.updateMovie.mockResolvedValue({});
+
+    const steps: string[] = [];
+    await executeAction(
+      makeAction({
+        actionType: "CHANGE_QUALITY_PROFILE_RADARR",
+        targetQualityProfileId: 7,
+        searchAfterAction: true,
+        addArrTags: ["keep"],
+      }),
+      (s) => steps.push(s),
+    );
+
+    // Tags run first, then the main action; search-after is noted on the label.
+    expect(steps).toEqual(["Updating tags", "Change Quality Profile (Radarr) → search"]);
+  });
+
+  it("reports only the main-action label to onStep when there are no tag ops", async () => {
+    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
+    });
+    mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
+      id: 1, title: "Test Movie", tmdbId: 12345, tags: [],
+    });
+
+    const steps: string[] = [];
+    await executeAction(makeAction({ actionType: "DELETE_RADARR" }), (s) => steps.push(s));
+
+    // Plain delete (no _FILES, no profile) → no "→ search" suffix.
+    expect(steps).toEqual(["Delete from Radarr"]);
+  });
+
+  it("reports only 'Updating tags' for a DO_NOTHING tag-only action (no main step)", async () => {
+    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
+    });
+    mockPrisma.sonarrInstance.findUnique.mockResolvedValue(null);
+    mockPrisma.lidarrInstance.findUnique.mockResolvedValue(null);
+    mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
+      id: 1, title: "Test Movie", tmdbId: 12345, tags: [],
+    });
+    mockRadarrClient.getTags.mockResolvedValue([{ id: 5, label: "drop" }]);
+    mockRadarrClient.updateMovie.mockResolvedValue({});
+
+    const steps: string[] = [];
+    await executeAction(
+      makeAction({ actionType: "DO_NOTHING", removeArrTags: ["drop"] }),
+      (s) => steps.push(s),
+    );
+
+    expect(steps).toEqual(["Updating tags"]);
+  });
+
+  it("does not append '→ search' for a dedicated SEARCH action", async () => {
+    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
+    });
+    mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
+      id: 1, title: "Test Movie", tmdbId: 12345, tags: [],
+    });
+
+    const steps: string[] = [];
+    await executeAction(makeAction({ actionType: "SEARCH_RADARR" }), (s) => steps.push(s));
+
+    expect(steps).toEqual(["Search for New Copy (Radarr)"]);
+  });
+
   it("DELETE_FILES_LIDARR refuses to delete when no matched track correlates to a Lidarr file", async () => {
     mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
       id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true,

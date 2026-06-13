@@ -66,6 +66,16 @@ export const QUALITY_PROFILE_ACTION_TYPES = new Set<string>([
   "CHANGE_QUALITY_PROFILE_LIDARR",
 ]);
 
+/**
+ * Whether an action triggers a follow-up search when `searchAfterAction` is set
+ * — file-deletion actions (re-grab the removed file) and quality-profile changes
+ * (fetch an upgrade). Single source of truth for the action bar's "Search after"
+ * toggle and the progress label's "→ search" hint.
+ */
+export function supportsSearchAfter(actionType: string): boolean {
+  return actionType.includes("DELETE_FILES") || QUALITY_PROFILE_ACTION_TYPES.has(actionType);
+}
+
 /** Human-readable labels for every action type (notifications, summaries). */
 export const ACTION_LABELS: Record<string, string> = {
   DO_NOTHING: "Monitor Only",

@@ -19,7 +19,17 @@ export interface ProgressPhase {
 /** Progress events forwarded to the UI as work proceeds. */
 export type ProgressUpdate =
   | { type: "plan"; phases: ProgressPhase[] }
-  | { type: "phase"; key: string; fraction?: number };
+  | {
+      type: "phase";
+      key: string;
+      fraction?: number;
+      /**
+       * Optional human-readable sub-status for the active phase (e.g. a per-item
+       * count plus the item and step currently being processed). Shown beneath
+       * the phase label; cleared automatically on any phase event that omits it.
+       */
+      detail?: string;
+    };
 
 /** Callback an engine/route uses to report progress. */
 export type ProgressEmit = (update: ProgressUpdate) => void;

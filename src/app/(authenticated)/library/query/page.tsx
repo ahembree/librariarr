@@ -284,6 +284,8 @@ export default function QueryPage() {
   // Result selection (for triggering ad-hoc lifecycle actions)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [executingAction, setExecutingAction] = useState(false);
+  // Live progress for the in-flight action (mirrors the query progress bar).
+  const { state: actionProgress, handleUpdate: onActionProgress, reset: resetActionProgress } = useStreamProgress();
   const [arrMeta, setArrMeta] = useState<Record<ArrFamily, ArrFamilyMeta>>({
     radarr: { qualityProfiles: [], tags: [] },
     sonarr: { qualityProfiles: [], tags: [] },
@@ -887,6 +889,7 @@ export default function QueryPage() {
   const executeAction = useCallback(
     async (config: QueryActionConfig) => {
       setExecutingAction(true);
+      resetActionProgress();
       try {
         const resp = await fetch("/api/query/actions", {
           method: "POST",
@@ -897,11 +900,19 @@ export default function QueryPage() {
             ...config,
           }),
         });
-        const data = await resp.json();
         if (!resp.ok) {
+          // Auth/validation failures come back as plain JSON (before streaming).
+          const data = await resp.json().catch(() => null);
           toast.error("Action failed", { description: data?.error ?? "Unknown error" });
           return;
         }
+        // The result is streamed as NDJSON with live phase progress.
+        const data = await consumeProgressStream<{
+          executed: number;
+          failed: number;
+          skipped: number;
+          errors: string[];
+        }>(resp, onActionProgress);
         const parts = [`${data.executed} executed`];
         if (data.failed > 0) parts.push(`${data.failed} failed`);
         if (data.skipped > 0) parts.push(`${data.skipped} skipped`);
@@ -913,12 +924,16 @@ export default function QueryPage() {
         clearSelection();
         runQuery();
       } catch {
-        toast.error("Action failed", { description: "Could not reach the server" });
+        // Reached on a network failure OR an in-band stream error event. Keep
+        // the message neutral — the server's raw error isn't surfaced — and
+        // avoid implying a connectivity problem when the server did respond.
+        toast.error("Action failed", { description: "The action could not be completed." });
       } finally {
         setExecutingAction(false);
+        resetActionProgress();
       }
     },
-    [buildDefinition, selectedIds, clearSelection, runQuery],
+    [buildDefinition, selectedIds, clearSelection, runQuery, onActionProgress, resetActionProgress],
   );
 
   // Table columns with a leading selection checkbox column.
@@ -1535,15 +1550,22 @@ export default function QueryPage() {
           )}
 
           {results.length > 0 && (
-            <QueryActionBar
-              selectedCount={selectedIds.size}
-              selectionTypeCounts={selectionTypeCounts}
-              arrServerIds={arrServerIds}
-              arrMeta={arrMeta}
-              executing={executingAction}
-              onExecute={executeAction}
-              onClear={clearSelection}
-            />
+            <>
+              <QueryActionBar
+                selectedCount={selectedIds.size}
+                selectionTypeCounts={selectionTypeCounts}
+                arrServerIds={arrServerIds}
+                arrMeta={arrMeta}
+                executing={executingAction}
+                onExecute={executeAction}
+                onClear={clearSelection}
+              />
+              {executingAction && actionProgress.phases.length > 0 && (
+                <div className="rounded-lg border border-border/60 bg-card/40 px-4 py-3">
+                  <QueryProgress state={actionProgress} />
+                </div>
+              )}
+            </>
           )}
 
           {results.length > 0 ? (
