@@ -477,6 +477,9 @@ model LifecycleAction {
   updatedAt       DateTime              @updatedAt
 
   @@index([status, scheduledFor])
+  @@index([ruleSetId])
+  @@index([mediaItemId])
+  @@index([userId])
 }
 
 model RuleMatch {
@@ -488,8 +491,8 @@ model RuleMatch {
   itemData        Json
   detectedAt      DateTime  @default(now())
 
+  // [ruleSetId] alone is covered by the composite unique's leading column.
   @@unique([ruleSetId, mediaItemId])
-  @@index([ruleSetId])
 }
 
 model LifecycleException {

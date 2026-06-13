@@ -58,3 +58,31 @@ export const QUALITY_PROFILE_ACTION_TYPES = new Set<string>([
   "CHANGE_QUALITY_PROFILE_SONARR",
   "CHANGE_QUALITY_PROFILE_LIDARR",
 ]);
+
+/** Human-readable labels for every action type (notifications, summaries). */
+export const ACTION_LABELS: Record<string, string> = {
+  DO_NOTHING: "Monitor Only",
+  DELETE_RADARR: "Delete from Radarr",
+  DELETE_SONARR: "Delete from Sonarr",
+  DELETE_LIDARR: "Delete from Lidarr",
+  UNMONITOR_RADARR: "Unmonitor in Radarr",
+  UNMONITOR_SONARR: "Unmonitor in Sonarr",
+  UNMONITOR_LIDARR: "Unmonitor in Lidarr",
+  UNMONITOR_DELETE_FILES_RADARR: "Unmonitor & Delete Files (Radarr)",
+  UNMONITOR_DELETE_FILES_SONARR: "Unmonitor & Delete Files (Sonarr)",
+  UNMONITOR_DELETE_FILES_LIDARR: "Unmonitor & Delete Files (Lidarr)",
+  MONITOR_DELETE_FILES_RADARR: "Monitor & Delete Files (Radarr)",
+  MONITOR_DELETE_FILES_SONARR: "Monitor & Delete Files (Sonarr)",
+  MONITOR_DELETE_FILES_LIDARR: "Monitor & Delete Files (Lidarr)",
+  DELETE_FILES_RADARR: "Delete Files (Radarr)",
+  DELETE_FILES_SONARR: "Delete Files (Sonarr)",
+  DELETE_FILES_LIDARR: "Delete Files (Lidarr)",
+  CHANGE_QUALITY_PROFILE_RADARR: "Change Quality Profile (Radarr)",
+  CHANGE_QUALITY_PROFILE_SONARR: "Change Quality Profile (Sonarr)",
+  CHANGE_QUALITY_PROFILE_LIDARR: "Change Quality Profile (Lidarr)",
+};
+
+/** Format an action type for display, falling back to the raw value. */
+export function formatActionLabel(actionType: string): string {
+  return ACTION_LABELS[actionType] ?? actionType;
+}

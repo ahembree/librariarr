@@ -1,4 +1,7 @@
 import { logger } from "@/lib/logger";
+import { formatActionLabel } from "@/lib/lifecycle/action-types";
+
+const WEBHOOK_TIMEOUT_MS = 15_000;
 
 interface DiscordEmbed {
   title?: string;
@@ -45,11 +48,14 @@ export async function sendDiscordNotification(
   webhookUrl: string,
   payload: DiscordWebhookPayload
 ): Promise<{ ok: boolean; error?: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
   try {
     const response = await fetch(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      signal: controller.signal,
     });
     if (!response.ok) {
       const text = await response.text().catch(() => "Unknown error");
@@ -57,9 +63,13 @@ export async function sendDiscordNotification(
     }
     return { ok: true };
   } catch (error) {
-    const msg = error instanceof Error ? error.message : "Unknown error";
+    const msg = error instanceof Error
+      ? (error.name === "AbortError" ? "Discord webhook timed out" : error.message)
+      : "Unknown error";
     logger.error("Discord", `Failed to send webhook: ${msg}`);
     return { ok: false, error: msg };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -69,22 +79,9 @@ export function buildSuccessSummaryEmbed(
   actionType: string,
   titles: string[],
 ): DiscordEmbed {
-  const actionLabels: Record<string, string> = {
-    DELETE_RADARR: "Delete from Radarr",
-    DELETE_SONARR: "Delete from Sonarr",
-    DELETE_LIDARR: "Delete from Lidarr",
-    UNMONITOR_RADARR: "Unmonitor in Radarr",
-    UNMONITOR_SONARR: "Unmonitor in Sonarr",
-    UNMONITOR_LIDARR: "Unmonitor in Lidarr",
-    CHANGE_QUALITY_PROFILE_RADARR: "Change Quality Profile (Radarr)",
-    CHANGE_QUALITY_PROFILE_SONARR: "Change Quality Profile (Sonarr)",
-    CHANGE_QUALITY_PROFILE_LIDARR: "Change Quality Profile (Lidarr)",
-    DO_NOTHING: "Monitor Only",
-  };
-
   const fields: DiscordEmbed["fields"] = [
     { name: "Rule", value: ruleSetName, inline: true },
-    { name: "Action", value: actionLabels[actionType] ?? actionType, inline: true },
+    { name: "Action", value: formatActionLabel(actionType), inline: true },
     { name: "Completed", value: String(titles.length), inline: true },
   ];
 
@@ -108,22 +105,9 @@ export function buildFailureSummaryEmbed(
   actionType: string,
   failures: { title: string; error: string }[],
 ): DiscordEmbed {
-  const actionLabels: Record<string, string> = {
-    DELETE_RADARR: "Delete from Radarr",
-    DELETE_SONARR: "Delete from Sonarr",
-    DELETE_LIDARR: "Delete from Lidarr",
-    UNMONITOR_RADARR: "Unmonitor in Radarr",
-    UNMONITOR_SONARR: "Unmonitor in Sonarr",
-    UNMONITOR_LIDARR: "Unmonitor in Lidarr",
-    CHANGE_QUALITY_PROFILE_RADARR: "Change Quality Profile (Radarr)",
-    CHANGE_QUALITY_PROFILE_SONARR: "Change Quality Profile (Sonarr)",
-    CHANGE_QUALITY_PROFILE_LIDARR: "Change Quality Profile (Lidarr)",
-    DO_NOTHING: "Monitor Only",
-  };
-
   const fields: DiscordEmbed["fields"] = [
     { name: "Rule", value: ruleSetName, inline: true },
-    { name: "Action", value: actionLabels[actionType] ?? actionType, inline: true },
+    { name: "Action", value: formatActionLabel(actionType), inline: true },
     { name: "Failed", value: String(failures.length), inline: true },
   ];
 
