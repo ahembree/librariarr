@@ -56,6 +56,14 @@ export default defineConfig({
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
+    // The app is served over plain HTTP. Chromium auto-upgrades http→https for
+    // non-localhost hostnames (e.g. the compose service `app`), which fails with
+    // ERR_SSL_PROTOCOL_ERROR. Disable the upgrade so http:// is used as written.
+    launchOptions: {
+      args: [
+        "--disable-features=HttpsUpgrades,HttpsFirstBalancedMode,HttpsFirstModeV2,HttpsFirstBalancedModeAutoEnable",
+      ],
+    },
   },
 
   projects: [
