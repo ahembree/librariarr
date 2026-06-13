@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
+import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { validateRequest, titlePreferenceSchema } from "@/lib/validation";
 
 export async function GET() {
@@ -65,6 +66,11 @@ export async function PUT(request: NextRequest) {
 
   // Recompute canonical items based on new server preference
   await recomputeCanonical(session.userId);
+
+  // The preferred title/artwork server feeds resolveServerFilter (cached) and
+  // dedup canonical selection; drop all media-derived caches so listings/stats
+  // don't serve the previous preference for up to the TTL.
+  invalidateMediaCaches();
 
   return NextResponse.json({
     preferredTitleServerId: settings.preferredTitleServerId,

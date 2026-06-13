@@ -143,6 +143,7 @@ describe("Lifecycle Rules Preview", () => {
       const ruleSet = await createTestRuleSet(user.id, {
         name: "Unwatched",
         type: "MOVIE",
+        serverIds: [server.id],
         rules: [
           {
             id: "r1",

@@ -20,6 +20,35 @@ export function parseMulti(value: string | null): string[] | null {
 }
 
 /**
+ * Parse a query param into a BigInt, returning null on any malformed input.
+ * `BigInt("abc")` / `BigInt("1.5")` throw synchronously — unguarded, that
+ * surfaces as an unhandled 500 on the media routes. Returns null so the caller
+ * skips the clause instead.
+ */
+function safeBigInt(value: string | null): bigint | null {
+  if (value == null || value.trim() === "") return null;
+  try {
+    return BigInt(value);
+  } catch {
+    return null;
+  }
+}
+
+/** Parse a query param into a finite integer, or null if not parseable. */
+function safeInt(value: string | null): number | null {
+  if (value == null || value.trim() === "") return null;
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Parse a query param into a valid Date, or null for an Invalid Date. */
+function safeDate(value: string | null): Date | null {
+  if (value == null || value.trim() === "") return null;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/**
  * Build Prisma WHERE clauses from common filter search params.
  * Handles multi-select (pipe-separated), range filters, and date filters.
  */
@@ -131,22 +160,22 @@ export function applyCommonFilters(
     }
   }
 
-  // File size range (BigInt)
-  const fileSizeMin = params.get("fileSizeMin");
-  const fileSizeMax = params.get("fileSizeMax");
-  if (fileSizeMin || fileSizeMax) {
+  // File size range (BigInt) — guard against malformed input (BigInt() throws)
+  const fileSizeMin = safeBigInt(params.get("fileSizeMin"));
+  const fileSizeMax = safeBigInt(params.get("fileSizeMax"));
+  if (fileSizeMin != null || fileSizeMax != null) {
     where.fileSize = {};
-    if (fileSizeMin) (where.fileSize as Record<string, bigint>).gte = BigInt(fileSizeMin);
-    if (fileSizeMax) (where.fileSize as Record<string, bigint>).lte = BigInt(fileSizeMax);
+    if (fileSizeMin != null) (where.fileSize as Record<string, bigint>).gte = fileSizeMin;
+    if (fileSizeMax != null) (where.fileSize as Record<string, bigint>).lte = fileSizeMax;
   }
 
-  // Duration range (milliseconds)
-  const durationMin = params.get("durationMin");
-  const durationMax = params.get("durationMax");
-  if (durationMin || durationMax) {
+  // Duration range (milliseconds) — skip non-numeric input (NaN → Prisma 500)
+  const durationMin = safeInt(params.get("durationMin"));
+  const durationMax = safeInt(params.get("durationMax"));
+  if (durationMin != null || durationMax != null) {
     where.duration = {};
-    if (durationMin) (where.duration as Record<string, number>).gte = parseInt(durationMin);
-    if (durationMax) (where.duration as Record<string, number>).lte = parseInt(durationMax);
+    if (durationMin != null) (where.duration as Record<string, number>).gte = durationMin;
+    if (durationMax != null) (where.duration as Record<string, number>).lte = durationMax;
   }
 
   // Play count — multi-condition with AND/OR logic
@@ -176,13 +205,16 @@ export function applyCommonFilters(
       since.setUTCHours(0, 0, 0, 0);
       where.lastPlayedAt = { gte: since };
     }
-  } else if (lastPlayedAtMin || lastPlayedAtMax) {
-    where.lastPlayedAt = {};
-    if (lastPlayedAtMin) (where.lastPlayedAt as Record<string, Date>).gte = new Date(lastPlayedAtMin);
-    if (lastPlayedAtMax) {
-      const maxDate = new Date(lastPlayedAtMax);
-      maxDate.setUTCHours(23, 59, 59, 999);
-      (where.lastPlayedAt as Record<string, Date>).lte = maxDate;
+  } else {
+    const minDate = safeDate(lastPlayedAtMin);
+    const maxDate = safeDate(lastPlayedAtMax);
+    if (minDate || maxDate) {
+      where.lastPlayedAt = {};
+      if (minDate) (where.lastPlayedAt as Record<string, Date>).gte = minDate;
+      if (maxDate) {
+        maxDate.setUTCHours(23, 59, 59, 999);
+        (where.lastPlayedAt as Record<string, Date>).lte = maxDate;
+      }
     }
   }
 
@@ -198,13 +230,16 @@ export function applyCommonFilters(
       since.setUTCHours(0, 0, 0, 0);
       where.addedAt = { gte: since };
     }
-  } else if (addedAtMin || addedAtMax) {
-    where.addedAt = {};
-    if (addedAtMin) (where.addedAt as Record<string, Date>).gte = new Date(addedAtMin);
-    if (addedAtMax) {
-      const maxDate = new Date(addedAtMax);
-      maxDate.setUTCHours(23, 59, 59, 999);
-      (where.addedAt as Record<string, Date>).lte = maxDate;
+  } else {
+    const minDate = safeDate(addedAtMin);
+    const maxDate = safeDate(addedAtMax);
+    if (minDate || maxDate) {
+      where.addedAt = {};
+      if (minDate) (where.addedAt as Record<string, Date>).gte = minDate;
+      if (maxDate) {
+        maxDate.setUTCHours(23, 59, 59, 999);
+        (where.addedAt as Record<string, Date>).lte = maxDate;
+      }
     }
   }
 
@@ -220,13 +255,16 @@ export function applyCommonFilters(
       since.setUTCHours(0, 0, 0, 0);
       where.originallyAvailableAt = { gte: since };
     }
-  } else if (originallyAvailableAtMin || originallyAvailableAtMax) {
-    where.originallyAvailableAt = {};
-    if (originallyAvailableAtMin) (where.originallyAvailableAt as Record<string, Date>).gte = new Date(originallyAvailableAtMin);
-    if (originallyAvailableAtMax) {
-      const maxDate = new Date(originallyAvailableAtMax);
-      maxDate.setUTCHours(23, 59, 59, 999);
-      (where.originallyAvailableAt as Record<string, Date>).lte = maxDate;
+  } else {
+    const minDate = safeDate(originallyAvailableAtMin);
+    const maxDate = safeDate(originallyAvailableAtMax);
+    if (minDate || maxDate) {
+      where.originallyAvailableAt = {};
+      if (minDate) (where.originallyAvailableAt as Record<string, Date>).gte = minDate;
+      if (maxDate) {
+        maxDate.setUTCHours(23, 59, 59, 999);
+        (where.originallyAvailableAt as Record<string, Date>).lte = maxDate;
+      }
     }
   }
 

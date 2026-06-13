@@ -7,6 +7,9 @@ import { logger } from "@/lib/logger";
 
 const PAGE_SIZE = 100;
 const CACHE_TTL_MS = 60_000;
+// Hard ceiling on Seerr request pagination so a huge or looping instance can't
+// hang the request indefinitely. 1000 pages × 100 per page = 100k requests.
+const MAX_PAGES = 1000;
 
 interface ResolvedRequest {
   seerrId: number;
@@ -76,7 +79,15 @@ async function resolveUserRequests(
   for (const inst of instances) {
     const client = new SeerrClient(inst.url, inst.apiKey);
     let skip = 0;
+    let pages = 0;
     while (true) {
+      if (pages >= MAX_PAGES) {
+        logger.warn(
+          "Seerr",
+          `Request pagination hit MAX_PAGES (${MAX_PAGES}) for ${inst.name} (user ${userKey}) — truncating`
+        );
+        break;
+      }
       let page;
       try {
         page = await client.getRequests({ take: PAGE_SIZE, skip });
@@ -88,6 +99,7 @@ async function resolveUserRequests(
         );
         break;
       }
+      pages += 1;
       for (const req of page.results) {
         const r = req.requestedBy;
         if (!r) continue;

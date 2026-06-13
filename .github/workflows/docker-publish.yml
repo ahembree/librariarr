@@ -1,5 +1,10 @@
 name: Build and Push Docker Image
 
+# Manual fallback publish (release-please is the primary release path).
+# NOTE: the `type=semver` tags below are derived from the dispatch REF, so they
+# only populate when this workflow is dispatched from a TAG (e.g. v1.2.3).
+# Dispatched from a branch, no semver tag exists, so only `:latest`
+# (default branch) and `:<sha>` are pushed — that is expected, not a failure.
 on:
   workflow_dispatch:
 

@@ -14,8 +14,8 @@ const SIZE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"];
 export function formatFileSize(bytes: string | null): string {
   if (!bytes) return "-";
   const num = Number(bytes);
-  if (num === 0) return "-";
-  const i = Math.floor(Math.log(num) / Math.log(1024));
+  if (!Number.isFinite(num) || num <= 0) return "-";
+  const i = Math.min(Math.floor(Math.log(num) / Math.log(1024)), SIZE_UNITS.length - 1);
   const value = num / Math.pow(1024, i);
   return `${value.toFixed(i >= 3 ? 2 : i >= 2 ? 1 : 0)} ${SIZE_UNITS[i]}`;
 }
@@ -25,8 +25,8 @@ export function formatFileSize(bytes: string | null): string {
  * Returns "0 B" for zero/falsy values. Used by stats cards where the value is already a number.
  */
 export function formatBytesNum(bytes: number): string {
-  if (!bytes || bytes <= 0) return "0 B";
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), SIZE_UNITS.length - 1);
   return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${SIZE_UNITS[i]}`;
 }
 

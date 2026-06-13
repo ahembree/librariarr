@@ -349,6 +349,48 @@ describe("PUT /api/tools/blackout/[id]", () => {
     expect(body.schedule.action).toBe("block_new_only");
   });
 
+  it("toggling enabled (partial body) preserves a one_time schedule's dates", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+
+    const createRes = await createOneTimeSchedule();
+    const { schedule: created } = await createRes.json();
+
+    // The streams page sends ONLY { enabled } when toggling the switch.
+    const res = await callRouteWithParams(
+      PUT,
+      { id: created.id },
+      { method: "PUT", body: { enabled: false } }
+    );
+    const body = await expectJson<{
+      schedule: { enabled: boolean; startDate: string | null; endDate: string | null };
+    }>(res);
+    expect(body.schedule.enabled).toBe(false);
+    // CRITICAL: a partial toggle must NOT wipe the schedule's date definition.
+    expect(body.schedule.startDate).not.toBeNull();
+    expect(body.schedule.endDate).not.toBeNull();
+  });
+
+  it("toggling enabled (partial body) preserves a recurring schedule's times", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+
+    const createRes = await createRecurringSchedule();
+    const { schedule: created } = await createRes.json();
+
+    const res = await callRouteWithParams(
+      PUT,
+      { id: created.id },
+      { method: "PUT", body: { enabled: false } }
+    );
+    const body = await expectJson<{
+      schedule: { startTime: string | null; endTime: string | null; daysOfWeek: number[] | null };
+    }>(res);
+    expect(body.schedule.startTime).toBe("02:00");
+    expect(body.schedule.endTime).toBe("06:00");
+    expect(body.schedule.daysOfWeek).toEqual([1, 3, 5]);
+  });
+
   it("cannot update another user's schedule", async () => {
     const user1 = await createTestUser({ plexId: "plex-owner" });
     const user2 = await createTestUser({ plexId: "plex-other" });

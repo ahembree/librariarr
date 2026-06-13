@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const m = vi.hoisted(() => ({
-  enqueueJob: vi.fn().mockResolvedValue(undefined),
+  enqueueJob: vi.fn().mockResolvedValue(true),
   isScheduleDue: vi.fn(),
   appSettings: {
     findMany: vi.fn(),
@@ -117,6 +117,7 @@ describe("dispatchScheduledJobs", () => {
   it("enqueues a backup when the backup schedule is due", async () => {
     appSettings.findMany.mockResolvedValue([settingsRow()]);
     appSettings.findFirst.mockResolvedValue({
+      id: "settings-1",
       backupSchedule: "DAILY",
       lastBackupAt: null,
       scheduledJobTime: "03:00",
@@ -130,7 +131,11 @@ describe("dispatchScheduledJobs", () => {
 
     await dispatchScheduledJobs();
 
-    expect(appSettings.updateMany).toHaveBeenCalledWith({ data: { lastBackupAt: expect.any(Date) } });
+    // Watermark advanced via a row-scoped update (not an unscoped updateMany).
+    expect(appSettings.update).toHaveBeenCalledWith({
+      where: { id: "settings-1" },
+      data: { lastBackupAt: expect.any(Date) },
+    });
     expect(enqueueJob).toHaveBeenCalledWith(
       TASK_SCHEDULED_BACKUP,
       {},

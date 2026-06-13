@@ -42,16 +42,16 @@ describe("jobs client", () => {
   });
 
   it("enqueues a job via worker utils, reusing the utils instance", async () => {
-    await enqueueJob("task-a", { x: 1 }, { jobKey: "k" });
-    await enqueueJob("task-b", { y: 2 });
+    await expect(enqueueJob("task-a", { x: 1 }, { jobKey: "k" })).resolves.toBe(true);
+    await expect(enqueueJob("task-b", { y: 2 })).resolves.toBe(true);
     expect(makeWorkerUtils).toHaveBeenCalledTimes(1); // cached
     expect(addJob).toHaveBeenCalledWith("task-a", { x: 1 }, { jobKey: "k" });
     expect(addJob).toHaveBeenCalledWith("task-b", { y: 2 }, undefined);
   });
 
-  it("swallows and logs enqueue errors", async () => {
+  it("logs enqueue errors and resolves false (never throws)", async () => {
     addJob.mockRejectedValueOnce(new Error("db down"));
-    await expect(enqueueJob("task-c", {})).resolves.toBeUndefined();
+    await expect(enqueueJob("task-c", {})).resolves.toBe(false);
     expect(error).toHaveBeenCalledWith("Jobs", expect.stringContaining("task-c"), expect.any(Object));
   });
 

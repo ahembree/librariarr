@@ -157,7 +157,7 @@ export class PlexClient implements MediaServerClient {
     type: LibraryItemType,
     offset: number,
     limit: number,
-  ): Promise<{ items: PlexMetadataItem[]; total: number }> {
+  ): Promise<{ items: PlexMetadataItem[]; total: number | null }> {
     const typeParam = type === "episode" ? 4 : type === "track" ? 10 : undefined;
     const params: Record<string, unknown> = {
       includeGuids: 1,
@@ -173,7 +173,14 @@ export class PlexClient implements MediaServerClient {
 
     const container = response.data.MediaContainer;
     const items = container.Metadata || [];
-    const total = container.totalSize ?? container.size ?? items.length;
+    // Prefer totalSize (the library-wide count). `container.size` is only the
+    // per-page count, NOT the total — trusting it as the total would terminate
+    // the caller's paging loop after one page and trigger erroneous stale
+    // deletion. When totalSize is absent, return null ("unknown") so the
+    // caller's short-page check governs termination; never return a numeric
+    // sentinel — it would overflow the Int SyncJob.totalItems column.
+    const total =
+      typeof container.totalSize === "number" ? container.totalSize : null;
     return { items, total };
   }
 
@@ -388,8 +395,13 @@ export class PlexClient implements MediaServerClient {
 
         await new Promise<void>((resolve) => { setImmediate(resolve); });
       }
-    } catch {
+    } catch (error) {
+      // Re-throw so the caller can tell a fetch failure apart from a genuinely
+      // empty history. The watch-history sync does a destructive full-replace;
+      // swallowing the error here (returning []) made a transient outage wipe
+      // all stored history.
       logger.debug("Plex", "Failed to fetch detailed watch history");
+      throw error;
     }
 
     return entries;

@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { appCache } from "@/lib/cache/memory-cache";
 import { normalizeResolutionLabel } from "@/lib/resolution";
+import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { getServerPresenceByGroup } from "@/lib/dedup/server-presence";
 
 type GroupType = "SERIES" | "MUSIC";
@@ -43,10 +44,21 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  const sf = await resolveServerFilter(session.userId!, null, type);
+  if (!sf) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
   const cacheKey = `group-summary:${session.userId}:${type}:${repItem.parentTitle.toLowerCase().trim()}`;
   const result = await appCache.getOrSet(
     cacheKey,
-    () => computeGroupSummary(session.userId!, type, repItem.parentTitle!),
+    () =>
+      computeGroupSummary(
+        type,
+        repItem.parentTitle!,
+        sf.serverIds,
+        sf.isSingleServer,
+      ),
     60_000,
   );
 
@@ -54,16 +66,20 @@ export async function GET(
 }
 
 async function computeGroupSummary(
-  userId: string,
   type: GroupType,
   parentTitle: string,
+  serverIds: string[],
+  isSingleServer: boolean,
 ) {
-  // Fetch all sibling items in this group across the user's servers
+  // Fetch all sibling items in this group across the user's servers.
+  // For multi-server, restrict to canonical copies to avoid double-counting
+  // episodes/size/playCount across duplicate items.
   const items = await prisma.mediaItem.findMany({
     where: {
       type,
       parentTitle,
-      library: { mediaServer: { userId } },
+      library: { mediaServerId: { in: serverIds } },
+      ...(isSingleServer ? {} : { dedupCanonical: true }),
     },
     select: {
       id: true,
@@ -95,11 +111,6 @@ async function computeGroupSummary(
   });
 
   // Server presence — uses normalized parentTitle keying like other grouped routes
-  const userServers = await prisma.mediaServer.findMany({
-    where: { userId, enabled: true },
-    select: { id: true },
-  });
-  const serverIds = userServers.map((s) => s.id);
   const presenceMap = await getServerPresenceByGroup(type, serverIds);
   const servers =
     presenceMap.get(parentTitle.toLowerCase().trim()) ?? [];

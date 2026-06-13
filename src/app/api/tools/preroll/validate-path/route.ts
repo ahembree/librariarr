@@ -4,9 +4,11 @@ import { access, constants } from "fs/promises";
 import nodePath from "node:path";
 import { validateRequest, prerollValidatePathSchema } from "@/lib/validation";
 
-const ALLOWED_PREFIXES = process.env.PREROLL_ALLOWED_PATHS
-  ? process.env.PREROLL_ALLOWED_PATHS.split(",").map((p) => p.trim())
-  : ["/media", "/data", "/mnt", "/opt/prerolls"];
+const ALLOWED_PREFIXES = (
+  process.env.PREROLL_ALLOWED_PATHS
+    ? process.env.PREROLL_ALLOWED_PATHS.split(",").map((p) => p.trim())
+    : ["/media", "/data", "/mnt", "/opt/prerolls"]
+).map((p) => nodePath.resolve(p));
 
 export async function POST(req: NextRequest) {
   const session = await getSession();
@@ -19,8 +21,11 @@ export async function POST(req: NextRequest) {
   const { path } = data;
 
   const resolved = nodePath.resolve(path);
-  const isAllowed = ALLOWED_PREFIXES.some((prefix) =>
-    resolved.startsWith(prefix)
+  // Require an exact match or a path-separator boundary so that a sibling
+  // directory (e.g. "/media-secret") can't pass the "/media" prefix check.
+  const isAllowed = ALLOWED_PREFIXES.some(
+    (prefix) =>
+      resolved === prefix || resolved.startsWith(prefix + nodePath.sep)
   );
   if (!isAllowed) {
     return NextResponse.json(

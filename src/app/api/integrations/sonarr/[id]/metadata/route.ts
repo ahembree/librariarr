@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { SonarrClient } from "@/lib/arr/sonarr-client";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
 export async function GET(
   _request: NextRequest,
@@ -23,12 +24,19 @@ export async function GET(
   }
 
   const client = new SonarrClient(instance.url, instance.apiKey);
-  const [series, qualityProfiles, tags, languages] = await Promise.all([
-    client.getSeries(),
-    client.getQualityProfiles(),
-    client.getTags(),
-    client.getLanguages(),
-  ]);
+  let series, qualityProfiles, tags, languages;
+  try {
+    [series, qualityProfiles, tags, languages] = await Promise.all([
+      client.getSeries(),
+      client.getQualityProfiles(),
+      client.getTags(),
+      client.getLanguages(),
+    ]);
+  } catch (err: unknown) {
+    const raw = err instanceof Error ? err.message : "Failed to query Sonarr";
+    const msg = sanitizeErrorDetail(raw) ?? "Failed to query Sonarr";
+    return NextResponse.json({ error: msg }, { status: 502 });
+  }
 
   const tagMap = new Map(tags.map((t) => [t.id, t.label]));
   const profileMap = new Map(qualityProfiles.map((p) => [p.id, p.name]));

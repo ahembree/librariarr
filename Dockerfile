@@ -14,11 +14,18 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN pnpm exec prisma generate && pnpm build
 
-# Isolated prisma CLI install with all transitive dependencies
+# Isolated prisma CLI install with all transitive dependencies.
+# Pin the CLI to the SAME version range as the generated client (read from
+# package.json) so a future Prisma publish can't install a mismatched `latest`
+# CLI — a CLI/client major mismatch breaks `migrate deploy` / `db push` at
+# runtime and makes the image non-reproducible across builds of one commit.
 FROM base AS prisma-cli
 WORKDIR /opt/prisma
-RUN npm init -y > /dev/null 2>&1 && \
-    npm install --no-package-lock --no-fund --no-audit prisma
+COPY package.json /tmp/app-package.json
+RUN PRISMA_VERSION="$(node -p "const p=require('/tmp/app-package.json');(p.devDependencies&&p.devDependencies.prisma)||(p.dependencies&&p.dependencies.prisma)")" && \
+    echo "Pinning prisma CLI to ${PRISMA_VERSION}" && \
+    npm init -y > /dev/null 2>&1 && \
+    npm install --no-package-lock --no-fund --no-audit "prisma@${PRISMA_VERSION}"
 
 FROM base AS runner
 WORKDIR /app

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
@@ -77,7 +77,13 @@ export async function detectAndSaveMatches(
 
   let matched;
   const episodeIdMap = new Map<string, string[]>();
-  if (ruleSet.type === "SERIES" && ruleSet.seriesScope) {
+  // A SERIES rule that references a series-aggregate field (episodeCount,
+  // watchedEpisodePercentage, …) MUST be evaluated at the series level even
+  // when seriesScope is false — the aggregate cannot be computed per-episode,
+  // and the episode path silently drops it (see hasSeriesAggregateRules). This
+  // mirrors the query engine's aggregateSeriesAndFilter routing.
+  const seriesUsesAggregate = ruleSet.type === "SERIES" && hasSeriesAggregateRules(rules);
+  if (ruleSet.type === "SERIES" && (ruleSet.seriesScope || seriesUsesAggregate)) {
     matched = await evaluateSeriesScope(rules, serverIds, arrData, seerrData);
     // Build episode ID map so actions track individual episodes for file size calculation
     for (const m of matched) {
@@ -254,6 +260,52 @@ export async function detectAndSaveMatches(
     }
   }
 
+  // Multi-server: the same logical media appears once per server, but each
+  // copy resolves to the SAME Arr record (same TMDB/TVDB/MBID). Collapse those
+  // duplicates by resolved Arr id so we don't schedule two destructive actions
+  // against one Arr record or double-count deletedBytes. We dedupe by Arr id
+  // (not dedupCanonical) because a rule set may target a server SUBSET whose
+  // canonical copy lives on a non-targeted server — filtering by canonical
+  // there would wrongly drop the item. Items with no Arr id are left as-is.
+  if (ruleSet.serverIds.length > 1) {
+    const byArrId = new Map<number, Record<string, unknown>>();
+    const deduped: Record<string, unknown>[] = [];
+    for (const item of enrichedItems) {
+      const arrId = item.arrId as number | null;
+      if (arrId == null) {
+        deduped.push(item);
+        continue;
+      }
+      const existing = byArrId.get(arrId);
+      if (!existing) {
+        byArrId.set(arrId, item);
+        deduped.push(item);
+      } else {
+        // Merge server presence so the matches view still shows every server.
+        const merged = [
+          ...((existing.servers as unknown[]) ?? []),
+          ...((item.servers as unknown[]) ?? []),
+        ];
+        const seen = new Set<string>();
+        existing.servers = merged.filter((s) => {
+          const sid = (s as { serverId?: string }).serverId;
+          if (!sid) return true;
+          if (seen.has(sid)) return false;
+          seen.add(sid);
+          return true;
+        });
+      }
+    }
+    if (deduped.length < enrichedItems.length) {
+      logger.info(
+        "Lifecycle",
+        `Collapsed ${enrichedItems.length - deduped.length} cross-server duplicate match(es) by Arr id for rule set "${ruleSet.name}"`,
+      );
+      enrichedItems.length = 0;
+      enrichedItems.push(...deduped);
+    }
+  }
+
   const now = new Date();
 
   if (fullReEval) {
@@ -291,23 +343,35 @@ export async function detectAndSaveMatches(
   );
   const staleIds = [...existingIds].filter((id) => !currentIds.has(id));
 
-  if (newItems.length > 0) {
-    await prisma.ruleMatch.createMany({
-      data: newItems.map((item) => ({
-        ruleSetId: ruleSet.id,
-        mediaItemId: item.id as string,
-        itemData: jsonSafe(item),
-        detectedAt: now,
-      })),
-      skipDuplicates: true,
-    });
+  // Atomic create + delete: a partial failure must not leave a half-updated
+  // match set (e.g. new matches written but stale ones never removed).
+  const removeStale = !ruleSet.stickyMatches && staleIds.length > 0;
+  if (newItems.length > 0 || removeStale) {
+    await prisma.$transaction([
+      ...(newItems.length > 0
+        ? [
+            prisma.ruleMatch.createMany({
+              data: newItems.map((item) => ({
+                ruleSetId: ruleSet.id,
+                mediaItemId: item.id as string,
+                itemData: jsonSafe(item),
+                detectedAt: now,
+              })),
+              skipDuplicates: true,
+            }),
+          ]
+        : []),
+      ...(removeStale
+        ? [
+            prisma.ruleMatch.deleteMany({
+              where: { ruleSetId: ruleSet.id, mediaItemId: { in: staleIds } },
+            }),
+          ]
+        : []),
+    ]);
   }
 
-  if (!ruleSet.stickyMatches && staleIds.length > 0) {
-    await prisma.ruleMatch.deleteMany({
-      where: { ruleSetId: ruleSet.id, mediaItemId: { in: staleIds } },
-    });
-
+  if (removeStale) {
     // Fetch current state of stale items to determine which criteria changed.
     // Scope by the rule set's serverIds so logs can never refer to items outside
     // the rule set's intended library scope.

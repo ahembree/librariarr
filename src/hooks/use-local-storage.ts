@@ -2,6 +2,24 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 
+// localStorage throws in Safari private mode / when storage is disabled. These
+// snapshots run during render, so an unguarded access would crash the page.
+function safeGet(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeSet(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Storage unavailable — fall through; in-memory listeners still fire.
+  }
+}
+
 const listenersByKey = new Map<string, Set<() => void>>();
 
 function notify(key: string) {
@@ -34,7 +52,7 @@ export function useLocalStorage<T extends string>(
 ): [T, (next: T) => void] {
   const sub = useCallback((l: () => void) => subscribe(key, l), [key]);
   const getSnapshot = useCallback(
-    () => (localStorage.getItem(key) as T | null) ?? defaultValue,
+    () => (safeGet(key) as T | null) ?? defaultValue,
     [key, defaultValue],
   );
   const getServerSnapshot = useCallback(() => defaultValue, [defaultValue]);
@@ -43,7 +61,7 @@ export function useLocalStorage<T extends string>(
 
   const setValue = useCallback(
     (next: T) => {
-      localStorage.setItem(key, next);
+      safeSet(key, next);
       notify(key);
     },
     [key],
@@ -60,7 +78,7 @@ export function useLocalStorageJSON<T>(
 ): [T, (next: T) => void] {
   const sub = useCallback((l: () => void) => subscribe(key, l), [key]);
   const getSnapshot = useCallback((): T => {
-    const raw = localStorage.getItem(key);
+    const raw = safeGet(key);
     const cached = jsonCache.get(key);
     if (cached && cached.raw === raw) return cached.parsed as T;
     let parsed: T;
@@ -83,7 +101,7 @@ export function useLocalStorageJSON<T>(
   const setValue = useCallback(
     (next: T) => {
       const raw = JSON.stringify(next);
-      localStorage.setItem(key, raw);
+      safeSet(key, raw);
       jsonCache.set(key, { raw, parsed: next });
       notify(key);
     },

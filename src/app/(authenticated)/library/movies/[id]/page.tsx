@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
 import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
@@ -26,12 +26,16 @@ export default function MovieDetailPage() {
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
   const [loading, setLoading] = useState(true);
+  // Token guards against a stale slow response landing after a quick id change.
+  const reqToken = useRef(0);
 
   useEffect(() => {
+    const token = ++reqToken.current;
     async function fetchItem() {
       try {
         const res = await fetch(`/api/media/${id}`);
         const data = await res.json();
+        if (token !== reqToken.current) return;
         if (data.item) {
           setItem(data.item);
           setPlayServers(data.playServers || []);
@@ -39,7 +43,7 @@ export default function MovieDetailPage() {
       } catch {
         // Failed to load
       } finally {
-        setLoading(false);
+        if (token === reqToken.current) setLoading(false);
       }
     }
     fetchItem();

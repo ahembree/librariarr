@@ -201,6 +201,9 @@ export default function AllSeasonsPage() {
   const scrollElementRef = useRef<HTMLElement | null>(null);
   const [, setScrollElement] = useState<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
+  // Token guards against a stale slow response landing after a quick
+  // filter/sort flip and overwriting state with the wrong items.
+  const reqToken = useRef(0);
 
   // Find the <main> scroll container on mount
   useEffect(() => {
@@ -209,11 +212,13 @@ export default function AllSeasonsPage() {
     setScrollElement(main);
   }, []);
 
+  // Re-measure scrollMargin once the grid mounts (it's hidden behind the
+  // skeleton while loading, so the ref is null on the initial pass).
   useLayoutEffect(() => {
     if (gridContainerRef.current) {
       setScrollMargin(gridContainerRef.current.offsetTop);
     }
-  }, []);
+  }, [loading, seasons.length]);
 
   // Compute row count for virtualizer
   const rowCount = useMemo(
@@ -253,6 +258,7 @@ export default function AllSeasonsPage() {
   };
 
   const fetchSeasons = useCallback(async () => {
+    const token = ++reqToken.current;
     setLoading(true);
     try {
       const params = new URLSearchParams();
@@ -263,11 +269,12 @@ export default function AllSeasonsPage() {
       }
       const response = await fetch(`/api/media/series/all-seasons?${params}`);
       const data = await response.json();
+      if (token !== reqToken.current) return;
       setSeasons(data.seasons || []);
     } catch (error) {
       console.error("Failed to fetch seasons:", error);
     } finally {
-      setLoading(false);
+      if (token === reqToken.current) setLoading(false);
     }
   }, [filters, sortBy, sortOrder]);
 
@@ -415,7 +422,18 @@ export default function AllSeasonsPage() {
                               <MediaHoverPopover
                                 imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
                                 data={{
+                                  // Keep the field set identical to the table
+                                  // view's popover (style-guide convention).
                                   title: `${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`,
+                                  year: season.year,
+                                  summary: season.summary,
+                                  contentRating: season.contentRating,
+                                  rating: season.rating,
+                                  ratingImage: season.ratingImage,
+                                  audienceRating: season.audienceRating,
+                                  audienceRatingImage: season.audienceRatingImage,
+                                  genres: season.genres,
+                                  studio: season.studio,
                                   episodeCount: season.episodeCount,
                                   qualityCounts: season.qualityCounts,
                                   fileSize: season.totalSize,

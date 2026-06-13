@@ -2,7 +2,7 @@ import { run, parseCrontab, type Runner } from "graphile-worker";
 import { logger } from "@/lib/logger";
 import { getJobsPool } from "@/lib/jobs/client";
 import { taskList } from "@/lib/jobs/tasks";
-import { TASK_DISPATCH, TASK_ARCHIVE_LOGS, TASK_CLEANUP_ACTIONS } from "@/lib/jobs/constants";
+import { TASK_DISPATCH, TASK_ARCHIVE_LOGS, TASK_CLEANUP_ACTIONS, TASK_PRUNE_IMAGE_CACHE } from "@/lib/jobs/constants";
 
 /**
  * Static crontab driving the recurring tasks.
@@ -16,6 +16,7 @@ const CRONTAB = `
 * * * * * ${TASK_DISPATCH}
 */15 * * * * ${TASK_CLEANUP_ACTIONS}
 0 * * * * ${TASK_ARCHIVE_LOGS}
+30 3 * * * ${TASK_PRUNE_IMAGE_CACHE}
 `.trim();
 
 let runner: Runner | undefined;

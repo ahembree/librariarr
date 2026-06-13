@@ -1,7 +1,12 @@
 import { prisma } from "@/lib/db";
 import { SeerrClient } from "@/lib/seerr/seerr-client";
+import { logger } from "@/lib/logger";
 import { splitProgress, type FractionReporter } from "@/lib/progress/fraction";
 import type { SeerrDataMap } from "@/lib/rules/lifecycle-engine";
+
+// Hard ceiling on Seerr request pagination so a huge or looping instance can't
+// hang the query indefinitely. 1000 pages × 100 per page = 100k requests.
+const MAX_PAGES = 1000;
 
 /**
  * Fetch Seerr metadata for the query builder from a specific instance.
@@ -38,10 +43,19 @@ export async function fetchSeerrDataForQuery(
     let skip = 0;
     const take = 100;
     let hasMore = true;
+    let pages = 0;
     let processed = 0;
 
     while (hasMore) {
+      if (pages >= MAX_PAGES) {
+        logger.warn(
+          "Seerr",
+          `Request pagination hit MAX_PAGES (${MAX_PAGES}) for ${instance.name} (${mediaType}) — truncating`
+        );
+        break;
+      }
       const response = await client.getRequests({ take, skip, mediaType });
+      pages += 1;
 
       for (const req of response.results) {
         const keys: string[] = [];

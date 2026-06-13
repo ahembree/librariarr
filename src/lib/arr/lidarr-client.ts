@@ -1,6 +1,34 @@
 import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
+import { configureRetry } from "@/lib/http-retry";
+
+// Tracked-download states that mean the item is NOT actively downloading.
+// Anything else (downloading, queued, warning, etc.) counts as an active download.
+const INACTIVE_DOWNLOAD_STATES = new Set([
+  "imported",
+  "importpending",
+  "failed",
+  "failedpending",
+  "ignored",
+]);
+
+/**
+ * A queue record is "actively downloading" unless its tracked-download state
+ * indicates it has already finished (imported), failed, or is ignored. Falling
+ * back to `true` when state is absent preserves the prior behaviour for queues
+ * that don't report a state.
+ */
+function isActiveDownloadRecord(record: {
+  trackedDownloadState?: string;
+  status?: string;
+}): boolean {
+  const state = (record.trackedDownloadState ?? "").toLowerCase();
+  if (state && INACTIVE_DOWNLOAD_STATES.has(state)) return false;
+  const status = (record.status ?? "").toLowerCase();
+  if (status === "completed" || status === "failed") return false;
+  return true;
+}
 
 export interface LidarrArtist {
   id: number;
@@ -41,6 +69,21 @@ export interface LidarrTrackFile {
   artistId: number;
   relativePath: string;
   size: number;
+}
+
+export interface LidarrAlbum {
+  id: number;
+  title: string;
+}
+
+export interface LidarrTrack {
+  id: number;
+  albumId: number;
+  trackFileId: number;
+  title: string;
+  hasFile: boolean;
+  trackNumber?: string;
+  absoluteTrackNumber?: number;
 }
 
 export interface LidarrExclusion {
@@ -87,6 +130,8 @@ export class LidarrClient {
         return Promise.reject(error);
       }
     );
+
+    configureRetry(this.client, "Lidarr", logger);
   }
 
   async testConnection(): Promise<{ ok: boolean; error?: string; appName?: string; version?: string }> {
@@ -117,8 +162,14 @@ export class LidarrClient {
   }
 
   async getArtistByMusicBrainzId(mbId: string): Promise<LidarrArtist | null> {
-    const artists = await this.getArtists();
-    return artists.find((a) => a.foreignArtistId === mbId) ?? null;
+    // Server-side lookup by MusicBrainz id (mirrors Radarr's ?tmdbId= and
+    // Sonarr's ?tvdbId=). Avoids fetching the entire artist library per call.
+    const { data } = await this.client.get<LidarrArtist[]>("/api/v1/artist", {
+      params: { mbId },
+    });
+    // Lidarr filters by foreignArtistId, but guard in case the param is ignored
+    // by an older version and the full list is returned.
+    return data.find((a) => a.foreignArtistId === mbId) ?? data[0] ?? null;
   }
 
   async deleteArtist(
@@ -154,6 +205,20 @@ export class LidarrClient {
     });
   }
 
+  async getAlbums(artistId: number): Promise<LidarrAlbum[]> {
+    const { data } = await this.client.get<LidarrAlbum[]>("/api/v1/album", {
+      params: { artistId },
+    });
+    return data;
+  }
+
+  async getTracks(artistId: number): Promise<LidarrTrack[]> {
+    const { data } = await this.client.get<LidarrTrack[]>("/api/v1/track", {
+      params: { artistId },
+    });
+    return data;
+  }
+
   async getQualityProfiles(): Promise<LidarrQualityProfile[]> {
     const { data } = await this.client.get<LidarrQualityProfile[]>(
       "/api/v1/qualityprofile"
@@ -175,8 +240,11 @@ export class LidarrClient {
       });
       const records = data.records || [];
       if (records.length === 0) return { downloading: false, status: null };
-      const record = records[0];
-      return { downloading: true, status: record.status ?? record.trackedDownloadStatus ?? "downloading" };
+      const active = records.find(isActiveDownloadRecord);
+      if (!active) {
+        return { downloading: false, status: records[0].status ?? records[0].trackedDownloadStatus ?? null };
+      }
+      return { downloading: true, status: active.status ?? active.trackedDownloadStatus ?? "downloading" };
     } catch {
       return { downloading: false, status: null };
     }

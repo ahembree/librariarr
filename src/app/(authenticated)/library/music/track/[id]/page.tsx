@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { MediaDetailContent } from "@/components/media-detail-content";
@@ -27,11 +27,17 @@ export default function TrackDetailPage() {
     return label ? { href: from, label } : null;
   }, [searchParams]);
 
+  // Token guards against a stale slow response landing after the id changes
+  // and overwriting the current track's data.
+  const reqToken = useRef(0);
+
   useEffect(() => {
+    const token = ++reqToken.current;
     async function fetchItem() {
       try {
         const res = await fetch(`/api/media/${id}`);
         const data = await res.json();
+        if (token !== reqToken.current) return;
         if (data.item) {
           setItem(data.item);
           setPlayServers(buildPlayLinks(data.playServers || [], [
@@ -43,7 +49,7 @@ export default function TrackDetailPage() {
       } catch {
         // Failed to load
       } finally {
-        setLoading(false);
+        if (token === reqToken.current) setLoading(false);
       }
     }
     fetchItem();

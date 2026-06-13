@@ -287,17 +287,26 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       // Fall through to /Users list fallback
     }
 
-    // Fallback: list users and pick the first admin
+    // Fallback: list users and pick an administrator. Sort by Id first so the
+    // selection is DETERMINISTIC across syncs (otherwise it depends on whatever
+    // order the API returns, which can attribute watch history to a different
+    // admin run-to-run). A non-admin fallback may have a restricted library
+    // view, so warn — it can cause incomplete syncs / wrongful stale deletion.
     const usersRes = await this.client.get<
       Array<{ Id: string; Name: string; Policy?: { IsAdministrator?: boolean } }>
     >("/Users");
-    const users = usersRes.data || [];
-    const admin = users.find((u) => u.Policy?.IsAdministrator) ?? users[0];
-    if (!admin) {
+    const users = [...(usersRes.data || [])].sort((a, b) => a.Id.localeCompare(b.Id));
+    const admin = users.find((u) => u.Policy?.IsAdministrator);
+    const selected = admin ?? users[0];
+    if (!selected) {
       throw new Error("No users found on server — cannot determine userId for API queries");
     }
-    logger.debug(this.logPrefix, `Using user "${admin.Name}" for API queries (API key auth)`);
-    this.cachedUserId = admin.Id;
+    if (admin) {
+      logger.debug(this.logPrefix, `Using admin user "${selected.Name}" for API queries (API key auth)`);
+    } else {
+      logger.warn(this.logPrefix, `No administrator user found; using "${selected.Name}" — library/watch-history queries may be incomplete (restricted view)`);
+    }
+    this.cachedUserId = selected.Id;
     return this.cachedUserId;
   }
 
@@ -340,7 +349,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     type: LibraryItemType,
     offset: number,
     limit: number,
-  ): Promise<{ items: MediaMetadataItem[]; total: number }> {
+  ): Promise<{ items: MediaMetadataItem[]; total: number | null }> {
     const itemTypes = type === "movie" ? "Movie" : type === "episode" ? "Episode" : "Audio";
     const userId = await this.getUserId();
 
@@ -359,7 +368,12 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     });
 
     const items = (response.data.Items || []).map((item) => this.normalizeItem(item));
-    const total = response.data.TotalRecordCount;
+    // null when the server omits the count, so the caller falls back to the
+    // short-page check instead of trusting a bogus total.
+    const total =
+      typeof response.data.TotalRecordCount === "number"
+        ? response.data.TotalRecordCount
+        : null;
     return { items, total };
   }
 
@@ -453,46 +467,58 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       >("/Users");
       const users = usersRes.data || [];
 
+      const pageSize = 1000;
       for (const user of users) {
         try {
-          const itemsRes = await this.client.get<{
-            Items: Array<{
-              Id: string;
-              UserData?: { PlayCount?: number; LastPlayedDate?: string };
-            }>;
-          }>(`/Users/${user.Id}/Items`, {
-            params: {
-              IsPlayed: true,
-              Recursive: true,
-              Fields: "UserData",
-              Limit: 10000,
-            },
-          });
+          let startIndex = 0;
+          // Page through this user's played items — a single Limit:10000 would
+          // hard-truncate users with more than 10k plays.
+          while (true) {
+            const itemsRes = await this.client.get<{
+              Items: Array<{
+                Id: string;
+                UserData?: { PlayCount?: number; LastPlayedDate?: string };
+              }>;
+            }>(`/Users/${user.Id}/Items`, {
+              params: {
+                IsPlayed: true,
+                Recursive: true,
+                Fields: "UserData",
+                StartIndex: startIndex,
+                Limit: pageSize,
+              },
+            });
 
-          const items = itemsRes.data.Items || [];
-          for (const item of items) {
-            const playCount = item.UserData?.PlayCount ?? 0;
-            if (playCount <= 0) continue;
+            const items = itemsRes.data.Items || [];
+            for (const item of items) {
+              const playCount = item.UserData?.PlayCount ?? 0;
+              if (playCount <= 0) continue;
 
-            for (let i = 0; i < playCount; i++) {
-              entries.push({
-                ratingKey: item.Id,
-                username: user.Name,
-                watchedAt:
-                  i === 0 && item.UserData?.LastPlayedDate
-                    ? new Date(item.UserData.LastPlayedDate).toISOString()
-                    : null,
-                deviceName: null,
-                platform: null,
-              });
+              for (let i = 0; i < playCount; i++) {
+                entries.push({
+                  ratingKey: item.Id,
+                  username: user.Name,
+                  watchedAt:
+                    i === 0 && item.UserData?.LastPlayedDate
+                      ? new Date(item.UserData.LastPlayedDate).toISOString()
+                      : null,
+                  deviceName: null,
+                  platform: null,
+                });
+              }
             }
+
+            if (items.length < pageSize) break;
+            startIndex += pageSize;
           }
         } catch {
-          // Skip users where we can't access items
+          // Skip users where we can't access items (graceful per-user degrade).
         }
       }
-    } catch {
-      // Non-fatal
+    } catch (error) {
+      // Re-throw a hard failure (e.g. /Users unreachable) so the caller can
+      // skip the destructive full-replace instead of wiping stored history.
+      throw error;
     }
 
     return entries;

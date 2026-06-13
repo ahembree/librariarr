@@ -5,9 +5,14 @@ import type { MediaSession } from "@/lib/media-server/types";
 
 let initialized = false;
 let isRunning = false;
+let prerollRunning = false;
 
-// Tracks when a session was first seen for pending termination
-// Key: "userId:serverId:sessionId" → timestamp in ms
+// Tracks when a session was first seen for pending termination.
+// Keys are namespaced per subsystem so the maintenance/transcode loop and the
+// blackout warn_then_terminate loop can't read each other's pending entries
+// (which would apply the wrong delay):
+//   maintenance/transcode → "maint:userId:serverId:sessionId"
+//   blackout              → "blackout:scheduleId:userId:serverId:sessionId"
 const pendingTerminations = new Map<string, number>();
 
 // For "block_new_only" blackout: tracks session IDs that existed when blackout started
@@ -89,11 +94,29 @@ function isPrerollScheduleActive(schedule: {
   startTime: string | null;
   endTime: string | null;
 }): boolean {
-  // Reuse blackout active check — same schedule structure
+  // Seasonal = an annually-recurring date range (compare month/day, ignore
+  // year). Not a blackout schedule type, so handle it here — otherwise
+  // isBlackoutActive falls through to `return false` and seasonal preroll
+  // schedules never activate.
+  if (schedule.scheduleType === "seasonal") {
+    if (!schedule.startDate || !schedule.endDate) return false;
+    const now = new Date();
+    const md = (d: Date) => (d.getMonth() + 1) * 100 + d.getDate();
+    const cur = md(now);
+    const start = md(schedule.startDate);
+    const end = md(schedule.endDate);
+    // Wrap across the year boundary (e.g. Dec 15 → Jan 5).
+    if (end < start) return cur >= start || cur <= end;
+    return cur >= start && cur <= end;
+  }
+  // one_time / recurring share the blackout active check (same structure).
   return isBlackoutActive(schedule);
 }
 
 async function processPrerollSchedules() {
+  // Re-entrancy guard: a slow Plex call must not let one tick overlap the next.
+  if (prerollRunning) return;
+  prerollRunning = true;
   try {
     const schedules = await prisma.prerollSchedule.findMany({
       where: { enabled: true },
@@ -195,6 +218,8 @@ async function processPrerollSchedules() {
     }
   } catch (error) {
     logger.error("Enforcer", "Error processing preroll schedules", { error: String(error) });
+  } finally {
+    prerollRunning = false;
   }
 }
 
@@ -224,7 +249,11 @@ export async function runEnforcerTick() {
       });
 
       if (allSettings.length === 0) {
-        pendingTerminations.clear();
+        // No maintenance/transcode rules — drop only this subsystem's pending
+        // entries, leaving blackout entries untouched.
+        for (const key of pendingTerminations.keys()) {
+          if (key.startsWith("maint:")) pendingTerminations.delete(key);
+        }
       } else {
         const now = Date.now();
         const activeSessionKeys = new Set<string>();
@@ -253,7 +282,7 @@ export async function runEnforcerTick() {
               const sessions = await client.getSessions();
 
               for (const session of sessions) {
-                const sessionKey = `${settings.userId}:${server.id}:${session.sessionId}`;
+                const sessionKey = `maint:${settings.userId}:${server.id}:${session.sessionId}`;
                 activeSessionKeys.add(sessionKey);
 
                 // Determine if this session should be terminated and with what delay/message
@@ -314,9 +343,11 @@ export async function runEnforcerTick() {
           }));
         }
 
-        // Prune entries for sessions that no longer exist
+        // Prune maintenance/transcode entries for sessions that no longer
+        // exist. Only touch "maint:" keys — blackout entries are pruned in
+        // their own loop below.
         for (const key of pendingTerminations.keys()) {
-          if (!activeSessionKeys.has(key)) {
+          if (key.startsWith("maint:") && !activeSessionKeys.has(key)) {
             pendingTerminations.delete(key);
           }
         }
@@ -335,6 +366,9 @@ export async function runEnforcerTick() {
       });
 
       const activeBlackoutKeys = new Set<string>();
+      // Pending-termination keys for warn_then_terminate sessions observed this
+      // tick, used to prune stale "blackout:" entries below.
+      const activeBlackoutSessionKeys = new Set<string>();
 
       for (const schedule of blackoutSchedules) {
         const blackoutKey = `${schedule.userId}-${schedule.id}`;
@@ -378,7 +412,8 @@ export async function runEnforcerTick() {
 
                   for (const session of sessions) {
                     if (blackoutExcluded.includes(session.username)) continue;
-                    const sessionKey = `${schedule.userId}:${server.id}:${session.sessionId}`;
+                    const sessionKey = `blackout:${schedule.id}:${schedule.userId}:${server.id}:${session.sessionId}`;
+                    activeBlackoutSessionKeys.add(sessionKey);
 
                     if (!pendingTerminations.has(sessionKey)) {
                       pendingTerminations.set(sessionKey, blackoutNow);
@@ -468,6 +503,14 @@ export async function runEnforcerTick() {
         }
       }
 
+      // Prune warn_then_terminate pending entries for sessions no longer seen
+      // under an active blackout (ended session, inactive/deleted schedule).
+      for (const key of pendingTerminations.keys()) {
+        if (key.startsWith("blackout:") && !activeBlackoutSessionKeys.has(key)) {
+          pendingTerminations.delete(key);
+        }
+      }
+
     } catch (error) {
       logger.error("Enforcer", "Error in enforcer", { error: String(error) });
     } finally {
@@ -500,6 +543,7 @@ export function _resetForTesting() {
   initialized = false;
   prerollInitialized = false;
   isRunning = false;
+  prerollRunning = false;
   pendingTerminations.clear();
   knownBlackoutSessions.clear();
   lastPrerollPath.clear();

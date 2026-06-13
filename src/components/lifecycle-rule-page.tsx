@@ -757,7 +757,12 @@ export function LifecycleRulePage({
       snapshot.actionType !== actionType ||
       snapshot.actionDelayDays !== actionDelayDays ||
       snapshot.arrInstanceId !== arrInstanceId ||
-      snapshot.targetQualityProfileId !== targetQualityProfileId ||
+      // Compare the EFFECTIVE persisted profile (null for non-quality actions,
+      // matching what the save body writes) so a leftover targetQualityProfileId
+      // from a since-changed action type doesn't spuriously mark the form dirty
+      // after a reload reads null from the DB.
+      (isQualityProfileChangeAction(snapshot.actionType) ? snapshot.targetQualityProfileId : null) !==
+        (isQualityProfileChangeAction(actionType) ? targetQualityProfileId : null) ||
       snapshot.addImportExclusion !== addImportExclusion ||
       snapshot.searchAfterAction !== searchAfterAction ||
       snapshot.addArrTags !== JSON.stringify([...addArrTags].sort()) ||
@@ -814,6 +819,7 @@ export function LifecycleRulePage({
   const [showRescheduleDialog, setShowRescheduleDialog] = useState(false);
   const [rescheduleOldDelay, setRescheduleOldDelay] = useState(0);
   const [rescheduleNewDelay, setRescheduleNewDelay] = useState(0);
+  const [rescheduling, setRescheduling] = useState(false);
 
   // Diff preview before re-detect
   const [diffData, setDiffData] = useState<DiffData | null>(null);
@@ -1026,7 +1032,7 @@ export function LifecycleRulePage({
     };
   }, [arrInstanceId, actionType, actionEnabled, arrApiPath]);
 
-  const handleSave = async (options?: { clearMatches?: boolean; runDetection?: boolean; processActions?: boolean }) => {
+  const handleSave = async (options?: { clearMatches?: boolean; runDetection?: boolean; processActions?: boolean; skipCollectionRemoval?: boolean }) => {
     const needsCheck =
       actionEnabled &&
       isDestructiveAction(actionType) &&
@@ -1051,11 +1057,14 @@ export function LifecycleRulePage({
     return executeSave(options);
   };
 
-  const executeSave = async (options?: { clearMatches?: boolean; runDetection?: boolean; processActions?: boolean }) => {
+  const executeSave = async (options?: { clearMatches?: boolean; runDetection?: boolean; processActions?: boolean; skipCollectionRemoval?: boolean }) => {
     if (!name || countAllRules(groups) === 0) return;
     const clearMatches = options?.clearMatches ?? true;
     const runDetection = options?.runDetection ?? false;
     const processActions = options?.processActions ?? false;
+    // Read skipCollectionRemoval from the explicit argument, not state — setState is async,
+    // so the state value here would be stale on the same tick as the dialog button click.
+    const effectiveSkipCollectionRemoval = options?.skipCollectionRemoval ?? skipCollectionRemoval;
     setLoading(true);
     setSaveError(null);
     try {
@@ -1133,7 +1142,7 @@ export function LifecycleRulePage({
               ruleSetId: savedRuleSetId,
               previousCollectionEnabled: prev.enabled,
               previousCollectionName: prev.name,
-              skipCollectionRemoval,
+              skipCollectionRemoval: effectiveSkipCollectionRemoval,
             }),
           });
           const applyData = await applyRes.json();
@@ -1172,12 +1181,17 @@ export function LifecycleRulePage({
       // Run detection if requested
       if (runDetection && savedRuleSetId) {
         try {
-          await fetch("/api/lifecycle/rules/run", {
+          const detectResponse = await fetch("/api/lifecycle/rules/run", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ ruleSetId: savedRuleSetId, fullReEval: clearMatches, processActions }),
           });
-          router.push("/lifecycle/matches");
+          if (detectResponse.ok) {
+            router.push("/lifecycle/matches");
+          } else {
+            const detectData = await detectResponse.json().catch(() => null);
+            toast.error(detectData?.error ?? "Failed to detect matches");
+          }
         } catch (error) {
           console.error("Failed to detect matches:", error);
           toast.error("Failed to detect matches");
@@ -1291,6 +1305,10 @@ export function LifecycleRulePage({
     }
   };
 
+  // Fields stored as numeric values but serialized as strings (e.g. BigInt fileSize)
+  // must be compared numerically — a lexicographic compare ranks "9000" above "10000".
+  const NUMERIC_PREVIEW_FIELDS = new Set(["fileSize"]);
+
   const sortedPreview = [...preview].sort((a, b) => {
     if (!previewSortBy) return 0;
     const aVal = a[previewSortBy as keyof PreviewItem];
@@ -1298,7 +1316,14 @@ export function LifecycleRulePage({
     if (aVal == null && bVal == null) return 0;
     if (aVal == null) return 1;
     if (bVal == null) return -1;
-    const cmp = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+    let cmp: number;
+    if (NUMERIC_PREVIEW_FIELDS.has(previewSortBy)) {
+      const aNum = Number(aVal);
+      const bNum = Number(bVal);
+      cmp = aNum < bNum ? -1 : aNum > bNum ? 1 : 0;
+    } else {
+      cmp = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+    }
     return previewSortOrder === "asc" ? cmp : -cmp;
   });
 
@@ -3031,7 +3056,7 @@ export function LifecycleRulePage({
                 setSkipCollectionRemoval(true);
                 setShowCollectionDisableDialog(false);
                 if (activeRuleSetId && !rulesChanged) {
-                  handleSave({ clearMatches: false, runDetection: false });
+                  handleSave({ clearMatches: false, runDetection: false, skipCollectionRemoval: true });
                 } else if (activeRuleSetId) {
                   setShowSaveOptions(true);
                 } else {
@@ -3047,7 +3072,7 @@ export function LifecycleRulePage({
                 setSkipCollectionRemoval(false);
                 setShowCollectionDisableDialog(false);
                 if (activeRuleSetId && !rulesChanged) {
-                  handleSave({ clearMatches: false, runDetection: false });
+                  handleSave({ clearMatches: false, runDetection: false, skipCollectionRemoval: false });
                 } else if (activeRuleSetId) {
                   setShowSaveOptions(true);
                 } else {
@@ -3257,8 +3282,12 @@ export function LifecycleRulePage({
           <AlertDialogFooter>
             <AlertDialogCancel>No, keep current schedule</AlertDialogCancel>
             <AlertDialogAction
-              onClick={async () => {
-                if (!activeRuleSetId) return;
+              disabled={rescheduling}
+              onClick={async (e) => {
+                // Keep the dialog open while the POST is in flight so the guard stays visible.
+                e.preventDefault();
+                if (!activeRuleSetId || rescheduling) return;
+                setRescheduling(true);
                 try {
                   const res = await fetch(`/api/lifecycle/rules/${activeRuleSetId}/reschedule-actions`, {
                     method: "POST",
@@ -3275,9 +3304,13 @@ export function LifecycleRulePage({
                   }
                 } catch {
                   toast.error("Failed to reschedule actions");
+                } finally {
+                  setRescheduling(false);
+                  setShowRescheduleDialog(false);
                 }
               }}
             >
+              {rescheduling ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
               Yes, reschedule
             </AlertDialogAction>
           </AlertDialogFooter>

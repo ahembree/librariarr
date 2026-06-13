@@ -172,4 +172,17 @@ describe("sanitizeErrorDetail", () => {
     const result = sanitizeErrorDetail("Something went wrong");
     expect(result).toBe("Something went wrong");
   });
+
+  it("redacts internal IPv6 addresses (loopback, ULA, link-local)", () => {
+    expect(sanitizeErrorDetail("Connect ::1 failed")).toBe("Connect [internal] failed");
+    expect(sanitizeErrorDetail("Host fd12:3456:789a:1::1 down")).toBe("Host [internal] down");
+    expect(sanitizeErrorDetail("Link fe80::1 unreachable")).toBe("Link [internal] unreachable");
+  });
+
+  it("does not over-redact a bare hex prefix or normal text (anchored segments)", () => {
+    // No segment follows the prefix → not an address, must be left intact.
+    expect(sanitizeErrorDetail("value fc00 only")).toBe("value fc00 only");
+    // A clock-like token isn't an internal IPv6 address.
+    expect(sanitizeErrorDetail("at 12:34:56")).toBe("at 12:34:56");
+  });
 });

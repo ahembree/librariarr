@@ -28,10 +28,7 @@ import {
 import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
 import {
   isUnconfiguredContainsRule,
-  validateRulePreamble,
-  FIELD_HANDLERS,
-  textGenericHandler,
-  UNSATISFIABLE_WHERE,
+  ruleToWhere,
 } from "@/lib/conditions/where-builder";
 import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
 import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
@@ -39,45 +36,9 @@ import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/condi
 import { pushDownGroupNegation } from "@/lib/conditions/negation";
 import { nullValueResult } from "@/lib/conditions/helpers";
 
-/**
- * Convert a single query rule to a Prisma WHERE clause.
- */
-function queryRuleToWhere(rule: QueryRule): Prisma.MediaItemWhereInput {
-  const { field, operator, value, negate } = rule;
-
-  // Safety preamble: unconfigured rule, inapplicable operator, malformed
-  // value → UNSATISFIABLE_WHERE. Shared with the rule engine.
-  const guarded = validateRulePreamble(field, operator, value);
-  if (guarded) return guarded;
-
-  // Skip external (arr/seerr) fields — handled as post-filters
-  if (isExternalQueryField(field)) return {};
-
-  // Stream query fields only make sense inside a stream-query group (whose
-  // rules go through buildStreamQueryClause, never this dispatcher). A
-  // misplaced one is a dead rule — never a dropped constraint.
-  if (isStreamQueryField(field)) return UNSATISFIABLE_WHERE;
-
-  // Skip cross-system fields — enriched before Phase 2
-  if (isCrossSystemQueryField(field)) return {};
-
-  // Skip series-aggregate fields — computed in dedicated series-scope path
-  if (isSeriesAggregateField(field)) return {};
-
-  // Stream count fields — always post-filtered in-memory
-  if (field === "audioStreamCount" || field === "subtitleStreamCount") return {};
-
-  // Field-specific WHERE-emitting handlers live in where-builder.ts and are
-  // shared with the rule engine. The dispatcher above handles all the
-  // query-engine-specific routing (cross-system, stream query, stream count)
-  // before reaching this lookup; stream relation and hasExternalId are routed
-  // via FIELD_HANDLERS.
-  const handler = FIELD_HANDLERS[field];
-  if (handler) return handler(operator, value, field, negate);
-
-  // Text-generic fallback for unrecognized text fields.
-  return textGenericHandler(operator, value, field, negate);
-}
+// Phase 1 rule → WHERE conversion is shared with the lifecycle rule engine via
+// `ruleToWhere` in where-builder.ts (the query and lifecycle dispatchers were
+// equivalent — their field classifiers resolve to the same sets).
 
 
 /** Check if any group tree contains stream query groups needing in-memory eval */
@@ -223,8 +184,8 @@ function buildBaseWhere(
     // (arr/seerr/wildcard/stream-count/resolution rules) would otherwise
     // exclude rows Phase 2 should see (EXTERNAL-aware composition).
     const conditions = usePreFilter
-      ? buildGroupConditionsPreFilter(groups, queryRuleToWhere)
-      : buildGroupConditions(groups, queryRuleToWhere);
+      ? buildGroupConditionsPreFilter(groups, ruleToWhere)
+      : buildGroupConditions(groups, ruleToWhere);
     if (Object.keys(conditions).length > 0) {
       where.AND = [conditions];
     }
@@ -990,7 +951,7 @@ function evaluateQueryRuleInMemory(
   seerrMeta: SeerrMetadata | undefined,
 ): boolean {
   // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
-  // Mirrors `queryRuleToWhere`'s UNSATISFIABLE_WHERE so Phase 1 and Phase 2 agree.
+  // Mirrors `ruleToWhere`'s UNSATISFIABLE_WHERE so Phase 1 and Phase 2 agree.
   if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
   // Safety: unknown operator or wrong-type combo → match nothing (bypass negate).
   if (!isOperatorApplicable(rule.operator, rule.field)) return false;

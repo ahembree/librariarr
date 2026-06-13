@@ -42,18 +42,22 @@ async function getWorkerUtils(): Promise<WorkerUtils> {
 /**
  * Enqueue a background job. Errors are logged rather than thrown so that
  * fire-and-forget callers (API routes, the dispatcher) are never blocked by a
- * transient queue failure.
+ * transient queue failure. Returns `true` on success and `false` on failure so
+ * callers that advance a schedule watermark can avoid skipping a window when
+ * the enqueue silently failed.
  */
 export async function enqueueJob(
   identifier: string,
   payload: unknown,
   spec?: TaskSpec,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const utils = await getWorkerUtils();
     await utils.addJob(identifier, payload, spec);
+    return true;
   } catch (error) {
     logger.error("Jobs", `Failed to enqueue job "${identifier}"`, { error: String(error) });
+    return false;
   }
 }
 

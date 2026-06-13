@@ -55,6 +55,9 @@ export default function AllEpisodesPage() {
   const gridContainerRef = useRef<HTMLDivElement>(null);
   const scrollElementRef = useRef<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
+  // Token guards against a stale slow response landing after a quick
+  // filter/sort flip and overwriting state with the wrong items.
+  const reqToken = useRef(0);
 
   // Compute landscape column count from screen width and landscape min widths
   const landscapeColumns = useMemo(() => {
@@ -98,11 +101,13 @@ export default function AllEpisodesPage() {
     scrollElementRef.current = document.querySelector<HTMLElement>("main");
   }, []);
 
+  // Re-measure scrollMargin once the grid mounts (it's hidden behind the
+  // skeleton while loading, so the ref is null on the initial pass).
   useLayoutEffect(() => {
     if (gridContainerRef.current) {
       setScrollMargin(gridContainerRef.current.offsetTop);
     }
-  }, []);
+  }, [loading, items.length]);
 
   // Compute row count for virtualizer
   const rowCount = useMemo(
@@ -154,6 +159,7 @@ export default function AllEpisodesPage() {
   );
 
   const fetchEpisodes = useCallback(async () => {
+    const token = ++reqToken.current;
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -165,18 +171,19 @@ export default function AllEpisodesPage() {
 
       const response = await fetch(`/api/media/series?${params}`);
       const data = await response.json();
+      if (token !== reqToken.current) return;
       startTransition(() => {
-        setItems(data.items);
+        setItems(data.items || []);
         setLoading(false);
       });
     } catch (error) {
       console.error("Failed to fetch episodes:", error);
-      setLoading(false);
+      if (token === reqToken.current) setLoading(false);
     }
   }, [filters, sortBy, sortOrder]);
 
   useEffect(() => {
-    const timeout = setTimeout(fetchEpisodes, 0);
+    const timeout = setTimeout(() => fetchEpisodes(), 300);
     return () => clearTimeout(timeout);
   }, [fetchEpisodes]);
 

@@ -102,11 +102,13 @@ export function SyncStatus({ onSyncComplete }: SyncStatusProps) {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Poll only when there's an active sync
+  // Poll fast (2s) during an active sync, and slowly (30s) when idle. The idle
+  // poll is essential: without it, once a sync finishes the card would stop
+  // polling entirely, so on SSE-down environments a NEW sync would never be
+  // detected and the card could stay hidden until a full page reload.
   useEffect(() => {
-    if (!initialCheckDone || !hasActiveSync) return;
-
-    const interval = setInterval(fetchStatus, 2000);
+    if (!initialCheckDone) return;
+    const interval = setInterval(fetchStatus, hasActiveSync ? 2000 : 30000);
     return () => clearInterval(interval);
   }, [fetchStatus, hasActiveSync, initialCheckDone]);
 

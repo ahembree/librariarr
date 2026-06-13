@@ -21,9 +21,18 @@
  */
 import { Prisma } from "@/generated/prisma/client";
 import { isNonNullableField, isNonNullableNonTextField, isNonNullableTextField } from "./field-metadata";
-import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "./helpers";
+import {
+  isEnumerableField,
+  isOperatorApplicable,
+  isValueValidForRule,
+  isExternalField,
+  isCrossSystemField,
+  isSeriesAggregateField,
+} from "./helpers";
+import { isStreamQueryField } from "./stream-query";
 import { MB_IN_BYTES, DURATION_MS_PER_MIN } from "./constants";
 import { wildcardToRegex } from "./wildcard";
+import type { Condition } from "./types";
 
 export function applyNegate(clause: Prisma.MediaItemWhereInput, negate?: boolean): Prisma.MediaItemWhereInput {
   if (!negate) return clause;
@@ -287,23 +296,27 @@ const dateHandler: FieldHandler = (operator, value, field, negate) => {
       daysAgo.setDate(daysAgo.getDate() - Number(value));
       return applyNegateNullable(field, { [field]: { lt: daysAgo } }, negate);
     }
+    // Day boundaries are computed in UTC (setUTCDate / UTC-midnight day-start)
+    // so Phase-1 windows align with Phase 2's UTC `toISOString().split("T")[0]`
+    // day comparison — on non-UTC deployments local-tz boundaries disagreed
+    // and dropped items the in-memory phase would have matched.
     case "equals": {
       const dayStart = new Date(String(value));
       const dayEnd = new Date(dayStart);
-      dayEnd.setDate(dayEnd.getDate() + 1);
+      dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
       return applyNegateNullable(field, { [field]: { gte: dayStart, lt: dayEnd } }, negate);
     }
     case "between": {
       const [fromStr, toStr] = String(value).split(",");
       const endDate = new Date(toStr);
-      endDate.setDate(endDate.getDate() + 1);
+      endDate.setUTCDate(endDate.getUTCDate() + 1);
       return applyNegateNullable(field, { [field]: { gte: new Date(fromStr), lt: endDate } }, negate);
     }
     // Negative (already null-safe via withNullSafety).
     case "notEquals": {
       const dayStart = new Date(String(value));
       const dayEnd = new Date(dayStart);
-      dayEnd.setDate(dayEnd.getDate() + 1);
+      dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
       clause = withNullSafety(field, { OR: [{ [field]: { lt: dayStart } }, { [field]: { gte: dayEnd } }] });
       break;
     }
@@ -700,3 +713,38 @@ export const FIELD_HANDLERS: Record<string, FieldHandler> = (() => {
   for (const f of NUMERIC_HANDLER_FIELDS) handlers[f] = numericHandler;
   return handlers;
 })();
+
+/** Stream-count fields are always post-filtered in memory (Phase 2), never in the WHERE. */
+export const STREAM_COUNT_FIELDS = new Set(["audioStreamCount", "subtitleStreamCount"]);
+
+/**
+ * Convert a single rule into a Prisma WHERE clause (Phase 1). Shared by the
+ * lifecycle rule engine (`ruleToWhereClause`) and the query builder
+ * (`queryRuleToWhere`) — the two were byte-for-byte equivalent because their
+ * field classifiers (`isExternalField`/`isExternalQueryField`,
+ * `isCrossSystemField`/`isCrossSystemQueryField`) resolve to the same sets.
+ *
+ * Fields handled only in Phase 2 (external Arr/Seerr, cross-system,
+ * series-aggregate, stream-count) return `{}` (no constraint); a misplaced
+ * stream-query field returns `UNSATISFIABLE_WHERE` rather than dropping the
+ * constraint and matching the whole library.
+ */
+export function ruleToWhere(rule: Condition): Prisma.MediaItemWhereInput {
+  const { field, operator, value, negate } = rule;
+
+  const guarded = validateRulePreamble(field, operator, value);
+  if (guarded) return guarded;
+
+  if (isExternalField(field)) return {};
+  if (isSeriesAggregateField(field)) return {};
+  if (isCrossSystemField(field)) return {};
+  // Stream-query fields only make sense inside a stream-query group (handled by
+  // buildStreamQueryClause). One reaching this dispatcher is a misplaced rule.
+  if (isStreamQueryField(field)) return UNSATISFIABLE_WHERE;
+  if (STREAM_COUNT_FIELDS.has(field)) return {};
+
+  const handler = FIELD_HANDLERS[field];
+  if (handler) return handler(operator, value, field, negate);
+
+  return textGenericHandler(operator, value, field, negate);
+}

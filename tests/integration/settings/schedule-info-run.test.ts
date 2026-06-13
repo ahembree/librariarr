@@ -19,20 +19,19 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const { mockEnqueueJob, mockProcessLifecycleRules, mockExecuteLifecycleActions } = vi.hoisted(() => ({
-  mockEnqueueJob: vi.fn().mockResolvedValue(undefined),
-  mockProcessLifecycleRules: vi.fn().mockResolvedValue(undefined),
-  mockExecuteLifecycleActions: vi.fn().mockResolvedValue(undefined),
+const { mockEnqueueJob } = vi.hoisted(() => ({
+  mockEnqueueJob: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("@/lib/jobs/client", () => ({ enqueueJob: mockEnqueueJob }));
-vi.mock("@/lib/lifecycle/processor", () => ({
-  processLifecycleRules: mockProcessLifecycleRules,
-  executeLifecycleActions: mockExecuteLifecycleActions,
-}));
 
 import { POST } from "@/app/api/settings/schedule-info/run/route";
-import { TASK_SYNC_SERVER, MAIN_QUEUE } from "@/lib/jobs/constants";
+import {
+  TASK_SYNC_SERVER,
+  TASK_LIFECYCLE_DETECTION,
+  TASK_LIFECYCLE_EXECUTION,
+  MAIN_QUEUE,
+} from "@/lib/jobs/constants";
 
 const prisma = getTestPrisma();
 
@@ -48,7 +47,7 @@ describe("POST /api/settings/schedule-info/run", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
-    mockEnqueueJob.mockResolvedValue(undefined);
+    mockEnqueueJob.mockResolvedValue(true);
   });
 
   afterAll(async () => {
@@ -105,37 +104,45 @@ describe("POST /api/settings/schedule-info/run", () => {
     expect(settings?.lastScheduledSync).not.toBeNull();
   });
 
-  it("runs lifecycle detection and stamps lastScheduledLifecycleDetection", async () => {
+  it("enqueues lifecycle detection and stamps lastScheduledLifecycleDetection", async () => {
     const user = await setup();
 
     const res = await callRoute(POST, { method: "POST", body: { job: "detection" } });
     await expectJson(res, 200);
 
-    expect(mockProcessLifecycleRules).toHaveBeenCalledWith(user.id);
+    expect(mockEnqueueJob).toHaveBeenCalledWith(
+      TASK_LIFECYCLE_DETECTION,
+      { userId: user.id },
+      expect.objectContaining({ jobKey: `detection:${user.id}`, queueName: MAIN_QUEUE }),
+    );
     const settings = await prisma.appSettings.findUnique({ where: { userId: user.id } });
     expect(settings?.lastScheduledLifecycleDetection).not.toBeNull();
   });
 
-  it("runs lifecycle execution and stamps lastScheduledLifecycleExecution", async () => {
+  it("enqueues lifecycle execution and stamps lastScheduledLifecycleExecution", async () => {
     const user = await setup();
 
     const res = await callRoute(POST, { method: "POST", body: { job: "execution" } });
     await expectJson(res, 200);
 
-    expect(mockExecuteLifecycleActions).toHaveBeenCalledWith(user.id);
+    expect(mockEnqueueJob).toHaveBeenCalledWith(
+      TASK_LIFECYCLE_EXECUTION,
+      { userId: user.id },
+      expect.objectContaining({ jobKey: `execution:${user.id}`, queueName: MAIN_QUEUE }),
+    );
     const settings = await prisma.appSettings.findUnique({ where: { userId: user.id } });
     expect(settings?.lastScheduledLifecycleExecution).not.toBeNull();
   });
 
-  it("returns 500 when a lifecycle job throws", async () => {
+  it("returns 500 when enqueueing a lifecycle job throws", async () => {
     const user = await setup();
-    mockProcessLifecycleRules.mockRejectedValueOnce(new Error("boom"));
+    mockEnqueueJob.mockRejectedValueOnce(new Error("boom"));
 
     const res = await callRoute(POST, { method: "POST", body: { job: "detection" } });
     const body = await expectJson<{ error: string }>(res, 500);
     expect(body.error).toContain("Job failed");
 
-    // Timestamp not advanced because the job failed.
+    // Timestamp not advanced because the enqueue failed.
     const settings = await prisma.appSettings.findUnique({ where: { userId: user.id } });
     expect(settings?.lastScheduledLifecycleDetection).toBeNull();
   });

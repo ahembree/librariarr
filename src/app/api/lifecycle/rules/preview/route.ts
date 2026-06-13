@@ -9,6 +9,11 @@ import { validateRequest, rulePreviewSchema } from "@/lib/validation";
 import { progressStreamResponse } from "@/lib/progress/stream";
 import type { ProgressPhase } from "@/lib/progress/types";
 
+// Streaming, potentially long-running (Arr/Seerr sweeps + full-library eval).
+// Force dynamic and cap the duration so a request can't pin a function forever.
+export const dynamic = "force-dynamic";
+export const maxDuration = 300;
+
 export async function POST(request: NextRequest) {
   const session = await getSession();
   if (!session.isLoggedIn) {
@@ -37,6 +42,7 @@ export async function POST(request: NextRequest) {
 
   return progressStreamResponse(async (emit) => {
     emit({ type: "plan", phases });
+    // (request.signal passed below aborts this run on client disconnect.)
 
     let arrData: ArrDataMap | undefined;
     if (willFetchArr) {
@@ -119,5 +125,5 @@ export async function POST(request: NextRequest) {
       });
 
     return { items: itemsWithCriteria, count: itemsWithCriteria.length };
-  });
+  }, { signal: request.signal });
 }

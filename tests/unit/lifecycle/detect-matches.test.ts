@@ -15,7 +15,17 @@ const mockPrisma = vi.hoisted(() => ({
   lifecycleException: {
     findMany: vi.fn(),
   },
-  $transaction: vi.fn(),
+  // Detection runs its match writes inside a transaction in two shapes:
+  //   - callback form: $transaction(async (tx) => { ... }) (full re-eval)
+  //   - array form:    $transaction([p1, p2])              (incremental)
+  // Execute both against the same mock so the createMany/deleteMany assertions hold.
+  $transaction: vi.fn((arg: unknown) => {
+    if (typeof arg === "function") {
+      return (arg as (tx: typeof mockPrisma) => Promise<unknown>)(mockPrisma);
+    }
+    if (Array.isArray(arg)) return Promise.all(arg);
+    return Promise.resolve(undefined);
+  }),
 }));
 
 const mockEvaluateRules = vi.hoisted(() => vi.fn());
@@ -25,6 +35,7 @@ const mockGroupSeriesResults = vi.hoisted(() => vi.fn());
 const mockHasAnyActiveRules = vi.hoisted(() => vi.fn());
 const mockHasArrRules = vi.hoisted(() => vi.fn());
 const mockHasSeerrRules = vi.hoisted(() => vi.fn());
+const mockHasSeriesAggregateRules = vi.hoisted(() => vi.fn());
 const mockHasWatchedByUserRules = vi.hoisted(() => vi.fn());
 const mockGetMatchedCriteriaForItems = vi.hoisted(() => vi.fn());
 const mockGetActualValuesForAllRules = vi.hoisted(() => vi.fn());
@@ -44,6 +55,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   hasAnyActiveRules: mockHasAnyActiveRules,
   hasArrRules: mockHasArrRules,
   hasSeerrRules: mockHasSeerrRules,
+  hasSeriesAggregateRules: mockHasSeriesAggregateRules,
   hasWatchedByUserRules: mockHasWatchedByUserRules,
   getMatchedCriteriaForItems: mockGetMatchedCriteriaForItems,
   getActualValuesForAllRules: mockGetActualValuesForAllRules,
@@ -230,6 +242,68 @@ describe("detectAndSaveMatches", () => {
     expect(result.episodeIdMap.get("grouped1")).toEqual(["ep1"]);
   });
 
+  it("routes a seriesScope:false SERIES rule with aggregate fields through evaluateSeriesScope", async () => {
+    // A series-aggregate field (e.g. episodeCount) cannot be evaluated per
+    // episode; it must use the aggregate path even when seriesScope is false,
+    // otherwise the aggregate conjunct is silently dropped (over-match).
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasSeriesAggregateRules.mockReturnValue(true);
+    mockEvaluateSeriesScope.mockResolvedValue([
+      {
+        id: "agg1",
+        title: "Series",
+        parentTitle: "Series",
+        titleSort: "series",
+        memberIds: ["ep1", "ep2"],
+        library: { mediaServer: { id: "s1", name: "Plex", type: "PLEX" } },
+        externalIds: [],
+      },
+    ]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
+    mockPrisma.ruleMatch.createMany.mockResolvedValue({ count: 1 });
+
+    const result = await detectAndSaveMatches(
+      makeRuleSetConfig({ type: "SERIES", seriesScope: false }),
+      ["s1"],
+    );
+
+    expect(mockEvaluateSeriesScope).toHaveBeenCalled();
+    expect(mockEvaluateRules).not.toHaveBeenCalled();
+    expect(result.items).toHaveLength(1);
+  });
+
+  it("collapses cross-server duplicate matches by resolved Arr id (multi-server)", async () => {
+    // The same movie on two servers resolves to ONE Radarr record — without
+    // dedup it would schedule two destructive actions and double-count bytes.
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockEvaluateRules.mockResolvedValue([
+      {
+        id: "a", title: "Movie", parentTitle: null, titleSort: "movie",
+        library: { mediaServer: { id: "s1", name: "Plex", type: "PLEX" } },
+        externalIds: [{ source: "TMDB", externalId: "111" }],
+      },
+      {
+        id: "b", title: "Movie", parentTitle: null, titleSort: "movie",
+        library: { mediaServer: { id: "s2", name: "Jellyfin", type: "JELLYFIN" } },
+        externalIds: [{ source: "TMDB", externalId: "111" }],
+      },
+    ]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
+    mockPrisma.ruleMatch.createMany.mockResolvedValue({ count: 1 });
+
+    const arrData = { "111": { arrId: 42 } } as never;
+    const result = await detectAndSaveMatches(
+      makeRuleSetConfig({ type: "MOVIE", serverIds: ["s1", "s2"] }),
+      ["s1", "s2"],
+      arrData,
+    );
+
+    expect(result.items).toHaveLength(1);
+    expect((result.items[0] as { arrId: number }).arrId).toBe(42);
+    const servers = result.items[0].servers as Array<{ serverId: string }>;
+    expect(servers.map((s) => s.serverId).sort()).toEqual(["s1", "s2"]);
+  });
+
   it("filters out excluded items via LifecycleException", async () => {
     mockHasAnyActiveRules.mockReturnValue(true);
     mockEvaluateRules.mockResolvedValue([
@@ -274,13 +348,20 @@ describe("detectAndSaveMatches", () => {
         externalIds: [],
       },
     ]);
-    mockPrisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
-      return fn({
-        ruleMatch: {
-          deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
-          createMany: vi.fn().mockResolvedValue({ count: 1 }),
-        },
-      });
+    // Full re-eval uses the callback form; handle the array form too so this
+    // override (which persists across clearAllMocks) doesn't break the
+    // incremental array-form tests that run after it.
+    mockPrisma.$transaction.mockImplementation((arg: unknown) => {
+      if (typeof arg === "function") {
+        return (arg as (tx: unknown) => Promise<unknown>)({
+          ruleMatch: {
+            deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+            createMany: vi.fn().mockResolvedValue({ count: 1 }),
+          },
+        });
+      }
+      if (Array.isArray(arg)) return Promise.all(arg);
+      return Promise.resolve(undefined);
     });
 
     const result = await detectAndSaveMatches(makeRuleSetConfig(), ["s1"], undefined, undefined, true);

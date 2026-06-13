@@ -74,6 +74,16 @@ pnpm exec vitest run tests/path/to/file.test.ts  # Run a single test file
 
 **Test coverage requirement:** Every new or modified file under the coverage scope must have tests. In practice that means: every new route handler under `src/app/api/` gets an integration test in `tests/integration/`, and every new module under `src/lib/` gets a unit test in `tests/unit/`. Unit-level lib coverage is necessary but not sufficient — route handlers compose multiple lib modules with session state, validation, rate-limiting, and DB writes, and bugs hide in those seams. When the lib is fully covered but the route isn't, the route isn't tested.
 
+### Browser E2E (Playwright)
+
+Real-browser end-to-end tests live in `e2e/` (Playwright, **separate from Vitest** — `e2e/*.spec.ts`, never picked up by `vitest`). Config: `playwright.config.ts`.
+
+- **Run it (portable, recommended):** `pnpm e2e:docker` — brings up `docker-compose.e2e.yml`: Postgres + the **real production app image** (built from `Dockerfile`) + the official `mcr.microsoft.com/playwright` image (browsers pre-baked, so **no browser download at run time**). The Playwright container sets `E2E_BASE_URL`, so `playwright.config.ts` skips its own web server and drives the app over the compose network.
+- **Run it (host):** `pnpm build && pnpm e2e:install && pnpm e2e` (needs egress to `cdn.playwright.dev` for the one-time browser download).
+- **CI:** `.github/workflows/e2e.yml` runs the compose stack on PRs (and `workflow_dispatch`).
+- **Structure:** `e2e/global-setup.ts` pushes the schema (`prisma db push --url … --accept-data-loss` — Prisma 7 takes **no `--skip-generate`** on `db push`) and truncates a **dedicated `librariarr_e2e` DB** for a clean slate (so the app reports `setupRequired`). `e2e/auth.setup.ts` (the `setup` project) runs the real first-run flow to create the admin and saves `e2e/.auth/admin.json`; authenticated specs reuse it, `*-anon` specs use a cleared state. `e2e/constants.ts` holds the admin creds + the page list. Coverage: first-run setup, auth-guard redirects, the login page, every authenticated page rendering, settings tab nav + accent persistence, lifecycle pages, and logout + local re-login.
+- **Excluded from the production image:** `@playwright/test` is a devDependency (not traced into the Next.js standalone output); `.dockerignore` also excludes `e2e/`, `playwright.config.ts`, and reports; `tsconfig`/`eslint` exclude `e2e/`. **Keep the compose Playwright image tag in sync with the `@playwright/test` version** in `package.json`.
+
 ## Architecture
 
 **Stack:** Next.js 16 (App Router) · React 19 · TypeScript · PostgreSQL 18 · Prisma 7 · Tailwind CSS v4 · shadcn/ui · Docker
@@ -196,10 +206,11 @@ When users connect multiple servers, dedup prevents duplicate items from appeari
 
 `appCache` from `src/lib/cache/memory-cache.ts` — in-process cache (no Redis), does not persist across restarts:
 
-- `appCache.get<T>(key)`, `set(key, data, ttlMs?)`, `getOrSet(key, compute, ttlMs?)` (compute-and-cache)
+- `appCache.get<T>(key)`, `set(key, data, ttlMs?)`, `getOrSet(key, compute, ttlMs?)` (compute-and-cache, **single-flight**: concurrent misses for the same key share one `compute()` call)
 - `invalidate(key)`, `invalidatePrefix(prefix)` (bulk invalidation by namespace), `clear()`
-- Default 60s TTL
+- Default 60s TTL; the store is **bounded** (evicts expired-then-oldest past `maxEntries`) so a long-running process can't grow unbounded
 - Used by `resolveServerFilter`, available-letters endpoints, and other read-heavy paths
+- **Always call `invalidateMediaCaches()` from `src/lib/cache/invalidate.ts`** after any mutation that changes media items, server membership, dedup canonical selection, or title/artwork preference — it drops every media-derived prefix (`server-filter:`, `stats:`, `letters:`, `group-summary:`, `cross-tab:`, `custom-stats:`, `timeline:`, `distinct-values`, `watch-history-filters:`) in one call. Used by sync, purge, server CRUD, and the dedup/title-preference settings routes. Do not hand-roll partial invalidation — it's the recurring source of stale-listing bugs.
 
 ### Filter Utilities
 
@@ -242,7 +253,9 @@ When users connect multiple servers, dedup prevents duplicate items from appeari
 
 - Rules are recursive `RuleGroup` structures with AND/OR operators, stored as JSON in `RuleSet`. Rules and groups support `negate`; group-level negation is normalized away before evaluation by `pushDownGroupNegation` (`src/lib/conditions/negation.ts`, De Morgan push-down into per-rule negation) so both evaluation phases share NULL semantics
 - Two-phase evaluation: Phase 1 converts rules to Prisma WHERE clauses, Phase 2 post-filters in memory for Arr/Seerr metadata, stream aggregation, and wildcard pattern matching
+- **The lifecycle rule engine (`src/lib/rules/lifecycle-engine.ts`) and the query builder (`src/lib/query/query-engine.ts`) share one implementation of both phases** so they can't drift: Phase 1 goes through the single `ruleToWhere` dispatcher in `src/lib/conditions/where-builder.ts` (both engines pass it to `buildGroupConditions`), and Phase 2 Arr/Seerr evaluation uses the exported `evaluateArrRule`/`evaluateSeerrRule` from `lifecycle-engine.ts` (the query side's `query/arr-filter.ts` / `query/seerr-filter.ts` are thin re-export shims). When fixing operator/NULL semantics, fix it once in these shared functions.
 - File size rules: user inputs in MB, engine converts to bytes for DB queries
+- **Series-aggregate fields** (`episodeCount`, `watchedEpisodePercentage`, …) can only be evaluated against an aggregated series record, never per-episode. A SERIES rule referencing one is routed through the aggregate path (`evaluateSeriesScope` in lifecycle, `aggregateSeriesAndFilter` in query) **regardless of `seriesScope`** — `hasSeriesAggregateRules` is part of the Phase-1 gate in both engines so the aggregate conjunct is never silently dropped from `where-builder` (which returns `{}` for aggregate fields)
 
 ### Lifecycle Processing Workflow
 
@@ -256,6 +269,7 @@ The lifecycle system operates in three phases, orchestrated by `src/lib/lifecycl
 - Fetches Arr/Seerr metadata lazily and caches per type (Movie/Series/Music) to share across rule sets
 - Enriches items with `matchedCriteria`, `actualValues`, `arrId`, and `servers[]`
 - For series with `seriesScope: false`, tracks individual episode IDs via `memberIds` in `itemData`
+- **Multi-server**: when a rule set targets more than one server, matches that resolve to the same Arr record (same TMDB/TVDB/MBID) are collapsed by `arrId` (merging `servers[]`) so the same title doesn't schedule two destructive actions or double-count `deletedBytes`. Dedup is by Arr id (not `dedupCanonical`) because a rule set may target a server subset whose canonical copy lives on a non-targeted server
 
 **Phase 2 — Action Scheduling** (in `processLifecycleRules`):
 
@@ -304,6 +318,7 @@ The lifecycle system operates in three phases, orchestrated by `src/lib/lifecycl
 - A static crontab (`src/lib/jobs/worker.ts`) drives recurring tasks: the **dispatcher** runs every minute, action cleanup every 15 minutes, log archival hourly.
 - The **dispatcher** (`dispatch.ts`) reads the user-configured, DB-stored schedules (`AppSettings.syncSchedule`, `lifecycleDetectionSchedule`, etc.), advances the `lastScheduled*` timestamp, and enqueues durable jobs for any work that is due. Heavy domain jobs (sync, lifecycle detection/execution, backup) share the serial `MAIN_QUEUE` so they run one-at-a-time (mirroring the original sequential scheduler); the dispatcher and housekeeping tasks omit a queue so a long sync never blocks scheduling. Jobs use a `jobKey` to deduplicate and are retried with backoff on failure.
 - Manual/API sync triggers (`/api/servers/[id]/sync`, `/api/sync/by-type`) enqueue durable `sync-server` jobs via `enqueueJob()` instead of fire-and-forget calls. `syncMediaServer` still self-serializes via its internal semaphore (`sync-semaphore.ts`), which guards all callers including the inline lifecycle re-sync.
+- Manual "Run Now" triggers (`/api/settings/schedule-info/run`) for **detection** and **execution** also enqueue durable jobs on `MAIN_QUEUE` with a stable `jobKey` (`detection:<userId>` / `execution:<userId>`) rather than running inline, so a double-click or a collision with the per-minute dispatcher dedupes into one run. The schedule watermark (`lastScheduled*`/`lastBackupAt`) is advanced only **after** a successful enqueue (in both the dispatcher and the manual route) so a transient enqueue failure can't silently skip a window.
 - Also starts the maintenance/preroll enforcers (30s `setInterval` polling loops) in the same `instrumentation.ts` — these keep cross-tick in-memory state and sub-minute cadence, so they intentionally remain outside the job queue.
 
 ### Documentation Site

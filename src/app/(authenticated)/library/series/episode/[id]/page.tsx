@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
@@ -26,6 +26,8 @@ export default function EpisodeDetailPage() {
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
   const [loading, setLoading] = useState(true);
+  // Token guards against a stale slow response landing after a quick id change.
+  const reqToken = useRef(0);
   const searchParams = useSearchParams();
   const backOverride = useMemo(() => {
     const from = searchParams.get("from");
@@ -39,10 +41,12 @@ export default function EpisodeDetailPage() {
   }, [searchParams]);
 
   useEffect(() => {
+    const token = ++reqToken.current;
     async function fetchItem() {
       try {
         const res = await fetch(`/api/media/${id}`);
         const data = await res.json();
+        if (token !== reqToken.current) return;
         if (data.item) {
           setItem(data.item);
           setPlayServers(buildPlayLinks(data.playServers || [], [
@@ -54,7 +58,7 @@ export default function EpisodeDetailPage() {
       } catch {
         // Failed to load
       } finally {
-        setLoading(false);
+        if (token === reqToken.current) setLoading(false);
       }
     }
     fetchItem();
@@ -136,8 +140,8 @@ export default function EpisodeDetailPage() {
       }
       filePath={item.filePath}
       artUrl={`/api/media/${item.id}/image`}
-      backHref={backOverride?.href ?? `/library/series/season/${item.id}`}
-      backLabel={backOverride?.label ?? (item.seasonNumber != null ? (item.seasonNumber === 0 ? "Specials" : `Season ${item.seasonNumber}`) : "Season")}
+      backHref={backOverride?.href ?? `/library/series/show/${item.id}`}
+      backLabel={backOverride?.label ?? (item.parentTitle || "Series")}
       useParentArt
       playServers={playServers}
     >

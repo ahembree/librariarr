@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useChipColors } from "@/components/chip-color-provider";
@@ -48,12 +48,16 @@ export default function SeriesDetailPage() {
   const [seasons, setSeasons] = useState<SeasonData[]>([]);
   const [seriesSummary, setSeriesSummary] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Token guards against a stale slow response landing after a quick id change.
+  const reqToken = useRef(0);
 
   useEffect(() => {
+    const token = ++reqToken.current;
     async function fetchData() {
       try {
         const itemRes = await fetch(`/api/media/${id}`);
         const itemData = await itemRes.json();
+        if (token !== reqToken.current) return;
         if (!itemData.item) return;
         setItem(itemData.item);
         setPlayServers(buildPlayLinks(itemData.playServers || [], [
@@ -67,11 +71,12 @@ export default function SeriesDetailPage() {
           `/api/media/series/seasons?parentTitle=${encodeURIComponent(parentTitle)}`
         );
         const seasonsData = await seasonsRes.json();
+        if (token !== reqToken.current) return;
         setSeasons(seasonsData.seasons || []);
       } catch {
         // Failed to load
       } finally {
-        setLoading(false);
+        if (token === reqToken.current) setLoading(false);
       }
     }
     fetchData();

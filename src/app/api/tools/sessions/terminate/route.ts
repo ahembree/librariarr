@@ -16,6 +16,16 @@ export async function POST(request: NextRequest) {
   if (error) return error;
   const { serverId, sessionIds, message } = data;
 
+  // Explicit session IDs must be scoped to a single server — they're only
+  // meaningful for the server that issued them. Passing serverId "all" with
+  // sessionIds would otherwise try those IDs against every server.
+  if (serverId === "all" && sessionIds) {
+    return NextResponse.json(
+      { error: "Cannot specify sessionIds when serverId is \"all\"" },
+      { status: 400 }
+    );
+  }
+
   const servers = await prisma.mediaServer.findMany({
     where: {
       userId: session.userId!,
@@ -34,9 +44,9 @@ export async function POST(request: NextRequest) {
         skipTlsVerify: server.tlsSkipVerify,
       });
 
-      // If terminating all sessions on this server, fetch them first
+      // If no explicit IDs were given, terminate all sessions on this server.
       let idsToTerminate = sessionIds;
-      if (!idsToTerminate || serverId === "all") {
+      if (!idsToTerminate) {
         const sessions = await client.getSessions();
         idsToTerminate = sessions.map((s) => s.sessionId);
       }

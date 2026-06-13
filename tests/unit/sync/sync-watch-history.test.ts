@@ -1,13 +1,22 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const { mockPrisma, mockClient } = vi.hoisted(() => ({
-  mockPrisma: {
-    $queryRawUnsafe: vi.fn(),
-  },
-  mockClient: {
-    getDetailedWatchHistory: vi.fn(),
-  },
-}));
+const { mockPrisma, mockClient } = vi.hoisted(() => {
+  // The DELETE + INSERTs run inside prisma.$transaction(cb) via tx.$executeRawUnsafe.
+  // Route the tx's raw methods to the same fn the tests assert against so the
+  // existing call-inspection (DELETE/INSERT string filters) keeps working.
+  const queryRawUnsafe = vi.fn();
+  const tx = { $queryRawUnsafe: queryRawUnsafe, $executeRawUnsafe: queryRawUnsafe };
+  return {
+    mockPrisma: {
+      $queryRawUnsafe: queryRawUnsafe,
+      $executeRawUnsafe: queryRawUnsafe,
+      $transaction: vi.fn(async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx)),
+    },
+    mockClient: {
+      getDetailedWatchHistory: vi.fn(),
+    },
+  };
+});
 
 vi.mock("@/lib/db", () => ({
   prisma: mockPrisma,
@@ -79,6 +88,30 @@ describe("syncWatchHistory", () => {
     expect(deleteCalls.length).toBe(1);
   });
 
+  it("skips the destructive DELETE when the watch-history fetch fails (no data loss)", async () => {
+    // Server query
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{
+      id: "server-1",
+      name: "Test Server",
+      url: "http://plex:32400",
+      accessToken: "token",
+      type: "PLEX",
+      tlsSkipVerify: false,
+      enabled: true,
+    }]);
+
+    // A transient outage: the client throws rather than returning [].
+    mockClient.getDetailedWatchHistory.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+
+    const result = await syncWatchHistory("server-1");
+    expect(result).toEqual({ count: 0 });
+
+    // CRITICAL: must NOT have wiped existing history on a fetch failure.
+    const deleteCalls = mockPrisma.$queryRawUnsafe.mock.calls
+      .filter((args) => (args[0] as string).includes('DELETE FROM "WatchHistory"'));
+    expect(deleteCalls.length).toBe(0);
+  });
+
   it("syncs watch history entries with matching media items", async () => {
     // Server query
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{
@@ -131,8 +164,8 @@ describe("syncWatchHistory", () => {
       enabled: true,
     }]);
 
-    // Generate 150 entries (batch size is 100)
-    const entries = Array.from({ length: 150 }, (_, i) => ({
+    // Generate 600 entries (batch size is 500 → splits into 2 batches)
+    const entries = Array.from({ length: 600 }, (_, i) => ({
       ratingKey: String(i),
       username: "Admin",
       watchedAt: "2024-01-01T00:00:00Z",
@@ -142,7 +175,7 @@ describe("syncWatchHistory", () => {
     mockClient.getDetailedWatchHistory.mockResolvedValueOnce(entries);
 
     // Media items (all match)
-    const mediaItems = Array.from({ length: 150 }, (_, i) => ({
+    const mediaItems = Array.from({ length: 600 }, (_, i) => ({
       id: `item-${i}`,
       ratingKey: String(i),
     }));
@@ -151,14 +184,14 @@ describe("syncWatchHistory", () => {
     // DELETE from WatchHistory
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
 
-    // INSERT batch 1 (100 items) and batch 2 (50 items)
+    // INSERT batch 1 (500 items) and batch 2 (100 items)
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
 
     const result = await syncWatchHistory("server-1");
-    expect(result).toEqual({ count: 150 });
+    expect(result).toEqual({ count: 600 });
 
-    // Should have 2 INSERT calls (batches of 100 + 50)
+    // Should have 2 INSERT calls (batches of 500 + 100)
     const insertCalls = mockPrisma.$queryRawUnsafe.mock.calls
       .filter((args) => (args[0] as string).includes('INSERT INTO "WatchHistory"'));
     expect(insertCalls.length).toBe(2);

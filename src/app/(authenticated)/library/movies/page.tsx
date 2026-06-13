@@ -99,6 +99,9 @@ export default function MoviesPage() {
   const scrollElementRef = useRef<HTMLElement | null>(null);
   const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
+  // Token guards against a stale slow response landing after a quick
+  // filter/server flip and overwriting state with the wrong items.
+  const reqToken = useRef(0);
 
   // Find the <main> scroll container on mount
   useEffect(() => {
@@ -107,11 +110,13 @@ export default function MoviesPage() {
     setScrollElement(main);
   }, []);
 
+  // Re-measure scrollMargin once the grid mounts (it's hidden behind the
+  // skeleton while loading, so the ref is null on the initial pass).
   useLayoutEffect(() => {
     if (gridContainerRef.current) {
       setScrollMargin(gridContainerRef.current.offsetTop);
     }
-  }, []);
+  }, [loading, items.length]);
 
   // Compute row count for virtualizer
   const rowCount = useMemo(
@@ -187,6 +192,7 @@ export default function MoviesPage() {
   );
 
   const fetchMovies = useCallback(async () => {
+    const token = ++reqToken.current;
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -201,13 +207,14 @@ export default function MoviesPage() {
 
       const response = await fetch(`/api/media/movies?${params}`);
       const data = await response.json();
+      if (token !== reqToken.current) return;
       startTransition(() => {
-        setItems(data.items);
+        setItems(data.items || []);
         setLoading(false);
       });
     } catch (error) {
       console.error("Failed to fetch movies:", error);
-      setLoading(false);
+      if (token === reqToken.current) setLoading(false);
     }
   }, [filters, sortBy, sortOrder, selectedServerId]);
 

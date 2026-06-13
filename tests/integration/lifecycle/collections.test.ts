@@ -362,6 +362,7 @@ describe("Lifecycle Collections", () => {
       const ruleSet = await createTestRuleSet(user.id, {
         name: "Sync Test",
         type: "MOVIE",
+        serverIds: [server.id],
         collectionEnabled: true,
         collectionName: "Synced Collection",
         rules: [
@@ -422,6 +423,7 @@ describe("Lifecycle Collections", () => {
       const ruleSet = await createTestRuleSet(user.id, {
         name: "All Disabled",
         type: "MOVIE",
+        serverIds: [server.id],
         collectionEnabled: true,
         collectionName: "Dangerous Collection",
         rules: [

@@ -19,17 +19,14 @@ import {
 } from "@/lib/conditions";
 import {
   isUnconfiguredContainsRule,
-  validateRulePreamble,
-  UNSATISFIABLE_WHERE,
-  FIELD_HANDLERS,
-  textGenericHandler,
+  ruleToWhere,
+  STREAM_COUNT_FIELDS,
 } from "@/lib/conditions/where-builder";
 import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
+import type { Condition } from "@/lib/conditions/types";
 import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
 import { Prisma } from "@/generated/prisma/client";
-
-const STREAM_COUNT_FIELDS = new Set(["audioStreamCount", "subtitleStreamCount"]);
 
 const STREAM_LANG_CODEC_FIELDS = new Set(["audioLanguage", "subtitleLanguage", "streamAudioCodec"]);
 const STREAM_LANGUAGE_FIELDS = new Set(["audioLanguage", "subtitleLanguage"]);
@@ -105,46 +102,9 @@ export function lookupSeerrMeta(
   return undefined;
 }
 
-function ruleToWhereClause(rule: LifecycleRule): Prisma.MediaItemWhereInput {
-  const { field, operator, value, negate } = rule;
-
-  // Safety preamble: unconfigured rule, inapplicable operator, malformed
-  // value → UNSATISFIABLE_WHERE. Shared with the query builder.
-  const guarded = validateRulePreamble(field, operator, value);
-  if (guarded) return guarded;
-
-  // Skip external fields — they are handled as post-filters
-  if (isExternalField(field)) return {};
-
-  // Skip series aggregate fields — computed during evaluateSeriesScope()
-  if (isSeriesAggregateField(field)) return {};
-
-  // Skip cross-system fields — enriched before Phase 2
-  if (isCrossSystemField(field)) return {};
-
-  // Stream query fields only make sense inside a stream-query group, whose
-  // rules never reach this dispatcher (they go through
-  // buildStreamQueryClause). One appearing HERE is a misplaced rule — fail
-  // it rather than dropping the constraint (a single-rule group would
-  // otherwise collapse to no WHERE at all and match the whole library).
-  if (isStreamQueryField(field)) return UNSATISFIABLE_WHERE;
-
-  // Stream count fields — always post-filtered in-memory
-  if (STREAM_COUNT_FIELDS.has(field)) return {};
-
-  // Field-specific WHERE-emitting handlers live in where-builder.ts and are
-  // shared with the query builder. The dispatcher above handles all the
-  // engine-specific routing (external, series aggregate, cross-system,
-  // stream query/count) before reaching this lookup; stream relation,
-  // hasExternalId are routed via FIELD_HANDLERS.
-  const handler = FIELD_HANDLERS[field];
-  if (handler) return handler(operator, value, field, negate);
-
-  // Text-generic fallback for unrecognized text fields (parentTitle, albumTitle,
-  // videoProfile, videoFrameRate, aspectRatio, scanType, contentRating, studio,
-  // videoCodec, audioCodec, container, etc.).
-  return textGenericHandler(operator, value, field, negate);
-}
+// Phase 1 rule → WHERE conversion is shared with the query builder via
+// `ruleToWhere` in where-builder.ts (the two engines' dispatchers were
+// equivalent). It's passed to buildGroupConditions below.
 
 function isRuleGroups(input: LifecycleRule[] | LifecycleRuleGroup[]): input is LifecycleRuleGroup[] {
   return input.length > 0 && "rules" in input[0];
@@ -265,6 +225,24 @@ function hasResolutionRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): bool
   return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "resolution");
 }
 
+/** Check if any rule references a series-aggregate field (episodeCount,
+ *  watchedEpisodePercentage, etc.). These can only be evaluated against an
+ *  aggregated series record, never per-episode, so they force series-level
+ *  (aggregate) evaluation regardless of seriesScope — mirroring the query
+ *  engine's aggregateSeriesAndFilter path. */
+function hasSeriesAggregateRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+  if (rules.length === 0) return false;
+  if (isRuleGroups(rules)) {
+    for (const group of rules) {
+      if (group.enabled === false) continue;
+      if (group.rules.some((r) => r.enabled !== false && isSeriesAggregateField(r.field))) return true;
+      if (hasSeriesAggregateRules(group.groups ?? [])) return true;
+    }
+    return false;
+  }
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isSeriesAggregateField(r.field));
+}
+
 /** Check if any rule uses stream fields or stream query groups */
 function hasStreamRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
@@ -347,8 +325,13 @@ export function hasWatchedByUserRules(rules: LifecycleRule[] | LifecycleRuleGrou
   return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "watchedByUser");
 }
 
-/** Evaluate a single arr rule against arr metadata for an item */
-function evaluateArrRule(rule: LifecycleRule, meta: ArrMetadata | undefined): boolean {
+/**
+ * Evaluate a single Arr rule against Arr metadata for an item (Phase 2).
+ * Shared with the query builder (exported as `evaluateQueryArrRule`) — typed on
+ * the engine-neutral `Condition` so both callers use this one canonical
+ * implementation rather than drifting copies.
+ */
+export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined): boolean {
   // Safety: unconfigured contains/notContains matches nothing. Negate is
   // intentionally NOT applied — `!false` would otherwise sweep the library.
   // Checked before any field-specific branch so even nonsensical pairings
@@ -727,7 +710,11 @@ function evaluateArrRule(rule: LifecycleRule, meta: ArrMetadata | undefined): bo
 }
 
 /** Evaluate a single seerr rule against seerr metadata for an item */
-function evaluateSeerrRule(rule: LifecycleRule, meta: SeerrMetadata | undefined): boolean {
+/**
+ * Evaluate a single Seerr rule against Seerr metadata (Phase 2). Shared with
+ * the query builder (exported as `evaluateQuerySeerrRule`).
+ */
+export function evaluateSeerrRule(rule: Condition, meta: SeerrMetadata | undefined): boolean {
   // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
   if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
   // Safety: unknown operator or wrong-type combo → match nothing (bypass negate).
@@ -783,6 +770,11 @@ function evaluateSeerrRule(rule: LifecycleRule, meta: SeerrMetadata | undefined)
         case "lessThanOrEqual":
           result = m.requestCount <= numVal;
           break;
+        case "between": {
+          const [minStr, maxStr] = String(value).split(",");
+          result = m.requestCount >= Number(minStr) && m.requestCount <= Number(maxStr);
+          break;
+        }
         default:
           return false;
       }
@@ -900,7 +892,7 @@ function evaluateRuleAgainstItem(
   seerrMeta?: SeerrMetadata
 ): boolean {
   // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
-  // Mirrors `ruleToWhereClause`'s UNSATISFIABLE_WHERE so Phase 1 and Phase 2 agree.
+  // Mirrors `ruleToWhere`'s UNSATISFIABLE_WHERE so Phase 1 and Phase 2 agree.
   if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
   // Safety: unknown operator or operator/field-type mismatch → match nothing.
   // Without this, `default: result = false` in any operator switch would be
@@ -2102,7 +2094,7 @@ export function evaluateAllRulesInMemory(
   return evaluateAllRulesInMemory(converted, item, arrMeta, seerrMeta);
 }
 
-export { hasArrRules, hasSeerrRules, hasStreamRules, hasExternalIdFieldRules, hasStreamQueryInMemoryRules };
+export { hasArrRules, hasSeerrRules, hasStreamRules, hasExternalIdFieldRules, hasStreamQueryInMemoryRules, hasSeriesAggregateRules };
 
 /**
  * Evaluate rules at the series scope: aggregate ALL episodes into series
@@ -2500,13 +2492,18 @@ export async function evaluateLifecycleRules(
   const needsStreams = hasStreamRules(rules);
   const needsWatchHistory = hasWatchedByUserRules(rules);
   const hasCrossSystem = hasCrossSystemFieldRules(rules);
-  const needsInMemoryEval = hasWildcardRules(rules) || hasStreamCountRules(rules) || hasStreamQueryInMemoryRules(rules) || hasCrossSystem || hasResolutionRules(rules);
+  // hasSeriesAggregateRules: aggregate fields are dropped to {} in Phase 1
+  // (where-builder), so they MUST force the pre-filter WHERE + in-memory
+  // re-eval, otherwise an aggregate conjunct AND-ed with a DB-expressible rule
+  // is silently dropped. (Aggregate evaluation itself happens at the series
+  // level — see detect-matches routing to evaluateSeriesScope.)
+  const needsInMemoryEval = hasWildcardRules(rules) || hasStreamCountRules(rules) || hasStreamQueryInMemoryRules(rules) || hasCrossSystem || hasResolutionRules(rules) || hasSeriesAggregateRules(rules);
   const needsFullReeval = needsInMemoryEval || !!hasExternal;
 
   let andConditions: Prisma.MediaItemWhereInput[];
 
   // When needsFullReeval is true, use pre-filter-aware WHERE construction.
-  // ruleToWhereClause() returns {} for external fields (Arr/Seerr), wildcards,
+  // ruleToWhere() returns {} for external fields (Arr/Seerr), wildcards,
   // and stream counts. Silently dropping these from OR branches makes the DB
   // query MORE restrictive than the in-memory evaluation — items that should
   // match get excluded from Phase 1 and never reach Phase 2.
@@ -2521,10 +2518,10 @@ export async function evaluateLifecycleRules(
     : legacyRulesToGroups(rules as LifecycleRule[]);
 
   if (needsFullReeval) {
-    const combined = buildGroupConditionsPreFilter(groupRules, ruleToWhereClause);
+    const combined = buildGroupConditionsPreFilter(groupRules, ruleToWhere);
     andConditions = Object.keys(combined).length > 0 ? [combined] : [];
   } else {
-    const combined = buildGroupConditions(groupRules, ruleToWhereClause);
+    const combined = buildGroupConditions(groupRules, ruleToWhere);
     andConditions = Object.keys(combined).length > 0 ? [combined] : [];
   }
 

@@ -53,8 +53,15 @@ function subscribeSize(listener: () => void) {
 }
 
 function getSizeSnapshot(): CardSize {
-  const stored = localStorage.getItem(STORAGE_KEY) as CardSize | null;
-  return stored && stored in CARD_MIN_WIDTHS ? stored : "medium";
+  // Guard storage access: this runs during render (useSyncExternalStore), and
+  // localStorage throws in Safari private mode / when storage is disabled,
+  // which would white-screen every library page.
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY) as CardSize | null;
+    return stored && stored in CARD_MIN_WIDTHS ? stored : "medium";
+  } catch {
+    return "medium";
+  }
 }
 
 function getSizeServerSnapshot(): CardSize {
@@ -111,7 +118,12 @@ export function useCardSize() {
   );
 
   const setSize = useCallback((s: CardSize) => {
-    localStorage.setItem(STORAGE_KEY, s);
+    try {
+      localStorage.setItem(STORAGE_KEY, s);
+    } catch {
+      // Storage unavailable (private mode) — keep the in-memory listeners in
+      // sync anyway so the UI still updates for this session.
+    }
     for (const l of sizeListeners) l();
   }, []);
 

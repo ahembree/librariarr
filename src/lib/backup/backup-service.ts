@@ -462,6 +462,15 @@ const LEGACY_FIELD_RENAMES: Record<string, Record<string, string>> = {
   lifecycleAction: { searchAfterDelete: "searchAfterAction" },
 };
 
+// Strict, FULLY-ANCHORED ISO-8601 datetime matcher (matches what serializeRow
+// emits via Date#toISOString, plus common offset/precision variants). The old
+// matcher was unanchored at the end, so any string value that merely STARTED
+// ISO-like — a media title, rule name, log message, or a collection label such
+// as "2024-01-01T00:00:00 Retrospective" — was coerced to a Date, corrupting
+// string columns or failing the whole-table createMany. Anchoring both ends
+// means only a value that is ENTIRELY a timestamp is converted.
+const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})?$/;
+
 // Deserialize date strings back to Date objects for Prisma, and migrate any
 // legacy field names so older backups still restore cleanly.
 function deserializeRow(row: Record<string, unknown>, table?: string): Record<string, unknown> {
@@ -469,7 +478,8 @@ function deserializeRow(row: Record<string, unknown>, table?: string): Record<st
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(row)) {
     const mappedKey = renames?.[key] ?? key;
-    if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)) {
+    // Only coerce when the ENTIRE string is a valid ISO timestamp.
+    if (typeof value === "string" && ISO_DATETIME.test(value) && !Number.isNaN(Date.parse(value))) {
       result[mappedKey] = new Date(value);
     } else {
       result[mappedKey] = value;

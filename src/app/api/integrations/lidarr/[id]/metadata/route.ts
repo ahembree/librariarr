@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { LidarrClient } from "@/lib/arr/lidarr-client";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
 export async function GET(
   _request: NextRequest,
@@ -23,11 +24,18 @@ export async function GET(
   }
 
   const client = new LidarrClient(instance.url, instance.apiKey);
-  const [artists, qualityProfiles, tags] = await Promise.all([
-    client.getArtists(),
-    client.getQualityProfiles(),
-    client.getTags(),
-  ]);
+  let artists, qualityProfiles, tags;
+  try {
+    [artists, qualityProfiles, tags] = await Promise.all([
+      client.getArtists(),
+      client.getQualityProfiles(),
+      client.getTags(),
+    ]);
+  } catch (err: unknown) {
+    const raw = err instanceof Error ? err.message : "Failed to query Lidarr";
+    const msg = sanitizeErrorDetail(raw) ?? "Failed to query Lidarr";
+    return NextResponse.json({ error: msg }, { status: 502 });
+  }
 
   const tagMap = new Map(tags.map((t) => [t.id, t.label]));
   const profileMap = new Map(qualityProfiles.map((p) => [p.id, p.name]));

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useChipColors } from "@/components/chip-color-provider";
 import { cn } from "@/lib/utils";
 import { normalizeResolutionLabel } from "@/lib/resolution";
@@ -218,10 +218,15 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
   const hasCredits = (merged.directors && merged.directors.length > 0) || (merged.writers && merged.writers.length > 0) || (merged.countries && merged.countries.length > 0);
   const hasCast = castRoles.length > 0;
 
-  const fetchItemDetail = useCallback(async (itemId: string) => {
+  // Token guards against a stale slow response landing after item.id changes
+  // and overwriting the current item's detail/history.
+  const reqToken = useRef(0);
+
+  const fetchItemDetail = useCallback(async (itemId: string, token: number) => {
     try {
       const response = await fetch(`/api/media/${itemId}`);
       const data = await response.json();
+      if (token !== reqToken.current) return;
       if (data.item) {
         const itemStreams = data.item.streams ?? [];
         setStreams(itemStreams);
@@ -232,22 +237,24 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
         setDetailData(rest as Partial<MediaItemWithRelations>);
       }
     } catch {
-      setStreams([]);
+      if (token === reqToken.current) setStreams([]);
     }
   }, []);
 
-  const fetchHistory = useCallback(async (itemId: string) => {
+  const fetchHistory = useCallback(async (itemId: string, token: number) => {
     setHistoryLoading(true);
     try {
       const response = await fetch(`/api/media/${itemId}/history`);
       const data = await response.json();
+      if (token !== reqToken.current) return;
       setHistory(data.history || []);
       setServerHistories(data.serverHistories || []);
     } catch {
+      if (token !== reqToken.current) return;
       setHistory([]);
       setServerHistories([]);
     } finally {
-      setHistoryLoading(false);
+      if (token === reqToken.current) setHistoryLoading(false);
     }
   }, []);
 
@@ -281,8 +288,9 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
 
   useEffect(() => {
     if (isAggregate) return;
+    const token = ++reqToken.current;
     void (async () => {
-      await Promise.all([fetchItemDetail(item.id), fetchHistory(item.id)]);
+      await Promise.all([fetchItemDetail(item.id, token), fetchHistory(item.id, token)]);
     })();
   }, [item.id, isAggregate, fetchItemDetail, fetchHistory]);
 
@@ -586,7 +594,9 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
               return (
                 <Collapsible key={entry.key} open={isOpen} onOpenChange={(open) => {
                   setMetadataOpenMap((prev) => ({ ...prev, [entry.key]: open }));
-                  if (open && metadata === undefined && !isLoading) {
+                  // `== null` retries after a failed fetch (entry set to null), not just
+                  // the never-fetched case (undefined) — otherwise it wedges on "Failed to load".
+                  if (open && metadata == null && !isLoading) {
                     fetchAllMetadata(entry.key, entry.mediaItemId);
                   }
                 }}>

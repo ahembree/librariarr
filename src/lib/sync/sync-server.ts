@@ -11,7 +11,7 @@ import { invalidateCachedUrls, normalizeCacheUrl } from "@/lib/image-cache/image
 import { computeDedupKey } from "@/lib/dedup/compute-dedup-key";
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
 import { withDeadlockRetry } from "@/lib/db-retry";
-import { appCache } from "@/lib/cache/memory-cache";
+import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { normalizeResolutionFromDimensions } from "@/lib/resolution";
 import { eventBus } from "@/lib/events/event-bus";
 import { acquireSyncSlot, releaseSyncSlot } from "@/lib/sync/sync-semaphore";
@@ -317,7 +317,7 @@ function buildRowParams(
   // Fall back to episode-level Guids only when show-level aren't available.
   let guids = item.Guid;
   if (showGuidsMap) {
-    const showGuids = showGuidsMap.get(item.grandparentTitle ?? "");
+    const showGuids = showGuidsMap.get(item.grandparentRatingKey ?? "");
     if (showGuids && showGuids.length > 0) {
       guids = showGuids;
     }
@@ -492,7 +492,7 @@ async function processBatch(
     // Fall back to episode-level Guids only when show-level aren't available.
     let guids = item.Guid;
     if (showGuidsMap) {
-      const showGuids = showGuidsMap.get(item.grandparentTitle ?? "");
+      const showGuids = showGuidsMap.get(item.grandparentRatingKey ?? "");
       if (showGuids && showGuids.length > 0) {
         guids = showGuids;
       }
@@ -609,6 +609,10 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
   const syncJob = syncJobRows[0];
 
   let syncUserId: string | undefined;
+  // Hoisted to function scope so the inner finally can run cache invalidation
+  // and canonical recomputation even on the cancel/fail paths (which return or
+  // throw before reaching the success-path cleanup), as long as work was done.
+  let processedItems = 0;
 
   await acquireSyncSlot();
   try {
@@ -712,7 +716,6 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
 
     // Process libraries one at a time to limit peak memory usage.
     // Each library's items are fetched, processed, then released before the next.
-    let processedItems = 0;
     let totalItems = 0;
 
     for (const lib of targetLibraries) {
@@ -744,15 +747,18 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       // - summary (show-level summary for hover popovers)
       if (lib.type === "show") {
         const shows = await client.getLibraryShows(lib.key);
+        // Key show maps by the series' stable ratingKey (not title) so two
+        // shows that share a title don't collide. Episodes are matched back
+        // via their grandparentRatingKey (the series ID).
         showGenreMap = new Map<string, string[]>();
         showGuidsMap = new Map<string, Array<{ id: string }>>();
         showSummaryMap = new Map<string, string>();
         for (const show of shows) {
-          if (show.title) {
+          if (show.ratingKey) {
             const showGenres = show.Genre?.map((g) => g.tag) ?? [];
-            if (showGenres.length > 0) showGenreMap.set(show.title, showGenres);
-            if (show.Guid && show.Guid.length > 0) showGuidsMap.set(show.title, show.Guid);
-            if (show.summary) showSummaryMap.set(show.title, show.summary);
+            if (showGenres.length > 0) showGenreMap.set(show.ratingKey, showGenres);
+            if (show.Guid && show.Guid.length > 0) showGuidsMap.set(show.ratingKey, show.Guid);
+            if (show.summary) showSummaryMap.set(show.ratingKey, show.summary);
           }
         }
       }
@@ -762,13 +768,16 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       const shouldEnrich = client.bulkListingIncomplete ?? false;
       const effectivePageSize = PAGE_SIZE;
 
-      // Fetch first page to learn total count without loading everything
+      // Fetch first page to learn total count without loading everything.
+      // `libraryTotal` is null when the server doesn't report a count — in that
+      // case we cannot pre-compute progress, so contribute 0 to the persisted
+      // total (it's an Int column) and let the short-page check govern paging.
       const firstPage = await client.getLibraryItemsPage(lib.key, fetchType, 0, effectivePageSize);
       const libraryTotal = firstPage.total;
-      logger.info("Sync", `Library "${lib.title}": ${libraryTotal} items (pageSize=${effectivePageSize}, enrichment=${shouldEnrich})`);
+      logger.info("Sync", `Library "${lib.title}": ${libraryTotal ?? "unknown"} items (pageSize=${effectivePageSize}, enrichment=${shouldEnrich})`);
       logHeapAndCollect(`start library "${lib.title}"`);
 
-      totalItems += libraryTotal;
+      totalItems += libraryTotal ?? 0;
 
       await prisma.$queryRawUnsafe(
         `UPDATE "SyncJob" SET "totalItems"=$1 WHERE "id"=$2`,
@@ -806,6 +815,12 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       let pageItems: MediaMetadataItem[] | null = firstPage.items;
       let pageOffset = 0;
       let cancelled = false;
+      // Track whether the page loop reached a legitimate terminal condition
+      // (a page shorter than the page size, or the reported total was reached)
+      // rather than exiting early/abnormally. Stale deletion only runs when the
+      // full library was actually traversed — otherwise a short/partial fetch
+      // would wrongly delete items that still exist on the server.
+      let reachedLibraryEnd = false;
 
       while (pageItems && pageItems.length > 0) {
         // Pre-fetch existing thumb URLs for the entire page in a single query
@@ -905,7 +920,12 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
         pageItems = null;
 
         pageOffset += pageRatingKeys.length;
-        if (pageRatingKeys.length < effectivePageSize || pageOffset >= libraryTotal) break;
+        if (pageRatingKeys.length < effectivePageSize || (libraryTotal != null && pageOffset >= libraryTotal)) {
+          // Reached the end: either the server returned a short (final) page, or
+          // we've fetched at least as many items as the reported total.
+          reachedLibraryEnd = true;
+          break;
+        }
 
         // Force GC between pages to reclaim the previous page's metadata objects
         // (each page holds items with nested Media/Part/Stream arrays).
@@ -914,6 +934,9 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
 
         const nextPage = await client.getLibraryItemsPage(lib.key, fetchType, pageOffset, effectivePageSize);
         pageItems = nextPage.items;
+        // An empty next page at a full-page boundary also means we've reached
+        // the end of the library (the loop condition will exit below).
+        if (!pageItems || pageItems.length === 0) reachedLibraryEnd = true;
       }
 
       if (cancelled) {
@@ -933,12 +956,29 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       // Remove items from DB that no longer exist on the server.
       // Items touched by upserts have updatedAt >= librarySyncStart.
       // Items NOT touched are stale (removed from the server since last sync).
-      const staleItems = await prisma.$queryRawUnsafe<
-        { id: string; thumbUrl: string | null; parentThumbUrl: string | null; seasonThumbUrl: string | null }[]
-      >(
-        `SELECT "id","thumbUrl","parentThumbUrl","seasonThumbUrl" FROM "MediaItem" WHERE "libraryId"=$1 AND "updatedAt"<$2`,
-        library.id, librarySyncStart,
-      );
+      //
+      // GUARD: only delete when the page loop actually traversed the entire
+      // library — either it reached a legitimate terminal condition (short/empty
+      // final page or reported total reached) or it processed at least as many
+      // items as the library claims to have. If a fetch was suspiciously short
+      // (e.g. a transient server error returned fewer items), skip deletion so
+      // we don't wipe items that still exist on the server.
+      const traversedFullLibrary = reachedLibraryEnd || (libraryTotal != null && libraryItemCount >= libraryTotal);
+      const staleItems = traversedFullLibrary
+        ? await prisma.$queryRawUnsafe<
+            { id: string; thumbUrl: string | null; parentThumbUrl: string | null; seasonThumbUrl: string | null }[]
+          >(
+            `SELECT "id","thumbUrl","parentThumbUrl","seasonThumbUrl" FROM "MediaItem" WHERE "libraryId"=$1 AND "updatedAt"<$2`,
+            library.id, librarySyncStart,
+          )
+        : [];
+
+      if (!traversedFullLibrary) {
+        logger.info(
+          "Sync",
+          `Library "${lib.title}": skipping stale-item deletion — library not fully traversed (${libraryItemCount}/${libraryTotal ?? "unknown"} items processed)`,
+        );
+      }
 
       if (staleItems.length > 0) {
         // Invalidate image cache for items being removed
@@ -956,10 +996,12 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       // This covers unchanged items that were skipped during enrichment
       // (only updatedAt was touched, not the full upsert).
       if (showSummaryMap && showSummaryMap.size > 0) {
-        for (const [showTitle, summary] of showSummaryMap) {
+        // Maps are keyed by series ratingKey; match episodes via their stored
+        // grandparentRatingKey rather than parentTitle (titles can collide).
+        for (const [seriesId, summary] of showSummaryMap) {
           await prisma.$queryRawUnsafe(
-            `UPDATE "MediaItem" SET "parentSummary"=$1 WHERE "libraryId"=$2 AND "parentTitle"=$3 AND ("parentSummary" IS DISTINCT FROM $1)`,
-            summary, library.id, showTitle,
+            `UPDATE "MediaItem" SET "parentSummary"=$1 WHERE "libraryId"=$2 AND "grandparentRatingKey"=$3 AND ("parentSummary" IS DISTINCT FROM $1)`,
+            summary, library.id, seriesId,
           );
         }
         logger.info("Sync", `Library "${lib.title}": updated parentSummary for ${showSummaryMap.size} shows`);
@@ -1003,22 +1045,13 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
         logger.error("Sync", "Watch history sync failed", { error: String(whError) });
         completedOps.push(`Watch history: failed (${formatDuration(Date.now() - whStart)})`);
       }
-      appCache.invalidatePrefix("watch-history-filters:");
     }
     logHeapAndCollect("after watch history sync");
-
-    // Recompute dedup canonical flags for this user's items
-    await recomputeCanonical(server.userId);
 
     await prisma.$queryRawUnsafe(
       `UPDATE "SyncJob" SET "status"=$1,"completedAt"=$2,"itemsProcessed"=$3,"currentLibrary"=NULL WHERE "id"=$4`,
       "COMPLETED", new Date(), processedItems, syncJob.id,
     );
-
-    // Invalidate caches that depend on media data
-    appCache.invalidate("distinct-values");
-    appCache.invalidatePrefix("server-filter:");
-    appCache.invalidatePrefix("stats:");
 
     logger.info("Sync", `Sync completed for server (${processedItems} items processed)`);
     eventBus.emit({ type: "sync:completed", userId: server.userId, meta: { serverId } });
@@ -1047,6 +1080,19 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
     );
     if (syncUserId) eventBus.emit({ type: "sync:failed", userId: syncUserId, meta: { serverId } });
     throw error;
+  } finally {
+    // Run dedup canonical recompute + media cache invalidation regardless of how
+    // the sync ended (success, cancel, or failure) as long as items were
+    // processed — a partial sync still changes the dataset, so leaving canonical
+    // flags / read caches stale would surface duplicate or missing items.
+    if (syncUserId && processedItems > 0) {
+      try {
+        await recomputeCanonical(syncUserId);
+      } catch (recomputeError) {
+        logger.error("Sync", "recomputeCanonical failed", { error: String(recomputeError) });
+      }
+      invalidateMediaCaches();
+    }
   }
   } finally {
     releaseSyncSlot();
@@ -1070,13 +1116,16 @@ function buildItemData(
   const audioStream = streams.find((s) => s.streamType === 2);
 
   const parentTitle = item.grandparentTitle ?? null;
+  // Series-level show maps are keyed by the series' ratingKey (not title) so
+  // shows that share a title don't collide. Match via grandparentRatingKey.
+  const seriesId = item.grandparentRatingKey ?? null;
   const albumTitle = libraryType === "MUSIC" ? (item.parentTitle ?? null) : null;
   const seasonNumber = item.parentIndex ?? null;
   const episodeNumber = item.index ?? null;
 
   let genres = item.Genre?.map((g) => g.tag) ?? null;
-  if ((!genres || genres.length === 0) && showGenreMap && parentTitle) {
-    genres = showGenreMap.get(parentTitle) ?? null;
+  if ((!genres || genres.length === 0) && showGenreMap && seriesId) {
+    genres = showGenreMap.get(seriesId) ?? null;
   }
   const directors = item.Director?.map((d) => d.tag) ?? null;
   const writers = item.Writer?.map((w) => w.tag) ?? null;
@@ -1098,7 +1147,7 @@ function buildItemData(
     thumbUrl: item.thumb,
     artUrl: item.art ?? null,
     parentThumbUrl: item.grandparentThumb ?? null,
-    parentSummary: (showSummaryMap && parentTitle ? showSummaryMap.get(parentTitle) : null) ?? null,
+    parentSummary: (showSummaryMap && seriesId ? showSummaryMap.get(seriesId) : null) ?? null,
     seasonThumbUrl: item.parentThumb ?? null,
     parentTitle,
     albumTitle,
@@ -1144,7 +1193,7 @@ function buildItemData(
     container: media?.container ?? part?.container ?? null,
     dynamicRange: detectDynamicRange(videoStream, part?.file ?? null),
     optimizedForStreaming: part?.optimizedForStreaming ?? media?.optimizedForStreaming ?? null,
-    fileSize: part?.size ? BigInt(part.size) : null,
+    fileSize: part?.size != null ? BigInt(Math.round(Number(part.size))) : null,
     filePath: part?.file ?? null,
     duration: media?.duration ?? item.duration ?? null,
     // Enriched metadata fields

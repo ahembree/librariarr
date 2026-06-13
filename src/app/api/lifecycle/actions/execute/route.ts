@@ -26,6 +26,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Rule set not found" }, { status: 404 });
   }
 
+  // A disabled rule set must not fire destructive actions, even manually — the
+  // scheduled execution path enforces this via its enabled filter, and a
+  // disabled rule set can still hold matches (PUT with clearMatches=false), so
+  // without this gate a manual "Execute" would bypass the backstop.
+  if (!ruleSet.enabled) {
+    return NextResponse.json(
+      { error: "Rule set is disabled — enable it before executing actions" },
+      { status: 400 }
+    );
+  }
+
   const hasTagOps = ruleSet.addArrTags.length > 0 || ruleSet.removeArrTags.length > 0;
 
   if (!ruleSet.actionType && !hasTagOps) {

@@ -5,6 +5,9 @@ import { logger } from "@/lib/logger";
 
 const REQUEST_PAGE_SIZE = 100;
 const STATS_TTL_MS = 60_000;
+// Hard ceiling on Seerr request pagination so a huge or looping instance can't
+// hang the request indefinitely. 1000 pages × 100 per page = 100k requests.
+const MAX_REQUEST_PAGES = 1000;
 
 export interface SeerrUserRequestStats {
   /** Stable identity key — plexUsername when present, otherwise Seerr username. */
@@ -85,7 +88,15 @@ async function computeSeerrRequestStats(
   for (const instance of instances) {
     const client = new SeerrClient(instance.url, instance.apiKey);
     let skip = 0;
+    let pages = 0;
     while (true) {
+      if (pages >= MAX_REQUEST_PAGES) {
+        logger.warn(
+          "Seerr",
+          `Request pagination hit MAX_REQUEST_PAGES (${MAX_REQUEST_PAGES}) for ${instance.name} during stats — truncating`
+        );
+        break;
+      }
       let page;
       try {
         page = await client.getRequests({ take: REQUEST_PAGE_SIZE, skip });
@@ -97,6 +108,7 @@ async function computeSeerrRequestStats(
         );
         break;
       }
+      pages += 1;
       for (const req of page.results) {
         const requester = req.requestedBy;
         if (!requester) continue;

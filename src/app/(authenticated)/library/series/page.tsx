@@ -231,6 +231,9 @@ export default function SeriesPage() {
   const scrollElementRef = useRef<HTMLElement | null>(null);
   const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
+  // Token guards against a stale slow response landing after a quick
+  // sort/server flip and overwriting state with the wrong items.
+  const reqToken = useRef(0);
 
   useEffect(() => {
     const main = document.querySelector<HTMLElement>("main");
@@ -238,11 +241,13 @@ export default function SeriesPage() {
     setScrollElement(main);
   }, []);
 
+  // Re-measure scrollMargin once the grid mounts (it's hidden behind the
+  // skeleton while loading, so the ref is null on the initial pass).
   useLayoutEffect(() => {
     if (gridContainerRef.current) {
       setScrollMargin(gridContainerRef.current.offsetTop);
     }
-  }, []);
+  }, [loading, seriesList.length]);
 
   useEffect(() => {
     const stored = localStorage.getItem("series-view-mode") as "cards" | "table" | null;
@@ -255,6 +260,7 @@ export default function SeriesPage() {
   };
 
   const fetchSeries = useCallback(async () => {
+    const token = ++reqToken.current;
     setLoading(true);
     try {
       const params = new URLSearchParams();
@@ -266,13 +272,14 @@ export default function SeriesPage() {
       }
       const response = await fetch(`/api/media/series/grouped?${params}`);
       const data = await response.json();
+      if (token !== reqToken.current) return;
       startTransition(() => {
         setSeriesList(data.series || []);
         setLoading(false);
       });
     } catch (error) {
       console.error("Failed to fetch series:", error);
-      setLoading(false);
+      if (token === reqToken.current) setLoading(false);
     }
   }, [sortBy, sortOrder, selectedServerId]);
 

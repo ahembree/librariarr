@@ -8,8 +8,15 @@ import { CARD_MIN_WIDTHS, MOBILE_CARD_MIN_WIDTHS, BREAKPOINTS, type CardSize } f
 const CARD_SIZE_KEY = "library-card-size";
 const emptySubscribe = () => () => {};
 function getCardWidthSnapshot(): number {
-  const stored = localStorage.getItem(CARD_SIZE_KEY) as CardSize | null;
-  const size = stored && stored in CARD_MIN_WIDTHS ? stored : "medium";
+  // Runs during render — guard against localStorage throwing (private mode)
+  // so the loading skeleton doesn't crash the page.
+  let size: CardSize = "medium";
+  try {
+    const stored = localStorage.getItem(CARD_SIZE_KEY) as CardSize | null;
+    if (stored && stored in CARD_MIN_WIDTHS) size = stored;
+  } catch {
+    // keep default
+  }
   const widths = window.innerWidth < BREAKPOINTS.md ? MOBILE_CARD_MIN_WIDTHS : CARD_MIN_WIDTHS;
   return widths[size];
 }

@@ -10,6 +10,9 @@
   "homepage": "https://librariarr.dev",
   "packageManager": "pnpm@11.1.2",
   "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=22"
+  },
   "author": "Aidan Hembree",
   "keywords": [
     "plex",
@@ -30,6 +33,12 @@
     "test:coverage": "vitest run --coverage",
     "test:unit": "VITEST_SKIP_DB_SETUP=true vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui",
+    "e2e:install": "playwright install chromium",
+    "e2e:report": "playwright show-report",
+    "e2e:docker": "docker compose -f docker-compose.e2e.yml up --build --abort-on-container-exit --exit-code-from playwright",
+    "e2e:docker:down": "docker compose -f docker-compose.e2e.yml down -v",
     "docker:dev": "docker compose -f docker-compose.dev.yml up --build",
     "docker:dev:detach": "docker compose -f docker-compose.dev.yml up --build -d",
     "docker:dev:down": "docker compose -f docker-compose.dev.yml down",
@@ -91,8 +100,9 @@
   "devDependencies": {
     "@commitlint/cli": "^21.0.2",
     "@commitlint/config-conventional": "^21.0.1",
+    "@playwright/test": "^1.60.0",
     "@tailwindcss/postcss": "^4.3.0",
-    "@types/node": "^25.9.1",
+    "@types/node": "^22.10.2",
     "@types/node-cron": "^3.0.11",
     "@types/pg": "^8.20.0",
     "@types/react": "^19",

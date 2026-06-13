@@ -47,6 +47,7 @@ import {
   TASK_SCHEDULED_BACKUP,
   TASK_ARCHIVE_LOGS,
   TASK_CLEANUP_ACTIONS,
+  TASK_PRUNE_IMAGE_CACHE,
 } from "@/lib/jobs/constants";
 
 // Minimal helpers object — tasks here don't use the helpers argument.
@@ -69,6 +70,7 @@ describe("taskList", () => {
         TASK_SCHEDULED_BACKUP,
         TASK_ARCHIVE_LOGS,
         TASK_CLEANUP_ACTIONS,
+        TASK_PRUNE_IMAGE_CACHE,
       ].sort(),
     );
   });

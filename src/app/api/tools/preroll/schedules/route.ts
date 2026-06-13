@@ -2,10 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { validateRequest, prerollScheduleCreateSchema } from "@/lib/validation";
+import { checkConflict } from "@/lib/preroll/schedule-conflict";
 
 const VALID_SCHEDULE_TYPES = ["one_time", "recurring", "seasonal"];
 const VALID_DAYS = [0, 1, 2, 3, 4, 5, 6];
-const TIME_REGEX = /^\d{2}:\d{2}$/;
+// Match the blackout route's stricter validation — the loose /^\d{2}:\d{2}$/
+// accepted nonsense like "99:99", producing wrong minute math in the enforcer.
+const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 interface ScheduleInput {
   name?: string;
@@ -63,71 +66,6 @@ function validateScheduleInput(body: ScheduleInput) {
   }
 
   return null;
-}
-
-interface ScheduleRecord {
-  id: string;
-  enabled: boolean;
-  scheduleType: string;
-  startDate: Date | null;
-  endDate: Date | null;
-  daysOfWeek: unknown;
-  startTime: string | null;
-  endTime: string | null;
-  name: string;
-}
-
-function checkConflict(
-  input: ScheduleInput,
-  existing: ScheduleRecord[],
-  excludeId?: string
-): { id: string; name: string } | null {
-  const candidates = existing.filter(
-    (s) => s.enabled && s.id !== excludeId
-  );
-
-  for (const other of candidates) {
-    if (
-      (input.scheduleType === "one_time" || input.scheduleType === "seasonal") &&
-      (other.scheduleType === "one_time" || other.scheduleType === "seasonal")
-    ) {
-      // Date range overlap check
-      const inputStart = new Date(input.startDate!);
-      const inputEnd = new Date(input.endDate!);
-      const otherStart = other.startDate!;
-      const otherEnd = other.endDate!;
-
-      if (inputStart < otherEnd && inputEnd > otherStart) {
-        return { id: other.id, name: other.name };
-      }
-    }
-
-    if (input.scheduleType === "recurring" && other.scheduleType === "recurring") {
-      // Check day overlap
-      const inputDays = new Set(input.daysOfWeek!);
-      const otherDays = (other.daysOfWeek as number[]) || [];
-      const hasOverlappingDay = otherDays.some((d) => inputDays.has(d));
-
-      if (hasOverlappingDay && other.startTime && other.endTime && input.startTime && input.endTime) {
-        // Check time overlap
-        const inputStartMin = timeToMinutes(input.startTime);
-        const inputEndMin = timeToMinutes(input.endTime);
-        const otherStartMin = timeToMinutes(other.startTime);
-        const otherEndMin = timeToMinutes(other.endTime);
-
-        if (inputStartMin < otherEndMin && inputEndMin > otherStartMin) {
-          return { id: other.id, name: other.name };
-        }
-      }
-    }
-  }
-
-  return null;
-}
-
-function timeToMinutes(time: string): number {
-  const [h, m] = time.split(":").map(Number);
-  return h * 60 + m;
 }
 
 export async function GET() {

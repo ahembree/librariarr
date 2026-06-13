@@ -5,6 +5,7 @@ import { syncMediaServer } from "@/lib/sync/sync-server";
 import { processLifecycleRules, executeLifecycleActions } from "@/lib/lifecycle/processor";
 import { createBackup, getBackupPassphrase, pruneBackups } from "@/lib/backup/backup-service";
 import { archiveLogs } from "@/lib/logs/archive";
+import { pruneImageCache } from "@/lib/image-cache/image-cache";
 import { dispatchScheduledJobs } from "@/lib/jobs/dispatch";
 import {
   TASK_DISPATCH,
@@ -14,6 +15,7 @@ import {
   TASK_SCHEDULED_BACKUP,
   TASK_ARCHIVE_LOGS,
   TASK_CLEANUP_ACTIONS,
+  TASK_PRUNE_IMAGE_CACHE,
   type SyncServerPayload,
   type UserPayload,
 } from "@/lib/jobs/constants";
@@ -95,6 +97,10 @@ const cleanupActionsTask: Task = async () => {
   await cleanupOldActions();
 };
 
+const pruneImageCacheTask: Task = async () => {
+  await pruneImageCache();
+};
+
 /** Complete Graphile Worker task list, keyed by task identifier. */
 export const taskList: TaskList = {
   [TASK_DISPATCH]: dispatch,
@@ -104,4 +110,5 @@ export const taskList: TaskList = {
   [TASK_SCHEDULED_BACKUP]: scheduledBackup,
   [TASK_ARCHIVE_LOGS]: archiveLogsTask,
   [TASK_CLEANUP_ACTIONS]: cleanupActionsTask,
+  [TASK_PRUNE_IMAGE_CACHE]: pruneImageCacheTask,
 };

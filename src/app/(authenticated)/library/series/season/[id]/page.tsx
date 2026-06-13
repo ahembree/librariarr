@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useLocalStorage } from "@/hooks/use-local-storage";
 import { useChipColors } from "@/components/chip-color-provider";
@@ -40,6 +40,8 @@ export default function SeasonDetailPage() {
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
   const [episodes, setEpisodes] = useState<MediaItemWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
+  // Token guards against a stale slow response landing after a quick id change.
+  const reqToken = useRef(0);
   const [viewMode, handleViewModeChange] = useLocalStorage<"cards" | "table">(
     "season-detail-view-mode",
     "cards",
@@ -71,10 +73,12 @@ export default function SeasonDetailPage() {
   );
 
   useEffect(() => {
+    const token = ++reqToken.current;
     async function fetchData() {
       try {
         const itemRes = await fetch(`/api/media/${id}`);
         const itemData = await itemRes.json();
+        if (token !== reqToken.current) return;
         if (!itemData.item) return;
         setItem(itemData.item);
         setPlayServers(buildPlayLinks(itemData.playServers || [], [
@@ -91,11 +95,12 @@ export default function SeasonDetailPage() {
           `/api/media/series?parentTitle=${encodeURIComponent(parentTitle)}&seasonNumber=${seasonNumber}&sortBy=episodeNumber&sortOrder=asc&limit=0`
         );
         const episodesData = await episodesRes.json();
+        if (token !== reqToken.current) return;
         setEpisodes(episodesData.items || []);
       } catch {
         // Failed to load
       } finally {
-        setLoading(false);
+        if (token === reqToken.current) setLoading(false);
       }
     }
     fetchData();

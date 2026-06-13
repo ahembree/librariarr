@@ -6,7 +6,7 @@ import { apiLogger } from "@/lib/logger";
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
 import { validateRequest, serverEditSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
-import { appCache } from "@/lib/cache/memory-cache";
+import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 
 export async function PUT(
   request: NextRequest,
@@ -76,19 +76,20 @@ export async function PUT(
       });
     }
 
-    await recomputeCanonical(session.userId!);
-
     apiLogger.info(
       "Auth",
       `Media server "${server.name}" disabled with data purge`
     );
   }
 
-  // Invalidate caches when enabled state changes so media queries reflect immediately
+  // Recompute canonical + invalidate caches whenever the enabled state changes:
+  // enabling/disabling a server changes the enabled-server set that dedup
+  // canonical selection is computed over, so items whose canonical lived on the
+  // toggled server must be re-canonicalized to a still-enabled copy (otherwise
+  // they vanish from multi-server listings). Also covers the delete-data path.
   if (enabled !== undefined) {
-    appCache.invalidatePrefix("server-filter:");
-    appCache.invalidate("distinct-values");
-    appCache.invalidatePrefix("stats:");
+    await recomputeCanonical(session.userId!);
+    invalidateMediaCaches();
   }
 
   return NextResponse.json({ server: sanitize(updated) });
@@ -187,9 +188,7 @@ export async function DELETE(
   apiLogger.info("Auth", `Media server "${server.name}" removed (deleteData=${deleteData})`);
 
   // Invalidate caches that depend on server/media data
-  appCache.invalidatePrefix("server-filter:");
-  appCache.invalidate("distinct-values");
-  appCache.invalidatePrefix("stats:");
+  invalidateMediaCaches();
 
   // Recompute canonical flags for remaining items
   await recomputeCanonical(userId);

@@ -16,11 +16,15 @@ import type { ServerPresence } from "./deduplicate";
  */
 export async function getServerPresenceByDedupKey(
   dedupKeys: string[],
+  serverIds: string[],
 ): Promise<Map<string, ServerPresence[]>> {
   if (dedupKeys.length === 0) return new Map();
 
   const items = await prisma.mediaItem.findMany({
-    where: { dedupKey: { in: dedupKeys } },
+    where: {
+      dedupKey: { in: dedupKeys },
+      library: { mediaServerId: { in: serverIds } },
+    },
     select: {
       id: true,
       dedupKey: true,

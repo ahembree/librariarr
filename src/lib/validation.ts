@@ -88,8 +88,15 @@ export const accentColorSchema = z.object({
   accentColor: z.string().min(1, "Accent color is required"),
 });
 
+const chipHexSchema = z
+  .string()
+  .regex(/^#[0-9a-fA-F]{6}$/, "Must be a 6-digit hex color (#rrggbb)");
+
 export const chipColorsSchema = z.object({
-  chipColors: z.record(z.string(), z.record(z.string(), z.string())),
+  chipColors: z.record(
+    z.string().min(1).max(64),
+    z.record(z.string().min(1).max(64), chipHexSchema),
+  ),
 });
 
 export const columnPreferencesSchema = z.object({
@@ -155,7 +162,7 @@ export const dedupSettingsSchema = z.object({
 
 export const titlePreferenceSchema = z.object({
   serverId: z.string().nullable().optional(),
-  field: z.string().min(1, "Field is required"),
+  field: z.enum(["title", "artwork"]),
 });
 
 export const backupScheduleSchema = z.object({
@@ -195,7 +202,7 @@ export const runJobSchema = z.object({
 export const maintenanceSchema = z.object({
   enabled: z.boolean(),
   message: z.string().optional(),
-  delay: z.number().optional(),
+  delay: z.number().int().min(0).max(3600).optional(),
   discordNotifyMaintenance: z.boolean().optional(),
   excludedUsers: z.array(z.string()).optional(),
 });
@@ -203,7 +210,7 @@ export const maintenanceSchema = z.object({
 export const transcodeManagerSchema = z.object({
   enabled: z.boolean().optional(),
   message: z.string().optional(),
-  delay: z.number().optional(),
+  delay: z.number().int().min(0).max(3600).optional(),
   criteria: z.record(z.string(), z.boolean()).optional(),
   excludedUsers: z.array(z.string()).optional(),
 });
@@ -214,6 +221,10 @@ export const terminateSessionSchema = z.object({
   message: z.string().min(1, "Message is required"),
 });
 
+// Note: cross-field rules (one_time needs dates; recurring needs days + HH:mm
+// times) are enforced in the blackout/preroll route handlers, which return
+// specific user-facing messages. Keep this schema permissive so those messages
+// surface instead of a generic "Validation failed".
 export const blackoutCreateSchema = z.object({
   name: z.string().min(1, "Name is required"),
   scheduleType: z.enum(["one_time", "recurring"]),
@@ -224,7 +235,10 @@ export const blackoutCreateSchema = z.object({
   endTime: z.string().nullable().optional(),
   action: z.enum(["terminate_immediate", "warn_then_terminate", "block_new_only"]),
   message: z.string().optional(),
-  delay: z.number().min(0).optional(),
+  // Bounded + integer to match the maintenance/transcode delays: an unbounded
+  // value makes warn_then_terminate effectively never fire, and a non-integer
+  // would 500 on write to the Int column.
+  delay: z.number().int().min(0).max(3600).optional(),
   enabled: z.boolean().optional(),
   excludedUsers: z.array(z.string()).optional(),
 });
@@ -524,6 +538,18 @@ export const arrTestSchema = z.object({
     "URL must start with http:// or https://"
   ),
   apiKey: z.string().min(1, "API key is required"),
+});
+
+// For re-testing a saved instance: both fields optional (fall back to stored
+// values), but if provided the URL must be a well-formed http(s) string.
+// Internal/LAN addresses are intentionally allowed — Arr/Seerr commonly run on
+// the same host or a private network.
+export const arrTestConnectionSchema = z.object({
+  url: z.string().refine(
+    (val) => /^https?:\/\//i.test(val),
+    "URL must start with http:// or https://"
+  ).optional(),
+  apiKey: z.string().optional(),
 });
 
 // ─── Server schemas ───

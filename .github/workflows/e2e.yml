@@ -1,0 +1,44 @@
+name: E2E
+
+# Browser end-to-end tests (Playwright), run as a portable container stack:
+# Postgres + the real production app image + the official Playwright image
+# (browsers pre-baked, so the test step needs NO browser download). Runs on PRs
+# and on demand; kept out of per-push CI to avoid slowing trunk. None of this is
+# part of the production image (see .dockerignore).
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: Browser E2E (compose)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run E2E stack
+        run: >-
+          docker compose -f docker-compose.e2e.yml up --build
+          --abort-on-container-exit --exit-code-from playwright
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.e2e.yml down -v
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-report
+          # Include test-results/ — that's where traces, videos, and screenshots
+          # land (the HTML report references them by relative path), so a failed
+          # run keeps its diagnostics instead of an attachment-less report.
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
