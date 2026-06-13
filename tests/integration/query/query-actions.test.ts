@@ -131,12 +131,23 @@ describe("POST /api/query/actions", () => {
     const m2 = await createTestMediaItem(library.id, { type: "MOVIE", title: "B" });
     const radarr = await createTestRadarrInstance(user.id);
 
-    mockedExecuteQuery.mockResolvedValue(
-      queryResult([
+    // The safety re-query forwards its own phase progress through the emitter it
+    // receives; the route surfaces those as the "validate" phase sub-status.
+    mockedExecuteQuery.mockImplementation(async (_def, _uid, _page, _limit, emit) => {
+      emit?.({
+        type: "plan",
+        phases: [
+          { key: "query", label: "Querying library" },
+          { key: "evaluate", label: "Evaluating rules" },
+        ],
+      });
+      emit?.({ type: "phase", key: "query" });
+      emit?.({ type: "phase", key: "evaluate", fraction: 0.5 });
+      return queryResult([
         { id: m1.id, type: "MOVIE", title: "A", parentTitle: null },
         { id: m2.id, type: "MOVIE", title: "B", parentTitle: null },
-      ]),
-    );
+      ]);
+    });
 
     const response = await callRoute(POST, {
       method: "POST",
@@ -175,6 +186,17 @@ describe("POST /api/query/actions", () => {
     expect(details.some((d) => /^2 \/ 2 · [AB] — DELETE_RADARR$/.test(d))).toBe(true);
     expect(details.some((d) => d.includes("· A — "))).toBe(true);
     expect(details.some((d) => d.includes("· B — "))).toBe(true);
+
+    // The validate phase narrates its steps: the re-query's own phase labels are
+    // forwarded (with a percentage when determinate), and the direct steps appear.
+    const validateDetails = events
+      .filter((e) => e.type === "phase" && e.key === "validate")
+      .map((e) => e.detail)
+      .filter((d): d is string => typeof d === "string");
+    expect(validateDetails).toContain("Re-checking your selection — Querying library");
+    expect(validateDetails).toContain("Re-checking your selection — Evaluating rules (50%)");
+    expect(validateDetails).toContain("Checking the exception list");
+    expect(validateDetails).toContain("Loading items to act on");
   });
 
   it("rejects an unknown action type", async () => {

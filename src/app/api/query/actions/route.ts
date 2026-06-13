@@ -7,7 +7,7 @@ import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES } from "@/lib/lifecycle/action-types";
 import { validateRequest, queryActionSchema } from "@/lib/validation";
 import { progressStreamResponse } from "@/lib/progress/stream";
-import type { ProgressPhase } from "@/lib/progress/types";
+import type { ProgressPhase, ProgressEmit } from "@/lib/progress/types";
 import type { QueryDefinition } from "@/lib/query/types";
 
 type MediaType = "MOVIE" | "SERIES" | "MUSIC";
@@ -126,12 +126,37 @@ export async function POST(request: NextRequest) {
         { key: "finalize", label: "Finalizing" },
       ];
       emit({ type: "plan", phases });
-      emit({ type: "phase", key: "validate" });
+
+      // The "validate" phase re-runs the query (the deletion-safety check that the
+      // selection still matches), resolves series episode members, drops excepted
+      // items, and loads the rows to act on. Narrate each step as a sub-status —
+      // and forward the re-query's own phase labels — so a slow re-check on a large
+      // library shows what it's doing instead of a bare "Validating selection".
+      const validateStep = (text: string) =>
+        emit({ type: "phase", key: "validate", detail: text });
+      // Adapts an executeQuery progress stream into the validate sub-status: maps
+      // each phase key to its announced label and appends a percentage when the
+      // phase reports determinate sub-progress (e.g. "Evaluating rules (47%)").
+      const forwardReQuery = (prefix: string): ProgressEmit => {
+        const labels = new Map<string, string>();
+        return (u) => {
+          if (u.type === "plan") {
+            for (const p of u.phases) labels.set(p.key, p.label);
+            return;
+          }
+          const label = labels.get(u.key) ?? u.key;
+          const pct = u.fraction !== undefined ? ` (${Math.round(u.fraction * 100)}%)` : "";
+          validateStep(`${prefix} — ${label}${pct}`);
+        };
+      };
 
       // SAFETY: re-run the query and only act on items that are still in the live
       // result set AND of the action's media type. This is the ad-hoc analog of
       // the RuleMatch validation used by rule-based execution.
-      const liveResult = await executeQuery(query as QueryDefinition, userId, 1, 0);
+      validateStep("Re-checking your selection");
+      const liveResult = await executeQuery(
+        query as QueryDefinition, userId, 1, 0, forwardReQuery("Re-checking your selection"),
+      );
       const liveOfType = liveResult.items.filter((it) => it.type === resolvedType);
       const liveIds = new Set(liveOfType.map((it) => String(it.id)));
 
@@ -152,11 +177,13 @@ export async function POST(request: NextRequest) {
         } else {
           // Grouped by show: re-run at episode level and map each selected show's
           // representative episode id to all matched episode ids of that show.
+          validateStep("Resolving matched episodes");
           const episodeResult = await executeQuery(
             { ...(query as QueryDefinition), includeEpisodes: true },
             userId,
             1,
             0,
+            forwardReQuery("Resolving matched episodes"),
           );
           // Group by the SAME key the query engine uses for grouped shows
           // (LOWER(TRIM(parentTitle))). Using a looser key (e.g. normalizeTitle)
@@ -187,6 +214,7 @@ export async function POST(request: NextRequest) {
       // and for grouped series filter individually-excepted member episodes out of
       // matchedMediaItemIds — cancelling the item only if ALL its members are
       // excepted. This keeps the deletion-safety guarantee for ad-hoc actions.
+      validateStep("Checking the exception list");
       const memberIds = new Set<string>();
       for (const members of episodeIdMap.values()) {
         for (const m of members) memberIds.add(m);
@@ -218,6 +246,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Fetch ownership-verified media items with external IDs.
+      validateStep("Loading items to act on");
       const items = await prisma.mediaItem.findMany({
         where: {
           id: { in: actionableIds },
