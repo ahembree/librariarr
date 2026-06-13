@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/public/librariarr_hero.png" alt="Librariarr" width="600" />
+  <img src=".github/assets/librariarr_hero.png" alt="Librariarr" width="600" />
 </p>
 
 <p align="center">
