@@ -34,6 +34,8 @@
     "e2e:ui": "playwright test --ui",
     "e2e:install": "playwright install chromium",
     "e2e:report": "playwright show-report",
+    "e2e:docker": "docker compose -f docker-compose.e2e.yml up --build --abort-on-container-exit --exit-code-from playwright",
+    "e2e:docker:down": "docker compose -f docker-compose.e2e.yml down -v",
     "docker:dev": "docker compose -f docker-compose.dev.yml up --build",
     "docker:dev:detach": "docker compose -f docker-compose.dev.yml up --build -d",
     "docker:dev:down": "docker compose -f docker-compose.dev.yml down",

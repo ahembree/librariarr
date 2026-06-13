@@ -1,0 +1,66 @@
+# Portable browser E2E stack: Postgres + the real production app image + the
+# official Playwright image (Chromium and all system libs pre-baked, so NO
+# browser download is needed at run time — this is the egress-independent path).
+#
+#   docker compose -f docker-compose.e2e.yml up --build \
+#       --abort-on-container-exit --exit-code-from playwright
+#
+# The Playwright container drives the app over the compose network
+# (E2E_BASE_URL=http://app:3000), so playwright.config.ts skips its own
+# webServer. Reports are written to ./playwright-report on the host.
+#
+# IMPORTANT: keep the playwright image tag in sync with the @playwright/test
+# version in package.json (currently 1.60.0).
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: librariarr
+      POSTGRES_PASSWORD: librariarr
+      POSTGRES_DB: librariarr_e2e
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U librariarr -d librariarr_e2e"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    tmpfs:
+      - /var/lib/postgresql/data # ephemeral DB — faster, always clean
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://librariarr:librariarr@postgres:5432/librariarr_e2e
+      SESSION_SECRET: e2e-session-secret-at-least-32-chars-long!!
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+  playwright:
+    image: mcr.microsoft.com/playwright:v1.60.0-noble
+    working_dir: /work
+    environment:
+      CI: "true"
+      HUSKY: "0"
+      E2E_BASE_URL: http://app:3000
+      E2E_DATABASE_URL: postgresql://librariarr:librariarr@postgres:5432/librariarr_e2e
+    volumes:
+      - .:/work
+      - /work/node_modules # mask host node_modules; install fresh for this image's arch
+    depends_on:
+      app:
+        condition: service_healthy
+    command:
+      - sh
+      - -lc
+      - "corepack enable && pnpm install --frozen-lockfile && pnpm exec prisma generate && pnpm exec playwright test"
