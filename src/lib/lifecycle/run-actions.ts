@@ -59,6 +59,10 @@ export interface RunActionsResult {
  *
  * Callers are responsible for ownership verification, match/exception filtering,
  * and resolving `episodeIdMap` (series episode-level member IDs) BEFORE calling.
+ *
+ * `onProgress` (optional) is invoked once before the first item with
+ * `(0, total)` and again after each item completes (success or failure) with
+ * `(done, total)`, so a streaming route can drive a determinate progress bar.
  */
 export async function executeActionsForItems(
   userId: string,
@@ -66,6 +70,7 @@ export async function executeActionsForItems(
   config: ActionConfig,
   episodeIdMap: Map<string, string[]>,
   history: HistoryContext,
+  onProgress?: (done: number, total: number) => void,
 ): Promise<RunActionsResult> {
   const actionType = config.actionType;
 
@@ -79,6 +84,10 @@ export async function executeActionsForItems(
   let failed = 0;
   const errors: string[] = [];
   const failures: { title: string; error: string }[] = [];
+
+  const total = items.length;
+  let processed = 0;
+  onProgress?.(0, total);
 
   for (const item of items) {
     const matchedMediaItemIds = episodeIdMap.get(item.id) ?? [];
@@ -183,6 +192,9 @@ export async function executeActionsForItems(
         },
       });
       failed++;
+    } finally {
+      processed++;
+      onProgress?.(processed, total);
     }
   }
 
