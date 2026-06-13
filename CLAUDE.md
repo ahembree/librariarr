@@ -74,6 +74,16 @@ pnpm exec vitest run tests/path/to/file.test.ts  # Run a single test file
 
 **Test coverage requirement:** Every new or modified file under the coverage scope must have tests. In practice that means: every new route handler under `src/app/api/` gets an integration test in `tests/integration/`, and every new module under `src/lib/` gets a unit test in `tests/unit/`. Unit-level lib coverage is necessary but not sufficient — route handlers compose multiple lib modules with session state, validation, rate-limiting, and DB writes, and bugs hide in those seams. When the lib is fully covered but the route isn't, the route isn't tested.
 
+### Browser E2E (Playwright)
+
+Real-browser end-to-end tests live in `e2e/` (Playwright, **separate from Vitest** — `e2e/*.spec.ts`, never picked up by `vitest`). Config: `playwright.config.ts`.
+
+- **Run it (portable, recommended):** `pnpm e2e:docker` — brings up `docker-compose.e2e.yml`: Postgres + the **real production app image** (built from `Dockerfile`) + the official `mcr.microsoft.com/playwright` image (browsers pre-baked, so **no browser download at run time**). The Playwright container sets `E2E_BASE_URL`, so `playwright.config.ts` skips its own web server and drives the app over the compose network.
+- **Run it (host):** `pnpm build && pnpm e2e:install && pnpm e2e` (needs egress to `cdn.playwright.dev` for the one-time browser download).
+- **CI:** `.github/workflows/e2e.yml` runs the compose stack on PRs (and `workflow_dispatch`).
+- **Structure:** `e2e/global-setup.ts` pushes the schema (`prisma db push --url … --accept-data-loss` — Prisma 7 takes **no `--skip-generate`** on `db push`) and truncates a **dedicated `librariarr_e2e` DB** for a clean slate (so the app reports `setupRequired`). `e2e/auth.setup.ts` (the `setup` project) runs the real first-run flow to create the admin and saves `e2e/.auth/admin.json`; authenticated specs reuse it, `*-anon` specs use a cleared state. `e2e/constants.ts` holds the admin creds + the page list. Coverage: first-run setup, auth-guard redirects, the login page, every authenticated page rendering, settings tab nav + accent persistence, lifecycle pages, and logout + local re-login.
+- **Excluded from the production image:** `@playwright/test` is a devDependency (not traced into the Next.js standalone output); `.dockerignore` also excludes `e2e/`, `playwright.config.ts`, and reports; `tsconfig`/`eslint` exclude `e2e/`. **Keep the compose Playwright image tag in sync with the `@playwright/test` version** in `package.json`.
+
 ## Architecture
 
 **Stack:** Next.js 16 (App Router) · React 19 · TypeScript · PostgreSQL 18 · Prisma 7 · Tailwind CSS v4 · shadcn/ui · Docker
@@ -243,6 +253,7 @@ When users connect multiple servers, dedup prevents duplicate items from appeari
 
 - Rules are recursive `RuleGroup` structures with AND/OR operators, stored as JSON in `RuleSet`. Rules and groups support `negate`; group-level negation is normalized away before evaluation by `pushDownGroupNegation` (`src/lib/conditions/negation.ts`, De Morgan push-down into per-rule negation) so both evaluation phases share NULL semantics
 - Two-phase evaluation: Phase 1 converts rules to Prisma WHERE clauses, Phase 2 post-filters in memory for Arr/Seerr metadata, stream aggregation, and wildcard pattern matching
+- **The lifecycle rule engine (`src/lib/rules/lifecycle-engine.ts`) and the query builder (`src/lib/query/query-engine.ts`) share one implementation of both phases** so they can't drift: Phase 1 goes through the single `ruleToWhere` dispatcher in `src/lib/conditions/where-builder.ts` (both engines pass it to `buildGroupConditions`), and Phase 2 Arr/Seerr evaluation uses the exported `evaluateArrRule`/`evaluateSeerrRule` from `lifecycle-engine.ts` (the query side's `query/arr-filter.ts` / `query/seerr-filter.ts` are thin re-export shims). When fixing operator/NULL semantics, fix it once in these shared functions.
 - File size rules: user inputs in MB, engine converts to bytes for DB queries
 
 ### Lifecycle Processing Workflow

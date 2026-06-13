@@ -55,6 +55,17 @@ PNGs land in `.claude/skills/run-librariarr/screenshots/<timestamp>.png` by defa
 
 The screenshot container joins the dev stack's docker network and reaches the app by its compose service name (`http://librariarr-dev:3000`) — not `localhost` — so the same command works under WSL, Docker Desktop, and native Linux without `--network=host` tricks.
 
+## Formal browser E2E suite
+
+This skill is for **ad-hoc** running/screenshots. The committed **regression** browser E2E suite lives in `e2e/` (Playwright) and runs the same way conceptually — Postgres + the real production app image + the official Playwright image (browsers pre-baked, no download):
+
+```bash
+pnpm e2e:docker        # docker-compose.e2e.yml: postgres + app + playwright, runs e2e/*.spec.ts
+pnpm e2e:docker:down   # tear down + wipe the ephemeral e2e DB
+```
+
+It uses a dedicated `librariarr_e2e` database and an in-suite first-run flow to create the admin (no manual `setup` step needed). See CLAUDE.md → "Browser E2E (Playwright)". Add new user-journey specs there, not here.
+
 ## Reset between runs
 
 ```bash

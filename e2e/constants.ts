@@ -9,7 +9,8 @@ export const AUTH_STATE = "e2e/.auth/admin.json";
 
 /** Authenticated pages and the heading text each should render. */
 export const PAGES: { path: string; heading: RegExp }[] = [
-  { path: "/", heading: /Dashboard/i },
+  // The dashboard h1 is a time-based greeting, not the word "Dashboard".
+  { path: "/", heading: /good (morning|afternoon|evening)/i },
   { path: "/library/movies", heading: /Movies/i },
   { path: "/library/series", heading: /Series/i },
   { path: "/library/music", heading: /Music/i },

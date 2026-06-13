@@ -87,7 +87,8 @@ export default defineConfig({
     ? undefined
     : {
         // Ensure the schema exists on the e2e DB, then serve the built app.
-        command: `pnpm exec prisma db push --skip-generate --accept-data-loss && pnpm exec next start -p ${PORT} -H 127.0.0.1`,
+        // (Prisma 7: --url, no --skip-generate.)
+        command: `pnpm exec prisma db push --url "${E2E_DATABASE_URL}" --accept-data-loss && pnpm exec next start -p ${PORT} -H 127.0.0.1`,
         url: `${BASE_URL}/api/health`,
         timeout: 180_000,
         reuseExistingServer: !process.env.CI,
