@@ -196,7 +196,7 @@ While you build a query, it's automatically kept for the current browser tab, so
 For one-off cleanups you don't want to schedule, you can run a lifecycle action on query results **without** creating a rule set:
 
 1. Pick the Arr instance(s) for the media types you want to act on in the query toolbar (Radarr for movies, Sonarr for series, Lidarr for music).
-2. Run the query, then tick the checkbox on each result you want to act on (in table or card view). A select-all checkbox is available in the table header, and a **Select all / Deselect all** toggle sits above the results in card view.
+2. Run the query, then tick the checkbox on each result you want to act on (in table or card view). A select-all checkbox is available in the table header, and a **Select all / Deselect all** toggle sits above the results in card view. While a query runs, a progress bar above the results tracks each phase (resolving servers, fetching *arr/Seerr metadata, querying the library, evaluating rules) instead of a bare spinner.
 3. In the **Actions** bar above the results — always visible but disabled until you select at least one item — choose an action (e.g. *Delete from Radarr*, *Unmonitor & Delete Files*, *Change Quality Profile*), set any action-specific options (the target quality profile and **Search for upgrade** for a profile change, import exclusion / **Search after** for deletions), optionally add/remove Arr tags, then **Run action** and confirm.
 
 Notes:
@@ -213,6 +213,7 @@ Before executing any actions, use the **Preview** feature to see which media ite
 - Shows a count of matching items
 - Displays a paginated list (50 per page) with metadata
 - Updates in real time as you modify rules
+- Shows a live progress bar through each phase (fetching *arr/Seerr metadata, evaluating rules, computing matched criteria) so large libraries don't just spin
 
 ## Actions
 

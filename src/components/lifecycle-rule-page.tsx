@@ -90,6 +90,8 @@ import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn, generateId } from "@/lib/utils";
+import { QueryProgress, useStreamProgress } from "@/components/query-progress";
+import { consumeProgressStream } from "@/lib/progress/client";
 
 interface PreviewItem extends MediaItemWithRelations {
   matchedCriteria?: MatchedCriterion[];
@@ -596,6 +598,7 @@ export function LifecycleRulePage({
   const [activeRuleSetId, setActiveRuleSetId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [previewing, setPreviewing] = useState(false);
+  const { state: previewProgress, handleUpdate: onPreviewProgress, reset: resetPreviewProgress } = useStreamProgress();
   const [saveError, setSaveError] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
   const [previewSortBy, setPreviewSortBy] = useState<string | undefined>("title");
@@ -1198,6 +1201,7 @@ export function LifecycleRulePage({
     if (countAllRules(groups) === 0) return;
     const token = ++previewTokenRef.current;
     setPreviewing(true);
+    resetPreviewProgress();
     try {
       const previewBody: Record<string, unknown> = { rules: groups, type: mediaType, serverIds };
       if (scopeConfig) {
@@ -1223,7 +1227,10 @@ export function LifecycleRulePage({
         diffPromise,
       ]);
 
-      const previewData = await previewResponse.json();
+      const previewData = await consumeProgressStream<{ items: PreviewItem[] }>(
+        previewResponse,
+        onPreviewProgress,
+      );
       let mergedItems = previewData.items as PreviewItem[];
 
       // Process diff data if available
@@ -1270,6 +1277,7 @@ export function LifecycleRulePage({
       // otherwise the newer call owns the spinner.
       if (previewTokenRef.current === token) {
         setPreviewing(false);
+        resetPreviewProgress();
       }
     }
   };
@@ -2583,6 +2591,10 @@ export function LifecycleRulePage({
               </Button>
             </div>
           </div>
+
+          {previewing && previewProgress.phases.length > 0 && (
+            <QueryProgress state={previewProgress} />
+          )}
 
           {saveError && (
             <p className="text-sm text-destructive">{saveError}</p>

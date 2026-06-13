@@ -14,6 +14,7 @@ import { evaluateQueryArrRule } from "./arr-filter";
 import { evaluateQuerySeerrRule } from "./seerr-filter";
 import { fetchArrDataForQuery } from "./fetch-arr-data";
 import { fetchSeerrDataForQuery } from "./fetch-seerr-data";
+import type { ProgressEmit, ProgressPhase } from "@/lib/progress/types";
 import type { ArrDataMap, ArrMetadata, SeerrDataMap, SeerrMetadata } from "@/lib/rules/lifecycle-engine";
 import { lookupSeerrMeta } from "@/lib/rules/lifecycle-engine";
 import {
@@ -408,15 +409,39 @@ async function groupSeriesEpisodes(
 /**
  * Execute a query definition and return paginated results.
  */
+// How often (in items) the in-memory evaluation loop reports sub-progress.
+// Coarse enough to avoid flooding the stream, fine enough to feel live.
+const EVAL_PROGRESS_INTERVAL = 250;
+
 export async function executeQuery(
   definition: QueryDefinition,
   userId: string,
   page: number = 1,
   limit: number = 50,
+  onProgress?: ProgressEmit,
 ): Promise<QueryResult> {
   const { mediaTypes, serverIds: requestedServerIds, groups, sortBy, sortOrder } = definition;
 
+  // Announce the phases this run will execute so the UI can render a stepper.
+  const willFetchArr = !!(hasArrRules(groups) && definition.arrServerIds &&
+    (definition.arrServerIds.radarr || definition.arrServerIds.sonarr || definition.arrServerIds.lidarr));
+  const willFetchSeerr = !!(hasSeerrRules(groups) && definition.seerrInstanceId);
+  const willEvaluate = willFetchArr || willFetchSeerr || hasWildcardRules(groups) ||
+    hasStreamQueryInMemoryRules(groups) || hasCrossSystemRules(groups) || hasArrRules(groups) ||
+    hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) ||
+    hasStreamCountRules(groups);
+  const phases: ProgressPhase[] = [
+    { key: "servers", label: "Resolving servers" },
+    ...(willFetchArr ? [{ key: "arr", label: "Fetching Arr metadata" }] : []),
+    ...(willFetchSeerr ? [{ key: "seerr", label: "Fetching Seerr metadata" }] : []),
+    { key: "query", label: "Querying library" },
+    ...(willEvaluate ? [{ key: "evaluate", label: "Evaluating rules" }] : []),
+    { key: "finalize", label: "Finalizing" },
+  ];
+  onProgress?.({ type: "plan", phases });
+
   // Resolve server filter
+  onProgress?.({ type: "phase", key: "servers" });
   const sf = await resolveServerFilter(userId, null);
   if (!sf) {
     return { items: [], pagination: { page, limit, hasMore: false, total: 0 } };
@@ -435,6 +460,7 @@ export async function executeQuery(
     (definition.arrServerIds.radarr || definition.arrServerIds.sonarr || definition.arrServerIds.lidarr);
   let arrDataByType: Record<string, ArrDataMap> | undefined;
   if (needsArr) {
+    onProgress?.({ type: "phase", key: "arr" });
     arrDataByType = await fetchArrDataForQuery(userId, definition.arrServerIds!, mediaTypes);
   }
 
@@ -442,6 +468,7 @@ export async function executeQuery(
   const needsSeerr = hasSeerrRules(groups) && definition.seerrInstanceId;
   let seerrDataByType: Record<string, SeerrDataMap> | undefined;
   if (needsSeerr) {
+    onProgress?.({ type: "phase", key: "seerr" });
     seerrDataByType = await fetchSeerrDataForQuery(userId, definition.seerrInstanceId!, mediaTypes);
   }
 
@@ -460,8 +487,10 @@ export async function executeQuery(
 
   if (!groupSeries) {
     // Ungrouped path
-    return executeUngrouped(where, groups, sortBy, sortOrder, page, limit, arrDataByType, seerrDataByType);
+    return executeUngrouped(where, groups, sortBy, sortOrder, page, limit, arrDataByType, seerrDataByType, onProgress);
   }
+
+  onProgress?.({ type: "phase", key: "query" });
 
   // Grouped series path: combine grouped shows with flat non-series items
   const flatTypes = mediaTypes.length === 0
@@ -500,10 +529,13 @@ export async function executeQuery(
 
   // Unified in-memory evaluation for flat items (handles ALL rules with correct AND/OR logic)
   if (needsFullInMemoryEval) {
+    onProgress?.({ type: "phase", key: "evaluate", fraction: 0 });
     let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }> | undefined;
     if (hasCrossSystem) {
       crossSystemData = await fetchCrossSystemData(serializedFlat.map((i) => i.id as string));
     }
+    const flatTotal = serializedFlat.length;
+    let evaluated = 0;
     serializedFlat = serializedFlat.filter((item) => {
       if (crossSystemData) {
         const crossData = crossSystemData.get(item.id as string);
@@ -514,9 +546,15 @@ export async function executeQuery(
         }
       }
       const { arrMeta, seerrMeta } = lookupExternalMeta(item, arrDataByType, seerrDataByType);
-      return evaluateAllQueryRulesInMemory(groups, item, arrMeta, seerrMeta);
+      const keep = evaluateAllQueryRulesInMemory(groups, item, arrMeta, seerrMeta);
+      if (onProgress && ++evaluated % EVAL_PROGRESS_INTERVAL === 0) {
+        onProgress({ type: "phase", key: "evaluate", fraction: evaluated / flatTotal });
+      }
+      return keep;
     });
   }
+
+  onProgress?.({ type: "phase", key: "finalize" });
 
   // Combine
   const combined: Array<Record<string, unknown>> = [...serializedFlat, ...groupedShows];
@@ -639,6 +677,7 @@ async function executeUngrouped(
   limit: number,
   arrDataByType?: Record<string, ArrDataMap>,
   seerrDataByType?: Record<string, SeerrDataMap>,
+  onProgress?: ProgressEmit,
 ): Promise<QueryResult> {
   // When any in-memory evaluation is needed (external rules, wildcards, stream query computed fields), fetch all items
   const hasCrossSystem = hasCrossSystemRules(groups);
@@ -671,6 +710,7 @@ async function executeUngrouped(
     findArgs.take = limit;
   }
 
+  onProgress?.({ type: "phase", key: "query" });
   const items = await prisma.mediaItem.findMany(findArgs);
 
   let filteredItems = items;
@@ -678,10 +718,13 @@ async function executeUngrouped(
   if (needsFullInMemoryEval) {
     // Unified in-memory evaluation: evaluates ALL rules (standard + external + wildcards)
     // with correct AND/OR group logic
+    onProgress?.({ type: "phase", key: "evaluate", fraction: 0 });
     let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }> | undefined;
     if (hasCrossSystem) {
       crossSystemData = await fetchCrossSystemData(filteredItems.map((i: Record<string, unknown>) => i.id as string));
     }
+    const evalTotal = filteredItems.length;
+    let evaluated = 0;
     filteredItems = filteredItems.filter((item: Record<string, unknown>) => {
       if (crossSystemData) {
         const crossData = crossSystemData.get(item.id as string);
@@ -692,10 +735,15 @@ async function executeUngrouped(
         }
       }
       const { arrMeta, seerrMeta } = lookupExternalMeta(item, arrDataByType, seerrDataByType);
-      return evaluateAllQueryRulesInMemory(groups, item, arrMeta, seerrMeta);
+      const keep = evaluateAllQueryRulesInMemory(groups, item, arrMeta, seerrMeta);
+      if (onProgress && ++evaluated % EVAL_PROGRESS_INTERVAL === 0) {
+        onProgress({ type: "phase", key: "evaluate", fraction: evaluated / evalTotal });
+      }
+      return keep;
     });
   }
 
+  onProgress?.({ type: "phase", key: "finalize" });
   const serializedItems = filteredItems.map(serializeItem);
 
   if (useInMemoryPagination) {
