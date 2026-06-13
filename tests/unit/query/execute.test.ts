@@ -492,6 +492,20 @@ describe("evaluateQuerySeerrRule", () => {
         makeSeerrMeta({ requestCount: 0 }),
       )).toBe(true);
     });
+
+    // Regression: the query evaluator previously had no `between` case (it
+    // silently matched nothing). It now shares the canonical rule-engine
+    // evaluator, so `between` works.
+    it("between works (shared canonical evaluator)", () => {
+      expect(evaluateQuerySeerrRule(
+        { id: "r1", field: "seerrRequestCount", operator: "between", value: "1,5", condition: "AND" },
+        makeSeerrMeta({ requestCount: 3 }),
+      )).toBe(true);
+      expect(evaluateQuerySeerrRule(
+        { id: "r1", field: "seerrRequestCount", operator: "between", value: "1,5", condition: "AND" },
+        makeSeerrMeta({ requestCount: 9 }),
+      )).toBe(false);
+    });
   });
 
   describe("seerrRequestDate (date)", () => {
@@ -507,6 +521,16 @@ describe("evaluateQuerySeerrRule", () => {
         { id: "r1", field: "seerrRequestDate", operator: "before", value: "2024-06-01", condition: "AND" },
         makeSeerrMeta({ requestDate: null }),
       )).toBe(false);
+    });
+
+    // Regression: the query copy previously ordered isNull AFTER the null guard,
+    // so `isNull` wrongly returned false when the date was null. The shared
+    // canonical evaluator handles isNull/isNotNull before the guard.
+    it("isNull returns true when date is null (shared canonical evaluator)", () => {
+      expect(evaluateQuerySeerrRule(
+        { id: "r1", field: "seerrRequestDate", operator: "isNull", value: "", condition: "AND" },
+        makeSeerrMeta({ requestDate: null }),
+      )).toBe(true);
     });
 
     it("isNotNull returns true when date exists", () => {

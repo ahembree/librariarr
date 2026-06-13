@@ -23,6 +23,7 @@ import {
   STREAM_COUNT_FIELDS,
 } from "@/lib/conditions/where-builder";
 import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
+import type { Condition } from "@/lib/conditions/types";
 import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
 import { Prisma } from "@/generated/prisma/client";
@@ -306,8 +307,13 @@ export function hasWatchedByUserRules(rules: LifecycleRule[] | LifecycleRuleGrou
   return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "watchedByUser");
 }
 
-/** Evaluate a single arr rule against arr metadata for an item */
-function evaluateArrRule(rule: LifecycleRule, meta: ArrMetadata | undefined): boolean {
+/**
+ * Evaluate a single Arr rule against Arr metadata for an item (Phase 2).
+ * Shared with the query builder (exported as `evaluateQueryArrRule`) — typed on
+ * the engine-neutral `Condition` so both callers use this one canonical
+ * implementation rather than drifting copies.
+ */
+export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined): boolean {
   // Safety: unconfigured contains/notContains matches nothing. Negate is
   // intentionally NOT applied — `!false` would otherwise sweep the library.
   // Checked before any field-specific branch so even nonsensical pairings
@@ -686,7 +692,11 @@ function evaluateArrRule(rule: LifecycleRule, meta: ArrMetadata | undefined): bo
 }
 
 /** Evaluate a single seerr rule against seerr metadata for an item */
-function evaluateSeerrRule(rule: LifecycleRule, meta: SeerrMetadata | undefined): boolean {
+/**
+ * Evaluate a single Seerr rule against Seerr metadata (Phase 2). Shared with
+ * the query builder (exported as `evaluateQuerySeerrRule`).
+ */
+export function evaluateSeerrRule(rule: Condition, meta: SeerrMetadata | undefined): boolean {
   // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
   if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
   // Safety: unknown operator or wrong-type combo → match nothing (bypass negate).
