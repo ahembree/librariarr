@@ -55,6 +55,8 @@ import {
   AlertTriangle,
   ArrowRightLeft,
   Check,
+  History,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { QueryBuilder, queryBuilderConfig, countAllRules, validateAllRules } from "@/components/query-builder";
@@ -150,6 +152,50 @@ function makeDefaultGroup(): QueryGroup {
     ],
     groups: [],
   };
+}
+
+// ── In-progress query draft ─────────────────────────────────────
+// Auto-persisted to sessionStorage so an unsaved query survives accidentally
+// navigating away and coming back (tab-scoped, cleared when the tab closes).
+// Distinct from "Saved queries", which are persisted to the database.
+const QUERY_DRAFT_KEY = "query-builder-draft";
+
+interface QueryDraft {
+  mediaTypes: string[];
+  selectedServerIds: string[];
+  groups: QueryGroup[];
+  sortBy: string;
+  sortOrder: "asc" | "desc";
+  includeEpisodes: boolean;
+  arrServerIds: { radarr?: string; sonarr?: string; lidarr?: string };
+  activeQueryId: string | null;
+}
+
+/** True if any rule anywhere in the tree has a non-empty value. */
+function anyRuleConfigured(groups: QueryGroup[]): boolean {
+  return groups.some(
+    (g) =>
+      g.rules.some((r) => String(r.value ?? "").trim() !== "") ||
+      anyRuleConfigured(g.groups ?? []),
+  );
+}
+
+/**
+ * Whether a draft holds anything worth restoring. A pristine builder (no media
+ * types, default scope/sort, and the single empty starter rule) is treated as
+ * empty so we neither persist nor advertise a restore for it.
+ */
+function queryHasContent(d: QueryDraft): boolean {
+  return (
+    d.mediaTypes.length > 0 ||
+    d.selectedServerIds.length > 0 ||
+    d.includeEpisodes ||
+    d.sortBy !== "title" ||
+    d.sortOrder !== "asc" ||
+    Object.values(d.arrServerIds).some(Boolean) ||
+    Boolean(d.activeQueryId) ||
+    anyRuleConfigured(d.groups)
+  );
 }
 
 function formatResolution(res: string | null) {
@@ -303,6 +349,10 @@ export default function QueryPage() {
   const [activeQueryId, setActiveQueryId] = useState<string | null>(null);
   const [saveName, setSaveName] = useState("");
   const [savePopoverOpen, setSavePopoverOpen] = useState(false);
+
+  // In-progress query draft restored from a previous visit (see QUERY_DRAFT_KEY).
+  const [draftRestored, setDraftRestored] = useState(false);
+  const draftReadyRef = useRef(false);
 
   // Convert-to-lifecycle-rule dialog
   const [convertDialogOpen, setConvertDialogOpen] = useState(false);
@@ -731,6 +781,49 @@ export default function QueryPage() {
     [buildDefinition],
   );
 
+  // Persist the in-progress query to sessionStorage so it survives navigating
+  // away and back. The first run restores any existing draft (without
+  // re-persisting); every later run mirrors the live builder into the draft,
+  // clearing it once the builder is back to an empty/default state.
+  useEffect(() => {
+    if (!draftReadyRef.current) {
+      draftReadyRef.current = true;
+      try {
+        const raw = sessionStorage.getItem(QUERY_DRAFT_KEY);
+        if (raw) {
+          const d = JSON.parse(raw) as Partial<QueryDraft>;
+          if (d && Array.isArray(d.groups) && d.groups.length > 0) {
+            setMediaTypes(d.mediaTypes ?? []);
+            setSelectedServerIds(d.selectedServerIds ?? []);
+            setGroups(d.groups);
+            setSortBy(d.sortBy ?? "title");
+            setSortOrder(d.sortOrder === "desc" ? "desc" : "asc");
+            setIncludeEpisodes(!!d.includeEpisodes);
+            setArrServerIds(d.arrServerIds ?? {});
+            if (d.activeQueryId) setActiveQueryId(d.activeQueryId);
+            setDraftRestored(true);
+          }
+        }
+      } catch {
+        /* ignore malformed draft */
+      }
+      return;
+    }
+    const draft: QueryDraft = {
+      mediaTypes, selectedServerIds, groups, sortBy, sortOrder,
+      includeEpisodes, arrServerIds, activeQueryId,
+    };
+    try {
+      if (queryHasContent(draft)) {
+        sessionStorage.setItem(QUERY_DRAFT_KEY, JSON.stringify(draft));
+      } else {
+        sessionStorage.removeItem(QUERY_DRAFT_KEY);
+      }
+    } catch {
+      /* storage unavailable (private mode / quota) */
+    }
+  }, [mediaTypes, selectedServerIds, groups, sortBy, sortOrder, includeEpisodes, arrServerIds, activeQueryId]);
+
   // ── Selection + ad-hoc action handlers ──
 
   const toggleSelect = useCallback((id: string) => {
@@ -915,6 +1008,8 @@ export default function QueryPage() {
     setSortBy("title"); setSortOrder("asc"); setIncludeEpisodes(false);
     setArrServerIds({});
     setHasRun(false); setResults([]);
+    // Reset clears the draft via the persistence effect; hide the restore notice.
+    setDraftRestored(false);
   };
 
   const toggleMediaType = (type: string) => {
@@ -1089,6 +1184,30 @@ export default function QueryPage() {
           <ArrowRightLeft className="mr-1.5 h-3.5 w-3.5" />Convert to Lifecycle Rule
         </Button>
       </div>
+
+      {/* Restored draft notice */}
+      {draftRestored && (
+        <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+          <History className="h-4 w-4 shrink-0 text-primary" />
+          <span className="text-muted-foreground">
+            Restored your unsaved query from this session.
+          </span>
+          <div className="ml-auto flex items-center gap-1">
+            <Button variant="ghost" size="sm" className="h-7" onClick={handleNew}>
+              Discard
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() => setDraftRestored(false)}
+              aria-label="Dismiss"
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Query Scope */}
       <div className="rounded-lg border bg-card/40 p-4">
