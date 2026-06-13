@@ -160,15 +160,26 @@ function makeDefaultGroup(): QueryGroup {
 // Distinct from "Saved queries", which are persisted to the database.
 const QUERY_DRAFT_KEY = "query-builder-draft";
 
+/**
+ * Auto-saved, in-progress query. Wraps the same `QueryDefinition` the engine
+ * runs (so there is no parallel field list to keep in sync) plus the id of the
+ * saved query being edited, if any.
+ */
 interface QueryDraft {
-  mediaTypes: string[];
-  selectedServerIds: string[];
-  groups: QueryGroup[];
-  sortBy: string;
-  sortOrder: "asc" | "desc";
-  includeEpisodes: boolean;
-  arrServerIds: { radarr?: string; sonarr?: string; lidarr?: string };
+  definition: QueryDefinition;
   activeQueryId: string | null;
+}
+
+/** A pristine query definition — the empty/default builder state. */
+function makeEmptyDefinition(): QueryDefinition {
+  return {
+    mediaTypes: [],
+    serverIds: [],
+    groups: [makeDefaultGroup()],
+    sortBy: "title",
+    sortOrder: "asc",
+    includeEpisodes: false,
+  };
 }
 
 /** True if any rule anywhere in the tree has a non-empty value. */
@@ -185,16 +196,16 @@ function anyRuleConfigured(groups: QueryGroup[]): boolean {
  * types, default scope/sort, and the single empty starter rule) is treated as
  * empty so we neither persist nor advertise a restore for it.
  */
-function queryHasContent(d: QueryDraft): boolean {
+function queryHasContent(def: QueryDefinition, activeQueryId: string | null): boolean {
   return (
-    d.mediaTypes.length > 0 ||
-    d.selectedServerIds.length > 0 ||
-    d.includeEpisodes ||
-    d.sortBy !== "title" ||
-    d.sortOrder !== "asc" ||
-    Object.values(d.arrServerIds).some(Boolean) ||
-    Boolean(d.activeQueryId) ||
-    anyRuleConfigured(d.groups)
+    (def.mediaTypes?.length ?? 0) > 0 ||
+    (def.serverIds?.length ?? 0) > 0 ||
+    Boolean(def.includeEpisodes) ||
+    def.sortBy !== "title" ||
+    def.sortOrder !== "asc" ||
+    Object.values(def.arrServerIds ?? {}).some(Boolean) ||
+    Boolean(activeQueryId) ||
+    anyRuleConfigured(def.groups)
   );
 }
 
@@ -750,6 +761,20 @@ export default function QueryPage() {
     };
   }, [mediaTypes, selectedServerIds, groups, sortBy, sortOrder, includeEpisodes, arrServerIds, seerrInstanceId]);
 
+  // Inverse of buildDefinition: load a QueryDefinition into the builder. Shared
+  // by saved-query loads, draft restore, and New, so the field list lives once.
+  const applyQueryDefinition = useCallback((def: QueryDefinition) => {
+    setMediaTypes(def.mediaTypes ?? []);
+    setSelectedServerIds(def.serverIds ?? []);
+    setGroups(def.groups ?? [makeDefaultGroup()]);
+    setSortBy(def.sortBy ?? "title");
+    setSortOrder(def.sortOrder === "desc" ? "desc" : "asc");
+    setIncludeEpisodes(def.includeEpisodes ?? false);
+    setArrServerIds(def.arrServerIds ?? {});
+    setHasRun(false);
+    setResults([]);
+  }, []);
+
   // The definition that produced the currently displayed results. Ad-hoc actions
   // must validate against THIS (not the live builder state, which the user may
   // have edited without re-running), so the selection matches what's on screen.
@@ -792,14 +817,9 @@ export default function QueryPage() {
         const raw = sessionStorage.getItem(QUERY_DRAFT_KEY);
         if (raw) {
           const d = JSON.parse(raw) as Partial<QueryDraft>;
-          if (d && Array.isArray(d.groups) && d.groups.length > 0) {
-            setMediaTypes(d.mediaTypes ?? []);
-            setSelectedServerIds(d.selectedServerIds ?? []);
-            setGroups(d.groups);
-            setSortBy(d.sortBy ?? "title");
-            setSortOrder(d.sortOrder === "desc" ? "desc" : "asc");
-            setIncludeEpisodes(!!d.includeEpisodes);
-            setArrServerIds(d.arrServerIds ?? {});
+          const def = d?.definition;
+          if (def && Array.isArray(def.groups) && def.groups.length > 0) {
+            applyQueryDefinition(def);
             if (d.activeQueryId) setActiveQueryId(d.activeQueryId);
             setDraftRestored(true);
           }
@@ -809,12 +829,10 @@ export default function QueryPage() {
       }
       return;
     }
-    const draft: QueryDraft = {
-      mediaTypes, selectedServerIds, groups, sortBy, sortOrder,
-      includeEpisodes, arrServerIds, activeQueryId,
-    };
+    const definition = buildDefinition();
     try {
-      if (queryHasContent(draft)) {
+      if (queryHasContent(definition, activeQueryId)) {
+        const draft: QueryDraft = { definition, activeQueryId };
         sessionStorage.setItem(QUERY_DRAFT_KEY, JSON.stringify(draft));
       } else {
         sessionStorage.removeItem(QUERY_DRAFT_KEY);
@@ -822,7 +840,7 @@ export default function QueryPage() {
     } catch {
       /* storage unavailable (private mode / quota) */
     }
-  }, [mediaTypes, selectedServerIds, groups, sortBy, sortOrder, includeEpisodes, arrServerIds, activeQueryId]);
+  }, [buildDefinition, applyQueryDefinition, activeQueryId]);
 
   // ── Selection + ad-hoc action handlers ──
 
@@ -934,16 +952,7 @@ export default function QueryPage() {
   const handleSave = async () => {
     const name = saveName.trim();
     if (!name) return;
-    const cleanedArrServerIds = Object.fromEntries(
-      Object.entries(arrServerIds).filter(([, v]) => v),
-    );
-    const definition: QueryDefinition = {
-      mediaTypes: mediaTypes as QueryDefinition["mediaTypes"],
-      serverIds: selectedServerIds,
-      groups, sortBy, sortOrder, includeEpisodes,
-      ...(Object.keys(cleanedArrServerIds).length > 0 && { arrServerIds: cleanedArrServerIds }),
-      ...(seerrInstanceId && { seerrInstanceId }),
-    };
+    const definition = buildDefinition();
     try {
       if (activeQueryId) {
         const resp = await fetch(`/api/saved-queries/${activeQueryId}`, {
@@ -980,15 +989,9 @@ export default function QueryPage() {
     const query = savedQueries.find((q) => q.id === queryId);
     if (!query) return;
     setActiveQueryId(query.id);
-    setMediaTypes(query.query.mediaTypes ?? []);
-    setSelectedServerIds(query.query.serverIds ?? []);
-    setGroups(query.query.groups ?? [makeDefaultGroup()]);
-    setSortBy(query.query.sortBy ?? "title");
-    setSortOrder(query.query.sortOrder ?? "asc");
-    setIncludeEpisodes(query.query.includeEpisodes ?? false);
-    setArrServerIds(query.query.arrServerIds ?? {});
-    setHasRun(false);
-    setResults([]);
+    applyQueryDefinition(query.query);
+    // Explicitly loading a query supersedes any restored-draft notice.
+    setDraftRestored(false);
   };
 
   const handleDelete = async () => {
@@ -1004,10 +1007,7 @@ export default function QueryPage() {
 
   const handleNew = () => {
     setActiveQueryId(null);
-    setMediaTypes([]); setSelectedServerIds([]); setGroups([makeDefaultGroup()]);
-    setSortBy("title"); setSortOrder("asc"); setIncludeEpisodes(false);
-    setArrServerIds({});
-    setHasRun(false); setResults([]);
+    applyQueryDefinition(makeEmptyDefinition());
     // Reset clears the draft via the persistence effect; hide the restore notice.
     setDraftRestored(false);
   };
