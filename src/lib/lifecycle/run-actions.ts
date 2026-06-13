@@ -50,6 +50,20 @@ export interface RunActionsResult {
   failures: { title: string; error: string }[];
 }
 
+/** Live progress for a bounded action run, suitable for a streaming UI. */
+export interface ActionRunProgress {
+  /** Items fully processed so far (success or failure). */
+  done: number;
+  /** Total items in this run. */
+  total: number;
+  /**
+   * The item currently being processed (1-based position = `done + 1`) and the
+   * sub-step within it, present only while an item is mid-flight. Absent on the
+   * boundary updates fired before the first item and after each completes.
+   */
+  current?: { title: string; step: string };
+}
+
 /**
  * Execute a lifecycle action on a bounded set of already-validated media items.
  *
@@ -60,9 +74,10 @@ export interface RunActionsResult {
  * Callers are responsible for ownership verification, match/exception filtering,
  * and resolving `episodeIdMap` (series episode-level member IDs) BEFORE calling.
  *
- * `onProgress` (optional) is invoked once before the first item with
- * `(0, total)` and again after each item completes (success or failure) with
- * `(done, total)`, so a streaming route can drive a determinate progress bar.
+ * `onProgress` (optional) drives a determinate progress bar: it fires once
+ * before the first item, then for each item with the live sub-step (`current`),
+ * and again after each item completes — so a streaming route can show both an
+ * overall fraction and a per-item count plus the step in flight.
  */
 export async function executeActionsForItems(
   userId: string,
@@ -70,7 +85,7 @@ export async function executeActionsForItems(
   config: ActionConfig,
   episodeIdMap: Map<string, string[]>,
   history: HistoryContext,
-  onProgress?: (done: number, total: number) => void,
+  onProgress?: (progress: ActionRunProgress) => void,
 ): Promise<RunActionsResult> {
   const actionType = config.actionType;
 
@@ -87,10 +102,15 @@ export async function executeActionsForItems(
 
   const total = items.length;
   let processed = 0;
-  onProgress?.(0, total);
+  onProgress?.({ done: 0, total });
 
   for (const item of items) {
     const matchedMediaItemIds = episodeIdMap.get(item.id) ?? [];
+    // Surface the live sub-step for this item (tags → main action) to the bar.
+    const reportStep = onProgress
+      ? (step: string) => onProgress({ done: processed, total, current: { title: item.title, step } })
+      : undefined;
+    reportStep?.("Starting");
     try {
       await executeAction({
         id: "immediate",
@@ -103,7 +123,7 @@ export async function executeActionsForItems(
         addArrTags: config.addArrTags,
         removeArrTags: config.removeArrTags,
         mediaItem: item,
-      });
+      }, reportStep);
 
       // Compute deleted bytes for stats tracking (only for delete actions)
       let deletedBytes: bigint | null = null;
@@ -194,7 +214,7 @@ export async function executeActionsForItems(
       failed++;
     } finally {
       processed++;
-      onProgress?.(processed, total);
+      onProgress?.({ done: processed, total });
     }
   }
 

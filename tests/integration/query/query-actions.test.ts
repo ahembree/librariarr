@@ -34,9 +34,16 @@ vi.mock("@/lib/query/query-engine", () => ({
 }));
 
 // Mock executeAction to avoid real Arr API calls (keep normalizeTitle/extractActionError real).
+// The no-op still echoes the action type as its in-flight sub-step, so the
+// per-item progress reporting in executeActionsForItems is exercised end-to-end.
 vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/lifecycle/actions")>();
-  return { ...actual, executeAction: vi.fn().mockResolvedValue(undefined) };
+  return {
+    ...actual,
+    executeAction: vi.fn(async (action: { actionType: string }, onStep?: (step: string) => void) => {
+      onStep?.(action.actionType);
+    }),
+  };
 });
 
 // Import AFTER mocks
@@ -149,14 +156,25 @@ describe("POST /api/query/actions", () => {
     expect(plan?.phases.map((p) => p.key)).toEqual(["validate", "execute", "finalize"]);
 
     // The execute phase reports a determinate, monotonic fraction that ends at 1.
-    const execFractions = events
-      .filter((e) => e.type === "phase" && e.key === "execute" && typeof e.fraction === "number")
+    const execEvents = events.filter((e) => e.type === "phase" && e.key === "execute");
+    const execFractions = execEvents
+      .filter((e) => typeof e.fraction === "number")
       .map((e) => e.fraction as number);
     expect(execFractions.length).toBeGreaterThan(1);
     expect(execFractions[execFractions.length - 1]).toBe(1);
     for (let i = 1; i < execFractions.length; i++) {
       expect(execFractions[i]).toBeGreaterThanOrEqual(execFractions[i - 1]);
     }
+
+    // The execute phase carries a per-item count, advancing through both items
+    // and surfacing the in-flight sub-step (here the echoed action type). Item
+    // processing order is whatever findMany returns, so assert order-independently.
+    const details = execEvents.map((e) => e.detail).filter((d): d is string => typeof d === "string");
+    expect(details).toContain("2 / 2"); // final boundary update, no item in flight
+    expect(details.some((d) => /^1 \/ 2 · [AB] — DELETE_RADARR$/.test(d))).toBe(true);
+    expect(details.some((d) => /^2 \/ 2 · [AB] — DELETE_RADARR$/.test(d))).toBe(true);
+    expect(details.some((d) => d.includes("· A — "))).toBe(true);
+    expect(details.some((d) => d.includes("· B — "))).toBe(true);
   });
 
   it("rejects an unknown action type", async () => {

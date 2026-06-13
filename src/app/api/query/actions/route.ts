@@ -246,8 +246,16 @@ export async function POST(request: NextRequest) {
           ruleSetType: resolvedType,
           cleanupMatches: false,
         },
-        (done, total) =>
-          emit({ type: "phase", key: "execute", fraction: total > 0 ? done / total : 1 }),
+        ({ done, total, current }) =>
+          emit({
+            type: "phase",
+            key: "execute",
+            fraction: total > 0 ? done / total : 1,
+            // Per-item count plus the item + sub-step currently in flight.
+            detail: current
+              ? `${Math.min(done + 1, total)} / ${total} · ${current.title} — ${current.step}`
+              : `${done} / ${total}`,
+          }),
       );
 
       emit({ type: "phase", key: "finalize" });

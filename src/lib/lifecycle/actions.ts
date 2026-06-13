@@ -4,7 +4,7 @@ import { RadarrClient } from "@/lib/arr/radarr-client";
 import { SonarrClient } from "@/lib/arr/sonarr-client";
 import { LidarrClient } from "@/lib/arr/lidarr-client";
 import { logger } from "@/lib/logger";
-import { actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
+import { actionHonorsMemberIds, formatActionLabel, QUALITY_PROFILE_ACTION_TYPES } from "@/lib/lifecycle/action-types";
 
 // Re-export constants so server-side consumers can import from here too
 export { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES } from "@/lib/lifecycle/action-types";
@@ -825,16 +825,35 @@ async function executeSearchLidarr(action: ActionRecord) {
 
 // --- Main dispatch ---
 
-export async function executeAction(action: ActionRecord): Promise<void> {
+export async function executeAction(
+  action: ActionRecord,
+  /**
+   * Optional reporter for the sub-step currently running within this single
+   * item (tags → main action). Lets a streaming caller surface the multi-step
+   * nature of an action (e.g. "Updating tags" then "Change Quality Profile").
+   */
+  onStep?: (label: string) => void,
+): Promise<void> {
   logger.info("Lifecycle", `Starting ${action.actionType} for "${action.mediaItem.title}" (item: ${action.mediaItem.id}, arr: ${action.arrInstanceId ?? "none"}${action.matchedMediaItemIds.length > 0 ? `, ${action.matchedMediaItemIds.length} matched episodes` : ""})`);
 
   // Execute tag operations before the main action
   if (action.addArrTags.length > 0 || action.removeArrTags.length > 0) {
+    onStep?.("Updating tags");
     await executeTagOperations(action);
     const tagOps: string[] = [];
     if (action.addArrTags.length > 0) tagOps.push(`+tags: ${action.addArrTags.join(", ")}`);
     if (action.removeArrTags.length > 0) tagOps.push(`-tags: ${action.removeArrTags.join(", ")}`);
     logger.info("Lifecycle", `Tag operations for "${action.mediaItem.title}": ${tagOps.join("; ")}`);
+  }
+
+  // Report the main step. DELETE_FILES / quality-profile actions also trigger a
+  // follow-up search inside their executor when searchAfterAction is set, so
+  // note that here rather than instrumenting every executor.
+  if (action.actionType !== "DO_NOTHING") {
+    const willSearchAfter =
+      action.searchAfterAction &&
+      (action.actionType.includes("DELETE_FILES") || QUALITY_PROFILE_ACTION_TYPES.has(action.actionType));
+    onStep?.(formatActionLabel(action.actionType) + (willSearchAfter ? " → search" : ""));
   }
 
   switch (action.actionType) {
