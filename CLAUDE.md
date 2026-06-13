@@ -362,7 +362,7 @@ Documentation files to be aware of:
 
 - `.github/workflows/ci.yml` — Lint, test, build on pushes to main and PRs
 - `.github/workflows/release-please.yml` — On push to main, runs release-please; when a release is created, builds and pushes the Docker image with `latest` + semver tags
-- `.github/workflows/docker-develop.yml` — On push to the `develop` branch (or manual dispatch), builds and pushes the `develop` rolling tag + immutable `develop-<sha>` tags. Never publishes `latest`/semver (reserved for releases)
+- `.github/workflows/docker-nightly.yml` — On push to `main` (or manual dispatch), builds and pushes the `nightly` rolling tag + immutable `nightly-<sha>` tags for the trunk-based bleeding-edge channel. Never publishes `latest`/semver (reserved for releases)
 - `.github/workflows/docker-publish.yml` — Manual (`workflow_dispatch`) Docker Hub image publish
 
 ### Git Conventions

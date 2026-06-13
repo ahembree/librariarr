@@ -1,17 +1,17 @@
-name: Build and Push Develop Image
+name: Build and Push Nightly Image
 
 on:
   push:
-    branches: [develop]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# Only one develop build at a time — the rolling `develop` tag should reflect
-# the newest commit, so cancel any in-flight build it would supersede.
+# Only one nightly build at a time — the rolling `nightly` tag should reflect
+# the newest commit on main, so cancel any in-flight build it would supersede.
 concurrency:
-  group: docker-develop
+  group: docker-nightly
   cancel-in-progress: true
 
 env:
@@ -44,8 +44,8 @@ jobs:
           # No `latest` or semver tags here — those are reserved for the
           # release-please flow that publishes stable releases from main.
           tags: |
-            type=raw,value=develop
-            type=sha,prefix=develop-
+            type=raw,value=nightly
+            type=sha,prefix=nightly-
 
       - name: Build and push
         uses: docker/build-push-action@v7

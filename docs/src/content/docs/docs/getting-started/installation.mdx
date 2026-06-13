@@ -129,13 +129,13 @@ Librariarr images are published to [Docker Hub](https://hub.docker.com/r/ahembre
 |-----|-------------|
 | `latest` | The most recent stable release. Recommended for most users. |
 | `X.Y.Z`, `X.Y`, `X` | Specific [release](https://github.com/ahembree/librariarr/releases) versions. Pin to one of these for reproducible deployments. |
-| `develop` | Rolling build from the `develop` branch — the latest pre-release changes. Handy for testing upcoming features, but expect occasional breakage. |
-| `develop-<sha>` | Immutable per-commit `develop` build, useful for pinning or rolling back a development deployment. |
+| `nightly` | Rolling build from the latest commit on `main` — the newest changes that haven't been cut into a release yet. Handy for testing upcoming fixes/features, but expect occasional breakage. |
+| `nightly-<sha>` | Immutable per-commit `nightly` build, useful for pinning to or rolling back to a specific commit. |
 
-The `latest` and version tags are published only from tagged releases on `main`. The `develop` tags are built from the separate `develop` branch and never overwrite a stable release, so switching back is just a matter of changing the tag.
+The `latest` and version tags are published only from tagged releases. The `nightly` tags are built from every push to `main` and never overwrite a stable release, so switching back is just a matter of changing the tag.
 
 <Aside type="caution">
-  `develop` images may contain unreleased, unstable changes and database schema migrations that haven't shipped in a release. Take a [backup](/docs/features/backup-restore/) before trying one, and avoid `develop` for production deployments.
+  `nightly` images may contain unreleased, unstable changes and database schema migrations that haven't shipped in a release. Take a [backup](/docs/features/backup-restore/) before trying one, and avoid `nightly` for production deployments.
 </Aside>
 
 ## Persistent Data
