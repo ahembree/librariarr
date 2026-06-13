@@ -12,11 +12,11 @@ import { ADMIN, AUTH_STATE } from "./constants";
 test("first-run: create the local admin and persist the session", async ({ page }) => {
   await page.goto("/login");
 
-  // The setup form may be revealed by a "Create Local Account" button.
-  const reveal = page.getByRole("button", { name: /create local account/i });
-  if (await reveal.isVisible().catch(() => false)) {
-    await reveal.click();
-  }
+  // The "Create Local Account" button only appears once the page's check-setup
+  // fetch resolves, and it reveals the setup form. click() auto-waits for the
+  // button to be actionable (bounded by the test timeout), so this is not racy
+  // against a cold first request — a one-shot isVisible() check would be.
+  await page.getByRole("button", { name: /create local account/i }).click();
 
   await page.locator("#setup-username").fill(ADMIN.username);
   await page.locator("#setup-password").fill(ADMIN.password);
