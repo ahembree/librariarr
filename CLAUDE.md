@@ -196,10 +196,11 @@ When users connect multiple servers, dedup prevents duplicate items from appeari
 
 `appCache` from `src/lib/cache/memory-cache.ts` — in-process cache (no Redis), does not persist across restarts:
 
-- `appCache.get<T>(key)`, `set(key, data, ttlMs?)`, `getOrSet(key, compute, ttlMs?)` (compute-and-cache)
+- `appCache.get<T>(key)`, `set(key, data, ttlMs?)`, `getOrSet(key, compute, ttlMs?)` (compute-and-cache, **single-flight**: concurrent misses for the same key share one `compute()` call)
 - `invalidate(key)`, `invalidatePrefix(prefix)` (bulk invalidation by namespace), `clear()`
-- Default 60s TTL
+- Default 60s TTL; the store is **bounded** (evicts expired-then-oldest past `maxEntries`) so a long-running process can't grow unbounded
 - Used by `resolveServerFilter`, available-letters endpoints, and other read-heavy paths
+- **Always call `invalidateMediaCaches()` from `src/lib/cache/invalidate.ts`** after any mutation that changes media items, server membership, dedup canonical selection, or title/artwork preference — it drops every media-derived prefix (`server-filter:`, `stats:`, `letters:`, `group-summary:`, `cross-tab:`, `custom-stats:`, `timeline:`, `distinct-values`, `watch-history-filters:`) in one call. Used by sync, purge, server CRUD, and the dedup/title-preference settings routes. Do not hand-roll partial invalidation — it's the recurring source of stale-listing bugs.
 
 ### Filter Utilities
 
@@ -304,6 +305,7 @@ The lifecycle system operates in three phases, orchestrated by `src/lib/lifecycl
 - A static crontab (`src/lib/jobs/worker.ts`) drives recurring tasks: the **dispatcher** runs every minute, action cleanup every 15 minutes, log archival hourly.
 - The **dispatcher** (`dispatch.ts`) reads the user-configured, DB-stored schedules (`AppSettings.syncSchedule`, `lifecycleDetectionSchedule`, etc.), advances the `lastScheduled*` timestamp, and enqueues durable jobs for any work that is due. Heavy domain jobs (sync, lifecycle detection/execution, backup) share the serial `MAIN_QUEUE` so they run one-at-a-time (mirroring the original sequential scheduler); the dispatcher and housekeeping tasks omit a queue so a long sync never blocks scheduling. Jobs use a `jobKey` to deduplicate and are retried with backoff on failure.
 - Manual/API sync triggers (`/api/servers/[id]/sync`, `/api/sync/by-type`) enqueue durable `sync-server` jobs via `enqueueJob()` instead of fire-and-forget calls. `syncMediaServer` still self-serializes via its internal semaphore (`sync-semaphore.ts`), which guards all callers including the inline lifecycle re-sync.
+- Manual "Run Now" triggers (`/api/settings/schedule-info/run`) for **detection** and **execution** also enqueue durable jobs on `MAIN_QUEUE` with a stable `jobKey` (`detection:<userId>` / `execution:<userId>`) rather than running inline, so a double-click or a collision with the per-minute dispatcher dedupes into one run. The schedule watermark (`lastScheduled*`/`lastBackupAt`) is advanced only **after** a successful enqueue (in both the dispatcher and the manual route) so a transient enqueue failure can't silently skip a window.
 - Also starts the maintenance/preroll enforcers (30s `setInterval` polling loops) in the same `instrumentation.ts` — these keep cross-tick in-memory state and sub-minute cadence, so they intentionally remain outside the job queue.
 
 ### Documentation Site
