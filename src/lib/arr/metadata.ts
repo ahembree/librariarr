@@ -18,6 +18,10 @@ export function mapRadarrMovie(
   movie: RadarrMovie,
   profileMap: Map<number, string>,
   tagMap: Map<number, string>,
+  // Radarr's /movie endpoint never populates the embedded movieFile's
+  // customFormatScore (only /moviefile does), so callers pass the real score
+  // fetched separately. Falls back to the embedded value when omitted.
+  customFormatScore?: number | null,
 ): ArrMetadata {
   return {
     arrId: movie.id,
@@ -38,7 +42,7 @@ export function mapRadarrMovie(
     runtime: movie.runtime ?? null,
     qualityName: movie.movieFile?.quality?.quality?.name ?? null,
     qualityCutoffMet: movie.qualityCutoffNotMet != null ? !movie.qualityCutoffNotMet : null,
-    customFormatScore: movie.movieFile?.customFormatScore ?? null,
+    customFormatScore: customFormatScore ?? movie.movieFile?.customFormatScore ?? null,
     downloadDate: movie.movieFile?.dateAdded ?? null,
     firstAired: null,
     seasonCount: null,

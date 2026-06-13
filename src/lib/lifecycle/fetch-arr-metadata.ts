@@ -24,8 +24,15 @@ export async function fetchArrMetadata(
       ]);
       const tagMap = new Map(tags.map((t) => [t.id, t.label]));
       const profileMap = new Map(profiles.map((p) => [p.id, p.name]));
+      // customFormatScore is only computed by Radarr's /moviefile endpoint,
+      // never on the /movie listing — fetch it separately and merge it in.
+      const scores = await client.getCustomFormatScores(
+        movies.filter((m) => m.hasFile).map((m) => m.id),
+      );
       for (const movie of movies) {
-        arrData[String(movie.tmdbId)] = mapRadarrMovie(movie, profileMap, tagMap);
+        arrData[String(movie.tmdbId)] = mapRadarrMovie(
+          movie, profileMap, tagMap, scores.get(movie.id) ?? null,
+        );
       }
     }
   } else if (type === "MUSIC") {

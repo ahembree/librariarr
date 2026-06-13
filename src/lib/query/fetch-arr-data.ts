@@ -69,8 +69,15 @@ async function fetchRadarrData(userId: string, instanceId: string): Promise<ArrD
   const profileMap = new Map(profiles.map((p) => [p.id, p.name]));
   const arrData: ArrDataMap = {};
 
+  // customFormatScore is only computed by Radarr's /moviefile endpoint,
+  // never on the /movie listing — fetch it separately and merge it in.
+  const scores = await client.getCustomFormatScores(
+    movies.filter((m) => m.hasFile).map((m) => m.id),
+  );
   for (const movie of movies) {
-    arrData[String(movie.tmdbId)] = mapRadarrMovie(movie, profileMap, tagMap);
+    arrData[String(movie.tmdbId)] = mapRadarrMovie(
+      movie, profileMap, tagMap, scores.get(movie.id) ?? null,
+    );
   }
 
   return arrData;

@@ -41,6 +41,23 @@ describe("mapRadarrMovie", () => {
     expect(mapRadarrMovie(base, profileMap, tagMap).customFormatScore).toBeNull(); // no movieFile
   });
 
+  it("uses the explicit customFormatScore override over the embedded movieFile value", () => {
+    const base = { id: 1, tmdbId: 1, qualityProfileId: 1, monitored: false, tags: [] } as unknown as RadarrMovie;
+    // Override wins over the (unreliable) embedded value.
+    expect(
+      mapRadarrMovie({ ...base, movieFile: { customFormatScore: 999 } } as RadarrMovie, profileMap, tagMap, 50).customFormatScore,
+    ).toBe(50);
+    // A zero override is preserved (no falsy coercion).
+    expect(mapRadarrMovie(base, profileMap, tagMap, 0).customFormatScore).toBe(0);
+    // A negative override is preserved.
+    expect(mapRadarrMovie(base, profileMap, tagMap, -25).customFormatScore).toBe(-25);
+    // null override falls back to the embedded value, then to null.
+    expect(
+      mapRadarrMovie({ ...base, movieFile: { customFormatScore: 7 } } as RadarrMovie, profileMap, tagMap, null).customFormatScore,
+    ).toBe(7);
+    expect(mapRadarrMovie(base, profileMap, tagMap, null).customFormatScore).toBeNull();
+  });
+
   it("falls back to Unknown profile and the raw tag id when unmapped", () => {
     const movie = { id: 2, tmdbId: 2, qualityProfileId: 999, monitored: false, tags: [55] } as unknown as RadarrMovie;
     const m = mapRadarrMovie(movie, profileMap, tagMap);
