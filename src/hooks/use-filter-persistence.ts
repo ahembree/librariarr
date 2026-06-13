@@ -22,10 +22,16 @@ export function useFilterPersistence(key: string) {
 
   const persistFilters = useCallback(
     (filters: Record<string, string>) => {
-      if (Object.keys(filters).length > 0) {
-        sessionStorage.setItem(key, JSON.stringify(filters));
-      } else {
-        sessionStorage.removeItem(key);
+      // Guard against sessionStorage throwing (private mode) — persistence is
+      // best-effort and must not break the calling component.
+      try {
+        if (Object.keys(filters).length > 0) {
+          sessionStorage.setItem(key, JSON.stringify(filters));
+        } else {
+          sessionStorage.removeItem(key);
+        }
+      } catch {
+        /* storage unavailable */
       }
     },
     [key],

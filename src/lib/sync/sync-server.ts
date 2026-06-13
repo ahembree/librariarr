@@ -768,13 +768,16 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       const shouldEnrich = client.bulkListingIncomplete ?? false;
       const effectivePageSize = PAGE_SIZE;
 
-      // Fetch first page to learn total count without loading everything
+      // Fetch first page to learn total count without loading everything.
+      // `libraryTotal` is null when the server doesn't report a count — in that
+      // case we cannot pre-compute progress, so contribute 0 to the persisted
+      // total (it's an Int column) and let the short-page check govern paging.
       const firstPage = await client.getLibraryItemsPage(lib.key, fetchType, 0, effectivePageSize);
       const libraryTotal = firstPage.total;
-      logger.info("Sync", `Library "${lib.title}": ${libraryTotal} items (pageSize=${effectivePageSize}, enrichment=${shouldEnrich})`);
+      logger.info("Sync", `Library "${lib.title}": ${libraryTotal ?? "unknown"} items (pageSize=${effectivePageSize}, enrichment=${shouldEnrich})`);
       logHeapAndCollect(`start library "${lib.title}"`);
 
-      totalItems += libraryTotal;
+      totalItems += libraryTotal ?? 0;
 
       await prisma.$queryRawUnsafe(
         `UPDATE "SyncJob" SET "totalItems"=$1 WHERE "id"=$2`,
@@ -917,7 +920,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
         pageItems = null;
 
         pageOffset += pageRatingKeys.length;
-        if (pageRatingKeys.length < effectivePageSize || pageOffset >= libraryTotal) {
+        if (pageRatingKeys.length < effectivePageSize || (libraryTotal != null && pageOffset >= libraryTotal)) {
           // Reached the end: either the server returned a short (final) page, or
           // we've fetched at least as many items as the reported total.
           reachedLibraryEnd = true;
@@ -960,7 +963,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       // items as the library claims to have. If a fetch was suspiciously short
       // (e.g. a transient server error returned fewer items), skip deletion so
       // we don't wipe items that still exist on the server.
-      const traversedFullLibrary = reachedLibraryEnd || libraryItemCount >= libraryTotal;
+      const traversedFullLibrary = reachedLibraryEnd || (libraryTotal != null && libraryItemCount >= libraryTotal);
       const staleItems = traversedFullLibrary
         ? await prisma.$queryRawUnsafe<
             { id: string; thumbUrl: string | null; parentThumbUrl: string | null; seasonThumbUrl: string | null }[]
@@ -973,7 +976,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       if (!traversedFullLibrary) {
         logger.info(
           "Sync",
-          `Library "${lib.title}": skipping stale-item deletion — library not fully traversed (${libraryItemCount}/${libraryTotal} items processed)`,
+          `Library "${lib.title}": skipping stale-item deletion — library not fully traversed (${libraryItemCount}/${libraryTotal ?? "unknown"} items processed)`,
         );
       }
 

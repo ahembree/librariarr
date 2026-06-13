@@ -340,7 +340,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     type: LibraryItemType,
     offset: number,
     limit: number,
-  ): Promise<{ items: MediaMetadataItem[]; total: number }> {
+  ): Promise<{ items: MediaMetadataItem[]; total: number | null }> {
     const itemTypes = type === "movie" ? "Movie" : type === "episode" ? "Episode" : "Audio";
     const userId = await this.getUserId();
 
@@ -359,7 +359,12 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     });
 
     const items = (response.data.Items || []).map((item) => this.normalizeItem(item));
-    const total = response.data.TotalRecordCount;
+    // null when the server omits the count, so the caller falls back to the
+    // short-page check instead of trusting a bogus total.
+    const total =
+      typeof response.data.TotalRecordCount === "number"
+        ? response.data.TotalRecordCount
+        : null;
     return { items, total };
   }
 
@@ -498,11 +503,13 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
             startIndex += pageSize;
           }
         } catch {
-          // Skip users where we can't access items
+          // Skip users where we can't access items (graceful per-user degrade).
         }
       }
-    } catch {
-      // Non-fatal
+    } catch (error) {
+      // Re-throw a hard failure (e.g. /Users unreachable) so the caller can
+      // skip the destructive full-replace instead of wiping stored history.
+      throw error;
     }
 
     return entries;

@@ -32,13 +32,17 @@ export interface MediaServerClient {
   getLibraryEpisodes(sectionKey: string): Promise<MediaMetadataItem[]>;
   getLibraryTracks(sectionKey: string): Promise<MediaMetadataItem[]>;
 
-  // Paginated library fetching for memory-efficient sync
+  // Paginated library fetching for memory-efficient sync.
+  // `total` is the library-wide item count, or `null` when the server doesn't
+  // report it — callers must NOT treat null as a number (it used to be a large
+  // sentinel, which overflowed the Int SyncJob.totalItems column). When total is
+  // null the caller relies on the short-page check to terminate paging.
   getLibraryItemsPage(
     sectionKey: string,
     type: LibraryItemType,
     offset: number,
     limit: number,
-  ): Promise<{ items: MediaMetadataItem[]; total: number }>;
+  ): Promise<{ items: MediaMetadataItem[]; total: number | null }>;
 
   // Item metadata
   getItemMetadata(ratingKey: string): Promise<MediaMetadataItem>;

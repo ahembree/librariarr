@@ -138,4 +138,37 @@ describe("DELETE /api/media/purge", () => {
     });
     expect(user2Movies).toBe(1);
   });
+
+  it("recomputes canonical so the surviving duplicate stays visible after a per-library purge", async () => {
+    const prisma = getTestPrisma();
+    const { recomputeCanonical } = await import("@/lib/dedup/recompute-canonical");
+    const user = await createTestUser();
+
+    // Two servers with the SAME movie (same title+year → same dedupKey).
+    const serverA = await createTestServer(user.id, { name: "Server A" });
+    const serverB = await createTestServer(user.id, { name: "Server B" });
+    const libA = await createTestLibrary(serverA.id, { type: "MOVIE" });
+    const libB = await createTestLibrary(serverB.id, { type: "MOVIE" });
+    await createTestMediaItem(libA.id, { title: "Dup Movie", year: 2020, type: "MOVIE" });
+    await createTestMediaItem(libB.id, { title: "Dup Movie", year: 2020, type: "MOVIE" });
+
+    // Establish canonical selection, then purge whichever library holds it.
+    await recomputeCanonical(user.id);
+    const canonical = await prisma.mediaItem.findFirst({ where: { dedupCanonical: true } });
+    expect(canonical).not.toBeNull();
+
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const response = await callRoute(DELETE, {
+      url: "/api/media/purge",
+      method: "DELETE",
+      searchParams: { libraryId: canonical!.libraryId },
+    });
+    await expectJson<{ deleted: number }>(response, 200);
+
+    // The surviving copy must now be canonical (otherwise it vanishes from
+    // multi-server listings, which filter dedupCanonical = true).
+    const survivors = await prisma.mediaItem.findMany();
+    expect(survivors).toHaveLength(1);
+    expect(survivors[0].dedupCanonical).toBe(true);
+  });
 });

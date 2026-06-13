@@ -225,6 +225,24 @@ function hasResolutionRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): bool
   return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "resolution");
 }
 
+/** Check if any rule references a series-aggregate field (episodeCount,
+ *  watchedEpisodePercentage, etc.). These can only be evaluated against an
+ *  aggregated series record, never per-episode, so they force series-level
+ *  (aggregate) evaluation regardless of seriesScope — mirroring the query
+ *  engine's aggregateSeriesAndFilter path. */
+function hasSeriesAggregateRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+  if (rules.length === 0) return false;
+  if (isRuleGroups(rules)) {
+    for (const group of rules) {
+      if (group.enabled === false) continue;
+      if (group.rules.some((r) => r.enabled !== false && isSeriesAggregateField(r.field))) return true;
+      if (hasSeriesAggregateRules(group.groups ?? [])) return true;
+    }
+    return false;
+  }
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isSeriesAggregateField(r.field));
+}
+
 /** Check if any rule uses stream fields or stream query groups */
 function hasStreamRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
@@ -2076,7 +2094,7 @@ export function evaluateAllRulesInMemory(
   return evaluateAllRulesInMemory(converted, item, arrMeta, seerrMeta);
 }
 
-export { hasArrRules, hasSeerrRules, hasStreamRules, hasExternalIdFieldRules, hasStreamQueryInMemoryRules };
+export { hasArrRules, hasSeerrRules, hasStreamRules, hasExternalIdFieldRules, hasStreamQueryInMemoryRules, hasSeriesAggregateRules };
 
 /**
  * Evaluate rules at the series scope: aggregate ALL episodes into series
@@ -2474,7 +2492,12 @@ export async function evaluateLifecycleRules(
   const needsStreams = hasStreamRules(rules);
   const needsWatchHistory = hasWatchedByUserRules(rules);
   const hasCrossSystem = hasCrossSystemFieldRules(rules);
-  const needsInMemoryEval = hasWildcardRules(rules) || hasStreamCountRules(rules) || hasStreamQueryInMemoryRules(rules) || hasCrossSystem || hasResolutionRules(rules);
+  // hasSeriesAggregateRules: aggregate fields are dropped to {} in Phase 1
+  // (where-builder), so they MUST force the pre-filter WHERE + in-memory
+  // re-eval, otherwise an aggregate conjunct AND-ed with a DB-expressible rule
+  // is silently dropped. (Aggregate evaluation itself happens at the series
+  // level — see detect-matches routing to evaluateSeriesScope.)
+  const needsInMemoryEval = hasWildcardRules(rules) || hasStreamCountRules(rules) || hasStreamQueryInMemoryRules(rules) || hasCrossSystem || hasResolutionRules(rules) || hasSeriesAggregateRules(rules);
   const needsFullReeval = needsInMemoryEval || !!hasExternal;
 
   let andConditions: Prisma.MediaItemWhereInput[];

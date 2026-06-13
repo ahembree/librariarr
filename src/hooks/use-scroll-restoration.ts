@@ -3,6 +3,30 @@
 import { useCallback, useEffect, useRef } from "react";
 import { findScrollContainer } from "@/lib/scroll-utils";
 
+// sessionStorage throws in Safari private mode / when storage is disabled. These
+// helpers keep a failure from aborting navigation or crashing the page.
+function ssGet(key: string): string | null {
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function ssSet(key: string, value: string): void {
+  try {
+    sessionStorage.setItem(key, value);
+  } catch {
+    /* storage unavailable */
+  }
+}
+function ssRemove(key: string): void {
+  try {
+    sessionStorage.removeItem(key);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 /**
  * Optional callbacks for index-based scroll restoration with virtualized lists.
  * Pixel-based restoration is inaccurate for virtualized grids because estimated
@@ -75,7 +99,7 @@ export function useScrollRestoration(
     const saveState = () => {
       const scrollTop = container.scrollTop;
       if (scrollTop <= 0) {
-        sessionStorage.removeItem(`scroll-${key}`);
+        ssRemove(`scroll-${key}`);
         return;
       }
 
@@ -85,7 +109,7 @@ export function useScrollRestoration(
         firstVisibleIndex,
         visibleCount: visibleCountRef.current,
       };
-      sessionStorage.setItem(`scroll-${key}`, JSON.stringify(data));
+      ssSet(`scroll-${key}`, JSON.stringify(data));
     };
 
     const onScroll = () => {
@@ -106,19 +130,19 @@ export function useScrollRestoration(
     if (!ready || restored.current) return;
     restored.current = true;
 
-    const preserve = sessionStorage.getItem(`scroll-${key}-preserve`);
-    sessionStorage.removeItem(`scroll-${key}-preserve`);
+    const preserve = ssGet(`scroll-${key}-preserve`);
+    ssRemove(`scroll-${key}-preserve`);
 
     if (!preserve) {
       // Not returning from a child page — clear saved state so page starts at top
-      sessionStorage.removeItem(`scroll-${key}`);
+      ssRemove(`scroll-${key}`);
       return;
     }
 
-    const saved = sessionStorage.getItem(`scroll-${key}`);
+    const saved = ssGet(`scroll-${key}`);
     if (!saved) return;
 
-    sessionStorage.removeItem(`scroll-${key}`);
+    ssRemove(`scroll-${key}`);
 
     try {
       const { scrollTop, firstVisibleIndex, visibleCount: savedVisibleCount } = JSON.parse(saved);
@@ -160,7 +184,7 @@ export function useScrollRestoration(
    * Sets a flag so that returning to this page will restore scroll position.
    */
   const markChildNavigation = useCallback(() => {
-    sessionStorage.setItem(`scroll-${key}-preserve`, "true");
+    ssSet(`scroll-${key}-preserve`, "true");
   }, [key]);
 
   return { markChildNavigation };

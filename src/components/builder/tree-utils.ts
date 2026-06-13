@@ -64,6 +64,24 @@ export function validateAllRules<R extends BaseRule>(
       const val = String(rule.value).trim();
       if (val === "") return false;
       const fieldType = getFieldType(rule.field);
+      // `between` stores the value as a "min,max" pair — validate both halves
+      // by field type (and reject min > max) rather than running the scalar
+      // number check, which would see "2000,2010" → NaN and wrongly mark every
+      // numeric/date range rule invalid (disabling Preview/Save/Run).
+      if (rule.operator === "between") {
+        const parts = val.split(",").map((p) => p.trim());
+        if (parts.length !== 2 || parts.some((p) => p === "")) return false;
+        if (fieldType === "number") {
+          const a = Number(parts[0]);
+          const b = Number(parts[1]);
+          if (isNaN(a) || isNaN(b) || a > b) return false;
+        } else if (fieldType === "date") {
+          const a = new Date(parts[0]).getTime();
+          const b = new Date(parts[1]).getTime();
+          if (isNaN(a) || isNaN(b) || a > b) return false;
+        }
+        continue;
+      }
       if (fieldType === "number" || rule.operator === "inLastDays" || rule.operator === "notInLastDays") {
         if (isNaN(Number(val))) return false;
       }

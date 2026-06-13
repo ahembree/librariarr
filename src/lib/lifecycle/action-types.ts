@@ -35,15 +35,19 @@ export const MUSIC_ACTION_TYPES = [
 
 /**
  * Action types whose executor acts only on the matched member ids
- * (`matchedMediaItemIds`) when present — i.e. Sonarr episode-file deletes.
- * Every OTHER destructive action operates on the WHOLE Arr record (series /
- * artist / movie) and ignores the member list, so a partially-excepted
- * member set cannot be honored by them.
+ * (`matchedMediaItemIds`, falling back to the action's own track for
+ * track-scope music rules) — i.e. Sonarr episode-file and Lidarr track-file
+ * deletes. Every OTHER destructive action operates on the WHOLE Arr record
+ * (series / artist / movie) and ignores the member list, so a partially-
+ * excepted member set cannot be honored by them.
  */
 export const MEMBER_SCOPED_ACTION_TYPES = new Set<string>([
   "UNMONITOR_DELETE_FILES_SONARR",
   "MONITOR_DELETE_FILES_SONARR",
   "DELETE_FILES_SONARR",
+  "UNMONITOR_DELETE_FILES_LIDARR",
+  "MONITOR_DELETE_FILES_LIDARR",
+  "DELETE_FILES_LIDARR",
 ]);
 
 export function actionHonorsMemberIds(actionType: string): boolean {

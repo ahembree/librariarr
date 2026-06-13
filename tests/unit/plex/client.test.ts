@@ -152,16 +152,17 @@ describe("PlexClient", () => {
       );
     });
 
-    it("ignores per-page size as the total when totalSize is absent (returns sentinel)", async () => {
+    it("returns total=null when totalSize is absent (never a numeric sentinel)", async () => {
       // `size` is the per-page count, not the library total. Trusting it would
       // terminate the sync loop early and wrongly delete unfetched items as
-      // stale, so the client returns a large sentinel and lets the loop's
-      // short-page detection govern termination.
+      // stale. The client returns null ("unknown") — NOT a large sentinel,
+      // which previously overflowed the Int SyncJob.totalItems column — and the
+      // sync loop's short-page detection governs termination.
       mockAxiosInstance.get.mockResolvedValueOnce({
         data: { MediaContainer: { Metadata: [], size: 0 } },
       });
       const result = await client.getLibraryItemsPage("3", "track", 0, 50);
-      expect(result.total).toBe(Number.MAX_SAFE_INTEGER);
+      expect(result.total).toBeNull();
     });
 
     it("fetches paginated items for movie type (no type param)", async () => {
@@ -170,8 +171,8 @@ describe("PlexClient", () => {
       });
       const result = await client.getLibraryItemsPage("1", "movie", 10, 25);
       expect(result.items).toHaveLength(1);
-      // No totalSize → sentinel (see note above); loop terminates on short page.
-      expect(result.total).toBe(Number.MAX_SAFE_INTEGER);
+      // No totalSize → null (see note above); loop terminates on short page.
+      expect(result.total).toBeNull();
       const callParams = mockAxiosInstance.get.mock.calls[0][1].params;
       expect(callParams.type).toBeUndefined();
     });

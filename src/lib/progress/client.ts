@@ -36,19 +36,25 @@ export async function consumeProgressStream<T>(
     }
   };
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let newlineIndex: number;
-    while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
-      const line = buffer.slice(0, newlineIndex);
-      buffer = buffer.slice(newlineIndex + 1);
-      handleLine(line);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let newlineIndex: number;
+      while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        handleLine(line);
+      }
     }
+    // Flush any trailing line without a newline terminator.
+    if (buffer.trim()) handleLine(buffer);
+  } finally {
+    // Release/cancel the reader on every exit path (error event, parse failure,
+    // or normal completion) so the response body isn't left locked/leaked.
+    reader.cancel().catch(() => {});
   }
-  // Flush any trailing line without a newline terminator.
-  if (buffer.trim()) handleLine(buffer);
 
   if (!hasResult) throw new Error("Stream ended without a result");
   return result as T;

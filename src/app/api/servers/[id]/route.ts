@@ -76,16 +76,19 @@ export async function PUT(
       });
     }
 
-    await recomputeCanonical(session.userId!);
-
     apiLogger.info(
       "Auth",
       `Media server "${server.name}" disabled with data purge`
     );
   }
 
-  // Invalidate caches when enabled state changes so media queries reflect immediately
+  // Recompute canonical + invalidate caches whenever the enabled state changes:
+  // enabling/disabling a server changes the enabled-server set that dedup
+  // canonical selection is computed over, so items whose canonical lived on the
+  // toggled server must be re-canonicalized to a still-enabled copy (otherwise
+  // they vanish from multi-server listings). Also covers the delete-data path.
   if (enabled !== undefined) {
+    await recomputeCanonical(session.userId!);
     invalidateMediaCaches();
   }
 

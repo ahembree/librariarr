@@ -56,17 +56,30 @@ export async function PUT(
     }
   }
 
+  // Only rewrite scheduleType and its dependent date/time columns when the
+  // caller actually sends scheduleType. A partial update (e.g. the enabled
+  // toggle, which posts only { enabled }) must NOT clear the schedule's
+  // date/time definition — previously every column was written
+  // unconditionally, so toggling enabled set startDate/endDate/startTime/
+  // endTime to null and silently broke the schedule (isBlackoutActive → false).
+  const scheduleTypeFields =
+    scheduleType !== undefined
+      ? {
+          scheduleType,
+          startDate: scheduleType === "one_time" ? new Date(startDate!) : null,
+          endDate: scheduleType === "one_time" ? new Date(endDate!) : null,
+          daysOfWeek: scheduleType === "recurring" && Array.isArray(daysOfWeek) ? daysOfWeek : [],
+          startTime: scheduleType === "recurring" ? startTime : null,
+          endTime: scheduleType === "recurring" ? endTime : null,
+        }
+      : {};
+
   const schedule = await prisma.blackoutSchedule.update({
     where: { id },
     data: {
-      name: name?.trim(),
-      scheduleType,
-      startDate: scheduleType === "one_time" ? new Date(startDate!) : null,
-      endDate: scheduleType === "one_time" ? new Date(endDate!) : null,
-      daysOfWeek: scheduleType === "recurring" && Array.isArray(daysOfWeek) ? daysOfWeek : undefined,
-      startTime: scheduleType === "recurring" ? startTime : null,
-      endTime: scheduleType === "recurring" ? endTime : null,
-      action,
+      ...(name !== undefined && { name: name.trim() }),
+      ...scheduleTypeFields,
+      ...(action !== undefined && { action }),
       ...(message !== undefined && { message }),
       ...(delay !== undefined && { delay }),
       ...(enabled !== undefined && { enabled }),

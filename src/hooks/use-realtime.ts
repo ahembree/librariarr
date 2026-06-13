@@ -81,6 +81,10 @@ function scheduleReconnect() {
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     if (refCount <= 0) return;
+    // A new subscriber may have already rebuilt the source via acquireSource
+    // while this timer was pending — don't create a duplicate (the first would
+    // be leaked and every event delivered twice).
+    if (sharedSource) return;
     createSource();
   }, delay);
 }
@@ -88,6 +92,12 @@ function scheduleReconnect() {
 function acquireSource(): EventSource {
   refCount++;
   if (sharedSource) return sharedSource;
+
+  // sharedSource may be null because a reconnect is scheduled (timer armed).
+  // Cancel it and reset backoff before creating, so the timer doesn't later
+  // fire a second createSource() and leak a duplicate connection.
+  clearReconnectTimer();
+  reconnectDelay = RECONNECT_BASE_MS;
 
   const source = createSource();
   if (!source) {

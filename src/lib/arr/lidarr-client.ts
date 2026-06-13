@@ -71,6 +71,21 @@ export interface LidarrTrackFile {
   size: number;
 }
 
+export interface LidarrAlbum {
+  id: number;
+  title: string;
+}
+
+export interface LidarrTrack {
+  id: number;
+  albumId: number;
+  trackFileId: number;
+  title: string;
+  hasFile: boolean;
+  trackNumber?: string;
+  absoluteTrackNumber?: number;
+}
+
 export interface LidarrExclusion {
   id?: number;
   foreignId: string;
@@ -188,6 +203,20 @@ export class LidarrClient {
     await this.client.delete("/api/v1/trackfile/bulk", {
       data: { trackFileIds },
     });
+  }
+
+  async getAlbums(artistId: number): Promise<LidarrAlbum[]> {
+    const { data } = await this.client.get<LidarrAlbum[]>("/api/v1/album", {
+      params: { artistId },
+    });
+    return data;
+  }
+
+  async getTracks(artistId: number): Promise<LidarrTrack[]> {
+    const { data } = await this.client.get<LidarrTrack[]>("/api/v1/track", {
+      params: { artistId },
+    });
+    return data;
   }
 
   async getQualityProfiles(): Promise<LidarrQualityProfile[]> {

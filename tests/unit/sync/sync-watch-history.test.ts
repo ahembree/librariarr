@@ -88,6 +88,30 @@ describe("syncWatchHistory", () => {
     expect(deleteCalls.length).toBe(1);
   });
 
+  it("skips the destructive DELETE when the watch-history fetch fails (no data loss)", async () => {
+    // Server query
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{
+      id: "server-1",
+      name: "Test Server",
+      url: "http://plex:32400",
+      accessToken: "token",
+      type: "PLEX",
+      tlsSkipVerify: false,
+      enabled: true,
+    }]);
+
+    // A transient outage: the client throws rather than returning [].
+    mockClient.getDetailedWatchHistory.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+
+    const result = await syncWatchHistory("server-1");
+    expect(result).toEqual({ count: 0 });
+
+    // CRITICAL: must NOT have wiped existing history on a fetch failure.
+    const deleteCalls = mockPrisma.$queryRawUnsafe.mock.calls
+      .filter((args) => (args[0] as string).includes('DELETE FROM "WatchHistory"'));
+    expect(deleteCalls.length).toBe(0);
+  });
+
   it("syncs watch history entries with matching media items", async () => {
     // Server query
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{

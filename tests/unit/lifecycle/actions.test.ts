@@ -43,6 +43,8 @@ const mockLidarrClient = vi.hoisted(() => ({
   updateArtist: vi.fn(),
   addExclusion: vi.fn(),
   getTrackFiles: vi.fn(),
+  getTracks: vi.fn(),
+  getAlbums: vi.fn(),
   deleteTrackFiles: vi.fn(),
   triggerArtistSearch: vi.fn(),
   getTags: vi.fn(),
@@ -710,6 +712,69 @@ describe("executeAction", () => {
     await executeAction(action);
 
     expect(mockLidarrClient.updateArtist).not.toHaveBeenCalled();
+  });
+
+  it("DELETE_FILES_LIDARR deletes ONLY the matched track's file, not the whole artist", async () => {
+    mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true,
+    });
+    mockLidarrClient.getArtistByMusicBrainzId.mockResolvedValue({
+      id: 5, artistName: "Test Artist", foreignArtistId: "mb-123", tags: [],
+    });
+    // The matched track (resolved from the DB by member id)
+    mockPrisma.mediaItem.findMany.mockResolvedValue([
+      { albumTitle: "Album A", title: "Song One" },
+    ]);
+    mockLidarrClient.getAlbums.mockResolvedValue([
+      { id: 10, title: "Album A" },
+      { id: 11, title: "Album B" },
+    ]);
+    mockLidarrClient.getTracks.mockResolvedValue([
+      { id: 1, albumId: 10, trackFileId: 101, title: "Song One", hasFile: true },
+      { id: 2, albumId: 10, trackFileId: 102, title: "Song Two", hasFile: true },
+      // same title on another album — must NOT be deleted (composite key wins)
+      { id: 3, albumId: 11, trackFileId: 103, title: "Song One", hasFile: true },
+    ]);
+
+    await executeAction(makeAction({
+      actionType: "DELETE_FILES_LIDARR",
+      matchedMediaItemIds: ["track-1"],
+      mediaItem: {
+        id: "item1", title: "Test Artist", parentTitle: null, year: null,
+        externalIds: [{ source: "MUSICBRAINZ", externalId: "mb-123" }],
+      },
+    }));
+
+    // Only the matched track's file is deleted; the whole-artist getTrackFiles
+    // path is never used and deleteArtist is never called.
+    expect(mockLidarrClient.deleteTrackFiles).toHaveBeenCalledWith([101]);
+    expect(mockLidarrClient.deleteArtist).not.toHaveBeenCalled();
+  });
+
+  it("DELETE_FILES_LIDARR refuses to delete when no matched track correlates to a Lidarr file", async () => {
+    mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true,
+    });
+    mockLidarrClient.getArtistByMusicBrainzId.mockResolvedValue({
+      id: 5, artistName: "Test Artist", foreignArtistId: "mb-123", tags: [],
+    });
+    // No matched track found in the DB (e.g. removed since scheduling)
+    mockPrisma.mediaItem.findMany.mockResolvedValue([]);
+    mockLidarrClient.getAlbums.mockResolvedValue([]);
+    mockLidarrClient.getTracks.mockResolvedValue([]);
+
+    await executeAction(makeAction({
+      actionType: "DELETE_FILES_LIDARR",
+      matchedMediaItemIds: [],
+      mediaItem: {
+        id: "item1", title: "Test Artist", parentTitle: null, year: null,
+        externalIds: [{ source: "MUSICBRAINZ", externalId: "mb-123" }],
+      },
+    }));
+
+    // Conservative: skip rather than wipe the whole artist.
+    expect(mockLidarrClient.deleteTrackFiles).not.toHaveBeenCalled();
+    expect(mockLidarrClient.deleteArtist).not.toHaveBeenCalled();
   });
 });
 

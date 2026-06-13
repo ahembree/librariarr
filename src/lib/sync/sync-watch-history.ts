@@ -49,7 +49,20 @@ export async function syncWatchHistory(
     `Fetching detailed watch history from "${server.name}"...`
   );
 
-  const entries = await client.getDetailedWatchHistory();
+  // A fetch failure must NOT reach the destructive full-replace below: the
+  // client throws on a hard failure so we can skip the wipe (an empty array
+  // here therefore means the server genuinely reported no plays).
+  let entries: Awaited<ReturnType<typeof client.getDetailedWatchHistory>>;
+  try {
+    entries = await client.getDetailedWatchHistory();
+  } catch (error) {
+    logger.warn(
+      "WatchHistory",
+      `Skipping watch history sync for "${server.name}" — fetch failed; leaving existing history intact`,
+      { error: String(error) }
+    );
+    return { count: 0 };
+  }
   logger.info(
     "WatchHistory",
     `Got ${entries.length} play events from "${server.name}"`

@@ -89,12 +89,33 @@ describe("applyCommonFilters", () => {
       const where = buildWhere({ fileSizeMin: "100", fileSizeMax: "200" });
       expect(where.fileSize).toEqual({ gte: BigInt(100), lte: BigInt(200) });
     });
+
+    it("ignores malformed file size without throwing (BigInt() would throw)", () => {
+      // Previously BigInt("abc")/BigInt("1.5") threw synchronously → unhandled 500.
+      expect(() => buildWhere({ fileSizeMin: "abc" })).not.toThrow();
+      expect(buildWhere({ fileSizeMin: "abc" }).fileSize).toBeUndefined();
+      expect(buildWhere({ fileSizeMax: "12.5" }).fileSize).toBeUndefined();
+      // A valid min alongside a malformed max keeps only the valid bound.
+      expect(buildWhere({ fileSizeMin: "100", fileSizeMax: "nope" }).fileSize).toEqual({ gte: BigInt(100) });
+    });
   });
 
   describe("duration range", () => {
     it("applies duration min and max", () => {
       const where = buildWhere({ durationMin: "3600000", durationMax: "7200000" });
       expect(where.duration).toEqual({ gte: 3600000, lte: 7200000 });
+    });
+
+    it("ignores non-numeric duration (NaN would 500 at query time)", () => {
+      expect(buildWhere({ durationMin: "abc" }).duration).toBeUndefined();
+    });
+  });
+
+  describe("malformed date ranges", () => {
+    it("ignores invalid date range params instead of producing an Invalid Date clause", () => {
+      expect(buildWhere({ lastPlayedAtMin: "not-a-date" }).lastPlayedAt).toBeUndefined();
+      expect(buildWhere({ addedAtMax: "garbage" }).addedAt).toBeUndefined();
+      expect(buildWhere({ originallyAvailableAtMin: "xyz" }).originallyAvailableAt).toBeUndefined();
     });
   });
 
