@@ -19,9 +19,9 @@ Scaffold a complete feature for: $ARGUMENTS
   - `@@index([userId])` for user-scoped queries
 - Add the relation field to the `User` model in schema.prisma
 - Create migration file at `prisma/migrations/NNNN_<name>/migration.sql`
-- Run `npm run docker:dev:db:push` to apply
-- Mark migration as applied: `DATABASE_URL="postgresql://librariarr:librariarr@localhost:5433/librariarr" npx prisma migrate resolve --applied NNNN_<name>`
-- Regenerate client: `npx prisma generate`
+- Run `pnpm docker:dev:db:push` to apply
+- Mark migration as applied: `DATABASE_URL="postgresql://librariarr:librariarr@localhost:5432/librariarr" pnpm exec prisma migrate resolve --applied NNNN_<name>`
+- Regenerate client: `pnpm exec prisma generate`
 
 ### 2. Validation Layer
 - Add create schema to `src/lib/validation.ts` using `zod/v4`
@@ -78,6 +78,6 @@ Standard test cases: 401 unauthorized, validation errors, CRUD operations, cross
 - Add sidebar entry in `docs/astro.config.mjs` if new page
 
 ### 8. Verification
-- `npm run lint` passes
-- `npx vitest run tests/integration/<category>/<name>.test.ts` passes
-- `npm run build` succeeds (catches type errors)
+- `pnpm lint` passes
+- `pnpm exec vitest run tests/integration/<category>/<name>.test.ts` passes
+- `pnpm build` succeeds (catches type errors)

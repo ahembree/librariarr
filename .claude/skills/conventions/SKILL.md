@@ -62,15 +62,15 @@ Every route handler must:
 
 - Conventional commits: `type(scope): description`
 - Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `style`, `perf`
-- Pre-commit hook: `npx next lint --quiet`
+- Pre-commit hook: `pnpm exec eslint --quiet`
 - Commit-msg hook: commitlint (`@commitlint/config-conventional`)
 
 ## Database Conventions
 
 - Schema changes need migration files for production (`prisma migrate deploy` only reads migration files)
-- Dev iteration: `npm run docker:dev:db:push` (no migration files needed)
+- Dev iteration: `pnpm docker:dev:db:push` (no migration files needed)
 - Migration naming: sequential `0001_init`, `0002_description`, etc.
-- After schema changes: `npx prisma generate` to regenerate client
+- After schema changes: `pnpm exec prisma generate` to regenerate client
 
 ## Key File Locations
 

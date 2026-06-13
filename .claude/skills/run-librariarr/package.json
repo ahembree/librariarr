@@ -4,6 +4,6 @@
   "type": "module",
   "description": "Headless driver deps for the /run-librariarr skill. Isolated from the main app's package.json — install with `pnpm install --ignore-workspace`.",
   "dependencies": {
-    "playwright": "1.49.0"
+    "playwright": "1.60.0"
   }
 }

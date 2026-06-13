@@ -50,9 +50,15 @@ ALTER TABLE "TableName" ADD CONSTRAINT "TableName_columnName_key" UNIQUE ("colum
 ```
 
 **Create new table:**
+
+The project's models use `id String @id @default(cuid())` — cuids are generated
+app-side by Prisma, so the `id` column has NO database-level default (do NOT use
+`gen_random_uuid()`; no existing migration does). This matches every table in
+`0001_init`.
+
 ```sql
 CREATE TABLE "TableName" (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid(),
+    "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -86,18 +92,18 @@ ALTER TABLE "TableName" DROP COLUMN "columnName";
 3. Create `prisma/migrations/NNNN_$ARGUMENTS/migration.sql` with the SQL
 4. Push schema to dev DB:
    ```bash
-   npm run docker:dev:db:push
+   pnpm docker:dev:db:push
    ```
 5. Mark migration as already applied on dev DB:
    ```bash
-   DATABASE_URL="postgresql://librariarr:librariarr@localhost:5433/librariarr" npx prisma migrate resolve --applied NNNN_$ARGUMENTS
+   DATABASE_URL="postgresql://librariarr:librariarr@localhost:5432/librariarr" pnpm exec prisma migrate resolve --applied NNNN_$ARGUMENTS
    ```
 6. Verify migration status:
    ```bash
-   DATABASE_URL="postgresql://librariarr:librariarr@localhost:5433/librariarr" npx prisma migrate status
+   DATABASE_URL="postgresql://librariarr:librariarr@localhost:5432/librariarr" pnpm exec prisma migrate status
    ```
    Should show "Database schema is up to date!"
-7. Regenerate Prisma client: `npx prisma generate`
+7. Regenerate Prisma client: `pnpm exec prisma generate`
 
 ## Post-Migration Checklist
 - If adding a new table: add `deleteMany()` call to `tests/setup/test-db.ts` `cleanDatabase()` in correct dependency order
