@@ -101,6 +101,7 @@ These fields require configured [Sonarr](/docs/integrations/sonarr/), [Radarr](/
 |-------|-------------|
 | `arrTag` | Tags in *arr instance |
 | `arrQualityProfile` | Quality profile name |
+| `arrCustomFormatScore` | Custom format score of the movie's current file (Radarr / movies only) |
 | `arrMonitored` | Whether monitored in *arr |
 | `arrRating` | Rating in *arr |
 
@@ -186,13 +187,17 @@ What the conversion does:
 
 After conversion, you're redirected to the new rule set's editor so you can pick an action type, set the delay, configure tags, and re-evaluate.
 
+### Unsaved query drafts
+
+While you build a query, it's automatically kept for the current browser tab, so if you navigate away and come back the in-progress query is still there — no need to rebuild it. This is separate from **Save** (which stores a named query in the database): the draft lives only in your browser, isn't shared between tabs, and is cleared when you close the tab. When a draft is restored you'll see a short notice with **Discard** (start fresh) and a dismiss option. Use **New** at any time to clear the builder and the draft.
+
 ### Running Actions Directly from the Query Page
 
 For one-off cleanups you don't want to schedule, you can run a lifecycle action on query results **without** creating a rule set:
 
 1. Pick the Arr instance(s) for the media types you want to act on in the query toolbar (Radarr for movies, Sonarr for series, Lidarr for music).
-2. Run the query, then tick the checkbox on each result you want to act on (in table or card view). A select-all checkbox is available in the table header.
-3. In the **Actions** bar above the results — always visible but disabled until you select at least one item — choose an action (e.g. *Delete from Radarr*, *Unmonitor & Delete Files*, *Change Quality Profile*), optionally add/remove Arr tags, then **Run action** and confirm.
+2. Run the query, then tick the checkbox on each result you want to act on (in table or card view). A select-all checkbox is available in the table header, and a **Select all / Deselect all** toggle sits above the results in card view.
+3. In the **Actions** bar above the results — always visible but disabled until you select at least one item — choose an action (e.g. *Delete from Radarr*, *Unmonitor & Delete Files*, *Change Quality Profile*), set any action-specific options (the target quality profile and **Search for upgrade** for a profile change, import exclusion / **Search after** for deletions), optionally add/remove Arr tags, then **Run action** and confirm.
 
 Notes:
 

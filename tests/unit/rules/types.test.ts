@@ -63,15 +63,15 @@ describe("isExternalField", () => {
 });
 
 describe("ARR_FIELDS", () => {
-  it("contains exactly 26 arr fields", () => {
-    expect(ARR_FIELDS).toHaveLength(26);
+  it("contains exactly 27 arr fields", () => {
+    expect(ARR_FIELDS).toHaveLength(27);
     expect(ARR_FIELDS).toEqual(expect.arrayContaining([
       "foundInArr",
       "arrTag", "arrQualityProfile", "arrMonitored", "arrRating",
       "arrTmdbRating", "arrRtCriticRating",
       "arrDateAdded", "arrPath", "arrSizeOnDisk", "arrOriginalLanguage",
       "arrReleaseDate", "arrInCinemasDate", "arrRuntime", "arrQualityName",
-      "arrQualityCutoffMet", "arrDownloadDate",
+      "arrQualityCutoffMet", "arrCustomFormatScore", "arrDownloadDate",
       "arrFirstAired", "arrSeasonCount", "arrEpisodeCount", "arrStatus",
       "arrEnded", "arrSeriesType", "arrHasUnaired",
       "arrMonitoredSeasonCount", "arrMonitoredEpisodeCount",

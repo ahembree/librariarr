@@ -21,7 +21,7 @@ function makeArrMeta(overrides?: Partial<ArrMetadata>): ArrMetadata {
     rating: null, tmdbRating: null, rtCriticRating: null,
     dateAdded: null, path: null, sizeOnDisk: null, originalLanguage: null,
     releaseDate: null, inCinemasDate: null, runtime: null,
-    qualityName: null, qualityCutoffMet: null, downloadDate: null,
+    qualityName: null, qualityCutoffMet: null, customFormatScore: null, downloadDate: null,
     firstAired: null, seasonCount: null, episodeCount: null,
     status: null, ended: null, seriesType: null, hasUnaired: null,
     monitoredSeasonCount: null, monitoredEpisodeCount: null,
@@ -714,6 +714,42 @@ describe("arrQualityCutoffMet (boolean, nullable)", () => {
 
   it("returns false when null", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrQualityCutoffMet", operator: "equals", value: "true" })])];
+    expect(matched(movieItems, rules, "MOVIE", { [tmdbId]: makeArrMeta() }).get("m1")).toHaveLength(0);
+  });
+});
+
+describe("arrCustomFormatScore (number, nullable)", () => {
+  it("greaterThanOrEqual matches when the score meets the threshold", () => {
+    const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ customFormatScore: 150 }) };
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrCustomFormatScore", operator: "greaterThanOrEqual", value: 100 })])];
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+  });
+
+  it("lessThan matches negative scores below the threshold", () => {
+    const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ customFormatScore: -50 }) };
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrCustomFormatScore", operator: "lessThan", value: 0 })])];
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+  });
+
+  it("equals matches a zero score (no `|| null` truthiness bug)", () => {
+    const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ customFormatScore: 0 }) };
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrCustomFormatScore", operator: "equals", value: 0 })])];
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+  });
+
+  it("between matches a score inside the range", () => {
+    const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ customFormatScore: 75 }) };
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrCustomFormatScore", operator: "between", value: "50,100" })])];
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+  });
+
+  it("isNull matches when the movie has no file (null score)", () => {
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrCustomFormatScore", operator: "isNull", value: "" })])];
+    expect(matched(movieItems, rules, "MOVIE", { [tmdbId]: makeArrMeta() }).get("m1")!.length).toBeGreaterThan(0);
+  });
+
+  it("comparison returns no match when the score is null", () => {
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrCustomFormatScore", operator: "greaterThan", value: 0 })])];
     expect(matched(movieItems, rules, "MOVIE", { [tmdbId]: makeArrMeta() }).get("m1")).toHaveLength(0);
   });
 });

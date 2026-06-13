@@ -157,6 +157,50 @@ describe("POST /api/query/actions", () => {
     await expectJson(response, 400);
   });
 
+  it("executes a quality profile change with search-after and records both fields", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+    const movie = await createTestMediaItem(library.id, { type: "MOVIE", title: "Dune" });
+    await createTestExternalId(movie.id, "TMDB", "12345");
+    const radarr = await createTestRadarrInstance(user.id);
+
+    mockedExecuteQuery.mockResolvedValue(queryResult([{ id: movie.id, type: "MOVIE", title: "Dune", parentTitle: null }]));
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: {
+        query: BASE_QUERY,
+        mediaItemIds: [movie.id],
+        actionType: "CHANGE_QUALITY_PROFILE_RADARR",
+        arrInstanceId: radarr.id,
+        targetQualityProfileId: 7,
+        searchAfterAction: true,
+      },
+    });
+
+    const body = await expectJson<{ executed: number; failed: number; skipped: number }>(response, 200);
+    expect(body).toMatchObject({ executed: 1, failed: 0, skipped: 0 });
+    expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
+    expect(mockedExecuteAction.mock.calls[0][0]).toMatchObject({
+      actionType: "CHANGE_QUALITY_PROFILE_RADARR",
+      targetQualityProfileId: 7,
+      searchAfterAction: true,
+    });
+
+    const prisma = getTestPrisma();
+    const actions = await prisma.lifecycleAction.findMany({ where: { userId: user.id } });
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      status: "COMPLETED",
+      ruleSetName: "Ad-hoc query action",
+      actionType: "CHANGE_QUALITY_PROFILE_RADARR",
+      targetQualityProfileId: 7,
+      searchAfterAction: true,
+      deletedBytes: null,
+    });
+  });
+
   it("skips items no longer in the live query result", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });

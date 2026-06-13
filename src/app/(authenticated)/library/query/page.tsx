@@ -55,6 +55,8 @@ import {
   AlertTriangle,
   ArrowRightLeft,
   Check,
+  History,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { QueryBuilder, queryBuilderConfig, countAllRules, validateAllRules } from "@/components/query-builder";
@@ -150,6 +152,61 @@ function makeDefaultGroup(): QueryGroup {
     ],
     groups: [],
   };
+}
+
+// ── In-progress query draft ─────────────────────────────────────
+// Auto-persisted to sessionStorage so an unsaved query survives accidentally
+// navigating away and coming back (tab-scoped, cleared when the tab closes).
+// Distinct from "Saved queries", which are persisted to the database.
+const QUERY_DRAFT_KEY = "query-builder-draft";
+
+/**
+ * Auto-saved, in-progress query. Wraps the same `QueryDefinition` the engine
+ * runs (so there is no parallel field list to keep in sync) plus the id of the
+ * saved query being edited, if any.
+ */
+interface QueryDraft {
+  definition: QueryDefinition;
+  activeQueryId: string | null;
+}
+
+/** A pristine query definition — the empty/default builder state. */
+function makeEmptyDefinition(): QueryDefinition {
+  return {
+    mediaTypes: [],
+    serverIds: [],
+    groups: [makeDefaultGroup()],
+    sortBy: "title",
+    sortOrder: "asc",
+    includeEpisodes: false,
+  };
+}
+
+/** True if any rule anywhere in the tree has a non-empty value. */
+function anyRuleConfigured(groups: QueryGroup[]): boolean {
+  return groups.some(
+    (g) =>
+      g.rules.some((r) => String(r.value ?? "").trim() !== "") ||
+      anyRuleConfigured(g.groups ?? []),
+  );
+}
+
+/**
+ * Whether a draft holds anything worth restoring. A pristine builder (no media
+ * types, default scope/sort, and the single empty starter rule) is treated as
+ * empty so we neither persist nor advertise a restore for it.
+ */
+function queryHasContent(def: QueryDefinition, activeQueryId: string | null): boolean {
+  return (
+    (def.mediaTypes?.length ?? 0) > 0 ||
+    (def.serverIds?.length ?? 0) > 0 ||
+    Boolean(def.includeEpisodes) ||
+    def.sortBy !== "title" ||
+    def.sortOrder !== "asc" ||
+    Object.values(def.arrServerIds ?? {}).some(Boolean) ||
+    Boolean(activeQueryId) ||
+    anyRuleConfigured(def.groups)
+  );
 }
 
 function formatResolution(res: string | null) {
@@ -302,6 +359,10 @@ export default function QueryPage() {
   const [activeQueryId, setActiveQueryId] = useState<string | null>(null);
   const [saveName, setSaveName] = useState("");
   const [savePopoverOpen, setSavePopoverOpen] = useState(false);
+
+  // In-progress query draft restored from a previous visit (see QUERY_DRAFT_KEY).
+  const [draftRestored, setDraftRestored] = useState(false);
+  const draftReadyRef = useRef(false);
 
   // Convert-to-lifecycle-rule dialog
   const [convertDialogOpen, setConvertDialogOpen] = useState(false);
@@ -699,6 +760,20 @@ export default function QueryPage() {
     };
   }, [mediaTypes, selectedServerIds, groups, sortBy, sortOrder, includeEpisodes, arrServerIds, seerrInstanceId]);
 
+  // Inverse of buildDefinition: load a QueryDefinition into the builder. Shared
+  // by saved-query loads, draft restore, and New, so the field list lives once.
+  const applyQueryDefinition = useCallback((def: QueryDefinition) => {
+    setMediaTypes(def.mediaTypes ?? []);
+    setSelectedServerIds(def.serverIds ?? []);
+    setGroups(def.groups ?? [makeDefaultGroup()]);
+    setSortBy(def.sortBy ?? "title");
+    setSortOrder(def.sortOrder === "desc" ? "desc" : "asc");
+    setIncludeEpisodes(def.includeEpisodes ?? false);
+    setArrServerIds(def.arrServerIds ?? {});
+    setHasRun(false);
+    setResults([]);
+  }, []);
+
   // The definition that produced the currently displayed results. Ad-hoc actions
   // must validate against THIS (not the live builder state, which the user may
   // have edited without re-running), so the selection matches what's on screen.
@@ -730,6 +805,42 @@ export default function QueryPage() {
     [buildDefinition],
   );
 
+  // Persist the in-progress query to sessionStorage so it survives navigating
+  // away and back. The first run restores any existing draft (without
+  // re-persisting); every later run mirrors the live builder into the draft,
+  // clearing it once the builder is back to an empty/default state.
+  useEffect(() => {
+    if (!draftReadyRef.current) {
+      draftReadyRef.current = true;
+      try {
+        const raw = sessionStorage.getItem(QUERY_DRAFT_KEY);
+        if (raw) {
+          const d = JSON.parse(raw) as Partial<QueryDraft>;
+          const def = d?.definition;
+          if (def && Array.isArray(def.groups) && def.groups.length > 0) {
+            applyQueryDefinition(def);
+            if (d.activeQueryId) setActiveQueryId(d.activeQueryId);
+            setDraftRestored(true);
+          }
+        }
+      } catch {
+        /* ignore malformed draft */
+      }
+      return;
+    }
+    const definition = buildDefinition();
+    try {
+      if (queryHasContent(definition, activeQueryId)) {
+        const draft: QueryDraft = { definition, activeQueryId };
+        sessionStorage.setItem(QUERY_DRAFT_KEY, JSON.stringify(draft));
+      } else {
+        sessionStorage.removeItem(QUERY_DRAFT_KEY);
+      }
+    } catch {
+      /* storage unavailable (private mode / quota) */
+    }
+  }, [buildDefinition, applyQueryDefinition, activeQueryId]);
+
   // ── Selection + ad-hoc action handlers ──
 
   const toggleSelect = useCallback((id: string) => {
@@ -741,6 +852,22 @@ export default function QueryPage() {
   }, []);
 
   const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+
+  // Whole-result-set selection state, shared by the table header checkbox and
+  // the card-view "Select all" control.
+  const { allSelected, someSelected } = useMemo(() => {
+    const all = results.length > 0 && results.every((r) => selectedIds.has(r.id));
+    return { allSelected: all, someSelected: selectedIds.size > 0 && !all };
+  }, [results, selectedIds]);
+
+  const toggleSelectAll = useCallback(() => {
+    // Re-derive from the latest selection inside the updater so the toggle is
+    // correct regardless of when it was last rendered.
+    setSelectedIds((prev) => {
+      const all = results.length > 0 && results.every((r) => prev.has(r.id));
+      return all ? new Set() : new Set(results.map((r) => r.id));
+    });
+  }, [results]);
 
   const selectionTypeCounts = useMemo(() => {
     const counts = { MOVIE: 0, SERIES: 0, MUSIC: 0 };
@@ -791,8 +918,6 @@ export default function QueryPage() {
 
   // Table columns with a leading selection checkbox column.
   const tableColumns = useMemo<QueryColumn[]>(() => {
-    const allSelected = results.length > 0 && results.every((r) => selectedIds.has(r.id));
-    const someSelected = selectedIds.size > 0 && !allSelected;
     const selectionColumn: QueryColumn = {
       id: "__select",
       group: "core",
@@ -805,9 +930,7 @@ export default function QueryPage() {
         <Checkbox
           checked={allSelected ? true : someSelected ? "indeterminate" : false}
           onClick={(e) => e.stopPropagation()}
-          onCheckedChange={() =>
-            setSelectedIds(allSelected ? new Set() : new Set(results.map((r) => r.id)))
-          }
+          onCheckedChange={toggleSelectAll}
           aria-label="Select all results"
         />
       ),
@@ -821,23 +944,14 @@ export default function QueryPage() {
       ),
     };
     return [selectionColumn, ...activeColumns];
-  }, [activeColumns, results, selectedIds, toggleSelect]);
+  }, [activeColumns, selectedIds, toggleSelect, allSelected, someSelected, toggleSelectAll]);
 
   // ── Save/Load/Delete handlers ──
 
   const handleSave = async () => {
     const name = saveName.trim();
     if (!name) return;
-    const cleanedArrServerIds = Object.fromEntries(
-      Object.entries(arrServerIds).filter(([, v]) => v),
-    );
-    const definition: QueryDefinition = {
-      mediaTypes: mediaTypes as QueryDefinition["mediaTypes"],
-      serverIds: selectedServerIds,
-      groups, sortBy, sortOrder, includeEpisodes,
-      ...(Object.keys(cleanedArrServerIds).length > 0 && { arrServerIds: cleanedArrServerIds }),
-      ...(seerrInstanceId && { seerrInstanceId }),
-    };
+    const definition = buildDefinition();
     try {
       if (activeQueryId) {
         const resp = await fetch(`/api/saved-queries/${activeQueryId}`, {
@@ -874,15 +988,9 @@ export default function QueryPage() {
     const query = savedQueries.find((q) => q.id === queryId);
     if (!query) return;
     setActiveQueryId(query.id);
-    setMediaTypes(query.query.mediaTypes ?? []);
-    setSelectedServerIds(query.query.serverIds ?? []);
-    setGroups(query.query.groups ?? [makeDefaultGroup()]);
-    setSortBy(query.query.sortBy ?? "title");
-    setSortOrder(query.query.sortOrder ?? "asc");
-    setIncludeEpisodes(query.query.includeEpisodes ?? false);
-    setArrServerIds(query.query.arrServerIds ?? {});
-    setHasRun(false);
-    setResults([]);
+    applyQueryDefinition(query.query);
+    // Explicitly loading a query supersedes any restored-draft notice.
+    setDraftRestored(false);
   };
 
   const handleDelete = async () => {
@@ -898,10 +1006,9 @@ export default function QueryPage() {
 
   const handleNew = () => {
     setActiveQueryId(null);
-    setMediaTypes([]); setSelectedServerIds([]); setGroups([makeDefaultGroup()]);
-    setSortBy("title"); setSortOrder("asc"); setIncludeEpisodes(false);
-    setArrServerIds({});
-    setHasRun(false); setResults([]);
+    applyQueryDefinition(makeEmptyDefinition());
+    // Reset clears the draft via the persistence effect; hide the restore notice.
+    setDraftRestored(false);
   };
 
   const toggleMediaType = (type: string) => {
@@ -1076,6 +1183,30 @@ export default function QueryPage() {
           <ArrowRightLeft className="mr-1.5 h-3.5 w-3.5" />Convert to Lifecycle Rule
         </Button>
       </div>
+
+      {/* Restored draft notice */}
+      {draftRestored && (
+        <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+          <History className="h-4 w-4 shrink-0 text-primary" />
+          <span className="text-muted-foreground">
+            Restored your unsaved query from this session.
+          </span>
+          <div className="ml-auto flex items-center gap-1">
+            <Button variant="ghost" size="sm" className="h-7" onClick={handleNew}>
+              Discard
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() => setDraftRestored(false)}
+              aria-label="Dismiss"
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Query Scope */}
       <div className="rounded-lg border bg-card/40 p-4">
@@ -1375,9 +1506,21 @@ export default function QueryPage() {
       {/* Results */}
       {hasRun && (
         <div className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            {loading ? "Searching..." : `${results.length} result${results.length !== 1 ? "s" : ""} found`}
-          </p>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              {loading ? "Searching..." : `${results.length} result${results.length !== 1 ? "s" : ""} found`}
+            </p>
+            {viewMode === "cards" && !loading && results.length > 0 && (
+              <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-muted-foreground">
+                <Checkbox
+                  checked={allSelected ? true : someSelected ? "indeterminate" : false}
+                  onCheckedChange={toggleSelectAll}
+                  aria-label="Select all results"
+                />
+                {allSelected ? "Deselect all" : "Select all"}
+              </label>
+            )}
+          </div>
 
           {results.length > 0 && (
             <QueryActionBar

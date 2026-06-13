@@ -309,12 +309,14 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
     case "arrRuntime":
     case "arrSeasonCount":
     case "arrEpisodeCount":
+    case "arrCustomFormatScore":
     case "arrMonitoredSeasonCount":
     case "arrMonitoredEpisodeCount": {
       const metaVal =
         field === "arrRuntime" ? meta.runtime :
         field === "arrSeasonCount" ? meta.seasonCount :
         field === "arrEpisodeCount" ? meta.episodeCount :
+        field === "arrCustomFormatScore" ? meta.customFormatScore :
         field === "arrMonitoredSeasonCount" ? meta.monitoredSeasonCount :
         meta.monitoredEpisodeCount;
       if (metaVal === null) {
@@ -330,6 +332,11 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
         case "greaterThanOrEqual": result = metaVal >= numVal; break;
         case "lessThan": result = metaVal < numVal; break;
         case "lessThanOrEqual": result = metaVal <= numVal; break;
+        case "between": {
+          const [minStr, maxStr] = String(value).split(",");
+          result = metaVal >= Number(minStr) && metaVal <= Number(maxStr);
+          break;
+        }
         default: return false;
       }
       break;

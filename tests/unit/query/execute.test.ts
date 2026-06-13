@@ -45,7 +45,7 @@ function makeArrMeta(overrides?: Partial<ArrMetadata>): ArrMetadata {
     rating: null, tmdbRating: null, rtCriticRating: null,
     dateAdded: null, path: null, sizeOnDisk: null, originalLanguage: null,
     releaseDate: null, inCinemasDate: null, runtime: null,
-    qualityName: null, qualityCutoffMet: null, downloadDate: null,
+    qualityName: null, qualityCutoffMet: null, customFormatScore: null, downloadDate: null,
     firstAired: null, seasonCount: null, episodeCount: null,
     status: null, ended: null, seriesType: null, hasUnaired: null,
     monitoredSeasonCount: null, monitoredEpisodeCount: null,
@@ -351,6 +351,50 @@ describe("evaluateQueryArrRule", () => {
       expect(evaluateQueryArrRule(
         { id: "r1", field: "arrQualityCutoffMet", operator: "equals", value: "true", condition: "AND" },
         makeArrMeta({ qualityCutoffMet: null }),
+      )).toBe(false);
+    });
+  });
+
+  describe("arrCustomFormatScore (number)", () => {
+    it("greaterThanOrEqual matches when the score meets the threshold", () => {
+      expect(evaluateQueryArrRule(
+        { id: "r1", field: "arrCustomFormatScore", operator: "greaterThanOrEqual", value: 100, condition: "AND" },
+        makeArrMeta({ customFormatScore: 120 }),
+      )).toBe(true);
+    });
+
+    it("lessThan matches a negative score", () => {
+      expect(evaluateQueryArrRule(
+        { id: "r1", field: "arrCustomFormatScore", operator: "lessThan", value: 0, condition: "AND" },
+        makeArrMeta({ customFormatScore: -25 }),
+      )).toBe(true);
+    });
+
+    it("isNull matches a movie with no file", () => {
+      expect(evaluateQueryArrRule(
+        { id: "r1", field: "arrCustomFormatScore", operator: "isNull", value: "", condition: "AND" },
+        makeArrMeta({ customFormatScore: null }),
+      )).toBe(true);
+    });
+
+    it("between matches a score inside the range (parity with the rule engine)", () => {
+      expect(evaluateQueryArrRule(
+        { id: "r1", field: "arrCustomFormatScore", operator: "between", value: "50,100", condition: "AND" },
+        makeArrMeta({ customFormatScore: 75 }),
+      )).toBe(true);
+    });
+
+    it("between excludes a score outside the range", () => {
+      expect(evaluateQueryArrRule(
+        { id: "r1", field: "arrCustomFormatScore", operator: "between", value: "50,100", condition: "AND" },
+        makeArrMeta({ customFormatScore: 120 }),
+      )).toBe(false);
+    });
+
+    it("comparison returns false when the score is null", () => {
+      expect(evaluateQueryArrRule(
+        { id: "r1", field: "arrCustomFormatScore", operator: "greaterThan", value: 0, condition: "AND" },
+        makeArrMeta({ customFormatScore: null }),
       )).toBe(false);
     });
   });
