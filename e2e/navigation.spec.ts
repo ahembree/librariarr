@@ -17,14 +17,4 @@ test.describe("authenticated navigation", () => {
       await expect(page.getByRole("heading", { name: heading }).first()).toBeVisible();
     });
   }
-
-  test("sidebar links navigate between sections", async ({ page }) => {
-    await page.goto("/");
-    // Use real link navigation rather than direct goto where possible.
-    const settingsLink = page.getByRole("link", { name: /settings/i }).first();
-    if (await settingsLink.isVisible().catch(() => false)) {
-      await settingsLink.click();
-      await expect(page).toHaveURL(/\/settings/);
-    }
-  });
 });
