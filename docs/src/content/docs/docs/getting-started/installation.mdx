@@ -121,6 +121,23 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
 | `COOKIE_SECURE` | No | `false` | Set the `Secure` attribute on the session cookie (browser only sends it over HTTPS). **Strongly recommended** (`COOKIE_SECURE=true`) for any deployment fronted by HTTPS — prevents the cookie from being transmitted on accidental HTTP downgrades. Leave unset/false for direct HTTP access (LAN, `http://host:3000` without a TLS-terminating proxy) — otherwise the browser will refuse to send the cookie and you won't stay logged in. |
 | `TRUST_PROXY_HEADERS` | No | `true` | Whether to trust `X-Forwarded-For` / `X-Real-IP` headers when computing rate-limit buckets. Leave as `true` when behind a reverse proxy. Set to `false` if Librariarr is exposed directly to the internet — preventing attackers from rotating `X-Forwarded-For` to bypass per-IP rate limits (at the cost of a single shared rate-limit bucket for all clients). |
 
+## Image Tags
+
+Librariarr images are published to [Docker Hub](https://hub.docker.com/r/ahembree/librariarr):
+
+| Tag | Description |
+|-----|-------------|
+| `latest` | The most recent stable release. Recommended for most users. |
+| `X.Y.Z`, `X.Y`, `X` | Specific [release](https://github.com/ahembree/librariarr/releases) versions. Pin to one of these for reproducible deployments. |
+| `develop` | Rolling build from the `develop` branch — the latest pre-release changes. Handy for testing upcoming features, but expect occasional breakage. |
+| `develop-<sha>` | Immutable per-commit `develop` build, useful for pinning or rolling back a development deployment. |
+
+The `latest` and version tags are published only from tagged releases on `main`. The `develop` tags are built from the separate `develop` branch and never overwrite a stable release, so switching back is just a matter of changing the tag.
+
+<Aside type="caution">
+  `develop` images may contain unreleased, unstable changes and database schema migrations that haven't shipped in a release. Take a [backup](/docs/features/backup-restore/) before trying one, and avoid `develop` for production deployments.
+</Aside>
+
 ## Persistent Data
 
 All persistent data is stored under `/config` inside the container:
