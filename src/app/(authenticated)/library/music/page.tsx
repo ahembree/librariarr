@@ -191,15 +191,21 @@ export default function MusicPage() {
     setScrollElement(main);
   }, []);
 
+  // Re-measure once the grid mounts behind the loading skeleton (the ref is
+  // null on the first pass), so the virtualized rows aren't mis-positioned.
   useLayoutEffect(() => {
     if (gridContainerRef.current) {
       setScrollMargin(gridContainerRef.current.offsetTop);
     }
-  }, []);
+  }, [loading, artistList.length]);
 
   useEffect(() => {
-    const stored = localStorage.getItem("music-view-mode") as "cards" | "table" | null;
-    if (stored) setViewMode(stored);
+    try {
+      const stored = localStorage.getItem("music-view-mode") as "cards" | "table" | null;
+      if (stored) setViewMode(stored);
+    } catch {
+      // localStorage unavailable (private mode) — keep the default view.
+    }
   }, []);
 
   const handleViewModeChange = (mode: "cards" | "table") => {

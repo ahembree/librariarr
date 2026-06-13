@@ -757,7 +757,12 @@ export function LifecycleRulePage({
       snapshot.actionType !== actionType ||
       snapshot.actionDelayDays !== actionDelayDays ||
       snapshot.arrInstanceId !== arrInstanceId ||
-      snapshot.targetQualityProfileId !== targetQualityProfileId ||
+      // Compare the EFFECTIVE persisted profile (null for non-quality actions,
+      // matching what the save body writes) so a leftover targetQualityProfileId
+      // from a since-changed action type doesn't spuriously mark the form dirty
+      // after a reload reads null from the DB.
+      (isQualityProfileChangeAction(snapshot.actionType) ? snapshot.targetQualityProfileId : null) !==
+        (isQualityProfileChangeAction(actionType) ? targetQualityProfileId : null) ||
       snapshot.addImportExclusion !== addImportExclusion ||
       snapshot.searchAfterAction !== searchAfterAction ||
       snapshot.addArrTags !== JSON.stringify([...addArrTags].sort()) ||

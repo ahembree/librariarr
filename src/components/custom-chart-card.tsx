@@ -402,13 +402,25 @@ function applyTopN(sorted: AggregatedEntry[], topN: number | null): AggregatedEn
   const rest = sorted.slice(topN);
   const otherCount = rest.reduce((sum, e) => sum + e.count, 0);
   if (otherCount > 0) {
-    top.push({
+    const folded = {
       label: "Other",
       count: otherCount,
       movies: rest.reduce((sum, e) => sum + e.movies, 0),
       series: rest.reduce((sum, e) => sum + e.series, 0),
       music: rest.reduce((sum, e) => sum + e.music, 0),
-    });
+    };
+    // A genuine value literally named "Other" (e.g. the genre/resolution bin
+    // "Other") may already be in the head — merge into it rather than pushing a
+    // duplicate "Other" key that would double-render and toggle-hide together.
+    const existing = top.find((e) => e.label === "Other");
+    if (existing) {
+      existing.count += folded.count;
+      existing.movies += folded.movies;
+      existing.series += folded.series;
+      existing.music += folded.music;
+    } else {
+      top.push(folded);
+    }
   }
   return top;
 }

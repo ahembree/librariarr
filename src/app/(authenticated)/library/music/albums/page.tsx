@@ -174,11 +174,13 @@ export default function AllAlbumsPage() {
     scrollElementRef.current = document.querySelector<HTMLElement>("main");
   }, []);
 
+  // Re-measure once the grid mounts behind the loading skeleton (the ref is
+  // null on the first pass), so the virtualized rows aren't mis-positioned.
   useLayoutEffect(() => {
     if (gridContainerRef.current) {
       setScrollMargin(gridContainerRef.current.offsetTop);
     }
-  }, []);
+  }, [loading, albums.length]);
 
   // Token guards against a stale slow response landing after a quick
   // sort/filter/server flip and showing the wrong items for the selection.
@@ -389,8 +391,21 @@ export default function AllAlbumsPage() {
                             servers={showServers && servers.length > 1 ? album.servers : undefined}
                             hoverContent={
                               <MediaHoverPopover
+                                imageUrl={`/api/media/${album.mediaItemId}/image?type=season`}
+                                imageAspect="square"
                                 data={{
+                                  // Keep the field set identical to the table
+                                  // view's popover (style-guide convention).
                                   title: album.albumTitle,
+                                  year: album.year,
+                                  summary: album.summary,
+                                  contentRating: album.contentRating,
+                                  rating: album.rating,
+                                  ratingImage: album.ratingImage,
+                                  audienceRating: album.audienceRating,
+                                  audienceRatingImage: album.audienceRatingImage,
+                                  genres: album.genres,
+                                  studio: album.studio,
                                   trackCount: album.trackCount,
                                   audioCodecCounts: album.audioCodecCounts,
                                   fileSize: album.totalSize,

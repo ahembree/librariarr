@@ -805,7 +805,9 @@ export default function LifecycleExceptionsPage() {
                 value={editReason}
                 onChange={(e) => setEditReason(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") handleEditReason();
+                  // Guard against overlapping PATCH requests from rapid Enter
+                  // presses (the Save button is already disabled while saving).
+                  if (e.key === "Enter" && !savingReason) handleEditReason();
                 }}
                 autoFocus
               />

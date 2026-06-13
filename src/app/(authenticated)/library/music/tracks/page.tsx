@@ -121,11 +121,13 @@ export default function AllTracksPage() {
     scrollElementRef.current = document.querySelector<HTMLElement>("main");
   }, []);
 
+  // Re-measure once the grid mounts behind the loading skeleton (the ref is
+  // null on the first pass), so the virtualized rows aren't mis-positioned.
   useLayoutEffect(() => {
     if (gridContainerRef.current) {
       setScrollMargin(gridContainerRef.current.offsetTop);
     }
-  }, []);
+  }, [loading, items.length]);
 
   const rowCount = useMemo(
     () => Math.ceil(items.length / actualColumns),

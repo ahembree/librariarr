@@ -455,6 +455,9 @@ export default function HistoryPage() {
   // Token guards against a stale slow response landing after a quick
   // filter/page flip and overwriting the current result set.
   const reqToken = useRef(0);
+  // Separate token for the detail panel so rapidly clicking two rows doesn't
+  // let the slower /api/media/:id response win and show the wrong item.
+  const detailReqToken = useRef(0);
 
   const fetchHistory = useCallback(async (fetchPage: number) => {
     const token = ++reqToken.current;
@@ -556,12 +559,15 @@ export default function HistoryPage() {
   // ── Detail panel ──────────────────────────────────────────────
 
   const openDetailPanel = useCallback(async (historyItem: WatchHistoryItem) => {
+    const token = ++detailReqToken.current;
     const mediaType = historyItem.mediaItem.type as "MOVIE" | "SERIES" | "MUSIC";
     setSelectedItemType(mediaType);
     setSelectedDetailUrl(getItemDetailUrl(historyItem));
     setLoadingDetail(true);
     try {
       const response = await fetch(`/api/media/${historyItem.mediaItem.id}`);
+      // Ignore a stale response superseded by a newer click.
+      if (token !== detailReqToken.current) return;
       if (response.ok) {
         const data = await response.json();
         setSelectedItem(data.item ?? data);
@@ -569,7 +575,7 @@ export default function HistoryPage() {
     } catch (error) {
       console.error("Failed to fetch media item:", error);
     } finally {
-      setLoadingDetail(false);
+      if (token === detailReqToken.current) setLoadingDetail(false);
     }
   }, []);
 

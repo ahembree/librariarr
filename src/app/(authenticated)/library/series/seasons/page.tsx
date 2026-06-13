@@ -422,7 +422,18 @@ export default function AllSeasonsPage() {
                               <MediaHoverPopover
                                 imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
                                 data={{
+                                  // Keep the field set identical to the table
+                                  // view's popover (style-guide convention).
                                   title: `${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`,
+                                  year: season.year,
+                                  summary: season.summary,
+                                  contentRating: season.contentRating,
+                                  rating: season.rating,
+                                  ratingImage: season.ratingImage,
+                                  audienceRating: season.audienceRating,
+                                  audienceRatingImage: season.audienceRatingImage,
+                                  genres: season.genres,
+                                  studio: season.studio,
                                   episodeCount: season.episodeCount,
                                   qualityCounts: season.qualityCounts,
                                   fileSize: season.totalSize,
