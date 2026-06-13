@@ -255,6 +255,7 @@ When users connect multiple servers, dedup prevents duplicate items from appeari
 - Two-phase evaluation: Phase 1 converts rules to Prisma WHERE clauses, Phase 2 post-filters in memory for Arr/Seerr metadata, stream aggregation, and wildcard pattern matching
 - **The lifecycle rule engine (`src/lib/rules/lifecycle-engine.ts`) and the query builder (`src/lib/query/query-engine.ts`) share one implementation of both phases** so they can't drift: Phase 1 goes through the single `ruleToWhere` dispatcher in `src/lib/conditions/where-builder.ts` (both engines pass it to `buildGroupConditions`), and Phase 2 Arr/Seerr evaluation uses the exported `evaluateArrRule`/`evaluateSeerrRule` from `lifecycle-engine.ts` (the query side's `query/arr-filter.ts` / `query/seerr-filter.ts` are thin re-export shims). When fixing operator/NULL semantics, fix it once in these shared functions.
 - File size rules: user inputs in MB, engine converts to bytes for DB queries
+- **Series-aggregate fields** (`episodeCount`, `watchedEpisodePercentage`, …) can only be evaluated against an aggregated series record, never per-episode. A SERIES rule referencing one is routed through the aggregate path (`evaluateSeriesScope` in lifecycle, `aggregateSeriesAndFilter` in query) **regardless of `seriesScope`** — `hasSeriesAggregateRules` is part of the Phase-1 gate in both engines so the aggregate conjunct is never silently dropped from `where-builder` (which returns `{}` for aggregate fields)
 
 ### Lifecycle Processing Workflow
 
@@ -268,6 +269,7 @@ The lifecycle system operates in three phases, orchestrated by `src/lib/lifecycl
 - Fetches Arr/Seerr metadata lazily and caches per type (Movie/Series/Music) to share across rule sets
 - Enriches items with `matchedCriteria`, `actualValues`, `arrId`, and `servers[]`
 - For series with `seriesScope: false`, tracks individual episode IDs via `memberIds` in `itemData`
+- **Multi-server**: when a rule set targets more than one server, matches that resolve to the same Arr record (same TMDB/TVDB/MBID) are collapsed by `arrId` (merging `servers[]`) so the same title doesn't schedule two destructive actions or double-count `deletedBytes`. Dedup is by Arr id (not `dedupCanonical`) because a rule set may target a server subset whose canonical copy lives on a non-targeted server
 
 **Phase 2 — Action Scheduling** (in `processLifecycleRules`):
 

@@ -26,6 +26,9 @@ export const TASK_ARCHIVE_LOGS = "archive-logs";
 /** Remove completed/failed lifecycle actions older than the retention window. */
 export const TASK_CLEANUP_ACTIONS = "cleanup-old-actions";
 
+/** Delete cached images older than the cache TTL (bounds on-disk growth). */
+export const TASK_PRUNE_IMAGE_CACHE = "prune-image-cache";
+
 /**
  * Serial queue for the heavy domain jobs (sync, lifecycle, backup).
  *

@@ -331,3 +331,59 @@ export async function getImageCacheStats(): Promise<{ fileCount: number; totalSi
     return s;
   }
 }
+
+/**
+ * Delete cached images whose mtime is older than CACHE_MAX_AGE_MS and reconcile
+ * the stats file from disk truth. TTL was previously enforced only lazily on
+ * read, so `.webp` files for media that is no longer requested accumulated
+ * forever (unbounded disk growth) and the stats counters only ever grew. Meant
+ * to run periodically (daily cron). Returns the number of files removed.
+ */
+export async function pruneImageCache(): Promise<{ removed: number }> {
+  const cutoff = Date.now() - CACHE_MAX_AGE_MS;
+  let removed = 0;
+  try {
+    await ensureCacheDir();
+    const shard1Entries = await fs.readdir(IMAGE_CACHE_DIR, { withFileTypes: true });
+    await Promise.all(
+      shard1Entries
+        .filter((e) => e.isDirectory())
+        .map(async (s1) => {
+          const s1Path = path.join(IMAGE_CACHE_DIR, s1.name);
+          const shard2Entries = await fs.readdir(s1Path, { withFileTypes: true });
+          await Promise.all(
+            shard2Entries
+              .filter((e) => e.isDirectory())
+              .map(async (s2) => {
+                const s2Path = path.join(s1Path, s2.name);
+                const files = await fs.readdir(s2Path, { withFileTypes: true });
+                await Promise.all(
+                  files
+                    .filter((f) => f.isFile() && f.name.endsWith(".webp"))
+                    .map(async (f) => {
+                      const fp = path.join(s2Path, f.name);
+                      try {
+                        const st = await fs.stat(fp);
+                        if (st.mtimeMs < cutoff) {
+                          await fs.unlink(fp);
+                          removed++;
+                        }
+                      } catch {
+                        // File vanished concurrently — ignore.
+                      }
+                    }),
+                );
+              }),
+          );
+        }),
+    );
+    if (removed > 0) {
+      // Reconcile the counters from disk truth (avoids long-term drift).
+      await writeStatsFile(await scanCacheStats());
+      logger.info("ImageCache", `Pruned ${removed} expired cached image(s)`);
+    }
+  } catch (error) {
+    logger.error("ImageCache", "Failed to prune image cache", { error: String(error) });
+  }
+  return { removed };
+}
