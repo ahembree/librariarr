@@ -377,6 +377,20 @@ describe("evaluateQueryArrRule", () => {
       )).toBe(true);
     });
 
+    it("between matches a score inside the range (parity with the rule engine)", () => {
+      expect(evaluateQueryArrRule(
+        { id: "r1", field: "arrCustomFormatScore", operator: "between", value: "50,100", condition: "AND" },
+        makeArrMeta({ customFormatScore: 75 }),
+      )).toBe(true);
+    });
+
+    it("between excludes a score outside the range", () => {
+      expect(evaluateQueryArrRule(
+        { id: "r1", field: "arrCustomFormatScore", operator: "between", value: "50,100", condition: "AND" },
+        makeArrMeta({ customFormatScore: 120 }),
+      )).toBe(false);
+    });
+
     it("comparison returns false when the score is null", () => {
       expect(evaluateQueryArrRule(
         { id: "r1", field: "arrCustomFormatScore", operator: "greaterThan", value: 0, condition: "AND" },

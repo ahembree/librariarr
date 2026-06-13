@@ -332,6 +332,11 @@ export function evaluateQueryArrRule(rule: QueryRule, meta: ArrMetadata | undefi
         case "greaterThanOrEqual": result = metaVal >= numVal; break;
         case "lessThan": result = metaVal < numVal; break;
         case "lessThanOrEqual": result = metaVal <= numVal; break;
+        case "between": {
+          const [minStr, maxStr] = String(value).split(",");
+          result = metaVal >= Number(minStr) && metaVal <= Number(maxStr);
+          break;
+        }
         default: return false;
       }
       break;
