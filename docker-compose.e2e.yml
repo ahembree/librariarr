@@ -24,8 +24,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    tmpfs:
-      - /var/lib/postgresql/data # ephemeral DB — faster, always clean
+    # No volume/tmpfs: data lives in the container's ephemeral layer (wiped on
+    # `down -v`). Postgres 18 moved its data dir to /var/lib/postgresql/<ver>/…,
+    # so a tmpfs at the old /var/lib/postgresql/data is rejected as a stray mount.
 
   app:
     build:
