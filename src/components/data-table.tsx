@@ -16,6 +16,8 @@ export interface DataTableColumn<T> {
   defaultWidth?: number;
   className?: string;
   headerClassName?: string;
+  /** When true, hovering this column's cell does not open the row hover popover. */
+  suppressRowHover?: boolean;
 }
 
 interface DataTableProps<T> {
@@ -49,6 +51,11 @@ export function DataTable<T>({
 }: DataTableProps<T>) {
   const [internalSortId, setInternalSortId] = useState(defaultSortId ?? "");
   const [internalSortOrder, setInternalSortOrder] = useState<"asc" | "desc">(defaultSortOrder);
+
+  // Row hover popover is controlled so that hovering a "suppressed" cell (e.g. a
+  // selection checkbox) keeps the popover closed instead of covering the cell.
+  const [openHoverKey, setOpenHoverKey] = useState<string | null>(null);
+  const hoverSuppressedRef = useRef(false);
 
   // When controlled, use defaultSortId/defaultSortOrder as current values
   const sortId = onSortChange ? (defaultSortId ?? "") : internalSortId;
@@ -214,11 +221,12 @@ export function DataTable<T>({
           )}
           {virtualRows.map((virtualRow) => {
             const item = sortedData[virtualRow.index];
+            const key = keyExtractor(item);
             const hoverContent = renderHoverContent?.(item);
 
             const tableRow = (
               <tr
-                key={keyExtractor(item)}
+                key={key}
                 data-index={virtualRow.index}
                 className={cn(
                   "transition-colors duration-200 even:bg-white/1.5",
@@ -230,6 +238,16 @@ export function DataTable<T>({
                   <td
                     key={col.id}
                     className={cn("px-3 py-2 whitespace-nowrap overflow-hidden text-ellipsis", col.className)}
+                    onPointerEnter={
+                      col.suppressRowHover
+                        ? () => { hoverSuppressedRef.current = true; setOpenHoverKey(null); }
+                        : undefined
+                    }
+                    onPointerLeave={
+                      col.suppressRowHover
+                        ? () => { hoverSuppressedRef.current = false; }
+                        : undefined
+                    }
                   >
                     {col.accessor(item)}
                   </td>
@@ -237,10 +255,20 @@ export function DataTable<T>({
               </tr>
             );
 
-            if (!hoverContent) return <React.Fragment key={keyExtractor(item)}>{tableRow}</React.Fragment>;
+            if (!hoverContent) return <React.Fragment key={key}>{tableRow}</React.Fragment>;
 
             return (
-              <HoverCard key={keyExtractor(item)} openDelay={400} closeDelay={150}>
+              <HoverCard
+                key={key}
+                open={openHoverKey === key}
+                onOpenChange={(open) => {
+                  // Don't open the popover while the pointer is over a suppressed cell.
+                  if (open && hoverSuppressedRef.current) return;
+                  setOpenHoverKey(open ? key : null);
+                }}
+                openDelay={400}
+                closeDelay={150}
+              >
                 <HoverCardTrigger asChild>
                   {tableRow}
                 </HoverCardTrigger>

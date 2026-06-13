@@ -353,7 +353,7 @@ export function QueryActionBar({
               {skippedCount > 0 && (
                 <> {skippedCount} other selected item{skippedCount === 1 ? "" : "s"} of a different media type will be skipped.</>
               )}{" "}
-              This cannot be undone.
+              {effectiveActionType.includes("DELETE") && "This cannot be undone."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
