@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { validateRequest, prerollScheduleUpdateSchema } from "@/lib/validation";
+import { checkConflict } from "@/lib/preroll/schedule-conflict";
 
 const VALID_SCHEDULE_TYPES = ["one_time", "recurring", "seasonal"];
 const VALID_DAYS = [0, 1, 2, 3, 4, 5, 6];
@@ -18,68 +19,6 @@ interface ScheduleInput {
   endTime?: string;
   priority?: number;
   enabled?: boolean;
-}
-
-interface ScheduleRecord {
-  id: string;
-  enabled: boolean;
-  scheduleType: string;
-  startDate: Date | null;
-  endDate: Date | null;
-  daysOfWeek: unknown;
-  startTime: string | null;
-  endTime: string | null;
-  name: string;
-}
-
-function timeToMinutes(time: string): number {
-  const [h, m] = time.split(":").map(Number);
-  return h * 60 + m;
-}
-
-function checkConflict(
-  input: ScheduleInput,
-  existing: ScheduleRecord[],
-  excludeId?: string
-): { id: string; name: string } | null {
-  const candidates = existing.filter(
-    (s) => s.enabled && s.id !== excludeId
-  );
-
-  for (const other of candidates) {
-    if (
-      (input.scheduleType === "one_time" || input.scheduleType === "seasonal") &&
-      (other.scheduleType === "one_time" || other.scheduleType === "seasonal")
-    ) {
-      const inputStart = new Date(input.startDate!);
-      const inputEnd = new Date(input.endDate!);
-      const otherStart = other.startDate!;
-      const otherEnd = other.endDate!;
-
-      if (inputStart < otherEnd && inputEnd > otherStart) {
-        return { id: other.id, name: other.name };
-      }
-    }
-
-    if (input.scheduleType === "recurring" && other.scheduleType === "recurring") {
-      const inputDays = new Set(input.daysOfWeek!);
-      const otherDays = (other.daysOfWeek as number[]) || [];
-      const hasOverlappingDay = otherDays.some((d) => inputDays.has(d));
-
-      if (hasOverlappingDay && other.startTime && other.endTime && input.startTime && input.endTime) {
-        const inputStartMin = timeToMinutes(input.startTime);
-        const inputEndMin = timeToMinutes(input.endTime);
-        const otherStartMin = timeToMinutes(other.startTime);
-        const otherEndMin = timeToMinutes(other.endTime);
-
-        if (inputStartMin < otherEndMin && inputEndMin > otherStartMin) {
-          return { id: other.id, name: other.name };
-        }
-      }
-    }
-  }
-
-  return null;
 }
 
 export async function PUT(

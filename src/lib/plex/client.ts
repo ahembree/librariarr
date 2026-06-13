@@ -173,7 +173,15 @@ export class PlexClient implements MediaServerClient {
 
     const container = response.data.MediaContainer;
     const items = container.Metadata || [];
-    const total = container.totalSize ?? container.size ?? items.length;
+    // Prefer totalSize (the library-wide count). `container.size` is only the
+    // per-page count, NOT the total — trusting it as the total would terminate
+    // the caller's paging loop after one page and trigger erroneous stale
+    // deletion. When totalSize is absent, return a large sentinel so the
+    // caller's short-page check (page shorter than limit) governs termination.
+    const total =
+      typeof container.totalSize === "number"
+        ? container.totalSize
+        : Number.MAX_SAFE_INTEGER;
     return { items, total };
   }
 

@@ -383,13 +383,16 @@ export default function SettingsPage() {
 
   // ─── Fetchers ───
 
-  const fetchServers = useCallback(async () => {
+  const fetchServers = useCallback(async (): Promise<MediaServer[]> => {
     try {
       const response = await fetch("/api/servers");
       const data = await response.json();
-      setServers(data.servers || []);
+      const fresh: MediaServer[] = data.servers || [];
+      setServers(fresh);
+      return fresh;
     } catch (error) {
       console.error("Failed to fetch servers:", error);
+      return [];
     }
   }, []);
 
@@ -794,8 +797,10 @@ export default function SettingsPage() {
         body: libraryKey ? JSON.stringify({ libraryKey }) : undefined,
       });
       const interval = setInterval(async () => {
-        await fetchServers();
-        const server = servers.find((s) => s.id === serverId);
+        // Inspect the freshly fetched list, not the stale closed-over `servers`
+        // snapshot — otherwise the COMPLETED/FAILED branch never fires.
+        const fresh = await fetchServers();
+        const server = fresh.find((s) => s.id === serverId);
         const latestJob = server?.syncJobs[0];
         if (
           latestJob?.status === "COMPLETED" ||
@@ -1863,7 +1868,7 @@ export default function SettingsPage() {
     setDiscordSaving(true);
     setDiscordTestResult(null);
     try {
-      await fetch("/api/settings/discord", {
+      const res = await fetch("/api/settings/discord", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1872,8 +1877,16 @@ export default function SettingsPage() {
           webhookAvatarUrl: discordWebhookAvatarUrl,
         }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        const detail = data?.details?.[0]?.message ?? data?.detail;
+        toast.error("Failed to save notification settings", { description: detail ?? data?.error });
+        return;
+      }
+      toast.success("Notification settings saved");
     } catch (error) {
       console.error("Failed to save Discord settings:", error);
+      toast.error("Failed to save notification settings");
     } finally {
       setDiscordSaving(false);
     }

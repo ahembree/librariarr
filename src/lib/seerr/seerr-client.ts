@@ -1,6 +1,7 @@
 import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
+import { configureRetry } from "@/lib/http-retry";
 
 export interface SeerrUser {
   id: number;
@@ -109,6 +110,8 @@ export class SeerrClient {
         return Promise.reject(error);
       }
     );
+
+    configureRetry(this.client, "Seerr", logger);
   }
 
   async testConnection(): Promise<{ ok: boolean; error?: string; appName?: string }> {

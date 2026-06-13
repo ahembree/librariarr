@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { enqueueJob } from "@/lib/jobs/client";
-import { MAIN_QUEUE, TASK_SYNC_SERVER } from "@/lib/jobs/constants";
 import {
-  processLifecycleRules,
-  executeLifecycleActions,
-} from "@/lib/lifecycle/processor";
+  MAIN_QUEUE,
+  TASK_SYNC_SERVER,
+  TASK_LIFECYCLE_DETECTION,
+  TASK_LIFECYCLE_EXECUTION,
+} from "@/lib/jobs/constants";
 import { logger } from "@/lib/logger";
 import { validateRequest, runJobSchema } from "@/lib/validation";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
@@ -52,21 +53,35 @@ export async function POST(request: NextRequest) {
       });
     } else if (job === "detection") {
       logger.info("Scheduler", "Manual lifecycle detection triggered");
-      await processLifecycleRules(session.userId!);
+      // Enqueue a durable job on MAIN_QUEUE with a stable jobKey so a
+      // double-click or a collision with the per-minute dispatcher dedupes
+      // into one run instead of executing detection concurrently.
+      await enqueueJob(
+        TASK_LIFECYCLE_DETECTION,
+        { userId: session.userId! },
+        { jobKey: `detection:${session.userId!}`, queueName: MAIN_QUEUE, maxAttempts: 2 },
+      );
       await prisma.appSettings.update({
         where: { userId: session.userId! },
         data: { lastScheduledLifecycleDetection: new Date() },
       });
     } else if (job === "execution") {
       logger.info("Scheduler", "Manual lifecycle execution triggered");
-      await executeLifecycleActions(session.userId!);
+      // Same dedup guard as detection. maxAttempts: 1 mirrors the dispatcher —
+      // execution applies destructive Arr actions and must not be retried as a
+      // whole job.
+      await enqueueJob(
+        TASK_LIFECYCLE_EXECUTION,
+        { userId: session.userId! },
+        { jobKey: `execution:${session.userId!}`, queueName: MAIN_QUEUE, maxAttempts: 1 },
+      );
       await prisma.appSettings.update({
         where: { userId: session.userId! },
         data: { lastScheduledLifecycleExecution: new Date() },
       });
     }
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ queued: true });
   } catch (error) {
     logger.error("Scheduler", `Manual ${job} failed`, { error: String(error) });
     return NextResponse.json({ error: `Job failed: ${sanitizeErrorDetail(String(error))}` }, { status: 500 });

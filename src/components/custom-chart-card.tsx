@@ -268,7 +268,9 @@ export function CustomChartCard({
         ) : isCount ? (
           <div className="flex flex-1 items-center justify-center">
             <span className="font-display text-5xl font-semibold tracking-tight tabular-nums">
-              {allWithColors
+              {/* Sum from the full pre-topN aggregation, not the post-fold list:
+                  values folded into "Other" must still count toward a selection. */}
+              {sorted
                 .filter((e) => !config.countValues?.length || config.countValues.includes(e.label))
                 .reduce((sum, e) => sum + e.count, 0)
                 .toLocaleString()}
@@ -845,14 +847,15 @@ function TimelineChart({ data, hiddenItems }: { data: TimelineData; hiddenItems:
           <AreaChart data={chartData} margin={margin}>
             <defs>
               {hasSeries ? (
-                visibleSeries.map((label, i) => {
-                  // Color by the series' ORIGINAL index (same as the Area
-                  // strokes below) — using the visible index desyncs fill
-                  // hue from stroke/legend once any series is hidden.
+                visibleSeries.map((label) => {
+                  // Color AND gradient id keyed by the series' ORIGINAL index
+                  // (same as the Area strokes below) — keying the id by the
+                  // visible index desyncs fill hue from stroke/legend once any
+                  // series is hidden.
                   const origIdx = data.series.indexOf(label);
                   const color = label === "Other" ? OTHER_HEX : AUTO_HEX[origIdx % AUTO_HEX.length];
                   return (
-                    <linearGradient key={label} id={`tl-grad-${i}`} x1="0" y1="0" x2="0" y2="1">
+                    <linearGradient key={label} id={`tl-grad-${origIdx}`} x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor={color} stopOpacity={0.3} />
                       <stop offset="100%" stopColor={color} stopOpacity={0.02} />
                     </linearGradient>
@@ -884,7 +887,7 @@ function TimelineChart({ data, hiddenItems }: { data: TimelineData; hiddenItems:
             />
             <RechartsTooltip content={<TimelineTooltip />} />
             {hasSeries ? (
-              visibleSeries.map((label, i) => {
+              visibleSeries.map((label) => {
                 const origIdx = data.series.indexOf(label);
                 const color = label === "Other" ? OTHER_HEX : AUTO_HEX[origIdx % AUTO_HEX.length];
                 return (
@@ -894,7 +897,7 @@ function TimelineChart({ data, hiddenItems }: { data: TimelineData; hiddenItems:
                     dataKey={label}
                     stroke={color}
                     strokeWidth={1.5}
-                    fill={`url(#tl-grad-${i})`}
+                    fill={`url(#tl-grad-${origIdx})`}
                     fillOpacity={0.15}
                   />
                 );

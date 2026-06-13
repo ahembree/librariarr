@@ -202,6 +202,46 @@ describe("MemoryCache", () => {
       expect(cache.get("a")).toBe("A");
       expect(cache.get("b")).toBe("B");
     });
+
+    it("is single-flight: concurrent misses share one compute() call", async () => {
+      let resolve!: (v: string) => void;
+      const compute = vi.fn(
+        () => new Promise<string>((r) => { resolve = r; }),
+      );
+
+      const p1 = cache.getOrSet("k", compute);
+      const p2 = cache.getOrSet("k", compute);
+      resolve("value");
+      const [a, b] = await Promise.all([p1, p2]);
+
+      expect(a).toBe("value");
+      expect(b).toBe("value");
+      expect(compute).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not cache a rejected compute (next call retries)", async () => {
+      const compute = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("boom"))
+        .mockResolvedValueOnce("ok");
+
+      await expect(cache.getOrSet("k", compute)).rejects.toThrow("boom");
+      await expect(cache.getOrSet("k", compute)).resolves.toBe("ok");
+      expect(compute).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("bounded size / eviction", () => {
+    it("evicts oldest entries once maxEntries is exceeded", () => {
+      const bounded = new MemoryCache(60_000, 3);
+      bounded.set("a", 1);
+      bounded.set("b", 2);
+      bounded.set("c", 3);
+      bounded.set("d", 4); // exceeds cap → oldest ("a") evicted
+      expect(bounded.get("a")).toBeUndefined();
+      expect(bounded.get("d")).toBe(4);
+      expect(bounded.get("c")).toBe(3);
+    });
   });
 
   describe("invalidate", () => {

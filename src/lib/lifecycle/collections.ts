@@ -351,8 +351,12 @@ export async function removeItemFromCollections(
 
       await client.removeCollectionItem(collection.ratingKey, ratingKeyToRemove);
 
-      // If collection is now empty, remove it
-      if (currentItems.length === 1) {
+      // Re-check emptiness AFTER removal — a stale pre-removal count of 1 could
+      // wrongly delete a collection that still holds other items (e.g. the
+      // collection grew between the fetch and the remove). Re-fetch the items
+      // so the delete only fires when the collection is genuinely empty.
+      const remainingItems = await client.getCollectionItems(collection.ratingKey);
+      if (remainingItems.length === 0) {
         await client.deleteCollection(collection.ratingKey);
         logger.info(
           "Lifecycle",

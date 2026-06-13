@@ -40,7 +40,14 @@ export async function POST(request: Request) {
     );
   }
 
-  const serverIds = ruleSet.user.mediaServers.map((s) => s.id);
+  // Intersect the rule set's own server scope with the user's enabled servers
+  // (mirrors processLifecycleRules) so evaluation never reaches outside the
+  // libraries the rule set targets.
+  const enabledServerIds = ruleSet.user.mediaServers.map((s) => s.id);
+  const serverIds = ruleSet.serverIds.filter((id) => enabledServerIds.includes(id));
+  if (serverIds.length === 0) {
+    return NextResponse.json({ error: "Rule set has no valid servers" }, { status: 400 });
+  }
   const rules = ruleSet.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
 
   // SAFETY: Refuse to evaluate if no rules are active — would match everything
@@ -65,6 +72,64 @@ export async function POST(request: Request) {
     matchedItems = await evaluateMusicScope(rules, serverIds, arrData);
   } else {
     matchedItems = await evaluateLifecycleRules(rules, ruleSet.type, serverIds, arrData, seerrData);
+  }
+
+  // Exclude items that carry a LifecycleException for this user, mirroring
+  // detect-matches.ts — a manual collection sync must not re-add an item the
+  // user explicitly excluded from this rule set's lifecycle.
+  const isGroupedScope =
+    (ruleSet.type === "SERIES" || ruleSet.type === "MUSIC") && ruleSet.seriesScope;
+  const records = matchedItems as unknown as Array<Record<string, unknown>>;
+
+  if (isGroupedScope) {
+    // Grouped items are aggregated: the series/artist name lives on `title`
+    // (the engine swaps title/parentTitle), while exceptions are stored against
+    // individual episode/track rows by parentTitle.
+    const groupTitles = records.map((item) => item.title as string).filter(Boolean);
+    if (groupTitles.length > 0) {
+      const excepted = await prisma.lifecycleException.findMany({
+        where: {
+          userId: ruleSet.userId,
+          mediaItem: {
+            parentTitle: { in: groupTitles },
+            type: ruleSet.type,
+            library: { mediaServerId: { in: serverIds } },
+          },
+        },
+        select: { mediaItem: { select: { parentTitle: true } } },
+      });
+      if (excepted.length > 0) {
+        const excludedSet = new Set(excepted.map((e) => e.mediaItem.parentTitle));
+        matchedItems = records.filter(
+          (item) => !excludedSet.has(item.title as string),
+        ) as typeof matchedItems;
+      }
+    }
+  } else {
+    // Individual-scope: check by exact mediaItemId (plus memberIds for grouped
+    // SERIES so excepted episodes drop the group when none remain).
+    const allIds = new Set<string>();
+    for (const item of records) {
+      allIds.add(item.id as string);
+      const members = item.memberIds as string[] | undefined;
+      if (members) for (const mid of members) allIds.add(mid);
+    }
+    if (allIds.size > 0) {
+      const excepted = await prisma.lifecycleException.findMany({
+        where: { userId: ruleSet.userId, mediaItemId: { in: [...allIds] } },
+        select: { mediaItemId: true },
+      });
+      if (excepted.length > 0) {
+        const excludedIds = new Set(excepted.map((e) => e.mediaItemId));
+        matchedItems = records.filter((item) => {
+          const members = item.memberIds as string[] | undefined;
+          if (members) {
+            return members.some((mid) => !excludedIds.has(mid));
+          }
+          return !excludedIds.has(item.id as string);
+        }) as typeof matchedItems;
+      }
+    }
   }
 
   await syncPlexCollection(ruleSet, matchedItems);

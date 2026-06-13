@@ -1,13 +1,22 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const { mockPrisma, mockClient } = vi.hoisted(() => ({
-  mockPrisma: {
-    $queryRawUnsafe: vi.fn(),
-  },
-  mockClient: {
-    getDetailedWatchHistory: vi.fn(),
-  },
-}));
+const { mockPrisma, mockClient } = vi.hoisted(() => {
+  // The DELETE + INSERTs run inside prisma.$transaction(cb) via tx.$executeRawUnsafe.
+  // Route the tx's raw methods to the same fn the tests assert against so the
+  // existing call-inspection (DELETE/INSERT string filters) keeps working.
+  const queryRawUnsafe = vi.fn();
+  const tx = { $queryRawUnsafe: queryRawUnsafe, $executeRawUnsafe: queryRawUnsafe };
+  return {
+    mockPrisma: {
+      $queryRawUnsafe: queryRawUnsafe,
+      $executeRawUnsafe: queryRawUnsafe,
+      $transaction: vi.fn(async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx)),
+    },
+    mockClient: {
+      getDetailedWatchHistory: vi.fn(),
+    },
+  };
+});
 
 vi.mock("@/lib/db", () => ({
   prisma: mockPrisma,

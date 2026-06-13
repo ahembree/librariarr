@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { TableRowsSkeleton } from "@/components/skeletons";
 import { ColorChip } from "@/components/color-chip";
@@ -124,7 +124,9 @@ function loadVisibleColumns(): Set<string> {
 }
 
 function saveVisibleColumns(cols: Set<string>) {
-  localStorage.setItem(VISIBLE_KEY, JSON.stringify([...cols]));
+  try {
+    localStorage.setItem(VISIBLE_KEY, JSON.stringify([...cols]));
+  } catch { /* private mode / quota — ignore */ }
 }
 
 function formatResolution(res: string | null) {
@@ -226,6 +228,8 @@ export default function HistoryPage() {
 
   // Filters
   const [search, setSearch] = useState("");
+  // Debounced search value drives fetching so each keystroke doesn't fire a request.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedServerId, setSelectedServerId] = useState<string>("all");
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
   const [selectedUsernames, setSelectedUsernames] = useState<Set<string>>(new Set());
@@ -442,7 +446,18 @@ export default function HistoryPage() {
 
   // ── Data fetching ──────────────────────────────────────────────
 
+  // Debounce the search box so typing doesn't fire a request per keystroke.
+  useEffect(() => {
+    const timeout = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timeout);
+  }, [search]);
+
+  // Token guards against a stale slow response landing after a quick
+  // filter/page flip and overwriting the current result set.
+  const reqToken = useRef(0);
+
   const fetchHistory = useCallback(async (fetchPage: number) => {
+    const token = ++reqToken.current;
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -451,7 +466,7 @@ export default function HistoryPage() {
         sortBy,
         sortOrder,
       });
-      if (search) params.set("search", search);
+      if (debouncedSearch) params.set("search", debouncedSearch);
       if (selectedServerId !== "all") params.set("serverId", selectedServerId);
       if (selectedTypes.size > 0) params.set("type", [...selectedTypes].join("|"));
       if (selectedUsernames.size > 0) params.set("username", [...selectedUsernames].join("|"));
@@ -461,20 +476,22 @@ export default function HistoryPage() {
       const res = await fetch(`/api/media/history?${params}`);
       if (!res.ok) throw new Error("Failed to fetch");
       const data = await res.json();
-      setItems(data.items);
-      setTotalCount(data.pagination.totalCount ?? 0);
-      setHasMore(data.pagination.hasMore ?? false);
+      if (token !== reqToken.current) return;
+      setItems(data.items || []);
+      setTotalCount(data.pagination?.totalCount ?? 0);
+      setHasMore(data.pagination?.hasMore ?? false);
       setPage(fetchPage);
       setUsernames(data.usernames ?? []);
       setPlatforms(data.platforms ?? []);
     } catch {
+      if (token !== reqToken.current) return;
       setItems([]);
       setTotalCount(0);
       setHasMore(false);
     } finally {
-      setLoading(false);
+      if (token === reqToken.current) setLoading(false);
     }
-  }, [search, selectedServerId, selectedTypes, selectedUsernames, selectedPlatforms, selectedResolutions, sortBy, sortOrder]);
+  }, [debouncedSearch, selectedServerId, selectedTypes, selectedUsernames, selectedPlatforms, selectedResolutions, sortBy, sortOrder]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
@@ -777,7 +794,7 @@ export default function HistoryPage() {
                 resizeStorageKey="history-col-widths"
                 renderHoverContent={(item) => (
                   <MediaHoverPopover
-                    imageUrl={`/api/media/${item.mediaItem.id}/image${item.mediaItem.type === "episode" || item.mediaItem.parentTitle ? "?type=parent" : ""}`}
+                    imageUrl={`/api/media/${item.mediaItem.id}/image${item.mediaItem.parentTitle ? "?type=parent" : ""}`}
                     data={{
                       title: item.mediaItem.parentTitle
                         ? `${item.mediaItem.parentTitle} — ${item.mediaItem.title}`

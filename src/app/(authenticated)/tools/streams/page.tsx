@@ -217,6 +217,7 @@ const TRANSCODE_PRESET_MESSAGES = [
 ];
 
 const SSE_RECONNECT_DELAY = 3000;
+const SSE_RECONNECT_MAX_DELAY = 30000;
 
 const DEFAULT_CRITERIA: TranscodeCriteria = {
   anyTranscoding: false,
@@ -848,6 +849,7 @@ export default function StreamManagerPage() {
   const [connected, setConnected] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectDelayRef = useRef(SSE_RECONNECT_DELAY);
 
   // SSE connection for real-time session updates
   useEffect(() => {
@@ -859,6 +861,11 @@ export default function StreamManagerPage() {
       const es = new EventSource("/api/tools/sessions/stream");
       eventSourceRef.current = es;
 
+      es.onopen = () => {
+        // Connection re-established — reset the backoff window.
+        reconnectDelayRef.current = SSE_RECONNECT_DELAY;
+      };
+
       es.addEventListener("sessions", (event) => {
         try {
           const data = JSON.parse(event.data);
@@ -866,6 +873,8 @@ export default function StreamManagerPage() {
           setSessions(incoming);
           setLoading(false);
           setConnected(true);
+          // Successful payload — reset the backoff window.
+          reconnectDelayRef.current = SSE_RECONNECT_DELAY;
 
           // Prune selected keys that no longer exist
           const currentKeys = new Set(incoming.map(sessionKey));
@@ -886,8 +895,11 @@ export default function StreamManagerPage() {
         es.close();
         eventSourceRef.current = null;
 
-        // Reconnect after delay
-        reconnectTimerRef.current = setTimeout(connect, SSE_RECONNECT_DELAY);
+        // Reconnect with exponential backoff (capped) to avoid hammering a
+        // down endpoint; the delay is reset to the floor on a successful open.
+        const delay = reconnectDelayRef.current;
+        reconnectDelayRef.current = Math.min(delay * 2, SSE_RECONNECT_MAX_DELAY);
+        reconnectTimerRef.current = setTimeout(connect, delay);
       };
     }
 

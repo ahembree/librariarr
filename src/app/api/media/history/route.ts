@@ -10,8 +10,9 @@ export async function GET(request: NextRequest) {
   }
 
   const { searchParams } = new URL(request.url);
-  const page = parseInt(searchParams.get("page") ?? "1");
-  const limit = Math.min(parseInt(searchParams.get("limit") ?? "50"), 200);
+  const page = Math.max(1, parseInt(searchParams.get("page") ?? "1") || 1);
+  const rawLimit = parseInt(searchParams.get("limit") ?? "50");
+  const limit = Math.min(Number.isNaN(rawLimit) ? 50 : rawLimit, 200);
   const search = searchParams.get("search");
   const sortBy = searchParams.get("sortBy") ?? "watchedAt";
   const sortOrder =
@@ -91,10 +92,12 @@ export async function GET(request: NextRequest) {
   }
 
   if (startsWith) {
+    // Both branches key off the same field (titleSort, falling back to title)
+    // so the non-alpha "#" bucket and the A-Z buckets stay consistent.
     if (startsWith === "#") {
-      conditions.push(`mi."title" !~ '^[A-Za-z]'`);
+      conditions.push(`COALESCE(mi."titleSort", mi."title") !~ '^[A-Za-z]'`);
     } else {
-      conditions.push(`UPPER(LEFT(mi."titleSort", 1)) = $${paramIdx++}`);
+      conditions.push(`UPPER(LEFT(COALESCE(mi."titleSort", mi."title"), 1)) = $${paramIdx++}`);
       params.push(startsWith.toUpperCase());
     }
   }

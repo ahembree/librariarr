@@ -199,8 +199,9 @@ export async function GET(request: NextRequest) {
   });
 
   // Pagination
-  const limit = limitParam !== null ? parseInt(limitParam, 10) : 50;
-  const page = pageParam !== null ? Math.max(1, parseInt(pageParam, 10)) : 1;
+  const parsedLimit = limitParam !== null ? parseInt(limitParam, 10) : 50;
+  const limit = Number.isNaN(parsedLimit) ? 50 : parsedLimit;
+  const page = pageParam !== null ? Math.max(1, parseInt(pageParam, 10) || 1) : 1;
 
   if (limit === 0) {
     return NextResponse.json({

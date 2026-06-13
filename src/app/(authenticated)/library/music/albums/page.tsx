@@ -122,13 +122,17 @@ export default function AllAlbumsPage() {
   const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
 
   useEffect(() => {
-    const stored = localStorage.getItem("albums-view-mode") as "cards" | "table" | null;
-    if (stored) setViewMode(stored);
+    try {
+      const stored = localStorage.getItem("albums-view-mode") as "cards" | "table" | null;
+      if (stored) setViewMode(stored);
+    } catch { /* private mode / quota — keep default */ }
   }, []);
 
   const handleViewModeChange = (mode: "cards" | "table") => {
     setViewMode(mode);
-    localStorage.setItem("albums-view-mode", mode);
+    try {
+      localStorage.setItem("albums-view-mode", mode);
+    } catch { /* private mode / quota — ignore */ }
   };
 
   const { size, setSize, columns: actualColumns } = useCardSize();
@@ -176,7 +180,12 @@ export default function AllAlbumsPage() {
     }
   }, []);
 
+  // Token guards against a stale slow response landing after a quick
+  // sort/filter/server flip and showing the wrong items for the selection.
+  const reqToken = useRef(0);
+
   const fetchAlbums = useCallback(async () => {
+    const token = ++reqToken.current;
     setLoading(true);
     try {
       const params = new URLSearchParams();
@@ -191,11 +200,12 @@ export default function AllAlbumsPage() {
       }
       const response = await fetch(`/api/media/music/albums/all?${params}`);
       const data = await response.json();
+      if (token !== reqToken.current) return;
       setAlbums(data.albums || []);
     } catch (error) {
       console.error("Failed to fetch albums:", error);
     } finally {
-      setLoading(false);
+      if (token === reqToken.current) setLoading(false);
     }
   }, [filters, sortBy, sortOrder, selectedServerId]);
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useLocalStorage } from "@/hooks/use-local-storage";
 import { cn } from "@/lib/utils";
@@ -22,6 +22,10 @@ import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
+
+// Numeric string fields (fileSize is BigInt-as-string) must compare as
+// numbers, not lexicographically ("9000" must sort before "10000").
+const NUMERIC_STRING_FIELDS = new Set(["fileSize"]);
 
 export default function AlbumDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -63,11 +67,17 @@ export default function AlbumDetailPage() {
     [sortBy]
   );
 
+  // Token guards against a stale slow response landing after the id changes
+  // and overwriting the current album's tracks.
+  const reqToken = useRef(0);
+
   useEffect(() => {
+    const token = ++reqToken.current;
     async function fetchData() {
       try {
         const itemRes = await fetch(`/api/media/${id}`);
         const itemData = await itemRes.json();
+        if (token !== reqToken.current) return;
         if (!itemData.item) return;
         setItem(itemData.item);
         setPlayServers(buildPlayLinks(itemData.playServers || [], [
@@ -84,11 +94,12 @@ export default function AlbumDetailPage() {
           `/api/media/music?parentTitle=${encodeURIComponent(artistName)}&albumTitle=${encodeURIComponent(albumTitle)}&sortBy=episodeNumber&sortOrder=asc&limit=0`
         );
         const tracksData = await tracksRes.json();
+        if (token !== reqToken.current) return;
         setTracks(tracksData.items || []);
       } catch {
         // Failed to load
       } finally {
-        setLoading(false);
+        if (token === reqToken.current) setLoading(false);
       }
     }
     fetchData();
@@ -101,6 +112,7 @@ export default function AlbumDetailPage() {
       if (aVal == null && bVal == null) return 0;
       if (aVal == null) return 1;
       if (bVal == null) return -1;
+      if (NUMERIC_STRING_FIELDS.has(sortBy)) return Number(aVal) - Number(bVal);
       if (typeof aVal === "string" && typeof bVal === "string") return aVal.localeCompare(bVal);
       if (typeof aVal === "number" && typeof bVal === "number") return aVal - bVal;
       return String(aVal).localeCompare(String(bVal));

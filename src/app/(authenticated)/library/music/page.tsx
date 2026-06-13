@@ -210,7 +210,12 @@ export default function MusicPage() {
   const [sortBy, setSortBy] = useState("parentTitle");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
 
+  // Token guards against a stale slow response landing after a quick
+  // sort/filter/server flip and showing the wrong items for the selection.
+  const reqToken = useRef(0);
+
   const fetchArtists = useCallback(async () => {
+    const token = ++reqToken.current;
     setLoading(true);
     try {
       const params = new URLSearchParams();
@@ -225,13 +230,14 @@ export default function MusicPage() {
       }
       const response = await fetch(`/api/media/music/grouped?${params}`);
       const data = await response.json();
+      if (token !== reqToken.current) return;
       startTransition(() => {
         setArtistList(data.artists || []);
         setLoading(false);
       });
     } catch (error) {
       console.error("Failed to fetch artists:", error);
-      setLoading(false);
+      if (token === reqToken.current) setLoading(false);
     }
   }, [sortBy, sortOrder, selectedServerId, filters]);
 

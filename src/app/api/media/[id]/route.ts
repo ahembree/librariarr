@@ -40,7 +40,10 @@ export async function GET(
   }
 
   // Build play servers list (this item's server + any dedup siblings)
-  const ms = item.library.mediaServer!;
+  const ms = item.library.mediaServer;
+  if (!ms) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
   const playServers = [
     {
       serverName: ms.name,
@@ -65,7 +68,7 @@ export async function GET(
       where: {
         dedupKey: item.dedupKey,
         id: { not: item.id },
-        library: { mediaServer: { userId: session.userId } },
+        library: { mediaServer: { userId: session.userId, enabled: true } },
       },
       select: {
         id: true,
@@ -82,8 +85,8 @@ export async function GET(
 
     const seenServerIds = new Set([ms.id]);
     for (const sibling of siblings) {
-      const sms = sibling.library.mediaServer!;
-      if (!seenServerIds.has(sms.id)) {
+      const sms = sibling.library.mediaServer;
+      if (sms && !seenServerIds.has(sms.id)) {
         seenServerIds.add(sms.id);
         playServers.push({
           serverName: sms.name,

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { RadarrClient } from "@/lib/arr/radarr-client";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
 export async function GET(
   _request: NextRequest,
@@ -23,12 +24,19 @@ export async function GET(
   }
 
   const client = new RadarrClient(instance.url, instance.apiKey);
-  const [movies, qualityProfiles, tags, languages] = await Promise.all([
-    client.getMovies(),
-    client.getQualityProfiles(),
-    client.getTags(),
-    client.getLanguages(),
-  ]);
+  let movies, qualityProfiles, tags, languages;
+  try {
+    [movies, qualityProfiles, tags, languages] = await Promise.all([
+      client.getMovies(),
+      client.getQualityProfiles(),
+      client.getTags(),
+      client.getLanguages(),
+    ]);
+  } catch (err: unknown) {
+    const raw = err instanceof Error ? err.message : "Failed to query Radarr";
+    const msg = sanitizeErrorDetail(raw) ?? "Failed to query Radarr";
+    return NextResponse.json({ error: msg }, { status: 502 });
+  }
 
   const tagMap = new Map(tags.map((t) => [t.id, t.label]));
   const profileMap = new Map(qualityProfiles.map((p) => [p.id, p.name]));

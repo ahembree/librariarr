@@ -179,12 +179,12 @@ describe("LidarrClient", () => {
   });
 
   describe("getQueue", () => {
-    it("returns downloading when records exist", async () => {
+    it("does not report a completed (inactive) record as downloading", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
         data: { records: [{ status: "completed" }] },
       });
       const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: true, status: "completed" });
+      expect(result).toEqual({ downloading: false, status: "completed" });
     });
 
     it("returns not downloading when no records", async () => {

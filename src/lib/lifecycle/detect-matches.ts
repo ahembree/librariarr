@@ -291,23 +291,35 @@ export async function detectAndSaveMatches(
   );
   const staleIds = [...existingIds].filter((id) => !currentIds.has(id));
 
-  if (newItems.length > 0) {
-    await prisma.ruleMatch.createMany({
-      data: newItems.map((item) => ({
-        ruleSetId: ruleSet.id,
-        mediaItemId: item.id as string,
-        itemData: jsonSafe(item),
-        detectedAt: now,
-      })),
-      skipDuplicates: true,
-    });
+  // Atomic create + delete: a partial failure must not leave a half-updated
+  // match set (e.g. new matches written but stale ones never removed).
+  const removeStale = !ruleSet.stickyMatches && staleIds.length > 0;
+  if (newItems.length > 0 || removeStale) {
+    await prisma.$transaction([
+      ...(newItems.length > 0
+        ? [
+            prisma.ruleMatch.createMany({
+              data: newItems.map((item) => ({
+                ruleSetId: ruleSet.id,
+                mediaItemId: item.id as string,
+                itemData: jsonSafe(item),
+                detectedAt: now,
+              })),
+              skipDuplicates: true,
+            }),
+          ]
+        : []),
+      ...(removeStale
+        ? [
+            prisma.ruleMatch.deleteMany({
+              where: { ruleSetId: ruleSet.id, mediaItemId: { in: staleIds } },
+            }),
+          ]
+        : []),
+    ]);
   }
 
-  if (!ruleSet.stickyMatches && staleIds.length > 0) {
-    await prisma.ruleMatch.deleteMany({
-      where: { ruleSetId: ruleSet.id, mediaItemId: { in: staleIds } },
-    });
-
+  if (removeStale) {
     // Fetch current state of stale items to determine which criteria changed.
     // Scope by the rule set's serverIds so logs can never refer to items outside
     // the rule set's intended library scope.

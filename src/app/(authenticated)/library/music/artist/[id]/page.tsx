@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useChipColors } from "@/components/chip-color-provider";
@@ -45,11 +45,17 @@ export default function ArtistDetailPage() {
   const [albums, setAlbums] = useState<AlbumData[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Token guards against a stale slow response landing after the id changes
+  // and overwriting the current artist's data.
+  const reqToken = useRef(0);
+
   useEffect(() => {
+    const token = ++reqToken.current;
     async function fetchData() {
       try {
         const itemRes = await fetch(`/api/media/${id}`);
         const itemData = await itemRes.json();
+        if (token !== reqToken.current) return;
         if (!itemData.item) return;
         setItem(itemData.item);
         setPlayServers(buildPlayLinks(itemData.playServers || [], [
@@ -61,11 +67,12 @@ export default function ArtistDetailPage() {
         const artistName = itemData.item.parentTitle || itemData.item.title;
         const albumsRes = await fetch(`/api/media/music/albums?parentTitle=${encodeURIComponent(artistName)}`);
         const albumsData = await albumsRes.json();
+        if (token !== reqToken.current) return;
         setAlbums(albumsData.albums || []);
       } catch {
         // Failed to load
       } finally {
-        setLoading(false);
+        if (token === reqToken.current) setLoading(false);
       }
     }
     fetchData();
@@ -90,7 +97,7 @@ export default function ArtistDetailPage() {
 
   const artistName = item.parentTitle || item.title;
   const totalTracks = albums.reduce((sum, a) => sum + a.trackCount, 0);
-  const totalSize = albums.reduce((sum, a) => sum + Number(a.totalSize), 0);
+  const totalSize = albums.reduce((sum, a) => sum + (a.totalSize ? Number(a.totalSize) : 0), 0);
 
   // Audio codec breakdown across all albums
   const codecCounts: Record<string, number> = {};

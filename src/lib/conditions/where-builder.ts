@@ -287,23 +287,27 @@ const dateHandler: FieldHandler = (operator, value, field, negate) => {
       daysAgo.setDate(daysAgo.getDate() - Number(value));
       return applyNegateNullable(field, { [field]: { lt: daysAgo } }, negate);
     }
+    // Day boundaries are computed in UTC (setUTCDate / UTC-midnight day-start)
+    // so Phase-1 windows align with Phase 2's UTC `toISOString().split("T")[0]`
+    // day comparison — on non-UTC deployments local-tz boundaries disagreed
+    // and dropped items the in-memory phase would have matched.
     case "equals": {
       const dayStart = new Date(String(value));
       const dayEnd = new Date(dayStart);
-      dayEnd.setDate(dayEnd.getDate() + 1);
+      dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
       return applyNegateNullable(field, { [field]: { gte: dayStart, lt: dayEnd } }, negate);
     }
     case "between": {
       const [fromStr, toStr] = String(value).split(",");
       const endDate = new Date(toStr);
-      endDate.setDate(endDate.getDate() + 1);
+      endDate.setUTCDate(endDate.getUTCDate() + 1);
       return applyNegateNullable(field, { [field]: { gte: new Date(fromStr), lt: endDate } }, negate);
     }
     // Negative (already null-safe via withNullSafety).
     case "notEquals": {
       const dayStart = new Date(String(value));
       const dayEnd = new Date(dayStart);
-      dayEnd.setDate(dayEnd.getDate() + 1);
+      dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
       clause = withNullSafety(field, { OR: [{ [field]: { lt: dayStart } }, { [field]: { gte: dayEnd } }] });
       break;
     }

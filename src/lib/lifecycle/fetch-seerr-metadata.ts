@@ -1,6 +1,11 @@
 import { prisma } from "@/lib/db";
 import { SeerrClient } from "@/lib/seerr/seerr-client";
+import { logger } from "@/lib/logger";
 import type { SeerrDataMap } from "@/lib/rules/lifecycle-engine";
+
+// Hard ceiling on Seerr request pagination so a huge or looping instance can't
+// hang lifecycle processing indefinitely. 1000 pages × 100 per page = 100k requests.
+const MAX_PAGES = 1000;
 
 export async function fetchSeerrMetadata(
   userId: string,
@@ -20,9 +25,18 @@ export async function fetchSeerrMetadata(
     let skip = 0;
     const take = 100;
     let hasMore = true;
+    let pages = 0;
 
     while (hasMore) {
+      if (pages >= MAX_PAGES) {
+        logger.warn(
+          "Seerr",
+          `Request pagination hit MAX_PAGES (${MAX_PAGES}) for ${inst.name} (${mediaType}) — truncating`
+        );
+        break;
+      }
       const response = await client.getRequests({ take, skip, mediaType });
+      pages += 1;
 
       for (const req of response.results) {
         // Namespace keys with source prefix so TMDB and TVDB IDs can't collide in the same map

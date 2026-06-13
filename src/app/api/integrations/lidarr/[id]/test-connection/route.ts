@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { LidarrClient } from "@/lib/arr/lidarr-client";
+import { validateRequest, arrTestConnectionSchema } from "@/lib/validation";
 
 export async function POST(
   request: NextRequest,
@@ -13,7 +14,8 @@ export async function POST(
   }
 
   const { id } = await params;
-  const body = await request.json().catch(() => ({}));
+  const { data, error } = await validateRequest(request, arrTestConnectionSchema);
+  if (error) return error;
 
   const existing = await prisma.lidarrInstance.findFirst({
     where: { id, userId: session.userId! },
@@ -22,8 +24,8 @@ export async function POST(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const testUrl = body.url ?? existing.url;
-  const testKey = body.apiKey ?? existing.apiKey;
+  const testUrl = data.url ?? existing.url;
+  const testKey = data.apiKey ?? existing.apiKey;
   const client = new LidarrClient(testUrl, testKey);
   const result = await client.testConnection();
   return NextResponse.json(result);

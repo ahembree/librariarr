@@ -783,6 +783,11 @@ function evaluateSeerrRule(rule: LifecycleRule, meta: SeerrMetadata | undefined)
         case "lessThanOrEqual":
           result = m.requestCount <= numVal;
           break;
+        case "between": {
+          const [minStr, maxStr] = String(value).split(",");
+          result = m.requestCount >= Number(minStr) && m.requestCount <= Number(maxStr);
+          break;
+        }
         default:
           return false;
       }

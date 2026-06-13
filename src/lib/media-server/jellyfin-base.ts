@@ -453,39 +453,49 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       >("/Users");
       const users = usersRes.data || [];
 
+      const pageSize = 1000;
       for (const user of users) {
         try {
-          const itemsRes = await this.client.get<{
-            Items: Array<{
-              Id: string;
-              UserData?: { PlayCount?: number; LastPlayedDate?: string };
-            }>;
-          }>(`/Users/${user.Id}/Items`, {
-            params: {
-              IsPlayed: true,
-              Recursive: true,
-              Fields: "UserData",
-              Limit: 10000,
-            },
-          });
+          let startIndex = 0;
+          // Page through this user's played items — a single Limit:10000 would
+          // hard-truncate users with more than 10k plays.
+          while (true) {
+            const itemsRes = await this.client.get<{
+              Items: Array<{
+                Id: string;
+                UserData?: { PlayCount?: number; LastPlayedDate?: string };
+              }>;
+            }>(`/Users/${user.Id}/Items`, {
+              params: {
+                IsPlayed: true,
+                Recursive: true,
+                Fields: "UserData",
+                StartIndex: startIndex,
+                Limit: pageSize,
+              },
+            });
 
-          const items = itemsRes.data.Items || [];
-          for (const item of items) {
-            const playCount = item.UserData?.PlayCount ?? 0;
-            if (playCount <= 0) continue;
+            const items = itemsRes.data.Items || [];
+            for (const item of items) {
+              const playCount = item.UserData?.PlayCount ?? 0;
+              if (playCount <= 0) continue;
 
-            for (let i = 0; i < playCount; i++) {
-              entries.push({
-                ratingKey: item.Id,
-                username: user.Name,
-                watchedAt:
-                  i === 0 && item.UserData?.LastPlayedDate
-                    ? new Date(item.UserData.LastPlayedDate).toISOString()
-                    : null,
-                deviceName: null,
-                platform: null,
-              });
+              for (let i = 0; i < playCount; i++) {
+                entries.push({
+                  ratingKey: item.Id,
+                  username: user.Name,
+                  watchedAt:
+                    i === 0 && item.UserData?.LastPlayedDate
+                      ? new Date(item.UserData.LastPlayedDate).toISOString()
+                      : null,
+                  deviceName: null,
+                  platform: null,
+                });
+              }
             }
+
+            if (items.length < pageSize) break;
+            startIndex += pageSize;
           }
         } catch {
           // Skip users where we can't access items

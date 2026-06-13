@@ -15,7 +15,17 @@ const mockPrisma = vi.hoisted(() => ({
   lifecycleException: {
     findMany: vi.fn(),
   },
-  $transaction: vi.fn(),
+  // Detection runs its match writes inside a transaction in two shapes:
+  //   - callback form: $transaction(async (tx) => { ... }) (full re-eval)
+  //   - array form:    $transaction([p1, p2])              (incremental)
+  // Execute both against the same mock so the createMany/deleteMany assertions hold.
+  $transaction: vi.fn((arg: unknown) => {
+    if (typeof arg === "function") {
+      return (arg as (tx: typeof mockPrisma) => Promise<unknown>)(mockPrisma);
+    }
+    if (Array.isArray(arg)) return Promise.all(arg);
+    return Promise.resolve(undefined);
+  }),
 }));
 
 const mockEvaluateRules = vi.hoisted(() => vi.fn());
@@ -274,13 +284,20 @@ describe("detectAndSaveMatches", () => {
         externalIds: [],
       },
     ]);
-    mockPrisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
-      return fn({
-        ruleMatch: {
-          deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
-          createMany: vi.fn().mockResolvedValue({ count: 1 }),
-        },
-      });
+    // Full re-eval uses the callback form; handle the array form too so this
+    // override (which persists across clearAllMocks) doesn't break the
+    // incremental array-form tests that run after it.
+    mockPrisma.$transaction.mockImplementation((arg: unknown) => {
+      if (typeof arg === "function") {
+        return (arg as (tx: unknown) => Promise<unknown>)({
+          ruleMatch: {
+            deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+            createMany: vi.fn().mockResolvedValue({ count: 1 }),
+          },
+        });
+      }
+      if (Array.isArray(arg)) return Promise.all(arg);
+      return Promise.resolve(undefined);
     });
 
     const result = await detectAndSaveMatches(makeRuleSetConfig(), ["s1"], undefined, undefined, true);

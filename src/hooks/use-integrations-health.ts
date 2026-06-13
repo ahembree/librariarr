@@ -43,7 +43,7 @@ export function useIntegrationsHealth() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/integrations/health?fresh=1")
+    fetch("/api/integrations/health")
       .then((res) => (res.ok ? (res.json() as Promise<IntegrationsHealth>) : null))
       .then((data) => {
         if (cancelled) return;

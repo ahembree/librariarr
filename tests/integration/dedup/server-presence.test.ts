@@ -57,7 +57,7 @@ describe("getServerPresenceByDedupKey", () => {
   });
 
   it("returns empty map for empty array", async () => {
-    const result = await getServerPresenceByDedupKey([]);
+    const result = await getServerPresenceByDedupKey([], []);
     expect(result.size).toBe(0);
   });
 
@@ -70,7 +70,7 @@ describe("getServerPresenceByDedupKey", () => {
       type: "MOVIE",
     });
 
-    const result = await getServerPresenceByDedupKey(["movie:tmdb:123"]);
+    const result = await getServerPresenceByDedupKey(["movie:tmdb:123"], [server.id]);
     expect(result.size).toBe(1);
     expect(result.has("movie:tmdb:123")).toBe(true);
 
@@ -96,7 +96,7 @@ describe("getServerPresenceByDedupKey", () => {
       type: "MOVIE",
     });
 
-    const result = await getServerPresenceByDedupKey(["movie:tmdb:456"]);
+    const result = await getServerPresenceByDedupKey(["movie:tmdb:456"], [server1.id, server2.id]);
     expect(result.size).toBe(1);
     const servers = result.get("movie:tmdb:456")!;
     expect(servers).toHaveLength(2);
@@ -119,7 +119,7 @@ describe("getServerPresenceByDedupKey", () => {
       type: "MOVIE",
     });
 
-    const result = await getServerPresenceByDedupKey(["movie:tmdb:789"]);
+    const result = await getServerPresenceByDedupKey(["movie:tmdb:789"], [server.id]);
     const servers = result.get("movie:tmdb:789")!;
     expect(servers).toHaveLength(1);
     expect(servers[0].serverId).toBe(server.id);
@@ -137,9 +137,26 @@ describe("getServerPresenceByDedupKey", () => {
       type: "MOVIE",
     });
 
-    const result = await getServerPresenceByDedupKey(["movie:tmdb:100"]);
+    const result = await getServerPresenceByDedupKey(["movie:tmdb:100"], [server.id]);
     expect(result.size).toBe(1);
     expect(result.has("movie:tmdb:100")).toBe(true);
+  });
+
+  it("excludes servers not in the provided serverIds (filtered/disabled)", async () => {
+    const user = await createTestUser();
+    const server1 = await createTestServer(user.id, { name: "Included Server" });
+    const server2 = await createTestServer(user.id, { name: "Excluded Server" });
+    const lib1 = await createTestLibrary(server1.id, { type: "MOVIE" });
+    const lib2 = await createTestLibrary(server2.id, { type: "MOVIE" });
+
+    await createItemWithDedupKey(lib1.id, "movie:tmdb:300", { title: "Shared", type: "MOVIE" });
+    await createItemWithDedupKey(lib2.id, "movie:tmdb:300", { title: "Shared", type: "MOVIE" });
+
+    // Only server1 is in scope -- server2's presence must not leak into the badge.
+    const result = await getServerPresenceByDedupKey(["movie:tmdb:300"], [server1.id]);
+    const servers = result.get("movie:tmdb:300")!;
+    expect(servers).toHaveLength(1);
+    expect(servers[0].serverId).toBe(server1.id);
   });
 
   it("sorts servers alphabetically within each group", async () => {
@@ -158,7 +175,7 @@ describe("getServerPresenceByDedupKey", () => {
       type: "MOVIE",
     });
 
-    const result = await getServerPresenceByDedupKey(["movie:tmdb:200"]);
+    const result = await getServerPresenceByDedupKey(["movie:tmdb:200"], [server1.id, server2.id]);
     const servers = result.get("movie:tmdb:200")!;
     expect(servers[0].serverName).toBe("Alpha Server");
     expect(servers[1].serverName).toBe("Zebra Server");

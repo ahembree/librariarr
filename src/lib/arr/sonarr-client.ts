@@ -1,6 +1,34 @@
 import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
+import { configureRetry } from "@/lib/http-retry";
+
+// Tracked-download states that mean the item is NOT actively downloading.
+// Anything else (downloading, queued, warning, etc.) counts as an active download.
+const INACTIVE_DOWNLOAD_STATES = new Set([
+  "imported",
+  "importpending",
+  "failed",
+  "failedpending",
+  "ignored",
+]);
+
+/**
+ * A queue record is "actively downloading" unless its tracked-download state
+ * indicates it has already finished (imported), failed, or is ignored. Falling
+ * back to `true` when state is absent preserves the prior behaviour for queues
+ * that don't report a state.
+ */
+function isActiveDownloadRecord(record: {
+  trackedDownloadState?: string;
+  status?: string;
+}): boolean {
+  const state = (record.trackedDownloadState ?? "").toLowerCase();
+  if (state && INACTIVE_DOWNLOAD_STATES.has(state)) return false;
+  const status = (record.status ?? "").toLowerCase();
+  if (status === "completed" || status === "failed") return false;
+  return true;
+}
 
 export interface SonarrSeries {
   id: number;
@@ -103,6 +131,8 @@ export class SonarrClient {
         return Promise.reject(error);
       }
     );
+
+    configureRetry(this.client, "Sonarr", logger);
   }
 
   async testConnection(): Promise<{ ok: boolean; error?: string; appName?: string; version?: string }> {
@@ -206,8 +236,11 @@ export class SonarrClient {
       });
       const records = data.records || [];
       if (records.length === 0) return { downloading: false, status: null };
-      const record = records[0];
-      return { downloading: true, status: record.status ?? record.trackedDownloadStatus ?? "downloading" };
+      const active = records.find(isActiveDownloadRecord);
+      if (!active) {
+        return { downloading: false, status: records[0].status ?? records[0].trackedDownloadStatus ?? null };
+      }
+      return { downloading: true, status: active.status ?? active.trackedDownloadStatus ?? "downloading" };
     } catch {
       return { downloading: false, status: null };
     }

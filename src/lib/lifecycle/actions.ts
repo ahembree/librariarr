@@ -4,6 +4,7 @@ import { RadarrClient } from "@/lib/arr/radarr-client";
 import { SonarrClient } from "@/lib/arr/sonarr-client";
 import { LidarrClient } from "@/lib/arr/lidarr-client";
 import { logger } from "@/lib/logger";
+import { actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
 
 // Re-export constants so server-side consumers can import from here too
 export { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES } from "@/lib/lifecycle/action-types";
@@ -446,15 +447,7 @@ async function executeUnmonitorDeleteFilesRadarr(action: ActionRecord) {
 async function executeUnmonitorDeleteFilesSonarr(action: ActionRecord) {
   const { client, series } = await resolveSonarrSeries(action);
   await client.updateSeries(series.id, { monitored: false });
-  if (action.matchedMediaItemIds.length > 0) {
-    await deleteMatchedEpisodeFiles(client, series.id, action.matchedMediaItemIds);
-  } else {
-    const files = await client.getEpisodeFiles(series.id);
-    if (files.length > 0) {
-      logger.info("Lifecycle", `Deleting ALL ${files.length} episode files for series "${action.mediaItem.title}" (series-scope mode)`);
-      await client.deleteEpisodeFiles(files.map((f) => f.id));
-    }
-  }
+  await deleteEpisodeFilesForAction(client, series.id, action);
   if (action.addImportExclusion) {
     await client.addExclusion(series.tvdbId, series.title);
   }
@@ -492,6 +485,44 @@ async function executeUnmonitorDeleteFilesLidarr(action: ActionRecord) {
 }
 
 // --- Episode-level file deletion helper ---
+
+/**
+ * Resolve which Sonarr episode files an action should delete.
+ *
+ * Sonarr file-delete action types are member-scoped (see
+ * MEMBER_SCOPED_ACTION_TYPES): they act only on the episodes named by
+ * `matchedMediaItemIds`. When that list is empty there is no explicit
+ * whole-series signal on the action record to distinguish a genuine
+ * whole-series intent from member ids that were lost between scheduling and
+ * execution — so we refuse to delete the WHOLE series and skip instead. A
+ * stale "delete all episode files" fallback here could wipe an entire series
+ * because a few member ids went missing.
+ */
+async function deleteEpisodeFilesForAction(
+  client: SonarrClient,
+  seriesId: number,
+  action: ActionRecord,
+): Promise<void> {
+  if (action.matchedMediaItemIds.length > 0) {
+    await deleteMatchedEpisodeFiles(client, seriesId, action.matchedMediaItemIds);
+    return;
+  }
+  // Member-scoped action with no targeted episodes — skip rather than delete
+  // the entire series' files. Conservative by design (media deletion pipeline).
+  if (actionHonorsMemberIds(action.actionType)) {
+    logger.warn(
+      "Lifecycle",
+      `Skipping ${action.actionType} file deletion for series "${action.mediaItem.title}" — no matched episodes resolved (refusing to delete all episode files without a whole-series signal)`,
+    );
+    return;
+  }
+  // Non-member-scoped action types should never reach here, but if they do,
+  // there is nothing scoped to act on — skip.
+  logger.warn(
+    "Lifecycle",
+    `Skipping ${action.actionType} file deletion for series "${action.mediaItem.title}" — no episodes to act on`,
+  );
+}
 
 async function deleteMatchedEpisodeFiles(
   client: SonarrClient,
@@ -572,15 +603,7 @@ async function executeMonitorDeleteFilesSonarr(action: ActionRecord) {
   if (!series.monitored) {
     await client.updateSeries(series.id, { monitored: true });
   }
-  if (action.matchedMediaItemIds.length > 0) {
-    await deleteMatchedEpisodeFiles(client, series.id, action.matchedMediaItemIds);
-  } else {
-    const files = await client.getEpisodeFiles(series.id);
-    if (files.length > 0) {
-      logger.info("Lifecycle", `Deleting ALL ${files.length} episode files for series "${action.mediaItem.title}" (series-scope mode)`);
-      await client.deleteEpisodeFiles(files.map((f) => f.id));
-    }
-  }
+  await deleteEpisodeFilesForAction(client, series.id, action);
   if (action.addImportExclusion) {
     await client.addExclusion(series.tvdbId, series.title);
   }
@@ -623,15 +646,7 @@ async function executeDeleteFilesRadarr(action: ActionRecord) {
 
 async function executeDeleteFilesSonarr(action: ActionRecord) {
   const { client, series } = await resolveSonarrSeries(action);
-  if (action.matchedMediaItemIds.length > 0) {
-    await deleteMatchedEpisodeFiles(client, series.id, action.matchedMediaItemIds);
-  } else {
-    const files = await client.getEpisodeFiles(series.id);
-    if (files.length > 0) {
-      logger.info("Lifecycle", `Deleting ALL ${files.length} episode files for series "${action.mediaItem.title}" (series-scope mode)`);
-      await client.deleteEpisodeFiles(files.map((f) => f.id));
-    }
-  }
+  await deleteEpisodeFilesForAction(client, series.id, action);
   if (action.addImportExclusion) {
     await client.addExclusion(series.tvdbId, series.title);
   }
