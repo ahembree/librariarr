@@ -91,9 +91,21 @@ export async function DELETE(
     return NextResponse.json({ error: "Collection not found" }, { status: 404 });
   }
 
-  // Remove the collection from Plex. Rule sets that referenced it are detached
-  // automatically (collectionId is set null via the FK), so they simply stop
-  // contributing — their matches and actions are unaffected.
+  // Refuse to delete a collection that any rule set still references — it must
+  // be unassigned everywhere first. The FK is SetNull, so without this guard a
+  // delete would silently detach (and stop syncing) rules still using it.
+  const inUse = await prisma.ruleSet.count({ where: { collectionId: id } });
+  if (inUse > 0) {
+    return NextResponse.json(
+      {
+        error: `This collection is in use by ${inUse} rule set${inUse === 1 ? "" : "s"}. Remove it from ${inUse === 1 ? "that rule" : "those rules"} before deleting.`,
+      },
+      { status: 409 }
+    );
+  }
+
+  // Remove the collection from Plex. No rule sets reference it (guarded above),
+  // so nothing is detached.
   try {
     await removePlexCollection(session.userId!, collection.type, collection.name);
   } catch {

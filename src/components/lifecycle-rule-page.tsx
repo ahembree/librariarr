@@ -739,6 +739,15 @@ export function LifecycleRulePage({
   const [collectionHomeScreen, setCollectionHomeScreen] = useState(false);
   const [collectionRecommended, setCollectionRecommended] = useState(false);
   const [collectionSort, setCollectionSort] = useState("ALPHABETICAL");
+  const [showDeleteCollectionDialog, setShowDeleteCollectionDialog] = useState(false);
+  const [deletingCollection, setDeletingCollection] = useState(false);
+  // How many rule sets currently reference the selected collection (from the
+  // fetched list). A collection can only be deleted when this is 0.
+  const isExistingCollectionSelected =
+    !!selectedCollectionId && selectedCollectionId !== NEW_COLLECTION;
+  const selectedCollectionUsage = isExistingCollectionSelected
+    ? (collections.find((c) => c.id === selectedCollectionId)?._count?.ruleSets ?? 0)
+    : 0;
 
   // Discord notification
   const [discordNotifyOnAction, setDiscordNotifyOnAction] = useState(false);
@@ -1085,6 +1094,35 @@ export function LifecycleRulePage({
       }
     }
     return executeSave(options);
+  };
+
+  const handleDeleteCollection = async () => {
+    if (!isExistingCollectionSelected) return;
+    const id = selectedCollectionId;
+    setDeletingCollection(true);
+    try {
+      const res = await fetch(`/api/lifecycle/collections/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        toast.error("Couldn't delete collection", { description: d?.error || "Unknown error" });
+        return;
+      }
+      toast.success("Collection deleted");
+      // Clear the selection (the collection no longer exists) and refresh the list.
+      setSelectedCollectionId("");
+      setCollectionName("");
+      setCollectionSortName("");
+      setCollectionHomeScreen(false);
+      setCollectionRecommended(false);
+      setCollectionSort("ALPHABETICAL");
+      if (prevCollectionId === id) setPrevCollectionId(null);
+      await fetchCollections();
+    } catch (error) {
+      toast.error("Couldn't delete collection", { description: String(error) });
+    } finally {
+      setDeletingCollection(false);
+      setShowDeleteCollectionDialog(false);
+    }
   };
 
   const executeSave = async (options?: { clearMatches?: boolean; runDetection?: boolean; processActions?: boolean }) => {
@@ -2482,47 +2520,71 @@ export function LifecycleRulePage({
               <>
                 <div>
                   <Label>Collection</Label>
-                  <Select
-                    value={selectedCollectionId}
-                    onValueChange={(val) => {
-                      setSelectedCollectionId(val);
-                      if (val === NEW_COLLECTION) {
-                        setCollectionName("");
-                        setCollectionSortName("");
-                        setCollectionHomeScreen(false);
-                        setCollectionRecommended(false);
-                        setCollectionSort("ALPHABETICAL");
-                      } else {
-                        const c = collections.find((x) => x.id === val);
-                        if (c) {
-                          setCollectionName(c.name);
-                          setCollectionSortName(c.sortName ?? "");
-                          setCollectionHomeScreen(c.homeScreen);
-                          setCollectionRecommended(c.recommended);
-                          setCollectionSort(c.sort);
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <Select
+                      value={selectedCollectionId}
+                      onValueChange={(val) => {
+                        setSelectedCollectionId(val);
+                        if (val === NEW_COLLECTION) {
+                          setCollectionName("");
+                          setCollectionSortName("");
+                          setCollectionHomeScreen(false);
+                          setCollectionRecommended(false);
+                          setCollectionSort("ALPHABETICAL");
+                        } else {
+                          const c = collections.find((x) => x.id === val);
+                          if (c) {
+                            setCollectionName(c.name);
+                            setCollectionSortName(c.sortName ?? "");
+                            setCollectionHomeScreen(c.homeScreen);
+                            setCollectionRecommended(c.recommended);
+                            setCollectionSort(c.sort);
+                          }
                         }
-                      }
-                    }}
-                  >
-                    <SelectTrigger className="mt-1.5">
-                      <SelectValue placeholder="Select or create a collection…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {collections.map((c) => (
-                        <SelectItem key={c.id} value={c.id}>
-                          {c.name}
-                          {c._count && c._count.ruleSets > 0
-                            ? ` (${c._count.ruleSets} rule${c._count.ruleSets === 1 ? "" : "s"})`
-                            : ""}
-                        </SelectItem>
-                      ))}
-                      <SelectItem value={NEW_COLLECTION}>+ Create new collection…</SelectItem>
-                    </SelectContent>
-                  </Select>
+                      }}
+                    >
+                      <SelectTrigger className="flex-1">
+                        <SelectValue placeholder="Select or create a collection…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {collections.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>
+                            {c.name}
+                            {c._count && c._count.ruleSets > 0
+                              ? ` (${c._count.ruleSets} rule${c._count.ruleSets === 1 ? "" : "s"})`
+                              : ""}
+                          </SelectItem>
+                        ))}
+                        <SelectItem value={NEW_COLLECTION}>+ Create new collection…</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {isExistingCollectionSelected && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="shrink-0 text-destructive hover:text-destructive"
+                        disabled={deletingCollection || selectedCollectionUsage > 0}
+                        title={
+                          selectedCollectionUsage > 0
+                            ? `In use by ${selectedCollectionUsage} rule${selectedCollectionUsage === 1 ? "" : "s"} — remove it from ${selectedCollectionUsage === 1 ? "that rule" : "them"} before deleting`
+                            : "Delete this collection"
+                        }
+                        onClick={() => setShowDeleteCollectionDialog(true)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
                   <p className="text-xs text-muted-foreground mt-1.5">
                     Multiple rules can sync to the same collection — their matches are
                     merged. These settings apply to every rule synced to it.
                   </p>
+                  {selectedCollectionUsage > 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      In use by {selectedCollectionUsage} rule{selectedCollectionUsage === 1 ? "" : "s"}. To delete it, remove it from every rule first.
+                    </p>
+                  )}
                 </div>
 
                 {selectedCollectionId && (
@@ -3127,6 +3189,29 @@ export function LifecycleRulePage({
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete collection confirmation */}
+      <AlertDialog open={showDeleteCollectionDialog} onOpenChange={(open) => { if (!deletingCollection) setShowDeleteCollectionDialog(open); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Collection?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes the collection definition &ldquo;{collectionName}&rdquo; and removes it from Plex. This can&rsquo;t be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingCollection}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); void handleDeleteCollection(); }}
+              disabled={deletingCollection}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deletingCollection ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+              Delete Collection
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

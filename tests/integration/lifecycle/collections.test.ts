@@ -232,10 +232,9 @@ describe("Lifecycle Collections CRUD", () => {
       await expectJson(response, 401);
     });
 
-    it("removes the collection from Plex and detaches rule sets", async () => {
+    it("deletes an unused collection and removes it from Plex", async () => {
       const user = await createTestUser();
       const collection = await createTestCollection(user.id, { name: "Gone", type: "MOVIE" });
-      const ruleSet = await createTestRuleSet(user.id, { type: "MOVIE", collectionId: collection.id });
       setMockSession({ isLoggedIn: true, userId: user.id });
 
       const response = await callRouteWithParams(deleteDelete, { id: collection.id }, {
@@ -247,9 +246,26 @@ describe("Lifecycle Collections CRUD", () => {
 
       const deleted = await getTestPrisma().collection.findUnique({ where: { id: collection.id } });
       expect(deleted).toBeNull();
-      // FK SetNull: the rule set survives but is detached.
+    });
+
+    it("refuses to delete a collection that is in use", async () => {
+      const user = await createTestUser();
+      const collection = await createTestCollection(user.id, { name: "Busy", type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, { type: "MOVIE", collectionId: collection.id });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRouteWithParams(deleteDelete, { id: collection.id }, {
+        url: `/api/lifecycle/collections/${collection.id}`,
+        method: "DELETE",
+      });
+      const body = await expectJson<{ error: string }>(response, 409);
+      expect(body.error).toContain("in use");
+      // The collection and its rule-set link are untouched.
+      expect(mockRemovePlexCollection).not.toHaveBeenCalled();
+      const stillThere = await getTestPrisma().collection.findUnique({ where: { id: collection.id } });
+      expect(stillThere).not.toBeNull();
       const rs = await getTestPrisma().ruleSet.findUnique({ where: { id: ruleSet.id } });
-      expect(rs?.collectionId).toBeNull();
+      expect(rs?.collectionId).toBe(collection.id);
     });
 
     it("returns 404 for a non-existent collection", async () => {

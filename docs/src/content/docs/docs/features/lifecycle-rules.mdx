@@ -303,7 +303,7 @@ With **Sort order: Deletion date**, items are arranged soonest-deletion-first. W
 ### Lifecycle of a collection
 
 - Disabling collection sync on a rule, or deleting the rule, simply detaches it — the collection is re-synced to the remaining rules' matches. The Plex collection is removed only when it has no remaining members.
-- Deleting the collection definition itself (it stops being referenced by any rule) removes it from Plex.
+- To delete a collection definition outright, select it in the dropdown and use the **trash** button. A collection can only be deleted when **no rule uses it** — the button is disabled (and the API refuses) while any rule still references it, so remove it from every rule first. Deleting it removes the collection from Plex.
 
 ## How Rules Are Evaluated
 
