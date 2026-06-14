@@ -73,7 +73,7 @@ import { CardSizeControl } from "@/components/card-size-control";
 import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useChipColors } from "@/components/chip-color-provider";
 import { useServers } from "@/hooks/use-servers";
-import { formatFileSize, formatDuration } from "@/lib/format";
+import { formatFileSize, formatDuration, formatBytesNum } from "@/lib/format";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { generateId } from "@/lib/utils";
 import { EmptyState } from "@/components/empty-state";
@@ -886,6 +886,21 @@ export default function QueryPage() {
     return counts;
   }, [results, selectedIds]);
 
+  // Total file size of all results and of the current selection. Series rows
+  // already carry the aggregated sum of their episodes, so summing the row-level
+  // fileSize gives the correct total for both grouped and flat result sets.
+  const { totalSize, selectedSize } = useMemo(() => {
+    let total = 0;
+    let selected = 0;
+    for (const r of results) {
+      const bytes = r.fileSize ? Number(r.fileSize) : 0;
+      if (!Number.isFinite(bytes) || bytes <= 0) continue;
+      total += bytes;
+      if (selectedIds.has(r.id)) selected += bytes;
+    }
+    return { totalSize: total, selectedSize: selected };
+  }, [results, selectedIds]);
+
   const executeAction = useCallback(
     async (config: QueryActionConfig) => {
       setExecutingAction(true);
@@ -1547,7 +1562,9 @@ export default function QueryPage() {
           ) : (
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm text-muted-foreground">
-                {loading ? "Searching..." : `${results.length} result${results.length !== 1 ? "s" : ""} found`}
+                {loading
+                  ? "Searching..."
+                  : `${results.length} result${results.length !== 1 ? "s" : ""} found${totalSize > 0 ? ` · ${formatBytesNum(totalSize)}` : ""}`}
               </p>
               {viewMode === "cards" && !loading && results.length > 0 && (
                 <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-muted-foreground">
@@ -1566,6 +1583,7 @@ export default function QueryPage() {
             <>
               <QueryActionBar
                 selectedCount={selectedIds.size}
+                selectedSize={selectedSize}
                 selectionTypeCounts={selectionTypeCounts}
                 arrServerIds={arrServerIds}
                 arrMeta={arrMeta}

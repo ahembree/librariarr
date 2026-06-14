@@ -43,6 +43,7 @@ import {
   QUALITY_PROFILE_ACTION_TYPES,
   supportsSearchAfter as canSearchAfter,
 } from "@/lib/lifecycle/action-types";
+import { formatBytesNum } from "@/lib/format";
 
 export type ArrFamily = "radarr" | "sonarr" | "lidarr";
 type MediaType = "MOVIE" | "SERIES" | "MUSIC";
@@ -64,6 +65,8 @@ export interface QueryActionConfig {
 
 interface QueryActionBarProps {
   selectedCount: number;
+  /** Total file size (bytes) of the selected items. */
+  selectedSize: number;
   /** Count of selected items per media type. */
   selectionTypeCounts: Record<MediaType, number>;
   /** Arr instance chosen on the page per family (id). */
@@ -159,6 +162,7 @@ function TagPicker({
 
 export function QueryActionBar({
   selectedCount,
+  selectedSize,
   selectionTypeCounts,
   arrServerIds,
   arrMeta,
@@ -253,7 +257,9 @@ export function QueryActionBar({
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2">
       <span className="text-sm font-medium">
-        {noSelection ? "Actions" : `${selectedCount} selected`}
+        {noSelection
+          ? "Actions"
+          : `${selectedCount} selected${selectedSize > 0 ? ` · ${formatBytesNum(selectedSize)}` : ""}`}
       </span>
       <Button
         variant="ghost"
