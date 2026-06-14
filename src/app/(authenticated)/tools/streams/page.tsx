@@ -1322,18 +1322,18 @@ export default function StreamManagerPage() {
 
   const updateTranscodeMessage = (message: string) => {
     setTranscodeMessage(message);
-    if (transcodeEnabled) saveTranscodeManager({ message });
+    if (transcodeEnabled) void saveTranscodeManager({ message });
   };
 
   const updateTranscodeDelay = (delay: number) => {
     setTranscodeDelay(delay);
-    if (transcodeEnabled) saveTranscodeManager({ delay });
+    if (transcodeEnabled) void saveTranscodeManager({ delay });
   };
 
   const updateTranscodeCriteria = (key: keyof TranscodeCriteria, checked: boolean) => {
     const updated = { ...transcodeCriteria, [key]: checked };
     setTranscodeCriteria(updated);
-    if (transcodeEnabled) saveTranscodeManager({ criteria: updated });
+    if (transcodeEnabled) void saveTranscodeManager({ criteria: updated });
   };
 
   return (

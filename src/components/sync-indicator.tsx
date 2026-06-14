@@ -108,6 +108,12 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
   const wasActiveRef = useRef(false);
   const lastStatsRefreshRef = useRef(0);
   const isFirstFetchRef = useRef(true);
+  // IDs of jobs seen RUNNING/PENDING on the previous poll. Used to attribute
+  // completion/failure toasts to the job that actually just finished — the
+  // jobs list also carries historical COMPLETED/FAILED rows (for the idle
+  // indicator), so we must not scan the whole list or a stale failure would
+  // be re-announced on every successful sync.
+  const prevActiveIdsRef = useRef<Set<string>>(new Set());
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -118,6 +124,11 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
 
       const isActive = newJobs.some(
         (j) => j.status === "RUNNING" || j.status === "PENDING"
+      );
+      const activeIds = new Set(
+        newJobs
+          .filter((j) => j.status === "RUNNING" || j.status === "PENDING")
+          .map((j) => j.id)
       );
 
       // Show toast when sync starts (skip initial load)
@@ -132,30 +143,29 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
         }
       }
 
+      // Announce jobs that were active last poll and have now reached a
+      // terminal state. Per-job so multi-server syncs each get attributed,
+      // and independent of onSyncComplete so the toast always fires.
+      if (!isFirstFetchRef.current) {
+        for (const job of newJobs) {
+          if (!prevActiveIdsRef.current.has(job.id)) continue;
+          if (job.status === "FAILED") {
+            toast.error(`Sync failed: ${job.mediaServer.name}`, {
+              description: job.error || "Unknown error",
+            });
+          } else if (job.status === "COMPLETED") {
+            toast.success(`Sync complete: ${job.mediaServer.name}`, {
+              description: `${job.itemsProcessed.toLocaleString()} items synced`,
+            });
+          }
+        }
+      }
+
       if (onSyncComplete) {
         // Detect transition from active to idle
         if (wasActiveRef.current && !isActive) {
           onSyncComplete();
           lastStatsRefreshRef.current = Date.now();
-          // Surface how the just-finished sync ended. Failures take priority so
-          // a partial failure isn't masked by a sibling success.
-          const justFailed = newJobs
-            .filter((j) => j.status === "FAILED")
-            .sort((a, b) => new Date(b.completedAt ?? 0).getTime() - new Date(a.completedAt ?? 0).getTime())[0];
-          if (justFailed) {
-            toast.error(`Sync failed: ${justFailed.mediaServer.name}`, {
-              description: justFailed.error || "Unknown error",
-            });
-          } else {
-            const justCompleted = newJobs
-              .filter((j) => j.status === "COMPLETED")
-              .sort((a, b) => new Date(b.completedAt ?? 0).getTime() - new Date(a.completedAt ?? 0).getTime())[0];
-            if (justCompleted) {
-              toast.success(`Sync complete: ${justCompleted.mediaServer.name}`, {
-                description: `${justCompleted.itemsProcessed.toLocaleString()} items synced`,
-              });
-            }
-          }
         }
         // Live-refresh stats every 10s during active sync
         else if (
@@ -167,6 +177,7 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
         }
       }
 
+      prevActiveIdsRef.current = activeIds;
       wasActiveRef.current = isActive;
       setHasActiveSync(isActive);
       isFirstFetchRef.current = false;

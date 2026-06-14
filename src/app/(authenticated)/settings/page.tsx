@@ -1066,18 +1066,20 @@ export default function SettingsPage() {
             method: "DELETE",
           });
         }
+        toast.success("Library disabled", deleteData ? { description: "Media data removed." } : undefined);
       } else {
         const res = await fetch(`/api/servers/${purgeDialog.serverId}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ enabled: false, deleteData }),
         });
-        if (res.ok) await fetchServers();
+        if (res.ok) {
+          await fetchServers();
+          toast.success("Server disabled", deleteData ? { description: "Media data removed." } : undefined);
+        } else {
+          toast.error("Failed to disable server");
+        }
       }
-      toast.success(
-        purgeDialog.mode === "library" ? "Library disabled" : "Server disabled",
-        deleteData ? { description: "Media data removed." } : undefined,
-      );
     } catch (error) {
       console.error("Failed to disable:", error);
       toast.error("Failed to disable");
