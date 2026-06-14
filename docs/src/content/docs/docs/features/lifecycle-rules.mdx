@@ -285,7 +285,7 @@ Collections are reusable, saved definitions (Plex only). Each one owns its prese
 
 - **Collection name** — the title shown in Plex.
 - **Sort name** *(optional)* — a sort title prefix (e.g., `!001`) to pin the collection to the top of a library.
-- **Sort order** — `Alphabetical`, `Release date`, or `Deletion date`.
+- **Sort order** — `Alphabetical`, `Release date`, or `Action date`.
 - **Display on home screens** / **Display in library recommended** — Plex visibility toggles.
 
 Because the settings live on the collection (not the rule), editing them from any rule applies to **every** rule synced to that collection.
@@ -296,9 +296,9 @@ Multiple rule sets can target the **same** collection. When they do, the collect
 
 A collection is scoped to one library type (Movies, Series, or Music), since a Plex collection lives inside a single library. To use the same name for both movies and series, create two collections.
 
-### Deletion-date ordering across rules
+### Action-date ordering across rules
 
-With **Sort order: Deletion date**, items are arranged soonest-deletion-first. When several rules feed the collection, the ordering pools the scheduled deletion dates of **all** of them, so the shelf is correctly interleaved regardless of which rule scheduled each item. (Items without a pending deletion are placed last.)
+With **Sort order: Action date**, items are arranged soonest-scheduled-action first. When several rules feed the collection, the ordering pools the scheduled action dates of **all** of them, so the shelf is correctly interleaved regardless of which rule scheduled each item. (Items without a pending action are placed last.)
 
 ### Lifecycle of a collection
 

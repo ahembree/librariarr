@@ -2650,7 +2650,7 @@ export function LifecycleRulePage({
                           <SelectContent>
                             <SelectItem value="ALPHABETICAL">Alphabetical</SelectItem>
                             <SelectItem value="RELEASE_DATE">Release date</SelectItem>
-                            <SelectItem value="DELETION_DATE">Deletion date</SelectItem>
+                            <SelectItem value="DELETION_DATE">Action date</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
