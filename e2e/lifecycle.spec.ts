@@ -48,9 +48,10 @@ test.describe("lifecycle — pending", () => {
     }
     await expect(page.getByText(/no pending actions/i)).toBeVisible();
 
-    // Switching the status filter keeps us on the page.
+    // Switching the status filter actually changes the view: the Completed
+    // tab shows its own distinct empty state.
     await page.getByRole("button", { name: "Completed", exact: true }).click();
-    await expect(page.getByRole("heading", { name: /Pending Actions/i }).first()).toBeVisible();
+    await expect(page.getByText(/no completed actions yet/i)).toBeVisible();
   });
 });
 

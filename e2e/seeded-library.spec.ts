@@ -34,6 +34,46 @@ test.describe("populated library", () => {
     await expect(page.getByText(SEED.movieTitle).first()).toBeVisible();
   });
 
+  test("the command palette finds the seeded movie and navigates to it", async ({ page }) => {
+    await page.goto("/library/movies");
+    await page.keyboard.press("Control+k");
+    await page
+      .getByPlaceholder(/search movies, series, artists, albums/i)
+      .fill("E2E Seed");
+
+    const result = page.getByRole("dialog").getByText(SEED.movieTitle);
+    await expect(result).toBeVisible();
+    await result.click();
+
+    await page.waitForURL(new RegExp(`/library/movies/${SEED.movieId}`));
+    await expect(page.getByText(SEED.movieTitle).first()).toBeVisible();
+  });
+
+  test("the title search filters the seeded movie out of the list", async ({ page }) => {
+    await page.goto("/library/movies");
+    await expect(page.getByText(SEED.movieTitle).first()).toBeVisible();
+
+    const search = page.getByPlaceholder("Search titles...");
+    await search.fill("zzz-no-such-title");
+    await search.press("Enter");
+
+    // The server-side title filter excludes the seeded movie, leaving the
+    // filtered empty state in its place.
+    await expect(page.getByText("No movies found.")).toBeVisible();
+    await expect(page.getByText(SEED.movieTitle)).toHaveCount(0);
+
+    // Emptying the search box restores the full list.
+    await search.fill("");
+    await search.press("Enter");
+    await expect(page.getByText(SEED.movieTitle).first()).toBeVisible();
+  });
+
+  test("the filters panel opens with the seeded library's facets", async ({ page }) => {
+    await page.goto("/library/movies");
+    await page.getByRole("button", { name: /^Filters$/i }).click();
+    await expect(page.getByText(/narrow down your library/i)).toBeVisible();
+  });
+
   test("settings lists the seeded media server", async ({ page }) => {
     await page.goto("/settings");
     await page.getByRole("tab", { name: /^Media Servers$/i }).click();
