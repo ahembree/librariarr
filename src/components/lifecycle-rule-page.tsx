@@ -741,13 +741,8 @@ export function LifecycleRulePage({
   const [collectionSort, setCollectionSort] = useState("ALPHABETICAL");
   const [showDeleteCollectionDialog, setShowDeleteCollectionDialog] = useState(false);
   const [deletingCollection, setDeletingCollection] = useState(false);
-  // How many rule sets currently reference the selected collection (from the
-  // fetched list). A collection can only be deleted when this is 0.
   const isExistingCollectionSelected =
     !!selectedCollectionId && selectedCollectionId !== NEW_COLLECTION;
-  const selectedCollectionUsage = isExistingCollectionSelected
-    ? (collections.find((c) => c.id === selectedCollectionId)?._count?.ruleSets ?? 0)
-    : 0;
 
   // Discord notification
   const [discordNotifyOnAction, setDiscordNotifyOnAction] = useState(false);
@@ -862,6 +857,17 @@ export function LifecycleRulePage({
   // reassigns the rule to a different collection re-syncs the old one too
   // (dropping this rule's items from it).
   const [prevCollectionId, setPrevCollectionId] = useState<string | null>(null);
+
+  // How many rule sets reference the selected collection (from the fetched
+  // list), and how many of those are OTHER rules (excluding the one being
+  // edited). A collection can be deleted when no OTHER rule uses it — deleting
+  // from the last rule detaches that rule via the FK.
+  const selectedCollectionUsage = isExistingCollectionSelected
+    ? (collections.find((c) => c.id === selectedCollectionId)?._count?.ruleSets ?? 0)
+    : 0;
+  const currentRuleUsesSelected =
+    isExistingCollectionSelected && prevCollectionId === selectedCollectionId;
+  const otherCollectionUsage = selectedCollectionUsage - (currentRuleUsesSelected ? 1 : 0);
 
   // Test Media
   const [showTestMediaDialog, setShowTestMediaDialog] = useState(false);
@@ -1099,23 +1105,48 @@ export function LifecycleRulePage({
   const handleDeleteCollection = async () => {
     if (!isExistingCollectionSelected) return;
     const id = selectedCollectionId;
+    // If the rule being edited is (the last) one using it, name it so the server
+    // excludes it from the in-use check; the FK SetNull then detaches it.
+    const detachedFromCurrent = prevCollectionId === id;
     setDeletingCollection(true);
     try {
-      const res = await fetch(`/api/lifecycle/collections/${id}`, { method: "DELETE" });
+      const qs = activeRuleSetId ? `?ruleSetId=${activeRuleSetId}` : "";
+      const res = await fetch(`/api/lifecycle/collections/${id}${qs}`, { method: "DELETE" });
       if (!res.ok) {
         const d = await res.json().catch(() => null);
         toast.error("Couldn't delete collection", { description: d?.error || "Unknown error" });
         return;
       }
       toast.success("Collection deleted");
-      // Clear the selection (the collection no longer exists) and refresh the list.
+      // Clear the collection portion of the editor.
       setSelectedCollectionId("");
       setCollectionName("");
       setCollectionSortName("");
       setCollectionHomeScreen(false);
       setCollectionRecommended(false);
       setCollectionSort("ALPHABETICAL");
-      if (prevCollectionId === id) setPrevCollectionId(null);
+      setPrevCollectionId(null);
+      if (detachedFromCurrent) {
+        // The current (saved) rule was detached server-side. Turn the toggle off
+        // and fold the cleared collection state into the baseline so it doesn't
+        // read as an unsaved change.
+        setCollectionEnabled(false);
+        setSnapshot((s) =>
+          s
+            ? {
+                ...s,
+                collectionEnabled: false,
+                selectedCollectionId: "",
+                collectionName: "",
+                collectionSortName: "",
+                collectionHomeScreen: false,
+                collectionRecommended: false,
+                collectionSort: "ALPHABETICAL",
+              }
+            : s,
+        );
+      }
+      await fetchRuleSets();
       await fetchCollections();
     } catch (error) {
       toast.error("Couldn't delete collection", { description: String(error) });
@@ -2564,10 +2595,10 @@ export function LifecycleRulePage({
                         variant="outline"
                         size="icon"
                         className="shrink-0 text-destructive hover:text-destructive"
-                        disabled={deletingCollection || selectedCollectionUsage > 0}
+                        disabled={deletingCollection || otherCollectionUsage > 0}
                         title={
-                          selectedCollectionUsage > 0
-                            ? `In use by ${selectedCollectionUsage} rule${selectedCollectionUsage === 1 ? "" : "s"} — remove it from ${selectedCollectionUsage === 1 ? "that rule" : "them"} before deleting`
+                          otherCollectionUsage > 0
+                            ? `In use by ${otherCollectionUsage} other rule${otherCollectionUsage === 1 ? "" : "s"} — remove it from ${otherCollectionUsage === 1 ? "that rule" : "them"} before deleting`
                             : "Delete this collection"
                         }
                         onClick={() => setShowDeleteCollectionDialog(true)}
@@ -2580,9 +2611,9 @@ export function LifecycleRulePage({
                     Multiple rules can sync to the same collection — their matches are
                     merged. These settings apply to every rule synced to it.
                   </p>
-                  {selectedCollectionUsage > 0 && (
+                  {otherCollectionUsage > 0 && (
                     <p className="text-xs text-muted-foreground mt-1">
-                      In use by {selectedCollectionUsage} rule{selectedCollectionUsage === 1 ? "" : "s"}. To delete it, remove it from every rule first.
+                      Also used by {otherCollectionUsage} other rule{otherCollectionUsage === 1 ? "" : "s"}. To delete it, remove it from {otherCollectionUsage === 1 ? "that rule" : "those rules"} first.
                     </p>
                   )}
                 </div>
@@ -3200,7 +3231,8 @@ export function LifecycleRulePage({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Collection?</AlertDialogTitle>
             <AlertDialogDescription>
-              This permanently deletes the collection definition &ldquo;{collectionName}&rdquo; and removes it from Plex. This can&rsquo;t be undone.
+              This permanently deletes the collection definition &ldquo;{collectionName}&rdquo; and removes it from Plex.
+              {currentRuleUsesSelected && <> It will also be removed from this rule.</>} This can&rsquo;t be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -268,6 +268,47 @@ describe("Lifecycle Collections CRUD", () => {
       expect(rs?.collectionId).toBe(collection.id);
     });
 
+    it("deletes from the last rule using it (detaches that rule)", async () => {
+      const user = await createTestUser();
+      const collection = await createTestCollection(user.id, { name: "Last", type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, { type: "MOVIE", collectionId: collection.id });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRouteWithParams(deleteDelete, { id: collection.id }, {
+        url: `/api/lifecycle/collections/${collection.id}`,
+        method: "DELETE",
+        searchParams: { ruleSetId: ruleSet.id },
+      });
+      await expectJson(response, 200);
+      expect(mockRemovePlexCollection).toHaveBeenCalledWith(user.id, "MOVIE", "Last");
+      // Collection gone; the named rule is detached via the FK SetNull.
+      const deleted = await getTestPrisma().collection.findUnique({ where: { id: collection.id } });
+      expect(deleted).toBeNull();
+      const rs = await getTestPrisma().ruleSet.findUnique({ where: { id: ruleSet.id } });
+      expect(rs?.collectionId).toBeNull();
+    });
+
+    it("still refuses when OTHER rules use it even if one is named", async () => {
+      const user = await createTestUser();
+      const collection = await createTestCollection(user.id, { name: "Shared", type: "MOVIE" });
+      const ruleA = await createTestRuleSet(user.id, { type: "MOVIE", collectionId: collection.id });
+      const ruleB = await createTestRuleSet(user.id, { type: "MOVIE", collectionId: collection.id });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRouteWithParams(deleteDelete, { id: collection.id }, {
+        url: `/api/lifecycle/collections/${collection.id}`,
+        method: "DELETE",
+        searchParams: { ruleSetId: ruleA.id },
+      });
+      const body = await expectJson<{ error: string }>(response, 409);
+      expect(body.error).toContain("other rule");
+      const stillThere = await getTestPrisma().collection.findUnique({ where: { id: collection.id } });
+      expect(stillThere).not.toBeNull();
+      // Both rules still linked.
+      expect((await getTestPrisma().ruleSet.findUnique({ where: { id: ruleA.id } }))?.collectionId).toBe(collection.id);
+      expect((await getTestPrisma().ruleSet.findUnique({ where: { id: ruleB.id } }))?.collectionId).toBe(collection.id);
+    });
+
     it("returns 404 for a non-existent collection", async () => {
       const user = await createTestUser();
       setMockSession({ isLoggedIn: true, userId: user.id });
