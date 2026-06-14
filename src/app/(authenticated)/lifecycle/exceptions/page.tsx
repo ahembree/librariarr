@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { toast } from "sonner";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { EmptyState } from "@/components/empty-state";
@@ -381,9 +382,14 @@ export default function LifecycleExceptionsPage() {
         if (selectedItem && selectedItem.id === row.mediaItem.id) {
           setSelectedItem(null);
         }
+        toast.success("Exception removed", { description: row.displayTitle });
+      } else {
+        const data = await response.json().catch(() => ({}));
+        toast.error("Couldn't remove exception", { description: data.error });
       }
     } catch (error) {
       console.error("Failed to remove exception:", error);
+      toast.error("Couldn't remove exception");
     } finally {
       setRemoving(null);
       setConfirmRemove(null);
@@ -410,9 +416,14 @@ export default function LifecycleExceptionsPage() {
           )
         );
         setEditingGroup(null);
+        toast.success("Reason updated");
+      } else {
+        const data = await response.json().catch(() => ({}));
+        toast.error("Couldn't update reason", { description: data.error });
       }
     } catch (error) {
       console.error("Failed to update reason:", error);
+      toast.error("Couldn't update reason");
     } finally {
       setSavingReason(false);
     }
@@ -467,9 +478,14 @@ export default function LifecycleExceptionsPage() {
         // Remove from search results and refresh exceptions
         setSearchResults((prev) => prev.filter((r) => r.id !== item.id));
         await fetchExceptions();
+        toast.success("Exception added", { description: getSearchResultLabel(item) });
+      } else {
+        const data = await response.json().catch(() => ({}));
+        toast.error("Couldn't add exception", { description: data.error });
       }
     } catch (error) {
       console.error("Failed to add exception:", error);
+      toast.error("Couldn't add exception");
     } finally {
       setAddingItemId(null);
     }

@@ -1324,6 +1324,7 @@ export function LifecycleRulePage({
       }
     } catch (error) {
       console.error("Failed to save rule set:", error);
+      toast.error("Failed to save rule set");
     } finally {
       setLoading(false);
     }

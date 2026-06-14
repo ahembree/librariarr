@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { toast } from "sonner";
 import {
   Card,
   CardContent,
@@ -1033,9 +1034,13 @@ export default function StreamManagerPage() {
         await fetchBlackoutSchedules();
         setShowBlackoutDialog(false);
         setEditingBlackout(null);
+        toast.success(editingBlackout ? "Blackout schedule updated" : "Blackout schedule created");
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error("Couldn't save blackout schedule", { description: data.error });
       }
     } catch {
-      // Silent
+      toast.error("Couldn't save blackout schedule");
     } finally {
       setBlackoutSaving(false);
     }
@@ -1047,9 +1052,12 @@ export default function StreamManagerPage() {
       const res = await fetch(`/api/tools/blackout/${id}`, { method: "DELETE" });
       if (res.ok) {
         await fetchBlackoutSchedules();
+        toast.success("Blackout schedule deleted");
+      } else {
+        toast.error("Couldn't delete blackout schedule");
       }
     } catch {
-      // Silent
+      toast.error("Couldn't delete blackout schedule");
     } finally {
       setDeleteBlackoutId(null);
     }
@@ -1062,16 +1070,18 @@ export default function StreamManagerPage() {
       prev.map((s) => (s.id === id ? { ...s, enabled: !currentEnabled } : s))
     );
     try {
-      await fetch(`/api/tools/blackout/${id}`, {
+      const res = await fetch(`/api/tools/blackout/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: !currentEnabled }),
       });
+      if (!res.ok) throw new Error("request failed");
     } catch {
       // Revert on failure
       setBlackoutSchedules((prev) =>
         prev.map((s) => (s.id === id ? { ...s, enabled: currentEnabled } : s))
       );
+      toast.error("Couldn't update blackout schedule");
     }
   };
 
@@ -1170,6 +1180,7 @@ export default function StreamManagerPage() {
   const executeTerminate = async () => {
     if (!terminateTarget || !selectedMessage) return;
     setTerminating(true);
+    const targetCount = getTargetSessions().length || (terminateTarget === "all" ? sessions.length : 0);
 
     try {
       if (terminateTarget === "all") {
@@ -1201,8 +1212,14 @@ export default function StreamManagerPage() {
 
       setSelectedKeys(new Set());
       await refreshSessions();
+      toast.success(
+        targetCount > 0
+          ? `Terminating ${targetCount} session${targetCount !== 1 ? "s" : ""}`
+          : "Sessions terminated",
+      );
     } catch {
       // SSE stream will pick up changes on next cycle
+      toast.error("Couldn't terminate sessions");
     } finally {
       setTerminating(false);
       setTerminateDialogOpen(false);
@@ -1221,13 +1238,14 @@ export default function StreamManagerPage() {
       ...(overrides.excludedUsers !== undefined && { excludedUsers: overrides.excludedUsers }),
     };
     try {
-      await fetch("/api/tools/maintenance", {
+      const res = await fetch("/api/tools/maintenance", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+      return res.ok;
     } catch {
-      // Silent
+      return false;
     }
   };
 
@@ -1235,10 +1253,14 @@ export default function StreamManagerPage() {
     setMaintenanceSaving(true);
     setMaintenanceEnabled(enabled);
     try {
-      await saveMaintenance({ enabled });
+      const ok = await saveMaintenance({ enabled });
+      if (!ok) {
+        setMaintenanceEnabled(!enabled);
+        toast.error("Couldn't update maintenance mode");
+        return;
+      }
       window.dispatchEvent(new CustomEvent("maintenance-changed", { detail: { enabled } }));
-    } catch {
-      setMaintenanceEnabled(!enabled);
+      toast.success(enabled ? "Maintenance mode enabled" : "Maintenance mode disabled");
     } finally {
       setMaintenanceSaving(false);
     }
@@ -1246,12 +1268,12 @@ export default function StreamManagerPage() {
 
   const updateMaintenanceMessage = (message: string) => {
     setMaintenanceMessage(message);
-    if (maintenanceEnabled) saveMaintenance({ message });
+    if (maintenanceEnabled) void saveMaintenance({ message });
   };
 
   const updateMaintenanceDelay = (delay: number) => {
     setMaintenanceDelay(delay);
-    if (maintenanceEnabled) saveMaintenance({ delay });
+    if (maintenanceEnabled) void saveMaintenance({ delay });
   };
 
   // --- Transcode manager handlers ---
@@ -1271,13 +1293,14 @@ export default function StreamManagerPage() {
       ...(overrides.excludedUsers !== undefined && { excludedUsers: overrides.excludedUsers }),
     };
     try {
-      await fetch("/api/tools/transcode-manager", {
+      const res = await fetch("/api/tools/transcode-manager", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+      return res.ok;
     } catch {
-      // Silent
+      return false;
     }
   };
 
@@ -1285,9 +1308,13 @@ export default function StreamManagerPage() {
     setTranscodeSaving(true);
     setTranscodeEnabled(enabled);
     try {
-      await saveTranscodeManager({ enabled });
-    } catch {
-      setTranscodeEnabled(!enabled);
+      const ok = await saveTranscodeManager({ enabled });
+      if (!ok) {
+        setTranscodeEnabled(!enabled);
+        toast.error("Couldn't update transcode manager");
+        return;
+      }
+      toast.success(enabled ? "Transcode manager enabled" : "Transcode manager disabled");
     } finally {
       setTranscodeSaving(false);
     }

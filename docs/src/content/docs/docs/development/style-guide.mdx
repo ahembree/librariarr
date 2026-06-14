@@ -346,6 +346,23 @@ Border-bottom style tabs with icon support:
 
 Dialogs use `backdrop-blur-sm` on the overlay and `border-white/6` on the content panel.
 
+### Toasts
+
+Transient feedback uses [sonner](https://sonner.emilkowal.ski/) via the global `<Toaster>` mounted in `src/app/layout.tsx` (`position="bottom-right"`, `richColors`, `closeButton`, `duration={4000}`, and a `mobileOffset` that keeps toasts clear of the phone safe area). Import `toast` from `sonner` in any client component.
+
+**When to toast:**
+
+- Every user-triggered mutation (save, create, update, delete, toggle, test, run, sync) gets feedback: `toast.success` on success and `toast.error` on failure. Don't leave a mutation silent.
+- Background **jobs** that change state surface their outcome — e.g. library sync start/complete/failure (`SyncIndicator`).
+- Keep the title short and imperative ("Server added", "Sync failed"); put the detail (item name, error message) in `description`.
+
+**When not to toast:**
+
+- Incidental auto-saves with their own immediate visual feedback (accent color, chip colors, dashboard drag-rearrange) only toast on **error** — a success toast on every drag/pick is noise.
+- Navigation that immediately replaces the page (e.g. logout) — the toast would unmount before it's read.
+
+Toasts auto-dismiss after 4s and are dismissable via the close button; never set a long/`Infinity` duration for routine feedback.
+
 ### Hover Popovers
 
 Every `MediaHoverPopover` must pass the **same universal set of fields** regardless of page, view type (table or card), or data source. All fields are optional — sections hide gracefully when data is absent. The component renders only what is non-null, so passing all fields is always safe.

@@ -781,6 +781,7 @@ export default function SettingsPage() {
 
       setAddServerDialog(null);
       await fetchServers();
+      toast.success("Server added", { description: "Syncing libraries now…" });
     } catch {
       setAddServerError("Failed to save library selections");
     } finally {
@@ -921,6 +922,7 @@ export default function SettingsPage() {
       setEditingServerId(null);
       setPlexServers([]);
       await fetchServers();
+      toast.success("Server updated");
     } catch {
       setEditServerError("Failed to update server");
     } finally {
@@ -942,9 +944,15 @@ export default function SettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: true }),
       });
-      if (res.ok) await fetchServers();
+      if (res.ok) {
+        await fetchServers();
+        toast.success("Server enabled");
+      } else {
+        toast.error("Failed to enable server");
+      }
     } catch (error) {
       console.error("Failed to enable server:", error);
+      toast.error("Failed to enable server");
     }
   };
 
@@ -959,9 +967,13 @@ export default function SettingsPage() {
         if (type === "sonarr") await fetchSonarrInstances();
         else if (type === "radarr") await fetchRadarrInstances();
         else if (type === "lidarr") await fetchLidarrInstances();
+        toast.success(enabled ? "Integration enabled" : "Integration disabled");
+      } else {
+        toast.error("Failed to update integration");
       }
     } catch (error) {
       console.error("Failed to toggle integration enabled:", error);
+      toast.error("Failed to update integration");
     }
   };
 
@@ -972,9 +984,15 @@ export default function SettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled }),
       });
-      if (res.ok) await fetchSeerrInstances();
+      if (res.ok) {
+        await fetchSeerrInstances();
+        toast.success(enabled ? "Seerr enabled" : "Seerr disabled");
+      } else {
+        toast.error("Failed to update Seerr");
+      }
     } catch (error) {
       console.error("Failed to toggle Seerr enabled:", error);
+      toast.error("Failed to update Seerr");
     }
   };
 
@@ -1056,8 +1074,13 @@ export default function SettingsPage() {
         });
         if (res.ok) await fetchServers();
       }
+      toast.success(
+        purgeDialog.mode === "library" ? "Library disabled" : "Server disabled",
+        deleteData ? { description: "Media data removed." } : undefined,
+      );
     } catch (error) {
       console.error("Failed to disable:", error);
+      toast.error("Failed to disable");
     } finally {
       setPurging(false);
       setPurgeDialog(null);
@@ -1081,6 +1104,7 @@ export default function SettingsPage() {
         return;
       }
       await fetchScheduleInfo();
+      toast.success("Sync schedule saved");
     } catch (error) {
       console.error("Failed to save schedule:", error);
       setCronError("Failed to save schedule");
@@ -1101,6 +1125,8 @@ export default function SettingsPage() {
       if (!response.ok) {
         const data = await response.json();
         setLcDetectCronError(data.error || "Failed to save schedule");
+      } else {
+        toast.success("Detection schedule saved");
       }
       await fetchScheduleInfo();
     } catch {
@@ -1122,6 +1148,8 @@ export default function SettingsPage() {
       if (!response.ok) {
         const data = await response.json();
         setLcExecCronError(data.error || "Failed to save schedule");
+      } else {
+        toast.success("Execution schedule saved");
       }
       await fetchScheduleInfo();
     } catch {
@@ -1186,7 +1214,11 @@ export default function SettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ scheduledJobTime: value }),
       });
-      if (!res.ok) toast.error("Failed to save scheduled job time");
+      if (!res.ok) {
+        toast.error("Failed to save scheduled job time");
+      } else {
+        toast.success("Scheduled job time saved");
+      }
       fetchScheduleInfo();
     } catch {
       toast.error("Failed to save scheduled job time");
@@ -1206,6 +1238,9 @@ export default function SettingsPage() {
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         toast.error("Failed to start job", { description: data?.error });
+      } else {
+        const label = job === "sync" ? "Sync" : job === "detection" ? "Detection" : "Execution";
+        toast.success(`${label} started`);
       }
       // Refresh schedule info + sync status after completion
       fetchScheduleInfo();
@@ -1281,6 +1316,7 @@ export default function SettingsPage() {
         return;
       }
       setDedupStats(value);
+      toast.success("Deduplication setting saved");
     } catch {
       toast.error("Failed to save deduplication setting");
     } finally {
@@ -1300,6 +1336,7 @@ export default function SettingsPage() {
       });
       if (response.ok) {
         setLogRetentionDays(days);
+        toast.success("Log retention saved");
       } else {
         toast.error("Failed to save log retention");
       }
@@ -1322,6 +1359,7 @@ export default function SettingsPage() {
       });
       if (response.ok) {
         setActionRetentionDays(days);
+        toast.success("Action history retention saved");
       } else {
         toast.error("Failed to save action history retention");
       }
@@ -1342,6 +1380,7 @@ export default function SettingsPage() {
         body: JSON.stringify({ serverId: newServerId, field: "title" }),
       });
       if (!res.ok) toast.error("Failed to save title preference");
+      else toast.success("Title preference saved");
     } catch {
       toast.error("Failed to save title preference");
     }
@@ -1357,6 +1396,7 @@ export default function SettingsPage() {
         body: JSON.stringify({ serverId: newServerId, field: "artwork" }),
       });
       if (!res.ok) toast.error("Failed to save artwork preference");
+      else toast.success("Artwork preference saved");
     } catch {
       toast.error("Failed to save artwork preference");
     }
@@ -1372,6 +1412,7 @@ export default function SettingsPage() {
         body: JSON.stringify({ backupSchedule: value }),
       });
       if (!res.ok) toast.error("Failed to save backup schedule");
+      else toast.success("Backup schedule saved");
     } catch {
       toast.error("Failed to save backup schedule");
     } finally {
@@ -1388,6 +1429,7 @@ export default function SettingsPage() {
         body: JSON.stringify({ backupRetentionCount }),
       });
       if (!res.ok) toast.error("Failed to save backup retention");
+      else toast.success("Backup retention saved");
     } catch {
       toast.error("Failed to save backup retention");
     } finally {
@@ -1532,6 +1574,7 @@ export default function SettingsPage() {
       setSonarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
       setShowSonarrForm(false);
       await fetchSonarrInstances();
+      toast.success("Sonarr instance added");
     } catch (error) {
       setSonarrError("Failed to add Sonarr instance");
       console.error(error);
@@ -1571,6 +1614,7 @@ export default function SettingsPage() {
       setRadarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
       setShowRadarrForm(false);
       await fetchRadarrInstances();
+      toast.success("Radarr instance added");
     } catch (error) {
       setRadarrError("Failed to add Radarr instance");
       console.error(error);
@@ -1610,6 +1654,7 @@ export default function SettingsPage() {
       setLidarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
       setShowLidarrForm(false);
       await fetchLidarrInstances();
+      toast.success("Lidarr instance added");
     } catch (error) {
       setLidarrError("Failed to add Lidarr instance");
       console.error(error);
@@ -1649,6 +1694,7 @@ export default function SettingsPage() {
       setSeerrForm({ name: "", url: "", apiKey: "" });
       setShowSeerrForm(false);
       await fetchSeerrInstances();
+      toast.success("Seerr instance added");
     } catch (error) {
       setSeerrError("Failed to add Seerr instance");
       console.error(error);
@@ -1742,6 +1788,7 @@ export default function SettingsPage() {
       }
       setEditingSonarrId(null);
       await fetchSonarrInstances();
+      toast.success("Sonarr instance updated");
     } catch {
       setEditSonarrError("Failed to update Sonarr instance");
     } finally {
@@ -1780,6 +1827,7 @@ export default function SettingsPage() {
       }
       setEditingRadarrId(null);
       await fetchRadarrInstances();
+      toast.success("Radarr instance updated");
     } catch {
       setEditRadarrError("Failed to update Radarr instance");
     } finally {
@@ -1818,6 +1866,7 @@ export default function SettingsPage() {
       }
       setEditingLidarrId(null);
       await fetchLidarrInstances();
+      toast.success("Lidarr instance updated");
     } catch {
       setEditLidarrError("Failed to update Lidarr instance");
     } finally {
@@ -1855,6 +1904,7 @@ export default function SettingsPage() {
       }
       setEditingSeerrId(null);
       await fetchSeerrInstances();
+      toast.success("Seerr instance updated");
     } catch {
       setEditSeerrError("Failed to update Seerr instance");
     } finally {
@@ -1908,12 +1958,15 @@ export default function SettingsPage() {
       const data = await response.json();
       if (data.success) {
         setDiscordTestResult({ ok: true });
+        toast.success("Test notification sent", { description: "Check your Discord channel." });
       } else {
         setDiscordTestResult({ ok: false, error: data.error || "Test failed" });
+        toast.error("Test notification failed", { description: data.error });
       }
     } catch (error) {
       setDiscordTestResult({ ok: false, error: "Request failed" });
       console.error("Failed to test Discord webhook:", error);
+      toast.error("Test notification failed");
     } finally {
       setDiscordTesting(false);
     }
@@ -1941,6 +1994,7 @@ export default function SettingsPage() {
       });
       if (res.ok) {
         setAuthInfo((prev) => prev ? { ...prev, localAuthEnabled: checked } : prev);
+        toast.success(checked ? "Local login enabled" : "Local login disabled");
       } else {
         // Surface the lockout-guard error inline. The UI also gates the
         // switch via wouldLockOut, so this mostly catches edge cases where
@@ -1967,6 +2021,7 @@ export default function SettingsPage() {
       });
       if (res.ok) {
         setAuthInfo((prev) => prev ? { ...prev, plexLoginEnabled: checked } : prev);
+        toast.success(checked ? "Plex login enabled" : "Plex login disabled");
       } else {
         // Surface the lockout-guard error inline in the Plex Connection card.
         const data = await res.json().catch(() => ({}));
@@ -2009,6 +2064,7 @@ export default function SettingsPage() {
       }
 
       setCredentialsSuccess("Credentials updated successfully");
+      toast.success("Credentials updated");
       setCredentialsForm({ currentPassword: "", newUsername: "", newPassword: "", confirmPassword: "" });
       // Refresh auth info to show updated username
       const infoRes = await fetch("/api/settings/auth");

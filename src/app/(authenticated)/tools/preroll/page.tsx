@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { toast } from "sonner";
 import {
   Card,
   CardContent,
@@ -49,7 +50,6 @@ import {
   Calendar,
   Clock,
   AlertTriangle,
-  CheckCircle,
   Combine,
   GripVertical,
   Shuffle,
@@ -366,7 +366,13 @@ export default function PrerollManagerPage() {
   const [scheduleForm, setScheduleForm] = useState<ScheduleFormState>(EMPTY_SCHEDULE_FORM);
   const [scheduleSaving, setScheduleSaving] = useState(false);
   const [scheduleError, setScheduleError] = useState("");
-  const [pageMessage, setPageMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  // Page-level feedback is surfaced through toasts (auto-dismissing, mobile
+  // friendly). This shim keeps the existing call sites unchanged.
+  const setPageMessage = (msg: { type: "success" | "error"; text: string } | null) => {
+    if (!msg) return;
+    if (msg.type === "error") toast.error(msg.text);
+    else toast.success(msg.text);
+  };
 
   // --- Data fetching ---
 
@@ -403,13 +409,6 @@ export default function PrerollManagerPage() {
   useEffect(() => {
     void (async () => { await Promise.all([fetchData(), fetchCurrentPreroll()]); })();
   }, [fetchData, fetchCurrentPreroll]);
-
-  // Auto-clear page messages
-  useEffect(() => {
-    if (!pageMessage) return;
-    const timer = setTimeout(() => setPageMessage(null), 5000);
-    return () => clearTimeout(timer);
-  }, [pageMessage]);
 
   // --- Actions ---
 
@@ -733,23 +732,6 @@ export default function PrerollManagerPage() {
         </Card>
       )}
 
-      {pageMessage && (
-        <div
-          className={cn(
-            "flex items-center gap-2 rounded-md p-3 text-sm",
-            pageMessage.type === "error"
-              ? "bg-destructive/10 text-destructive"
-              : "bg-green-500/10 text-green-500"
-          )}
-        >
-          {pageMessage.type === "error" ? (
-            <AlertTriangle className="h-4 w-4 shrink-0" />
-          ) : (
-            <CheckCircle className="h-4 w-4 shrink-0" />
-          )}
-          {pageMessage.text}
-        </div>
-      )}
 
       {/* Section 1: Current Preroll */}
       <Card>

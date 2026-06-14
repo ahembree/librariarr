@@ -63,7 +63,16 @@ export default function RootLayout({
         className={`${display.variable} ${sans.variable} ${mono.variable} antialiased`}
       >
         <ThemeProvider>{children}</ThemeProvider>
-        <Toaster position="bottom-right" richColors duration={5000} />
+        {/* Toasts auto-dismiss after 4s; a close button lets users dismiss
+            sooner. On phones sonner spans the bottom edge full-width, so the
+            mobileOffset keeps it clear of the home indicator / safe area. */}
+        <Toaster
+          position="bottom-right"
+          richColors
+          closeButton
+          duration={4000}
+          mobileOffset={{ bottom: 16, left: 16, right: 16 }}
+        />
       </body>
     </html>
   );

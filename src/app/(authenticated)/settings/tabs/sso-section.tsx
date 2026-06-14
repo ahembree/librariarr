@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -222,13 +223,16 @@ export function SsoSection() {
       const data = await res.json();
       if (!res.ok) {
         setError(data.error || "Failed to save");
+        toast.error("Couldn't save SSO configuration", { description: data.error });
         return;
       }
       setConfig(data);
       setSavedConfigSnapshot(snapshotOf(data));
       setSavedAt(Date.now());
+      toast.success("SSO configuration saved");
     } catch {
       setError("Network error");
+      toast.error("Couldn't save SSO configuration");
     } finally {
       setSaving(false);
     }
@@ -247,11 +251,14 @@ export function SsoSection() {
       const data = await res.json();
       if (data.ok) {
         setTestResult({ ok: true, message: `Discovery succeeded. Issuer: ${data.issuer}` });
+        toast.success("OIDC discovery succeeded");
       } else {
         setTestResult({ ok: false, message: data.error || "Discovery failed" });
+        toast.error("OIDC discovery failed", { description: data.error });
       }
     } catch {
       setTestResult({ ok: false, message: "Network error" });
+      toast.error("OIDC discovery failed");
     } finally {
       setTesting(false);
     }
@@ -274,12 +281,15 @@ export function SsoSection() {
       const data = await res.json();
       if (!res.ok) {
         setLinkError(data.error || "Failed to link");
+        toast.error("Couldn't link SSO identity", { description: data.error });
         return;
       }
       setLink(data);
       setLinkSubject("");
+      toast.success("SSO identity linked");
     } catch {
       setLinkError("Network error");
+      toast.error("Couldn't link SSO identity");
     } finally {
       setLinking(false);
     }
@@ -294,6 +304,7 @@ export function SsoSection() {
       const data = await res.json();
       if (!res.ok) {
         setLinkError(data.error || "Failed to unlink");
+        toast.error("Couldn't unlink SSO identity", { description: data.error });
         return;
       }
       setLink({
@@ -301,6 +312,7 @@ export function SsoSection() {
         ssoProvider: data.ssoProvider ?? null,
         ssoEnabled: data.ssoEnabled ?? false,
       });
+      toast.success("SSO identity unlinked");
       if (data.globalSsoDisabled) {
         setConfig((prev) => (prev ? { ...prev, ssoEnabled: false } : prev));
         setLinkNotice(
@@ -322,6 +334,7 @@ export function SsoSection() {
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setError(data.error || "Failed to revert SSO configuration");
+        toast.error("Couldn't revert SSO configuration", { description: data.error });
         return;
       }
       // Reload the current config from the server and reset the unsaved-
@@ -333,8 +346,10 @@ export function SsoSection() {
         setSavedConfigSnapshot(snapshotOf(data));
       }
       setSavedAt(Date.now());
+      toast.success("SSO configuration reverted");
     } catch {
       setError("Network error");
+      toast.error("Couldn't revert SSO configuration");
     } finally {
       setReverting(false);
       setConfirmRevertOpen(false);
@@ -377,11 +392,14 @@ export function SsoSection() {
       const data = await res.json();
       if (!res.ok) {
         setEnableError(data.error || "Failed to update");
+        toast.error("Couldn't update SSO login", { description: data.error });
         return;
       }
       setConfig(data);
+      toast.success(enabled ? "SSO login enabled" : "SSO login disabled");
     } catch {
       setEnableError("Network error");
+      toast.error("Couldn't update SSO login");
     } finally {
       setTogglingEnabled(false);
     }

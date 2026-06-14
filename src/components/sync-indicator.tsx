@@ -137,6 +137,25 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
         if (wasActiveRef.current && !isActive) {
           onSyncComplete();
           lastStatsRefreshRef.current = Date.now();
+          // Surface how the just-finished sync ended. Failures take priority so
+          // a partial failure isn't masked by a sibling success.
+          const justFailed = newJobs
+            .filter((j) => j.status === "FAILED")
+            .sort((a, b) => new Date(b.completedAt ?? 0).getTime() - new Date(a.completedAt ?? 0).getTime())[0];
+          if (justFailed) {
+            toast.error(`Sync failed: ${justFailed.mediaServer.name}`, {
+              description: justFailed.error || "Unknown error",
+            });
+          } else {
+            const justCompleted = newJobs
+              .filter((j) => j.status === "COMPLETED")
+              .sort((a, b) => new Date(b.completedAt ?? 0).getTime() - new Date(a.completedAt ?? 0).getTime())[0];
+            if (justCompleted) {
+              toast.success(`Sync complete: ${justCompleted.mediaServer.name}`, {
+                description: `${justCompleted.itemsProcessed.toLocaleString()} items synced`,
+              });
+            }
+          }
         }
         // Live-refresh stats every 10s during active sync
         else if (
