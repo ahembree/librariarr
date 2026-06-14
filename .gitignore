@@ -37,6 +37,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# Local pnpm content-addressable store (when store-dir is set to the repo)
+.pnpm-store/
+
 # npm (migrated to pnpm)
 package-lock.json
 
