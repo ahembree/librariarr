@@ -985,6 +985,9 @@ export default function QueryPage() {
           setSavedQueries((prev) =>
             prev.map((q) => (q.id === activeQueryId ? { ...q, ...data.query } : q)),
           );
+          toast.success("Query updated", { description: name });
+        } else {
+          toast.error("Couldn't save query");
         }
       } else {
         const resp = await fetch("/api/saved-queries", {
@@ -996,9 +999,14 @@ export default function QueryPage() {
           const data = await resp.json();
           setSavedQueries((prev) => [data.query, ...prev]);
           setActiveQueryId(data.query.id);
+          toast.success("Query saved", { description: name });
+        } else {
+          toast.error("Couldn't save query");
         }
       }
-    } catch { /* silent */ }
+    } catch {
+      toast.error("Couldn't save query");
+    }
     setSavePopoverOpen(false);
     setSaveName("");
   };
@@ -1021,8 +1029,13 @@ export default function QueryPage() {
       if (resp.ok) {
         setSavedQueries((prev) => prev.filter((q) => q.id !== activeQueryId));
         setActiveQueryId(null);
+        toast.success("Query deleted");
+      } else {
+        toast.error("Couldn't delete query");
       }
-    } catch { /* silent */ }
+    } catch {
+      toast.error("Couldn't delete query");
+    }
   };
 
   const handleNew = () => {

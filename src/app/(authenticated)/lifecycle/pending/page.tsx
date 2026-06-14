@@ -801,11 +801,17 @@ export default function PendingActionsPage() {
 
   const removeAction = async (id: string) => {
     try {
-      await fetch(`/api/lifecycle/actions/${id}`, { method: "DELETE" });
+      const response = await fetch(`/api/lifecycle/actions/${id}`, { method: "DELETE" });
+      if (!response.ok) {
+        toast.error("Failed to remove action");
+        return;
+      }
       await fetchActions();
       void fetchDeletionStats();
+      toast.success("Action removed");
     } catch (error) {
       console.error("Failed to remove action:", error);
+      toast.error("Failed to remove action");
     }
   };
 
@@ -826,11 +832,20 @@ export default function PendingActionsPage() {
     setRetryingItems((prev) => new Set(prev).add(action.id));
     try {
       const params = retrySkipTitle ? "?skipTitleValidation=true" : "";
-      await fetch(`/api/lifecycle/actions/${action.id}${params}`, { method: "POST" });
+      const response = await fetch(`/api/lifecycle/actions/${action.id}${params}`, { method: "POST" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.failed > 0) {
+        toast.error("Retry failed", {
+          description: data.errors?.join("\n") || data.error,
+        });
+      } else {
+        toast.success("Action executed", { description: action.mediaItem.title });
+      }
       await fetchActions();
       void fetchDeletionStats();
     } catch (error) {
       console.error("Failed to retry action:", error);
+      toast.error("Retry failed");
     } finally {
       setRetryingItems((prev) => {
         const next = new Set(prev);
@@ -864,6 +879,8 @@ export default function PendingActionsPage() {
           toast.error(`${data.failed} action${data.failed !== 1 ? "s" : ""} failed`, {
             description: data.errors.join("\n"),
           });
+        } else if (data.executed > 0) {
+          toast.success(`${data.executed} action${data.executed !== 1 ? "s" : ""} executed`);
         }
       } else {
         setExecuteResults((prev) => ({
@@ -904,11 +921,14 @@ export default function PendingActionsPage() {
         toast.error("Action failed", {
           description: data.errors.join("\n"),
         });
+      } else {
+        toast.success("Action executed");
       }
       await fetchActions();
       void fetchDeletionStats();
     } catch (error) {
       console.error("Failed to execute item:", error);
+      toast.error("Failed to execute action");
     } finally {
       setExecutingItems((prev) => {
         const next = new Set(prev);
@@ -956,9 +976,14 @@ export default function PendingActionsPage() {
         setExceptedItemIds((prev) => new Set(prev).add(mediaItemId));
         await fetchActions();
         void fetchDeletionStats();
+        toast.success("Excluded from lifecycle actions", { description: action.mediaItem.title });
+      } else {
+        const data = await response.json().catch(() => ({}));
+        toast.error("Couldn't exclude item", { description: data.error });
       }
     } catch (error) {
       console.error("Failed to exclude item:", error);
+      toast.error("Couldn't exclude item");
     } finally {
       setExcludingItems((prev) => {
         const next = new Set(prev);
