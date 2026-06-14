@@ -876,29 +876,25 @@ export default function QueryPage() {
     });
   }, [results]);
 
-  const selectionTypeCounts = useMemo(() => {
+  // Per-selection aggregates computed in a single pass over the (potentially
+  // large) result set: per-type selected counts, total size of all results, and
+  // total size of the selection. Series rows already carry the aggregated sum of
+  // their episodes, and no result path emits both a series row and its episodes,
+  // so summing the row-level fileSize is correct for grouped and flat sets alike.
+  const { selectionTypeCounts, totalSize, selectedSize } = useMemo(() => {
     const counts = { MOVIE: 0, SERIES: 0, MUSIC: 0 };
-    for (const r of results) {
-      if (selectedIds.has(r.id) && (r.type === "MOVIE" || r.type === "SERIES" || r.type === "MUSIC")) {
-        counts[r.type]++;
-      }
-    }
-    return counts;
-  }, [results, selectedIds]);
-
-  // Total file size of all results and of the current selection. Series rows
-  // already carry the aggregated sum of their episodes, so summing the row-level
-  // fileSize gives the correct total for both grouped and flat result sets.
-  const { totalSize, selectedSize } = useMemo(() => {
     let total = 0;
     let selected = 0;
     for (const r of results) {
       const bytes = r.fileSize ? Number(r.fileSize) : 0;
-      if (!Number.isFinite(bytes) || bytes <= 0) continue;
-      total += bytes;
-      if (selectedIds.has(r.id)) selected += bytes;
+      const validBytes = Number.isFinite(bytes) && bytes > 0;
+      if (validBytes) total += bytes;
+      if (selectedIds.has(r.id)) {
+        if (validBytes) selected += bytes;
+        if (r.type === "MOVIE" || r.type === "SERIES" || r.type === "MUSIC") counts[r.type]++;
+      }
     }
-    return { totalSize: total, selectedSize: selected };
+    return { selectionTypeCounts: counts, totalSize: total, selectedSize: selected };
   }, [results, selectedIds]);
 
   const executeAction = useCallback(
