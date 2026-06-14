@@ -46,7 +46,9 @@ describe("recoverOrphanedWorkerLocks (real graphile_worker schema)", () => {
   });
 
   afterAll(async () => {
-    if (utils) await utils.release().catch(() => {});
+    // release() returns graphile-worker's PromiseOrDirect<void>; wrap so .catch
+    // is always valid (mirrors releaseJobsClient in src/lib/jobs/client.ts).
+    if (utils) await Promise.resolve(utils.release()).catch(() => {});
     if (pool) {
       await pool.query("DROP SCHEMA IF EXISTS graphile_worker CASCADE").catch(() => {});
       await pool.end().catch(() => {});
