@@ -234,7 +234,7 @@ describe("syncCollection", () => {
     );
   });
 
-  it("sets DELETION_DATE sort order and reorders items across rule sets", async () => {
+  it("sets ACTION_DATE sort order and reorders items across rule sets", async () => {
     mockPrisma.library.findMany.mockResolvedValue(oneMovieLibrary);
     mockPlexClient.getCollections.mockResolvedValue([]);
     mockPlexClient.createCollection.mockResolvedValue({ ratingKey: "col1", title: "Test Collection" });
@@ -247,7 +247,7 @@ describe("syncCollection", () => {
       { scheduledFor: new Date("2025-01-05"), ruleSetId: "rsB", mediaItem: { ratingKey: "rk1", parentTitle: null, title: "Movie 1" } },
     ]);
 
-    await syncCollection(makeCollection({ sort: "DELETION_DATE" }), [
+    await syncCollection(makeCollection({ sort: "ACTION_DATE" }), [
       contribution([{ libraryId: "lib1", ratingKey: "rk2", title: "Movie 2", parentTitle: null }], { ruleSetId: "rsA" }),
       contribution([{ libraryId: "lib1", ratingKey: "rk1", title: "Movie 1", parentTitle: null }], { ruleSetId: "rsB" }),
     ]);

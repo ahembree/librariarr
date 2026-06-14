@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Sync Plex collections last, so DELETION_DATE ordering reflects any actions
+  // Sync Plex collections last, so ACTION_DATE ordering reflects any actions
   // just scheduled above.
   await syncCollectionsAfterDetection(session.userId!, data.ruleSetId, results);
 

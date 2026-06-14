@@ -331,7 +331,7 @@ const actionTypeEnum = z.enum([
 ]).nullable().optional();
 
 // Shared sort modes for a Plex collection's item ordering.
-const collectionSortEnum = z.enum(["RELEASE_DATE", "ALPHABETICAL", "DELETION_DATE"]);
+const collectionSortEnum = z.enum(["RELEASE_DATE", "ALPHABETICAL", "ACTION_DATE"]);
 
 export const ruleSetCreateSchema = z.object({
   name: z.string().min(1, "Name is required"),

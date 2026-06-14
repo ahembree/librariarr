@@ -118,11 +118,11 @@ describe("Lifecycle Collections CRUD", () => {
       const response = await callRoute(createPost, {
         url: "/api/lifecycle/collections",
         method: "POST",
-        body: { name: "Leaving Soon", type: "MOVIE", sort: "DELETION_DATE", homeScreen: true },
+        body: { name: "Leaving Soon", type: "MOVIE", sort: "ACTION_DATE", homeScreen: true },
       });
       const body = await expectJson<{ collection: { id: string; name: string; sort: string; homeScreen: boolean } }>(response, 201);
       expect(body.collection.name).toBe("Leaving Soon");
-      expect(body.collection.sort).toBe("DELETION_DATE");
+      expect(body.collection.sort).toBe("ACTION_DATE");
       expect(body.collection.homeScreen).toBe(true);
 
       const inDb = await getTestPrisma().collection.findFirst({ where: { userId: user.id } });
@@ -184,10 +184,10 @@ describe("Lifecycle Collections CRUD", () => {
       const response = await callRouteWithParams(updatePut, { id: collection.id }, {
         url: `/api/lifecycle/collections/${collection.id}`,
         method: "PUT",
-        body: { sort: "DELETION_DATE", recommended: true },
+        body: { sort: "ACTION_DATE", recommended: true },
       });
       const body = await expectJson<{ collection: { sort: string; recommended: boolean } }>(response, 200);
-      expect(body.collection.sort).toBe("DELETION_DATE");
+      expect(body.collection.sort).toBe("ACTION_DATE");
       expect(body.collection.recommended).toBe(true);
       expect(mockSyncCollectionById).toHaveBeenCalledWith(collection.id);
       expect(mockRenameCollectionInPlex).not.toHaveBeenCalled();

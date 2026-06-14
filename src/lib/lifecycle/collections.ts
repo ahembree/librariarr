@@ -113,9 +113,9 @@ export async function syncAllCollections(
  * Sync a single Plex collection from the UNION of every contributing rule set's
  * matched items. Multiple rule sets can "merge" into one collection: the
  * collection's membership is the union of their matches, sorting/visibility come
- * from the shared collection settings, and DELETION_DATE ordering spans the
+ * from the shared collection settings, and ACTION_DATE ordering spans the
  * pending actions of ALL contributing rule sets so items are correctly
- * interleaved by deletion date regardless of which rule produced them.
+ * interleaved by scheduled action date regardless of which rule produced them.
  *
  * Passing an empty `contributions` array (no rule set currently feeds the
  * collection) removes the collection from Plex — this is how an orphaned or
@@ -146,14 +146,14 @@ export async function syncCollection(
   );
 
   // Preload pending actions across ALL contributing rule sets once, for
-  // deletion-date ordering. Querying here (rather than per library) keeps the
+  // action-date ordering. Querying here (rather than per library) keeps the
   // cross-rule ordering consistent.
   let pendingActions: Array<{
     scheduledFor: Date;
     ruleSetId: string | null;
     mediaItem: { ratingKey: string; parentTitle: string | null; title: string } | null;
   }> = [];
-  if (collection.sort === "DELETION_DATE" && contributingRuleSetIds.length > 0) {
+  if (collection.sort === "ACTION_DATE" && contributingRuleSetIds.length > 0) {
     pendingActions = await prisma.lifecycleAction.findMany({
       where: { ruleSetId: { in: contributingRuleSetIds }, status: "PENDING" },
       select: {
@@ -175,7 +175,7 @@ export async function syncCollection(
       // For series-scope SERIES contributions the matched items are episodes, but
       // a Plex collection in a TV library holds shows. Resolve series-level rating
       // keys by (normalized) title. Built once per library and shared by both the
-      // membership union and the deletion-date ordering.
+      // membership union and the action-date ordering.
       let seriesKeyByTitle: Map<string, string> | null = null;
       const needSeries =
         collection.type === "SERIES" && contributions.some((c) => c.seriesScope);
@@ -265,10 +265,10 @@ export async function syncCollection(
       );
 
       // Always sync collection item sort order
-      if (collection.sort === "DELETION_DATE") {
+      if (collection.sort === "ACTION_DATE") {
         // Custom sort mode (value 2) so manual ordering is preserved
         await client.editCollectionSort(plexCollection.ratingKey, 2);
-        await applyDeletionDateOrder(
+        await applyActionDateOrder(
           client,
           plexCollection.ratingKey,
           desiredKeys,
@@ -303,12 +303,12 @@ export async function syncCollection(
 }
 
 /**
- * Reorder collection items by their scheduled deletion date (soonest first),
+ * Reorder collection items by their scheduled action date (soonest first),
  * pooling the pending actions of every contributing rule set so items are
- * interleaved by deletion date across rules. Items without a pending action are
+ * interleaved by action date across rules. Items without a pending action are
  * placed at the end.
  */
-async function applyDeletionDateOrder(
+async function applyActionDateOrder(
   client: PlexClient,
   collectionRatingKey: string,
   desiredKeys: string[],
@@ -365,7 +365,7 @@ async function applyDeletionDateOrder(
 
   logger.debug(
     "Lifecycle",
-    `Reordered ${sorted.length} items in collection by deletion date`
+    `Reordered ${sorted.length} items in collection by action date`
   );
 }
 

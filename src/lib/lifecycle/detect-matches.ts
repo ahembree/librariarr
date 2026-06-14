@@ -592,7 +592,7 @@ export async function runDetection(userId: string, ruleSetId?: string, fullReEva
  * Sync Plex collections after a manual detection run. Collection membership is
  * the UNION of every rule set feeding it, so this runs after detection (and,
  * when the caller processes actions, after those are scheduled — so
- * DELETION_DATE ordering reflects the freshly scheduled deletions).
+ * ACTION_DATE ordering reflects the freshly scheduled actions).
  *
  * For a single-rule-set run, only the collection(s) that rule set feeds are
  * synced; for a full run, every collection is synced (which also cleans up

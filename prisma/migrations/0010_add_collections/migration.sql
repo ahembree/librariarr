@@ -48,7 +48,9 @@ SELECT DISTINCT ON ("userId", "type", "collectionName")
     "collectionSortName",
     "collectionHomeScreen",
     "collectionRecommended",
-    "collectionSort",
+    -- The old inline value "DELETION_DATE" was renamed to "ACTION_DATE" (the
+    -- scheduled action isn't always a deletion).
+    CASE WHEN "collectionSort" = 'DELETION_DATE' THEN 'ACTION_DATE' ELSE "collectionSort" END,
     CURRENT_TIMESTAMP,
     CURRENT_TIMESTAMP
 FROM "RuleSet"
