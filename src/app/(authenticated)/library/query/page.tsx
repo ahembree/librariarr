@@ -73,7 +73,7 @@ import { CardSizeControl } from "@/components/card-size-control";
 import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useChipColors } from "@/components/chip-color-provider";
 import { useServers } from "@/hooks/use-servers";
-import { formatFileSize, formatDuration } from "@/lib/format";
+import { formatFileSize, formatDuration, formatBytesNum } from "@/lib/format";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { generateId } from "@/lib/utils";
 import { EmptyState } from "@/components/empty-state";
@@ -876,14 +876,25 @@ export default function QueryPage() {
     });
   }, [results]);
 
-  const selectionTypeCounts = useMemo(() => {
+  // Per-selection aggregates computed in a single pass over the (potentially
+  // large) result set: per-type selected counts, total size of all results, and
+  // total size of the selection. Series rows already carry the aggregated sum of
+  // their episodes, and no result path emits both a series row and its episodes,
+  // so summing the row-level fileSize is correct for grouped and flat sets alike.
+  const { selectionTypeCounts, totalSize, selectedSize } = useMemo(() => {
     const counts = { MOVIE: 0, SERIES: 0, MUSIC: 0 };
+    let total = 0;
+    let selected = 0;
     for (const r of results) {
-      if (selectedIds.has(r.id) && (r.type === "MOVIE" || r.type === "SERIES" || r.type === "MUSIC")) {
-        counts[r.type]++;
+      const bytes = r.fileSize ? Number(r.fileSize) : 0;
+      const validBytes = Number.isFinite(bytes) && bytes > 0;
+      if (validBytes) total += bytes;
+      if (selectedIds.has(r.id)) {
+        if (validBytes) selected += bytes;
+        if (r.type === "MOVIE" || r.type === "SERIES" || r.type === "MUSIC") counts[r.type]++;
       }
     }
-    return counts;
+    return { selectionTypeCounts: counts, totalSize: total, selectedSize: selected };
   }, [results, selectedIds]);
 
   const executeAction = useCallback(
@@ -1547,7 +1558,9 @@ export default function QueryPage() {
           ) : (
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm text-muted-foreground">
-                {loading ? "Searching..." : `${results.length} result${results.length !== 1 ? "s" : ""} found`}
+                {loading
+                  ? "Searching..."
+                  : `${results.length} result${results.length !== 1 ? "s" : ""} found${totalSize > 0 ? ` · ${formatBytesNum(totalSize)}` : ""}`}
               </p>
               {viewMode === "cards" && !loading && results.length > 0 && (
                 <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-muted-foreground">
@@ -1566,6 +1579,7 @@ export default function QueryPage() {
             <>
               <QueryActionBar
                 selectedCount={selectedIds.size}
+                selectedSize={selectedSize}
                 selectionTypeCounts={selectionTypeCounts}
                 arrServerIds={arrServerIds}
                 arrMeta={arrMeta}
