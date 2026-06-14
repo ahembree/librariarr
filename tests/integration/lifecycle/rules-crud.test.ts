@@ -10,6 +10,7 @@ import {
   createTestRuleSet,
   createTestSonarrInstance,
   createTestRadarrInstance,
+  createTestCollection,
 } from "../../setup/test-helpers";
 
 // Critical: redirect prisma to test database
@@ -27,8 +28,12 @@ vi.mock("@/lib/logger", () => ({
 
 // Mock lifecycle collections (used by DELETE handler)
 vi.mock("@/lib/lifecycle/collections", () => ({
-  syncPlexCollection: vi.fn().mockResolvedValue(undefined),
+  syncCollection: vi.fn().mockResolvedValue(undefined),
+  syncCollectionById: vi.fn().mockResolvedValue(undefined),
+  syncAllCollections: vi.fn().mockResolvedValue(undefined),
   removePlexCollection: vi.fn().mockResolvedValue(undefined),
+  renameCollectionInPlex: vi.fn().mockResolvedValue(undefined),
+  removeItemFromCollections: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Import AFTER mocks
@@ -193,6 +198,7 @@ describe("Lifecycle Rules CRUD", () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
       const sonarr = await createTestSonarrInstance(user.id);
+      const collection = await createTestCollection(user.id, { name: "Test Collection", type: "SERIES" });
       setMockSession({ isLoggedIn: true, userId: user.id });
 
       const response = await callRoute(POST, {
@@ -210,11 +216,7 @@ describe("Lifecycle Rules CRUD", () => {
           actionDelayDays: 14,
           arrInstanceId: sonarr.id,
           addImportExclusion: true,
-          collectionEnabled: true,
-          collectionName: "Test Collection",
-          collectionSortName: "zzz-test",
-          collectionHomeScreen: true,
-          collectionRecommended: true,
+          collectionId: collection.id,
         },
       });
 
@@ -228,11 +230,7 @@ describe("Lifecycle Rules CRUD", () => {
           actionDelayDays: number;
           arrInstanceId: string;
           addImportExclusion: boolean;
-          collectionEnabled: boolean;
-          collectionName: string;
-          collectionSortName: string;
-          collectionHomeScreen: boolean;
-          collectionRecommended: boolean;
+          collectionId: string;
         };
       }>(response, 201);
 
@@ -244,11 +242,28 @@ describe("Lifecycle Rules CRUD", () => {
       expect(body.ruleSet.actionDelayDays).toBe(14);
       expect(body.ruleSet.arrInstanceId).toBe(sonarr.id);
       expect(body.ruleSet.addImportExclusion).toBe(true);
-      expect(body.ruleSet.collectionEnabled).toBe(true);
-      expect(body.ruleSet.collectionName).toBe("Test Collection");
-      expect(body.ruleSet.collectionSortName).toBe("zzz-test");
-      expect(body.ruleSet.collectionHomeScreen).toBe(true);
-      expect(body.ruleSet.collectionRecommended).toBe(true);
+      expect(body.ruleSet.collectionId).toBe(collection.id);
+    });
+
+    it("rejects a collection that belongs to another type", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const collection = await createTestCollection(user.id, { name: "Series Coll", type: "SERIES" });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(POST, {
+        url: "/api/lifecycle/rules",
+        method: "POST",
+        body: {
+          name: "Mismatch",
+          type: "MOVIE",
+          rules: [dummyRule],
+          serverIds: [server.id],
+          collectionId: collection.id,
+        },
+      });
+
+      await expectJson(response, 400);
     });
 
     it("creates a rule set with CHANGE_QUALITY_PROFILE action and target profile", async () => {
@@ -492,6 +507,7 @@ describe("Lifecycle Rules CRUD", () => {
 
     it("updates multiple fields at once", async () => {
       const user = await createTestUser();
+      const collection = await createTestCollection(user.id, { name: "New Collection", type: "MOVIE" });
       const ruleSet = await createTestRuleSet(user.id, {
         name: "Test",
         enabled: true,
@@ -508,8 +524,7 @@ describe("Lifecycle Rules CRUD", () => {
             enabled: false,
             actionEnabled: true,
             actionType: "DO_NOTHING",
-            collectionEnabled: true,
-            collectionName: "New Collection",
+            collectionId: collection.id,
           },
         }
       );
@@ -519,16 +534,14 @@ describe("Lifecycle Rules CRUD", () => {
           enabled: boolean;
           actionEnabled: boolean;
           actionType: string;
-          collectionEnabled: boolean;
-          collectionName: string;
+          collectionId: string;
         };
       }>(response, 200);
 
       expect(body.ruleSet.enabled).toBe(false);
       expect(body.ruleSet.actionEnabled).toBe(true);
       expect(body.ruleSet.actionType).toBe("DO_NOTHING");
-      expect(body.ruleSet.collectionEnabled).toBe(true);
-      expect(body.ruleSet.collectionName).toBe("New Collection");
+      expect(body.ruleSet.collectionId).toBe(collection.id);
     });
 
     it("updates targetQualityProfileId on existing rule set", async () => {
@@ -711,14 +724,14 @@ describe("Lifecycle Rules CRUD", () => {
       await expectJson(response, 404);
     });
 
-    it("attempts to remove Plex collection when collectionName is set", async () => {
-      const { removePlexCollection } = await import("@/lib/lifecycle/collections");
+    it("re-syncs the linked collection but keeps it when a rule set is deleted", async () => {
+      const { syncCollectionById } = await import("@/lib/lifecycle/collections");
       const user = await createTestUser();
+      const collection = await createTestCollection(user.id, { name: "My Collection", type: "MOVIE" });
       const ruleSet = await createTestRuleSet(user.id, {
         name: "With Collection",
         type: "MOVIE",
-        collectionEnabled: true,
-        collectionName: "My Collection",
+        collectionId: collection.id,
       });
       setMockSession({ isLoggedIn: true, userId: user.id });
 
@@ -732,23 +745,24 @@ describe("Lifecycle Rules CRUD", () => {
       );
 
       await expectJson<{ success: boolean }>(response, 200);
-      expect(removePlexCollection).toHaveBeenCalledWith(
-        user.id,
-        "MOVIE",
-        "My Collection"
-      );
+      // The collection is re-synced (to drop this rule's items), NOT removed.
+      expect(syncCollectionById).toHaveBeenCalledWith(collection.id);
+      const stillThere = await getTestPrisma().collection.findUnique({ where: { id: collection.id } });
+      expect(stillThere).not.toBeNull();
     });
 
-    it("still deletes when Plex collection removal fails", async () => {
-      const { removePlexCollection } = await import("@/lib/lifecycle/collections");
-      (removePlexCollection as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+    it("still deletes when collection re-sync fails", async () => {
+      const { syncCollectionById } = await import("@/lib/lifecycle/collections");
+      (syncCollectionById as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
         new Error("Plex unreachable")
       );
 
       const user = await createTestUser();
+      const collection = await createTestCollection(user.id, { name: "Bad Collection", type: "MOVIE" });
       const ruleSet = await createTestRuleSet(user.id, {
         name: "Failing Collection",
-        collectionName: "Bad Collection",
+        type: "MOVIE",
+        collectionId: collection.id,
       });
       setMockSession({ isLoggedIn: true, userId: user.id });
 

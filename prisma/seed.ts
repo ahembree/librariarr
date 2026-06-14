@@ -1123,6 +1123,15 @@ async function main() {
     },
   });
 
+  const untrackedCollection = await prisma.collection.create({
+    data: {
+      userId: user.id,
+      name: "4K Untracked",
+      type: "MOVIE",
+      sort: "ALPHABETICAL",
+    },
+  });
+
   await prisma.ruleSet.create({
     data: {
       userId: user.id,
@@ -1143,8 +1152,7 @@ async function main() {
       actionEnabled: false,
       actionDelayDays: 7,
       arrInstanceId: radarr4k.id,
-      collectionEnabled: true,
-      collectionName: "4K Untracked",
+      collectionId: untrackedCollection.id,
       serverIds: [atlas.id],
     },
   });

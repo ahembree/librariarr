@@ -37,10 +37,12 @@ vi.mock("@/lib/discord/client", () => ({
   buildMaintenanceEmbed: vi.fn(),
 }));
 vi.mock("@/lib/lifecycle/collections", () => ({
-  syncPlexCollection: vi.fn().mockResolvedValue(undefined),
+  syncCollection: vi.fn().mockResolvedValue(undefined),
+  syncCollectionById: vi.fn().mockResolvedValue(undefined),
+  syncAllCollections: vi.fn().mockResolvedValue(undefined),
   removeItemFromCollections: vi.fn().mockResolvedValue(undefined),
   removePlexCollection: vi.fn().mockResolvedValue(undefined),
-  updateCollectionVisibility: vi.fn().mockResolvedValue(undefined),
+  renameCollectionInPlex: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { processLifecycleRules, executeLifecycleActions } from "@/lib/lifecycle/processor";

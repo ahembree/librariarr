@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { removePlexCollection } from "@/lib/lifecycle/collections";
+import { syncCollectionById } from "@/lib/lifecycle/collections";
 import { cleanupArrTags } from "@/lib/lifecycle/actions";
 import { validateRequest, ruleSetUpdateSchema } from "@/lib/validation";
 import { findFieldsInvalidForType } from "@/lib/conditions";
@@ -24,7 +24,7 @@ export async function PUT(
     name, rules, seriesScope,
     enabled, actionEnabled, actionType, actionDelayDays, arrInstanceId, targetQualityProfileId, addImportExclusion, searchAfterAction,
     addArrTags, removeArrTags,
-    collectionEnabled, collectionName, collectionSortName, collectionHomeScreen, collectionRecommended, collectionSort,
+    collectionId,
     discordNotifyOnAction,
     discordNotifyOnMatch,
     stickyMatches,
@@ -121,6 +121,27 @@ export async function PUT(
     }
   }
 
+  // A referenced collection must exist, belong to the user, and target the same
+  // library type as this rule set.
+  if (collectionId) {
+    const [collection, ruleSetRow] = await Promise.all([
+      prisma.collection.findFirst({
+        where: { id: collectionId, userId: session.userId },
+        select: { type: true },
+      }),
+      prisma.ruleSet.findFirst({ where: { id, userId: session.userId }, select: { type: true } }),
+    ]);
+    if (!collection) {
+      return NextResponse.json({ error: "Collection not found" }, { status: 400 });
+    }
+    if (ruleSetRow && collection.type !== ruleSetRow.type) {
+      return NextResponse.json(
+        { error: "Collection type does not match the rule set type" },
+        { status: 400 }
+      );
+    }
+  }
+
   const updateData: Record<string, unknown> = {};
   if (name !== undefined) updateData.name = name;
   if (rules !== undefined) updateData.rules = rules;
@@ -135,12 +156,7 @@ export async function PUT(
   if (addArrTags !== undefined) updateData.addArrTags = addArrTags;
   if (removeArrTags !== undefined) updateData.removeArrTags = removeArrTags;
   if (enabled !== undefined) updateData.enabled = enabled;
-  if (collectionEnabled !== undefined) updateData.collectionEnabled = collectionEnabled;
-  if (collectionName !== undefined) updateData.collectionName = collectionName;
-  if (collectionSortName !== undefined) updateData.collectionSortName = collectionSortName;
-  if (collectionHomeScreen !== undefined) updateData.collectionHomeScreen = collectionHomeScreen;
-  if (collectionRecommended !== undefined) updateData.collectionRecommended = collectionRecommended;
-  if (collectionSort !== undefined) updateData.collectionSort = collectionSort;
+  if (collectionId !== undefined) updateData.collectionId = collectionId;
   if (discordNotifyOnAction !== undefined) updateData.discordNotifyOnAction = discordNotifyOnAction;
   if (discordNotifyOnMatch !== undefined) updateData.discordNotifyOnMatch = discordNotifyOnMatch;
   if (stickyMatches !== undefined) updateData.stickyMatches = stickyMatches;
@@ -216,15 +232,6 @@ export async function DELETE(
     }
   }
 
-  // Clean up Plex collection if one was configured
-  if (ruleSet.collectionName && session.userId) {
-    try {
-      await removePlexCollection(session.userId, ruleSet.type, ruleSet.collectionName);
-    } catch {
-      // Best-effort cleanup — don't block deletion if Plex is unreachable
-    }
-  }
-
   // Delete PENDING actions (no longer relevant).
   // COMPLETED and FAILED actions are preserved — SetNull will clear their ruleSetId
   // while the denormalized ruleSetName/ruleSetType fields retain display info.
@@ -232,7 +239,21 @@ export async function DELETE(
     where: { ruleSetId: id, status: "PENDING" },
   });
 
+  const collectionId = ruleSet.collectionId;
+
   await prisma.ruleSet.delete({ where: { id } });
+
+  // Re-sync the collection this rule set fed (if any). The collection is NOT
+  // removed wholesale — other rule sets may still feed it. After this rule set's
+  // matches are gone, the sync recomputes membership as the union of the
+  // remaining rule sets (removing the collection only if it's now empty).
+  if (collectionId && session.userId) {
+    try {
+      await syncCollectionById(collectionId);
+    } catch {
+      // Best-effort — don't block deletion if Plex is unreachable
+    }
+  }
 
   return NextResponse.json({ success: true });
 }

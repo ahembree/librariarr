@@ -24,6 +24,7 @@ model User {
   updatedAt        DateTime          @updatedAt
   mediaServers     MediaServer[]
   ruleSets         RuleSet[]
+  collections      Collection[]
   appSettings      AppSettings?
   sonarrInstances  SonarrInstance[]
   radarrInstances  RadarrInstance[]
@@ -425,12 +426,8 @@ model RuleSet {
   searchAfterAction     Boolean           @default(false)
   addArrTags            String[]          @default([])
   removeArrTags         String[]          @default([])
-  collectionEnabled     Boolean           @default(false)
-  collectionName        String?
-  collectionSortName    String?
-  collectionHomeScreen  Boolean           @default(false)
-  collectionRecommended Boolean           @default(false)
-  collectionSort        String            @default("ALPHABETICAL")
+  collectionId          String?
+  collection            Collection?       @relation(fields: [collectionId], references: [id], onDelete: SetNull)
   discordNotifyOnAction Boolean           @default(false)
   discordNotifyOnMatch  Boolean           @default(false)
   stickyMatches         Boolean           @default(false)
@@ -439,6 +436,31 @@ model RuleSet {
   ruleMatches           RuleMatch[]
   createdAt             DateTime          @default(now())
   updatedAt             DateTime          @updatedAt
+
+  @@index([collectionId])
+}
+
+// A reusable, named Plex collection definition that multiple RuleSets can sync
+// into ("merge"). Owns the collection-level presentation settings (sort order,
+// sort title, home-screen / recommended visibility) so that every rule feeding
+// the same collection shares one source of truth. Scoped by LibraryType because
+// a Plex collection lives inside a single library type (Movies/Series/Music).
+model Collection {
+  id          String      @id @default(cuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  type        LibraryType
+  sortName    String?
+  homeScreen  Boolean     @default(false)
+  recommended Boolean     @default(false)
+  sort        String      @default("ALPHABETICAL")
+  ruleSets    RuleSet[]
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@unique([userId, type, name])
+  @@index([userId])
 }
 
 enum LifecycleActionStatus {

@@ -10,6 +10,7 @@ import {
   createTestMediaItem,
   createTestRuleSet,
   createTestRuleMatch,
+  createTestCollection,
 } from "../../setup/test-helpers";
 
 // Critical: redirect prisma to test database
@@ -199,14 +200,14 @@ describe("GET /api/lifecycle/rules/matches", () => {
       type: "MOVIE",
     });
 
+    const collection = await createTestCollection(user.id, { name: "Test Col", type: "MOVIE" });
     const rs = await createTestRuleSet(user.id, {
       name: "Metadata Test",
       type: "MOVIE",
       enabled: true,
       actionEnabled: true,
       actionType: "DELETE_RADARR",
-      collectionEnabled: true,
-      collectionName: "Test Col",
+      collectionId: collection.id,
       rules: [],
     });
 
@@ -226,8 +227,8 @@ describe("GET /api/lifecycle/rules/matches", () => {
           type: string;
           actionEnabled: boolean;
           actionType: string;
-          collectionEnabled: boolean;
-          collectionName: string;
+          collectionName: string | null;
+          collectionSort: string | null;
         };
       }[];
     }>(response, 200);
@@ -238,7 +239,6 @@ describe("GET /api/lifecycle/rules/matches", () => {
     expect(rsMeta.type).toBe("MOVIE");
     expect(rsMeta.actionEnabled).toBe(true);
     expect(rsMeta.actionType).toBe("DELETE_RADARR");
-    expect(rsMeta.collectionEnabled).toBe(true);
     expect(rsMeta.collectionName).toBe("Test Col");
   });
 

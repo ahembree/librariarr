@@ -188,8 +188,7 @@ export async function POST(request: NextRequest) {
         select: {
           id: true,
           type: true,
-          collectionEnabled: true,
-          collectionName: true,
+          collection: { select: { name: true } },
           seriesScope: true,
         },
       },
@@ -215,7 +214,7 @@ export async function POST(request: NextRequest) {
 
   // Remove items from Plex collections (best-effort)
   const collectionsToUpdate = matchedRuleSets
-    .filter((m) => m.ruleSet.collectionEnabled && m.ruleSet.collectionName);
+    .filter((m) => m.ruleSet.collection);
 
   if (collectionsToUpdate.length > 0) {
     const itemMap = new Map(relatedItems.map((i) => [i.id, i]));
@@ -225,7 +224,7 @@ export async function POST(request: NextRequest) {
       await removeItemFromCollections(
         session.userId!,
         match.ruleSet.type,
-        match.ruleSet.collectionName!,
+        match.ruleSet.collection!.name,
         item.ratingKey,
         match.ruleSet.seriesScope && match.ruleSet.type === "SERIES"
           ? (item.parentTitle ?? item.title)
@@ -271,8 +270,7 @@ async function handleIndividualException(
         select: {
           id: true,
           type: true,
-          collectionEnabled: true,
-          collectionName: true,
+          collection: { select: { name: true } },
           seriesScope: true,
         },
       },
@@ -298,7 +296,7 @@ async function handleIndividualException(
 
   // Remove the item from any Plex collections it was synced to
   const collectionsToUpdate = matchedRuleSets
-    .filter((m) => m.ruleSet.collectionEnabled && m.ruleSet.collectionName)
+    .filter((m) => m.ruleSet.collection)
     .map((m) => m.ruleSet);
 
   if (collectionsToUpdate.length > 0) {
@@ -318,7 +316,7 @@ async function handleIndividualException(
         await removeItemFromCollections(
           userId,
           ruleSet.type,
-          ruleSet.collectionName!,
+          ruleSet.collection!.name,
           fullItem.ratingKey,
           ruleSet.seriesScope && ruleSet.type === "SERIES"
             ? (fullItem.parentTitle ?? fullItem.title)

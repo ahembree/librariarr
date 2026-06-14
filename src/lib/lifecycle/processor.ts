@@ -7,7 +7,7 @@ import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
-import { syncPlexCollection, removePlexCollection } from "@/lib/lifecycle/collections";
+import { syncAllCollections } from "@/lib/lifecycle/collections";
 import { syncMediaServer } from "@/lib/sync/sync-server";
 import { sendDiscordNotification, buildSuccessSummaryEmbed, buildMatchChangeEmbed, buildFailureSummaryEmbed } from "@/lib/discord/client";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
@@ -210,7 +210,7 @@ export async function processLifecycleRules(userId?: string) {
         : undefined;
 
       // Evaluate rules and save match results to DB (incremental: add new, remove stale)
-      const { items: matchedItems, episodeIdMap, currentItems } = await detectAndSaveMatches(
+      const { items: matchedItems, episodeIdMap } = await detectAndSaveMatches(
         {
           id: ruleSet.id,
           name: ruleSet.name,
@@ -226,8 +226,6 @@ export async function processLifecycleRules(userId?: string) {
           addImportExclusion: ruleSet.addImportExclusion,
           addArrTags: ruleSet.addArrTags,
           removeArrTags: ruleSet.removeArrTags,
-          collectionEnabled: ruleSet.collectionEnabled,
-          collectionName: ruleSet.collectionName,
           stickyMatches: ruleSet.stickyMatches,
         },
         serverIds,
@@ -283,44 +281,17 @@ export async function processLifecycleRules(userId?: string) {
 
       // Cancel stale actions and create new ones via shared scheduling function
       await scheduleActionsForRuleSet(ruleSet, matchedItems, episodeIdMap);
-
-      // Sync Plex collection (only when collectionEnabled)
-      if (ruleSet.collectionEnabled && ruleSet.collectionName) {
-        try {
-          await syncPlexCollection(ruleSet, currentItems as Array<{ libraryId: string; ratingKey: string; title: string; parentTitle: string | null }>, plexItemsCache);
-        } catch (error) {
-          logger.error("Lifecycle", `Collection sync failed for "${ruleSet.name}"`, { error: String(error) });
-        }
-      }
     } catch (error) {
       logger.error("Lifecycle", `Error processing rule set "${ruleSet.name}"`, { error: String(error) });
     }
   }
 
-  // Clean up Plex collections for rule sets where collection sync is disabled
-  // but a collection name is still configured (meaning it was previously synced)
-  const disabledCollectionRuleSets = await prisma.ruleSet.findMany({
-    where: {
-      collectionEnabled: false,
-      collectionName: { not: null },
-      ...(userId ? { userId } : {}),
-    },
-    select: { id: true, userId: true, type: true, collectionName: true },
-  });
-
-  for (const rs of disabledCollectionRuleSets) {
-    if (!rs.collectionName) continue;
-    try {
-      await removePlexCollection(rs.userId, rs.type, rs.collectionName);
-      // Clear the collection name so we don't try to remove it again
-      await prisma.ruleSet.update({
-        where: { id: rs.id },
-        data: { collectionName: null },
-      });
-    } catch (error) {
-      logger.error("Lifecycle", `Failed to remove collection for rule set ${rs.id}`, { error: String(error) });
-    }
-  }
+  // Sync every Plex collection from the now-persisted matches. Membership is the
+  // UNION of every rule set feeding a collection, so this runs once after all
+  // rule sets (and their actions) are processed — never per rule set. Collections
+  // with no remaining enabled rule sets resolve to an empty union and are removed
+  // from Plex (replacing the old "disabled collection cleanup" pass).
+  await syncAllCollections(userId, plexItemsCache);
 
   // Notify connected clients that detection is done
   const affectedUserIds = userId ? [userId] : [...new Set(ruleSets.map((rs) => rs.userId))];

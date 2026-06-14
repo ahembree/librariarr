@@ -41,8 +41,7 @@ const mockPrisma = vi.hoisted(() => ({
 const mockDetectAndSaveMatches = vi.hoisted(() => vi.fn());
 const mockExecuteAction = vi.hoisted(() => vi.fn());
 const mockExtractActionError = vi.hoisted(() => vi.fn());
-const mockSyncPlexCollection = vi.hoisted(() => vi.fn());
-const mockRemovePlexCollection = vi.hoisted(() => vi.fn());
+const mockSyncAllCollections = vi.hoisted(() => vi.fn());
 const mockFetchArrMetadata = vi.hoisted(() => vi.fn());
 const mockFetchSeerrMetadata = vi.hoisted(() => vi.fn());
 const mockSyncMediaServer = vi.hoisted(() => vi.fn());
@@ -72,8 +71,7 @@ vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
   };
 });
 vi.mock("@/lib/lifecycle/collections", () => ({
-  syncPlexCollection: mockSyncPlexCollection,
-  removePlexCollection: mockRemovePlexCollection,
+  syncAllCollections: mockSyncAllCollections,
 }));
 vi.mock("@/lib/lifecycle/fetch-arr-metadata", () => ({
   fetchArrMetadata: mockFetchArrMetadata,
@@ -411,15 +409,13 @@ describe("processLifecycleRules", () => {
           addImportExclusion: false,
           addArrTags: [],
           removeArrTags: [],
-          collectionEnabled: false,
-          collectionName: null,
+          collectionId: null,
           discordNotifyOnMatch: false,
           stickyMatches: false,
           searchAfterAction: false,
           user: { mediaServers: [{ id: "other-server" }] },
         },
-      ])
-      .mockResolvedValueOnce([]); // disabledCollectionRuleSets
+      ]);
 
     await processLifecycleRules("u1");
 
@@ -446,15 +442,13 @@ describe("processLifecycleRules", () => {
           addImportExclusion: false,
           addArrTags: [],
           removeArrTags: [],
-          collectionEnabled: false,
-          collectionName: null,
+          collectionId: null,
           discordNotifyOnMatch: false,
           stickyMatches: false,
           searchAfterAction: false,
           user: { mediaServers: [{ id: "s1" }] },
         },
-      ])
-      .mockResolvedValueOnce([]); // disabledCollectionRuleSets
+      ]);
 
     await processLifecycleRules("u1");
 
@@ -494,15 +488,13 @@ describe("processLifecycleRules", () => {
           addImportExclusion: false,
           addArrTags: [],
           removeArrTags: [],
-          collectionEnabled: false,
-          collectionName: null,
+          collectionId: null,
           discordNotifyOnMatch: false,
           stickyMatches: false,
           searchAfterAction: false,
           user: { mediaServers: [{ id: "s1" }] },
         },
-      ])
-      .mockResolvedValueOnce([]); // disabledCollectionRuleSets
+      ]);
 
     await processLifecycleRules("u1");
 
@@ -510,85 +502,51 @@ describe("processLifecycleRules", () => {
     expect(mockDetectAndSaveMatches).toHaveBeenCalled();
   });
 
-  it("cleans up disabled collection rule sets", async () => {
-    mockPrisma.ruleSet.findMany
-      .mockResolvedValueOnce([]) // no enabled rule sets
-      .mockResolvedValueOnce([
-        { id: "rs1", userId: "u1", type: "MOVIE", collectionName: "Old Collection" },
-      ]);
-
-    mockRemovePlexCollection.mockResolvedValue(undefined);
-    mockPrisma.ruleSet.update.mockResolvedValue({});
-
-    await processLifecycleRules();
-
-    expect(mockRemovePlexCollection).toHaveBeenCalledWith("u1", "MOVIE", "Old Collection");
-    expect(mockPrisma.ruleSet.update).toHaveBeenCalledWith({
-      where: { id: "rs1" },
-      data: { collectionName: null },
-    });
-  });
-
-  it("handles collection cleanup errors gracefully", async () => {
-    mockPrisma.ruleSet.findMany
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        { id: "rs1", userId: "u1", type: "MOVIE", collectionName: "Bad Collection" },
-      ]);
-
-    mockRemovePlexCollection.mockRejectedValue(new Error("Plex down"));
-
-    // Should not throw
-    await expect(processLifecycleRules()).resolves.toBeUndefined();
-  });
-
-  it("syncs Plex collection when collection is enabled", async () => {
+  it("syncs collections once after processing all rule sets", async () => {
     mockHasAnyActiveRules.mockReturnValue(true);
     mockHasArrRules.mockReturnValue(false);
     mockHasSeerrRules.mockReturnValue(false);
-    const currentItems = [{ id: "item1", libraryId: "lib1", ratingKey: "rk1", title: "Movie", parentTitle: null }];
     mockDetectAndSaveMatches.mockResolvedValue({
       items: [{ id: "item1", title: "Movie" }],
       count: 1,
       episodeIdMap: new Map(),
-      currentItems,
+      currentItems: [],
     });
     mockPrisma.lifecycleAction.findMany.mockResolvedValue([]);
     mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 0 });
     mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
-    mockSyncPlexCollection.mockResolvedValue(undefined);
+    mockSyncAllCollections.mockResolvedValue(undefined);
 
-    mockPrisma.ruleSet.findMany
-      .mockResolvedValueOnce([
-        {
-          id: "rs1",
-          userId: "u1",
-          name: "Test",
-          type: "MOVIE",
-          rules: [{ field: "title", operator: "contains", value: "test", enabled: true }],
-          seriesScope: false,
-          serverIds: ["s1"],
-          actionEnabled: false,
-          actionType: null,
-          actionDelayDays: 0,
-          arrInstanceId: null,
-          targetQualityProfileId: null,
-          addImportExclusion: false,
-          addArrTags: [],
-          removeArrTags: [],
-          collectionEnabled: true,
-          collectionName: "My Collection",
-          discordNotifyOnMatch: false,
-          stickyMatches: false,
-          searchAfterAction: false,
-          user: { mediaServers: [{ id: "s1" }] },
-        },
-      ])
-      .mockResolvedValueOnce([]); // disabledCollectionRuleSets
+    mockPrisma.ruleSet.findMany.mockResolvedValueOnce([
+      {
+        id: "rs1",
+        userId: "u1",
+        name: "Test",
+        type: "MOVIE",
+        rules: [{ field: "title", operator: "contains", value: "test", enabled: true }],
+        seriesScope: false,
+        serverIds: ["s1"],
+        actionEnabled: false,
+        actionType: null,
+        actionDelayDays: 0,
+        arrInstanceId: null,
+        targetQualityProfileId: null,
+        addImportExclusion: false,
+        addArrTags: [],
+        removeArrTags: [],
+        collectionId: "col1",
+        discordNotifyOnMatch: false,
+        stickyMatches: false,
+        searchAfterAction: false,
+        user: { mediaServers: [{ id: "s1" }] },
+      },
+    ]);
 
     await processLifecycleRules("u1");
 
-    expect(mockSyncPlexCollection).toHaveBeenCalled();
+    // Collections are synced exactly once, scoped to the user, after the loop.
+    expect(mockSyncAllCollections).toHaveBeenCalledTimes(1);
+    expect(mockSyncAllCollections).toHaveBeenCalledWith("u1", expect.anything());
   });
 });
 

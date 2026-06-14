@@ -5,7 +5,7 @@ import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { logger } from "@/lib/logger";
-import { syncPlexCollection } from "@/lib/lifecycle/collections";
+import { syncCollectionById, syncAllCollections } from "@/lib/lifecycle/collections";
 
 interface RuleSetConfig {
   id: string;
@@ -22,8 +22,6 @@ interface RuleSetConfig {
   addImportExclusion: boolean;
   addArrTags: string[];
   removeArrTags: string[];
-  collectionEnabled: boolean;
-  collectionName: string | null;
   stickyMatches: boolean;
 }
 
@@ -486,16 +484,12 @@ export async function runDetection(userId: string, ruleSetId?: string, fullReEva
       addImportExclusion: boolean;
       addArrTags: string[];
       removeArrTags: string[];
-      collectionEnabled: boolean;
-      collectionName: string | null;
+      collectionId: string | null;
       stickyMatches: boolean;
     };
     items: Record<string, unknown>[];
     count: number;
   }> = [];
-
-  // Cache Plex library items across rule sets to avoid redundant API calls
-  const plexItemsCache = new Map<string, Array<{ title: string; ratingKey: string }>>();
 
   for (const rs of ruleSets) {
     const allServerIds = rs.user.mediaServers.map((s) => s.id);
@@ -563,8 +557,6 @@ export async function runDetection(userId: string, ruleSetId?: string, fullReEva
         addImportExclusion: rs.addImportExclusion,
         addArrTags: rs.addArrTags,
         removeArrTags: rs.removeArrTags,
-        collectionEnabled: rs.collectionEnabled,
-        collectionName: rs.collectionName,
         stickyMatches: rs.stickyMatches,
       },
       serverIds,
@@ -572,19 +564,6 @@ export async function runDetection(userId: string, ruleSetId?: string, fullReEva
       seerrData,
       fullReEval,
     );
-
-    // Sync Plex collection if enabled
-    if (rs.collectionEnabled && rs.collectionName) {
-      try {
-        await syncPlexCollection(
-          rs,
-          result.currentItems as Array<{ libraryId: string; ratingKey: string; title: string; parentTitle: string | null }>,
-          plexItemsCache,
-        );
-      } catch (error) {
-        logger.error("Lifecycle", `Collection sync failed for "${rs.name}" during detection`, { error: String(error) });
-      }
-    }
 
     results.push({
       ruleSet: {
@@ -598,8 +577,7 @@ export async function runDetection(userId: string, ruleSetId?: string, fullReEva
         addImportExclusion: rs.addImportExclusion,
         addArrTags: rs.addArrTags,
         removeArrTags: rs.removeArrTags,
-        collectionEnabled: rs.collectionEnabled,
-        collectionName: rs.collectionName,
+        collectionId: rs.collectionId,
         stickyMatches: rs.stickyMatches,
       },
       items: result.items,
@@ -608,4 +586,36 @@ export async function runDetection(userId: string, ruleSetId?: string, fullReEva
   }
 
   return results;
+}
+
+/**
+ * Sync Plex collections after a manual detection run. Collection membership is
+ * the UNION of every rule set feeding it, so this runs after detection (and,
+ * when the caller processes actions, after those are scheduled — so
+ * DELETION_DATE ordering reflects the freshly scheduled deletions).
+ *
+ * For a single-rule-set run, only the collection(s) that rule set feeds are
+ * synced; for a full run, every collection is synced (which also cleans up
+ * orphaned collections).
+ */
+export async function syncCollectionsAfterDetection(
+  userId: string,
+  ruleSetId: string | undefined,
+  results: Array<{ ruleSet: { collectionId: string | null } }>,
+): Promise<void> {
+  const plexItemsCache = new Map<string, Array<{ title: string; ratingKey: string }>>();
+  if (ruleSetId) {
+    const collectionIds = [
+      ...new Set(results.map((r) => r.ruleSet.collectionId).filter((id): id is string => !!id)),
+    ];
+    for (const id of collectionIds) {
+      try {
+        await syncCollectionById(id, plexItemsCache);
+      } catch (error) {
+        logger.error("Lifecycle", `Collection sync failed for collection ${id} during detection`, { error: String(error) });
+      }
+    }
+  } else {
+    await syncAllCollections(userId, plexItemsCache);
+  }
 }

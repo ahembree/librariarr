@@ -97,7 +97,6 @@ interface RuleSetMatch {
     searchAfterAction: boolean;
     addArrTags: string[];
     removeArrTags: string[];
-    collectionEnabled: boolean;
     collectionName: string | null;
   };
   items: MatchedMediaItem[];
@@ -1025,7 +1024,7 @@ export default function RuleMatchesPage() {
                             ))}
                           </div>
                         )}
-                        {match.ruleSet.collectionEnabled && match.ruleSet.collectionName && (
+                        {match.ruleSet.collectionName && (
                           <span className="text-xs text-sky">
                             Collection: {match.ruleSet.collectionName}
                           </span>

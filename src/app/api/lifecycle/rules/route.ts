@@ -15,6 +15,18 @@ export async function GET() {
   const ruleSets = await prisma.ruleSet.findMany({
     where: { userId: session.userId },
     orderBy: { createdAt: "desc" },
+    include: {
+      collection: {
+        select: {
+          id: true,
+          name: true,
+          sortName: true,
+          homeScreen: true,
+          recommended: true,
+          sort: true,
+        },
+      },
+    },
   });
 
   return NextResponse.json({ ruleSets });
@@ -33,7 +45,7 @@ export async function POST(request: NextRequest) {
     name, type, rules, seriesScope,
     enabled, actionEnabled, actionType, actionDelayDays, arrInstanceId, targetQualityProfileId, addImportExclusion, searchAfterAction,
     addArrTags, removeArrTags,
-    collectionEnabled, collectionName, collectionSortName, collectionHomeScreen, collectionRecommended, collectionSort,
+    collectionId,
     discordNotifyOnAction,
     discordNotifyOnMatch,
     stickyMatches,
@@ -93,6 +105,24 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: actionConfigError }, { status: 400 });
   }
 
+  // A referenced collection must exist, belong to the user, and target the same
+  // library type (a Plex collection lives in a single library type).
+  if (collectionId) {
+    const collection = await prisma.collection.findFirst({
+      where: { id: collectionId, userId: session.userId },
+      select: { type: true },
+    });
+    if (!collection) {
+      return NextResponse.json({ error: "Collection not found" }, { status: 400 });
+    }
+    if (collection.type !== type) {
+      return NextResponse.json(
+        { error: "Collection type does not match the rule set type" },
+        { status: 400 }
+      );
+    }
+  }
+
   const ruleSet = await prisma.ruleSet.create({
     data: {
       userId: session.userId!,
@@ -110,12 +140,7 @@ export async function POST(request: NextRequest) {
       searchAfterAction: searchAfterAction ?? false,
       addArrTags: addArrTags ?? [],
       removeArrTags: removeArrTags ?? [],
-      collectionEnabled: collectionEnabled ?? false,
-      collectionName: collectionName ?? null,
-      collectionSortName: collectionSortName ?? null,
-      collectionHomeScreen: collectionHomeScreen ?? false,
-      collectionRecommended: collectionRecommended ?? false,
-      collectionSort: collectionSort ?? "ALPHABETICAL",
+      collectionId: collectionId ?? null,
       discordNotifyOnAction: discordNotifyOnAction ?? false,
       discordNotifyOnMatch: discordNotifyOnMatch ?? false,
       stickyMatches: stickyMatches ?? false,

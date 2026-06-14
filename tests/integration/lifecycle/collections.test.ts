@@ -1,14 +1,13 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
+  callRouteWithParams,
   expectJson,
   createTestUser,
-  createTestServer,
-  createTestLibrary,
-  createTestMediaItem,
   createTestRuleSet,
+  createTestCollection,
 } from "../../setup/test-helpers";
 
 // Critical: redirect prisma to test database
@@ -17,567 +16,300 @@ vi.mock("@/lib/db", async () => {
   return { prisma: getTestPrisma() };
 });
 
-// Suppress logger DB writes
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   apiLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-// Mock PlexClient (used by apply and visibility routes)
-vi.mock("@/lib/plex/client", () => ({
-  PlexClient: vi.fn().mockImplementation(function () {
-    return {
-      getCollections: vi.fn().mockResolvedValue([]),
-      syncCollection: vi.fn().mockResolvedValue(undefined),
-      removePlexCollection: vi.fn().mockResolvedValue(undefined),
-      renameCollection: vi.fn().mockResolvedValue(undefined),
-      getCollectionVisibility: vi.fn().mockResolvedValue({ home: false, recommended: false }),
-    };
-  }),
-}));
-
-// Mock lifecycle collections module (used by apply and sync routes)
-const { mockSyncPlexCollection, mockRemovePlexCollection } = vi.hoisted(() => ({
-  mockSyncPlexCollection: vi.fn().mockResolvedValue(undefined),
+// Mock the Plex-touching collection helpers so route logic is exercised against
+// the real DB without hitting Plex. The sync engine itself is unit-tested.
+const { mockSyncCollectionById, mockRemovePlexCollection, mockRenameCollectionInPlex } = vi.hoisted(() => ({
+  mockSyncCollectionById: vi.fn().mockResolvedValue(undefined),
   mockRemovePlexCollection: vi.fn().mockResolvedValue(undefined),
+  mockRenameCollectionInPlex: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/lib/lifecycle/collections", () => ({
-  syncPlexCollection: mockSyncPlexCollection,
+  syncCollectionById: mockSyncCollectionById,
   removePlexCollection: mockRemovePlexCollection,
-}));
-
-// Mock Arr clients (not directly used, but the rules engine import chain may pull them)
-vi.mock("@/lib/arr/radarr-client", () => ({
-  RadarrClient: vi.fn().mockImplementation(function () {
-    return {
-      getMovies: vi.fn().mockResolvedValue([]),
-      getQualityProfiles: vi.fn().mockResolvedValue([]),
-      getTags: vi.fn().mockResolvedValue([]),
-      getCustomFormatScores: vi.fn().mockResolvedValue(new Map()),
-    };
-  }),
-}));
-
-vi.mock("@/lib/arr/sonarr-client", () => ({
-  SonarrClient: vi.fn().mockImplementation(function () {
-    return {
-      getSeries: vi.fn().mockResolvedValue([]),
-      getQualityProfiles: vi.fn().mockResolvedValue([]),
-      getTags: vi.fn().mockResolvedValue([]),
-    };
-  }),
-}));
-
-vi.mock("@/lib/arr/lidarr-client", () => ({
-  LidarrClient: vi.fn().mockImplementation(function () {
-    return {
-      getArtists: vi.fn().mockResolvedValue([]),
-      getQualityProfiles: vi.fn().mockResolvedValue([]),
-      getTags: vi.fn().mockResolvedValue([]),
-    };
-  }),
+  renameCollectionInPlex: mockRenameCollectionInPlex,
 }));
 
 // Import AFTER mocks
-import { POST as applyPost } from "@/app/api/lifecycle/collections/apply/route";
+import { GET as listGet, POST as createPost } from "@/app/api/lifecycle/collections/route";
+import { PUT as updatePut, DELETE as deleteDelete } from "@/app/api/lifecycle/collections/[id]/route";
 import { POST as syncPost } from "@/app/api/lifecycle/collections/sync/route";
-import { GET as visibilityGet } from "@/app/api/lifecycle/collections/visibility/route";
 
-describe("Lifecycle Collections", () => {
+describe("Lifecycle Collections CRUD", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
-    // Reset collection mocks to clear any unconsumed mockRejectedValueOnce queues
-    mockSyncPlexCollection.mockReset();
-    mockSyncPlexCollection.mockResolvedValue(undefined);
-    mockRemovePlexCollection.mockReset();
-    mockRemovePlexCollection.mockResolvedValue(undefined);
   });
 
   afterAll(async () => {
     await disconnectTestDb();
   });
 
-  // ---- POST /api/lifecycle/collections/apply ----
-
-  describe("POST /api/lifecycle/collections/apply", () => {
+  // ---- GET /api/lifecycle/collections ----
+  describe("GET /api/lifecycle/collections", () => {
     it("returns 401 without auth", async () => {
-      const response = await callRoute(applyPost, {
-        url: "/api/lifecycle/collections/apply",
+      const response = await callRoute(listGet, { url: "/api/lifecycle/collections" });
+      await expectJson(response, 401);
+    });
+
+    it("lists the user's collections, optionally filtered by type", async () => {
+      const user = await createTestUser();
+      await createTestCollection(user.id, { name: "Leaving Soon", type: "MOVIE" });
+      await createTestCollection(user.id, { name: "TV Soon", type: "SERIES" });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const all = await callRoute(listGet, { url: "/api/lifecycle/collections" });
+      const allBody = await expectJson<{ collections: Array<{ name: string }> }>(all, 200);
+      expect(allBody.collections).toHaveLength(2);
+
+      const movies = await callRoute(listGet, {
+        url: "/api/lifecycle/collections",
+        searchParams: { type: "MOVIE" },
+      });
+      const moviesBody = await expectJson<{ collections: Array<{ name: string }> }>(movies, 200);
+      expect(moviesBody.collections).toHaveLength(1);
+      expect(moviesBody.collections[0].name).toBe("Leaving Soon");
+    });
+
+    it("includes a rule set usage count", async () => {
+      const user = await createTestUser();
+      const collection = await createTestCollection(user.id, { type: "MOVIE" });
+      await createTestRuleSet(user.id, { type: "MOVIE", collectionId: collection.id });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(listGet, { url: "/api/lifecycle/collections" });
+      const body = await expectJson<{ collections: Array<{ _count: { ruleSets: number } }> }>(response, 200);
+      expect(body.collections[0]._count.ruleSets).toBe(1);
+    });
+  });
+
+  // ---- POST /api/lifecycle/collections ----
+  describe("POST /api/lifecycle/collections", () => {
+    it("returns 401 without auth", async () => {
+      const response = await callRoute(createPost, {
+        url: "/api/lifecycle/collections",
         method: "POST",
-        body: { ruleSetId: "some-id" },
+        body: { name: "X", type: "MOVIE" },
       });
       await expectJson(response, 401);
     });
 
-    it("returns 400 when ruleSetId is missing", async () => {
+    it("returns 400 on validation failure", async () => {
       const user = await createTestUser();
       setMockSession({ isLoggedIn: true, userId: user.id });
-
-      const response = await callRoute(applyPost, {
-        url: "/api/lifecycle/collections/apply",
+      const response = await callRoute(createPost, {
+        url: "/api/lifecycle/collections",
         method: "POST",
-        body: {},
+        body: { type: "MOVIE" },
       });
-
-      const body = await expectJson<{ error: string }>(response, 400);
-      expect(body.error).toBe("Validation failed");
+      await expectJson(response, 400);
     });
 
-    it("returns 404 for non-existent rule set", async () => {
+    it("creates a collection", async () => {
       const user = await createTestUser();
       setMockSession({ isLoggedIn: true, userId: user.id });
-
-      const response = await callRoute(applyPost, {
-        url: "/api/lifecycle/collections/apply",
+      const response = await callRoute(createPost, {
+        url: "/api/lifecycle/collections",
         method: "POST",
-        body: { ruleSetId: "nonexistent" },
+        body: { name: "Leaving Soon", type: "MOVIE", sort: "DELETION_DATE", homeScreen: true },
       });
+      const body = await expectJson<{ collection: { id: string; name: string; sort: string; homeScreen: boolean } }>(response, 201);
+      expect(body.collection.name).toBe("Leaving Soon");
+      expect(body.collection.sort).toBe("DELETION_DATE");
+      expect(body.collection.homeScreen).toBe(true);
 
+      const inDb = await getTestPrisma().collection.findFirst({ where: { userId: user.id } });
+      expect(inDb?.name).toBe("Leaving Soon");
+    });
+
+    it("returns 409 on duplicate name for the same type", async () => {
+      const user = await createTestUser();
+      await createTestCollection(user.id, { name: "Leaving Soon", type: "MOVIE" });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(createPost, {
+        url: "/api/lifecycle/collections",
+        method: "POST",
+        body: { name: "Leaving Soon", type: "MOVIE" },
+      });
+      await expectJson(response, 409);
+    });
+
+    it("allows the same name across different types", async () => {
+      const user = await createTestUser();
+      await createTestCollection(user.id, { name: "Leaving Soon", type: "MOVIE" });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(createPost, {
+        url: "/api/lifecycle/collections",
+        method: "POST",
+        body: { name: "Leaving Soon", type: "SERIES" },
+      });
+      await expectJson(response, 201);
+    });
+  });
+
+  // ---- PUT /api/lifecycle/collections/[id] ----
+  describe("PUT /api/lifecycle/collections/[id]", () => {
+    it("returns 401 without auth", async () => {
+      const response = await callRouteWithParams(updatePut, { id: "x" }, {
+        url: "/api/lifecycle/collections/x",
+        method: "PUT",
+        body: { sort: "ALPHABETICAL" },
+      });
+      await expectJson(response, 401);
+    });
+
+    it("returns 404 for a non-existent collection", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRouteWithParams(updatePut, { id: "missing" }, {
+        url: "/api/lifecycle/collections/missing",
+        method: "PUT",
+        body: { sort: "ALPHABETICAL" },
+      });
       await expectJson(response, 404);
     });
 
-    it("returns success with no changes when collection is not enabled", async () => {
+    it("updates settings and re-syncs", async () => {
       const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      await createTestLibrary(server.id, { type: "MOVIE" });
-      const ruleSet = await createTestRuleSet(user.id, {
-        name: "No Collection",
-        type: "MOVIE",
-        collectionEnabled: false,
-      });
-
+      const collection = await createTestCollection(user.id, { type: "MOVIE", sort: "ALPHABETICAL" });
       setMockSession({ isLoggedIn: true, userId: user.id });
 
-      const response = await callRoute(applyPost, {
-        url: "/api/lifecycle/collections/apply",
-        method: "POST",
-        body: { ruleSetId: ruleSet.id },
+      const response = await callRouteWithParams(updatePut, { id: collection.id }, {
+        url: `/api/lifecycle/collections/${collection.id}`,
+        method: "PUT",
+        body: { sort: "DELETION_DATE", recommended: true },
       });
-
-      const body = await expectJson<{ success: boolean; changes: string[] }>(response, 200);
-      expect(body.success).toBe(true);
-      expect(body.changes).toHaveLength(0);
+      const body = await expectJson<{ collection: { sort: string; recommended: boolean } }>(response, 200);
+      expect(body.collection.sort).toBe("DELETION_DATE");
+      expect(body.collection.recommended).toBe(true);
+      expect(mockSyncCollectionById).toHaveBeenCalledWith(collection.id);
+      expect(mockRenameCollectionInPlex).not.toHaveBeenCalled();
     });
 
-    it("removes collection when previousCollectionEnabled but now disabled", async () => {
+    it("renames on Plex when the name changes", async () => {
       const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      await createTestLibrary(server.id, { type: "MOVIE" });
-      const ruleSet = await createTestRuleSet(user.id, {
-        name: "Disabled Collection",
-        type: "MOVIE",
-        collectionEnabled: false,
-      });
-
+      const collection = await createTestCollection(user.id, { name: "Old", type: "MOVIE" });
       setMockSession({ isLoggedIn: true, userId: user.id });
 
-      const response = await callRoute(applyPost, {
-        url: "/api/lifecycle/collections/apply",
-        method: "POST",
-        body: {
-          ruleSetId: ruleSet.id,
-          previousCollectionEnabled: true,
-          previousCollectionName: "Old Collection",
-        },
+      const response = await callRouteWithParams(updatePut, { id: collection.id }, {
+        url: `/api/lifecycle/collections/${collection.id}`,
+        method: "PUT",
+        body: { name: "New" },
       });
-
-      const body = await expectJson<{ success: boolean; changes: string[] }>(response, 200);
-      expect(body.success).toBe(true);
-      expect(body.changes).toHaveLength(1);
-      expect(body.changes[0]).toContain("Removed");
-      expect(mockRemovePlexCollection).toHaveBeenCalledWith(
-        user.id,
-        "MOVIE",
-        "Old Collection"
-      );
+      await expectJson(response, 200);
+      expect(mockRenameCollectionInPlex).toHaveBeenCalledWith(user.id, "MOVIE", "Old", "New");
     });
 
-    it("returns success with no changes when collection is enabled but no rename/removal needed", async () => {
+    it("returns 409 when renaming to an existing name", async () => {
       const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      await createTestLibrary(server.id, { type: "MOVIE" });
-
-      const ruleSet = await createTestRuleSet(user.id, {
-        name: "Collection Sync",
-        type: "MOVIE",
-        collectionEnabled: true,
-        collectionName: "My Collection",
-        rules: [
-          {
-            id: "r1",
-            field: "playCount",
-            operator: "equals",
-            value: 0,
-            condition: "AND",
-          },
-        ],
-      });
-
+      await createTestCollection(user.id, { name: "Taken", type: "MOVIE" });
+      const collection = await createTestCollection(user.id, { name: "Mine", type: "MOVIE" });
       setMockSession({ isLoggedIn: true, userId: user.id });
 
-      // Apply route only handles rename/removal — item syncing is done by the sync route
-      const response = await callRoute(applyPost, {
-        url: "/api/lifecycle/collections/apply",
-        method: "POST",
-        body: { ruleSetId: ruleSet.id },
+      const response = await callRouteWithParams(updatePut, { id: collection.id }, {
+        url: `/api/lifecycle/collections/${collection.id}`,
+        method: "PUT",
+        body: { name: "Taken" },
       });
+      await expectJson(response, 409);
+    });
+  });
 
-      const body = await expectJson<{ success: boolean; changes: string[] }>(response, 200);
-      expect(body.success).toBe(true);
-      expect(body.changes).toHaveLength(0);
-      expect(mockSyncPlexCollection).not.toHaveBeenCalled();
+  // ---- DELETE /api/lifecycle/collections/[id] ----
+  describe("DELETE /api/lifecycle/collections/[id]", () => {
+    it("returns 401 without auth", async () => {
+      const response = await callRouteWithParams(deleteDelete, { id: "x" }, {
+        url: "/api/lifecycle/collections/x",
+        method: "DELETE",
+      });
+      await expectJson(response, 401);
     });
 
-    it("returns 404 for another user's rule set", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const ruleSet = await createTestRuleSet(user1.id, {
-        name: "Private Collection",
-        collectionEnabled: true,
-        collectionName: "Secret",
+    it("removes the collection from Plex and detaches rule sets", async () => {
+      const user = await createTestUser();
+      const collection = await createTestCollection(user.id, { name: "Gone", type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, { type: "MOVIE", collectionId: collection.id });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRouteWithParams(deleteDelete, { id: collection.id }, {
+        url: `/api/lifecycle/collections/${collection.id}`,
+        method: "DELETE",
       });
+      await expectJson(response, 200);
+      expect(mockRemovePlexCollection).toHaveBeenCalledWith(user.id, "MOVIE", "Gone");
 
-      setMockSession({ isLoggedIn: true, userId: user2.id });
+      const deleted = await getTestPrisma().collection.findUnique({ where: { id: collection.id } });
+      expect(deleted).toBeNull();
+      // FK SetNull: the rule set survives but is detached.
+      const rs = await getTestPrisma().ruleSet.findUnique({ where: { id: ruleSet.id } });
+      expect(rs?.collectionId).toBeNull();
+    });
 
-      const response = await callRoute(applyPost, {
-        url: "/api/lifecycle/collections/apply",
-        method: "POST",
-        body: { ruleSetId: ruleSet.id },
+    it("returns 404 for a non-existent collection", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRouteWithParams(deleteDelete, { id: "missing" }, {
+        url: "/api/lifecycle/collections/missing",
+        method: "DELETE",
       });
-
       await expectJson(response, 404);
-    });
-
-    it("returns 500 when Plex removal fails", async () => {
-      mockRemovePlexCollection.mockRejectedValueOnce(new Error("Plex connection refused"));
-
-      const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      await createTestLibrary(server.id, { type: "MOVIE" });
-
-      // Collection is now disabled but was previously enabled — triggers removal
-      const ruleSet = await createTestRuleSet(user.id, {
-        name: "Failing Collection",
-        type: "MOVIE",
-        collectionEnabled: false,
-      });
-
-      setMockSession({ isLoggedIn: true, userId: user.id });
-
-      const response = await callRoute(applyPost, {
-        url: "/api/lifecycle/collections/apply",
-        method: "POST",
-        body: {
-          ruleSetId: ruleSet.id,
-          previousCollectionEnabled: true,
-          previousCollectionName: "Old Collection",
-        },
-      });
-
-      const body = await expectJson<{ error: string }>(response, 500);
-      expect(body.error).toContain("Plex connection refused");
     });
   });
 
   // ---- POST /api/lifecycle/collections/sync ----
-
   describe("POST /api/lifecycle/collections/sync", () => {
     it("returns 401 without auth", async () => {
       const response = await callRoute(syncPost, {
         url: "/api/lifecycle/collections/sync",
         method: "POST",
-        body: { ruleSetId: "some-id" },
+        body: { collectionId: "x" },
       });
       await expectJson(response, 401);
     });
 
-    it("returns 400 when ruleSetId is missing", async () => {
+    it("returns 400 when collectionId is missing", async () => {
       const user = await createTestUser();
       setMockSession({ isLoggedIn: true, userId: user.id });
-
       const response = await callRoute(syncPost, {
         url: "/api/lifecycle/collections/sync",
         method: "POST",
         body: {},
       });
-
-      const body = await expectJson<{ error: string }>(response, 400);
-      expect(body.error).toBe("Validation failed");
+      await expectJson(response, 400);
     });
 
-    it("returns 404 for non-existent rule set", async () => {
+    it("returns 404 for a non-existent collection", async () => {
       const user = await createTestUser();
       setMockSession({ isLoggedIn: true, userId: user.id });
-
       const response = await callRoute(syncPost, {
         url: "/api/lifecycle/collections/sync",
         method: "POST",
-        body: { ruleSetId: "nonexistent" },
+        body: { collectionId: "missing" },
       });
-
       await expectJson(response, 404);
     });
 
-    it("returns 400 when collection sync is not enabled", async () => {
+    it("syncs an existing collection", async () => {
       const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      await createTestLibrary(server.id, { type: "MOVIE" });
-      const ruleSet = await createTestRuleSet(user.id, {
-        name: "No Collection",
-        type: "MOVIE",
-        collectionEnabled: false,
-      });
-
+      const collection = await createTestCollection(user.id, { name: "Leaving Soon", type: "MOVIE" });
       setMockSession({ isLoggedIn: true, userId: user.id });
 
       const response = await callRoute(syncPost, {
         url: "/api/lifecycle/collections/sync",
         method: "POST",
-        body: { ruleSetId: ruleSet.id },
+        body: { collectionId: collection.id },
       });
-
-      const body = await expectJson<{ error: string }>(response, 400);
-      expect(body.error).toContain("not enabled");
-    });
-
-    it("syncs collection and returns match count", async () => {
-      const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      const library = await createTestLibrary(server.id, { type: "MOVIE" });
-      await createTestMediaItem(library.id, {
-        title: "Movie A",
-        type: "MOVIE",
-        playCount: 0,
-      });
-      await createTestMediaItem(library.id, {
-        title: "Movie B",
-        type: "MOVIE",
-        playCount: 0,
-      });
-
-      const ruleSet = await createTestRuleSet(user.id, {
-        name: "Sync Test",
-        type: "MOVIE",
-        serverIds: [server.id],
-        collectionEnabled: true,
-        collectionName: "Synced Collection",
-        rules: [
-          {
-            id: "r1",
-            field: "playCount",
-            operator: "equals",
-            value: 0,
-            condition: "AND",
-          },
-        ],
-      });
-
-      setMockSession({ isLoggedIn: true, userId: user.id });
-
-      const response = await callRoute(syncPost, {
-        url: "/api/lifecycle/collections/sync",
-        method: "POST",
-        body: { ruleSetId: ruleSet.id },
-      });
-
-      const body = await expectJson<{
-        success: boolean;
-        matchedCount: number;
-        collectionName: string;
-      }>(response, 200);
-
+      const body = await expectJson<{ success: boolean; collectionName: string }>(response, 200);
       expect(body.success).toBe(true);
-      expect(body.matchedCount).toBe(2);
-      expect(body.collectionName).toBe("Synced Collection");
-      expect(mockSyncPlexCollection).toHaveBeenCalled();
-    });
-
-    it("returns 404 for another user's rule set", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const ruleSet = await createTestRuleSet(user1.id, {
-        name: "Private Sync",
-        collectionEnabled: true,
-        collectionName: "Secret Sync",
-      });
-
-      setMockSession({ isLoggedIn: true, userId: user2.id });
-
-      const response = await callRoute(syncPost, {
-        url: "/api/lifecycle/collections/sync",
-        method: "POST",
-        body: { ruleSetId: ruleSet.id },
-      });
-
-      await expectJson(response, 404);
-    });
-
-    it("returns 400 when all rules are disabled (safety guard)", async () => {
-      const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      await createTestLibrary(server.id, { type: "MOVIE" });
-      const ruleSet = await createTestRuleSet(user.id, {
-        name: "All Disabled",
-        type: "MOVIE",
-        serverIds: [server.id],
-        collectionEnabled: true,
-        collectionName: "Dangerous Collection",
-        rules: [
-          {
-            id: "g1",
-            condition: "AND",
-            rules: [
-              { id: "r1", field: "playCount", operator: "greaterThan", value: 0, condition: "AND", enabled: false },
-            ],
-            groups: [],
-          },
-        ],
-      });
-
-      setMockSession({ isLoggedIn: true, userId: user.id });
-
-      const response = await callRoute(syncPost, {
-        url: "/api/lifecycle/collections/sync",
-        method: "POST",
-        body: { ruleSetId: ruleSet.id },
-      });
-
-      const body = await expectJson<{ error: string }>(response, 400);
-      expect(body.error).toBe("No active rules to evaluate");
-      // Ensure syncPlexCollection was NOT called
-      expect(mockSyncPlexCollection).not.toHaveBeenCalled();
-    });
-  });
-
-  // ---- GET /api/lifecycle/collections/visibility ----
-
-  describe("GET /api/lifecycle/collections/visibility", () => {
-    it("returns 401 without auth", async () => {
-      const response = await callRoute(visibilityGet, {
-        url: "/api/lifecycle/collections/visibility",
-        searchParams: { ruleSetId: "some-id" },
-      });
-      await expectJson(response, 401);
-    });
-
-    it("returns 400 when ruleSetId is missing", async () => {
-      const user = await createTestUser();
-      setMockSession({ isLoggedIn: true, userId: user.id });
-
-      const response = await callRoute(visibilityGet, {
-        url: "/api/lifecycle/collections/visibility",
-      });
-
-      const body = await expectJson<{ error: string }>(response, 400);
-      expect(body.error).toContain("ruleSetId");
-    });
-
-    it("returns defaults when rule set has no collection name", async () => {
-      const user = await createTestUser();
-      const ruleSet = await createTestRuleSet(user.id, {
-        name: "No Collection Name",
-        collectionEnabled: false,
-      });
-
-      setMockSession({ isLoggedIn: true, userId: user.id });
-
-      const response = await callRoute(visibilityGet, {
-        url: "/api/lifecycle/collections/visibility",
-        searchParams: { ruleSetId: ruleSet.id },
-      });
-
-      const body = await expectJson<{ home: boolean; recommended: boolean }>(response, 200);
-      expect(body.home).toBe(false);
-      expect(body.recommended).toBe(false);
-    });
-
-    it("returns defaults when rule set does not exist", async () => {
-      const user = await createTestUser();
-      setMockSession({ isLoggedIn: true, userId: user.id });
-
-      const response = await callRoute(visibilityGet, {
-        url: "/api/lifecycle/collections/visibility",
-        searchParams: { ruleSetId: "nonexistent" },
-      });
-
-      const body = await expectJson<{ home: boolean; recommended: boolean }>(response, 200);
-      expect(body.home).toBe(false);
-      expect(body.recommended).toBe(false);
-    });
-
-    it("returns defaults when no libraries exist for user", async () => {
-      const user = await createTestUser();
-      const ruleSet = await createTestRuleSet(user.id, {
-        name: "With Collection",
-        type: "MOVIE",
-        collectionEnabled: true,
-        collectionName: "Test",
-      });
-
-      setMockSession({ isLoggedIn: true, userId: user.id });
-
-      const response = await callRoute(visibilityGet, {
-        url: "/api/lifecycle/collections/visibility",
-        searchParams: { ruleSetId: ruleSet.id },
-      });
-
-      const body = await expectJson<{ home: boolean; recommended: boolean }>(response, 200);
-      expect(body.home).toBe(false);
-      expect(body.recommended).toBe(false);
-    });
-
-    it("queries Plex for visibility when library and server exist", async () => {
-      const user = await createTestUser();
-      const server = await createTestServer(user.id, { machineId: "plex-machine-1" });
-      await createTestLibrary(server.id, { type: "MOVIE" });
-
-      const ruleSet = await createTestRuleSet(user.id, {
-        name: "Visibility Test",
-        type: "MOVIE",
-        collectionEnabled: true,
-        collectionName: "Visible Collection",
-      });
-
-      setMockSession({ isLoggedIn: true, userId: user.id });
-
-      const response = await callRoute(visibilityGet, {
-        url: "/api/lifecycle/collections/visibility",
-        searchParams: { ruleSetId: ruleSet.id },
-      });
-
-      // PlexClient mock returns { home: false, recommended: false } by default,
-      // but getCollections returns [] so no collection is found, falling through
-      // to the default response
-      const body = await expectJson<{ home: boolean; recommended: boolean }>(response, 200);
-      expect(body.home).toBe(false);
-      expect(body.recommended).toBe(false);
-    });
-
-    it("returns visibility when another user's ruleSetId is provided (returns defaults)", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "viewer" });
-      const ruleSet = await createTestRuleSet(user1.id, {
-        name: "Private",
-        collectionEnabled: true,
-        collectionName: "Private Col",
-      });
-
-      setMockSession({ isLoggedIn: true, userId: user2.id });
-
-      // The visibility route uses findUnique with userId filter, so it won't
-      // find it and returns defaults
-      const response = await callRoute(visibilityGet, {
-        url: "/api/lifecycle/collections/visibility",
-        searchParams: { ruleSetId: ruleSet.id },
-      });
-
-      const body = await expectJson<{ home: boolean; recommended: boolean }>(response, 200);
-      expect(body.home).toBe(false);
-      expect(body.recommended).toBe(false);
+      expect(body.collectionName).toBe("Leaving Soon");
+      expect(mockSyncCollectionById).toHaveBeenCalledWith(collection.id);
     });
   });
 });

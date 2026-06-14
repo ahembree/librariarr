@@ -270,8 +270,7 @@ export async function createTestRuleSet(
     addImportExclusion: boolean;
     addArrTags: string[];
     removeArrTags: string[];
-    collectionEnabled: boolean;
-    collectionName: string;
+    collectionId: string | null;
     serverIds: string[];
   }>
 ) {
@@ -293,9 +292,33 @@ export async function createTestRuleSet(
       addImportExclusion: overrides?.addImportExclusion,
       addArrTags: overrides?.addArrTags,
       removeArrTags: overrides?.removeArrTags,
-      collectionEnabled: overrides?.collectionEnabled,
-      collectionName: overrides?.collectionName,
+      collectionId: overrides?.collectionId ?? null,
       serverIds: overrides?.serverIds,
+    },
+  });
+}
+
+export async function createTestCollection(
+  userId: string,
+  overrides?: Partial<{
+    name: string;
+    type: "MOVIE" | "SERIES" | "MUSIC";
+    sortName: string | null;
+    homeScreen: boolean;
+    recommended: boolean;
+    sort: string;
+  }>
+) {
+  const prisma = getTestPrisma();
+  return prisma.collection.create({
+    data: {
+      userId,
+      name: overrides?.name ?? `Collection ${unique()}`,
+      type: overrides?.type ?? "MOVIE",
+      sortName: overrides?.sortName ?? null,
+      homeScreen: overrides?.homeScreen ?? false,
+      recommended: overrides?.recommended ?? false,
+      sort: overrides?.sort ?? "ALPHABETICAL",
     },
   });
 }
