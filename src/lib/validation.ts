@@ -330,6 +330,9 @@ const actionTypeEnum = z.enum([
   "SEARCH_RADARR", "SEARCH_SONARR", "SEARCH_LIDARR",
 ]).nullable().optional();
 
+// Shared sort modes for a Plex collection's item ordering.
+const collectionSortEnum = z.enum(["RELEASE_DATE", "ALPHABETICAL", "ACTION_DATE"]);
+
 export const ruleSetCreateSchema = z.object({
   name: z.string().min(1, "Name is required"),
   type: z.enum(["MOVIE", "SERIES", "MUSIC"]),
@@ -345,12 +348,7 @@ export const ruleSetCreateSchema = z.object({
   searchAfterAction: z.boolean().optional(),
   addArrTags: z.array(z.string()).optional(),
   removeArrTags: z.array(z.string()).optional(),
-  collectionEnabled: z.boolean().optional(),
-  collectionName: z.string().nullable().optional(),
-  collectionSortName: z.string().nullable().optional(),
-  collectionHomeScreen: z.boolean().optional(),
-  collectionRecommended: z.boolean().optional(),
-  collectionSort: z.enum(["RELEASE_DATE", "ALPHABETICAL", "DELETION_DATE"]).optional(),
+  collectionId: z.string().nullable().optional(),
   discordNotifyOnAction: z.boolean().optional(),
   discordNotifyOnMatch: z.boolean().optional(),
   stickyMatches: z.boolean().optional(),
@@ -371,16 +369,29 @@ export const ruleSetUpdateSchema = z.object({
   searchAfterAction: z.boolean().optional(),
   addArrTags: z.array(z.string()).optional(),
   removeArrTags: z.array(z.string()).optional(),
-  collectionEnabled: z.boolean().optional(),
-  collectionName: z.string().nullable().optional(),
-  collectionSortName: z.string().nullable().optional(),
-  collectionHomeScreen: z.boolean().optional(),
-  collectionRecommended: z.boolean().optional(),
-  collectionSort: z.enum(["RELEASE_DATE", "ALPHABETICAL", "DELETION_DATE"]).optional(),
+  collectionId: z.string().nullable().optional(),
   discordNotifyOnAction: z.boolean().optional(),
   discordNotifyOnMatch: z.boolean().optional(),
   stickyMatches: z.boolean().optional(),
   serverIds: z.array(z.string()).min(1, "At least one server is required").optional(),
+});
+
+// Collection (reusable Plex collection definition) CRUD.
+export const collectionCreateSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  type: z.enum(["MOVIE", "SERIES", "MUSIC"]),
+  sortName: z.string().nullable().optional(),
+  homeScreen: z.boolean().optional(),
+  recommended: z.boolean().optional(),
+  sort: collectionSortEnum.optional(),
+});
+
+export const collectionUpdateSchema = z.object({
+  name: z.string().min(1).optional(),
+  sortName: z.string().nullable().optional(),
+  homeScreen: z.boolean().optional(),
+  recommended: z.boolean().optional(),
+  sort: collectionSortEnum.optional(),
 });
 
 export const rulePreviewSchema = z.object({
@@ -416,15 +427,8 @@ export const ruleRunSchema = z.object({
   processActions: z.boolean().optional(),
 });
 
-export const collectionApplySchema = z.object({
-  ruleSetId: z.string().min(1, "Rule set ID is required"),
-  previousCollectionEnabled: z.boolean().optional(),
-  previousCollectionName: z.string().optional(),
-  skipCollectionRemoval: z.boolean().optional(),
-});
-
 export const collectionSyncSchema = z.object({
-  ruleSetId: z.string().min(1, "Rule set ID is required"),
+  collectionId: z.string().min(1, "Collection ID is required"),
 });
 
 export const exceptionCreateSchema = z.object({

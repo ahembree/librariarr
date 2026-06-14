@@ -126,6 +126,7 @@ interface RuleSetSnapshot {
   addArrTags: string;
   removeArrTags: string;
   collectionEnabled: boolean;
+  selectedCollectionId: string;
   collectionName: string;
   collectionSortName: string;
   collectionHomeScreen: boolean;
@@ -135,6 +136,16 @@ interface RuleSetSnapshot {
   discordNotifyOnMatch: boolean;
   stickyMatches: boolean;
   serverIds: string;
+}
+
+interface CollectionDefinition {
+  id: string;
+  name: string;
+  sortName: string | null;
+  homeScreen: boolean;
+  recommended: boolean;
+  sort: string;
+  _count?: { ruleSets: number };
 }
 
 interface SavedRuleSet {
@@ -153,18 +164,17 @@ interface SavedRuleSet {
   searchAfterAction?: boolean;
   addArrTags: string[];
   removeArrTags: string[];
-  collectionEnabled: boolean;
-  collectionName: string | null;
-  collectionSortName: string | null;
-  collectionHomeScreen: boolean;
-  collectionRecommended: boolean;
-  collectionSort: string;
+  collectionId: string | null;
+  collection?: CollectionDefinition | null;
   discordNotifyOnAction: boolean;
   discordNotifyOnMatch?: boolean;
   stickyMatches?: boolean;
   serverIds: string[];
   createdAt: string;
 }
+
+// Sentinel for the "Create new collection…" dropdown option.
+const NEW_COLLECTION = "__new__";
 
 function isDestructiveAction(actionType: string): boolean {
   return actionType.includes("DELETE");
@@ -717,13 +727,22 @@ export function LifecycleRulePage({
   // response overwrite the result of a later one.
   const previewTokenRef = useRef(0);
 
-  // Collection config
+  // Collection config — a reusable collection definition is selected from a
+  // dropdown (or created inline). The settings fields below edit the SHARED
+  // collection, so saving them applies to every rule synced to that collection.
+  const [collections, setCollections] = useState<CollectionDefinition[]>([]);
   const [collectionEnabled, setCollectionEnabled] = useState(false);
+  // "" = none picked yet, NEW_COLLECTION = creating, otherwise an existing id.
+  const [selectedCollectionId, setSelectedCollectionId] = useState("");
   const [collectionName, setCollectionName] = useState("");
   const [collectionSortName, setCollectionSortName] = useState("");
   const [collectionHomeScreen, setCollectionHomeScreen] = useState(false);
   const [collectionRecommended, setCollectionRecommended] = useState(false);
   const [collectionSort, setCollectionSort] = useState("ALPHABETICAL");
+  const [showDeleteCollectionDialog, setShowDeleteCollectionDialog] = useState(false);
+  const [deletingCollection, setDeletingCollection] = useState(false);
+  const isExistingCollectionSelected =
+    !!selectedCollectionId && selectedCollectionId !== NEW_COLLECTION;
 
   // Discord notification
   const [discordNotifyOnAction, setDiscordNotifyOnAction] = useState(false);
@@ -768,6 +787,7 @@ export function LifecycleRulePage({
       snapshot.addArrTags !== JSON.stringify([...addArrTags].sort()) ||
       snapshot.removeArrTags !== JSON.stringify([...removeArrTags].sort()) ||
       snapshot.collectionEnabled !== collectionEnabled ||
+      snapshot.selectedCollectionId !== selectedCollectionId ||
       snapshot.collectionName !== collectionName ||
       snapshot.collectionSortName !== collectionSortName ||
       snapshot.collectionHomeScreen !== collectionHomeScreen ||
@@ -782,7 +802,7 @@ export function LifecycleRulePage({
     snapshot,
     name, groups, enabled, seriesScope, actionEnabled, actionType, actionDelayDays,
     arrInstanceId, targetQualityProfileId, addImportExclusion, searchAfterAction, addArrTags, removeArrTags,
-    collectionEnabled, collectionName, collectionSortName, collectionHomeScreen,
+    collectionEnabled, selectedCollectionId, collectionName, collectionSortName, collectionHomeScreen,
     collectionRecommended, collectionSort, discordNotifyOnAction, discordNotifyOnMatch, stickyMatches, serverIds,
   ]);
 
@@ -833,13 +853,21 @@ export function LifecycleRulePage({
 
   // Ref to the scroll container to preserve scroll position across re-renders
 
-  // Track previous collection state for Plex diff on save
-  const [prevCollection, setPrevCollection] = useState<{
-    enabled: boolean;
-    name: string | null;
-  }>({ enabled: false, name: null });
-  const [skipCollectionRemoval, setSkipCollectionRemoval] = useState(false);
-  const [showCollectionDisableDialog, setShowCollectionDisableDialog] = useState(false);
+  // Which collection this rule fed before the current edit — so a save that
+  // reassigns the rule to a different collection re-syncs the old one too
+  // (dropping this rule's items from it).
+  const [prevCollectionId, setPrevCollectionId] = useState<string | null>(null);
+
+  // How many rule sets reference the selected collection (from the fetched
+  // list), and how many of those are OTHER rules (excluding the one being
+  // edited). A collection can be deleted when no OTHER rule uses it — deleting
+  // from the last rule detaches that rule via the FK.
+  const selectedCollectionUsage = isExistingCollectionSelected
+    ? (collections.find((c) => c.id === selectedCollectionId)?._count?.ruleSets ?? 0)
+    : 0;
+  const currentRuleUsesSelected =
+    isExistingCollectionSelected && prevCollectionId === selectedCollectionId;
+  const otherCollectionUsage = selectedCollectionUsage - (currentRuleUsesSelected ? 1 : 0);
 
   // Test Media
   const [showTestMediaDialog, setShowTestMediaDialog] = useState(false);
@@ -922,6 +950,22 @@ export function LifecycleRulePage({
     }
   };
 
+  // The user's reusable collections for this library type — populates the
+  // collection dropdown. Returns the list so callers can use it before the
+  // async state update commits.
+  const fetchCollections = async (): Promise<CollectionDefinition[]> => {
+    try {
+      const response = await fetch(`/api/lifecycle/collections?type=${mediaType}`);
+      const data = await response.json();
+      const list: CollectionDefinition[] = data.collections || [];
+      setCollections(list);
+      return list;
+    } catch (error) {
+      console.error("Failed to fetch collections:", error);
+      return [];
+    }
+  };
+
   useEffect(() => {
     void (async () => {
       await Promise.all([
@@ -930,6 +974,7 @@ export function LifecycleRulePage({
         fetchSeerrInstances(),
         fetchDistinctValues(),
         fetchServers(),
+        fetchCollections(),
       ]);
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1032,7 +1077,7 @@ export function LifecycleRulePage({
     };
   }, [arrInstanceId, actionType, actionEnabled, arrApiPath]);
 
-  const handleSave = async (options?: { clearMatches?: boolean; runDetection?: boolean; processActions?: boolean; skipCollectionRemoval?: boolean }) => {
+  const handleSave = async (options?: { clearMatches?: boolean; runDetection?: boolean; processActions?: boolean }) => {
     const needsCheck =
       actionEnabled &&
       isDestructiveAction(actionType) &&
@@ -1057,17 +1102,115 @@ export function LifecycleRulePage({
     return executeSave(options);
   };
 
-  const executeSave = async (options?: { clearMatches?: boolean; runDetection?: boolean; processActions?: boolean; skipCollectionRemoval?: boolean }) => {
+  const handleDeleteCollection = async () => {
+    if (!isExistingCollectionSelected) return;
+    const id = selectedCollectionId;
+    // If the rule being edited is (the last) one using it, name it so the server
+    // excludes it from the in-use check; the FK SetNull then detaches it.
+    const detachedFromCurrent = prevCollectionId === id;
+    setDeletingCollection(true);
+    try {
+      const qs = activeRuleSetId ? `?ruleSetId=${activeRuleSetId}` : "";
+      const res = await fetch(`/api/lifecycle/collections/${id}${qs}`, { method: "DELETE" });
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        toast.error("Couldn't delete collection", { description: d?.error || "Unknown error" });
+        return;
+      }
+      toast.success("Collection deleted");
+      // Clear the collection portion of the editor.
+      setSelectedCollectionId("");
+      setCollectionName("");
+      setCollectionSortName("");
+      setCollectionHomeScreen(false);
+      setCollectionRecommended(false);
+      setCollectionSort("ALPHABETICAL");
+      setPrevCollectionId(null);
+      if (detachedFromCurrent) {
+        // The current (saved) rule was detached server-side. Turn the toggle off
+        // and fold the cleared collection state into the baseline so it doesn't
+        // read as an unsaved change.
+        setCollectionEnabled(false);
+        setSnapshot((s) =>
+          s
+            ? {
+                ...s,
+                collectionEnabled: false,
+                selectedCollectionId: "",
+                collectionName: "",
+                collectionSortName: "",
+                collectionHomeScreen: false,
+                collectionRecommended: false,
+                collectionSort: "ALPHABETICAL",
+              }
+            : s,
+        );
+      }
+      await fetchRuleSets();
+      await fetchCollections();
+    } catch (error) {
+      toast.error("Couldn't delete collection", { description: String(error) });
+    } finally {
+      setDeletingCollection(false);
+      setShowDeleteCollectionDialog(false);
+    }
+  };
+
+  const executeSave = async (options?: { clearMatches?: boolean; runDetection?: boolean; processActions?: boolean }) => {
     if (!name || countAllRules(groups) === 0) return;
     const clearMatches = options?.clearMatches ?? true;
     const runDetection = options?.runDetection ?? false;
     const processActions = options?.processActions ?? false;
-    // Read skipCollectionRemoval from the explicit argument, not state — setState is async,
-    // so the state value here would be stale on the same tick as the dialog button click.
-    const effectiveSkipCollectionRemoval = options?.skipCollectionRemoval ?? skipCollectionRemoval;
     setLoading(true);
     setSaveError(null);
     try {
+      // Resolve which collection this rule feeds. Settings live on the shared
+      // collection definition, so create it (new) or update it (existing) before
+      // saving the rule set. Saving the settings here applies to every rule
+      // synced to that collection.
+      let targetCollectionId: string | null = null;
+      if (collectionEnabled) {
+        if (!collectionName.trim()) {
+          setSaveError("Collection name is required");
+          return;
+        }
+        const settings = {
+          sortName: collectionSortName || null,
+          homeScreen: collectionHomeScreen,
+          recommended: collectionRecommended,
+          sort: collectionSort,
+        };
+        if (selectedCollectionId && selectedCollectionId !== NEW_COLLECTION) {
+          const res = await fetch(`/api/lifecycle/collections/${selectedCollectionId}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: collectionName.trim(), ...settings }),
+          });
+          if (!res.ok) {
+            const d = await res.json().catch(() => null);
+            setSaveError(d?.error || "Failed to update collection");
+            return;
+          }
+          targetCollectionId = selectedCollectionId;
+        } else {
+          const res = await fetch("/api/lifecycle/collections", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: collectionName.trim(), type: mediaType, ...settings }),
+          });
+          const d = await res.json().catch(() => null);
+          if (!res.ok) {
+            setSaveError(d?.error || "Failed to create collection");
+            return;
+          }
+          targetCollectionId = d.collection.id as string;
+          // Adopt the created collection immediately so a retry after a later
+          // failure (e.g. duplicate rule-set name) updates it instead of trying
+          // to re-create — which would 409 on the now-existing name.
+          setSelectedCollectionId(d.collection.id as string);
+        }
+      }
+
       const body: Record<string, unknown> = {
         name,
         rules: groups,
@@ -1081,12 +1224,7 @@ export function LifecycleRulePage({
         searchAfterAction,
         addArrTags,
         removeArrTags,
-        collectionEnabled,
-        collectionName: collectionName || null,
-        collectionSortName: collectionSortName || null,
-        collectionHomeScreen,
-        collectionRecommended,
-        collectionSort,
+        collectionId: targetCollectionId,
         discordNotifyOnAction,
         discordNotifyOnMatch,
         stickyMatches,
@@ -1124,49 +1262,29 @@ export function LifecycleRulePage({
         setActiveRuleSetId(savedRuleSetId);
       }
       await fetchRuleSets();
+      await fetchCollections();
 
-      // Apply Plex collection changes only for disable or rename (not item sync)
-      const prev = prevCollection;
-      const collectionDisabled = prev.enabled && !collectionEnabled;
-      const collectionRenamed =
-        prev.enabled && collectionEnabled &&
-        prev.name !== null && prev.name !== (collectionName || null);
-      const collectionChanged = collectionDisabled || collectionRenamed;
-
-      if (collectionChanged && savedRuleSetId) {
+      // Reconcile Plex collections from current matches. If the rule moved off a
+      // previous collection, re-sync that one so it drops this rule's items. The
+      // target collection is synced now only when detection isn't going to run
+      // (the post-detection sync handles it otherwise).
+      const toSync = new Set<string>();
+      if (prevCollectionId && prevCollectionId !== targetCollectionId) toSync.add(prevCollectionId);
+      if (targetCollectionId && !(runDetection && savedRuleSetId)) toSync.add(targetCollectionId);
+      for (const cid of toSync) {
         try {
-          const applyRes = await fetch("/api/lifecycle/collections/apply", {
+          await fetch("/api/lifecycle/collections/sync", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              ruleSetId: savedRuleSetId,
-              previousCollectionEnabled: prev.enabled,
-              previousCollectionName: prev.name,
-              skipCollectionRemoval: effectiveSkipCollectionRemoval,
-            }),
+            body: JSON.stringify({ collectionId: cid }),
           });
-          const applyData = await applyRes.json();
-          if (applyRes.ok) {
-            toast.success("Plex Updated", {
-              description: applyData.changes?.join(", ") || "Collection synced",
-            });
-          } else {
-            toast.error("Plex Sync Failed", {
-              description: applyData.error || "Unknown error",
-            });
-          }
-        } catch (error) {
-          toast.error("Plex Sync Failed", {
-            description: String(error),
-          });
+        } catch {
+          // Best-effort Plex reconciliation
         }
       }
 
-      setPrevCollection({
-        enabled: collectionEnabled,
-        name: collectionName || null,
-      });
-      setSkipCollectionRemoval(false);
+      setPrevCollectionId(targetCollectionId);
+      setSelectedCollectionId(targetCollectionId ?? "");
 
       toast.success("Rule set saved");
 
@@ -1414,6 +1532,7 @@ export function LifecycleRulePage({
     addArrTags: JSON.stringify([...addArrTags].sort()),
     removeArrTags: JSON.stringify([...removeArrTags].sort()),
     collectionEnabled,
+    selectedCollectionId,
     collectionName,
     collectionSortName,
     collectionHomeScreen,
@@ -1449,43 +1568,35 @@ export function LifecycleRulePage({
     setRemoveArrTags(ruleSet.removeArrTags ?? []);
     setManageTagsEnabled((ruleSet.addArrTags ?? []).length > 0 || (ruleSet.removeArrTags ?? []).length > 0);
     setTagMode((ruleSet.addArrTags ?? []).length > 0 ? "add" : (ruleSet.removeArrTags ?? []).length > 0 ? "remove" : "add");
-    setCollectionEnabled(ruleSet.collectionEnabled ?? false);
-    setCollectionName(ruleSet.collectionName ?? "");
-    setCollectionSortName(ruleSet.collectionSortName ?? "");
     setPreview([]);
 
-    setPrevCollection({
-      enabled: ruleSet.collectionEnabled ?? false,
-      name: ruleSet.collectionName ?? null,
-    });
+    // Collection: settings come from the linked collection definition (the
+    // shared source of truth), not from the rule set itself.
+    const col = ruleSet.collection ?? null;
+    const collectionEnabledVal = !!ruleSet.collectionId;
+    const selectedIdVal = ruleSet.collectionId ?? "";
+    const nameVal = col?.name ?? "";
+    const sortNameVal = col?.sortName ?? "";
+    const homeScreen = col?.homeScreen ?? false;
+    const recommended = col?.recommended ?? false;
+    const sortVal = col?.sort ?? "ALPHABETICAL";
+
+    setCollectionEnabled(collectionEnabledVal);
+    setSelectedCollectionId(selectedIdVal);
+    setCollectionName(nameVal);
+    setCollectionSortName(sortNameVal);
+    setCollectionHomeScreen(homeScreen);
+    setCollectionRecommended(recommended);
+    setCollectionSort(sortVal);
+    setPrevCollectionId(ruleSet.collectionId ?? null);
 
     setDiscordNotifyOnAction(ruleSet.discordNotifyOnAction ?? false);
     setDiscordNotifyOnMatch(ruleSet.discordNotifyOnMatch ?? false);
     setStickyMatches(ruleSet.stickyMatches ?? false);
     setServerIds(ruleSet.serverIds ?? []);
 
-    let homeScreen = ruleSet.collectionHomeScreen ?? false;
-    let recommended = ruleSet.collectionRecommended ?? false;
-    if (ruleSet.collectionEnabled && ruleSet.collectionName) {
-      try {
-        const res = await fetch(
-          `/api/lifecycle/collections/visibility?ruleSetId=${ruleSet.id}`
-        );
-        if (res.ok) {
-          const data = await res.json();
-          homeScreen = data.home;
-          recommended = data.recommended;
-        }
-      } catch {
-        // Fall back to DB values
-      }
-    }
-    // Bail if the user navigated away (loaded a different rule set, or clicked
-    // "New Rule Set") while the visibility fetch was in flight.
+    // Bail if the user navigated away while loading.
     if (loadTokenRef.current !== token) return;
-    setCollectionHomeScreen(homeScreen);
-    setCollectionRecommended(recommended);
-    setCollectionSort(ruleSet.collectionSort ?? "ALPHABETICAL");
 
     // Capture snapshot from rule set data (state not yet updated)
     setSnapshot({
@@ -1502,12 +1613,13 @@ export function LifecycleRulePage({
       searchAfterAction: ruleSet.searchAfterAction ?? false,
       addArrTags: JSON.stringify([...(ruleSet.addArrTags ?? [])].sort()),
       removeArrTags: JSON.stringify([...(ruleSet.removeArrTags ?? [])].sort()),
-      collectionEnabled: ruleSet.collectionEnabled ?? false,
-      collectionName: ruleSet.collectionName ?? "",
-      collectionSortName: ruleSet.collectionSortName ?? "",
+      collectionEnabled: collectionEnabledVal,
+      selectedCollectionId: selectedIdVal,
+      collectionName: nameVal,
+      collectionSortName: sortNameVal,
       collectionHomeScreen: homeScreen,
       collectionRecommended: recommended,
-      collectionSort: ruleSet.collectionSort ?? "ALPHABETICAL",
+      collectionSort: sortVal,
       discordNotifyOnAction: ruleSet.discordNotifyOnAction ?? false,
       discordNotifyOnMatch: ruleSet.discordNotifyOnMatch ?? false,
       stickyMatches: ruleSet.stickyMatches ?? false,
@@ -1649,6 +1761,7 @@ export function LifecycleRulePage({
     setManageTagsEnabled(false);
     setTagMode("add");
     setCollectionEnabled(false);
+    setSelectedCollectionId("");
     setCollectionName("");
     setCollectionSortName("");
     setCollectionHomeScreen(false);
@@ -1658,7 +1771,7 @@ export function LifecycleRulePage({
     setDiscordNotifyOnMatch(false);
     setServerIds([]);
     setPreview([]);
-    setPrevCollection({ enabled: false, name: null });
+    setPrevCollectionId(null);
     setSnapshot(null);
   };
 
@@ -1739,12 +1852,16 @@ export function LifecycleRulePage({
       setRemoveArrTags(data.removeArrTags ?? []);
       setManageTagsEnabled((data.addArrTags ?? []).length > 0 || (data.removeArrTags ?? []).length > 0);
       setTagMode((data.addArrTags ?? []).length > 0 ? "add" : (data.removeArrTags ?? []).length > 0 ? "remove" : "add");
+      // Imported collection settings populate a fresh collection definition;
+      // saving matches it to an existing collection by name or creates one.
       setCollectionEnabled(data.collectionEnabled ?? false);
+      setSelectedCollectionId(data.collectionEnabled ? NEW_COLLECTION : "");
       setCollectionName(data.collectionName ?? "");
       setCollectionSortName(data.collectionSortName ?? "");
       setCollectionHomeScreen(data.collectionHomeScreen ?? false);
       setCollectionRecommended(data.collectionRecommended ?? false);
       setCollectionSort(data.collectionSort ?? "ALPHABETICAL");
+      setPrevCollectionId(null);
       setDiscordNotifyOnAction(data.discordNotifyOnAction ?? false);
       setDiscordNotifyOnMatch(data.discordNotifyOnMatch ?? false);
       setStickyMatches(data.stickyMatches ?? false);
@@ -1823,7 +1940,7 @@ export function LifecycleRulePage({
                         {ruleSet.enabled && ruleSet.actionEnabled && (
                           <FeatureChip tone="amber">Action</FeatureChip>
                         )}
-                        {ruleSet.enabled && ruleSet.collectionEnabled && (
+                        {ruleSet.enabled && !!ruleSet.collectionId && (
                           <FeatureChip tone="sky">Collection</FeatureChip>
                         )}
                         {ruleSet.enabled && (ruleSet.addArrTags?.length > 0 || ruleSet.removeArrTags?.length > 0) && (
@@ -1850,7 +1967,7 @@ export function LifecycleRulePage({
                       e.stopPropagation();
                       setDeleteConfirmId(ruleSet.id);
                       setDeleteConfirmName(ruleSet.name);
-                      setDeleteConfirmHasCollection(ruleSet.collectionEnabled && !!ruleSet.collectionName);
+                      setDeleteConfirmHasCollection(!!ruleSet.collectionId);
                       setDeleteConfirmAddTags(ruleSet.addArrTags ?? []);
                       setDeleteConfirmCleanupTags(false);
                     }}
@@ -2419,77 +2536,150 @@ export function LifecycleRulePage({
                 checked={collectionEnabled}
                 onCheckedChange={(checked) => {
                   setCollectionEnabled(checked);
-                  if (checked) setSkipCollectionRemoval(false);
+                  // Default to "create new" when there's nothing to pick from.
+                  if (checked && !selectedCollectionId && collections.length === 0) {
+                    setSelectedCollectionId(NEW_COLLECTION);
+                  }
                 }}
               />
               <Label htmlFor="collection-enabled" className="font-medium">
-                Sync matches to Plex collection
+                Sync matches to a Plex collection
               </Label>
-              {!collectionEnabled && prevCollection.enabled && prevCollection.name && (
-                <span className="text-xs text-amber">Pending disable on save</span>
-              )}
             </div>
 
             {collectionEnabled && (
               <>
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <div>
-                    <Label htmlFor="collection-name">Collection name</Label>
-                    <Input
-                      id="collection-name"
-                      placeholder="e.g., Unwatched Old Movies"
-                      value={collectionName}
-                      onChange={(e) => setCollectionName(e.target.value)}
-                      className={`mt-1.5${!collectionName?.trim() ? " border-destructive" : ""}`}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="collection-sort-name">Sort name (optional)</Label>
-                    <Input
-                      id="collection-sort-name"
-                      placeholder="e.g., !001 for top sorting"
-                      value={collectionSortName}
-                      onChange={(e) => setCollectionSortName(e.target.value)}
-                      className="mt-1.5"
-                    />
-                  </div>
-                  <div>
-                    <Label>Sort order</Label>
-                    <Select value={collectionSort} onValueChange={setCollectionSort}>
-                      <SelectTrigger className="mt-1.5">
-                        <SelectValue />
+                <div>
+                  <Label>Collection</Label>
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <Select
+                      value={selectedCollectionId}
+                      onValueChange={(val) => {
+                        setSelectedCollectionId(val);
+                        if (val === NEW_COLLECTION) {
+                          setCollectionName("");
+                          setCollectionSortName("");
+                          setCollectionHomeScreen(false);
+                          setCollectionRecommended(false);
+                          setCollectionSort("ALPHABETICAL");
+                        } else {
+                          const c = collections.find((x) => x.id === val);
+                          if (c) {
+                            setCollectionName(c.name);
+                            setCollectionSortName(c.sortName ?? "");
+                            setCollectionHomeScreen(c.homeScreen);
+                            setCollectionRecommended(c.recommended);
+                            setCollectionSort(c.sort);
+                          }
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="flex-1">
+                        <SelectValue placeholder="Select or create a collection…" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="ALPHABETICAL">Alphabetical</SelectItem>
-                        <SelectItem value="RELEASE_DATE">Release date</SelectItem>
-                        <SelectItem value="DELETION_DATE">Deletion date</SelectItem>
+                        {collections.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>
+                            {c.name}
+                            {c._count && c._count.ruleSets > 0
+                              ? ` (${c._count.ruleSets} rule${c._count.ruleSets === 1 ? "" : "s"})`
+                              : ""}
+                          </SelectItem>
+                        ))}
+                        <SelectItem value={NEW_COLLECTION}>+ Create new collection…</SelectItem>
                       </SelectContent>
                     </Select>
+                    {isExistingCollectionSelected && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="shrink-0 text-destructive hover:text-destructive"
+                        disabled={deletingCollection || otherCollectionUsage > 0}
+                        title={
+                          otherCollectionUsage > 0
+                            ? `In use by ${otherCollectionUsage} other rule${otherCollectionUsage === 1 ? "" : "s"} — remove it from ${otherCollectionUsage === 1 ? "that rule" : "them"} before deleting`
+                            : "Delete this collection"
+                        }
+                        onClick={() => setShowDeleteCollectionDialog(true)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
                   </div>
+                  <p className="text-xs text-muted-foreground mt-1.5">
+                    Multiple rules can sync to the same collection — their matches are
+                    merged. These settings apply to every rule synced to it.
+                  </p>
+                  {otherCollectionUsage > 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Also used by {otherCollectionUsage} other rule{otherCollectionUsage === 1 ? "" : "s"}. To delete it, remove it from {otherCollectionUsage === 1 ? "that rule" : "those rules"} first.
+                    </p>
+                  )}
                 </div>
 
-                <div className="flex flex-wrap gap-x-6 gap-y-3">
-                  <div className="flex items-center gap-3">
-                    <Switch
-                      id="collection-home"
-                      checked={collectionHomeScreen}
-                      onCheckedChange={setCollectionHomeScreen}
-                    />
-                    <Label htmlFor="collection-home">
-                      Display on home screens
-                    </Label>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <Switch
-                      id="collection-recommended"
-                      checked={collectionRecommended}
-                      onCheckedChange={setCollectionRecommended}
-                    />
-                    <Label htmlFor="collection-recommended">
-                      Display in library recommended
-                    </Label>
-                  </div>
-                </div>
+                {selectedCollectionId && (
+                  <>
+                    <div className="grid gap-4 sm:grid-cols-3">
+                      <div>
+                        <Label htmlFor="collection-name">Collection name</Label>
+                        <Input
+                          id="collection-name"
+                          placeholder="e.g., Leaving Soon"
+                          value={collectionName}
+                          onChange={(e) => setCollectionName(e.target.value)}
+                          className={`mt-1.5${!collectionName?.trim() ? " border-destructive" : ""}`}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="collection-sort-name">Sort name (optional)</Label>
+                        <Input
+                          id="collection-sort-name"
+                          placeholder="e.g., !001 for top sorting"
+                          value={collectionSortName}
+                          onChange={(e) => setCollectionSortName(e.target.value)}
+                          className="mt-1.5"
+                        />
+                      </div>
+                      <div>
+                        <Label>Sort order</Label>
+                        <Select value={collectionSort} onValueChange={setCollectionSort}>
+                          <SelectTrigger className="mt-1.5">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="ALPHABETICAL">Alphabetical</SelectItem>
+                            <SelectItem value="RELEASE_DATE">Release date</SelectItem>
+                            <SelectItem value="ACTION_DATE">Action date</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-x-6 gap-y-3">
+                      <div className="flex items-center gap-3">
+                        <Switch
+                          id="collection-home"
+                          checked={collectionHomeScreen}
+                          onCheckedChange={setCollectionHomeScreen}
+                        />
+                        <Label htmlFor="collection-home">
+                          Display on home screens
+                        </Label>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <Switch
+                          id="collection-recommended"
+                          checked={collectionRecommended}
+                          onCheckedChange={setCollectionRecommended}
+                        />
+                        <Label htmlFor="collection-recommended">
+                          Display in library recommended
+                        </Label>
+                      </div>
+                    </div>
+                  </>
+                )}
               </>
             )}
           </div>
@@ -2572,10 +2762,7 @@ export function LifecycleRulePage({
             </Button>
             <Button
               onClick={() => {
-                const collectionPendingDisable = prevCollection.enabled && !collectionEnabled && !!prevCollection.name;
-                if (collectionPendingDisable) {
-                  setShowCollectionDisableDialog(true);
-                } else if (activeRuleSetId && !rulesChanged) {
+                if (activeRuleSetId && !rulesChanged) {
                   // Config-only change — skip detection, just save
                   handleSave({ clearMatches: false, runDetection: false });
                 } else if (activeRuleSetId) {
@@ -3002,7 +3189,8 @@ export function LifecycleRulePage({
                 <p>
                   This will permanently delete the rule set &ldquo;{deleteConfirmName}&rdquo;.
                   {deleteConfirmHasCollection && (
-                    <> The associated Plex collection will also be removed.</>
+                    <> Its items will be removed from the linked Plex collection (the
+                    collection itself is kept for any other rules using it).</>
                   )}
                 </p>
                 {deleteConfirmAddTags.length > 0 && (
@@ -3037,51 +3225,25 @@ export function LifecycleRulePage({
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Collection Disable Dialog — shown during save flow when collection is being disabled */}
-      <AlertDialog open={showCollectionDisableDialog} onOpenChange={setShowCollectionDisableDialog}>
+      {/* Delete collection confirmation */}
+      <AlertDialog open={showDeleteCollectionDialog} onOpenChange={(open) => { if (!deletingCollection) setShowDeleteCollectionDialog(open); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Disable Collection Sync?</AlertDialogTitle>
+            <AlertDialogTitle>Delete Collection?</AlertDialogTitle>
             <AlertDialogDescription>
-              The collection &ldquo;{prevCollection.name}&rdquo; currently exists on Plex.
-              Would you like to also delete it from Plex, or keep it?
+              This permanently deletes the collection definition &ldquo;{collectionName}&rdquo; and removes it from Plex.
+              {currentRuleUsesSelected && <> It will also be removed from this rule.</>} This can&rsquo;t be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter className="flex-col sm:flex-row gap-2">
-            <AlertDialogCancel onClick={() => setShowCollectionDisableDialog(false)}>
-              Cancel
-            </AlertDialogCancel>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingCollection}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => {
-                setSkipCollectionRemoval(true);
-                setShowCollectionDisableDialog(false);
-                if (activeRuleSetId && !rulesChanged) {
-                  handleSave({ clearMatches: false, runDetection: false, skipCollectionRemoval: true });
-                } else if (activeRuleSetId) {
-                  setShowSaveOptions(true);
-                } else {
-                  setShowNewSaveOptions(true);
-                }
-              }}
-              className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
-            >
-              Keep on Plex
-            </AlertDialogAction>
-            <AlertDialogAction
-              onClick={() => {
-                setSkipCollectionRemoval(false);
-                setShowCollectionDisableDialog(false);
-                if (activeRuleSetId && !rulesChanged) {
-                  handleSave({ clearMatches: false, runDetection: false, skipCollectionRemoval: false });
-                } else if (activeRuleSetId) {
-                  setShowSaveOptions(true);
-                } else {
-                  setShowNewSaveOptions(true);
-                }
-              }}
+              onClick={(e) => { e.preventDefault(); void handleDeleteCollection(); }}
+              disabled={deletingCollection}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Delete from Plex
+              {deletingCollection ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+              Delete Collection
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

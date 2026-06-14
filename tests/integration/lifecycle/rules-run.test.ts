@@ -6,8 +6,10 @@ import { callRoute, expectJson, createTestUser, createTestRuleSet } from "../../
 // Mock the lifecycle processor
 const mockRunDetection = vi.hoisted(() => vi.fn());
 const mockScheduleActionsForRuleSet = vi.hoisted(() => vi.fn());
+const mockSyncCollectionsAfterDetection = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/lifecycle/detect-matches", () => ({
   runDetection: mockRunDetection,
+  syncCollectionsAfterDetection: mockSyncCollectionsAfterDetection,
 }));
 vi.mock("@/lib/lifecycle/processor", () => ({
   scheduleActionsForRuleSet: mockScheduleActionsForRuleSet,

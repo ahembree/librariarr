@@ -118,7 +118,7 @@ Real-browser end-to-end tests live in `e2e/` (Playwright, **separate from Vitest
 - `src/lib/jobs/` — [Graphile Worker](https://worker.graphile.org/) background job queue (Postgres-backed), initialized via `instrumentation.ts`. `worker.ts` runs the in-process worker + static crontab; `dispatch.ts` is the per-minute dispatcher that fans DB-configured schedules into durable jobs; `tasks.ts` holds the task handlers; `client.ts` exposes `enqueueJob()`; `schedule.ts` has the pure cron/preset helpers (`presetToCron`, `isScheduleDue`, `getSystemTimezone`)
 - `src/lib/rules/` — Lifecycle rule engine with recursive AND/OR groups
 - `src/lib/arr/` — Sonarr/Radarr/Lidarr API clients (15s timeout, title validation via `normalizeTitle()`)
-- `src/lib/lifecycle/` — Detection (`detect-matches.ts`), action execution (`actions.ts`), orchestration (`processor.ts`), Plex collection sync (`collections.ts`), Arr/Seerr metadata fetching
+- `src/lib/lifecycle/` — Detection (`detect-matches.ts`), action execution (`actions.ts`), orchestration (`processor.ts`), Plex collection sync (`collections.ts` — `syncCollection` unions contributions, `syncCollectionById`/`syncAllCollections` drive it from persisted matches), Arr/Seerr metadata fetching
 - `src/lib/discord/client.ts` — Discord webhook notifications
 - `src/lib/api/sanitize.ts` — `sanitize()` strips sensitive fields from API responses; `sanitizeErrorDetail()` scrubs internal paths/IPs from error messages (see Security below)
 - `src/lib/rate-limit/rate-limiter.ts` — In-memory `RateLimiter` class; `authRateLimiter` singleton (10 attempts / 15 min) applied to auth endpoints
@@ -276,7 +276,7 @@ The lifecycle system operates in three phases, orchestrated by `src/lib/lifecycl
 - Cancels pending `LifecycleAction` records for items no longer in matches (safety net for cascading deletes, rule set edits)
 - Creates new `LifecycleAction` records with `scheduledFor = now + actionDelayDays` (only when `actionEnabled`)
 - Prevents duplicate actions via `existingItemIds` check + `skipDuplicates: true`
-- Syncs Plex collections from matched items when `collectionEnabled`
+- After **all** rule sets are processed, `processLifecycleRules` calls `syncAllCollections(userId)` **once** to push Plex collections (see Plex Collections below) — never per rule set, because a collection's membership is the union of every rule set feeding it
 
 **Phase 3 — Execution** (`executeLifecycleActions`):
 
@@ -288,6 +288,15 @@ The lifecycle system operates in three phases, orchestrated by `src/lib/lifecycl
 - Deletion stats are aggregated via `GET /api/lifecycle/stats`; reset via `POST /api/lifecycle/stats/reset` (sets `AppSettings.deletionStatsResetAt`)
 
 **Rule set edit behavior**: Any PUT to a rule set clears all `RuleMatch` records and cancels all PENDING `LifecycleAction` records. The next detection run evaluates everything fresh.
+
+### Plex Collections (merge)
+
+A `Collection` is a reusable, named Plex-collection definition (`prisma/schema.prisma`) owning the presentation settings (`name`, `sortName`, `homeScreen`, `recommended`, `sort`) and scoped to one `LibraryType`. A `RuleSet` references it via the optional `collectionId` FK (`onDelete: SetNull`). Multiple rule sets can point at the **same** collection — "merge".
+
+- **Union membership**: `syncCollection(collection, contributions, cache)` in `src/lib/lifecycle/collections.ts` sets the Plex collection's membership to the **union** of every contributing rule set's matched items. Never sync a collection per rule set — that's how the pre-merge code clobbered shared collections.
+- **Driven from `RuleMatch`**: `syncCollectionById(id)` builds contributions from the persisted matches of every enabled rule set assigned to the collection (`buildContributionsFromMatches`), so re-evaluating one rule still syncs against all of them, and orphaned collections resolve to an empty union (which removes the Plex collection). `syncAllCollections(userId?)` does this for every collection in scope and **replaces** the old per-rule "disabled collection cleanup" pass.
+- **Ordering**: `ACTION_DATE` sort pools the PENDING `LifecycleAction` rows of **all** contributing rule sets, so scheduled-action order is correct across rules. Collection sync therefore runs **after** action scheduling (`processLifecycleRules` after its loop; the manual `runDetection` path via `syncCollectionsAfterDetection` called from `/api/lifecycle/rules/run` after `scheduleActionsForRuleSet`).
+- **CRUD**: `GET/POST /api/lifecycle/collections`, `PUT/DELETE /api/lifecycle/collections/[id]` (PUT renames on Plex + re-syncs; DELETE removes from Plex + `SetNull` detaches rules), `POST /api/lifecycle/collections/sync` (`{ collectionId }`). Managed inline from the lifecycle rule editor's collection dropdown — settings edit the shared collection. There is no `collectionEnabled`/`collectionName`/inline-settings on `RuleSet` anymore (migration `0010_add_collections` backfills + auto-merges same `(userId, type, name)`).
 
 ### Notifications
 

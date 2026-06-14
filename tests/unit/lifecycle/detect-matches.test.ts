@@ -41,7 +41,8 @@ const mockGetMatchedCriteriaForItems = vi.hoisted(() => vi.fn());
 const mockGetActualValuesForAllRules = vi.hoisted(() => vi.fn());
 const mockFetchArrMetadata = vi.hoisted(() => vi.fn());
 const mockFetchSeerrMetadata = vi.hoisted(() => vi.fn());
-const mockSyncPlexCollection = vi.hoisted(() => vi.fn());
+const mockSyncCollectionById = vi.hoisted(() => vi.fn());
+const mockSyncAllCollections = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
 vi.mock("@/lib/logger", () => ({
@@ -67,10 +68,11 @@ vi.mock("@/lib/lifecycle/fetch-seerr-metadata", () => ({
   fetchSeerrMetadata: mockFetchSeerrMetadata,
 }));
 vi.mock("@/lib/lifecycle/collections", () => ({
-  syncPlexCollection: mockSyncPlexCollection,
+  syncCollectionById: mockSyncCollectionById,
+  syncAllCollections: mockSyncAllCollections,
 }));
 
-import { detectAndSaveMatches, runDetection } from "@/lib/lifecycle/detect-matches";
+import { detectAndSaveMatches, runDetection, syncCollectionsAfterDetection } from "@/lib/lifecycle/detect-matches";
 
 function makeRuleSetConfig(overrides: Partial<Parameters<typeof detectAndSaveMatches>[0]> = {}) {
   return {
@@ -88,8 +90,6 @@ function makeRuleSetConfig(overrides: Partial<Parameters<typeof detectAndSaveMat
     addImportExclusion: false,
     addArrTags: [],
     removeArrTags: [],
-    collectionEnabled: false,
-    collectionName: null,
     stickyMatches: false,
     ...overrides,
   };
@@ -521,53 +521,42 @@ describe("runDetection", () => {
     expect(mockFetchArrMetadata).toHaveBeenCalledTimes(1);
   });
 
-  it("syncs Plex collection when enabled on rule set", async () => {
-    mockHasAnyActiveRules.mockReturnValue(true);
-    mockHasArrRules.mockReturnValue(false);
-    mockHasSeerrRules.mockReturnValue(false);
-    mockEvaluateRules.mockResolvedValue([]);
-    mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
-    mockSyncPlexCollection.mockResolvedValue(undefined);
+});
 
-    mockPrisma.ruleSet.findMany.mockResolvedValue([
-      {
-        id: "rs1", userId: "u1", name: "Test", type: "MOVIE",
-        rules: [{ field: "title", operator: "contains", value: "x", enabled: true }],
-        seriesScope: false, serverIds: ["s1"], actionEnabled: false, actionType: null,
-        actionDelayDays: 0, arrInstanceId: null, addImportExclusion: false,
-        addArrTags: [], removeArrTags: [], collectionEnabled: true, collectionName: "My Coll",
-        stickyMatches: false,
-        user: { mediaServers: [{ id: "s1" }] },
-      },
-    ]);
-
-    await runDetection("u1");
-
-    expect(mockSyncPlexCollection).toHaveBeenCalled();
+describe("syncCollectionsAfterDetection", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  it("handles collection sync errors gracefully", async () => {
-    mockHasAnyActiveRules.mockReturnValue(true);
-    mockHasArrRules.mockReturnValue(false);
-    mockHasSeerrRules.mockReturnValue(false);
-    mockEvaluateRules.mockResolvedValue([]);
-    mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
-    mockSyncPlexCollection.mockRejectedValue(new Error("Plex fail"));
+  it("syncs only the targeted rule set's collection(s) when a ruleSetId is given", async () => {
+    mockSyncCollectionById.mockResolvedValue(undefined);
 
-    mockPrisma.ruleSet.findMany.mockResolvedValue([
-      {
-        id: "rs1", userId: "u1", name: "Test", type: "MOVIE",
-        rules: [{ field: "title", operator: "contains", value: "x", enabled: true }],
-        seriesScope: false, serverIds: ["s1"], actionEnabled: false, actionType: null,
-        actionDelayDays: 0, arrInstanceId: null, addImportExclusion: false,
-        addArrTags: [], removeArrTags: [], collectionEnabled: true, collectionName: "My Coll",
-        stickyMatches: false,
-        user: { mediaServers: [{ id: "s1" }] },
-      },
+    await syncCollectionsAfterDetection("u1", "rs1", [
+      { ruleSet: { collectionId: "col1" } },
+      { ruleSet: { collectionId: null } },
     ]);
 
-    // Should not throw
-    const results = await runDetection("u1");
-    expect(results).toHaveLength(1);
+    expect(mockSyncCollectionById).toHaveBeenCalledTimes(1);
+    expect(mockSyncCollectionById).toHaveBeenCalledWith("col1", expect.anything());
+    expect(mockSyncAllCollections).not.toHaveBeenCalled();
+  });
+
+  it("syncs every collection for a full run (no ruleSetId)", async () => {
+    mockSyncAllCollections.mockResolvedValue(undefined);
+
+    await syncCollectionsAfterDetection("u1", undefined, [
+      { ruleSet: { collectionId: "col1" } },
+    ]);
+
+    expect(mockSyncAllCollections).toHaveBeenCalledWith("u1", expect.anything());
+    expect(mockSyncCollectionById).not.toHaveBeenCalled();
+  });
+
+  it("does not throw when a collection sync fails", async () => {
+    mockSyncCollectionById.mockRejectedValue(new Error("Plex fail"));
+
+    await expect(
+      syncCollectionsAfterDetection("u1", "rs1", [{ ruleSet: { collectionId: "col1" } }]),
+    ).resolves.toBeUndefined();
   });
 });

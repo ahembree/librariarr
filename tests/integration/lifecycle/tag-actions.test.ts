@@ -70,8 +70,12 @@ vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
 
 // Mock lifecycle collections
 vi.mock("@/lib/lifecycle/collections", () => ({
-  syncPlexCollection: vi.fn().mockResolvedValue(undefined),
+  syncCollection: vi.fn().mockResolvedValue(undefined),
+  syncCollectionById: vi.fn().mockResolvedValue(undefined),
+  syncAllCollections: vi.fn().mockResolvedValue(undefined),
   removePlexCollection: vi.fn().mockResolvedValue(undefined),
+  renameCollectionInPlex: vi.fn().mockResolvedValue(undefined),
+  removeItemFromCollections: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Import AFTER mocks

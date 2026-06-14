@@ -25,9 +25,7 @@ export async function GET() {
       searchAfterAction: true,
       addArrTags: true,
       removeArrTags: true,
-      collectionEnabled: true,
-      collectionName: true,
-      collectionSort: true,
+      collection: { select: { name: true, sort: true } },
       ruleMatches: {
         select: { itemData: true, detectedAt: true },
         orderBy: { detectedAt: "desc" },
@@ -50,9 +48,8 @@ export async function GET() {
         searchAfterAction: rs.searchAfterAction,
         addArrTags: rs.addArrTags,
         removeArrTags: rs.removeArrTags,
-        collectionEnabled: rs.collectionEnabled,
-        collectionName: rs.collectionName,
-        collectionSort: rs.collectionSort,
+        collectionName: rs.collection?.name ?? null,
+        collectionSort: rs.collection?.sort ?? null,
       },
       items: rs.ruleMatches.map((m) => ({
         ...(m.itemData as Record<string, unknown>),

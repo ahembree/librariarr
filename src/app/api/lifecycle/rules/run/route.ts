@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { runDetection } from "@/lib/lifecycle/detect-matches";
+import { runDetection, syncCollectionsAfterDetection } from "@/lib/lifecycle/detect-matches";
 import { scheduleActionsForRuleSet } from "@/lib/lifecycle/processor";
 import { validateRequest, ruleRunSchema } from "@/lib/validation";
 
@@ -47,6 +47,10 @@ export async function POST(request: NextRequest) {
       }
     }
   }
+
+  // Sync Plex collections last, so ACTION_DATE ordering reflects any actions
+  // just scheduled above.
+  await syncCollectionsAfterDetection(session.userId!, data.ruleSetId, results);
 
   return NextResponse.json({ ruleMatches: results });
 }
