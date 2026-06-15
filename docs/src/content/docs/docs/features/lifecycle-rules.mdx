@@ -127,6 +127,10 @@ These fields require configured [Sonarr](/docs/integrations/sonarr/), [Radarr](/
 | `arrMonitoredSeasonCount` | Number of monitored seasons (Sonarr / series only) |
 | `arrMonitoredEpisodeCount` | Number of monitored episodes (Sonarr / series only) |
 
+:::note[Missing *arr data is fail-closed]
+If an item isn't in the linked *arr instance, or a specific field has no value (for example a movie with no downloaded file has no quality name, quality-cutoff, or size), **no comparison operator matches it** — including negative operators like *Not Equals* / *Not Contains* and the *NOT* toggle. This is deliberate so lifecycle rules never delete an item on the strength of absent *arr data. To target items with missing data, use the *Is Empty* (`isNull`) operator, or the `foundInArr` field.
+:::
+
 ### Seerr Fields
 
 These fields require a configured [Seerr](/docs/integrations/seerr/) integration.

@@ -1153,3 +1153,54 @@ describe("foundInArr (boolean presence check)", () => {
     expect(result.get("n1")!.length).toBeGreaterThan(0);
   });
 });
+
+// ===========================================================================
+// Fail-closed NULL convention (item IS in Arr, but a field value is null)
+//
+// When an item exists in Arr but a specific field is null (e.g. a fileless
+// movie has no qualityName/quality/size), NO comparison operator matches —
+// regardless of negate. This keeps `arrX notEquals Y` and `NOT(arrX equals Y)`
+// agreeing on null (both no-match) and never deletes an item on the strength of
+// absent Arr data. Only isNull/isNotNull intentionally act on null.
+// ===========================================================================
+
+describe("Arr null field is fail-closed across operators and negate", () => {
+  // Movie present in Arr, but no downloaded file → text/number/bool/date all null.
+  const nullData: ArrDataMap = { [tmdbId]: makeArrMeta({ qualityName: null, rating: null, qualityCutoffMet: null, downloadDate: null }) };
+
+  const noMatch = (rule: LifecycleRule) =>
+    expect(matched(movieItems, [makeGroup([rule])], "MOVIE", nullData).get("m1") ?? []).toHaveLength(0);
+
+  it("text: notEquals on null does not match", () => {
+    noMatch(makeRule({ field: "arrQualityName", operator: "notEquals", value: "Bluray-1080p" }));
+  });
+  it("text: notContains on null does not match", () => {
+    noMatch(makeRule({ field: "arrQualityName", operator: "notContains", value: "Bluray-1080p" }));
+  });
+  it("text: notMatchesWildcard on null does not match", () => {
+    noMatch(makeRule({ field: "arrQualityName", operator: "notMatchesWildcard", value: "Blu*" }));
+  });
+  it("text: NOT(equals) on null does not match (agrees with notEquals)", () => {
+    noMatch(makeRule({ field: "arrQualityName", operator: "equals", value: "Bluray-1080p", negate: true }));
+  });
+  it("number: NOT(greaterThan) on null does not match", () => {
+    noMatch(makeRule({ field: "arrRating", operator: "greaterThan", value: 0, negate: true }));
+  });
+  it("number: notEquals on null does not match", () => {
+    noMatch(makeRule({ field: "arrRating", operator: "notEquals", value: 5 }));
+  });
+  it("boolean: notEquals on null does not match", () => {
+    noMatch(makeRule({ field: "arrQualityCutoffMet", operator: "notEquals", value: "true" }));
+  });
+  it("boolean: NOT(equals) on null does not match", () => {
+    noMatch(makeRule({ field: "arrQualityCutoffMet", operator: "equals", value: "true", negate: true }));
+  });
+  it("date: NOT(before) on null does not match", () => {
+    noMatch(makeRule({ field: "arrDownloadDate", operator: "before", value: "2024-01-01", negate: true }));
+  });
+
+  it("isNull still matches a null field, and NOT(isNull) does not", () => {
+    expect(matched(movieItems, [makeGroup([makeRule({ field: "arrQualityName", operator: "isNull", value: "" })])], "MOVIE", nullData).get("m1")!.length).toBeGreaterThan(0);
+    noMatch(makeRule({ field: "arrQualityName", operator: "isNull", value: "", negate: true }));
+  });
+});
