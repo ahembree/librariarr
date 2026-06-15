@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.24.0](https://github.com/ahembree/librariarr/compare/v0.23.0...v0.24.0) (2026-06-15)
+
+
+### Features
+
+* **lifecycle:** color media-type chips on matches & pending pages ([3a9db99](https://github.com/ahembree/librariarr/commit/3a9db99be49fd9887dee4b9db0634ec728242d3b))
+* **query:** show total and selected result sizes ([fabf671](https://github.com/ahembree/librariarr/commit/fabf6711fd4b43be86df96fda7f6daead4efa195))
+
+
+### Bug Fixes
+
+* **lifecycle:** close series/episode action-targeting gaps in query + detection ([5142262](https://github.com/ahembree/librariarr/commit/5142262c9305e233ffc4613bf6028cda376db0e6))
+* **lifecycle:** correct Sonarr series rating mapping ([bf9efb1](https://github.com/ahembree/librariarr/commit/bf9efb1e492718e9e4299d8872c98262910a2b99))
+* **lifecycle:** fail-closed NULL handling for Arr rule fields ([6db4167](https://github.com/ahembree/librariarr/commit/6db4167cbbe8a2dc10628a2c5d3e5746d6748fa8))
+* **lifecycle:** read Radarr quality cutoff from nested movieFile ([d7971d8](https://github.com/ahembree/librariarr/commit/d7971d891310895c126113027720de21eec5c2c8))
+* **lifecycle:** restrict series members to matching episodes for seriesScope=false + aggregate ([d2fed24](https://github.com/ahembree/librariarr/commit/d2fed24a61f48ca7bc953d83b85b1d5c9d287027))
+* **lifecycle:** stop year guard blocking valid series episode deletes ([9c48ece](https://github.com/ahembree/librariarr/commit/9c48ece2f9b67a899dfb1bc9c518f8831cd60295))
+* **query:** evaluate series-aggregate fields in episode view; count whole-series deletes ([6878a1a](https://github.com/ahembree/librariarr/commit/6878a1adbcae5df3e604fb8de9e52d7fd2d1d7de))
+* **query:** rename local plural label map to avoid shared-name collision ([dd7905d](https://github.com/ahembree/librariarr/commit/dd7905d42c95f950cd76a154b11de6c9eb749659))
+* **sync:** never persist episode-level TVDB ids as a series id ([fc33975](https://github.com/ahembree/librariarr/commit/fc33975d81f70227d56255d99ed2569f3f80cc33))
+
 ## [0.23.0](https://github.com/ahembree/librariarr/compare/v0.22.0...v0.23.0) (2026-06-14)
 
 
