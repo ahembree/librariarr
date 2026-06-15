@@ -11,6 +11,7 @@ import { useIntegrationsHealth } from "@/hooks/use-integrations-health";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ColorChip } from "@/components/color-chip";
+import { MEDIA_TYPE_BADGE_COLORS, mediaTypeLabel } from "@/lib/theme/media-type-colors";
 import {
   Card,
   CardContent,
@@ -139,14 +140,6 @@ const STATUS_COLORS: Record<string, string> = {
   PENDING: "bg-amber/20 text-amber border-amber/30",
   COMPLETED: "bg-green/20 text-green border-green/30",
   FAILED: "bg-red/20 text-red border-red/30",
-};
-
-// Media-type chip colors, matched to the Watch History and Query pages so a
-// "Movie"/"Series"/"Music" chip reads the same everywhere.
-const TYPE_BADGE_COLORS: Record<string, string> = {
-  MOVIE: "bg-sky/20 text-sky border-sky/30",
-  SERIES: "bg-purple-500/20 text-purple-400 border-purple-500/30",
-  MUSIC: "bg-green/20 text-green border-green/30",
 };
 
 function formatActionType(type: string, targetQualityProfileId?: number | null): string {
@@ -1202,8 +1195,8 @@ export default function PendingActionsPage() {
                             )}
                           </CardTitle>
                           <div className="flex items-center gap-2 mt-1">
-                            <ColorChip className={TYPE_BADGE_COLORS[group.ruleSet.type] ?? "border-border text-muted-foreground"}>
-                              {group.ruleSet.type === "MOVIE" ? "Movie" : group.ruleSet.type === "MUSIC" ? "Music" : "Series"}
+                            <ColorChip className={MEDIA_TYPE_BADGE_COLORS[group.ruleSet.type] ?? "border-border text-muted-foreground"}>
+                              {mediaTypeLabel(group.ruleSet.type)}
                             </ColorChip>
                             <Badge variant="secondary">
                               {group.count} item{group.count !== 1 && "s"}

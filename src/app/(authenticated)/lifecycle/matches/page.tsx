@@ -25,6 +25,7 @@ import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine } from "@/components/metadata-line";
 import { useChipColors } from "@/components/chip-color-provider";
 import { type ChipColorCategory } from "@/lib/theme/chip-colors";
+import { MEDIA_TYPE_BADGE_COLORS, mediaTypeLabel } from "@/lib/theme/media-type-colors";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -102,14 +103,6 @@ interface RuleSetMatch {
   items: MatchedMediaItem[];
   count: number;
 }
-
-// Media-type chip colors, matched to the Watch History and Query pages so a
-// "Movie"/"Series"/"Music" chip reads the same everywhere.
-const TYPE_BADGE_COLORS: Record<string, string> = {
-  MOVIE: "bg-sky/20 text-sky border-sky/30",
-  SERIES: "bg-purple-500/20 text-purple-400 border-purple-500/30",
-  MUSIC: "bg-green/20 text-green border-green/30",
-};
 
 function formatResolution(resolution: string | null): string {
   if (!resolution) return "";
@@ -1001,8 +994,8 @@ export default function RuleMatchesPage() {
                         {match.ruleSet.name}
                       </CardTitle>
                       <div className="flex items-center gap-2 mt-1">
-                        <ColorChip className={TYPE_BADGE_COLORS[match.ruleSet.type] ?? "border-border text-muted-foreground"}>
-                          {match.ruleSet.type === "MOVIE" ? "Movie" : match.ruleSet.type === "MUSIC" ? "Music" : "Series"}
+                        <ColorChip className={MEDIA_TYPE_BADGE_COLORS[match.ruleSet.type] ?? "border-border text-muted-foreground"}>
+                          {mediaTypeLabel(match.ruleSet.type)}
                         </ColorChip>
                         <Badge variant="secondary">
                           {match.count} match{match.count !== 1 && "es"}

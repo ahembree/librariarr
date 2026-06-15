@@ -76,6 +76,7 @@ import { useServers } from "@/hooks/use-servers";
 import { formatFileSize, formatDuration, formatBytesNum } from "@/lib/format";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { generateId } from "@/lib/utils";
+import { MEDIA_TYPE_BADGE_COLORS, mediaTypeLabel } from "@/lib/theme/media-type-colors";
 import { EmptyState } from "@/components/empty-state";
 import { ConvertQueryToRuleDialog } from "@/components/convert-query-to-rule-dialog";
 import { QueryProgress, useStreamProgress } from "@/components/query-progress";
@@ -126,12 +127,6 @@ interface QueryResultItem {
   } | null;
   servers?: Array<{ serverId: string; serverName: string; serverType: string }>;
 }
-
-const TYPE_BADGE_COLORS: Record<string, string> = {
-  MOVIE: "bg-sky/20 text-sky border-sky/30",
-  SERIES: "bg-purple-500/20 text-purple-400 border-purple-500/30",
-  MUSIC: "bg-green/20 text-green border-green/30",
-};
 
 const FALLBACK_ICONS: Record<string, "movie" | "series" | "music"> = {
   MOVIE: "movie",
@@ -522,8 +517,8 @@ export default function QueryPage() {
       group: "core",
       defaultVisible: true,
       accessor: (item) => (
-        <ColorChip className={TYPE_BADGE_COLORS[item.type] ?? ""}>
-          {item.type === "MOVIE" ? "Movie" : item.type === "SERIES" ? "Series" : "Music"}
+        <ColorChip className={MEDIA_TYPE_BADGE_COLORS[item.type] ?? ""}>
+          {mediaTypeLabel(item.type)}
         </ColorChip>
       ),
       sortValue: (item) => item.type,
@@ -1707,8 +1702,8 @@ export default function QueryPage() {
                                 </MetadataLine>
                               }
                               badges={
-                                <ColorChip className={TYPE_BADGE_COLORS[item.type] ?? ""}>
-                                  {item.type === "MOVIE" ? "Movie" : item.type === "SERIES" ? "Series" : "Music"}
+                                <ColorChip className={MEDIA_TYPE_BADGE_COLORS[item.type] ?? ""}>
+                                  {mediaTypeLabel(item.type)}
                                 </ColorChip>
                               }
                               qualityBar={
