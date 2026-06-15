@@ -199,3 +199,51 @@ describe("validateArrItem — year guard (remake collisions)", () => {
     ).toThrow(/year mismatch/i);
   });
 })
+
+describe("validateArrItem — series year guard (episode-of-series)", () => {
+  // For Sonarr, expectedYear is the EPISODE air year while arrYear is the
+  // SERIES premiere year. The guard must tolerate episodes that air years
+  // after the show premiered, but still catch an external id that resolves to
+  // a same-named series that premiered AFTER our episode aired.
+
+  it("allows an episode airing years after the series premiered", () => {
+    // Regression: "Dope" episode "The Devil's Oldest Trick" aired 2019, series
+    // premiered 2017 — a legitimate deletion that the symmetric guard blocked.
+    expect(() =>
+      validateArrItem("Dope", "Dope", "Sonarr series", "339662", 2019, 2017, "episodeOfSeries")
+    ).not.toThrow();
+    expect(() =>
+      validateArrItem("Through the Wormhole", "Through the Wormhole", "Sonarr series", "168571", 2015, 2010, "episodeOfSeries")
+    ).not.toThrow();
+    expect(() =>
+      validateArrItem("Weird But True!", "Weird But True!", "Sonarr series", "386989", 2020, 2016, "episodeOfSeries")
+    ).not.toThrow();
+  });
+
+  it("allows the premiere-season tolerance (episode year one before premiere)", () => {
+    // Metadata quirks can put an early episode a year before the series' year.
+    expect(() =>
+      validateArrItem("Show", "Show", "Sonarr series", "1", 2009, 2010, "episodeOfSeries")
+    ).not.toThrow();
+  });
+
+  it("still rejects a series that premiered well after our episode aired", () => {
+    // Wrong external id pointing at a newer same-named reboot: our episode aired
+    // 2010 but the resolved series premiered 2020 — impossible for a match.
+    expect(() =>
+      validateArrItem("The Office", "The Office", "Sonarr series", "1", 2010, 2020, "episodeOfSeries")
+    ).toThrow(/year mismatch/i);
+  });
+
+  it("does not gate when either year is missing or zero", () => {
+    expect(() => validateArrItem("Show", "Show", "Sonarr series", "1", null, 2010, "episodeOfSeries")).not.toThrow();
+    expect(() => validateArrItem("Show", "Show", "Sonarr series", "1", 2019, null, "episodeOfSeries")).not.toThrow();
+    expect(() => validateArrItem("Show", "Show", "Sonarr series", "1", 0, 2010, "episodeOfSeries")).not.toThrow();
+  });
+
+  it("still enforces the title check under the series year mode", () => {
+    expect(() =>
+      validateArrItem("Breaking Bad", "Better Call Saul", "Sonarr series", "1", 2013, 2008, "episodeOfSeries")
+    ).toThrow(/title mismatch/i);
+  });
+})

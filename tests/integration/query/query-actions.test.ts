@@ -486,6 +486,102 @@ describe("POST /api/query/actions", () => {
     expect(passed.matchedMediaItemIds).toEqual([usEp.id]);
   });
 
+  it("refuses a whole-series DELETE_SONARR from the grouped view when any member episode is excepted", async () => {
+    // Contrast with the member-scoped test above: a member-scoped file delete
+    // drops the excepted episode and proceeds, but DELETE_SONARR removes the
+    // ENTIRE series (ignoring the member list), so an excepted episode means the
+    // whole show must be refused — otherwise the protected episode is destroyed.
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" });
+    const ep1 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E1", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
+    const ep2 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E2", parentTitle: "Show", seasonNumber: 1, episodeNumber: 2 });
+    const sonarr = await createTestSonarrInstance(user.id);
+    const prisma = getTestPrisma();
+    await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: ep2.id } });
+
+    mockedExecuteQuery.mockImplementation(async (q: { includeEpisodes?: boolean }) => {
+      if (q.includeEpisodes) {
+        return queryResult([
+          { id: ep1.id, type: "SERIES", title: "S1E1", parentTitle: "Show" },
+          { id: ep2.id, type: "SERIES", title: "S1E2", parentTitle: "Show" },
+        ]);
+      }
+      return queryResult([{ id: ep1.id, type: "SERIES", title: "Show", parentTitle: null }]);
+    });
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { query: BASE_QUERY, mediaItemIds: [ep1.id], actionType: "DELETE_SONARR", arrInstanceId: sonarr.id },
+    });
+    const { result: body } = await expectStreamResult<{ executed: number; skipped: number }>(response);
+    expect(body.executed).toBe(0);
+    expect(body.skipped).toBe(1);
+    expect(mockedExecuteAction).not.toHaveBeenCalled();
+  });
+
+  it("collapses a whole-series action to ONE call per show in episode (includeEpisodes) mode", async () => {
+    // Selecting many episodes of one show + a whole-series action must run the
+    // series op once, not once per episode (which produced N-1 spurious failures).
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" });
+    const ep1 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E1", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
+    const ep2 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E2", parentTitle: "Show", seasonNumber: 1, episodeNumber: 2 });
+    const ep3 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E3", parentTitle: "Show", seasonNumber: 1, episodeNumber: 3 });
+    const sonarr = await createTestSonarrInstance(user.id);
+
+    mockedExecuteQuery.mockResolvedValue(queryResult([
+      { id: ep1.id, type: "SERIES", title: "S1E1", parentTitle: "Show" },
+      { id: ep2.id, type: "SERIES", title: "S1E2", parentTitle: "Show" },
+      { id: ep3.id, type: "SERIES", title: "S1E3", parentTitle: "Show" },
+    ]));
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: {
+        query: { ...BASE_QUERY, includeEpisodes: true },
+        mediaItemIds: [ep1.id, ep2.id, ep3.id],
+        actionType: "DELETE_SONARR",
+        arrInstanceId: sonarr.id,
+      },
+    });
+    const { result: body } = await expectStreamResult<{ executed: number }>(response);
+    expect(body.executed).toBe(1);
+    expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("acts per-episode for a member-scoped file delete in episode (includeEpisodes) mode", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" });
+    const ep1 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E1", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
+    const ep2 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E2", parentTitle: "Show", seasonNumber: 1, episodeNumber: 2 });
+    const sonarr = await createTestSonarrInstance(user.id);
+
+    mockedExecuteQuery.mockResolvedValue(queryResult([
+      { id: ep1.id, type: "SERIES", title: "S1E1", parentTitle: "Show" },
+      { id: ep2.id, type: "SERIES", title: "S1E2", parentTitle: "Show" },
+    ]));
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: {
+        query: { ...BASE_QUERY, includeEpisodes: true },
+        mediaItemIds: [ep1.id, ep2.id],
+        actionType: "DELETE_FILES_SONARR",
+        arrInstanceId: sonarr.id,
+      },
+    });
+    const { result: body } = await expectStreamResult<{ executed: number }>(response);
+    expect(body.executed).toBe(2);
+    expect(mockedExecuteAction).toHaveBeenCalledTimes(2);
+    // Each call targets only its own episode's file.
+    const passedMembers = mockedExecuteAction.mock.calls.map((c) => c[0].matchedMediaItemIds);
+    expect(new Set(passedMembers.flat())).toEqual(new Set([ep1.id, ep2.id]));
+    for (const members of passedMembers) expect(members).toHaveLength(1);
+  });
+
   it("records a FAILED action and surfaces the error when execution throws", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });

@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeQuery } from "@/lib/query/query-engine";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
-import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES } from "@/lib/lifecycle/action-types";
+import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { validateRequest, queryActionSchema } from "@/lib/validation";
 import { progressStreamResponse } from "@/lib/progress/stream";
 import type { ProgressPhase, ProgressEmit } from "@/lib/progress/types";
@@ -168,12 +168,50 @@ export async function POST(request: NextRequest) {
         return { executed: 0, failed: 0, skipped, errors: [] };
       }
 
-      // Resolve SERIES episode-level member IDs for file-deletion actions.
+      // Whole-record series actions (DELETE_SONARR, UNMONITOR_SONARR, …) hit the
+      // ENTIRE series and ignore the member list; member-scoped actions
+      // (DELETE_FILES_SONARR, …) act only on the named episodes.
+      const isMemberScoped = actionHonorsMemberIds(actionType);
+      const isWholeRecordDestructive = isDestructiveActionType(actionType) && !isMemberScoped;
+
+      // Group by the SAME key the query engine uses for grouped shows
+      // (LOWER(TRIM(parentTitle))). Using a looser key (e.g. normalizeTitle)
+      // would collapse distinct shows like "The Office (US)" / "The Office (UK)"
+      // and act on the wrong episodes.
+      const showKey = (s: unknown) => String(s ?? "").trim().toLowerCase();
+
+      // Resolve SERIES episode-level member IDs and the units the action runs on.
       const episodeIdMap = new Map<string, string[]>();
+      // The ids the action actually executes against. Defaults to the validated
+      // selection; the episode-view whole-record case below collapses it to one
+      // representative per show.
+      let actionUnitIds: string[] = validIds;
       if (resolvedType === "SERIES") {
         if (query.includeEpisodes) {
-          // Results are already individual episodes — act on each on its own.
-          for (const id of validIds) episodeIdMap.set(id, [id]);
+          if (isMemberScoped) {
+            // Results are already individual episodes — act on each on its own.
+            for (const id of validIds) episodeIdMap.set(id, [id]);
+          } else {
+            // Whole-record series action on individual episodes: collapse the
+            // selected episodes by show to ONE action per series, otherwise the
+            // whole-series op runs once per selected episode (N-1 spurious
+            // "series not found" failures + per-episode deletedBytes). The
+            // representative's members are the selected episodes of that show so
+            // the exception guard below can still see them.
+            const byShow = new Map<string, { rep: string; members: string[] }>();
+            for (const id of validIds) {
+              const item = liveOfType.find((it) => String(it.id) === id);
+              const key = showKey(item?.parentTitle ?? item?.title);
+              const entry = byShow.get(key);
+              if (entry) entry.members.push(id);
+              else byShow.set(key, { rep: id, members: [id] });
+            }
+            actionUnitIds = [];
+            for (const { rep, members } of byShow.values()) {
+              actionUnitIds.push(rep);
+              episodeIdMap.set(rep, members);
+            }
+          }
         } else {
           // Grouped by show: re-run at episode level and map each selected show's
           // representative episode id to all matched episode ids of that show.
@@ -185,11 +223,6 @@ export async function POST(request: NextRequest) {
             0,
             forwardReQuery("Resolving matched episodes"),
           );
-          // Group by the SAME key the query engine uses for grouped shows
-          // (LOWER(TRIM(parentTitle))). Using a looser key (e.g. normalizeTitle)
-          // would collapse distinct shows like "The Office (US)" / "The Office (UK)"
-          // and act on the wrong episodes.
-          const showKey = (s: unknown) => String(s ?? "").trim().toLowerCase();
           const groups = new Map<string, string[]>();
           for (const ep of episodeResult.items) {
             if (ep.type !== "SERIES" || ep.parentTitle == null) continue;
@@ -220,22 +253,28 @@ export async function POST(request: NextRequest) {
         for (const m of members) memberIds.add(m);
       }
       const exceptions = await prisma.lifecycleException.findMany({
-        where: { userId, mediaItemId: { in: [...new Set([...validIds, ...memberIds])] } },
+        where: { userId, mediaItemId: { in: [...new Set([...actionUnitIds, ...memberIds])] } },
         select: { mediaItemId: true },
       });
       const excluded = new Set(exceptions.map((e) => e.mediaItemId));
       const actionableIds: string[] = [];
-      for (const id of validIds) {
+      for (const id of actionUnitIds) {
         if (excluded.has(id)) continue; // representative item is excepted
         const members = episodeIdMap.get(id);
         if (members && members.length > 0) {
           const remaining = members.filter((m) => !excluded.has(m));
           if (remaining.length === 0) continue; // every targeted episode is excepted
+          // Exception inviolability: a whole-record destructive action ignores
+          // the member list and would destroy the excepted episode along with
+          // the rest of the series. Refuse the whole show rather than delete a
+          // protected item (mirrors processor.ts's scheduler guard). Member-
+          // scoped file deletes honor `remaining` and are safe to proceed.
+          if (remaining.length < members.length && isWholeRecordDestructive) continue;
           episodeIdMap.set(id, remaining);
         }
         actionableIds.push(id);
       }
-      skipped += validIds.length - actionableIds.length;
+      skipped += actionUnitIds.length - actionableIds.length;
       if (actionableIds.length === 0) {
         return {
           executed: 0,

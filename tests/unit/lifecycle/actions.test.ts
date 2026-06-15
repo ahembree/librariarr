@@ -271,6 +271,56 @@ describe("executeAction", () => {
     expect(mockSonarrClient.deleteSeries).toHaveBeenCalledWith(2, true, false);
   });
 
+  it("DELETE_SONARR allows an episode that aired years after the series premiered", async () => {
+    // Regression: a "Dope" (2017) episode that aired in 2019 was wrongly blocked
+    // because the symmetric year guard compared the episode air year (2019) to
+    // the series premiere year (2017). The series titles match, so the deletion
+    // must proceed.
+    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
+    });
+    mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({
+      id: 7, title: "Dope", tvdbId: 339662, year: 2017, tags: [],
+    });
+
+    await executeAction(makeAction({
+      actionType: "DELETE_SONARR",
+      mediaItem: {
+        id: "item1",
+        title: "The Devil's Oldest Trick", // episode title
+        parentTitle: "Dope",                // series title
+        year: 2019,                         // episode air year
+        externalIds: [{ source: "TVDB", externalId: "339662" }],
+      },
+    }));
+
+    expect(mockSonarrClient.deleteSeries).toHaveBeenCalledWith(7, true, false);
+  });
+
+  it("DELETE_SONARR still aborts when the resolved series premiered well after our episode", async () => {
+    // Wrong external id pointing at a newer same-named reboot: our episode aired
+    // 2010 but Sonarr resolved a series that premiered 2020 — refuse to delete.
+    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
+    });
+    mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({
+      id: 9, title: "The Office", tvdbId: 11111, year: 2020, tags: [],
+    });
+
+    await expect(executeAction(makeAction({
+      actionType: "DELETE_SONARR",
+      mediaItem: {
+        id: "item1",
+        title: "Pilot",
+        parentTitle: "The Office",
+        year: 2010,
+        externalIds: [{ source: "TVDB", externalId: "11111" }],
+      },
+    }))).rejects.toThrow(/year mismatch/i);
+
+    expect(mockSonarrClient.deleteSeries).not.toHaveBeenCalled();
+  });
+
   it("executes UNMONITOR_RADARR with import exclusion", async () => {
     mockPrisma.radarrInstance.findUnique.mockResolvedValue({
       id: "arr1",
