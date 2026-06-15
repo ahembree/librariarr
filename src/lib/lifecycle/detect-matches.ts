@@ -82,7 +82,12 @@ export async function detectAndSaveMatches(
   // mirrors the query engine's aggregateSeriesAndFilter routing.
   const seriesUsesAggregate = ruleSet.type === "SERIES" && hasSeriesAggregateRules(rules);
   if (ruleSet.type === "SERIES" && (ruleSet.seriesScope || seriesUsesAggregate)) {
-    matched = await evaluateSeriesScope(rules, serverIds, arrData, seerrData);
+    // When seriesScope is false the series path is FORCED by an aggregate field;
+    // the user still asked for per-episode scope, so restrict each matched
+    // series' member episodes to those that individually satisfy the rule (a
+    // member-scoped file delete then acts only on matching episodes, not the
+    // whole series). With seriesScope true, every episode stays a member.
+    matched = await evaluateSeriesScope(rules, serverIds, arrData, seerrData, !ruleSet.seriesScope);
     // Build episode ID map so actions track individual episodes for file size calculation
     for (const m of matched) {
       const ids = (m as unknown as { memberIds?: string[] }).memberIds;

@@ -319,6 +319,17 @@ Rules are evaluated in two steps:
   Rules using external data (Step 2) are slower because they query your integrations. Use local-data rules to narrow your matches first for best performance.
 </Aside>
 
+### Series scope and aggregate fields
+
+For **Series** rule sets, the **Series Scope** toggle controls the unit of evaluation:
+
+- **Series scope on** — the rule is evaluated against the whole show, and an action applies to the entire series. Every episode is a member of the match.
+- **Series scope off** — the rule is evaluated against individual episodes, then results are grouped by show. A member-scoped action (such as **Delete Files Only**) acts only on the episodes that matched.
+
+Some fields are **series-aggregate** fields — `availableEpisodeCount`, `watchedEpisodeCount`, `watchedEpisodePercentage`, `lastEpisodeAiredAt`, `lastEpisodeAddedAt`, and `latestEpisodeViewDate`. These describe the show as a whole and can only be computed across every episode, so a rule that references one is always evaluated at the series level — even with Series Scope off.
+
+When Series Scope is **off** and your rule mixes an aggregate field with a per-episode field (for example, *available episode count ≥ 20 **and** resolution = 4K*), the show first has to qualify on the aggregate, and then a member-scoped file delete acts only on the episodes that individually satisfy the per-episode conditions (here, just the 4K episodes) — not every episode of the series. With Series Scope **on**, the same rule deletes the whole series.
+
 ## Scheduling
 
 Lifecycle processing runs on two independent schedules (configured in **Settings → Scheduling**):

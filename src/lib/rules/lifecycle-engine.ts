@@ -2105,7 +2105,20 @@ export async function evaluateSeriesScope(
   rules: LifecycleRule[] | LifecycleRuleGroup[],
   serverIds: string[],
   arrData?: ArrDataMap,
-  seerrData?: SeerrDataMap
+  seerrData?: SeerrDataMap,
+  /**
+   * When true, after a series matches at the aggregate level, restrict its
+   * `memberIds` to the episodes that ALSO individually satisfy the rule
+   * (re-evaluated per-episode with the series-aggregate fields injected as
+   * series-level constants). Used when the series path was FORCED by an
+   * aggregate field while `seriesScope` is false — the user asked for
+   * per-episode scope, so a member-scoped file delete must act only on the
+   * matching episodes, not every episode of the series. With `seriesScope`
+   * true (whole-series intent) this stays false and every episode is a member.
+   * The restricted set is always a subset of the series' episodes, so this can
+   * only narrow a deletion (never wrong-target or over-delete).
+   */
+  restrictMembersToEpisodeMatches: boolean = false,
 ) {
   // Defense-in-depth: refuse to evaluate if no active rules exist
   if (rules.length === 0 || !hasAnyActiveRules(rules)) return [];
@@ -2160,10 +2173,15 @@ export async function evaluateSeriesScope(
     }
   > = [];
 
+  // Retain the raw episode rows per series so member ids can be restricted to
+  // per-episode matches below (only when restrictMembersToEpisodeMatches).
+  const episodesByRepId = new Map<string, typeof allEpisodes>();
+
   for (const [, episodes] of seriesMap) {
     // Sort by id for a stable representative across syncs (prevents false match churn)
     episodes.sort((a, b) => a.id.localeCompare(b.id));
     const representative = episodes[0];
+    if (restrictMembersToEpisodeMatches) episodesByRepId.set(representative.id, episodes);
     const totalPlays = episodes.reduce((sum, ep) => sum + ep.playCount, 0);
     const totalSize = episodes.reduce(
       (sum, ep) => sum + (ep.fileSize ?? BigInt(0)),
@@ -2298,6 +2316,40 @@ export async function evaluateSeriesScope(
     const seerrMeta = lookupSeerrMeta(series.externalIds ?? [], seerrData, "SERIES");
 
     if (evaluateAllRulesInMemory(rules, item, arrMeta, seerrMeta)) {
+      if (restrictMembersToEpisodeMatches) {
+        // Re-evaluate per-episode with the 6 series-aggregate fields injected as
+        // series-level constants (so aggregate rules pass for every episode and
+        // only the per-episode conditions actually filter). Keep only matching
+        // episodes as members. Same arr/seerr meta — correlation is series-level.
+        const aggInjection = {
+          availableEpisodeCount: item.availableEpisodeCount,
+          watchedEpisodeCount: item.watchedEpisodeCount,
+          watchedEpisodePercentage: item.watchedEpisodePercentage,
+          latestEpisodeViewDate: item.latestEpisodeViewDate,
+          lastEpisodeAddedAt: item.lastEpisodeAddedAt,
+          lastEpisodeAiredAt: item.lastEpisodeAiredAt,
+        };
+        const epis = episodesByRepId.get(series.id) ?? [];
+        series.memberIds = epis
+          .filter((ep) => {
+            const epExternalIds = "externalIds" in ep
+              ? (ep.externalIds as Array<{ source: string; externalId: string }>)
+              : [];
+            const epItem: Record<string, unknown> = {
+              ...ep,
+              fileSize: ep.fileSize?.toString() ?? null,
+              lastPlayedAt: ep.lastPlayedAt?.toISOString() ?? null,
+              addedAt: ep.addedAt?.toISOString() ?? null,
+              originallyAvailableAt: ep.originallyAvailableAt?.toISOString() ?? null,
+              streams: "streams" in ep ? ep.streams : [],
+              watchHistory: "watchHistory" in ep ? ep.watchHistory : [],
+              externalIds: epExternalIds,
+              ...aggInjection,
+            };
+            return evaluateAllRulesInMemory(rules, epItem, arrMeta, seerrMeta);
+          })
+          .map((ep) => ep.id);
+      }
       matching.push(series);
     }
   }
