@@ -39,6 +39,7 @@ import { useServers } from "@/hooks/use-servers";
 import { useChipColors } from "@/components/chip-color-provider";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { normalizeResolutionLabel } from "@/lib/resolution";
+import { MEDIA_TYPE_BADGE_COLORS, MEDIA_TYPE_LABELS } from "@/lib/theme/media-type-colors";
 import { EmptyState } from "@/components/empty-state";
 import type { MediaItemWithRelations } from "@/lib/types";
 
@@ -85,18 +86,6 @@ interface WatchHistoryItem {
 // ── Constants ────────────────────────────────────────────────────
 
 const PAGE_SIZE = 100;
-
-const TYPE_BADGE_COLORS: Record<string, string> = {
-  MOVIE: "bg-blue-500/20 text-blue-400 border-blue-500/30",
-  SERIES: "bg-purple-500/20 text-purple-400 border-purple-500/30",
-  MUSIC: "bg-green-500/20 text-green-400 border-green-500/30",
-};
-
-const TYPE_LABELS: Record<string, string> = {
-  MOVIE: "Movie",
-  SERIES: "Series",
-  MUSIC: "Music",
-};
 
 const COLUMN_TO_SORT_FIELD: Record<string, string> = {
   title: "title",
@@ -262,8 +251,8 @@ export default function HistoryPage() {
       group: "core",
       defaultVisible: true,
       accessor: (item) => (
-        <ColorChip className={cn("text-xs", TYPE_BADGE_COLORS[item.mediaItem.type])}>
-          {TYPE_LABELS[item.mediaItem.type] ?? item.mediaItem.type}
+        <ColorChip className={cn("text-xs", MEDIA_TYPE_BADGE_COLORS[item.mediaItem.type])}>
+          {MEDIA_TYPE_LABELS[item.mediaItem.type] ?? item.mediaItem.type}
         </ColorChip>
       ),
       sortValue: (item) => item.mediaItem.type,
@@ -674,11 +663,11 @@ export default function HistoryPage() {
                   className={cn(
                     "rounded-md px-3 h-full text-xs font-medium transition-colors",
                     selectedTypes.has(t)
-                      ? TYPE_BADGE_COLORS[t]
+                      ? MEDIA_TYPE_BADGE_COLORS[t]
                       : "text-muted-foreground hover:text-foreground"
                   )}
                 >
-                  {TYPE_LABELS[t]}
+                  {MEDIA_TYPE_LABELS[t]}
                 </button>
               ))}
             </div>
