@@ -84,8 +84,9 @@ const fullMovie = {
   ratings: { imdb: { value: 8 }, tmdb: { value: 7 }, rottenTomatoes: { value: 90 } },
   added: "2024-01-01", path: "/m", sizeOnDisk: 1000, originalLanguage: { name: "English" },
   digitalRelease: "2024-02-01", physicalRelease: "2024-03-01", inCinemas: "2024-01-15",
-  runtime: 120, hasFile: true, movieFile: { quality: { quality: { name: "Bluray-1080p" } }, dateAdded: "2024-02-02" },
-  qualityCutoffNotMet: false, status: "released",
+  runtime: 120, hasFile: true,
+  movieFile: { quality: { quality: { name: "Bluray-1080p" } }, dateAdded: "2024-02-02", qualityCutoffNotMet: false },
+  status: "released",
 };
 const fullSeries = {
   id: 1, tvdbId: 200, tags: [], qualityProfileId: 1, monitored: true,

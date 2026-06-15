@@ -72,8 +72,7 @@ describe("fetchArrMetadata", () => {
           physicalRelease: null,
           inCinemas: "2024-03-01",
           runtime: 139,
-          movieFile: { quality: { quality: { name: "Bluray-1080p" } }, dateAdded: "2024-02-01" },
-          qualityCutoffNotMet: false,
+          movieFile: { quality: { quality: { name: "Bluray-1080p" } }, dateAdded: "2024-02-01", qualityCutoffNotMet: false },
           hasFile: true,
           movieFileId: 99,
           status: "released",
@@ -171,7 +170,7 @@ describe("fetchArrMetadata", () => {
           id: 1, tmdbId: 100, tags: [999], qualityProfileId: 1,
           monitored: false, ratings: {}, added: null, path: null, sizeOnDisk: null,
           originalLanguage: null, digitalRelease: null, physicalRelease: null,
-          inCinemas: null, runtime: null, movieFile: null, qualityCutoffNotMet: null,
+          inCinemas: null, runtime: null, movieFile: null,
         },
       ]);
       mockRadarrClient.getQualityProfiles.mockResolvedValue([]);
@@ -192,7 +191,7 @@ describe("fetchArrMetadata", () => {
           id: 1, tmdbId: 200, tags: [], qualityProfileId: 1,
           monitored: true, ratings: {}, added: null, path: null, sizeOnDisk: null,
           originalLanguage: null, digitalRelease: null, physicalRelease: "2024-09-01",
-          inCinemas: null, runtime: null, movieFile: null, qualityCutoffNotMet: null,
+          inCinemas: null, runtime: null, movieFile: null,
         },
       ]);
       mockRadarrClient.getQualityProfiles.mockResolvedValue([]);
@@ -210,10 +209,10 @@ describe("fetchArrMetadata", () => {
       ]);
       mockRadarrClient.getMovies
         .mockResolvedValueOnce([
-          { id: 1, tmdbId: 100, tags: [], qualityProfileId: 1, monitored: true, ratings: {}, added: null, path: null, sizeOnDisk: null, originalLanguage: null, digitalRelease: null, physicalRelease: null, inCinemas: null, runtime: null, movieFile: null, qualityCutoffNotMet: null },
+          { id: 1, tmdbId: 100, tags: [], qualityProfileId: 1, monitored: true, ratings: {}, added: null, path: null, sizeOnDisk: null, originalLanguage: null, digitalRelease: null, physicalRelease: null, inCinemas: null, runtime: null, movieFile: null },
         ])
         .mockResolvedValueOnce([
-          { id: 2, tmdbId: 200, tags: [], qualityProfileId: 1, monitored: true, ratings: {}, added: null, path: null, sizeOnDisk: null, originalLanguage: null, digitalRelease: null, physicalRelease: null, inCinemas: null, runtime: null, movieFile: null, qualityCutoffNotMet: null },
+          { id: 2, tmdbId: 200, tags: [], qualityProfileId: 1, monitored: true, ratings: {}, added: null, path: null, sizeOnDisk: null, originalLanguage: null, digitalRelease: null, physicalRelease: null, inCinemas: null, runtime: null, movieFile: null },
         ]);
       mockRadarrClient.getQualityProfiles.mockResolvedValue([]);
       mockRadarrClient.getTags.mockResolvedValue([]);

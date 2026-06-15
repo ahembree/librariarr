@@ -99,11 +99,33 @@ These fields require configured [Sonarr](/docs/integrations/sonarr/), [Radarr](/
 
 | Field | Description |
 |-------|-------------|
+| `foundInArr` | Whether the item exists in the linked *arr instance |
+| `arrMonitored` | Whether monitored in *arr |
 | `arrTag` | Tags in *arr instance |
 | `arrQualityProfile` | Quality profile name |
+| `arrQualityName` | Name of the current file's quality (Radarr / movies only) |
+| `arrQualityCutoffMet` | Whether the current file meets the quality profile's cutoff (Radarr / movies only). `true` once the file is at or above the cutoff, so no upgrade is pending |
 | `arrCustomFormatScore` | Custom format score of the movie's current file (Radarr / movies only) |
-| `arrMonitored` | Whether monitored in *arr |
-| `arrRating` | Rating in *arr |
+| `arrStatus` | Release/lifecycle status in *arr (e.g. `released`, `continuing`) |
+| `arrEnded` | Whether the series has ended (Sonarr / series only) |
+| `arrSeriesType` | Series type: `standard`, `daily`, or `anime` (Sonarr / series only) |
+| `arrRating` | IMDB rating in *arr |
+| `arrTmdbRating` | TMDB rating in *arr (not music) |
+| `arrRtCriticRating` | Rotten Tomatoes critic rating in *arr (not music) |
+| `arrOriginalLanguage` | Original language in *arr (not music) |
+| `arrRuntime` | Runtime in minutes (Radarr / movies only) |
+| `arrSizeOnDisk` | Size on disk in MB |
+| `arrPath` | File path in *arr |
+| `arrReleaseDate` | Digital/physical release date (Radarr / movies only) |
+| `arrInCinemasDate` | In-cinemas date (Radarr / movies only) |
+| `arrFirstAired` | First-aired date (Sonarr / series only) |
+| `arrDateAdded` | When the item was added to *arr |
+| `arrDownloadDate` | When the current file was downloaded (Radarr / movies only) |
+| `arrSeasonCount` | Total season count (Sonarr / series only) |
+| `arrEpisodeCount` | Total episode count (Sonarr / series only) |
+| `arrHasUnaired` | Whether the series has unaired episodes (Sonarr / series only) |
+| `arrMonitoredSeasonCount` | Number of monitored seasons (Sonarr / series only) |
+| `arrMonitoredEpisodeCount` | Number of monitored episodes (Sonarr / series only) |
 
 ### Seerr Fields
 

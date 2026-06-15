@@ -41,7 +41,10 @@ export function mapRadarrMovie(
     inCinemasDate: movie.inCinemas ?? null,
     runtime: movie.runtime ?? null,
     qualityName: movie.movieFile?.quality?.quality?.name ?? null,
-    qualityCutoffMet: movie.qualityCutoffNotMet != null ? !movie.qualityCutoffNotMet : null,
+    qualityCutoffMet:
+      movie.movieFile?.qualityCutoffNotMet != null
+        ? !movie.movieFile.qualityCutoffNotMet
+        : null,
     customFormatScore: customFormatScore ?? movie.movieFile?.customFormatScore ?? null,
     downloadDate: movie.movieFile?.dateAdded ?? null,
     firstAired: null,
