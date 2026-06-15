@@ -64,10 +64,12 @@ describe("CONDITION_FIELDS registry", () => {
   it("gates Arr fields to only the library types whose data populates them", () => {
     const expectedGates: Record<string, Array<"MOVIE" | "SERIES" | "MUSIC">> = {
       // Movie + Series (not Music)
-      arrTmdbRating: ["MUSIC"],
-      arrRtCriticRating: ["MUSIC"],
       arrOriginalLanguage: ["MUSIC"],
       // Movie only
+      // Sonarr/Lidarr expose only a single flat rating (mapped to arrRating);
+      // there is no per-source TMDB or Rotten Tomatoes rating for series/music.
+      arrTmdbRating: ["SERIES", "MUSIC"],
+      arrRtCriticRating: ["SERIES", "MUSIC"],
       arrReleaseDate: ["SERIES", "MUSIC"],
       arrInCinemasDate: ["SERIES", "MUSIC"],
       arrRuntime: ["SERIES", "MUSIC"],

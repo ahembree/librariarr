@@ -46,13 +46,15 @@ describe("findFieldsInvalidForType (single-type, lifecycle rule sets)", () => {
   });
 
   it("flags movie-only fields on a SERIES rule set", () => {
-    const tree = [group([rule("arrQualityName"), rule("arrRuntime"), rule("title")])];
+    // arrTmdbRating / arrRtCriticRating are movie-only: Sonarr exposes only a
+    // single flat rating, so there is no per-source TMDB/RT rating for series.
+    const tree = [group([rule("arrQualityName"), rule("arrRuntime"), rule("arrTmdbRating"), rule("arrRtCriticRating"), rule("title")])];
     expect(findFieldsInvalidForType(tree, "SERIES").sort()).toEqual(
-      ["arrQualityName", "arrRuntime"].sort(),
+      ["arrQualityName", "arrRtCriticRating", "arrRuntime", "arrTmdbRating"].sort(),
     );
   });
 
-  it("flags movie+series fields (e.g. arrTmdbRating) on a MUSIC rule set", () => {
+  it("flags movie+series fields (e.g. arrOriginalLanguage) on a MUSIC rule set", () => {
     const tree = [group([rule("arrTmdbRating"), rule("arrOriginalLanguage")])];
     expect(findFieldsInvalidForType(tree, "MUSIC").sort()).toEqual(
       ["arrOriginalLanguage", "arrTmdbRating"].sort(),

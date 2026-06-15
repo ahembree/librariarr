@@ -41,7 +41,10 @@ export function mapRadarrMovie(
     inCinemasDate: movie.inCinemas ?? null,
     runtime: movie.runtime ?? null,
     qualityName: movie.movieFile?.quality?.quality?.name ?? null,
-    qualityCutoffMet: movie.qualityCutoffNotMet != null ? !movie.qualityCutoffNotMet : null,
+    qualityCutoffMet:
+      movie.movieFile?.qualityCutoffNotMet != null
+        ? !movie.movieFile.qualityCutoffNotMet
+        : null,
     customFormatScore: customFormatScore ?? movie.movieFile?.customFormatScore ?? null,
     downloadDate: movie.movieFile?.dateAdded ?? null,
     firstAired: null,
@@ -67,11 +70,11 @@ export function mapSonarrSeries(
     tags: s.tags.map((tid) => tagMap.get(tid) ?? String(tid)),
     qualityProfile: profileMap.get(s.qualityProfileId) ?? "Unknown",
     monitored: s.monitored,
-    rating: s.ratings?.imdb?.value ?? null,
-    tmdbRating: s.ratings?.tmdb?.value ?? null,
-    rtCriticRating: s.ratings?.rottenTomatoes?.value != null
-      ? s.ratings.rottenTomatoes.value / 10
-      : null,
+    // Sonarr exposes a single flat series rating (like Lidarr), so it maps to
+    // `rating`; it has no per-source TMDB or Rotten Tomatoes rating.
+    rating: s.ratings?.value ?? null,
+    tmdbRating: null,
+    rtCriticRating: null,
     dateAdded: s.added ?? null,
     path: s.path ?? null,
     sizeOnDisk: s.statistics?.sizeOnDisk ?? null,
