@@ -397,7 +397,7 @@ describe("Integration metadata endpoints", () => {
           tags: [1, 3],
           qualityProfileId: 2,
           monitored: true,
-          ratings: { imdb: { value: 9.3 } },
+          ratings: { votes: 300, value: 9.3 },
         },
       ]);
       mockSonarrGetQualityProfiles.mockResolvedValue([{ id: 2, name: "Ultra-HD" }]);

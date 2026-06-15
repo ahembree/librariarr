@@ -72,8 +72,7 @@ describe("fetchArrMetadata", () => {
           physicalRelease: null,
           inCinemas: "2024-03-01",
           runtime: 139,
-          movieFile: { quality: { quality: { name: "Bluray-1080p" } }, dateAdded: "2024-02-01" },
-          qualityCutoffNotMet: false,
+          movieFile: { quality: { quality: { name: "Bluray-1080p" } }, dateAdded: "2024-02-01", qualityCutoffNotMet: false },
           hasFile: true,
           movieFileId: 99,
           status: "released",
@@ -171,7 +170,7 @@ describe("fetchArrMetadata", () => {
           id: 1, tmdbId: 100, tags: [999], qualityProfileId: 1,
           monitored: false, ratings: {}, added: null, path: null, sizeOnDisk: null,
           originalLanguage: null, digitalRelease: null, physicalRelease: null,
-          inCinemas: null, runtime: null, movieFile: null, qualityCutoffNotMet: null,
+          inCinemas: null, runtime: null, movieFile: null,
         },
       ]);
       mockRadarrClient.getQualityProfiles.mockResolvedValue([]);
@@ -192,7 +191,7 @@ describe("fetchArrMetadata", () => {
           id: 1, tmdbId: 200, tags: [], qualityProfileId: 1,
           monitored: true, ratings: {}, added: null, path: null, sizeOnDisk: null,
           originalLanguage: null, digitalRelease: null, physicalRelease: "2024-09-01",
-          inCinemas: null, runtime: null, movieFile: null, qualityCutoffNotMet: null,
+          inCinemas: null, runtime: null, movieFile: null,
         },
       ]);
       mockRadarrClient.getQualityProfiles.mockResolvedValue([]);
@@ -210,10 +209,10 @@ describe("fetchArrMetadata", () => {
       ]);
       mockRadarrClient.getMovies
         .mockResolvedValueOnce([
-          { id: 1, tmdbId: 100, tags: [], qualityProfileId: 1, monitored: true, ratings: {}, added: null, path: null, sizeOnDisk: null, originalLanguage: null, digitalRelease: null, physicalRelease: null, inCinemas: null, runtime: null, movieFile: null, qualityCutoffNotMet: null },
+          { id: 1, tmdbId: 100, tags: [], qualityProfileId: 1, monitored: true, ratings: {}, added: null, path: null, sizeOnDisk: null, originalLanguage: null, digitalRelease: null, physicalRelease: null, inCinemas: null, runtime: null, movieFile: null },
         ])
         .mockResolvedValueOnce([
-          { id: 2, tmdbId: 200, tags: [], qualityProfileId: 1, monitored: true, ratings: {}, added: null, path: null, sizeOnDisk: null, originalLanguage: null, digitalRelease: null, physicalRelease: null, inCinemas: null, runtime: null, movieFile: null, qualityCutoffNotMet: null },
+          { id: 2, tmdbId: 200, tags: [], qualityProfileId: 1, monitored: true, ratings: {}, added: null, path: null, sizeOnDisk: null, originalLanguage: null, digitalRelease: null, physicalRelease: null, inCinemas: null, runtime: null, movieFile: null },
         ]);
       mockRadarrClient.getQualityProfiles.mockResolvedValue([]);
       mockRadarrClient.getTags.mockResolvedValue([]);
@@ -244,7 +243,7 @@ describe("fetchArrMetadata", () => {
           tags: [1],
           qualityProfileId: 5,
           monitored: true,
-          ratings: { imdb: { value: 9.0 }, tmdb: { value: 8.7 }, rottenTomatoes: { value: 95 } },
+          ratings: { votes: 1000, value: 9.0 },
           added: "2023-01-01",
           path: "/tv/breaking-bad",
           statistics: { sizeOnDisk: 80000000000, seasonCount: 5, episodeCount: 62 },
@@ -270,9 +269,11 @@ describe("fetchArrMetadata", () => {
       expect(result["12345"]).toBeDefined();
       expect(result["12345"].arrId).toBe(1);
       expect(result["12345"].qualityProfile).toBe("HD-1080p");
+      // Sonarr's flat series rating maps to `rating`; it has no per-source
+      // TMDB or Rotten Tomatoes rating, so those stay null.
       expect(result["12345"].rating).toBe(9.0);
-      expect(result["12345"].tmdbRating).toBe(8.7);
-      expect(result["12345"].rtCriticRating).toBe(9.5); // 95/10
+      expect(result["12345"].tmdbRating).toBeNull();
+      expect(result["12345"].rtCriticRating).toBeNull();
       expect(result["12345"].firstAired).toBe("2008-01-20");
       expect(result["12345"].seasonCount).toBe(5);
       expect(result["12345"].episodeCount).toBe(62);

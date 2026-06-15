@@ -84,12 +84,13 @@ const fullMovie = {
   ratings: { imdb: { value: 8 }, tmdb: { value: 7 }, rottenTomatoes: { value: 90 } },
   added: "2024-01-01", path: "/m", sizeOnDisk: 1000, originalLanguage: { name: "English" },
   digitalRelease: "2024-02-01", physicalRelease: "2024-03-01", inCinemas: "2024-01-15",
-  runtime: 120, hasFile: true, movieFile: { quality: { quality: { name: "Bluray-1080p" } }, dateAdded: "2024-02-02" },
-  qualityCutoffNotMet: false, status: "released",
+  runtime: 120, hasFile: true,
+  movieFile: { quality: { quality: { name: "Bluray-1080p" } }, dateAdded: "2024-02-02", qualityCutoffNotMet: false },
+  status: "released",
 };
 const fullSeries = {
   id: 1, tvdbId: 200, tags: [], qualityProfileId: 1, monitored: true,
-  ratings: { imdb: { value: 9 }, tmdb: { value: 8 }, rottenTomatoes: { value: 95 } },
+  ratings: { votes: 100, value: 9 },
   added: "2023-01-01", path: "/s", statistics: { sizeOnDisk: 2000, seasonCount: 3, episodeCount: 30 },
   originalLanguage: { name: "English" }, firstAired: "2020-01-01", status: "continuing",
   ended: false, seriesType: "standard", nextAiring: "2025-01-01",

@@ -354,6 +354,14 @@ export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined):
   const { field, operator, value, negate } = rule;
   let result: boolean;
 
+  // Fail-closed NULL convention: when an item IS in Arr but a specific field is
+  // null (e.g. a fileless movie has no qualityName), no comparison operator
+  // matches — and crucially the per-field null guards below `return false`
+  // DIRECTLY rather than `result = false; break`, so the trailing
+  // `negate ? !result : result` flip can't turn a null into a match. This keeps
+  // `arrX notEquals Y` and `NOT(arrX equals Y)` agreeing (both no-match) on
+  // null, and never deletes an item on the strength of absent Arr data. Only
+  // isNull/isNotNull (handled before each guard) intentionally match on null.
   switch (field) {
     case "arrTag": {
       const strVal = String(value).toLowerCase();
@@ -444,7 +452,7 @@ export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined):
     case "arrRating": {
       if (operator === "isNull") { result = meta.rating === null; break; }
       if (operator === "isNotNull") { result = meta.rating !== null; break; }
-      if (meta.rating === null) { result = false; break; }
+      if (meta.rating === null) return false;
       const numVal = Number(value);
       switch (operator) {
         case "equals": result = meta.rating === numVal; break;
@@ -465,7 +473,7 @@ export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined):
     case "arrTmdbRating": {
       if (operator === "isNull") { result = meta.tmdbRating === null; break; }
       if (operator === "isNotNull") { result = meta.tmdbRating !== null; break; }
-      if (meta.tmdbRating === null) { result = false; break; }
+      if (meta.tmdbRating === null) return false;
       const numVal = Number(value);
       switch (operator) {
         case "equals": result = meta.tmdbRating === numVal; break;
@@ -486,7 +494,7 @@ export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined):
     case "arrRtCriticRating": {
       if (operator === "isNull") { result = meta.rtCriticRating === null; break; }
       if (operator === "isNotNull") { result = meta.rtCriticRating !== null; break; }
-      if (meta.rtCriticRating === null) { result = false; break; }
+      if (meta.rtCriticRating === null) return false;
       const numVal = Number(value);
       switch (operator) {
         case "equals": result = meta.rtCriticRating === numVal; break;
@@ -519,10 +527,7 @@ export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined):
       const itemDate = dateStr ? new Date(dateStr) : null;
       if (operator === "isNull") { result = !itemDate || isNaN(itemDate.getTime()); break; }
       if (operator === "isNotNull") { result = !!itemDate && !isNaN(itemDate.getTime()); break; }
-      if (!itemDate || isNaN(itemDate.getTime())) {
-        result = false;
-        break;
-      }
+      if (!itemDate || isNaN(itemDate.getTime())) return false;
       switch (operator) {
         case "before":
           result = itemDate < new Date(String(value));
@@ -571,7 +576,7 @@ export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined):
     case "arrSizeOnDisk": {
       if (operator === "isNull") { result = meta.sizeOnDisk === null; break; }
       if (operator === "isNotNull") { result = meta.sizeOnDisk !== null; break; }
-      if (meta.sizeOnDisk === null) { result = false; break; }
+      if (meta.sizeOnDisk === null) return false;
       const sizeMB = meta.sizeOnDisk / (1024 * 1024);
       const numVal = Number(value);
       switch (operator) {
@@ -605,7 +610,7 @@ export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined):
         meta.monitoredEpisodeCount;
       if (operator === "isNull") { result = metaVal === null; break; }
       if (operator === "isNotNull") { result = metaVal !== null; break; }
-      if (metaVal === null) { result = false; break; }
+      if (metaVal === null) return false;
       const numVal = Number(value);
       switch (operator) {
         case "equals": result = metaVal === numVal; break;
@@ -636,7 +641,7 @@ export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined):
       // `isNull negate:true` would flip the always-false default to "match all".
       if (operator === "isNull") { result = metaVal === null; break; }
       if (operator === "isNotNull") { result = metaVal !== null; break; }
-      if (metaVal === null) { result = false; break; }
+      if (metaVal === null) return false;
       const boolVal = String(value).toLowerCase() === "true";
       switch (operator) {
         case "equals": result = metaVal === boolVal; break;
@@ -662,7 +667,7 @@ export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined):
       // `isNull negate:true` would flip the always-false default to "match all".
       if (operator === "isNull") { result = metaVal === null; break; }
       if (operator === "isNotNull") { result = metaVal !== null; break; }
-      if (metaVal === null) { result = false; break; }
+      if (metaVal === null) return false;
       const strVal = String(value).toLowerCase();
       const metaLower = metaVal.toLowerCase();
       const enumerable = isEnumerableField(field);

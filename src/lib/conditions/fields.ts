@@ -80,8 +80,8 @@ export const CONDITION_FIELDS: ConditionField[] = [
 
   // ─── Arr: Media ─────────────────────────────────────────────────────────
   { value: "arrRating", label: "IMDB Rating", type: "number", section: "arrMedia", requiresArr: true },
-  { value: "arrTmdbRating", label: "TMDB Rating", type: "number", section: "arrMedia", requiresArr: true, invalidForLibraryType: ["MUSIC"] },
-  { value: "arrRtCriticRating", label: "RT Critic Rating", type: "number", section: "arrMedia", requiresArr: true, invalidForLibraryType: ["MUSIC"] },
+  { value: "arrTmdbRating", label: "TMDB Rating", type: "number", section: "arrMedia", requiresArr: true, invalidForLibraryType: ["SERIES", "MUSIC"] },
+  { value: "arrRtCriticRating", label: "RT Critic Rating", type: "number", section: "arrMedia", requiresArr: true, invalidForLibraryType: ["SERIES", "MUSIC"] },
   { value: "arrOriginalLanguage", label: "Original Language", type: "text", section: "arrMedia", enumerable: true, requiresArr: true, invalidForLibraryType: ["MUSIC"] },
   { value: "arrRuntime", label: "Runtime (min)", type: "number", section: "arrMedia", requiresArr: true, invalidForLibraryType: ["SERIES", "MUSIC"] },
   { value: "arrSizeOnDisk", label: "Size on Disk (MB)", type: "number", section: "arrMedia", requiresArr: true },

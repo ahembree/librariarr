@@ -56,7 +56,9 @@ export async function GET(
       tags: s.tags.map((tid) => tagMap.get(tid) ?? String(tid)),
       qualityProfile: profileMap.get(s.qualityProfileId) ?? "Unknown",
       monitored: s.monitored,
-      rating: s.ratings?.imdb?.value ?? null,
+      // Sonarr exposes a single flat series rating ({ votes, value }) — there is
+      // no per-source imdb/tmdb/rottenTomatoes breakdown like Radarr.
+      rating: s.ratings?.value ?? null,
     };
   }
 

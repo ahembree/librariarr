@@ -54,8 +54,10 @@ export interface RadarrMovie {
   digitalRelease?: string;
   runtime?: number;
   originalLanguage?: { id: number; name: string };
-  movieFile?: { quality?: { quality?: { name?: string } }; dateAdded?: string; customFormatScore?: number };
-  qualityCutoffNotMet?: boolean;
+  // `qualityCutoffNotMet` lives on the embedded movieFile (MovieFileResource),
+  // not on the movie itself — reading it off the top-level movie always yields
+  // undefined (the "Quality Cutoff Met" rule never matching) bug.
+  movieFile?: { quality?: { quality?: { name?: string } }; dateAdded?: string; customFormatScore?: number; qualityCutoffNotMet?: boolean };
   // Radarr movie lifecycle status: tba | announced | inCinemas | released | deleted
   status?: string;
 }

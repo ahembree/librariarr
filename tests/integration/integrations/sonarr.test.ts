@@ -454,7 +454,7 @@ describe("Sonarr integration endpoints", () => {
           tags: [1],
           qualityProfileId: 1,
           monitored: true,
-          ratings: { imdb: { value: 8.5 } },
+          ratings: { votes: 200, value: 8.5 },
         },
       ]);
 
