@@ -488,7 +488,16 @@ export async function executeLifecycleActions(userId?: string) {
       // Compute deleted bytes for stats tracking (only for delete actions)
       let deletedBytes: bigint | null = null;
       if (action.actionType.includes("DELETE")) {
-        if (filteredMatchedIds.length > 0) {
+        if (action.actionType === "DELETE_SONARR" && mediaItem.parentTitle) {
+          // Whole-series delete removes EVERY episode of the series, so count the
+          // whole series' file size — not just the matched members, which
+          // under-counts when only a subset of episodes matched the rule.
+          const agg = await prisma.mediaItem.aggregate({
+            where: { type: "SERIES", parentTitle: mediaItem.parentTitle, libraryId: mediaItem.libraryId },
+            _sum: { fileSize: true },
+          });
+          deletedBytes = agg._sum.fileSize ?? null;
+        } else if (filteredMatchedIds.length > 0) {
           // Series/music with episode-level tracking — sum member items' file sizes
           const memberSizes = await prisma.mediaItem.findMany({
             where: { id: { in: filteredMatchedIds } },

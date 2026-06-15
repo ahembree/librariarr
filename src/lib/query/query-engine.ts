@@ -451,6 +451,17 @@ export async function executeQuery(
   const seriesInScope = mediaTypes.length === 0 || mediaTypes.includes("SERIES");
   const groupSeries = seriesInScope && !definition.includeEpisodes;
 
+  // Episode view (`includeEpisodes`) + a series-aggregate rule: the ungrouped
+  // path evaluates the aggregate field per-episode (reads NULL → wrong/empty
+  // matches, and breaks the /api/query/actions member re-resolution). Resolve
+  // surviving series via aggregation and return their episodes instead.
+  if (!groupSeries && seriesInScope && definition.includeEpisodes && hasSeriesAggregateRules(groups)) {
+    return executeEpisodesWithSeriesAggregate(
+      definition, effectiveServerIds, groups, sortBy, sortOrder, page, limit,
+      arrDataByType, seerrDataByType, onProgress,
+    );
+  }
+
   if (!groupSeries) {
     // Ungrouped path
     return executeUngrouped(where, groups, sortBy, sortOrder, page, limit, arrDataByType, seerrDataByType, onProgress);
@@ -553,12 +564,12 @@ export async function executeQuery(
  * Episode-level fields (year, fileSize, etc.) are evaluated against the
  * representative episode's value via the aggregated record.
  */
-async function aggregateSeriesAndFilter(
+async function computeAggregateSurvivingEpisodeIds(
   effectiveServerIds: string[],
   groups: QueryGroup[],
   arrDataByType?: Record<string, ArrDataMap>,
   seerrDataByType?: Record<string, SeerrDataMap>,
-): Promise<Array<Record<string, unknown>>> {
+): Promise<string[]> {
   const seriesWhere: Prisma.MediaItemWhereInput = {
     type: "SERIES",
     parentTitle: { not: null },
@@ -588,9 +599,112 @@ async function aggregateSeriesAndFilter(
     }
   }
 
-  if (survivingIds.length === 0) return [];
+  return survivingIds;
+}
 
-  return groupSeriesEpisodes(seriesWhere, survivingIds);
+async function aggregateSeriesAndFilter(
+  effectiveServerIds: string[],
+  groups: QueryGroup[],
+  arrDataByType?: Record<string, ArrDataMap>,
+  seerrDataByType?: Record<string, SeerrDataMap>,
+): Promise<Array<Record<string, unknown>>> {
+  const survivingIds = await computeAggregateSurvivingEpisodeIds(
+    effectiveServerIds, groups, arrDataByType, seerrDataByType,
+  );
+  if (survivingIds.length === 0) return [];
+  // `where` is ignored when preFilteredIds is supplied (it queries by id).
+  return groupSeriesEpisodes({}, survivingIds);
+}
+
+/**
+ * Episode-view (`includeEpisodes`) queries that reference a series-aggregate
+ * field: the ungrouped per-episode path CANNOT evaluate an aggregate (it reads
+ * NULL off an individual episode → the rule matches nothing, or for negated
+ * operators matches everything — and the /api/query/actions route re-runs this
+ * same path to resolve members, so deletes mis-target). Resolve which SERIES
+ * survive via aggregation (exactly like the grouped `aggregateSeriesAndFilter`)
+ * and return their member EPISODES individually. Flat (movie/music) types in
+ * scope are evaluated normally and combined, mirroring the grouped path.
+ */
+async function executeEpisodesWithSeriesAggregate(
+  definition: QueryDefinition,
+  effectiveServerIds: string[],
+  groups: QueryGroup[],
+  sortBy: string,
+  sortOrder: "asc" | "desc",
+  page: number,
+  limit: number,
+  arrDataByType?: Record<string, ArrDataMap>,
+  seerrDataByType?: Record<string, SeerrDataMap>,
+  onProgress?: ProgressEmit,
+): Promise<QueryResult> {
+  const { mediaTypes } = definition;
+  onProgress?.({ type: "phase", key: "query" });
+
+  const survivingIds = await computeAggregateSurvivingEpisodeIds(
+    effectiveServerIds, groups, arrDataByType, seerrDataByType,
+  );
+
+  const selectToUse = buildItemSelectFull({ includeWatchHistory: hasWatchedByUserRules(groups) });
+
+  // Flat (movie/music) types are unaffected by aggregate rules but may still be
+  // in scope when mediaTypes is empty — evaluate them the normal way.
+  const flatTypes = mediaTypes.length === 0
+    ? ["MOVIE", "MUSIC"] as const
+    : mediaTypes.filter((t) => t !== "SERIES");
+  const hasFlatTypes = flatTypes.length > 0;
+  const flatWhere = buildBaseWhere(definition, effectiveServerIds, true);
+  flatWhere.type = { in: [...flatTypes] };
+
+  const [episodeRows, flatRows] = await Promise.all([
+    survivingIds.length > 0
+      ? prisma.mediaItem.findMany({ where: { id: { in: survivingIds } }, select: selectToUse })
+      : Promise.resolve([]),
+    hasFlatTypes
+      ? prisma.mediaItem.findMany({ where: flatWhere, select: selectToUse })
+      : Promise.resolve([]),
+  ]);
+
+  // Surviving episodes already passed the aggregate evaluation at the series
+  // level — do NOT re-evaluate them per-episode (that's the very bug this path
+  // avoids, since the aggregate field reads NULL on an episode).
+  const serializedEpisodes = episodeRows.map(serializeItem);
+
+  // Flat items: full in-memory evaluation (handles all rule types correctly).
+  onProgress?.({ type: "phase", key: "evaluate", fraction: 0 });
+  let serializedFlat = flatRows.map(serializeItem);
+  if (hasFlatTypes) {
+    let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }> | undefined;
+    if (hasCrossSystemRules(groups)) {
+      crossSystemData = await fetchCrossSystemData(serializedFlat.map((i) => i.id as string));
+    }
+    serializedFlat = serializedFlat.filter((item) => {
+      if (crossSystemData) {
+        const crossData = crossSystemData.get(item.id as string);
+        if (crossData) {
+          item.serverCount = crossData.serverCount;
+          item.matchedRuleSets = crossData.matchedRuleSets;
+          item.hasPendingAction = crossData.hasPendingAction;
+        }
+      }
+      const { arrMeta, seerrMeta } = lookupExternalMeta(item, arrDataByType, seerrDataByType);
+      return evaluateAllQueryRulesInMemory(groups, item, arrMeta, seerrMeta);
+    });
+  }
+
+  onProgress?.({ type: "phase", key: "finalize" });
+  const combined = [...serializedEpisodes, ...serializedFlat];
+  sortCombinedResults(combined, sortBy, sortOrder);
+
+  const total = combined.length;
+  if (limit === 0) {
+    return { items: combined, pagination: { page: 1, limit: 0, hasMore: false, total } };
+  }
+  const offset = (page - 1) * limit;
+  return {
+    items: combined.slice(offset, offset + limit),
+    pagination: { page, limit, hasMore: total > page * limit, total },
+  };
 }
 
 /**
