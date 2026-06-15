@@ -224,7 +224,9 @@ function ScopeRow({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-const MEDIA_TYPE_LABELS: Record<"MOVIE" | "SERIES" | "MUSIC", string> = {
+// Plural labels for the media-type scope pills — distinct from the shared
+// singular MEDIA_TYPE_LABELS used by the type chips (which read "Movie").
+const MEDIA_TYPE_PLURAL_LABELS: Record<"MOVIE" | "SERIES" | "MUSIC", string> = {
   MOVIE: "Movies",
   SERIES: "Series",
   MUSIC: "Music",
@@ -1274,7 +1276,7 @@ export default function QueryPage() {
                       )}
                     >
                       {selected ? <Check className="h-3.5 w-3.5 text-primary" /> : null}
-                      {MEDIA_TYPE_LABELS[type]}
+                      {MEDIA_TYPE_PLURAL_LABELS[type]}
                     </button>
                   );
                 })}
