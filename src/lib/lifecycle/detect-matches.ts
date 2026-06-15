@@ -260,23 +260,30 @@ export async function detectAndSaveMatches(
 
   // Multi-server: the same logical media appears once per server, but each
   // copy resolves to the SAME Arr record (same TMDB/TVDB/MBID). Collapse those
-  // duplicates by resolved Arr id so we don't schedule two destructive actions
-  // against one Arr record or double-count deletedBytes. We dedupe by Arr id
-  // (not dedupCanonical) because a rule set may target a server SUBSET whose
-  // canonical copy lives on a non-targeted server — filtering by canonical
-  // there would wrongly drop the item. Items with no Arr id are left as-is.
+  // duplicates so we don't schedule two destructive actions against one Arr
+  // record or double-count deletedBytes. We dedupe by the resolved EXTERNAL id
+  // (TMDB/TVDB/MBID), which is globally unique — NOT the internal `arrId`,
+  // which is an instance-local auto-increment id that collides across two
+  // different Arr instances (two unrelated series can both be id 5 on their
+  // respective Sonarr instances and would wrongly collapse into one match). We
+  // still gate on `arrId != null` so only items that actually resolved to an
+  // Arr record are collapsed (a rule set may target a server SUBSET whose
+  // dedupCanonical copy lives on a non-targeted server, so we can't key on
+  // dedupCanonical). Items with no Arr id are left as-is.
   if (ruleSet.serverIds.length > 1) {
-    const byArrId = new Map<number, Record<string, unknown>>();
+    const byExternalId = new Map<string, Record<string, unknown>>();
     const deduped: Record<string, unknown>[] = [];
     for (const item of enrichedItems) {
       const arrId = item.arrId as number | null;
-      if (arrId == null) {
+      const externalIds = (item.externalIds ?? []) as Array<{ source: string; externalId: string }>;
+      const externalKey = externalIds.find((e) => e.source === arrIdSource)?.externalId;
+      if (arrId == null || !externalKey) {
         deduped.push(item);
         continue;
       }
-      const existing = byArrId.get(arrId);
+      const existing = byExternalId.get(externalKey);
       if (!existing) {
-        byArrId.set(arrId, item);
+        byExternalId.set(externalKey, item);
         deduped.push(item);
       } else {
         // Merge server presence so the matches view still shows every server.
@@ -292,12 +299,26 @@ export async function detectAndSaveMatches(
           seen.add(sid);
           return true;
         });
+        // Merge member ids (episode/track ids) so a member that exists only on
+        // the dropped server's copy is still acted on and still counted toward
+        // deletedBytes. Dropping the dropped copy's members (the old behavior)
+        // under-deleted and under-counted for multi-server series/music.
+        const existingMembers = (existing.memberIds as string[] | undefined) ?? [];
+        const itemMembers = (item.memberIds as string[] | undefined) ?? [];
+        if (existingMembers.length > 0 || itemMembers.length > 0) {
+          const mergedMembers = [...new Set([...existingMembers, ...itemMembers])];
+          existing.memberIds = mergedMembers;
+          // Keep the returned episodeIdMap in sync with the merged member set,
+          // and drop the now-removed duplicate's stale entry.
+          episodeIdMap.set(existing.id as string, mergedMembers);
+        }
+        episodeIdMap.delete(item.id as string);
       }
     }
     if (deduped.length < enrichedItems.length) {
       logger.info(
         "Lifecycle",
-        `Collapsed ${enrichedItems.length - deduped.length} cross-server duplicate match(es) by Arr id for rule set "${ruleSet.name}"`,
+        `Collapsed ${enrichedItems.length - deduped.length} cross-server duplicate match(es) by external ID for rule set "${ruleSet.name}"`,
       );
       enrichedItems.length = 0;
       enrichedItems.push(...deduped);

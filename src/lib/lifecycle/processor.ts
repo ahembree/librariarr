@@ -340,9 +340,22 @@ export async function executeLifecycleActions(userId?: string) {
   const ruleSetIds = [...new Set(pendingActions.map((a) => a.ruleSetId).filter((id): id is string => id !== null))];
   const currentMatches = await prisma.ruleMatch.findMany({
     where: { ruleSetId: { in: ruleSetIds } },
-    select: { ruleSetId: true, mediaItemId: true },
+    select: { ruleSetId: true, mediaItemId: true, itemData: true },
   });
   const matchSet = new Set(currentMatches.map((m) => `${m.ruleSetId}:${m.mediaItemId}`));
+  // Current member (episode/track) ids per match, so execution can drop members
+  // that have since stopped matching. Incremental detection refreshes
+  // RuleMatch.itemData.memberIds, but an already-PENDING action keeps the member
+  // list it was scheduled with — without this intersection a member that no
+  // longer matches would still be acted on (e.g. an episode whose file grew past
+  // a size threshold). Only populated when the match actually tracks members.
+  const currentMemberIds = new Map<string, Set<string>>();
+  for (const m of currentMatches) {
+    const members = (m.itemData as { memberIds?: string[] } | null)?.memberIds;
+    if (members && members.length > 0) {
+      currentMemberIds.set(`${m.ruleSetId}:${m.mediaItemId}`, new Set(members));
+    }
+  }
 
   // Check for lifecycle exceptions — cancel any pending action on an excluded item
   const userIds = [...new Set(pendingActions.map((a) => a.userId))];
@@ -418,6 +431,31 @@ export async function executeLifecycleActions(userId?: string) {
     // any member IDs that were individually excepted since the action was scheduled
     let filteredMatchedIds = action.matchedMediaItemIds ?? [];
     if (filteredMatchedIds.length > 0) {
+      // First, drop members the rule no longer matches (the current RuleMatch
+      // member set is authoritative; a stale PENDING action may still carry
+      // members that stopped matching). Only for member-scoped actions, where
+      // the member list actually determines what is acted on — a whole-record
+      // action (e.g. DELETE_SONARR) ignores the member list and deletes the
+      // whole series regardless, so intersecting (and possibly cancelling on an
+      // episode-id churn) would wrongly skip a series that still matches. Also
+      // skip when the match doesn't track members — absence means "not
+      // member-scoped", not "zero members".
+      const currentMembers = actionHonorsMemberIds(action.actionType)
+        ? currentMemberIds.get(`${action.ruleSetId}:${action.mediaItemId}`)
+        : undefined;
+      if (currentMembers) {
+        const stillMatching = filteredMatchedIds.filter((mid) => currentMembers.has(mid));
+        if (stillMatching.length === 0) {
+          await prisma.lifecycleAction.delete({ where: { id: action.id } });
+          logger.info("Lifecycle", `Deleted action ${action.id} — none of the originally targeted members for "${mediaItem.title}" still match`);
+          continue;
+        }
+        if (stillMatching.length < filteredMatchedIds.length) {
+          logger.info("Lifecycle", `Dropped ${filteredMatchedIds.length - stillMatching.length} member(s) from action on "${mediaItem.title}" that no longer match`);
+        }
+        filteredMatchedIds = stillMatching;
+      }
+
       const original = filteredMatchedIds;
       filteredMatchedIds = original.filter(
         (mid) => !exceptionSet.has(`${action.userId}:${mid}`)
