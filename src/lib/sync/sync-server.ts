@@ -481,20 +481,31 @@ async function processBatch(
   const externalIdRows: unknown[][] = [];
   const streamRows: unknown[][] = [];
   const mediaItemIdsWithExternalIds = new Set<string>();
+  // Series episodes for which we deliberately persist NO external IDs (see
+  // below) — their stale rows must still be cleared so a previously-stored
+  // wrong (episode-level) id doesn't linger.
+  const mediaItemIdsToClearExternalIds = new Set<string>();
   const mediaItemIdsWithStreams = new Set<string>();
 
   for (const item of items) {
     const mediaItemId = ratingKeyToId.get(item.ratingKey);
     if (!mediaItemId) continue;
 
-    // For series episodes, prefer show-level Guids (series-level TVDB/TMDB)
-    // since Arr and Seerr correlation needs series-level IDs.
-    // Fall back to episode-level Guids only when show-level aren't available.
+    // For series episodes, persist ONLY show-level Guids (series-level
+    // TVDB/TMDB/IMDB) — Arr/Seerr correlation needs the SERIES id, and an
+    // episode's own Guid is an EPISODE-level id (e.g. tvdb://<episodeId>). If we
+    // have no show-level Guids for an episode (unmatched / manually-added show),
+    // record the series id as ABSENT rather than falling back to the episode id,
+    // which would make getSeriesByTvdbId resolve the wrong series (or nothing)
+    // for a delete. Show/season records and movies/music (no grandparent) keep
+    // their own Guids. (dedupKey still uses episode-level Guids — see buildRowParams.)
     let guids = item.Guid;
     if (showGuidsMap) {
       const showGuids = showGuidsMap.get(item.grandparentRatingKey ?? "");
       if (showGuids && showGuids.length > 0) {
         guids = showGuids;
+      } else if (item.grandparentRatingKey) {
+        guids = undefined;
       }
     }
     if (guids && guids.length > 0) {
@@ -509,6 +520,9 @@ async function processBatch(
         mediaItemIdsWithExternalIds.add(mediaItemId);
         externalIdRows.push([randomUUID(), mediaItemId, source, match[2], now]);
       }
+    } else if (showGuidsMap && item.grandparentRatingKey) {
+      // Episode with no resolvable series-level id — clear any stale id.
+      mediaItemIdsToClearExternalIds.add(mediaItemId);
     }
 
     const media = item.Media?.[0];
@@ -551,14 +565,17 @@ async function processBatch(
     }
   }
 
-  // Raw SQL for external IDs — delete old + bulk insert to avoid Prisma state
-  if (externalIdRows.length > 0) {
-    const deleteIds = [...mediaItemIdsWithExternalIds];
+  // Raw SQL for external IDs — delete old + bulk insert to avoid Prisma state.
+  // The delete also covers episodes that should now have NO external IDs, so a
+  // previously-stored wrong (episode-level) series id is cleared on resync.
+  const deleteIds = [...new Set([...mediaItemIdsWithExternalIds, ...mediaItemIdsToClearExternalIds])];
+  if (deleteIds.length > 0) {
     await prisma.$queryRawUnsafe(
       `DELETE FROM "MediaItemExternalId" WHERE "mediaItemId" IN (${deleteIds.map((_, i) => `$${i + 1}`).join(",")})`,
       ...deleteIds,
     );
-
+  }
+  if (externalIdRows.length > 0) {
     const extIdParams: unknown[] = [];
     const extIdValueSets: string[] = [];
     for (let r = 0; r < externalIdRows.length; r++) {
