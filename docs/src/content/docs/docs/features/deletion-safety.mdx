@@ -202,6 +202,8 @@ To prevent acting on the wrong record, Librariarr compares both titles before se
 
 After normalization, if the titles match exactly, the action proceeds. If they don't, there's a partial-match fallback that allows things like "Agents of SHIELD" / "Marvel's Agents of SHIELD" through — but only when both titles are at least 4 characters and the shorter is at least 50% the length of the longer (so short-title collisions like "It" / "It Follows" are still blocked).
 
+There's also a **year guard** that runs first, because title normalization strips the very parentheticals that tell remakes apart ("Dune (1984)" and "Dune (2021)" both normalize to "dune"). For movies, the *arr year and the library year describe the same release, so they must match within a year — a wider gap means the external ID points at a different work and the action is refused. For series the comparison is one-directional: an episode is stored with its own air year, while *arr returns the series' **premiere** year, so an episode legitimately airs years after the show premiered. Only the reverse is impossible — a correct series can't have premiered well *after* the episode aired — so the guard rejects only when the resolved series premiered more than a year later than the episode (which means the ID resolved to a newer same-named series).
+
 If neither check passes, the action is rejected with an error logged to System Logs and surfaced in the Pending Actions page. The action moves to "Failed" status — it does not execute against the unverified record.
 
 When you retry a failed action manually from the Pending Actions page, you have the option to skip title validation if you've inspected the mismatch and confirmed it's safe (for example, a legitimate rename you've already verified).

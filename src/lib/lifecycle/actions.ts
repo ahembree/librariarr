@@ -82,6 +82,21 @@ export function normalizeTitle(title: string): string {
 }
 
 /**
+ * How `expectedYear` relates to `arrYear` for the year guard:
+ *  - "release" (movies): both years describe the SAME work's release, so they
+ *    must match within ±1. Catches remake collisions ("Dune" 1984 vs 2021).
+ *  - "episodeOfSeries" (Sonarr): `expectedYear` is an EPISODE air year while
+ *    `arrYear` is the SERIES premiere year. A correct match has the episode
+ *    airing on (or after) the premiere, so an episode legitimately airs years
+ *    later — comparing them symmetrically would falsely flag every late-season
+ *    episode of a long-running show. Only the reverse is impossible: a correct
+ *    series can't have premiered well AFTER our episode aired, so flag only when
+ *    `arrYear - expectedYear > 1` (the external id points at a newer same-named
+ *    series).
+ */
+export type YearMatchMode = "release" | "episodeOfSeries";
+
+/**
  * Validate that the item resolved from the Arr API matches what we expect.
  * Called by each resolve helper after the API lookup succeeds.
  * Throws if titles don't match — prevents acting on the wrong item.
@@ -93,20 +108,27 @@ export function validateArrItem(
   externalId: string,
   expectedYear?: number | null,
   arrYear?: number | null,
+  yearMode: YearMatchMode = "release",
 ): void {
   // Year guard FIRST: title normalization strips the very disambiguators
   // that separate remakes ("Dune (1984)" vs "(2021)" both normalize to
   // "dune"), so a wrong external id pointing at the other remake would pass
-  // the title check. When both years are known and differ by more than one,
-  // the records are different works — refuse regardless of title.
+  // the title check. When both years are known and the mismatch is impossible
+  // for the same work, the records are different works — refuse regardless of
+  // title. See YearMatchMode for why series use a one-directional check.
   if (
     expectedYear != null && arrYear != null &&
-    expectedYear > 0 && arrYear > 0 &&
-    Math.abs(expectedYear - arrYear) > 1
+    expectedYear > 0 && arrYear > 0
   ) {
-    throw new Error(
-      `${arrType} year mismatch: expected "${expectedTitle}" (${expectedYear}) but Arr returned "${arrTitle}" (${arrYear}) for external ID ${externalId}. Aborting to prevent acting on the wrong item.`
-    );
+    const yearMismatch =
+      yearMode === "episodeOfSeries"
+        ? arrYear - expectedYear > 1
+        : Math.abs(expectedYear - arrYear) > 1;
+    if (yearMismatch) {
+      throw new Error(
+        `${arrType} year mismatch: expected "${expectedTitle}" (${expectedYear}) but Arr returned "${arrTitle}" (${arrYear}) for external ID ${externalId}. Aborting to prevent acting on the wrong item.`
+      );
+    }
   }
 
   const normalizedExpected = normalizeTitle(expectedTitle);
@@ -175,7 +197,10 @@ async function resolveSonarrSeries(action: ActionRecord) {
   if (!series) throw new Error("Series not found in Sonarr");
 
   if (!action.skipTitleValidation) {
-    validateArrItem(action.mediaItem.parentTitle ?? action.mediaItem.title, series.title, "Sonarr series", tvdbId.externalId, action.mediaItem.year, series.year);
+    // `action.mediaItem.year` is the EPISODE air year (episodes are stored as
+    // individual MediaItem rows), but Sonarr returns the SERIES premiere year —
+    // so use the one-directional series year guard, not the symmetric one.
+    validateArrItem(action.mediaItem.parentTitle ?? action.mediaItem.title, series.title, "Sonarr series", tvdbId.externalId, action.mediaItem.year, series.year, "episodeOfSeries");
   }
 
   return { client, series };
