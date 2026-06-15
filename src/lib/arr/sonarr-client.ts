@@ -41,10 +41,12 @@ export interface SonarrSeries {
   monitored: boolean;
   path: string;
   tags: number[];
+  // Sonarr's SeriesResource.ratings is a single flat aggregate ({ votes, value }),
+  // NOT broken down by source like Radarr's. There is no per-source imdb/tmdb/
+  // rottenTomatoes rating for a series.
   ratings?: {
-    imdb?: { value: number };
-    tmdb?: { value: number };
-    rottenTomatoes?: { value: number };
+    votes?: number;
+    value?: number;
   };
   statistics?: {
     seasonCount: number;

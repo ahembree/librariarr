@@ -90,7 +90,7 @@ const fullMovie = {
 };
 const fullSeries = {
   id: 1, tvdbId: 200, tags: [], qualityProfileId: 1, monitored: true,
-  ratings: { imdb: { value: 9 }, tmdb: { value: 8 }, rottenTomatoes: { value: 95 } },
+  ratings: { votes: 100, value: 9 },
   added: "2023-01-01", path: "/s", statistics: { sizeOnDisk: 2000, seasonCount: 3, episodeCount: 30 },
   originalLanguage: { name: "English" }, firstAired: "2020-01-01", status: "continuing",
   ended: false, seriesType: "standard", nextAiring: "2025-01-01",

@@ -89,7 +89,7 @@ describe("mapSonarrSeries", () => {
   it("maps season/episode stats and leaves movie-only fields null", () => {
     const series = {
       id: 7, tvdbId: 200, qualityProfileId: 1, monitored: true, tags: [10],
-      ratings: { imdb: { value: 9 } }, added: "2023-01-01", path: "/tv/x",
+      ratings: { votes: 500, value: 9 }, added: "2023-01-01", path: "/tv/x",
       statistics: { sizeOnDisk: 5000, seasonCount: 3, episodeCount: 30 },
       originalLanguage: { id: 1, name: "English" }, firstAired: "2020-01-01", status: "continuing",
       ended: false, seriesType: "standard", nextAiring: "2025-01-01",
@@ -109,6 +109,10 @@ describe("mapSonarrSeries", () => {
       customFormatScore: null,
       qualityName: null,
       runtime: null,
+      // Sonarr's flat rating maps to `rating`; no per-source TMDB/RT rating.
+      rating: 9,
+      tmdbRating: null,
+      rtCriticRating: null,
     });
   });
 });

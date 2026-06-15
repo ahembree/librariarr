@@ -109,9 +109,9 @@ These fields require configured [Sonarr](/docs/integrations/sonarr/), [Radarr](/
 | `arrStatus` | Release/lifecycle status in *arr (e.g. `released`, `continuing`) |
 | `arrEnded` | Whether the series has ended (Sonarr / series only) |
 | `arrSeriesType` | Series type: `standard`, `daily`, or `anime` (Sonarr / series only) |
-| `arrRating` | IMDB rating in *arr |
-| `arrTmdbRating` | TMDB rating in *arr (not music) |
-| `arrRtCriticRating` | Rotten Tomatoes critic rating in *arr (not music) |
+| `arrRating` | Rating in *arr. For movies this is the IMDB rating; for series/music it is the single aggregate rating the *arr exposes |
+| `arrTmdbRating` | TMDB rating in *arr (Radarr / movies only — Sonarr/Lidarr expose only a single flat rating) |
+| `arrRtCriticRating` | Rotten Tomatoes critic rating in *arr (Radarr / movies only — Sonarr/Lidarr expose only a single flat rating) |
 | `arrOriginalLanguage` | Original language in *arr (not music) |
 | `arrRuntime` | Runtime in minutes (Radarr / movies only) |
 | `arrSizeOnDisk` | Size on disk in MB |

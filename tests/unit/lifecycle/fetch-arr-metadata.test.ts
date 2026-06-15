@@ -243,7 +243,7 @@ describe("fetchArrMetadata", () => {
           tags: [1],
           qualityProfileId: 5,
           monitored: true,
-          ratings: { imdb: { value: 9.0 }, tmdb: { value: 8.7 }, rottenTomatoes: { value: 95 } },
+          ratings: { votes: 1000, value: 9.0 },
           added: "2023-01-01",
           path: "/tv/breaking-bad",
           statistics: { sizeOnDisk: 80000000000, seasonCount: 5, episodeCount: 62 },
@@ -269,9 +269,11 @@ describe("fetchArrMetadata", () => {
       expect(result["12345"]).toBeDefined();
       expect(result["12345"].arrId).toBe(1);
       expect(result["12345"].qualityProfile).toBe("HD-1080p");
+      // Sonarr's flat series rating maps to `rating`; it has no per-source
+      // TMDB or Rotten Tomatoes rating, so those stay null.
       expect(result["12345"].rating).toBe(9.0);
-      expect(result["12345"].tmdbRating).toBe(8.7);
-      expect(result["12345"].rtCriticRating).toBe(9.5); // 95/10
+      expect(result["12345"].tmdbRating).toBeNull();
+      expect(result["12345"].rtCriticRating).toBeNull();
       expect(result["12345"].firstAired).toBe("2008-01-20");
       expect(result["12345"].seasonCount).toBe(5);
       expect(result["12345"].episodeCount).toBe(62);
