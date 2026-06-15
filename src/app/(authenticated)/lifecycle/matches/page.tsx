@@ -103,6 +103,14 @@ interface RuleSetMatch {
   count: number;
 }
 
+// Media-type chip colors, matched to the Watch History and Query pages so a
+// "Movie"/"Series"/"Music" chip reads the same everywhere.
+const TYPE_BADGE_COLORS: Record<string, string> = {
+  MOVIE: "bg-sky/20 text-sky border-sky/30",
+  SERIES: "bg-purple-500/20 text-purple-400 border-purple-500/30",
+  MUSIC: "bg-green/20 text-green border-green/30",
+};
+
 function formatResolution(resolution: string | null): string {
   if (!resolution) return "";
   const label = normalizeResolutionLabel(resolution);
@@ -993,7 +1001,7 @@ export default function RuleMatchesPage() {
                         {match.ruleSet.name}
                       </CardTitle>
                       <div className="flex items-center gap-2 mt-1">
-                        <ColorChip className="border-border text-muted-foreground">
+                        <ColorChip className={TYPE_BADGE_COLORS[match.ruleSet.type] ?? "border-border text-muted-foreground"}>
                           {match.ruleSet.type === "MOVIE" ? "Movie" : match.ruleSet.type === "MUSIC" ? "Music" : "Series"}
                         </ColorChip>
                         <Badge variant="secondary">
