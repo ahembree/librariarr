@@ -231,6 +231,41 @@ describe("scheduleActionsForRuleSet", () => {
     );
   });
 
+  it("sweeps orphaned pending actions whose media item was purged from the DB", async () => {
+    // The orphaned action has a null mediaItemId (FK SetNull after the item was deleted),
+    // so it never appears in the non-null stale-id set — it must be swept separately.
+    mockPrisma.lifecycleAction.findMany
+      .mockResolvedValueOnce([{ mediaItemId: "item1" }]) // previousPending (only the still-matching item)
+      .mockResolvedValueOnce([]) // allPending (dedup)
+      .mockResolvedValueOnce([{ mediaItemId: "item1" }]); // existingActions
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 1 });
+    mockPrisma.lifecycleAction.createMany.mockResolvedValue({ count: 0 });
+
+    await scheduleActionsForRuleSet(
+      {
+        id: "rs1",
+        userId: "u1",
+        name: "Test",
+        type: "MOVIE",
+        actionEnabled: true,
+        actionType: "DELETE_RADARR",
+        actionDelayDays: 7,
+        arrInstanceId: "arr1",
+        targetQualityProfileId: null,
+        addImportExclusion: false,
+        searchAfterAction: false,
+        addArrTags: [],
+        removeArrTags: [],
+      },
+      [{ id: "item1", title: "Movie 1" }],
+      new Map(),
+    );
+
+    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({
+      where: { ruleSetId: "rs1", status: "PENDING", mediaItemId: null },
+    });
+  });
+
   it("creates new actions for matched items without existing actions", async () => {
     mockPrisma.lifecycleAction.findMany
       .mockResolvedValueOnce([]) // previousPending

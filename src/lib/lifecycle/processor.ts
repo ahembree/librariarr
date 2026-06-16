@@ -76,6 +76,16 @@ export async function scheduleActionsForRuleSet(
     logger.info("Lifecycle", `Deleted ${stalePendingIds.length} pending actions for items no longer matching rule set "${ruleSet.name}"`);
   }
 
+  // Delete orphaned pending actions whose media item was purged from the DB (FK is
+  // SetNull, so mediaItemId goes null). These can never execute; the stale check above
+  // only covers non-null ids, so sweep them here for immediate self-healing.
+  const orphaned = await prisma.lifecycleAction.deleteMany({
+    where: { ruleSetId: ruleSet.id, status: "PENDING", mediaItemId: null },
+  });
+  if (orphaned.count > 0) {
+    logger.info("Lifecycle", `Deleted ${orphaned.count} orphaned pending actions (media item no longer exists) for rule set "${ruleSet.name}"`);
+  }
+
   // Deduplicate: clean up any duplicate PENDING actions (from concurrent runs)
   const allPending = await prisma.lifecycleAction.findMany({
     where: { ruleSetId: ruleSet.id, status: "PENDING" },
