@@ -182,14 +182,36 @@ export async function PUT(
       await tx.lifecycleAction.deleteMany({
         where: { ruleSetId: id, status: "PENDING" },
       });
-    } else if (actionEnabled === false || enabled === false) {
-      // Disabling the rule set (or just its action) must cancel armed
-      // PENDING actions — the execution-side enabled filter is the backstop,
-      // but cancelling here keeps the Pending page honest and prevents the
-      // actions lingering until the next detection run.
+    } else if (actionEnabled === false || enabled === false || actionType === null) {
+      // Disabling the rule set (or just its action), or clearing the action
+      // type entirely, must cancel armed PENDING actions — there's nothing
+      // valid left to execute. The execution-side enabled filter is the
+      // backstop, but cancelling here keeps the Pending page honest and
+      // prevents the actions lingering until the next detection run.
       await tx.lifecycleAction.deleteMany({
         where: { ruleSetId: id, status: "PENDING" },
       });
+    } else {
+      // Matches are preserved and the rule remains actionable. PENDING actions
+      // snapshot the rule set's action config when they're scheduled, and BOTH
+      // the Pending page and the scheduled executor read that snapshot — not the
+      // live rule. So when the action config changes here, re-snapshot it onto
+      // the existing PENDING actions; otherwise they'd display (and execute) the
+      // value captured when they were first scheduled.
+      const actionConfigUpdate: Record<string, unknown> = {};
+      if (actionType !== undefined) actionConfigUpdate.actionType = actionType;
+      if (arrInstanceId !== undefined) actionConfigUpdate.arrInstanceId = arrInstanceId;
+      if (targetQualityProfileId !== undefined) actionConfigUpdate.targetQualityProfileId = targetQualityProfileId;
+      if (addImportExclusion !== undefined) actionConfigUpdate.addImportExclusion = addImportExclusion;
+      if (searchAfterAction !== undefined) actionConfigUpdate.searchAfterAction = searchAfterAction;
+      if (addArrTags !== undefined) actionConfigUpdate.addArrTags = addArrTags;
+      if (removeArrTags !== undefined) actionConfigUpdate.removeArrTags = removeArrTags;
+      if (Object.keys(actionConfigUpdate).length > 0) {
+        await tx.lifecycleAction.updateMany({
+          where: { ruleSetId: id, status: "PENDING" },
+          data: actionConfigUpdate,
+        });
+      }
     }
 
     return tx.ruleSet.findUnique({ where: { id } });

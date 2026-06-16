@@ -7,6 +7,8 @@ import {
   expectJson,
   createTestUser,
   createTestServer,
+  createTestLibrary,
+  createTestMediaItem,
   createTestRuleSet,
   createTestSonarrInstance,
   createTestRadarrInstance,
@@ -646,6 +648,124 @@ describe("Lifecycle Rules CRUD", () => {
       const body = await expectJson<{ ruleSet: { name: string; enabled: boolean } }>(response, 200);
       expect(body.ruleSet.name).toBe("Keep Name");
       expect(body.ruleSet.enabled).toBe(false);
+    });
+
+    // PENDING actions snapshot the rule set's action config when scheduled, and
+    // both the Pending page and the scheduled executor read that snapshot. A
+    // clearMatches=false update (every in-editor save) must therefore re-snapshot
+    // the new config onto existing PENDING actions, or they'd show/run stale
+    // values (e.g. the SEARCH_RADARR-after-changing-to-DELETE_RADARR bug).
+    describe("re-snapshots PENDING actions on clearMatches=false", () => {
+      async function setupPendingAction(actionType = "SEARCH_RADARR") {
+        const user = await createTestUser();
+        const server = await createTestServer(user.id);
+        const library = await createTestLibrary(server.id, { type: "MOVIE" });
+        const item = await createTestMediaItem(library.id, { title: "Movie", type: "MOVIE" });
+        const ruleSet = await createTestRuleSet(user.id, {
+          name: "Resnapshot",
+          type: "MOVIE",
+          enabled: true,
+          actionEnabled: true,
+          actionType,
+          addArrTags: ["old"],
+        });
+        const prisma = getTestPrisma();
+        const action = await prisma.lifecycleAction.create({
+          data: {
+            userId: user.id,
+            mediaItemId: item.id,
+            ruleSetId: ruleSet.id,
+            actionType,
+            status: "PENDING",
+            scheduledFor: new Date(),
+            addArrTags: ["old"],
+          },
+        });
+        return { user, ruleSet, action };
+      }
+
+      it("updates the action config on existing PENDING actions", async () => {
+        const { user, ruleSet, action } = await setupPendingAction("SEARCH_RADARR");
+        setMockSession({ isLoggedIn: true, userId: user.id });
+
+        const response = await callRouteWithParams(
+          PUT,
+          { id: ruleSet.id },
+          {
+            url: `/api/lifecycle/rules/${ruleSet.id}`,
+            method: "PUT",
+            searchParams: { clearMatches: "false" },
+            body: {
+              actionType: "DELETE_RADARR",
+              addImportExclusion: true,
+              addArrTags: ["new"],
+            },
+          }
+        );
+        await expectJson(response, 200);
+
+        const prisma = getTestPrisma();
+        const updated = await prisma.lifecycleAction.findUnique({ where: { id: action.id } });
+        expect(updated?.status).toBe("PENDING");
+        expect(updated?.actionType).toBe("DELETE_RADARR");
+        expect(updated?.addImportExclusion).toBe(true);
+        expect(updated?.addArrTags).toEqual(["new"]);
+      });
+
+      it("leaves COMPLETED/FAILED actions untouched", async () => {
+        const { user, ruleSet } = await setupPendingAction("SEARCH_RADARR");
+        const prisma = getTestPrisma();
+        const server2 = await createTestServer(user.id, { name: "S2" });
+        const lib2 = await createTestLibrary(server2.id, { type: "MOVIE" });
+        const doneItem = await createTestMediaItem(lib2.id, { title: "Done", type: "MOVIE" });
+        const completed = await prisma.lifecycleAction.create({
+          data: {
+            userId: user.id,
+            mediaItemId: doneItem.id,
+            ruleSetId: ruleSet.id,
+            actionType: "SEARCH_RADARR",
+            status: "COMPLETED",
+            scheduledFor: new Date(),
+          },
+        });
+        setMockSession({ isLoggedIn: true, userId: user.id });
+
+        const response = await callRouteWithParams(
+          PUT,
+          { id: ruleSet.id },
+          {
+            url: `/api/lifecycle/rules/${ruleSet.id}`,
+            method: "PUT",
+            searchParams: { clearMatches: "false" },
+            body: { actionType: "DELETE_RADARR" },
+          }
+        );
+        await expectJson(response, 200);
+
+        const after = await prisma.lifecycleAction.findUnique({ where: { id: completed.id } });
+        expect(after?.actionType).toBe("SEARCH_RADARR");
+      });
+
+      it("cancels PENDING actions instead of re-snapshotting when the action is disabled", async () => {
+        const { user, ruleSet, action } = await setupPendingAction("SEARCH_RADARR");
+        setMockSession({ isLoggedIn: true, userId: user.id });
+
+        const response = await callRouteWithParams(
+          PUT,
+          { id: ruleSet.id },
+          {
+            url: `/api/lifecycle/rules/${ruleSet.id}`,
+            method: "PUT",
+            searchParams: { clearMatches: "false" },
+            body: { actionEnabled: false, actionType: "DELETE_RADARR" },
+          }
+        );
+        await expectJson(response, 200);
+
+        const prisma = getTestPrisma();
+        const after = await prisma.lifecycleAction.findUnique({ where: { id: action.id } });
+        expect(after).toBeNull();
+      });
     });
   });
 

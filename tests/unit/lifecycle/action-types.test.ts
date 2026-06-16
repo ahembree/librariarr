@@ -5,6 +5,7 @@ import {
   MOVIE_ACTION_TYPES,
   SERIES_ACTION_TYPES,
   MUSIC_ACTION_TYPES,
+  formatActionTypeLabel,
 } from "@/lib/lifecycle/action-types";
 
 describe("supportsSearchAfter", () => {
@@ -52,5 +53,38 @@ describe("supportsSearchAfter", () => {
     for (const { value } of all) {
       expect(typeof supportsSearchAfter(value)).toBe("boolean");
     }
+  });
+});
+
+describe("formatActionTypeLabel", () => {
+  it("resolves SEARCH_* actions to their friendly name (regression: raw enum leak)", () => {
+    expect(formatActionTypeLabel("SEARCH_RADARR")).toBe("Search for New Copy (Radarr)");
+    expect(formatActionTypeLabel("SEARCH_SONARR")).toBe("Search for New Copy (Sonarr)");
+    expect(formatActionTypeLabel("SEARCH_LIDARR")).toBe("Search for New Copy (Lidarr)");
+  });
+
+  it("resolves every dropdown action type to a non-raw label", () => {
+    const all = [...MOVIE_ACTION_TYPES, ...SERIES_ACTION_TYPES, ...MUSIC_ACTION_TYPES];
+    for (const { value } of all) {
+      // A friendly label never equals the raw SCREAMING_SNAKE enum value.
+      expect(formatActionTypeLabel(value)).not.toBe(value);
+    }
+  });
+
+  it("appends the target quality profile to CHANGE_QUALITY_PROFILE_* actions", () => {
+    expect(formatActionTypeLabel("CHANGE_QUALITY_PROFILE_RADARR", 5)).toBe(
+      "Change Quality Profile (Radarr) → profile #5",
+    );
+    // No suffix when the profile id is absent.
+    expect(formatActionTypeLabel("CHANGE_QUALITY_PROFILE_RADARR")).toBe(
+      "Change Quality Profile (Radarr)",
+    );
+    expect(formatActionTypeLabel("CHANGE_QUALITY_PROFILE_RADARR", null)).toBe(
+      "Change Quality Profile (Radarr)",
+    );
+  });
+
+  it("falls back to the raw value for unknown action types", () => {
+    expect(formatActionTypeLabel("MYSTERY_ACTION")).toBe("MYSTERY_ACTION");
   });
 });
