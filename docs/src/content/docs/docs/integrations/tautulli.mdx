@@ -1,0 +1,58 @@
+---
+title: Tautulli
+description: Connect Tautulli to enrich watch history with transcode and per-session stream data.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+[Tautulli](https://tautulli.com/) monitors a Plex server and records far richer playback data than Plex's own history API exposes. Connecting it lets Librariarr **stitch that session detail onto your existing Plex watch history** — including the transcode decision and the source→delivered stream comparison for every play.
+
+<Aside type="note">
+  Tautulli monitors **Plex**. Link a Tautulli instance to the Plex media server it watches; Jellyfin and Emby keep using their own native history.
+</Aside>
+
+## Setup
+
+<Steps>
+
+1. In Tautulli, go to **Settings → Web Interface → API** and copy the **API key** (enable the API if it isn't already).
+2. In Librariarr, go to **Settings → Integrations**.
+3. Under the **Tautulli** section, click **Add Instance**.
+4. Enter:
+   - **Name**: A label (e.g., "Tautulli")
+   - **URL**: Tautulli base URL (e.g., `http://192.168.1.100:8181`) — this is the Tautulli address, not Plex
+   - **API Key**: From the step above
+   - **Plex server**: The media server Tautulli monitors (used to correlate plays)
+5. Click **Test Connection** to verify.
+6. Save.
+
+</Steps>
+
+Tautulli history is then ingested as part of the linked server's regular [library sync](/docs/features/library/). The first sync pulls the full Tautulli history; later syncs pull incrementally.
+
+## What It Adds Over Plex History
+
+Plex's history API only records *who watched what, when, and on which device*. Tautulli watched each session live, so it adds:
+
+| Data | Description |
+|------|-------------|
+| **Transcode decision** | Direct Play / Direct Stream / Transcode — overall and per video/audio track |
+| **Source → delivered stream** | The on-disk codec/resolution/bitrate vs. what was actually streamed (incl. HW transcode) |
+| **Dynamic range** | Source vs. delivered (e.g. HDR10 tone-mapped to SDR) |
+| **IP & location** | Client IP and WAN/LAN geo-location |
+| **Engagement** | Paused count, percent complete, real seconds watched |
+| **Session timing** | Started / stopped timestamps |
+| **Device detail** | Player, product, and platform |
+
+## How Correlation Works
+
+Each Tautulli play is matched to a Librariarr media item by Plex `rating_key` (with a GUID/external-id fallback), then reconciled against the Plex history already stored:
+
+- **Correlated** — when a Tautulli play lines up with an existing Plex history row (same item, same user, stop time within a few minutes), the two are **merged into one row** and the Plex row is enriched with the Tautulli detail.
+- **Not correlated** — a Tautulli play with no matching Plex row is kept as its **own** row. Plex-only and Tautulli-only plays coexist; nothing is dropped.
+
+Paused/resumed segments are grouped into a single logical play, and re-syncing is idempotent (Tautulli's row id is the key) — running a sync twice never duplicates history.
+
+<Aside type="tip">
+  Removing a Tautulli instance leaves the already-ingested history in place; it simply stops being refreshed. Toggling **Enabled** off pauses ingestion without deleting the instance.
+</Aside>

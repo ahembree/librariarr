@@ -20,6 +20,7 @@ export async function cleanDatabase() {
   const prisma = getTestPrisma();
   await prisma.lifecycleAction.deleteMany();
   await prisma.logEntry.deleteMany();
+  await prisma.watchHistory.deleteMany();
   await prisma.mediaStream.deleteMany();
   await prisma.mediaItemExternalId.deleteMany();
   await prisma.mediaItem.deleteMany();
@@ -34,6 +35,7 @@ export async function cleanDatabase() {
   await prisma.prerollPreset.deleteMany();
   await prisma.savedQuery.deleteMany();
   await prisma.seerrInstance.deleteMany();
+  await prisma.tautulliInstance.deleteMany();
   await prisma.appSettings.deleteMany();
   await prisma.mediaServer.deleteMany();
   await prisma.user.deleteMany();

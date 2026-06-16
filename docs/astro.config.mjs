@@ -117,6 +117,7 @@ export default defineConfig({
             { label: "Radarr", slug: "docs/integrations/radarr" },
             { label: "Lidarr", slug: "docs/integrations/lidarr" },
             { label: "Seerr", slug: "docs/integrations/seerr" },
+            { label: "Tautulli", slug: "docs/integrations/tautulli" },
           ],
         },
         {

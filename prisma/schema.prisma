@@ -30,6 +30,7 @@ model User {
   radarrInstances  RadarrInstance[]
   lidarrInstances  LidarrInstance[]
   seerrInstances   SeerrInstance[]
+  tautulliInstances TautulliInstance[]
   lifecycleActions      LifecycleAction[]
   lifecycleExceptions  LifecycleException[]
   blackoutSchedules    BlackoutSchedule[]
@@ -137,8 +138,30 @@ model MediaServer {
   libraries     Library[]
   syncJobs      SyncJob[]
   watchHistory  WatchHistory[]
+  tautulliInstances TautulliInstance[]
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
+}
+
+// A Tautulli instance (Plex monitoring/stats). Tied 1:1 to a Plex MediaServer
+// via the optional mediaServerId FK — Tautulli monitors a single Plex server,
+// and its richer watch history (transcode decisions, per-session stream detail,
+// ip/geo) is ingested into WatchHistory and correlated against the Plex history.
+model TautulliInstance {
+  id            String       @id @default(cuid())
+  userId        String
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaServerId String?
+  mediaServer   MediaServer? @relation(fields: [mediaServerId], references: [id], onDelete: SetNull)
+  name          String
+  url           String
+  apiKey        String
+  enabled       Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([userId])
+  @@index([mediaServerId])
 }
 
 model SonarrInstance {
@@ -646,11 +669,62 @@ model WatchHistory {
   platform        String?
   createdAt       DateTime     @default(now())
 
+  // ── Provenance / idempotency ──
+  // A play can be sourced from Plex history, Tautulli, or both (merged). The two
+  // id columns are the real upsert keys; Postgres treats NULLs as distinct in a
+  // unique index, so Plex-only rows (NULL tautulliRowId) and Tautulli-only rows
+  // (NULL plexHistoryKey) coexist, while a correlated row carries both.
+  source              String    @default("PLEX") // "PLEX" | "TAUTULLI" | "PLEX+TAUTULLI"
+  serverHistoryKey    String?   // native media-server history id (Plex historyKey; synthesized for Jellyfin/Emby)
+  tautulliRowId       String?   // Tautulli get_history → row_id
+  tautulliReferenceId String?   // Tautulli get_history → reference_id (groups paused segments)
+
+  // ── Session / engagement (Tautulli get_history) ──
+  startedAt        DateTime?
+  stoppedAt        DateTime?
+  playDurationSec  Int?       // play_duration — actual seconds watched
+  pausedCounter    Int?
+  percentComplete  Int?
+  ipAddress        String?
+  location         String?
+  player           String?
+  product          String?
+
+  // ── Transcode decision (Tautulli get_history) ──
+  transcodeDecision String?   // "direct play" | "copy" | "transcode"
+  videoDecision     String?
+  audioDecision     String?
+  subtitleDecision  String?
+
+  // ── Source (on-disk) tracks — for source→delivered diff (Tautulli get_stream_data) ──
+  sourceVideoCodec        String?
+  sourceAudioCodec        String?
+  sourceContainer         String?
+  sourceVideoResolution   String?
+  sourceVideoDynamicRange String?
+
+  // ── Delivered stream — what was actually streamed (Tautulli get_stream_data) ──
+  streamVideoCodec        String?
+  streamAudioCodec        String?
+  streamContainer         String?
+  streamSubtitleCodec     String?
+  streamVideoResolution   String?
+  streamVideoBitrate      Int?
+  streamAudioBitrate      Int?
+  streamBitrate           Int?
+  streamVideoDynamicRange String?
+  transcodeHwDecode       String?  // HW decode codec name (empty when not HW)
+  transcodeHwEncode       String?  // HW encode codec name (empty when not HW)
+
+  @@unique([mediaServerId, serverHistoryKey])
+  @@unique([mediaServerId, tautulliRowId])
   @@index([mediaItemId])
   @@index([mediaServerId])
   @@index([serverUsername])
   @@index([watchedAt])
   @@index([deviceName])
   @@index([platform])
+  @@index([source])
+  @@index([transcodeDecision])
 }
 

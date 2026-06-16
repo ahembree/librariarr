@@ -3,17 +3,27 @@ import { createMediaServerClient } from "@/lib/media-server/factory";
 import { logger } from "@/lib/logger";
 import type { MediaServerType } from "@/generated/prisma/client";
 
-// 500 rows × 8 params = 4000 bind params per INSERT — well under Postgres's
-// 65535 limit, but ~5× fewer round-trips than 100, which keeps the full-replace
-// transaction comfortably inside its timeout on large histories.
+// 500 rows × 10 params = 5000 bind params per INSERT — well under Postgres's
+// 65535 limit, while keeping the full-replace transaction's round-trips low.
 const BATCH_SIZE = 500;
 
-// The full-replace runs as a single interactive transaction (DELETE + all
-// INSERTs) so a mid-insert failure rolls back rather than leaving the table
-// empty. A large history easily exceeds Prisma's 5s default, so give the
-// transaction a generous window (and a longer connection wait under load).
+// DELETE + all INSERTs run as one interactive transaction so a mid-insert
+// failure rolls back rather than leaving the native rows wiped. Large histories
+// easily exceed Prisma's 5s default, so give it a generous window.
 const TX_OPTIONS = { timeout: 120_000, maxWait: 15_000 } as const;
 
+/**
+ * Sync a media server's native watch history into WatchHistory.
+ *
+ * Plex/Jellyfin/Emby each return their *full* history every call, so this does a
+ * replace of the **native-only** rows: it deletes rows with no Tautulli linkage
+ * (`tautulliRowId IS NULL`) and re-inserts the fetched set, upserting on the
+ * `(mediaServerId, serverHistoryKey)` key. Tautulli-only and Plex+Tautulli
+ * (merged) rows are preserved — for a merged row the upsert refreshes the
+ * native fields via ON CONFLICT without clobbering the Tautulli enrichment or
+ * the `source` marker. This replaced the old unconditional full-replace, which
+ * would have wiped Tautulli data on every native sync.
+ */
 export async function syncWatchHistory(
   serverId: string
 ): Promise<{ count: number }> {
@@ -58,9 +68,9 @@ export async function syncWatchHistory(
     `Fetching detailed watch history from "${server.name}"...`
   );
 
-  // A fetch failure must NOT reach the destructive full-replace below: the
-  // client throws on a hard failure so we can skip the wipe (an empty array
-  // here therefore means the server genuinely reported no plays).
+  // A fetch failure must NOT reach the destructive replace below: the client
+  // throws on a hard failure so we can skip the wipe (an empty array here
+  // therefore means the server genuinely reported no plays).
   let entries: Awaited<ReturnType<typeof client.getDetailedWatchHistory>>;
   try {
     entries = await client.getDetailedWatchHistory();
@@ -78,9 +88,10 @@ export async function syncWatchHistory(
   );
 
   if (entries.length === 0) {
-    // Still clear old records in case items were removed
-    await prisma.$queryRawUnsafe(
-      `DELETE FROM "WatchHistory" WHERE "mediaServerId"=$1`,
+    // Clear native-only rows (in case items were removed) but preserve any
+    // Tautulli-linked rows for this server.
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM "WatchHistory" WHERE "mediaServerId"=$1 AND "tautulliRowId" IS NULL`,
       serverId
     );
     return { count: 0 };
@@ -101,30 +112,24 @@ export async function syncWatchHistory(
     ratingKeyToId.set(item.ratingKey, item.id);
   }
 
-  // Dedupe entries in memory before inserting. There is no DB unique constraint
-  // on WatchHistory (intentional), so identical play events from the source
-  // (same item, user, and watchedAt) would otherwise become duplicate rows.
+  // Dedupe by the native history-event key before inserting — a multi-row INSERT
+  // cannot hit the same ON CONFLICT target twice ("cannot affect row a second
+  // time"), and the source occasionally repeats an event.
   const seen = new Set<string>();
   const dedupedEntries: typeof entries = [];
   for (const entry of entries) {
-    const key = `${entry.ratingKey}|${entry.username}|${entry.watchedAt ?? ""}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (seen.has(entry.historyKey)) continue;
+    seen.add(entry.historyKey);
     dedupedEntries.push(entry);
   }
 
-  // Batch insert new records
   let insertedCount = 0;
   const { randomUUID } = await import("crypto");
 
-  // Wrap the full-replace DELETE and all batch INSERTs in a single transaction
-  // so a mid-insert failure rolls back instead of leaving the table empty
-  // (the previous out-of-transaction version permanently wiped history on any
-  // insert error until the next successful sync).
   await prisma.$transaction(async (tx) => {
-    // Full replace: delete existing watch history for this server
+    // Replace native-only rows; preserve Tautulli-linked rows.
     await tx.$executeRawUnsafe(
-      `DELETE FROM "WatchHistory" WHERE "mediaServerId"=$1`,
+      `DELETE FROM "WatchHistory" WHERE "mediaServerId"=$1 AND "tautulliRowId" IS NULL`,
       serverId
     );
 
@@ -132,14 +137,14 @@ export async function syncWatchHistory(
       const batch = dedupedEntries.slice(i, i + BATCH_SIZE);
       const values: string[] = [];
       const params: unknown[] = [];
-      let paramIndex = 1;
+      let p = 1;
 
       for (const entry of batch) {
         const mediaItemId = ratingKeyToId.get(entry.ratingKey);
         if (!mediaItemId) continue;
 
         values.push(
-          `($${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++})`
+          `($${p++},$${p++},$${p++},$${p++},$${p++},$${p++},$${p++},$${p++},$${p++},$${p++})`
         );
         params.push(
           randomUUID(),
@@ -149,17 +154,24 @@ export async function syncWatchHistory(
           entry.watchedAt ? new Date(entry.watchedAt) : null,
           entry.deviceName,
           entry.platform,
+          server.type, // source: "PLEX" | "JELLYFIN" | "EMBY"
+          entry.historyKey,
           new Date()
         );
       }
 
       if (values.length > 0) {
-        // No setImmediate yield between batches: the awaited DB round-trip
-        // already yields the event loop, and an extra macrotask only burns the
-        // interactive-transaction timeout budget.
+        // ON CONFLICT keeps merged (Plex+Tautulli) rows intact: refresh the
+        // native fields but never overwrite `source` or the Tautulli columns.
         await tx.$executeRawUnsafe(
-          `INSERT INTO "WatchHistory" ("id","mediaItemId","mediaServerId","serverUsername","watchedAt","deviceName","platform","createdAt")
-           VALUES ${values.join(",")}`,
+          `INSERT INTO "WatchHistory"
+             ("id","mediaItemId","mediaServerId","serverUsername","watchedAt","deviceName","platform","source","serverHistoryKey","createdAt")
+           VALUES ${values.join(",")}
+           ON CONFLICT ("mediaServerId","serverHistoryKey") DO UPDATE SET
+             "serverUsername"=EXCLUDED."serverUsername",
+             "watchedAt"=EXCLUDED."watchedAt",
+             "deviceName"=EXCLUDED."deviceName",
+             "platform"=EXCLUDED."platform"`,
           ...params
         );
         insertedCount += values.length;
@@ -169,7 +181,7 @@ export async function syncWatchHistory(
 
   logger.info(
     "WatchHistory",
-    `Synced ${insertedCount} watch history entries for "${server.name}" ` +
+    `Synced ${insertedCount} native watch history entries for "${server.name}" ` +
       `(${dedupedEntries.length - insertedCount} unmatched, ` +
       `${entries.length - dedupedEntries.length} duplicates removed)`
   );

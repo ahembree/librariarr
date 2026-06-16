@@ -387,6 +387,23 @@ export async function createTestSeerrInstance(
   });
 }
 
+export async function createTestTautulliInstance(
+  userId: string,
+  overrides?: Partial<{ name: string; url: string; apiKey: string; mediaServerId: string; enabled: boolean }>
+) {
+  const prisma = getTestPrisma();
+  return prisma.tautulliInstance.create({
+    data: {
+      userId,
+      name: overrides?.name ?? "Test Tautulli",
+      url: overrides?.url ?? "http://tautulli.test:8181",
+      apiKey: overrides?.apiKey ?? "test-api-key",
+      mediaServerId: overrides?.mediaServerId ?? null,
+      enabled: overrides?.enabled ?? true,
+    },
+  });
+}
+
 export async function createTestExternalId(
   mediaItemId: string,
   source: string,

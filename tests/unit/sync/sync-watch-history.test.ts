@@ -126,9 +126,9 @@ describe("syncWatchHistory", () => {
 
     // Watch history entries from media server
     mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
-      { ratingKey: "100", username: "Admin", watchedAt: "2024-01-01T00:00:00Z", deviceName: "Roku", platform: "Roku" },
-      { ratingKey: "200", username: "User1", watchedAt: "2024-01-02T00:00:00Z", deviceName: "iPhone", platform: "iOS" },
-      { ratingKey: "999", username: "User2", watchedAt: "2024-01-03T00:00:00Z", deviceName: null, platform: null }, // no matching media item
+      { ratingKey: "100", username: "Admin", watchedAt: "2024-01-01T00:00:00Z", deviceName: "Roku", platform: "Roku", historyKey: "h100" },
+      { ratingKey: "200", username: "User1", watchedAt: "2024-01-02T00:00:00Z", deviceName: "iPhone", platform: "iOS", historyKey: "h200" },
+      { ratingKey: "999", username: "User2", watchedAt: "2024-01-03T00:00:00Z", deviceName: null, platform: null, historyKey: "h999" }, // no matching media item
     ]);
 
     // Media items query
@@ -171,6 +171,7 @@ describe("syncWatchHistory", () => {
       watchedAt: "2024-01-01T00:00:00Z",
       deviceName: "Roku",
       platform: "Roku",
+      historyKey: `h${i}`,
     }));
     mockClient.getDetailedWatchHistory.mockResolvedValueOnce(entries);
 
@@ -210,7 +211,7 @@ describe("syncWatchHistory", () => {
     }]);
 
     mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
-      { ratingKey: "100", username: "Admin", watchedAt: "2024-01-01T00:00:00Z", deviceName: null, platform: null },
+      { ratingKey: "100", username: "Admin", watchedAt: "2024-01-01T00:00:00Z", deviceName: null, platform: null, historyKey: "h100" },
     ]);
 
     // No matching media items
@@ -226,5 +227,62 @@ describe("syncWatchHistory", () => {
     const insertCalls = mockPrisma.$queryRawUnsafe.mock.calls
       .filter((args) => (args[0] as string).includes('INSERT INTO "WatchHistory"'));
     expect(insertCalls.length).toBe(0);
+  });
+
+  it("preserves Tautulli-linked rows: DELETE is scoped to native-only rows", async () => {
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{
+      id: "server-1", name: "Test Server", url: "http://plex:32400",
+      accessToken: "token", type: "PLEX", tlsSkipVerify: false, enabled: true,
+    }]);
+    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
+      { ratingKey: "100", username: "Admin", watchedAt: "2024-01-01T00:00:00Z", deviceName: "Roku", platform: "Roku", historyKey: "h100" },
+    ]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: "item-1", ratingKey: "100" }]); // media items
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT
+
+    await syncWatchHistory("server-1");
+
+    const deleteCall = mockPrisma.$queryRawUnsafe.mock.calls
+      .find((args) => (args[0] as string).includes('DELETE FROM "WatchHistory"'));
+    expect(deleteCall?.[0]).toContain('"tautulliRowId" IS NULL');
+  });
+
+  it("upserts on the serverHistoryKey conflict so merged rows aren't duplicated", async () => {
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{
+      id: "server-1", name: "Test Server", url: "http://plex:32400",
+      accessToken: "token", type: "PLEX", tlsSkipVerify: false, enabled: true,
+    }]);
+    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
+      { ratingKey: "100", username: "Admin", watchedAt: "2024-01-01T00:00:00Z", deviceName: "Roku", platform: "Roku", historyKey: "h100" },
+    ]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: "item-1", ratingKey: "100" }]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT
+
+    await syncWatchHistory("server-1");
+
+    const insertCall = mockPrisma.$queryRawUnsafe.mock.calls
+      .find((args) => (args[0] as string).includes('INSERT INTO "WatchHistory"'));
+    expect(insertCall?.[0]).toContain('ON CONFLICT ("mediaServerId","serverHistoryKey")');
+    // source is carried as the server type ("PLEX"), not clobbering merged rows.
+    expect(insertCall).toBeDefined();
+  });
+
+  it("dedupes entries that share a serverHistoryKey", async () => {
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{
+      id: "server-1", name: "Test Server", url: "http://plex:32400",
+      accessToken: "token", type: "PLEX", tlsSkipVerify: false, enabled: true,
+    }]);
+    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
+      { ratingKey: "100", username: "Admin", watchedAt: "2024-01-01T00:00:00Z", deviceName: "Roku", platform: "Roku", historyKey: "dup" },
+      { ratingKey: "100", username: "Admin", watchedAt: "2024-01-01T00:00:00Z", deviceName: "Roku", platform: "Roku", historyKey: "dup" },
+    ]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: "item-1", ratingKey: "100" }]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT
+
+    const result = await syncWatchHistory("server-1");
+    expect(result).toEqual({ count: 1 });
   });
 });

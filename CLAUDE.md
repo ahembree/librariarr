@@ -114,7 +114,8 @@ Real-browser end-to-end tests live in `e2e/` (Playwright, **separate from Vitest
 - `src/lib/filters/build-where.ts` — Shared filter query param parsing for media routes (see Filter Utilities below)
 - `src/lib/plex/` — Plex OAuth flow and API client
 - `src/lib/sso/` — OIDC (Authorization Code + PKCE) and forward-auth helpers. Manual-linking only: an admin must link an `ssoSubject` to a User before SSO login is accepted. When `AppSettings.ssoEnabled` is true, the local username/password form is hidden on the login page (Plex login remains by default). `AppSettings.plexLoginEnabled` (default true) independently controls whether the Plex login button is shown — toggling it off hides Plex from the login page without unlinking the Plex token from the User record (so server discovery and library sync still work). `/api/settings/auth` enforces a unified lockout guard: at least one of Plex login, local auth, or SSO must remain usable post-update.
-- `src/lib/sync/sync-server.ts` — Media sync engine (fetches metadata from Plex)
+- `src/lib/sync/sync-server.ts` — Media sync engine (fetches metadata from Plex). After library sync it runs `sync-watch-history.ts` (native Plex/Jellyfin/Emby history) then `sync-tautulli-history.ts` (Tautulli enrichment) — see Watch History below
+- `src/lib/tautulli/client.ts` — Tautulli API client (`get_history` paged ingest, `get_stream_data` per-session source→delivered detail); query-param `apikey` auth, `response`-envelope unwrap. See the `tautulli-api` skill
 - `src/lib/jobs/` — [Graphile Worker](https://worker.graphile.org/) background job queue (Postgres-backed), initialized via `instrumentation.ts`. `worker.ts` runs the in-process worker + static crontab; `dispatch.ts` is the per-minute dispatcher that fans DB-configured schedules into durable jobs; `tasks.ts` holds the task handlers; `client.ts` exposes `enqueueJob()`; `schedule.ts` has the pure cron/preset helpers (`presetToCron`, `isScheduleDue`, `getSystemTimezone`)
 - `src/lib/rules/` — Lifecycle rule engine with recursive AND/OR groups
 - `src/lib/arr/` — Sonarr/Radarr/Lidarr API clients (15s timeout, title validation via `normalizeTitle()`)
@@ -248,6 +249,14 @@ When users connect multiple servers, dedup prevents duplicate items from appeari
 - Arr matching: Movies via TMDB ID → Radarr, Series via TVDB ID → Sonarr
 - Dynamic range detection: normalizes to "Dolby Vision", "HDR10+", "HDR10", "HLG", or "SDR"
 - Audio profile detection: normalizes to "Dolby Atmos", "Dolby TrueHD", "DTS-HD MA", "DTS:X", etc.
+
+### Watch History (native + Tautulli)
+
+`WatchHistory` is **one logical play per row**, sourced from native server history and/or Tautulli, distinguished by the `source` column (`"PLEX"`/`"JELLYFIN"`/`"EMBY"`/`"TAUTULLI"`/`"PLEX+TAUTULLI"`). Two nullable provenance keys are the real upsert keys — `serverHistoryKey` (native event id: Plex `historyKey`, synthesized for Jellyfin/Emby) and `tautulliRowId` (Tautulli `row_id`) — each backed by a `@@unique([mediaServerId, ...])`. **Postgres treats NULLs as distinct**, so Plex-only rows (null `tautulliRowId`) and Tautulli-only rows (null `serverHistoryKey`) coexist; a correlated play carries both.
+
+- **Native sync** (`sync-watch-history.ts`) is now an **idempotent upsert** (ON CONFLICT on `serverHistoryKey`), not the old full-replace: it deletes only native-only rows (`tautulliRowId IS NULL`) and re-inserts, so Tautulli-enriched rows survive every native sync.
+- **Tautulli sync** (`sync-tautulli-history.ts`, gated on an enabled `TautulliInstance` linked via `mediaServerId`) runs **after** native sync so it can correlate. It merges a Tautulli play into a native row when item+user match and stop time is within ~5 min; otherwise keeps it as its own `"TAUTULLI"` row. It's incremental (`after` watermark from latest `stoppedAt`), idempotent on `row_id`, uses `grouping=1` to collapse paused segments, and lazily calls `get_stream_data` only for non-direct-play sessions (source→delivered stitch).
+- `TautulliInstance` mirrors the Arr integration pattern (`/api/integrations/tautulli` CRUD + `[id]/test-connection`, `sanitize()`-masked `apiKey`); it's a config table (included in config-only backups).
 
 ### Rule Engine
 

@@ -451,6 +451,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       watchedAt: string | null;
       deviceName: string | null;
       platform: string | null;
+      historyKey: string;
     }>
   > {
     const entries: Array<{
@@ -459,6 +460,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       watchedAt: string | null;
       deviceName: string | null;
       platform: string | null;
+      historyKey: string;
     }> = [];
 
     try {
@@ -504,6 +506,9 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
                       : null,
                   deviceName: null,
                   platform: null,
+                  // Jellyfin/Emby expose no native history-event id, so synthesize
+                  // a deterministic one (per play index) for idempotent upsert.
+                  historyKey: `${this.logPrefix.toLowerCase()}:${item.Id}:${user.Id}:${i}`,
                 });
               }
             }

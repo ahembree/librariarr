@@ -16,6 +16,7 @@ import { normalizeResolutionFromDimensions } from "@/lib/resolution";
 import { eventBus } from "@/lib/events/event-bus";
 import { acquireSyncSlot, releaseSyncSlot } from "@/lib/sync/sync-semaphore";
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
+import { syncTautulliHistory } from "@/lib/sync/sync-tautulli-history";
 
 // --- Filename-based detection using Trash-Guides naming conventions ---
 // These regex patterns are derived from Trash-Guides custom format definitions:
@@ -1061,6 +1062,21 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
         // Non-fatal: don't fail the entire sync if watch history fails
         logger.error("Sync", "Watch history sync failed", { error: String(whError) });
         completedOps.push(`Watch history: failed (${formatDuration(Date.now() - whStart)})`);
+      }
+
+      // Tautulli runs after the native history so it can correlate/merge against
+      // the Plex rows just written. No-op when no enabled instance is linked.
+      const tStart = Date.now();
+      try {
+        const { count: tCount } = await syncTautulliHistory(serverId);
+        if (tCount > 0) {
+          completedOps.push(`Tautulli history: ${tCount} plays (${formatDuration(Date.now() - tStart)})`);
+          logger.info("Sync", `Tautulli history sync completed: ${tCount} play events`);
+        }
+      } catch (tError) {
+        // Non-fatal: Tautulli enrichment must not fail the whole sync.
+        logger.error("Sync", "Tautulli history sync failed", { error: String(tError) });
+        completedOps.push(`Tautulli history: failed (${formatDuration(Date.now() - tStart)})`);
       }
     }
     logHeapAndCollect("after watch history sync");

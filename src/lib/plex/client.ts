@@ -327,6 +327,7 @@ export class PlexClient implements MediaServerClient {
       watchedAt: string | null;
       deviceName: string | null;
       platform: string | null;
+      historyKey: string;
     }>
   > {
     const entries: Array<{
@@ -335,6 +336,7 @@ export class PlexClient implements MediaServerClient {
       watchedAt: string | null;
       deviceName: string | null;
       platform: string | null;
+      historyKey: string;
     }> = [];
 
     try {
@@ -379,6 +381,12 @@ export class PlexClient implements MediaServerClient {
             ? deviceMap.get(entry.deviceID as number)
             : undefined;
 
+          // Prefer Plex's stable per-event historyKey as the idempotent upsert
+          // key; fall back to a synthesized key on the rare entry without one.
+          const historyKey =
+            (entry.historyKey != null ? String(entry.historyKey) : "") ||
+            `plex:${key}:${entry.accountID ?? ""}:${entry.viewedAt ?? ""}`;
+
           entries.push({
             ratingKey: key,
             username,
@@ -387,6 +395,7 @@ export class PlexClient implements MediaServerClient {
               : null,
             deviceName: device?.name ?? null,
             platform: device?.platform ?? null,
+            historyKey,
           });
         }
 

@@ -293,4 +293,7 @@ export interface DetailedWatchHistoryEntry {
   watchedAt: string | null;
   deviceName: string | null;
   platform: string | null;
+  // Stable native history-event id used as the idempotent upsert key:
+  // Plex's `historyKey`; synthesized (ratingKey|username|index) for Jellyfin/Emby.
+  historyKey: string;
 }

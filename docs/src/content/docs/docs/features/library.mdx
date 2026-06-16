@@ -153,7 +153,7 @@ Watch history data is synced from your media servers in two ways:
 - **Automatic** — During each scheduled library sync, detailed play events are fetched and stored
 - **On-demand** — Click the **Refresh** button on the history page to sync immediately
 
-Each sync fully refreshes watch history for that server — existing records are replaced with the latest data from the server.
+Each sync replaces the server's **native** history with the latest data from the server. History enriched from [Tautulli](/docs/integrations/tautulli/) is preserved across native syncs and refreshed separately.
 
 ### Data Sources by Server Type
 
@@ -164,6 +164,10 @@ Each sync fully refreshes watch history for that server — existing records are
 | Device name | Yes | No | No |
 | Platform | Yes | No | No |
 | Play count (per item) | Yes | Yes | Yes |
+
+### Richer History with Tautulli
+
+Connecting a [Tautulli](/docs/integrations/tautulli/) instance to a Plex server adds session detail Plex's own history API doesn't expose — the **transcode decision**, the **source→delivered stream** comparison (codec, resolution, bitrate, dynamic range, HW transcoding), client **IP/location**, and **pause/percent-complete** engagement. Tautulli plays are correlated to existing Plex history rows and merged where they line up; plays with no match are kept as their own rows, so nothing is lost.
 
 <Aside type="note">
   Plex provides the most detailed watch history, with individual timestamps and device information for each play event. Jellyfin and Emby only report which items have been played and the last played date — individual play timestamps beyond the first are not available.
