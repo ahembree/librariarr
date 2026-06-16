@@ -22,6 +22,17 @@ import {
 
 /** Remove completed/failed lifecycle actions older than the retention window. */
 export async function cleanupOldActions(): Promise<void> {
+  // Orphaned PENDING actions whose media item was purged from the DB (the FK is
+  // SetNull, so mediaItemId goes null) can never execute and are never swept by the
+  // retention pass below — garbage-collect them unconditionally, even when retention
+  // is set to "keep forever".
+  const orphans = await prisma.lifecycleAction.deleteMany({
+    where: { status: "PENDING", mediaItemId: null },
+  });
+  if (orphans.count > 0) {
+    logger.info("Jobs", `Action cleanup: removed ${orphans.count} orphaned pending actions (media item no longer exists)`);
+  }
+
   const settings = await prisma.appSettings.findFirst({
     select: { actionHistoryRetentionDays: true },
   });

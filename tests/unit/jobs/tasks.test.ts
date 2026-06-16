@@ -108,17 +108,36 @@ describe("taskList", () => {
     await (taskList[TASK_ARCHIVE_LOGS] as (p: unknown, h: unknown) => Promise<void>)({}, helpers);
     await (taskList[TASK_CLEANUP_ACTIONS] as (p: unknown, h: unknown) => Promise<void>)({}, helpers);
     expect(archiveLogs).toHaveBeenCalledOnce();
-    expect(lifecycleAction.deleteMany).toHaveBeenCalledOnce();
+    // Orphan sweep + retention deletion.
+    expect(lifecycleAction.deleteMany).toHaveBeenCalledTimes(2);
   });
 });
 
 describe("cleanupOldActions", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    lifecycleAction.deleteMany.mockResolvedValue({ count: 0 });
+  });
 
-  it("skips deletion when retention is 0 (keep forever)", async () => {
+  it("sweeps orphaned pending actions whose media item was purged", async () => {
+    appSettings.findFirst.mockResolvedValue({ actionHistoryRetentionDays: 30 });
+    await cleanupOldActions();
+    expect(lifecycleAction.deleteMany).toHaveBeenCalledWith({
+      where: { status: "PENDING", mediaItemId: null },
+    });
+  });
+
+  it("sweeps orphaned pending actions even when retention is 0 (keep forever)", async () => {
     appSettings.findFirst.mockResolvedValue({ actionHistoryRetentionDays: 0 });
     await cleanupOldActions();
-    expect(lifecycleAction.deleteMany).not.toHaveBeenCalled();
+    // The orphan sweep still runs; the retention-based deletion does not.
+    expect(lifecycleAction.deleteMany).toHaveBeenCalledTimes(1);
+    expect(lifecycleAction.deleteMany).toHaveBeenCalledWith({
+      where: { status: "PENDING", mediaItemId: null },
+    });
+    expect(lifecycleAction.deleteMany).not.toHaveBeenCalledWith({
+      where: { status: { not: "PENDING" }, createdAt: { lt: expect.any(Date) } },
+    });
   });
 
   it("deletes non-pending actions older than the cutoff", async () => {
