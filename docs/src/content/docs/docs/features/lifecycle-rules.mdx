@@ -287,6 +287,10 @@ Each action links a rule set to an *arr instance:
   The **Delete** action permanently removes files from your *arr instance and, optionally, from disk. Preview your matches carefully before enabling deletion rules.
 </Aside>
 
+<Aside type="note">
+  **Repeat scheduling.** A non-destructive action (Unmonitor, Do Nothing, Search for New Copy, Change Quality Profile) leaves the item in your library, so it keeps matching the rule. To avoid re-running the *same* action every cycle, Librariarr won't re-schedule an item that already has a completed action with an **identical configuration**. The comparison covers the whole action — its type, target quality profile, Arr instance, search-after toggle, and tag set — so you can **re-configure a rule's action without recreating the rule** and it will fire again. For example, changing the action from *Search for New Copy* to *Delete from Radarr*, editing the tags an action applies, or pointing a *Change Quality Profile* action at a different profile all schedule the action again, because the new action has never run on that item. Completed **Delete** actions are always eligible to re-schedule, so a deleted title that is re-downloaded (or whose delete failed silently) is acted on again.
+</Aside>
+
 <Aside type="tip">
   See [Deletion Safety](/docs/features/deletion-safety/) for an in-depth, layer-by-layer description of every check that stands between a rule firing and a file being deleted, including the exact source locations and tests that enforce each one.
 </Aside>

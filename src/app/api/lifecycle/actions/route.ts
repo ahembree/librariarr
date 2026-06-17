@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { isDestructiveActionType } from "@/lib/lifecycle/action-types";
+import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
 
 interface ActionItemMediaItem {
   id: string | null;
@@ -190,13 +192,13 @@ async function handlePendingGrouped(userId: string) {
     );
   }
 
-  // Build set of (ruleSetId, mediaItemId) pairs that should NOT appear as
-  // estimated. Suppress when:
-  // - A PENDING action exists (already scheduled)
-  // - A COMPLETED/FAILED non-delete action exists (item will always still
-  //   exist after unmonitor/do-nothing, so re-scheduling would loop)
-  // Allow estimated rows for completed DELETE actions — if the item still
-  // matches, the deletion likely failed silently on disk.
+  // Fetch every action that could suppress an estimated row:
+  // - PENDING actions (already scheduled), and
+  // - COMPLETED/FAILED non-destructive actions, which we may suppress against —
+  //   but only when they are the SAME EFFECTIVE ACTION the rule set would
+  //   schedule now (matched on the full config signature; see below).
+  //   Destructive (DELETE*) actions never suppress: a still-matching item after
+  //   a "completed" delete means the delete failed silently on disk.
   const existingActions = await prisma.lifecycleAction.findMany({
     where: {
       userId,
@@ -208,11 +210,19 @@ async function handlePendingGrouped(userId: string) {
         },
       ],
     },
-    select: { ruleSetId: true, mediaItemId: true },
+    select: {
+      ruleSetId: true,
+      mediaItemId: true,
+      status: true,
+      actionType: true,
+      arrInstanceId: true,
+      targetQualityProfileId: true,
+      addImportExclusion: true,
+      searchAfterAction: true,
+      addArrTags: true,
+      removeArrTags: true,
+    },
   });
-  const actionedPairs = new Set(
-    existingActions.map((a) => `${a.ruleSetId}:${a.mediaItemId}`)
-  );
 
   // 2. Fetch RuleMatch records for action-enabled rule sets without any lifecycle action
   const upcomingMatches = await prisma.ruleMatch.findMany({
@@ -239,10 +249,38 @@ async function handlePendingGrouped(userId: string) {
     orderBy: { detectedAt: "asc" },
   });
 
-  // Filter out matches that already have a pending action
-  const filteredUpcoming = upcomingMatches.filter(
-    (m) => !actionedPairs.has(`${m.ruleSetId}:${m.mediaItemId}`)
-  );
+  // A pair is suppressed when it already has a PENDING action, or a
+  // COMPLETED/FAILED action whose config SIGNATURE equals what the rule set
+  // would schedule now. Matching on the full signature is what lets a changed
+  // action ("Search for New Copy" → "Delete from Radarr") OR a re-configured
+  // one (edited tags / new quality profile) surface again: a prior action with
+  // a different signature no longer suppresses it.
+  const pendingPairs = new Set<string>();
+  const completedSigsByPair = new Map<string, Set<string>>();
+  for (const a of existingActions) {
+    const pair = `${a.ruleSetId}:${a.mediaItemId}`;
+    if (a.status === "PENDING") {
+      pendingPairs.add(pair);
+    } else {
+      let sigs = completedSigsByPair.get(pair);
+      if (!sigs) {
+        sigs = new Set();
+        completedSigsByPair.set(pair, sigs);
+      }
+      sigs.add(actionConfigSignature(a));
+    }
+  }
+
+  const filteredUpcoming = upcomingMatches.filter((m) => {
+    const pair = `${m.ruleSetId}:${m.mediaItemId}`;
+    if (pendingPairs.has(pair)) return false;
+    // DELETE* actions are always eligible to re-surface; non-destructive
+    // actions are suppressed only by a completed action with the same signature.
+    if (m.ruleSet.actionType && !isDestructiveActionType(m.ruleSet.actionType)) {
+      if (completedSigsByPair.get(pair)?.has(actionConfigSignature(m.ruleSet))) return false;
+    }
+    return true;
+  });
 
   // Pre-aggregate series/music member data so response has series-level totals
   // instead of single-episode data for the representative item

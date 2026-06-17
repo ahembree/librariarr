@@ -1,9 +1,11 @@
 import { prisma } from "@/lib/db";
+import type { Prisma } from "@/generated/prisma/client";
 import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { logger } from "@/lib/logger";
 import { normalizeTitle, executeAction, extractActionError } from "@/lib/lifecycle/actions";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
+import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
@@ -109,28 +111,56 @@ export async function scheduleActionsForRuleSet(
   const matchedItemIds = matchedItems.map((item) => item.id as string);
 
   // Skip items that already have:
-  // - A PENDING action (prevents duplicates)
-  // - A COMPLETED or FAILED non-delete action (prevents infinite loop —
-  //   unmonitor/do-nothing items always still exist after execution)
-  // Allow re-scheduling past completed DELETE actions: if the item still
-  // matches after a "completed" deletion, the deletion likely failed
-  // silently (e.g. Arr removed its record but the file remained on disk
-  // due to permissions).
+  // - A PENDING action of any type (prevents duplicates), or
+  // - A COMPLETED/FAILED action that is the SAME EFFECTIVE ACTION we'd schedule
+  //   now (same type AND same config — tags, target quality profile, Arr
+  //   instance, search-after). Non-destructive actions leave the item in place,
+  //   so it keeps matching and the same action would re-run as a no-op every
+  //   cycle; suppressing it prevents that loop. But the block is keyed on the
+  //   full action SIGNATURE, not just the type, so changing the action (e.g.
+  //   "Search for New Copy" → "Delete from Radarr") OR re-configuring it
+  //   (editing tags, picking a new quality profile) schedules the new action —
+  //   it has never run on the item — without forcing the user to recreate the
+  //   rule.
+  // Destructive (DELETE*) actions are always re-schedulable: a still-matching
+  // item after a "completed" delete means the delete likely failed silently
+  // (e.g. Arr removed its record but the file remained on disk due to
+  // permissions), so we never suppress them.
+  const currentSignature = actionConfigSignature(ruleSet);
+  const existingActionConditions: Prisma.LifecycleActionWhereInput[] = [{ status: "PENDING" }];
+  if (!isDestructiveActionType(ruleSet.actionType!)) {
+    existingActionConditions.push({
+      status: { in: ["COMPLETED", "FAILED"] },
+      actionType: ruleSet.actionType!,
+    });
+  }
   const existingActions = await prisma.lifecycleAction.findMany({
     where: {
       ruleSetId: ruleSet.id,
       mediaItemId: { in: matchedItemIds },
-      OR: [
-        { status: "PENDING" },
-        {
-          status: { in: ["COMPLETED", "FAILED"] },
-          actionType: { not: { contains: "DELETE" } },
-        },
-      ],
+      OR: existingActionConditions,
     },
-    select: { mediaItemId: true },
+    select: {
+      mediaItemId: true,
+      status: true,
+      actionType: true,
+      arrInstanceId: true,
+      targetQualityProfileId: true,
+      addImportExclusion: true,
+      searchAfterAction: true,
+      addArrTags: true,
+      removeArrTags: true,
+    },
   });
-  const existingItemIds = new Set(existingActions.map((a) => a.mediaItemId));
+  const existingItemIds = new Set<string | null>();
+  for (const action of existingActions) {
+    // A PENDING action always blocks (dedup). A completed/failed action only
+    // blocks when its config matches what we'd schedule now — a re-configured
+    // action has a different signature and is allowed through.
+    if (action.status === "PENDING" || actionConfigSignature(action) === currentSignature) {
+      existingItemIds.add(action.mediaItemId);
+    }
+  }
 
   const newItems = matchedItems.filter((item) => !existingItemIds.has(item.id as string));
 

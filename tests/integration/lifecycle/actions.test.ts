@@ -162,6 +162,112 @@ describe("Lifecycle Actions", () => {
       expect(body.groups[0].count).toBe(1);
     });
 
+    it("shows an estimated row when the rule's action changed since a completed action of a different type", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { title: "Movie", type: "MOVIE" });
+      // Rule's action is now "Delete from Radarr"...
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Rule",
+        enabled: true,
+        actionEnabled: true,
+        actionType: "DELETE_RADARR",
+      });
+
+      // ...but a "Search for New Copy" action already completed on this item
+      // (the rule's action was changed afterward). The old Search must NOT
+      // suppress the new Delete.
+      await createTestAction(user.id, item.id, ruleSet.id, {
+        status: "COMPLETED",
+        actionType: "SEARCH_RADARR",
+        executedAt: new Date("2020-01-01T00:00:00Z"),
+      });
+      await createTestRuleMatch(ruleSet.id, item.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(GET, { url: "/api/lifecycle/actions" });
+
+      const body = await expectJson<{
+        groups: { items: { estimated: boolean; actionType: string; mediaItem: { id: string } }[] }[];
+      }>(response, 200);
+      expect(body.groups).toHaveLength(1);
+      expect(body.groups[0].items).toHaveLength(1);
+      expect(body.groups[0].items[0].estimated).toBe(true);
+      expect(body.groups[0].items[0].actionType).toBe("DELETE_RADARR");
+      expect(body.groups[0].items[0].mediaItem.id).toBe(item.id);
+    });
+
+    it("suppresses the estimated row when a completed action of the SAME type already ran", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { title: "Movie", type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Rule",
+        enabled: true,
+        actionEnabled: true,
+        actionType: "UNMONITOR_RADARR",
+      });
+
+      // Same non-destructive action already completed — re-scheduling it would
+      // loop on a still-matching item, so the estimated row stays suppressed.
+      await createTestAction(user.id, item.id, ruleSet.id, {
+        status: "COMPLETED",
+        actionType: "UNMONITOR_RADARR",
+        executedAt: new Date("2020-01-01T00:00:00Z"),
+      });
+      await createTestRuleMatch(ruleSet.id, item.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(GET, { url: "/api/lifecycle/actions" });
+
+      const body = await expectJson<{ groups: unknown[] }>(response, 200);
+      expect(body.groups).toHaveLength(0);
+    });
+
+    it("shows an estimated row when the same action type was re-configured (tags changed)", async () => {
+      const prisma = getTestPrisma();
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { title: "Movie", type: "MOVIE" });
+      // Rule now adds tags ["keep", "fresh"]...
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Rule",
+        enabled: true,
+        actionEnabled: true,
+        actionType: "UNMONITOR_RADARR",
+        addArrTags: ["keep", "fresh"],
+      });
+
+      // ...but the completed action only applied ["keep"]. Different config → the
+      // re-configured action must surface again.
+      await prisma.lifecycleAction.create({
+        data: {
+          userId: user.id, mediaItemId: item.id, ruleSetId: ruleSet.id,
+          actionType: "UNMONITOR_RADARR", status: "COMPLETED",
+          addArrTags: ["keep"], removeArrTags: [],
+          scheduledFor: new Date("2020-01-01T00:00:00Z"), executedAt: new Date("2020-01-02T00:00:00Z"),
+        },
+      });
+      await createTestRuleMatch(ruleSet.id, item.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(GET, { url: "/api/lifecycle/actions" });
+
+      const body = await expectJson<{
+        groups: { items: { estimated: boolean; mediaItem: { id: string } }[] }[];
+      }>(response, 200);
+      expect(body.groups).toHaveLength(1);
+      expect(body.groups[0].items).toHaveLength(1);
+      expect(body.groups[0].items[0].estimated).toBe(true);
+      expect(body.groups[0].items[0].mediaItem.id).toBe(item.id);
+    });
+
     it("filters by status parameter", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
