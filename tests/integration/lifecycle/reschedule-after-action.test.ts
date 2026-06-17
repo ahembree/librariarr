@@ -22,7 +22,7 @@ import { scheduleActionsForRuleSet } from "@/lib/lifecycle/processor";
 
 type Cfg = Parameters<typeof scheduleActionsForRuleSet>[0];
 
-function config(ruleSetId: string, userId: string, actionType: string): Cfg {
+function config(ruleSetId: string, userId: string, actionType: string, overrides?: Partial<Cfg>): Cfg {
   return {
     id: ruleSetId,
     userId,
@@ -37,6 +37,7 @@ function config(ruleSetId: string, userId: string, actionType: string): Cfg {
     searchAfterAction: false,
     addArrTags: [],
     removeArrTags: [],
+    ...overrides,
   };
 }
 
@@ -87,13 +88,61 @@ describe("scheduleActionsForRuleSet — re-schedule after a prior action (real D
     await prisma.lifecycleAction.create({
       data: {
         userId: user.id, mediaItemId: item.id, ruleSetId: ruleSet.id,
-        actionType: "UNMONITOR_RADARR", status: "COMPLETED",
+        actionType: "UNMONITOR_RADARR", status: "COMPLETED", arrInstanceId: "arr1",
         scheduledFor: new Date("2020-01-01T00:00:00Z"), executedAt: new Date("2020-01-02T00:00:00Z"),
       },
     });
     await prisma.ruleMatch.create({ data: { ruleSetId: ruleSet.id, mediaItemId: item.id, itemData: {} } });
 
     await scheduleActionsForRuleSet(config(ruleSet.id, user.id, "UNMONITOR_RADARR"), [{ id: item.id, title: "Movie" }], new Map());
+
+    const pending = await prisma.lifecycleAction.findMany({ where: { ruleSetId: ruleSet.id, status: "PENDING" } });
+    expect(pending).toHaveLength(0);
+  });
+
+  it("schedules the re-configured action when only the config changed (tags edited, same type)", async () => {
+    // The user edited the rule's tags but kept the action type — the new tag set
+    // has never been applied, so it must re-fire even though a same-type action
+    // already completed.
+    const { prisma, user, item, ruleSet } = await setup("DO_NOTHING");
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: item.id, ruleSetId: ruleSet.id,
+        actionType: "DO_NOTHING", status: "COMPLETED",
+        addArrTags: ["keep"], removeArrTags: [],
+        scheduledFor: new Date("2020-01-01T00:00:00Z"), executedAt: new Date("2020-01-02T00:00:00Z"),
+      },
+    });
+    await prisma.ruleMatch.create({ data: { ruleSetId: ruleSet.id, mediaItemId: item.id, itemData: {} } });
+
+    await scheduleActionsForRuleSet(
+      config(ruleSet.id, user.id, "DO_NOTHING", { addArrTags: ["keep", "new"], arrInstanceId: "arr1" }),
+      [{ id: item.id, title: "Movie" }],
+      new Map(),
+    );
+
+    const pending = await prisma.lifecycleAction.findMany({ where: { ruleSetId: ruleSet.id, status: "PENDING" } });
+    expect(pending).toHaveLength(1);
+    expect(pending[0].addArrTags).toEqual(["keep", "new"]);
+  });
+
+  it("does NOT re-schedule when the same-type action has an identical config", async () => {
+    const { prisma, user, item, ruleSet } = await setup("DO_NOTHING");
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: item.id, ruleSetId: ruleSet.id,
+        actionType: "DO_NOTHING", status: "COMPLETED",
+        addArrTags: ["keep"], removeArrTags: [], arrInstanceId: "arr1",
+        scheduledFor: new Date("2020-01-01T00:00:00Z"), executedAt: new Date("2020-01-02T00:00:00Z"),
+      },
+    });
+    await prisma.ruleMatch.create({ data: { ruleSetId: ruleSet.id, mediaItemId: item.id, itemData: {} } });
+
+    await scheduleActionsForRuleSet(
+      config(ruleSet.id, user.id, "DO_NOTHING", { addArrTags: ["keep"], arrInstanceId: "arr1" }),
+      [{ id: item.id, title: "Movie" }],
+      new Map(),
+    );
 
     const pending = await prisma.lifecycleAction.findMany({ where: { ruleSetId: ruleSet.id, status: "PENDING" } });
     expect(pending).toHaveLength(0);

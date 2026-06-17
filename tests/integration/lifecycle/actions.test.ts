@@ -228,6 +228,46 @@ describe("Lifecycle Actions", () => {
       expect(body.groups).toHaveLength(0);
     });
 
+    it("shows an estimated row when the same action type was re-configured (tags changed)", async () => {
+      const prisma = getTestPrisma();
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { title: "Movie", type: "MOVIE" });
+      // Rule now adds tags ["keep", "fresh"]...
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Rule",
+        enabled: true,
+        actionEnabled: true,
+        actionType: "UNMONITOR_RADARR",
+        addArrTags: ["keep", "fresh"],
+      });
+
+      // ...but the completed action only applied ["keep"]. Different config → the
+      // re-configured action must surface again.
+      await prisma.lifecycleAction.create({
+        data: {
+          userId: user.id, mediaItemId: item.id, ruleSetId: ruleSet.id,
+          actionType: "UNMONITOR_RADARR", status: "COMPLETED",
+          addArrTags: ["keep"], removeArrTags: [],
+          scheduledFor: new Date("2020-01-01T00:00:00Z"), executedAt: new Date("2020-01-02T00:00:00Z"),
+        },
+      });
+      await createTestRuleMatch(ruleSet.id, item.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(GET, { url: "/api/lifecycle/actions" });
+
+      const body = await expectJson<{
+        groups: { items: { estimated: boolean; mediaItem: { id: string } }[] }[];
+      }>(response, 200);
+      expect(body.groups).toHaveLength(1);
+      expect(body.groups[0].items).toHaveLength(1);
+      expect(body.groups[0].items[0].estimated).toBe(true);
+      expect(body.groups[0].items[0].mediaItem.id).toBe(item.id);
+    });
+
     it("filters by status parameter", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
