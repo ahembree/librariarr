@@ -190,6 +190,31 @@ export async function PUT(
       await tx.lifecycleAction.deleteMany({
         where: { ruleSetId: id, status: "PENDING" },
       });
+    } else {
+      // clearMatches=false with the rule + action still enabled: surviving
+      // PENDING actions snapshot the action config at creation time, so an edit
+      // that changes the action (e.g. SEARCH_RADARR → DELETE_RADARR) must be
+      // propagated to them — otherwise the Pending page shows the old action and
+      // the executor (which reads LifecycleAction.actionType, not the live rule
+      // set) would run the stale action. scheduledFor is left untouched; the
+      // delay-change reschedule prompt owns that.
+      const actionFieldUpdate: Record<string, unknown> = {};
+      // actionType is non-nullable on LifecycleAction; only sync a concrete value.
+      if (actionType) actionFieldUpdate.actionType = actionType;
+      if (arrInstanceId !== undefined) actionFieldUpdate.arrInstanceId = arrInstanceId;
+      if (targetQualityProfileId !== undefined)
+        actionFieldUpdate.targetQualityProfileId = targetQualityProfileId;
+      if (addImportExclusion !== undefined)
+        actionFieldUpdate.addImportExclusion = addImportExclusion;
+      if (searchAfterAction !== undefined) actionFieldUpdate.searchAfterAction = searchAfterAction;
+      if (addArrTags !== undefined) actionFieldUpdate.addArrTags = addArrTags;
+      if (removeArrTags !== undefined) actionFieldUpdate.removeArrTags = removeArrTags;
+      if (Object.keys(actionFieldUpdate).length > 0) {
+        await tx.lifecycleAction.updateMany({
+          where: { ruleSetId: id, status: "PENDING" },
+          data: actionFieldUpdate,
+        });
+      }
     }
 
     return tx.ruleSet.findUnique({ where: { id } });

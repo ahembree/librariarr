@@ -571,6 +571,115 @@ describe("Lifecycle Rules CRUD", () => {
       expect(body.ruleSet.targetQualityProfileId).toBe(9);
     });
 
+    it("clearMatches=false syncs the new action config onto surviving PENDING actions", async () => {
+      const prisma = getTestPrisma();
+      const user = await createTestUser();
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Search rule",
+        actionEnabled: true,
+        actionType: "SEARCH_RADARR",
+      });
+      const action = await prisma.lifecycleAction.create({
+        data: {
+          userId: user.id,
+          ruleSetId: ruleSet.id,
+          actionType: "SEARCH_RADARR",
+          searchAfterAction: false,
+          addImportExclusion: false,
+          status: "PENDING",
+          scheduledFor: new Date(),
+        },
+      });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRouteWithParams(
+        PUT,
+        { id: ruleSet.id },
+        {
+          url: `/api/lifecycle/rules/${ruleSet.id}?clearMatches=false`,
+          method: "PUT",
+          searchParams: { clearMatches: "false" },
+          body: { actionType: "DELETE_RADARR", addImportExclusion: true },
+        }
+      );
+
+      await expectJson(response, 200);
+      const updated = await prisma.lifecycleAction.findUnique({ where: { id: action.id } });
+      // The surviving PENDING action reflects the edited action, not the stale snapshot.
+      expect(updated?.status).toBe("PENDING");
+      expect(updated?.actionType).toBe("DELETE_RADARR");
+      expect(updated?.addImportExclusion).toBe(true);
+    });
+
+    it("clearMatches=false still cancels PENDING actions when the action is disabled", async () => {
+      const prisma = getTestPrisma();
+      const user = await createTestUser();
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Disable me",
+        actionEnabled: true,
+        actionType: "DELETE_RADARR",
+      });
+      const action = await prisma.lifecycleAction.create({
+        data: {
+          userId: user.id,
+          ruleSetId: ruleSet.id,
+          actionType: "DELETE_RADARR",
+          status: "PENDING",
+          scheduledFor: new Date(),
+        },
+      });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRouteWithParams(
+        PUT,
+        { id: ruleSet.id },
+        {
+          url: `/api/lifecycle/rules/${ruleSet.id}?clearMatches=false`,
+          method: "PUT",
+          searchParams: { clearMatches: "false" },
+          body: { actionEnabled: false, actionType: "SEARCH_RADARR" },
+        }
+      );
+
+      await expectJson(response, 200);
+      const removed = await prisma.lifecycleAction.findUnique({ where: { id: action.id } });
+      expect(removed).toBeNull();
+    });
+
+    it("default save (clearMatches omitted) clears PENDING actions", async () => {
+      const prisma = getTestPrisma();
+      const user = await createTestUser();
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Default clear",
+        actionEnabled: true,
+        actionType: "SEARCH_RADARR",
+      });
+      const action = await prisma.lifecycleAction.create({
+        data: {
+          userId: user.id,
+          ruleSetId: ruleSet.id,
+          actionType: "SEARCH_RADARR",
+          status: "PENDING",
+          scheduledFor: new Date(),
+        },
+      });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRouteWithParams(
+        PUT,
+        { id: ruleSet.id },
+        {
+          url: `/api/lifecycle/rules/${ruleSet.id}`,
+          method: "PUT",
+          body: { actionType: "DELETE_RADARR" },
+        }
+      );
+
+      await expectJson(response, 200);
+      const removed = await prisma.lifecycleAction.findUnique({ where: { id: action.id } });
+      expect(removed).toBeNull();
+    });
+
     it("returns 404 for non-existent rule set", async () => {
       const user = await createTestUser();
       setMockSession({ isLoggedIn: true, userId: user.id });

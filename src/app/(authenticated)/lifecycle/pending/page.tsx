@@ -50,6 +50,7 @@ import { MediaCard } from "@/components/media-card";
 import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { CardSizeControl } from "@/components/card-size-control";
 import { formatDuration, formatFileSize } from "@/lib/format";
+import { formatActionLabel } from "@/lib/lifecycle/action-types";
 import { MetadataLine } from "@/components/metadata-line";
 import { TabNav, type TabNavItem } from "@/components/tab-nav";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -143,28 +144,10 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 function formatActionType(type: string, targetQualityProfileId?: number | null): string {
-  const map: Record<string, string> = {
-    DO_NOTHING: "Monitor Only",
-    DELETE_RADARR: "Delete from Radarr",
-    DELETE_SONARR: "Delete from Sonarr",
-    DELETE_LIDARR: "Delete from Lidarr",
-    UNMONITOR_RADARR: "Unmonitor in Radarr",
-    UNMONITOR_SONARR: "Unmonitor in Sonarr",
-    UNMONITOR_LIDARR: "Unmonitor in Lidarr",
-    UNMONITOR_DELETE_FILES_RADARR: "Unmonitor & Delete Files (Radarr)",
-    UNMONITOR_DELETE_FILES_SONARR: "Unmonitor & Delete Files (Sonarr)",
-    UNMONITOR_DELETE_FILES_LIDARR: "Unmonitor & Delete Files (Lidarr)",
-    MONITOR_DELETE_FILES_RADARR: "Monitor & Delete Files (Radarr)",
-    MONITOR_DELETE_FILES_SONARR: "Monitor & Delete Files (Sonarr)",
-    MONITOR_DELETE_FILES_LIDARR: "Monitor & Delete Files (Lidarr)",
-    DELETE_FILES_RADARR: "Delete Files Only (Radarr)",
-    DELETE_FILES_SONARR: "Delete Files Only (Sonarr)",
-    DELETE_FILES_LIDARR: "Delete Files Only (Lidarr)",
-    CHANGE_QUALITY_PROFILE_RADARR: "Change Quality Profile (Radarr)",
-    CHANGE_QUALITY_PROFILE_SONARR: "Change Quality Profile (Sonarr)",
-    CHANGE_QUALITY_PROFILE_LIDARR: "Change Quality Profile (Lidarr)",
-  };
-  const label = map[type] ?? type;
+  // Single source of truth for action labels (includes SEARCH_* and the rest) —
+  // see src/lib/lifecycle/action-types.ts. Keeping a local map drifted and left
+  // SEARCH_RADARR/SONARR/LIDARR rendering as the raw enum.
+  const label = formatActionLabel(type);
   if (type.startsWith("CHANGE_QUALITY_PROFILE_") && targetQualityProfileId != null) {
     return `${label} → profile #${targetQualityProfileId}`;
   }
