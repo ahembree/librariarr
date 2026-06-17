@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.25.0](https://github.com/ahembree/librariarr/compare/v0.24.0...v0.25.0) (2026-06-17)
+
+
+### Features
+
+* **lifecycle:** re-fire a reconfigured action without recreating the rule ([2f75a40](https://github.com/ahembree/librariarr/commit/2f75a40657fbf3051738dcfe31a15c6241d823b6))
+
+
+### Bug Fixes
+
+* **lifecycle:** cleanup pending actions on stale/removed content ([bc4e301](https://github.com/ahembree/librariarr/commit/bc4e301cbae2623c2c46e7b337f09c63b536a3da))
+* **lifecycle:** cleanup pending actions on stale/removed content ([55a72db](https://github.com/ahembree/librariarr/commit/55a72db1912cda1c7ddfb81c92f357a754eeb678))
+* **lifecycle:** count delete matches with a prior non-delete action in stats ([71d7c1e](https://github.com/ahembree/librariarr/commit/71d7c1eac1e263b3facc48bb9749ec4f1dfeacd7))
+* **lifecycle:** re-schedule actions for re-added items ([3fe7adf](https://github.com/ahembree/librariarr/commit/3fe7adf980c626540a7123a3b865cf60e4dd1c2c))
+* **lifecycle:** scope completed-action re-schedule guard to action type ([7f3a6a8](https://github.com/ahembree/librariarr/commit/7f3a6a811da30c86fbe227d21eadaebc3f785169))
+* **lifecycle:** sync pending actions when a rule's action changes ([1d8cf8a](https://github.com/ahembree/librariarr/commit/1d8cf8a7507fba99fa40b7b2beb08a7ba8da3c08))
+
 ## [0.24.0](https://github.com/ahembree/librariarr/compare/v0.23.0...v0.24.0) (2026-06-15)
 
 
