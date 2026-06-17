@@ -288,7 +288,7 @@ Each action links a rule set to an *arr instance:
 </Aside>
 
 <Aside type="note">
-  **Repeat scheduling.** A non-destructive action (Unmonitor, Do Nothing, tag changes) leaves the item in your library, so it keeps matching the rule. To avoid scheduling the same action on every run, Librariarr won't re-schedule an item that already has a completed action of that kind — **as long as it has matched continuously**. If the item later drops out of the match set and is **re-added** (for example, deleted and then re-downloaded), it counts as a new match and a fresh action is scheduled. Completed **Delete** actions are always eligible to re-schedule — if a "deleted" item still matches, the delete likely failed and should run again.
+  **Repeat scheduling.** A non-destructive action (Unmonitor, Do Nothing, Search for New Copy, Change Quality Profile) leaves the item in your library, so it keeps matching the rule. To avoid re-running the same action every cycle, Librariarr won't re-schedule an item that already has a completed action **of the same type**. Crucially, this is scoped to the action type: if you **change a rule's action** (for example from *Search for New Copy* to *Delete from Radarr*), the new action is scheduled even though the old one already completed — it's a different action that has never run on that item. Completed **Delete** actions are always eligible to re-schedule, so a deleted title that is re-downloaded (or whose delete failed silently) is acted on again.
 </Aside>
 
 <Aside type="tip">

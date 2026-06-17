@@ -237,7 +237,7 @@ describe("scheduleActionsForRuleSet", () => {
     mockPrisma.lifecycleAction.findMany
       .mockResolvedValueOnce([{ mediaItemId: "item1" }]) // previousPending (only the still-matching item)
       .mockResolvedValueOnce([]) // allPending (dedup)
-      .mockResolvedValueOnce([{ mediaItemId: "item1", status: "PENDING" }]); // existingActions
+      .mockResolvedValueOnce([{ mediaItemId: "item1" }]); // existingActions
     mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 1 });
     mockPrisma.lifecycleAction.createMany.mockResolvedValue({ count: 0 });
 
@@ -313,7 +313,7 @@ describe("scheduleActionsForRuleSet", () => {
     mockPrisma.lifecycleAction.findMany
       .mockResolvedValueOnce([]) // previousPending
       .mockResolvedValueOnce([]) // allPending (dedup)
-      .mockResolvedValueOnce([{ mediaItemId: "item1", status: "PENDING" }]); // existingActions — item1 already has one
+      .mockResolvedValueOnce([{ mediaItemId: "item1" }]); // existingActions — item1 already has one
     mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 0 });
     mockPrisma.lifecycleAction.createMany.mockResolvedValue({ count: 0 });
 
@@ -341,21 +341,23 @@ describe("scheduleActionsForRuleSet", () => {
     expect(mockPrisma.lifecycleAction.createMany).not.toHaveBeenCalled();
   });
 
-  it("re-schedules a re-added item whose match was detected after a completed non-delete action", async () => {
-    // Item was unmonitored long ago, dropped out of the match set, then re-added.
-    // Its CURRENT RuleMatch.detectedAt is newer than the completed action — a new
-    // actionable cycle that must NOT be blocked.
-    const actionRanAt = new Date("2020-01-01T00:00:00Z");
-    const rematchedAt = new Date("2024-01-01T00:00:00Z");
+  // Helper: the existingActions probe is the lifecycleAction.findMany call whose
+  // where carries an OR list (the previous-pending and dedup probes do not).
+  function existingActionsWhere() {
+    const arg = mockPrisma.lifecycleAction.findMany.mock.calls
+      .map((c) => c[0] as { where?: { OR?: unknown } } | undefined)
+      .find((a) => a?.where?.OR);
+    return (arg as { where: { OR: unknown[] } }).where;
+  }
+
+  it("scopes the completed/failed re-schedule block to the current action type", async () => {
+    // A non-destructive action only suppresses re-scheduling against a prior
+    // action OF THE SAME TYPE — so a completed "Search for New Copy" can't block
+    // a freshly-configured "Unmonitor", and vice versa.
     mockPrisma.lifecycleAction.findMany
       .mockResolvedValueOnce([]) // previousPending
       .mockResolvedValueOnce([]) // allPending (dedup)
-      .mockResolvedValueOnce([
-        { mediaItemId: "item1", status: "COMPLETED", executedAt: actionRanAt, createdAt: actionRanAt },
-      ]); // existingActions
-    mockPrisma.ruleMatch.findMany.mockResolvedValueOnce([
-      { mediaItemId: "item1", detectedAt: rematchedAt },
-    ]);
+      .mockResolvedValueOnce([]); // existingActions
     mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 0 });
     mockPrisma.lifecycleAction.createMany.mockResolvedValue({ count: 1 });
 
@@ -379,31 +381,22 @@ describe("scheduleActionsForRuleSet", () => {
       new Map(),
     );
 
-    expect(mockPrisma.lifecycleAction.createMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.arrayContaining([
-          expect.objectContaining({ mediaItemId: "item1", actionType: "UNMONITOR_RADARR" }),
-        ]),
-      }),
-    );
+    expect(existingActionsWhere().OR).toEqual([
+      { status: "PENDING" },
+      { status: { in: ["COMPLETED", "FAILED"] }, actionType: "UNMONITOR_RADARR" },
+    ]);
   });
 
-  it("still blocks a continuously-matching item with a completed non-delete action", async () => {
-    // The completed action ran AFTER the match was first detected (the item never
-    // dropped out), so re-scheduling would loop — keep suppressing it.
-    const detectedAt = new Date("2020-01-01T00:00:00Z");
-    const actionRanAt = new Date("2020-01-08T00:00:00Z");
+  it("never blocks completed/failed actions when the current action is destructive", async () => {
+    // DELETE* actions are always re-schedulable: a completed action of ANY other
+    // type (e.g. the user changed "Search for New Copy" → "Delete from Radarr")
+    // must not suppress the new delete. Only a PENDING action dedupes.
     mockPrisma.lifecycleAction.findMany
       .mockResolvedValueOnce([]) // previousPending
       .mockResolvedValueOnce([]) // allPending (dedup)
-      .mockResolvedValueOnce([
-        { mediaItemId: "item1", status: "COMPLETED", executedAt: actionRanAt, createdAt: actionRanAt },
-      ]); // existingActions
-    mockPrisma.ruleMatch.findMany.mockResolvedValueOnce([
-      { mediaItemId: "item1", detectedAt },
-    ]);
+      .mockResolvedValueOnce([]); // existingActions
     mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 0 });
-    mockPrisma.lifecycleAction.createMany.mockResolvedValue({ count: 0 });
+    mockPrisma.lifecycleAction.createMany.mockResolvedValue({ count: 1 });
 
     await scheduleActionsForRuleSet(
       {
@@ -412,7 +405,7 @@ describe("scheduleActionsForRuleSet", () => {
         name: "Test",
         type: "MOVIE",
         actionEnabled: true,
-        actionType: "UNMONITOR_RADARR",
+        actionType: "DELETE_RADARR",
         actionDelayDays: 0,
         arrInstanceId: "arr1",
         targetQualityProfileId: null,
@@ -425,7 +418,8 @@ describe("scheduleActionsForRuleSet", () => {
       new Map(),
     );
 
-    expect(mockPrisma.lifecycleAction.createMany).not.toHaveBeenCalled();
+    expect(existingActionsWhere().OR).toEqual([{ status: "PENDING" }]);
+    expect(mockPrisma.lifecycleAction.createMany).toHaveBeenCalled();
   });
 
   it("deduplicates pending actions from concurrent runs", async () => {
@@ -435,7 +429,7 @@ describe("scheduleActionsForRuleSet", () => {
         { id: "a1", mediaItemId: "item1" },
         { id: "a2", mediaItemId: "item1" }, // duplicate
       ]) // allPending (dedup)
-      .mockResolvedValueOnce([{ mediaItemId: "item1", status: "PENDING" }]); // existingActions
+      .mockResolvedValueOnce([{ mediaItemId: "item1" }]); // existingActions
     mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 1 });
 
     await scheduleActionsForRuleSet(

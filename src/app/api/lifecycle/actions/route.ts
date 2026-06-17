@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { completedActionBlocksReschedule } from "@/lib/lifecycle/reschedule-guard";
 
 interface ActionItemMediaItem {
   id: string | null;
@@ -191,15 +190,12 @@ async function handlePendingGrouped(userId: string) {
     );
   }
 
-  // Build set of (ruleSetId, mediaItemId) pairs that should NOT appear as
-  // estimated. Suppress when:
-  // - A PENDING action exists (already scheduled)
-  // - A COMPLETED/FAILED non-delete action exists (item will always still
-  //   exist after unmonitor/do-nothing, so re-scheduling would loop) — but ONLY
-  //   while the item has continuously matched since that action ran. A re-added
-  //   item (current match detected after the action) is a new actionable cycle.
-  // Allow estimated rows for completed DELETE actions — if the item still
-  // matches, the deletion likely failed silently on disk.
+  // Fetch every action that could suppress an estimated row:
+  // - PENDING actions (already scheduled), and
+  // - COMPLETED/FAILED non-destructive actions, which we may suppress against —
+  //   but only when their type matches the rule set's CURRENT action type (see
+  //   below). Destructive (DELETE*) actions never suppress: a still-matching
+  //   item after a "completed" delete means the delete failed silently on disk.
   const existingActions = await prisma.lifecycleAction.findMany({
     where: {
       userId,
@@ -211,7 +207,7 @@ async function handlePendingGrouped(userId: string) {
         },
       ],
     },
-    select: { ruleSetId: true, mediaItemId: true, status: true, executedAt: true, createdAt: true },
+    select: { ruleSetId: true, mediaItemId: true, status: true, actionType: true },
   });
 
   // 2. Fetch RuleMatch records for action-enabled rule sets without any lifecycle action
@@ -239,27 +235,38 @@ async function handlePendingGrouped(userId: string) {
     orderBy: { detectedAt: "asc" },
   });
 
-  // detectedAt of each currently-matching (ruleSetId, mediaItemId) pair, used to
-  // decide whether a completed non-delete action still blocks its item.
-  const detectedAtByPair = new Map(
-    upcomingMatches.map((m) => [`${m.ruleSetId}:${m.mediaItemId}`, m.detectedAt])
-  );
-  const actionedPairs = new Set<string>();
+  // A pair is suppressed when it already has a PENDING action, or a
+  // COMPLETED/FAILED action whose type equals the rule set's CURRENT action
+  // type. Matching on the current type is what lets a changed action (e.g.
+  // "Search for New Copy" → "Delete from Radarr") surface again: the old
+  // completed Search no longer suppresses the new Delete.
+  const pendingPairs = new Set<string>();
+  const completedTypesByPair = new Map<string, Set<string>>();
   for (const a of existingActions) {
     const pair = `${a.ruleSetId}:${a.mediaItemId}`;
     if (a.status === "PENDING") {
-      actionedPairs.add(pair);
-      continue;
-    }
-    if (completedActionBlocksReschedule(a.executedAt ?? a.createdAt, detectedAtByPair.get(pair))) {
-      actionedPairs.add(pair);
+      pendingPairs.add(pair);
+    } else {
+      let types = completedTypesByPair.get(pair);
+      if (!types) {
+        types = new Set();
+        completedTypesByPair.set(pair, types);
+      }
+      types.add(a.actionType);
     }
   }
 
-  // Filter out matches that already have a pending action
-  const filteredUpcoming = upcomingMatches.filter(
-    (m) => !actionedPairs.has(`${m.ruleSetId}:${m.mediaItemId}`)
-  );
+  const filteredUpcoming = upcomingMatches.filter((m) => {
+    const pair = `${m.ruleSetId}:${m.mediaItemId}`;
+    if (pendingPairs.has(pair)) return false;
+    const currentType = m.ruleSet.actionType;
+    // DELETE* actions are always eligible to re-surface; non-destructive types
+    // are suppressed only by a completed action of the SAME type.
+    if (currentType && !currentType.includes("DELETE")) {
+      if (completedTypesByPair.get(pair)?.has(currentType)) return false;
+    }
+    return true;
+  });
 
   // Pre-aggregate series/music member data so response has series-level totals
   // instead of single-episode data for the representative item
