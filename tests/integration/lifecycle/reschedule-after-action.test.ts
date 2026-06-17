@@ -148,6 +148,30 @@ describe("scheduleActionsForRuleSet — re-schedule after a prior action (real D
     expect(pending).toHaveLength(0);
   });
 
+  it("does NOT re-schedule when only tag ORDER differs (tags compared as a set)", async () => {
+    // A re-saved rule whose tag list is the same set in a different order must
+    // not re-fire — otherwise a cosmetic reorder would loop.
+    const { prisma, user, item, ruleSet } = await setup("DO_NOTHING");
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: item.id, ruleSetId: ruleSet.id,
+        actionType: "DO_NOTHING", status: "COMPLETED",
+        addArrTags: ["a", "b"], removeArrTags: [], arrInstanceId: "arr1",
+        scheduledFor: new Date("2020-01-01T00:00:00Z"), executedAt: new Date("2020-01-02T00:00:00Z"),
+      },
+    });
+    await prisma.ruleMatch.create({ data: { ruleSetId: ruleSet.id, mediaItemId: item.id, itemData: {} } });
+
+    await scheduleActionsForRuleSet(
+      config(ruleSet.id, user.id, "DO_NOTHING", { addArrTags: ["b", "a"], arrInstanceId: "arr1" }),
+      [{ id: item.id, title: "Movie" }],
+      new Map(),
+    );
+
+    const pending = await prisma.lifecycleAction.findMany({ where: { ruleSetId: ruleSet.id, status: "PENDING" } });
+    expect(pending).toHaveLength(0);
+  });
+
   it("does not loop across schedule → execute → re-detect cycles for a no-op action", async () => {
     // Full steady-state replay: this is the exact sequence that a naive
     // detectedAt-based guard re-scheduled every cycle.
