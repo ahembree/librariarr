@@ -427,11 +427,24 @@ export async function executeLifecycleActions(userId?: string) {
     // ratingKey's row to different content with different external ids before
     // detection removed the now-stale match), the Arr resolution would target
     // the NEW item — which never matched. Refuse rather than act on it.
-    if (
-      action.mediaItemTitle &&
-      mediaItem.title &&
-      normalizeTitle(action.mediaItemTitle) !== normalizeTitle(mediaItem.title)
-    ) {
+    //
+    // `mediaItemTitle` is snapshotted from the matched item, but its meaning
+    // differs by source: the scheduler stores a grouped series/music match's
+    // PARENT (series/artist) name (the engine swaps the aggregate's title),
+    // while the lazy backfill in /api/lifecycle/actions stores the raw row's
+    // `.title` (the episode/track title). The joined `mediaItem` is the
+    // representative episode/track row, so accept a match against EITHER its
+    // `.title` or its `.parentTitle` — only when the snapshot matches neither
+    // has the row genuinely been rewritten to different content. Comparing
+    // against `.title` alone wrongly cancelled every grouped series/music
+    // action (snapshot = series name ≠ episode title). Movies have a null
+    // parentTitle, so this reduces to the title check for them.
+    const identityMatches =
+      !action.mediaItemTitle ||
+      normalizeTitle(action.mediaItemTitle) === normalizeTitle(mediaItem.title) ||
+      (mediaItem.parentTitle != null &&
+        normalizeTitle(action.mediaItemTitle) === normalizeTitle(mediaItem.parentTitle));
+    if (!identityMatches) {
       await prisma.lifecycleAction.delete({ where: { id: action.id } });
       logger.warn("Lifecycle", `Cancelled action ${action.id} — item identity changed since scheduling ("${action.mediaItemTitle}" → "${mediaItem.title}"); will re-evaluate on next detection`);
       continue;

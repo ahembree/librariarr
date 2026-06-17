@@ -26,6 +26,7 @@ const mockPrisma = vi.hoisted(() => ({
   },
   mediaItem: {
     findMany: vi.fn(),
+    aggregate: vi.fn(),
   },
   // $transaction supports both the array form (returns resolved array) and the
   // callback form (invokes the callback with the same mock client). Production
@@ -674,6 +675,66 @@ describe("executeLifecycleActions", () => {
 
     expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
     expect(mockExecuteAction).not.toHaveBeenCalled();
+  });
+
+  it("does NOT cancel a grouped series action whose snapshot title is the series name but the joined row is an episode", async () => {
+    // Regression: grouped series/music matches snapshot `mediaItemTitle` as the
+    // SERIES/ARTIST name (engine swaps the aggregate's title to the parent),
+    // while the joined representative row's `.title` is the EPISODE/TRACK title
+    // and `.parentTitle` holds the series/artist name. Comparing the snapshot
+    // against the bare `.title` wrongly flagged every grouped action as an
+    // identity swap and silently cancelled the delete.
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      {
+        id: "a1",
+        userId: "u1",
+        mediaItemId: "ep1",
+        mediaItemTitle: "Breaking Bad",        // snapshot = series name (swapped aggregate title)
+        mediaItem: { id: "ep1", title: "Pilot", parentTitle: "Breaking Bad", year: 2008, libraryId: "lib1", fileSize: null, library: { key: "1", mediaServerId: "s1" }, externalIds: [] },
+        ruleSetId: "rs1",
+        actionType: "DELETE_SONARR",
+        matchedMediaItemIds: [],
+        ruleSet: { name: "Test", discordNotifyOnAction: false, userId: "u1" },
+      },
+    ]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "ep1" }]);
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+    mockPrisma.mediaItem.aggregate.mockResolvedValue({ _sum: { fileSize: null } });
+    mockPrisma.lifecycleAction.update.mockResolvedValue({});
+    mockPrisma.$transaction.mockResolvedValue([{}, {}]);
+
+    await executeLifecycleActions("u1");
+
+    expect(mockExecuteAction).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.lifecycleAction.delete).not.toHaveBeenCalled();
+  });
+
+  it("does NOT cancel a grouped action backfilled with the episode title (snapshot matches row .title)", async () => {
+    // The lazy backfill in /api/lifecycle/actions stores the raw row's `.title`
+    // (episode title) rather than the series name, so the guard must also accept
+    // a match against `.title` directly.
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      {
+        id: "a1",
+        userId: "u1",
+        mediaItemId: "ep1",
+        mediaItemTitle: "Pilot",               // backfilled snapshot = episode title
+        mediaItem: { id: "ep1", title: "Pilot", parentTitle: "Breaking Bad", year: 2008, libraryId: "lib1", fileSize: null, library: { key: "1", mediaServerId: "s1" }, externalIds: [] },
+        ruleSetId: "rs1",
+        actionType: "DELETE_FILES_SONARR",     // member-scoped, no whole-series delete
+        matchedMediaItemIds: [],
+        ruleSet: { name: "Test", discordNotifyOnAction: false, userId: "u1" },
+      },
+    ]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "ep1" }]);
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+    mockPrisma.lifecycleAction.update.mockResolvedValue({});
+    mockPrisma.$transaction.mockResolvedValue([{}, {}]);
+
+    await executeLifecycleActions("u1");
+
+    expect(mockExecuteAction).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.lifecycleAction.delete).not.toHaveBeenCalled();
   });
 
   it("does NOT cancel when only cosmetic title differences exist (article/year)", async () => {
