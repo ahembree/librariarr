@@ -7,6 +7,7 @@ import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
+import { completedActionBlocksReschedule } from "@/lib/lifecycle/reschedule-guard";
 import { syncAllCollections } from "@/lib/lifecycle/collections";
 import { syncMediaServer } from "@/lib/sync/sync-server";
 import { sendDiscordNotification, buildSuccessSummaryEmbed, buildMatchChangeEmbed, buildFailureSummaryEmbed } from "@/lib/discord/client";
@@ -111,7 +112,11 @@ export async function scheduleActionsForRuleSet(
   // Skip items that already have:
   // - A PENDING action (prevents duplicates)
   // - A COMPLETED or FAILED non-delete action (prevents infinite loop —
-  //   unmonitor/do-nothing items always still exist after execution)
+  //   unmonitor/do-nothing items always still exist after execution), but ONLY
+  //   while the item has continuously matched since that action ran. An item
+  //   that was actioned, dropped out of the match set, then re-added at a later
+  //   date gets a fresh RuleMatch.detectedAt and is a new actionable cycle —
+  //   see completedActionBlocksReschedule.
   // Allow re-scheduling past completed DELETE actions: if the item still
   // matches after a "completed" deletion, the deletion likely failed
   // silently (e.g. Arr removed its record but the file remained on disk
@@ -128,9 +133,36 @@ export async function scheduleActionsForRuleSet(
         },
       ],
     },
-    select: { mediaItemId: true },
+    select: { mediaItemId: true, status: true, executedAt: true, createdAt: true },
   });
-  const existingItemIds = new Set(existingActions.map((a) => a.mediaItemId));
+
+  // For completed/failed non-delete actions, look up when each item's CURRENT
+  // match was detected so we can tell a continuous match (keep blocking) from a
+  // re-added item (allow re-scheduling). PENDING actions always block.
+  const completedActions = existingActions.filter((a) => a.status !== "PENDING");
+  const detectedAtByItem = new Map<string, Date>();
+  if (completedActions.length > 0) {
+    const completedItemIds = completedActions
+      .map((a) => a.mediaItemId)
+      .filter((id): id is string => id !== null);
+    const currentMatches = await prisma.ruleMatch.findMany({
+      where: { ruleSetId: ruleSet.id, mediaItemId: { in: completedItemIds } },
+      select: { mediaItemId: true, detectedAt: true },
+    });
+    for (const m of currentMatches) detectedAtByItem.set(m.mediaItemId, m.detectedAt);
+  }
+
+  const existingItemIds = new Set<string | null>();
+  for (const action of existingActions) {
+    if (action.status === "PENDING") {
+      existingItemIds.add(action.mediaItemId);
+      continue;
+    }
+    const detectedAt = action.mediaItemId ? detectedAtByItem.get(action.mediaItemId) : undefined;
+    if (completedActionBlocksReschedule(action.executedAt ?? action.createdAt, detectedAt)) {
+      existingItemIds.add(action.mediaItemId);
+    }
+  }
 
   const newItems = matchedItems.filter((item) => !existingItemIds.has(item.id as string));
 

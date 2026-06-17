@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { completedActionBlocksReschedule } from "@/lib/lifecycle/reschedule-guard";
 
 interface ActionItemMediaItem {
   id: string | null;
@@ -194,7 +195,9 @@ async function handlePendingGrouped(userId: string) {
   // estimated. Suppress when:
   // - A PENDING action exists (already scheduled)
   // - A COMPLETED/FAILED non-delete action exists (item will always still
-  //   exist after unmonitor/do-nothing, so re-scheduling would loop)
+  //   exist after unmonitor/do-nothing, so re-scheduling would loop) — but ONLY
+  //   while the item has continuously matched since that action ran. A re-added
+  //   item (current match detected after the action) is a new actionable cycle.
   // Allow estimated rows for completed DELETE actions — if the item still
   // matches, the deletion likely failed silently on disk.
   const existingActions = await prisma.lifecycleAction.findMany({
@@ -208,11 +211,8 @@ async function handlePendingGrouped(userId: string) {
         },
       ],
     },
-    select: { ruleSetId: true, mediaItemId: true },
+    select: { ruleSetId: true, mediaItemId: true, status: true, executedAt: true, createdAt: true },
   });
-  const actionedPairs = new Set(
-    existingActions.map((a) => `${a.ruleSetId}:${a.mediaItemId}`)
-  );
 
   // 2. Fetch RuleMatch records for action-enabled rule sets without any lifecycle action
   const upcomingMatches = await prisma.ruleMatch.findMany({
@@ -238,6 +238,23 @@ async function handlePendingGrouped(userId: string) {
     },
     orderBy: { detectedAt: "asc" },
   });
+
+  // detectedAt of each currently-matching (ruleSetId, mediaItemId) pair, used to
+  // decide whether a completed non-delete action still blocks its item.
+  const detectedAtByPair = new Map(
+    upcomingMatches.map((m) => [`${m.ruleSetId}:${m.mediaItemId}`, m.detectedAt])
+  );
+  const actionedPairs = new Set<string>();
+  for (const a of existingActions) {
+    const pair = `${a.ruleSetId}:${a.mediaItemId}`;
+    if (a.status === "PENDING") {
+      actionedPairs.add(pair);
+      continue;
+    }
+    if (completedActionBlocksReschedule(a.executedAt ?? a.createdAt, detectedAtByPair.get(pair))) {
+      actionedPairs.add(pair);
+    }
+  }
 
   // Filter out matches that already have a pending action
   const filteredUpcoming = upcomingMatches.filter(

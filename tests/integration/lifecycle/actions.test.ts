@@ -162,6 +162,69 @@ describe("Lifecycle Actions", () => {
       expect(body.groups[0].count).toBe(1);
     });
 
+    it("shows an estimated row for a re-added item whose match post-dates a completed non-delete action", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { title: "Movie", type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Rule",
+        enabled: true,
+        actionEnabled: true,
+        actionType: "UNMONITOR_RADARR",
+      });
+
+      // Item was unmonitored long ago, dropped out, then re-added — its current
+      // match was detected (now, via createTestRuleMatch) AFTER the action ran.
+      await createTestAction(user.id, item.id, ruleSet.id, {
+        status: "COMPLETED",
+        actionType: "UNMONITOR_RADARR",
+        executedAt: new Date("2020-01-01T00:00:00Z"),
+      });
+      await createTestRuleMatch(ruleSet.id, item.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(GET, { url: "/api/lifecycle/actions" });
+
+      const body = await expectJson<{
+        groups: { items: { estimated: boolean; mediaItem: { id: string } }[] }[];
+      }>(response, 200);
+      expect(body.groups).toHaveLength(1);
+      expect(body.groups[0].items).toHaveLength(1);
+      expect(body.groups[0].items[0].estimated).toBe(true);
+      expect(body.groups[0].items[0].mediaItem.id).toBe(item.id);
+    });
+
+    it("suppresses the estimated row for a continuously-matching item with a completed non-delete action", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { title: "Movie", type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Rule",
+        enabled: true,
+        actionEnabled: true,
+        actionType: "UNMONITOR_RADARR",
+      });
+
+      // The action ran AFTER the match was detected (the item never dropped out),
+      // so re-scheduling would loop — the estimated row must stay suppressed.
+      await createTestAction(user.id, item.id, ruleSet.id, {
+        status: "COMPLETED",
+        actionType: "UNMONITOR_RADARR",
+        executedAt: new Date("2999-01-01T00:00:00Z"),
+      });
+      await createTestRuleMatch(ruleSet.id, item.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(GET, { url: "/api/lifecycle/actions" });
+
+      const body = await expectJson<{ groups: unknown[] }>(response, 200);
+      expect(body.groups).toHaveLength(0);
+    });
+
     it("filters by status parameter", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);

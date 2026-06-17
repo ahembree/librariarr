@@ -287,6 +287,10 @@ Each action links a rule set to an *arr instance:
   The **Delete** action permanently removes files from your *arr instance and, optionally, from disk. Preview your matches carefully before enabling deletion rules.
 </Aside>
 
+<Aside type="note">
+  **Repeat scheduling.** A non-destructive action (Unmonitor, Do Nothing, tag changes) leaves the item in your library, so it keeps matching the rule. To avoid scheduling the same action on every run, Librariarr won't re-schedule an item that already has a completed action of that kind — **as long as it has matched continuously**. If the item later drops out of the match set and is **re-added** (for example, deleted and then re-downloaded), it counts as a new match and a fresh action is scheduled. Completed **Delete** actions are always eligible to re-schedule — if a "deleted" item still matches, the delete likely failed and should run again.
+</Aside>
+
 <Aside type="tip">
   See [Deletion Safety](/docs/features/deletion-safety/) for an in-depth, layer-by-layer description of every check that stands between a rule firing and a file being deleted, including the exact source locations and tests that enforce each one.
 </Aside>
