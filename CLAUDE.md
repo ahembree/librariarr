@@ -275,7 +275,7 @@ The lifecycle system operates in three phases, orchestrated by `src/lib/lifecycl
 
 - Cancels pending `LifecycleAction` records for items no longer in matches (safety net for cascading deletes, rule set edits)
 - Creates new `LifecycleAction` records with `scheduledFor = now + actionDelayDays` (only when `actionEnabled`)
-- Prevents duplicate actions via `existingItemIds` check + `skipDuplicates: true`
+- Skips scheduling for an item that already has a PENDING action (dedup) **or** a COMPLETED/FAILED action with the **same config signature** as the one being scheduled (`actionConfigSignature` in `src/lib/lifecycle/action-signature.ts` — action type + Arr instance + quality profile + tags-as-sets + flags; deliberately excludes `actionDelayDays`). This stops non-destructive actions (unmonitor/do-nothing/search/quality-change) re-firing every cycle on a still-matching item, while still letting a **changed or re-configured** action re-fire (different signature → never run before). Destructive (`DELETE*`) actions are always re-schedulable (a still-matching item after a "completed" delete likely failed silently). `skipDuplicates: true` guards concurrent runs. The **same** signature guard drives the Pending page's "estimated" rows (`GET /api/lifecycle/actions`) and the pending-deletion-bytes estimate (`GET /api/lifecycle/stats`), so Matches, Pending, and stats stay consistent
 - After **all** rule sets are processed, `processLifecycleRules` calls `syncAllCollections(userId)` **once** to push Plex collections (see Plex Collections below) — never per rule set, because a collection's membership is the union of every rule set feeding it
 
 **Phase 3 — Execution** (`executeLifecycleActions`):
