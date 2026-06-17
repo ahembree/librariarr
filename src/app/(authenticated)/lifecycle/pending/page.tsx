@@ -50,6 +50,7 @@ import { MediaCard } from "@/components/media-card";
 import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { CardSizeControl } from "@/components/card-size-control";
 import { formatDuration, formatFileSize } from "@/lib/format";
+import { formatActionTypeLabel } from "@/lib/lifecycle/action-types";
 import { MetadataLine } from "@/components/metadata-line";
 import { TabNav, type TabNavItem } from "@/components/tab-nav";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -141,35 +142,6 @@ const STATUS_COLORS: Record<string, string> = {
   COMPLETED: "bg-green/20 text-green border-green/30",
   FAILED: "bg-red/20 text-red border-red/30",
 };
-
-function formatActionType(type: string, targetQualityProfileId?: number | null): string {
-  const map: Record<string, string> = {
-    DO_NOTHING: "Monitor Only",
-    DELETE_RADARR: "Delete from Radarr",
-    DELETE_SONARR: "Delete from Sonarr",
-    DELETE_LIDARR: "Delete from Lidarr",
-    UNMONITOR_RADARR: "Unmonitor in Radarr",
-    UNMONITOR_SONARR: "Unmonitor in Sonarr",
-    UNMONITOR_LIDARR: "Unmonitor in Lidarr",
-    UNMONITOR_DELETE_FILES_RADARR: "Unmonitor & Delete Files (Radarr)",
-    UNMONITOR_DELETE_FILES_SONARR: "Unmonitor & Delete Files (Sonarr)",
-    UNMONITOR_DELETE_FILES_LIDARR: "Unmonitor & Delete Files (Lidarr)",
-    MONITOR_DELETE_FILES_RADARR: "Monitor & Delete Files (Radarr)",
-    MONITOR_DELETE_FILES_SONARR: "Monitor & Delete Files (Sonarr)",
-    MONITOR_DELETE_FILES_LIDARR: "Monitor & Delete Files (Lidarr)",
-    DELETE_FILES_RADARR: "Delete Files Only (Radarr)",
-    DELETE_FILES_SONARR: "Delete Files Only (Sonarr)",
-    DELETE_FILES_LIDARR: "Delete Files Only (Lidarr)",
-    CHANGE_QUALITY_PROFILE_RADARR: "Change Quality Profile (Radarr)",
-    CHANGE_QUALITY_PROFILE_SONARR: "Change Quality Profile (Sonarr)",
-    CHANGE_QUALITY_PROFILE_LIDARR: "Change Quality Profile (Lidarr)",
-  };
-  const label = map[type] ?? type;
-  if (type.startsWith("CHANGE_QUALITY_PROFILE_") && targetQualityProfileId != null) {
-    return `${label} → profile #${targetQualityProfileId}`;
-  }
-  return label;
-}
 
 /* ---------- Virtualized action table for a single group ---------- */
 
@@ -283,7 +255,7 @@ function VirtualizedActionTable({
                   <td className="p-4 align-middle">
                     <div className="space-y-1">
                       <p className="text-sm">
-                        {formatActionType(action.actionType, action.targetQualityProfileId)}
+                        {formatActionTypeLabel(action.actionType, action.targetQualityProfileId)}
                       </p>
                       {action.addImportExclusion && (
                         <Badge variant="outline" className="text-[10px]">
@@ -1203,7 +1175,7 @@ export default function PendingActionsPage() {
                             </Badge>
                             {group.ruleSet.actionType && (
                               <span className="text-xs text-muted-foreground">
-                                Action: {formatActionType(group.ruleSet.actionType, group.ruleSet.targetQualityProfileId)}
+                                Action: {formatActionTypeLabel(group.ruleSet.actionType, group.ruleSet.targetQualityProfileId)}
                               </span>
                             )}
                             {(group.ruleSet.addArrTags?.length > 0 || group.ruleSet.removeArrTags?.length > 0) && (
@@ -1346,7 +1318,7 @@ export default function PendingActionsPage() {
                 {(() => {
                   const group = groups.find((g) => g.ruleSet.id === confirmExecuteRuleSetId);
                   if (!group) return "Are you sure?";
-                  return `This will immediately execute ${formatActionType(group.ruleSet.actionType ?? "DO_NOTHING", group.ruleSet.targetQualityProfileId)} on ${group.count} item${group.count !== 1 ? "s" : ""} for "${group.ruleSet.name}". This action cannot be undone.`;
+                  return `This will immediately execute ${formatActionTypeLabel(group.ruleSet.actionType ?? "DO_NOTHING", group.ruleSet.targetQualityProfileId)} on ${group.count} item${group.count !== 1 ? "s" : ""} for "${group.ruleSet.name}". This action cannot be undone.`;
                 })()}
               </AlertDialogDescription>
             </AlertDialogHeader>
@@ -1393,7 +1365,7 @@ export default function PendingActionsPage() {
               <AlertDialogDescription asChild>
                 <div className="space-y-3">
                   <p>
-                    Retry {formatActionType(confirmRetryAction?.actionType ?? "", confirmRetryAction?.targetQualityProfileId)} for &quot;{confirmRetryAction?.mediaItem.title}&quot;?
+                    Retry {formatActionTypeLabel(confirmRetryAction?.actionType ?? "", confirmRetryAction?.targetQualityProfileId)} for &quot;{confirmRetryAction?.mediaItem.title}&quot;?
                   </p>
                   {confirmRetryAction?.error?.includes("title mismatch") && (() => {
                     const arrTitleMatch = confirmRetryAction.error?.match(/Arr returned "([^"]+)"/);

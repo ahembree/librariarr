@@ -91,9 +91,9 @@ export const ACTION_LABELS: Record<string, string> = {
   MONITOR_DELETE_FILES_RADARR: "Monitor & Delete Files (Radarr)",
   MONITOR_DELETE_FILES_SONARR: "Monitor & Delete Files (Sonarr)",
   MONITOR_DELETE_FILES_LIDARR: "Monitor & Delete Files (Lidarr)",
-  DELETE_FILES_RADARR: "Delete Files (Radarr)",
-  DELETE_FILES_SONARR: "Delete Files (Sonarr)",
-  DELETE_FILES_LIDARR: "Delete Files (Lidarr)",
+  DELETE_FILES_RADARR: "Delete Files Only (Radarr)",
+  DELETE_FILES_SONARR: "Delete Files Only (Sonarr)",
+  DELETE_FILES_LIDARR: "Delete Files Only (Lidarr)",
   CHANGE_QUALITY_PROFILE_RADARR: "Change Quality Profile (Radarr)",
   CHANGE_QUALITY_PROFILE_SONARR: "Change Quality Profile (Sonarr)",
   CHANGE_QUALITY_PROFILE_LIDARR: "Change Quality Profile (Lidarr)",
@@ -105,4 +105,22 @@ export const ACTION_LABELS: Record<string, string> = {
 /** Format an action type for display, falling back to the raw value. */
 export function formatActionLabel(actionType: string): string {
   return ACTION_LABELS[actionType] ?? actionType;
+}
+
+/**
+ * Format an action type for display, appending the target quality profile to
+ * CHANGE_QUALITY_PROFILE_* actions. Single source of truth for the lifecycle
+ * Pending and Matches views so their labels can't drift (and so every action
+ * type — including SEARCH_* — resolves to its friendly name instead of the raw
+ * enum). Falls back to the raw value for unknown types.
+ */
+export function formatActionTypeLabel(
+  actionType: string,
+  targetQualityProfileId?: number | null,
+): string {
+  const label = formatActionLabel(actionType);
+  if (actionType.startsWith("CHANGE_QUALITY_PROFILE_") && targetQualityProfileId != null) {
+    return `${label} → profile #${targetQualityProfileId}`;
+  }
+  return label;
 }

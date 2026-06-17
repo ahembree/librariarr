@@ -28,6 +28,7 @@ import { type ChipColorCategory } from "@/lib/theme/chip-colors";
 import { MEDIA_TYPE_BADGE_COLORS, mediaTypeLabel } from "@/lib/theme/media-type-colors";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatFileSize, formatDuration } from "@/lib/format";
+import { formatActionTypeLabel } from "@/lib/lifecycle/action-types";
 import { cn } from "@/lib/utils";
 import type { MediaItemWithRelations } from "@/lib/types";
 import {
@@ -821,35 +822,8 @@ export default function RuleMatchesPage() {
     });
   };
 
-  const formatActionType = (type: string | null, targetQualityProfileId?: number | null) => {
-    if (!type) return "None";
-    const map: Record<string, string> = {
-      DO_NOTHING: "Monitor Only",
-      DELETE_RADARR: "Delete from Radarr",
-      DELETE_SONARR: "Delete from Sonarr",
-      DELETE_LIDARR: "Delete from Lidarr",
-      UNMONITOR_RADARR: "Unmonitor in Radarr",
-      UNMONITOR_SONARR: "Unmonitor in Sonarr",
-      UNMONITOR_LIDARR: "Unmonitor in Lidarr",
-      UNMONITOR_DELETE_FILES_RADARR: "Unmonitor & Delete Files (Radarr)",
-      UNMONITOR_DELETE_FILES_SONARR: "Unmonitor & Delete Files (Sonarr)",
-      UNMONITOR_DELETE_FILES_LIDARR: "Unmonitor & Delete Files (Lidarr)",
-      MONITOR_DELETE_FILES_RADARR: "Monitor & Delete Files (Radarr)",
-      MONITOR_DELETE_FILES_SONARR: "Monitor & Delete Files (Sonarr)",
-      MONITOR_DELETE_FILES_LIDARR: "Monitor & Delete Files (Lidarr)",
-      DELETE_FILES_RADARR: "Delete Files Only (Radarr)",
-      DELETE_FILES_SONARR: "Delete Files Only (Sonarr)",
-      DELETE_FILES_LIDARR: "Delete Files Only (Lidarr)",
-      CHANGE_QUALITY_PROFILE_RADARR: "Change Quality Profile (Radarr)",
-      CHANGE_QUALITY_PROFILE_SONARR: "Change Quality Profile (Sonarr)",
-      CHANGE_QUALITY_PROFILE_LIDARR: "Change Quality Profile (Lidarr)",
-    };
-    const label = map[type] ?? type;
-    if (type.startsWith("CHANGE_QUALITY_PROFILE_") && targetQualityProfileId != null) {
-      return `${label} → profile #${targetQualityProfileId}`;
-    }
-    return label;
-  };
+  const formatActionType = (type: string | null, targetQualityProfileId?: number | null) =>
+    type ? formatActionTypeLabel(type, targetQualityProfileId) : "None";
 
   if (loading) {
     return (
