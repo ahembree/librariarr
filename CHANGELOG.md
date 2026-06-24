@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.25.1](https://github.com/ahembree/librariarr/compare/v0.25.0...v0.25.1) (2026-06-24)
+
+
+### Bug Fixes
+
+* **lifecycle:** fix progress bar and seerr gating ([3bd6926](https://github.com/ahembree/librariarr/commit/3bd69261ac48a9af16705f94834ecf547cf49070))
+* **lifecycle:** fix progress bar and seerr gating ([9a9f88c](https://github.com/ahembree/librariarr/commit/9a9f88cfc5c0b97bbe989ca6a10b19446c321955))
+
 ## [0.25.0](https://github.com/ahembree/librariarr/compare/v0.24.0...v0.25.0) (2026-06-17)
 
 
