@@ -1325,7 +1325,7 @@ function evaluateRuleAgainstItem(
   // Date fields
   const dateFields = new Set([
     "lastPlayedAt", "addedAt", "originallyAvailableAt",
-    "latestEpisodeViewDate", "lastEpisodeAddedAt", "lastEpisodeAiredAt",
+    "latestEpisodeViewDate", "lastEpisodeAddedAt", "lastEpisodeAiredAt", "seriesLastPlayedAt",
   ]);
   if (dateFields.has(field)) {
     const itemDate = itemValue ? new Date(itemValue as string) : null;
@@ -1720,7 +1720,7 @@ function getActualValueForField(
   // Date fields
   const dateFields = new Set([
     "lastPlayedAt", "addedAt", "originallyAvailableAt",
-    "latestEpisodeViewDate", "lastEpisodeAddedAt", "lastEpisodeAiredAt",
+    "latestEpisodeViewDate", "lastEpisodeAddedAt", "lastEpisodeAiredAt", "seriesLastPlayedAt",
   ]);
   if (dateFields.has(field)) {
     return fmtDate(item[field]) ?? "N/A";
@@ -2290,6 +2290,12 @@ export async function evaluateSeriesScope(
           : series.addedAt
         : null,
       streams: series.allStreams ?? [],
+      // MAX(lastPlayedAt) across all episodes — the "Series Last Played" aggregate.
+      seriesLastPlayedAt: series.lastPlayedAt
+        ? series.lastPlayedAt instanceof Date
+          ? series.lastPlayedAt.toISOString()
+          : series.lastPlayedAt
+        : null,
       latestEpisodeViewDate: series.latestEpisodeViewDate
         ? series.latestEpisodeViewDate instanceof Date
           ? series.latestEpisodeViewDate.toISOString()
@@ -2331,6 +2337,7 @@ export async function evaluateSeriesScope(
           watchedEpisodeCount: item.watchedEpisodeCount,
           watchedEpisodePercentage: item.watchedEpisodePercentage,
           latestEpisodeViewDate: item.latestEpisodeViewDate,
+          seriesLastPlayedAt: item.seriesLastPlayedAt,
           lastEpisodeAddedAt: item.lastEpisodeAddedAt,
           lastEpisodeAiredAt: item.lastEpisodeAiredAt,
         };
@@ -2368,6 +2375,8 @@ export async function evaluateSeriesScope(
     // series-scope rules (these only exist on the enriched evaluation object,
     // not on the raw aggregated series record)
     latestEpisodeViewDate: item.latestEpisodeViewDate ?? null,
+    // MAX(lastPlayedAt) across all episodes — the aggregate already stores it on lastPlayedAt.
+    seriesLastPlayedAt: item.lastPlayedAt ?? null,
     availableEpisodeCount: item.episodeCount,
     watchedEpisodePercentage: item.episodeCount > 0
       ? (item.watchedEpisodeCount / item.episodeCount) * 100

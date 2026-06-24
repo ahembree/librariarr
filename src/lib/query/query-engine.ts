@@ -1283,7 +1283,7 @@ function evaluateQueryRuleInMemory(
     // Series-aggregate date fields (attached by serializeSeriesAggregateForEval).
     // Without these, aggregate date comparisons fell through to the text
     // default and every comparison operator returned false.
-    "latestEpisodeViewDate", "lastEpisodeAddedAt", "lastEpisodeAiredAt"]);
+    "latestEpisodeViewDate", "lastEpisodeAddedAt", "lastEpisodeAiredAt", "seriesLastPlayedAt"]);
   if (dateFields.has(field)) {
     const raw = item[field];
     const itemDate = raw ? new Date(String(raw)) : null;

@@ -109,6 +109,7 @@ export const CONDITION_FIELDS: ConditionField[] = [
 
   // ─── Series (aggregate fields, computed by aggregating across episodes) ─
   { value: "latestEpisodeViewDate", label: "Latest Episode View Date", type: "date", section: "series", isSeriesAggregate: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
+  { value: "seriesLastPlayedAt", label: "Series Last Played", type: "date", section: "series", isSeriesAggregate: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
   { value: "availableEpisodeCount", label: "Available Episode Count", type: "number", section: "series", isSeriesAggregate: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
   { value: "watchedEpisodeCount", label: "Watched Episode Count", type: "number", section: "series", isSeriesAggregate: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
   { value: "watchedEpisodePercentage", label: "Watched Episode %", type: "number", section: "series", isSeriesAggregate: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
