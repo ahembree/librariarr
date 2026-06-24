@@ -51,7 +51,7 @@ services:
       start_period: 120s
 
   playwright:
-    image: mcr.microsoft.com/playwright:v1.60.0-noble
+    image: mcr.microsoft.com/playwright:v1.61.0-noble
     working_dir: /work
     # Share the app container's network namespace so the browser reaches the app
     # at 127.0.0.1:3000. Chromium auto-upgrades http->https for non-localhost

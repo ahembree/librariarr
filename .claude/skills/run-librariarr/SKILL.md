@@ -33,7 +33,7 @@ Defaults — override via env:
 | `LIBRARIARR_ADMIN_USER` | `admin` |
 | `LIBRARIARR_ADMIN_PASS` | `librariarr-dev-pw-1234` (8-char min per `authSetupSchema`) |
 | `LIBRARIARR_APP_CONTAINER` | `librariarr-dev` |
-| `LIBRARIARR_PLAYWRIGHT_IMAGE` | `mcr.microsoft.com/playwright:v1.60.0-noble` |
+| `LIBRARIARR_PLAYWRIGHT_IMAGE` | `mcr.microsoft.com/playwright:v1.61.0-noble` |
 
 ## Run (human path)
 
@@ -116,6 +116,6 @@ Pick these because they don't depend on any user-supplied state. Adding more (me
   SKILL.md          ← this file
   driver.sh         ← bash dispatcher (up | setup | smoke | logs | down | clean | screenshot)
   screenshot.mjs    ← Playwright helper called from `driver.sh screenshot`
-  package.json      ← declares playwright@1.60.0 (installed via --ignore-workspace)
+  package.json      ← declares playwright@1.61.0 (installed via --ignore-workspace)
   .gitignore        ← excludes node_modules/, pnpm-lock.yaml, .cookies, screenshots/
 ```
