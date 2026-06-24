@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.26.0](https://github.com/ahembree/librariarr/compare/v0.25.1...v0.26.0) (2026-06-24)
+
+
+### Features
+
+* **lifecycle:** add series last played criteria ([241f0ba](https://github.com/ahembree/librariarr/commit/241f0baf35c62208b79bb989d61cad8223f85778))
+
+
+### Bug Fixes
+
+* **history:** fix searching by series title ([18ae46d](https://github.com/ahembree/librariarr/commit/18ae46dca57d64e994e43b4db1adb7c7e7bf75c7))
+
 ## [0.25.1](https://github.com/ahembree/librariarr/compare/v0.25.0...v0.25.1) (2026-06-24)
 
 
