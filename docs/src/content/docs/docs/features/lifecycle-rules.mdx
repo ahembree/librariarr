@@ -144,6 +144,10 @@ These fields require a configured [Seerr](/docs/integrations/seerr/) integration
 | `seerrApprovalDate` | When approved |
 | `seerrDeclineDate` | When declined |
 
+:::caution[Seerr criteria need a connected Seerr instance]
+If a rule set uses Seerr fields but no Seerr instance is connected — for example after **importing** a rule set — the rule builder shows a **"Seerr instance required"** warning and disables Preview, Test Media, and Save until you connect Overseerr or Jellyseerr in Settings → Integrations. Without one, items requiring Seerr lookups would never match.
+:::
+
 ## Operators
 
 | Operator | Applicable Types | Description |

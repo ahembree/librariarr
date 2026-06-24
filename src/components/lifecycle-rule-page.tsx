@@ -1355,16 +1355,21 @@ export function LifecycleRulePage({
           })
         : null;
 
-      const [previewResponse, diffResponse] = await Promise.all([
-        previewPromise,
-        diffPromise,
-      ]);
-
+      // Consume the preview stream live so its progress events drive the bar.
+      // The preview fetch resolves on headers (the route returns its ReadableStream
+      // immediately), so reading it now streams progress right away while the diff
+      // request runs in parallel. Joining both with Promise.all first would block
+      // stream consumption behind the (equally heavy, non-streaming) diff, so the
+      // buffered progress events arrive in one burst and the bar never paints.
+      const previewResponse = await previewPromise;
       const previewData = await consumeProgressStream<{ items: PreviewItem[] }>(
         previewResponse,
         onPreviewProgress,
       );
       let mergedItems = previewData.items as PreviewItem[];
+
+      // diffPromise (if any) has been running in parallel since above.
+      const diffResponse = diffPromise ? await diffPromise : null;
 
       // Process diff data if available
       let nextDiffMap: Map<string, "added" | "removed" | "retained"> | null = null;
@@ -2734,10 +2739,26 @@ export function LifecycleRulePage({
             </div>
           )}
 
+          {ruleUsesSeerr && !seerrConnected && (
+            <div className="flex items-start gap-2 rounded-md border border-amber/30 bg-amber/10 p-3 text-sm">
+              <AlertTriangle className="h-4 w-4 mt-0.5 text-amber shrink-0" />
+              <div className="space-y-1">
+                <p className="font-medium text-amber">
+                  Seerr instance required
+                </p>
+                <p className="text-muted-foreground">
+                  This rule set uses Seerr criteria but no Seerr instance is connected.
+                  Connect Overseerr or Jellyseerr in Settings &rarr; Integrations so Preview,
+                  Test Media, and Save can evaluate those criteria.
+                </p>
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-wrap gap-2 pt-2">
             <Button
               onClick={handlePreview}
-              disabled={groups.length === 0 || !validateAllRules(groups) || previewing || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId)}
+              disabled={groups.length === 0 || !validateAllRules(groups) || previewing || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
               variant="secondary"
             >
               {previewing ? (
@@ -2755,7 +2776,7 @@ export function LifecycleRulePage({
                 setTestMediaResult(null);
                 setShowTestMediaDialog(true);
               }}
-              disabled={groups.length === 0 || !validateAllRules(groups) || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId)}
+              disabled={groups.length === 0 || !validateAllRules(groups) || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
               variant="secondary"
             >
               <FlaskConical className="mr-2 h-4 w-4" />
@@ -2772,7 +2793,7 @@ export function LifecycleRulePage({
                   setShowNewSaveOptions(true);
                 }
               }}
-              disabled={!isDirty || justSaved || !name || groups.length === 0 || !validateAllRules(groups) || loading || serverIds.length === 0 || (actionEnabled && (actionType !== "DO_NOTHING" || addArrTags.length > 0 || removeArrTags.length > 0) && !arrInstanceId) || (actionEnabled && isQualityProfileChangeAction(actionType) && targetQualityProfileId === null) || (actionEnabled && targetProfileMissing) || (actionEnabled && isQualityProfileChangeAction(actionType) && !!arrInstanceId && arrProfilesStatus !== "ready") || (collectionEnabled && !collectionName?.trim()) || (ruleUsesArr && !arrInstanceId)}
+              disabled={!isDirty || justSaved || !name || groups.length === 0 || !validateAllRules(groups) || loading || serverIds.length === 0 || (actionEnabled && (actionType !== "DO_NOTHING" || addArrTags.length > 0 || removeArrTags.length > 0) && !arrInstanceId) || (actionEnabled && isQualityProfileChangeAction(actionType) && targetQualityProfileId === null) || (actionEnabled && targetProfileMissing) || (actionEnabled && isQualityProfileChangeAction(actionType) && !!arrInstanceId && arrProfilesStatus !== "ready") || (collectionEnabled && !collectionName?.trim()) || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
               className={justSaved ? "bg-green hover:bg-green text-white" : ""}
             >
               {loading ? (
