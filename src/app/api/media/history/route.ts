@@ -89,8 +89,8 @@ export async function GET(request: NextRequest) {
   }
 
   if (search) {
-    conditions.push(`mi."title" ILIKE $${paramIdx++}`);
-    params.push(`%${search}%`);
+    conditions.push(`(mi."title" ILIKE $${paramIdx++} OR mi."parentTitle" ILIKE $${paramIdx++})`);
+    params.push(`%${search}%`, `%${search}%`);
   }
 
   if (startsWith) {
