@@ -152,6 +152,31 @@ describe("serializeSeriesAggregateForEval", () => {
     expect(item.lastPlayedAt).toBe("2025-03-15T12:00:00.000Z");
   });
 
+  it("exposes seriesLastPlayedAt as MAX(lastPlayedAt) across all episodes", () => {
+    const recent = new Date("2025-12-01T00:00:00.000Z");
+    const old = new Date("2024-01-01T00:00:00.000Z");
+    const episodes: AggregableEpisode[] = [
+      // Newest episode by number played long ago; an earlier episode played recently.
+      ep({ id: "e1", parentTitle: "S", libraryId: "L", seasonNumber: 1, episodeNumber: 1, lastPlayedAt: recent }),
+      ep({ id: "e2", parentTitle: "S", libraryId: "L", seasonNumber: 9, episodeNumber: 9, lastPlayedAt: old }),
+    ];
+    const [series] = aggregateEpisodesIntoSeries(episodes);
+    const item = serializeSeriesAggregateForEval(series);
+    // MAX across all episodes — distinct from latestEpisodeViewDate (newest episode's date).
+    expect(item.seriesLastPlayedAt).toBe("2025-12-01T00:00:00.000Z");
+    expect(item.latestEpisodeViewDate).toBe("2024-01-01T00:00:00.000Z");
+  });
+
+  it("seriesLastPlayedAt is null when no episode has been played", () => {
+    const episodes: AggregableEpisode[] = [
+      ep({ id: "e1", parentTitle: "S", libraryId: "L" }),
+      ep({ id: "e2", parentTitle: "S", libraryId: "L" }),
+    ];
+    const [series] = aggregateEpisodesIntoSeries(episodes);
+    const item = serializeSeriesAggregateForEval(series);
+    expect(item.seriesLastPlayedAt).toBeNull();
+  });
+
   it("aliases episodeCount to availableEpisodeCount on the eval object", () => {
     const episodes: AggregableEpisode[] = [
       ep({ id: "e1", parentTitle: "S", libraryId: "L" }),

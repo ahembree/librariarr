@@ -399,4 +399,13 @@ describe("evaluateAllQueryRulesInMemory — series-aggregate comparisons (F3)", 
     expect(evaluateAllQueryRulesInMemory(grp({ field: "latestEpisodeViewDate", operator: "before", value: "2024-01-01" }), { id: "1", latestEpisodeViewDate: "2023-06-01T00:00:00Z" }, undefined, undefined)).toBe(true);
     expect(evaluateAllQueryRulesInMemory(grp({ field: "latestEpisodeViewDate", operator: "before", value: "2024-01-01" }), { id: "2", latestEpisodeViewDate: "2025-06-01T00:00:00Z" }, undefined, undefined)).toBe(false);
   });
+
+  it("seriesLastPlayedAt notInLastDays compares the series MAX play date", () => {
+    const longAgo = new Date(Date.now() - 400 * 86400_000).toISOString();
+    const recent = new Date(Date.now() - 30 * 86400_000).toISOString();
+    // Series whose MAX play is >365d ago matches "not played in last 365 days".
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "seriesLastPlayedAt", operator: "notInLastDays", value: "365" }), { id: "1", seriesLastPlayedAt: longAgo }, undefined, undefined)).toBe(true);
+    // Series with a recent play (e.g. one episode a month ago) does NOT match.
+    expect(evaluateAllQueryRulesInMemory(grp({ field: "seriesLastPlayedAt", operator: "notInLastDays", value: "365" }), { id: "2", seriesLastPlayedAt: recent }, undefined, undefined)).toBe(false);
+  });
 });

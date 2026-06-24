@@ -169,6 +169,10 @@ export function serializeSeriesAggregateForEval(
     lastPlayedAt: toIsoOrNull(series.lastPlayedAt),
     addedAt: toIsoOrNull(series.addedAt),
     streams: series.allStreams ?? [],
+    // MAX(lastPlayedAt) across all episodes — exposed as the "Series Last Played"
+    // aggregate field (distinct from per-episode lastPlayedAt and from
+    // latestEpisodeViewDate, which is the newest episode's play date).
+    seriesLastPlayedAt: toIsoOrNull(series.lastPlayedAt),
     latestEpisodeViewDate: toIsoOrNull(series.latestEpisodeViewDate),
     availableEpisodeCount: series.episodeCount,
     watchedEpisodeCount: series.watchedEpisodeCount,

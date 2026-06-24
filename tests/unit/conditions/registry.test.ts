@@ -120,7 +120,7 @@ describe("CONDITION_FIELDS registry", () => {
     expect(values).toContain("ratingCount");
   });
 
-  it("includes the 6 series-aggregate fields (previously rules-only)", () => {
+  it("includes the series-aggregate fields (previously rules-only)", () => {
     const values = CONDITION_FIELDS.map((f) => f.value);
     expect(values).toContain("watchedEpisodeCount");
     expect(values).toContain("watchedEpisodePercentage");
@@ -128,6 +128,16 @@ describe("CONDITION_FIELDS registry", () => {
     expect(values).toContain("latestEpisodeViewDate");
     expect(values).toContain("lastEpisodeAddedAt");
     expect(values).toContain("lastEpisodeAiredAt");
+    expect(values).toContain("seriesLastPlayedAt");
+  });
+
+  it("seriesLastPlayedAt is a series-aggregate date field excluded for MOVIE/MUSIC", () => {
+    const field = CONDITION_FIELDS.find((f) => f.value === "seriesLastPlayedAt");
+    expect(field).toBeDefined();
+    expect(field!.type).toBe("date");
+    expect(field!.isSeriesAggregate).toBe(true);
+    expect(isSeriesAggregateField("seriesLastPlayedAt")).toBe(true);
+    expect([...(field!.invalidForLibraryType ?? [])].sort()).toEqual(["MOVIE", "MUSIC"]);
   });
 });
 
