@@ -1,14 +1,15 @@
 /**
  * Shared cross-system enrichment for the lifecycle rule engine and the
  * query builder. Both engines batch-fetch `serverCount` (via dedupKey),
- * `matchedRuleSets` (via RuleMatch), and `hasPendingAction` (via
- * LifecycleAction) for the same set of candidate item IDs to support
- * the cross-system rule fields (`serverCount`, `matchedRuleSets`,
- * `hasPendingAction`).
+ * `matchedRuleSets` (via RuleMatch), `hasPendingAction` (via
+ * LifecycleAction), and `excludedInLibrariarr` (via LifecycleException)
+ * for the same set of candidate item IDs to support the cross-system
+ * rule fields (`serverCount`, `matchedRuleSets`, `hasPendingAction`,
+ * `excludedInLibrariarr`).
  *
  * The function initializes every requested ID with default values
- * (single-server, no matches, no pending action) so callers can index
- * without null checks even when the relevant tables have no rows.
+ * (single-server, no matches, no pending action, not excluded) so callers
+ * can index without null checks even when the relevant tables have no rows.
  */
 import { prisma } from "@/lib/db";
 
@@ -16,6 +17,7 @@ export interface CrossSystemDataEntry {
   serverCount: number;
   matchedRuleSets: string[];
   hasPendingAction: boolean;
+  excludedInLibrariarr: boolean;
 }
 
 export type CrossSystemDataMap = Map<string, CrossSystemDataEntry>;
@@ -25,7 +27,7 @@ export async function fetchCrossSystemData(itemIds: string[]): Promise<CrossSyst
   if (itemIds.length === 0) return result;
 
   for (const id of itemIds) {
-    result.set(id, { serverCount: 1, matchedRuleSets: [], hasPendingAction: false });
+    result.set(id, { serverCount: 1, matchedRuleSets: [], hasPendingAction: false, excludedInLibrariarr: false });
   }
 
   // Server count via dedupKey
@@ -72,6 +74,17 @@ export async function fetchCrossSystemData(itemIds: string[]): Promise<CrossSyst
     if (!action.mediaItemId) continue;
     const entry = result.get(action.mediaItemId);
     if (entry) entry.hasPendingAction = true;
+  }
+
+  // Lifecycle exceptions (items the user has excluded from lifecycle processing)
+  const exceptions = await prisma.lifecycleException.findMany({
+    where: { mediaItemId: { in: itemIds } },
+    select: { mediaItemId: true },
+    distinct: ["mediaItemId"],
+  });
+  for (const exception of exceptions) {
+    const entry = result.get(exception.mediaItemId);
+    if (entry) entry.excludedInLibrariarr = true;
   }
 
   return result;

@@ -12,6 +12,9 @@ const { mockPrisma } = vi.hoisted(() => ({
     lifecycleAction: {
       findMany: vi.fn(),
     },
+    lifecycleException: {
+      findMany: vi.fn(),
+    },
   },
 }));
 
@@ -29,6 +32,7 @@ describe("fetchCrossSystemData", () => {
     mockPrisma.mediaItem.groupBy.mockResolvedValue([]);
     mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
     mockPrisma.lifecycleAction.findMany.mockResolvedValue([]);
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
   });
 
   it("returns an empty map and queries nothing for empty input", async () => {
@@ -38,6 +42,7 @@ describe("fetchCrossSystemData", () => {
     expect(mockPrisma.mediaItem.groupBy).not.toHaveBeenCalled();
     expect(mockPrisma.ruleMatch.findMany).not.toHaveBeenCalled();
     expect(mockPrisma.lifecycleAction.findMany).not.toHaveBeenCalled();
+    expect(mockPrisma.lifecycleException.findMany).not.toHaveBeenCalled();
   });
 
   it("initializes every requested id with defaults when no rows exist", async () => {
@@ -50,11 +55,13 @@ describe("fetchCrossSystemData", () => {
       serverCount: 1,
       matchedRuleSets: [],
       hasPendingAction: false,
+      excludedInLibrariarr: false,
     });
     expect(result.get("b")).toEqual({
       serverCount: 1,
       matchedRuleSets: [],
       hasPendingAction: false,
+      excludedInLibrariarr: false,
     });
     // No dedup keys → no groupBy call.
     expect(mockPrisma.mediaItem.groupBy).not.toHaveBeenCalled();
@@ -168,7 +175,25 @@ describe("fetchCrossSystemData", () => {
     });
   });
 
-  it("combines all three enrichment sources for the same item", async () => {
+  it("flags items with a lifecycle exception", async () => {
+    mockPrisma.lifecycleException.findMany.mockResolvedValueOnce([
+      { mediaItemId: "a" },
+      { mediaItemId: "ghost" }, // not in requested ids
+    ]);
+
+    const result = await fetchCrossSystemData(["a", "b"]);
+
+    expect(result.get("a")?.excludedInLibrariarr).toBe(true);
+    expect(result.get("b")?.excludedInLibrariarr).toBe(false);
+
+    expect(mockPrisma.lifecycleException.findMany).toHaveBeenCalledWith({
+      where: { mediaItemId: { in: ["a", "b"] } },
+      select: { mediaItemId: true },
+      distinct: ["mediaItemId"],
+    });
+  });
+
+  it("combines all enrichment sources for the same item", async () => {
     mockPrisma.mediaItem.findMany.mockResolvedValueOnce([
       { id: "a", dedupKey: "k1" },
     ]);
@@ -181,6 +206,9 @@ describe("fetchCrossSystemData", () => {
     mockPrisma.lifecycleAction.findMany.mockResolvedValueOnce([
       { mediaItemId: "a" },
     ]);
+    mockPrisma.lifecycleException.findMany.mockResolvedValueOnce([
+      { mediaItemId: "a" },
+    ]);
 
     const result = await fetchCrossSystemData(["a"]);
 
@@ -188,6 +216,7 @@ describe("fetchCrossSystemData", () => {
       serverCount: 2,
       matchedRuleSets: ["Watched"],
       hasPendingAction: true,
+      excludedInLibrariarr: true,
     });
   });
 

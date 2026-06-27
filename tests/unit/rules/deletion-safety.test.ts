@@ -135,6 +135,7 @@ describe("Empty-WHERE field categorization (invariants)", () => {
     expect(isCrossSystemField("serverCount")).toBe(true);
     expect(isCrossSystemField("matchedByRuleSet")).toBe(true);
     expect(isCrossSystemField("hasPendingAction")).toBe(true);
+    expect(isCrossSystemField("excludedInLibrariarr")).toBe(true);
     expect(isCrossSystemField("title")).toBe(false);
   });
 

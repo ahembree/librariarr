@@ -62,6 +62,7 @@ export const CONDITION_FIELDS: ConditionField[] = [
   { value: "serverCount", label: "Server Count", type: "number", section: "cross" },
   { value: "matchedByRuleSet", label: "Matched By Rule Set", type: "text", section: "cross", enumerable: true },
   { value: "hasPendingAction", label: "Has Pending Action", type: "boolean", section: "cross", knownValues: ["true", "false"] },
+  { value: "excludedInLibrariarr", label: "Excluded in Librariarr", type: "boolean", section: "cross", knownValues: ["true", "false"] },
 
   // ─── External IDs ───────────────────────────────────────────────────────
   { value: "hasExternalId", label: "Has External ID", type: "text", section: "external", enumerable: true, knownValues: ["TMDB", "TVDB", "IMDB", "MUSICBRAINZ"] },

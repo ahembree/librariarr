@@ -88,6 +88,7 @@ describe("isCrossSystemQueryField", () => {
     expect(isCrossSystemQueryField("serverCount")).toBe(true);
     expect(isCrossSystemQueryField("matchedByRuleSet")).toBe(true);
     expect(isCrossSystemQueryField("hasPendingAction")).toBe(true);
+    expect(isCrossSystemQueryField("excludedInLibrariarr")).toBe(true);
   });
 
   it("returns false for non-cross-system fields", () => {

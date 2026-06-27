@@ -507,7 +507,7 @@ export async function executeQuery(
   // Unified in-memory evaluation for flat items (handles ALL rules with correct AND/OR logic)
   if (needsFullInMemoryEval) {
     onProgress?.({ type: "phase", key: "evaluate", fraction: 0 });
-    let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }> | undefined;
+    let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean; excludedInLibrariarr: boolean }> | undefined;
     if (hasCrossSystem) {
       crossSystemData = await fetchCrossSystemData(serializedFlat.map((i) => i.id as string));
     }
@@ -520,6 +520,7 @@ export async function executeQuery(
           item.serverCount = crossData.serverCount;
           item.matchedRuleSets = crossData.matchedRuleSets;
           item.hasPendingAction = crossData.hasPendingAction;
+          item.excludedInLibrariarr = crossData.excludedInLibrariarr;
         }
       }
       const { arrMeta, seerrMeta } = lookupExternalMeta(item, arrDataByType, seerrDataByType);
@@ -674,7 +675,7 @@ async function executeEpisodesWithSeriesAggregate(
   onProgress?.({ type: "phase", key: "evaluate", fraction: 0 });
   let serializedFlat = flatRows.map(serializeItem);
   if (hasFlatTypes) {
-    let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }> | undefined;
+    let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean; excludedInLibrariarr: boolean }> | undefined;
     if (hasCrossSystemRules(groups)) {
       crossSystemData = await fetchCrossSystemData(serializedFlat.map((i) => i.id as string));
     }
@@ -685,6 +686,7 @@ async function executeEpisodesWithSeriesAggregate(
           item.serverCount = crossData.serverCount;
           item.matchedRuleSets = crossData.matchedRuleSets;
           item.hasPendingAction = crossData.hasPendingAction;
+          item.excludedInLibrariarr = crossData.excludedInLibrariarr;
         }
       }
       const { arrMeta, seerrMeta } = lookupExternalMeta(item, arrDataByType, seerrDataByType);
@@ -799,7 +801,7 @@ async function executeUngrouped(
     // Unified in-memory evaluation: evaluates ALL rules (standard + external + wildcards)
     // with correct AND/OR group logic
     onProgress?.({ type: "phase", key: "evaluate", fraction: 0 });
-    let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }> | undefined;
+    let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean; excludedInLibrariarr: boolean }> | undefined;
     if (hasCrossSystem) {
       crossSystemData = await fetchCrossSystemData(filteredItems.map((i: Record<string, unknown>) => i.id as string));
     }
@@ -812,6 +814,7 @@ async function executeUngrouped(
           item.serverCount = crossData.serverCount;
           item.matchedRuleSets = crossData.matchedRuleSets;
           item.hasPendingAction = crossData.hasPendingAction;
+          item.excludedInLibrariarr = crossData.excludedInLibrariarr;
         }
       }
       const { arrMeta, seerrMeta } = lookupExternalMeta(item, arrDataByType, seerrDataByType);
@@ -1144,6 +1147,17 @@ function evaluateQueryRuleInMemory(
       switch (operator) {
         case "equals": result = hasPending === boolVal; break;
         case "notEquals": result = hasPending !== boolVal; break;
+        default: return false;
+      }
+      return negate ? !result : result;
+    }
+    if (field === "excludedInLibrariarr") {
+      const isExcluded = !!item.excludedInLibrariarr;
+      const boolVal = String(value).toLowerCase() === "true";
+      let result: boolean;
+      switch (operator) {
+        case "equals": result = isExcluded === boolVal; break;
+        case "notEquals": result = isExcluded !== boolVal; break;
         default: return false;
       }
       return negate ? !result : result;

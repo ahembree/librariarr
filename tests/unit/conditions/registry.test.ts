@@ -161,7 +161,8 @@ describe("Field-set predicates derive from registry", () => {
     expect(CROSS_SYSTEM_FIELDS.has("serverCount")).toBe(true);
     expect(CROSS_SYSTEM_FIELDS.has("matchedByRuleSet")).toBe(true);
     expect(CROSS_SYSTEM_FIELDS.has("hasPendingAction")).toBe(true);
-    expect(CROSS_SYSTEM_FIELDS.size).toBe(3);
+    expect(CROSS_SYSTEM_FIELDS.has("excludedInLibrariarr")).toBe(true);
+    expect(CROSS_SYSTEM_FIELDS.size).toBe(4);
   });
 
   it("STREAM_FIELDS contains the audio/subtitle stream relation fields", () => {

@@ -93,6 +93,21 @@ Over 50 fields are available for rule conditions.
 | `subtitleLanguage` | Subtitle track language |
 | `subtitleStreamCount` | Number of subtitle tracks |
 
+### Cross-System Fields
+
+These fields compare an item against state Librariarr tracks internally rather than against the item's own metadata.
+
+| Field | Description | Operators |
+|-------|-------------|-----------|
+| `serverCount` | How many connected servers hold this item | equals, greaterThan, lessThan, between, etc. |
+| `matchedByRuleSet` | Name(s) of rule set(s) currently matching this item — multi-select | equals, notEquals, contains, notContains |
+| `hasPendingAction` | Whether the item already has a pending lifecycle action scheduled | equals, notEquals |
+| `excludedInLibrariarr` | Whether the item is on the [Lifecycle Exceptions](/docs/features/deletion-safety/) list (excluded from lifecycle processing within Librariarr) | equals, notEquals |
+
+:::note[`excludedInLibrariarr` in lifecycle rules]
+The lifecycle engine already skips excepted items automatically after matching, so a lifecycle rule of `excludedInLibrariarr equals true` will never produce matches. This field is most useful in the **Query Builder** for surfacing exactly which items you've excluded — for example to review or prune your exceptions list.
+:::
+
 ### External / *arr Fields
 
 These fields require configured [Sonarr](/docs/integrations/sonarr/), [Radarr](/docs/integrations/radarr/), or [Lidarr](/docs/integrations/lidarr/) integrations.

@@ -1241,6 +1241,17 @@ function evaluateRuleAgainstItem(
       }
       return negate ? !result : result;
     }
+    if (field === "excludedInLibrariarr") {
+      const isExcluded = !!item.excludedInLibrariarr;
+      const boolVal = String(value).toLowerCase() === "true";
+      let result: boolean;
+      switch (operator) {
+        case "equals": result = isExcluded === boolVal; break;
+        case "notEquals": result = isExcluded !== boolVal; break;
+        default: return false;
+      }
+      return negate ? !result : result;
+    }
     return false;
   }
 
@@ -2629,7 +2640,7 @@ export async function evaluateLifecycleRules(
     const arrIdSource = type === "MOVIE" ? "TMDB" : type === "MUSIC" ? "MUSICBRAINZ" : "TVDB";
 
     // Batch-fetch cross-system data if needed
-    let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }> | undefined;
+    let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean; excludedInLibrariarr: boolean }> | undefined;
     if (hasCrossSystem) {
       crossSystemData = await fetchCrossSystemData(filteredItems.map((i) => i.id));
     }

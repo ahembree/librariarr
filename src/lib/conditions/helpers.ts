@@ -26,6 +26,7 @@ const CROSS_SYSTEM_FIELD_VALUES = new Set([
   "serverCount",
   "matchedByRuleSet",
   "hasPendingAction",
+  "excludedInLibrariarr",
 ]);
 const ENUMERABLE_FIELD_VALUES = new Set(
   [...CONDITION_FIELDS, ...STREAM_QUERY_FIELDS]
