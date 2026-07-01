@@ -162,11 +162,21 @@ function pickScore(scores: Record<string, number> | undefined, scoreSet?: string
 function resolveLanguage(
   trashLanguage: string | undefined,
   schema: ArrQualityProfileSchema,
+  languages: ArrLanguage[] | undefined,
+  warnings: string[],
 ): ArrLanguage | undefined {
   if (!trashLanguage) return schema.language;
   const lower = trashLanguage.toLowerCase();
   if (lower === "any") return { id: -1, name: "Any" };
   if (lower === "original") return { id: -2, name: "Original" };
+  // Named language (e.g. "French") — resolve against the instance's language
+  // list. Never silently substitute the schema default: a wrong language
+  // silently breaks the user's language filtering.
+  const match = languages?.find((l) => l.name.toLowerCase() === lower);
+  if (match) return match;
+  warnings.push(
+    `Language "${trashLanguage}" could not be resolved on this instance — keeping the profile's existing language.`,
+  );
   return schema.language;
 }
 
@@ -191,10 +201,15 @@ export function buildQualityProfile(
   service: ServiceType,
   catalogCfsByTrashId: Map<string, TrashCustomFormat>,
   existingId?: number,
+  languages?: ArrLanguage[],
   scoreSet?: string,
 ): BuildProfileResult {
   const warnings: string[] = [];
   const baseByName = flattenSchemaQualities(schema.items);
+  // The profile's declared score set selects which entry of each custom
+  // format's `trash_scores` to use. Many formats have no `default`, so this
+  // must be honored or their scores collapse to 0.
+  const resolvedScoreSet = scoreSet ?? trash.trash_score_set;
 
   const items: ArrProfileItem[] = [];
   const used = new Set<string>();
@@ -260,7 +275,7 @@ export function buildQualityProfile(
   const byName = new Map(formatItems.map((f) => [f.name, f]));
   for (const [cfName, cfTrashId] of Object.entries(trash.formatItems ?? {})) {
     const catalogCf = catalogCfsByTrashId.get(cfTrashId);
-    const score = pickScore(catalogCf?.trash_scores, scoreSet);
+    const score = pickScore(catalogCf?.trash_scores, resolvedScoreSet);
     const target = byName.get(cfName) ?? byName.get(catalogCf?.name ?? "");
     if (target) {
       target.score = score;
@@ -284,14 +299,23 @@ export function buildQualityProfile(
   };
   if (existingId !== undefined) payload.id = existingId;
 
-  const language = resolveLanguage(trash.language, schema);
-  if (service === "RADARR" && language) payload.language = language;
+  // Radarr profiles carry a language; Sonarr sets language per item, so we
+  // leave it off the Sonarr payload.
+  if (service === "RADARR") {
+    const language = resolveLanguage(trash.language, schema, languages, warnings);
+    if (language) payload.language = language;
+  }
 
   return { payload, warnings };
 }
 
-/** Normalize a profile (Arr or built) to a comparable shape for diffing. */
-export function profileComparable(profile: ArrQualityProfile) {
+/**
+ * Normalize a profile (Arr or built) to a comparable shape for diffing. The
+ * language is only compared for Radarr, where it lives on the profile payload;
+ * Sonarr profiles always carry a language field we never set, so including it
+ * would produce a spurious diff on every sync.
+ */
+export function profileComparable(profile: ArrQualityProfile, service: ServiceType) {
   const idToName = new Map<number, string>();
   const orderedQualities: Array<{ name: string; allowed: boolean }> = [];
   for (const it of profile.items ?? []) {
@@ -311,6 +335,9 @@ export function profileComparable(profile: ArrQualityProfile) {
     minFormatScore: profile.minFormatScore,
     cutoffFormatScore: profile.cutoffFormatScore,
     minUpgradeFormatScore: profile.minUpgradeFormatScore ?? null,
+    ...(service === "RADARR"
+      ? { language: profile.language?.name ?? profile.language?.id ?? null }
+      : {}),
     qualities: orderedQualities,
     formatScores,
   };

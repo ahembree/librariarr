@@ -30,6 +30,8 @@ export function trashProfileHash(p: TrashQualityProfile): string {
     minFormatScore: p.minFormatScore ?? 0,
     cutoffFormatScore: p.cutoffFormatScore ?? 0,
     minUpgradeFormatScore: p.minUpgradeFormatScore ?? 1,
+    scoreSet: p.trash_score_set ?? "default",
+    language: p.language ?? null,
     items: p.items,
     formatItems: p.formatItems ?? {},
   });

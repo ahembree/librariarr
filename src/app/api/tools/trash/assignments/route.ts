@@ -48,39 +48,44 @@ export async function POST(request: NextRequest) {
   const instanceKey = managedInstanceWhere(data.serviceType, data.instanceId);
   const results = [];
   for (const item of data.items) {
-    const existing = await prisma.trashManagedResource.findFirst({
-      where: {
+    // Atomic upsert on the (user, instance, resource) composite unique — a
+    // concurrent double-submit can't create duplicate managed rows. Re-assigning
+    // an already-managed resource just refreshes its metadata (e.g. a changed
+    // naming selection).
+    const selectionData =
+      item.selection !== undefined ? { selection: item.selection as object } : {};
+    const where =
+      data.serviceType === "SONARR"
+        ? {
+            userId_sonarrInstanceId_resourceType_trashId: {
+              userId: session.userId!,
+              sonarrInstanceId: data.instanceId,
+              resourceType: item.resourceType,
+              trashId: item.trashId,
+            },
+          }
+        : {
+            userId_radarrInstanceId_resourceType_trashId: {
+              userId: session.userId!,
+              radarrInstanceId: data.instanceId,
+              resourceType: item.resourceType,
+              trashId: item.trashId,
+            },
+          };
+    const upserted = await prisma.trashManagedResource.upsert({
+      where,
+      create: {
         userId: session.userId!,
+        serviceType: data.serviceType,
         ...instanceKey,
         resourceType: item.resourceType,
         trashId: item.trashId,
+        name: item.name,
+        ...selectionData,
       },
+      update: { name: item.name, ...selectionData },
     });
-    if (existing) {
-      // Re-assigning an already-managed resource just refreshes its metadata
-      // (e.g. a changed naming selection).
-      const updated = await prisma.trashManagedResource.update({
-        where: { id: existing.id },
-        data: {
-          name: item.name,
-          ...(item.selection !== undefined ? { selection: item.selection as object } : {}),
-        },
-      });
-      results.push(updated);
-    } else {
-      const created = await prisma.trashManagedResource.create({
-        data: {
-          userId: session.userId!,
-          serviceType: data.serviceType,
-          ...instanceKey,
-          resourceType: item.resourceType,
-          trashId: item.trashId,
-          name: item.name,
-          ...(item.selection !== undefined ? { selection: item.selection as object } : {}),
-        },
-      });
-      results.push(created);
-    }
+    results.push(upserted);
   }
 
   return NextResponse.json({ assignments: results }, { status: 201 });

@@ -83,6 +83,7 @@ interface StatusItem {
   arrId?: number | null;
   managedResourceId?: string;
   lastSyncedAt?: string | null;
+  selection?: NamingSelection | null;
 }
 
 interface TrashStatus {
@@ -597,6 +598,7 @@ export default function TrashSyncPage() {
               )}
               {namingItem && (
                 <NamingCard
+                  key={`${selected.serviceType}:${selected.id}`}
                   service={selected.serviceType}
                   item={namingItem}
                   naming={catalog?.naming ?? null}
@@ -845,7 +847,9 @@ function NamingCard({
   onUnmanage: () => void;
   onPreview: (selection: NamingSelection) => void;
 }) {
-  const [sel, setSel] = useState<NamingSelection>({});
+  // Seed from the currently-managed selection so a managed naming item shows
+  // its variants (the card is keyed per instance, so this re-seeds on switch).
+  const [sel, setSel] = useState<NamingSelection>(item.selection ?? {});
   const meta = STATUS_META[item.status];
 
   const groups: { key: keyof NamingSelection; label: string; options: Record<string, string> }[] = [];

@@ -191,10 +191,63 @@ describe("quality profile builder", () => {
 
   it("comparable reflects allowed set, cutoff name and non-zero scores", () => {
     const { payload } = buildQualityProfile(trash, schema, "RADARR", cfMap);
-    const comp = profileComparable(payload);
+    const comp = profileComparable(payload, "RADARR");
     expect(comp.cutoff).toBe("Bluray-1080p");
     expect(comp.formatScores).toEqual({ "Tier 01": 100 });
     expect(comp.qualities.find((q) => q.name === "Bluray-720p")?.allowed).toBe(true);
+  });
+
+  it("honors the profile's declared score set (not just default)", () => {
+    // A profile with a named score set must pull each CF's score from that set,
+    // falling back to default only when the set key is absent.
+    const t: TrashQualityProfile = { ...trash, trash_score_set: "anime-radarr", formatItems: { "Tier 01": "cf-a", "Tier 02": "cf-b" } };
+    const map = new Map<string, TrashCustomFormat>([
+      // Has the named set → use it (975, not the default 1950).
+      ["cf-a", { trash_id: "cf-a", name: "Tier 01", trash_scores: { default: 1950, "anime-radarr": 975 }, specifications: [] }],
+      // Score-set-only format (no default) → the set value, not 0.
+      ["cf-b", { trash_id: "cf-b", name: "Tier 02", trash_scores: { "anime-radarr": -10000 }, specifications: [] }],
+    ]);
+    // schema.formatItems must list both CFs so scores can be applied.
+    const sch = { ...schema, formatItems: [{ format: 101, name: "Tier 01", score: 0 }, { format: 102, name: "Tier 02", score: 0 }] };
+    const { payload } = buildQualityProfile(t, sch, "RADARR", map);
+    expect(payload.formatItems.find((f) => f.name === "Tier 01")?.score).toBe(975);
+    expect(payload.formatItems.find((f) => f.name === "Tier 02")?.score).toBe(-10000);
+  });
+
+  it("resolves a named language against the instance language list", () => {
+    const langs = [
+      { id: -1, name: "Any" },
+      { id: 8, name: "French" },
+    ];
+    const t: TrashQualityProfile = { ...trash, language: "French" };
+    const { payload, warnings } = buildQualityProfile(t, schema, "RADARR", cfMap, undefined, langs);
+    expect(payload.language).toEqual({ id: 8, name: "French" });
+    expect(warnings).toEqual([]);
+  });
+
+  it("warns (does not silently substitute) when a named language can't be resolved", () => {
+    const t: TrashQualityProfile = { ...trash, language: "French" };
+    const { warnings } = buildQualityProfile(t, schema, "RADARR", cfMap, undefined, []);
+    expect(warnings.some((w) => w.includes("French"))).toBe(true);
+  });
+
+  it("includes language in the Radarr comparable so a language change is a real diff", () => {
+    const base = {
+      name: "P",
+      upgradeAllowed: true,
+      cutoff: 0,
+      items: [],
+      minFormatScore: 0,
+      cutoffFormatScore: 0,
+      formatItems: [],
+    };
+    const before = profileComparable({ ...base, language: { id: -1, name: "Any" } }, "RADARR");
+    const after = profileComparable({ ...base, language: { id: 8, name: "French" } }, "RADARR");
+    expect((before as { language?: unknown }).language).toBe("Any");
+    expect((after as { language?: unknown }).language).toBe("French");
+    // Sonarr comparable omits language entirely (never set on the payload).
+    const sonarr = profileComparable({ ...base, language: { id: 1, name: "x" } }, "SONARR");
+    expect(sonarr).not.toHaveProperty("language");
   });
 });
 

@@ -9,6 +9,7 @@ import type {
   ArrQualityProfileSchema,
   ArrQualityDefinition,
   ArrNamingConfig,
+  ArrLanguage,
 } from "./types";
 
 /**
@@ -92,6 +93,13 @@ export class GuideArrClient {
       `/api/v3/customformat/${id}`,
       { ...cf, id },
     );
+    return data;
+  }
+
+  // ─── Languages (Radarr profile language resolution) ───
+
+  async getLanguages(): Promise<ArrLanguage[]> {
+    const { data } = await this.client.get<ArrLanguage[]>("/api/v3/language");
     return data;
   }
 

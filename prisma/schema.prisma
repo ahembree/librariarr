@@ -684,6 +684,12 @@ model TrashManagedResource {
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
+  // One managed row per (user, instance, resource). Two composite uniques —
+  // one per instance FK — because exactly one FK is set per row; the other is
+  // NULL (and Postgres treats NULLs as distinct, so each constraint only
+  // governs the rows whose FK it names). Makes assignment an atomic upsert.
+  @@unique([userId, sonarrInstanceId, resourceType, trashId])
+  @@unique([userId, radarrInstanceId, resourceType, trashId])
   @@index([userId])
   @@index([sonarrInstanceId])
   @@index([radarrInstanceId])

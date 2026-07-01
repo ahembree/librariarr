@@ -33,6 +33,7 @@ import type {
   ArrQualityProfileSchema,
   ArrQualityDefinition,
   ArrNamingConfig,
+  ArrLanguage,
 } from "./types";
 
 interface Target {
@@ -81,12 +82,14 @@ export async function runTrashSync(
   let schema: ArrQualityProfileSchema | undefined;
   let qualityDefs: ArrQualityDefinition[] | undefined;
   let namingConfig: ArrNamingConfig | undefined;
+  let languages: ArrLanguage[] | undefined;
 
   const getArrCfs = async () => (arrCfs ??= await client.getCustomFormats());
   const getArrProfiles = async () => (arrProfiles ??= await client.getQualityProfiles());
   const getSchema = async () => (schema ??= await client.getQualityProfileSchema());
   const getQualityDefs = async () => (qualityDefs ??= await client.getQualityDefinitions());
   const getNaming = async () => (namingConfig ??= await client.getNamingConfig());
+  const getLanguages = async () => (languages ??= await client.getLanguages());
 
   const items: PlanItem[] = [];
 
@@ -98,10 +101,12 @@ export async function runTrashSync(
           break;
         case "QUALITY_PROFILE": {
           // Fetch the schema at profile time so custom formats created earlier in
-          // this same apply are visible for scoring.
+          // this same apply are visible for scoring. Radarr profiles also carry a
+          // language, resolved against the instance's language list.
           const [profiles, sch] = [await getArrProfiles(), await getSchema()];
+          const langs = inst.serviceType === "RADARR" ? await getLanguages() : undefined;
           items.push(
-            await planQualityProfile(target, catalog, profiles, sch, cfMapByTrashId, inst, opts, client, userId),
+            await planQualityProfile(target, catalog, profiles, sch, langs, cfMapByTrashId, inst, opts, client, userId),
           );
           break;
         }
@@ -226,6 +231,7 @@ async function planQualityProfile(
   catalog: TrashCatalog,
   arrProfiles: ArrQualityProfile[],
   schema: ArrQualityProfileSchema,
+  languages: ArrLanguage[] | undefined,
   cfMapByTrashId: Map<string, TrashCustomFormat>,
   inst: ResolvedInstance,
   opts: SyncOptions,
@@ -243,9 +249,10 @@ async function planQualityProfile(
     inst.serviceType,
     cfMapByTrashId,
     existing?.id,
+    languages,
   );
-  const before = existing ? profileComparable(existing) : null;
-  const after = profileComparable(payload);
+  const before = existing ? profileComparable(existing, inst.serviceType) : null;
+  const after = profileComparable(payload, inst.serviceType);
   const diff = diffValues(before, after);
   const action = existing ? (diff.length ? "UPDATE" : "NOOP") : "CREATE";
 

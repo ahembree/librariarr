@@ -194,6 +194,7 @@ export async function computeTrashStatus(
       arrId: null,
       managedResourceId: m?.id,
       lastSyncedAt: m?.lastSyncedAt?.toISOString() ?? null,
+      selection,
     });
   }
 

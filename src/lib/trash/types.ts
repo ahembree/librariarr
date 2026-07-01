@@ -56,6 +56,12 @@ export interface TrashQualityProfile {
   name: string;
   trash_description?: string;
   trash_url?: string;
+  /**
+   * Which named score set (from each custom format's `trash_scores`) this
+   * profile uses. Absent ⇒ the `default` set. Score-set-only formats have no
+   * `default` key, so this must be honored or their scores come out as 0.
+   */
+  trash_score_set?: string;
   upgradeAllowed?: boolean;
   cutoff: string;
   minFormatScore?: number;
@@ -242,6 +248,8 @@ export interface TrashStatusItem {
   arrId?: number | null;
   managedResourceId?: string;
   lastSyncedAt?: string | null;
+  /** Currently-managed naming variant selection (NAMING resources only). */
+  selection?: NamingSelection | null;
 }
 
 export interface TrashStatus {

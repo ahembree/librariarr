@@ -30,6 +30,12 @@ CREATE INDEX "TrashManagedResource_userId_idx" ON "TrashManagedResource"("userId
 CREATE INDEX "TrashManagedResource_sonarrInstanceId_idx" ON "TrashManagedResource"("sonarrInstanceId");
 CREATE INDEX "TrashManagedResource_radarrInstanceId_idx" ON "TrashManagedResource"("radarrInstanceId");
 
+-- One managed row per (user, instance, resource). Two composite uniques (one
+-- per instance FK) because exactly one FK is populated per row; NULLs are
+-- distinct in Postgres, so each constraint governs only the rows it names.
+CREATE UNIQUE INDEX "TrashManagedResource_userId_sonarrInstanceId_resourceType_trashId_key" ON "TrashManagedResource"("userId", "sonarrInstanceId", "resourceType", "trashId");
+CREATE UNIQUE INDEX "TrashManagedResource_userId_radarrInstanceId_resourceType_trashId_key" ON "TrashManagedResource"("userId", "radarrInstanceId", "resourceType", "trashId");
+
 -- AddForeignKey
 ALTER TABLE "TrashManagedResource"
     ADD CONSTRAINT "TrashManagedResource_userId_fkey"
