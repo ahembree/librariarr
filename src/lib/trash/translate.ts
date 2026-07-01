@@ -59,35 +59,74 @@ interface RawSpec {
   fields?: unknown;
 }
 
-function normalizeFields(fields: unknown): Array<{ name: string; value: unknown }> {
-  const arr = Array.isArray(fields)
-    ? (fields as Array<{ name?: string; value?: unknown }>).map((f) => ({
-        name: String(f.name ?? ""),
-        value: f.value,
-      }))
-    : Object.entries((fields as Record<string, unknown>) ?? {}).map(([name, value]) => ({
-        name,
-        value,
-      }));
-  return arr.sort((a, b) => a.name.localeCompare(b.name));
+/** Reduce a spec's fields (array or object form) to a name→value map. */
+function fieldsToMap(fields: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (Array.isArray(fields)) {
+    for (const f of fields as Array<{ name?: string; value?: unknown }>) {
+      if (f && f.name != null) out[String(f.name)] = f.value;
+    }
+  } else if (fields && typeof fields === "object") {
+    for (const [k, v] of Object.entries(fields as Record<string, unknown>)) out[k] = v;
+  }
+  return out;
+}
+
+interface CfComparableSpec {
+  implementation: string;
+  negate: boolean;
+  required: boolean;
+  fields: Record<string, unknown>;
+}
+
+export interface CfComparable {
+  name: string;
+  includeCustomFormatWhenRenaming: boolean;
+  /** Keyed by spec name, so ordering never matters. */
+  specifications: Record<string, CfComparableSpec>;
 }
 
 /** Normalize an Arr/guide custom format to a comparable shape (ids + field metadata stripped). */
-export function cfComparable(cf: ArrCustomFormat) {
+export function cfComparable(cf: ArrCustomFormat): CfComparable {
+  const specifications: Record<string, CfComparableSpec> = {};
+  for (const raw of (cf.specifications ?? []) as RawSpec[]) {
+    specifications[raw.name ?? ""] = {
+      implementation: raw.implementation ?? "",
+      negate: raw.negate ?? false,
+      required: raw.required ?? false,
+      fields: fieldsToMap(raw.fields),
+    };
+  }
   return {
     name: cf.name,
     includeCustomFormatWhenRenaming: cf.includeCustomFormatWhenRenaming ?? false,
-    specifications: [...(cf.specifications ?? [])]
-      .map((s) => s as RawSpec)
-      .sort((a, b) => String(a.name).localeCompare(String(b.name)))
-      .map((s) => ({
-        name: s.name ?? "",
-        implementation: s.implementation ?? "",
-        negate: s.negate ?? false,
-        required: s.required ?? false,
-        fields: normalizeFields(s.fields),
-      })),
+    specifications,
   };
+}
+
+/**
+ * Project the existing (Arr) comparable down to only the fields the guide
+ * actually manages. Sonarr/Radarr add default fields to some specifications
+ * (e.g. a LanguageSpecification stores `exceptLanguage` even when the guide
+ * only sets `value`), which the guide never sends — so without this, those
+ * defaults register as a perpetual diff and the format never reports "in sync".
+ */
+export function projectManagedFields(before: CfComparable, after: CfComparable): CfComparable {
+  const specifications: Record<string, CfComparableSpec> = {};
+  for (const [name, beforeSpec] of Object.entries(before.specifications)) {
+    const afterSpec = after.specifications[name];
+    if (!afterSpec) {
+      // Spec exists in the app but not the guide — a real change (it'll be dropped).
+      specifications[name] = beforeSpec;
+      continue;
+    }
+    const fields: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(beforeSpec.fields)) {
+      if (k in afterSpec.fields) fields[k] = v;
+    }
+    specifications[name] = { ...beforeSpec, fields };
+  }
+  return { ...before, specifications };
 }
 
 export function findArrCfByName(

@@ -3,6 +3,7 @@ import {
   specFieldsToArray,
   trashCfToArr,
   cfComparable,
+  projectManagedFields,
   findArrCfByName,
   applyQualitySizes,
   qualityDefsComparable,
@@ -11,6 +12,7 @@ import {
   applyNaming,
   namingComparable,
 } from "@/lib/trash/translate";
+import { diffValues } from "@/lib/trash/diff";
 import type {
   TrashCustomFormat,
   TrashQualityProfile,
@@ -64,6 +66,63 @@ describe("custom format translation", () => {
       ],
     };
     expect(cfComparable(fromGuide)).toEqual(cfComparable(fromArr));
+  });
+
+  it("ignores app-supplied fields the guide doesn't manage (no perpetual diff)", () => {
+    // A LanguageSpecification: the guide only sets `value`, but Sonarr/Radarr
+    // round-trips it with an extra `exceptLanguage` default.
+    const guideCf: TrashCustomFormat = {
+      trash_id: "x",
+      name: "Anime Dual Audio",
+      specifications: [
+        { name: "Japanese Language", implementation: "LanguageSpecification", negate: false, required: false, fields: { value: 8 } },
+      ],
+    };
+    const payload = trashCfToArr(guideCf);
+    const arr: ArrCustomFormat = {
+      id: 5,
+      name: "Anime Dual Audio",
+      specifications: [
+        {
+          name: "Japanese Language",
+          implementation: "LanguageSpecification",
+          negate: false,
+          required: false,
+          fields: [{ name: "exceptLanguage", value: false }, { name: "value", value: 8 }] as never,
+        },
+      ],
+    };
+    const after = cfComparable(payload);
+    const before = projectManagedFields(cfComparable(arr), after);
+    // exceptLanguage is dropped from the comparison → no changes.
+    expect(diffValues(before, after)).toEqual([]);
+  });
+
+  it("still detects a real field change after projection", () => {
+    const guideCf: TrashCustomFormat = {
+      trash_id: "x",
+      name: "Lang",
+      specifications: [
+        { name: "Japanese Language", implementation: "LanguageSpecification", negate: false, required: false, fields: { value: 8 } },
+      ],
+    };
+    const payload = trashCfToArr(guideCf);
+    const arr: ArrCustomFormat = {
+      id: 5,
+      name: "Lang",
+      specifications: [
+        {
+          name: "Japanese Language",
+          implementation: "LanguageSpecification",
+          negate: false,
+          required: false,
+          fields: [{ name: "value", value: 99 }, { name: "exceptLanguage", value: false }] as never,
+        },
+      ],
+    };
+    const after = cfComparable(payload);
+    const before = projectManagedFields(cfComparable(arr), after);
+    expect(diffValues(before, after).length).toBeGreaterThan(0);
   });
 
   it("finds an Arr custom format by name (case-insensitive fallback)", () => {

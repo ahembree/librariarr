@@ -6,6 +6,7 @@ import { diffValues } from "./diff";
 import {
   trashCfToArr,
   cfComparable,
+  projectManagedFields,
   findArrCfByName,
   applyQualitySizes,
   qualityDefsComparable,
@@ -223,8 +224,10 @@ async function planCustomFormat(
   }
   const existing = findArrCfByName(arrCfs, cf.name);
   const payload = trashCfToArr(cf, existing?.id);
-  const before = existing ? cfComparable(existing) : null;
   const after = cfComparable(payload);
+  // Compare only the fields the guide manages, so app-supplied defaults (e.g. a
+  // LanguageSpecification's exceptLanguage) don't cause a perpetual diff.
+  const before = existing ? projectManagedFields(cfComparable(existing), after) : null;
   const diff = diffValues(before, after);
   const action = existing ? (diff.length ? "UPDATE" : "NOOP") : "CREATE";
 
