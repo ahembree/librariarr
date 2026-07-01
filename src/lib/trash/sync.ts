@@ -276,7 +276,7 @@ async function planQualityProfile(
     schema,
     inst.serviceType,
     cfMapByTrashId,
-    existing?.id,
+    existing,
     languages,
   );
   const before = existing ? profileComparable(existing, inst.serviceType) : null;

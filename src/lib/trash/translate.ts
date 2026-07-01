@@ -239,7 +239,7 @@ export function buildQualityProfile(
   schema: ArrQualityProfileSchema,
   service: ServiceType,
   catalogCfsByTrashId: Map<string, TrashCustomFormat>,
-  existingId?: number,
+  existing?: ArrQualityProfile,
   languages?: ArrLanguage[],
   scoreSet?: string,
 ): BuildProfileResult {
@@ -304,12 +304,18 @@ export function buildQualityProfile(
     cutoff = highestAllowed?.quality?.id ?? highestAllowed?.id ?? items[items.length - 1]?.quality?.id ?? 0;
   }
 
-  // Format scores: start from schema.formatItems (all CFs at score 0) then set
-  // the scores for CFs the guide profile references.
+  // Format scores. Seed from the profile's EXISTING scores rather than zeroing
+  // everything, so custom formats the guide profile doesn't manage (e.g. ones
+  // assigned via PROFILE_CF or set manually) are preserved. This mirrors
+  // Recyclarr's default (`reset_unmatched_scores` off): only the CFs the guide
+  // profile references are changed; all other scores are left untouched.
+  const existingScoreByName = new Map(
+    (existing?.formatItems ?? []).map((f) => [f.name, f.score]),
+  );
   const formatItems: ArrFormatItem[] = (schema.formatItems ?? []).map((f) => ({
     format: f.format,
     name: f.name,
-    score: 0,
+    score: existingScoreByName.get(f.name) ?? 0,
   }));
   const byName = new Map(formatItems.map((f) => [f.name, f]));
   for (const [cfName, cfTrashId] of Object.entries(trash.formatItems ?? {})) {
@@ -336,7 +342,7 @@ export function buildQualityProfile(
     minUpgradeFormatScore: trash.minUpgradeFormatScore ?? 1,
     formatItems,
   };
-  if (existingId !== undefined) payload.id = existingId;
+  if (existing?.id !== undefined) payload.id = existing.id;
 
   // Radarr profiles carry a language; Sonarr sets language per item, so we
   // leave it off the Sonarr payload.

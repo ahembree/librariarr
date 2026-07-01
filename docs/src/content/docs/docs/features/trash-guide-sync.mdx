@@ -85,6 +85,8 @@ Quality profiles are rebuilt against the app's live quality schema: quality orde
 
 A quality profile only assigns scores to custom formats that **already exist** in the app. If a profile references a format you haven't managed, the sync surfaces a warning rather than silently creating the format — assign and sync that custom format too if you want its score to apply.
 
+Syncing a quality profile **does not reset** custom-format scores it doesn't manage. Only the scores the guide profile defines are changed; every other score on the profile — including ones you assigned in the **Profile Formats** tab or set yourself in the app — is preserved. (This matches Recyclarr's default, where `reset_unmatched_scores` is off.)
+
 ### Profile custom formats
 
 The **Profile Formats** tab lets you attach guide custom formats — with scores — to **any** quality profile on the instance, including profiles you created yourself in Radarr/Sonarr (not just ones imported from the guide).

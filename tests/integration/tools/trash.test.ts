@@ -83,6 +83,7 @@ const { clientMock } = vi.hoisted(() => ({
     getCustomFormats: vi.fn(),
     getQualityProfiles: vi.fn(),
     getQualityProfileSchema: vi.fn(),
+    getLanguages: vi.fn(),
     createCustomFormat: vi.fn(),
     updateCustomFormat: vi.fn(),
     createQualityProfile: vi.fn(),
@@ -125,6 +126,7 @@ function defaultClient() {
   clientMock.getCustomFormats.mockResolvedValue([]);
   clientMock.getQualityProfiles.mockResolvedValue([]);
   clientMock.getQualityProfileSchema.mockResolvedValue(SCHEMA);
+  clientMock.getLanguages.mockResolvedValue([{ id: -1, name: "Any" }]);
   clientMock.getQualityDefinitions.mockResolvedValue([
     { id: 1, quality: { id: 7, name: "Bluray-1080p" }, title: "Bluray-1080p", weight: 1, minSize: 0, maxSize: 100, preferredSize: 95 },
   ]);
@@ -422,6 +424,49 @@ describe("POST /api/tools/trash/sync", () => {
     // The quality-definition row was left unsynced.
     const qdRow = await getTestPrisma().trashManagedResource.findFirst({ where: { resourceType: "QUALITY_DEFINITION" } });
     expect(qdRow?.lastSyncedAt).toBeNull();
+  });
+
+  it("quality-profile sync preserves custom-format scores it doesn't manage", async () => {
+    const { user, radarr } = await authedUserWithRadarr();
+    // The instance profile already scores a CF the guide profile never references.
+    clientMock.getQualityProfiles.mockResolvedValue([
+      {
+        id: 3,
+        name: "HD Bluray + WEB",
+        cutoff: 7,
+        upgradeAllowed: true,
+        minFormatScore: 0,
+        cutoffFormatScore: 0,
+        items: [{ quality: { id: 7, name: "Bluray-1080p" }, items: [], allowed: true }],
+        formatItems: [
+          { format: 55, name: "AMZN", score: 0 },
+          { format: 77, name: "My CF", score: 500 },
+        ],
+      },
+    ]);
+    clientMock.getQualityProfileSchema.mockResolvedValue({
+      ...SCHEMA,
+      formatItems: [
+        { format: 55, name: "AMZN", score: 0 },
+        { format: 77, name: "My CF", score: 0 },
+      ],
+    });
+    await getTestPrisma().trashManagedResource.create({
+      data: {
+        userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id,
+        resourceType: "QUALITY_PROFILE", trashId: "qp1", name: "HD Bluray + WEB",
+      },
+    });
+    const res = await callRoute(postSync, {
+      method: "POST",
+      body: { serviceType: "RADARR", instanceId: radarr.id, dryRun: false, items: [{ resourceType: "QUALITY_PROFILE", trashId: "qp1" }] },
+    });
+    await expectJson(res, 200);
+    expect(clientMock.updateQualityProfile).toHaveBeenCalledTimes(1);
+    const [, payload] = clientMock.updateQualityProfile.mock.calls[0] as [number, { formatItems: { name: string; score: number }[] }];
+    // The guide CF is set to its guide score; the unmanaged CF keeps its score.
+    expect(payload.formatItems.find((f) => f.name === "AMZN")?.score).toBe(100);
+    expect(payload.formatItems.find((f) => f.name === "My CF")?.score).toBe(500);
   });
 
   it("apply ignores unmanaged preview items (nothing written without a managed row)", async () => {

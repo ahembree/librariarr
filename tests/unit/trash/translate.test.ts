@@ -231,6 +231,38 @@ describe("quality profile builder", () => {
     expect(payload.language).toEqual({ id: -1, name: "Any" });
   });
 
+  it("preserves custom-format scores the guide profile doesn't manage (Recyclarr default)", () => {
+    // The instance schema lists every CF, including one the guide profile never
+    // references ("My Custom CF").
+    const schemaWithExtra = {
+      ...schema,
+      formatItems: [
+        { format: 101, name: "Tier 01", score: 0 },
+        { format: 102, name: "Tier 02", score: 0 },
+        { format: 200, name: "My Custom CF", score: 0 },
+      ],
+    };
+    const existingProfile = {
+      id: 7,
+      name: "HD Test",
+      upgradeAllowed: true,
+      cutoff: 7,
+      items: [],
+      minFormatScore: 0,
+      cutoffFormatScore: 0,
+      formatItems: [
+        { format: 101, name: "Tier 01", score: 999 },
+        { format: 200, name: "My Custom CF", score: 500 },
+      ],
+    };
+    const { payload } = buildQualityProfile(trash, schemaWithExtra, "RADARR", cfMap, existingProfile);
+    // A guide-managed CF is set to the guide's score…
+    expect(payload.formatItems.find((f) => f.name === "Tier 01")?.score).toBe(100);
+    // …but a CF the guide doesn't manage keeps its existing score (not reset to 0).
+    expect(payload.formatItems.find((f) => f.name === "My Custom CF")?.score).toBe(500);
+    expect(payload.id).toBe(7);
+  });
+
   it("warns when a referenced custom format is not present in the instance", () => {
     const t: TrashQualityProfile = { ...trash, formatItems: { "Ghost CF": "cf-x" } };
     const map = new Map<string, TrashCustomFormat>([
