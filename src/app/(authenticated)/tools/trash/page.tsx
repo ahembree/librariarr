@@ -825,7 +825,11 @@ function ResourceList({
           </div>
         </div>
 
-        <ScrollArea className="h-[26rem] rounded-md border border-white/5">
+        {/* Native vertical scroll (not shadcn ScrollArea): its inner
+            display:table wrapper lets long rows grow horizontally, which pushed
+            the action buttons off-screen. overflow-x-hidden keeps rows bounded
+            so the description truncates and the buttons stay visible. */}
+        <div className="max-h-[26rem] overflow-y-auto overflow-x-hidden rounded-md border border-white/5">
           <div className="divide-y divide-white/5">
             {filtered.length === 0 ? (
               <p className="p-6 text-center text-sm text-muted-foreground">No items match.</p>
@@ -842,7 +846,7 @@ function ResourceList({
               ))
             )}
           </div>
-        </ScrollArea>
+        </div>
       </CardContent>
     </Card>
   );
@@ -875,45 +879,48 @@ function ResourceRow({
           <p className="truncate text-xs text-muted-foreground">{item.description}</p>
         )}
       </div>
-      <Button variant="ghost" size="sm" onClick={onPreview} disabled={busy}>
-        <Eye className="mr-1 h-3.5 w-3.5" /> Diff
-      </Button>
-      {item.managed && (
-        <Button variant="secondary" size="sm" onClick={onSync} disabled={busy} title="Sync just this item">
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="mr-1 h-3.5 w-3.5" />}
-          Sync
+      {/* Actions never shrink, so a long description can't push them off-row. */}
+      <div className="flex shrink-0 items-center gap-2">
+        <Button variant="ghost" size="sm" onClick={onPreview} disabled={busy}>
+          <Eye className="mr-1 h-3.5 w-3.5" /> Diff
         </Button>
-      )}
-      <Button
-        variant={item.managed ? "outline" : "default"}
-        size="sm"
-        onClick={onManage}
-        disabled={busy}
-        className="w-28"
-        title={
-          item.managed
-            ? "Stop managing (leaves the app unchanged)"
-            : item.existsInArr
-              ? "Take over management — the next sync overwrites the app copy"
-              : "Add this to the app now"
-        }
-      >
-        {busy ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        ) : item.managed ? (
-          <>
-            <X className="mr-1 h-3.5 w-3.5" /> Unmanage
-          </>
-        ) : item.existsInArr ? (
-          <>
-            <ShieldCheck className="mr-1 h-3.5 w-3.5" /> Manage
-          </>
-        ) : (
-          <>
-            <Plus className="mr-1 h-3.5 w-3.5" /> Add
-          </>
+        {item.managed && (
+          <Button variant="secondary" size="sm" onClick={onSync} disabled={busy} title="Sync just this item">
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="mr-1 h-3.5 w-3.5" />}
+            Sync
+          </Button>
         )}
-      </Button>
+        <Button
+          variant={item.managed ? "outline" : "default"}
+          size="sm"
+          onClick={onManage}
+          disabled={busy}
+          className="w-28"
+          title={
+            item.managed
+              ? "Stop managing (leaves the app unchanged)"
+              : item.existsInArr
+                ? "Take over management — the next sync overwrites the app copy"
+                : "Add this to the app now"
+          }
+        >
+          {busy ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : item.managed ? (
+            <>
+              <X className="mr-1 h-3.5 w-3.5" /> Unmanage
+            </>
+          ) : item.existsInArr ? (
+            <>
+              <ShieldCheck className="mr-1 h-3.5 w-3.5" /> Manage
+            </>
+          ) : (
+            <>
+              <Plus className="mr-1 h-3.5 w-3.5" /> Add
+            </>
+          )}
+        </Button>
+      </div>
     </div>
   );
 }

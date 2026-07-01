@@ -68,6 +68,17 @@ interface ManagedRow {
   lastSyncHash: string | null;
 }
 
+/** TRaSH descriptions embed HTML (`<br>`, etc.); render them as plain text. */
+function cleanDescription(desc: string | undefined): string | undefined {
+  if (!desc) return undefined;
+  const text = desc
+    .replace(/<br\s*\/?>/gi, " · ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length ? text : undefined;
+}
+
 function statusFor(
   existsInArr: boolean,
   managed: ManagedRow | undefined,
@@ -148,7 +159,7 @@ export async function computeTrashStatus(
       resourceType: "QUALITY_PROFILE",
       trashId: qp.trash_id,
       name: qp.name,
-      description: qp.trash_description,
+      description: cleanDescription(qp.trash_description),
       status: statusFor(!!existing, m, trashProfileHash(qp), true),
       existsInArr: !!existing,
       managed: !!m,
