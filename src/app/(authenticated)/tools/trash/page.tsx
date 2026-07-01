@@ -789,11 +789,11 @@ export default function TrashSyncPage() {
             </div>
           </div>
 
-          <Tabs defaultValue="cf" className="space-y-4">
+          <Tabs defaultValue="profilecf" className="space-y-4">
             <TabsList className="w-full justify-start overflow-x-auto">
+              <TabsTrigger value="profilecf">Profile Formats</TabsTrigger>
               <TabsTrigger value="cf">Custom Formats ({cfItems.length})</TabsTrigger>
               <TabsTrigger value="qp">Quality Profiles ({qpItems.length})</TabsTrigger>
-              <TabsTrigger value="profilecf">Profile Formats</TabsTrigger>
               <TabsTrigger value="misc">Sizes &amp; Naming</TabsTrigger>
             </TabsList>
 
@@ -1357,6 +1357,11 @@ function NamingCard({
 
 // ─── Profile custom-format assignment ───
 
+/** Assigned formats are shown highest-score-first (ties broken by name). */
+function sortFormatsByScore(list: ProfileCfFormat[]): ProfileCfFormat[] {
+  return [...list].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+}
+
 function ProfileFormatsTab({
   serviceType,
   instanceId,
@@ -1422,6 +1427,13 @@ function ProfileFormatsTab({
   const currentAssignment = selectedProfile ? assignmentFor(selectedProfile) : undefined;
   const currentProfile = profiles.find((p) => p.name === selectedProfile);
 
+  // Managed profiles (those with a saved PROFILE_CF assignment), always listed
+  // so they can be jumped to without opening the dropdown.
+  const managedProfileNames = useMemo(
+    () => [...assignments.map((a) => a.trashId)].sort((a, b) => a.localeCompare(b)),
+    [assignments],
+  );
+
   // Guide custom formats keyed by lowercased name (to map a profile's current
   // scores — which are keyed by name — back to guide trash_ids).
   const cfByName = useMemo(() => {
@@ -1445,12 +1457,14 @@ function ProfileFormatsTab({
     }
     // …then layer the user's saved overrides on top.
     for (const f of existing?.selection?.formats ?? []) byTrashId.set(f.trashId, { ...f });
-    setFormats([...byTrashId.values()].sort((a, b) => a.name.localeCompare(b.name)));
+    setFormats(sortFormatsByScore([...byTrashId.values()]));
   };
 
   const addFormat = (cf: CatalogCf) => {
     if (formats.some((f) => f.trashId === cf.trashId)) return;
-    setFormats((prev) => [...prev, { trashId: cf.trashId, name: cf.name, score: cf.defaultScore }]);
+    // Re-sort on add so the new format lands in its score position. Inline score
+    // edits intentionally don't re-sort (that would make the row jump while typing).
+    setFormats((prev) => sortFormatsByScore([...prev, { trashId: cf.trashId, name: cf.name, score: cf.defaultScore }]));
     setCfQuery("");
   };
   const removeFormat = (trashId: string) =>
@@ -1592,124 +1606,149 @@ function ProfileFormatsTab({
           <p className="text-sm text-muted-foreground">No quality profiles found on this instance.</p>
         ) : (
           <>
-            <div className="flex flex-wrap items-center gap-2">
-              <Select value={selectedProfile} onValueChange={selectProfile}>
-                <SelectTrigger className="w-72">
-                  <SelectValue placeholder="Select a quality profile" />
-                </SelectTrigger>
-                <SelectContent>
-                  {profiles.map((p) => (
-                    <SelectItem key={p.id} value={p.name}>
-                      {p.name}
-                      {assignmentFor(p.name) ? " · managed" : ""}
-                    </SelectItem>
+            {/* Profile picker + always-visible managed profiles */}
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Select value={selectedProfile} onValueChange={selectProfile}>
+                  <SelectTrigger className="w-72">
+                    <SelectValue placeholder="Select a quality profile" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {profiles.map((p) => (
+                      <SelectItem key={p.id} value={p.name}>
+                        {p.name}
+                        {assignmentFor(p.name) ? " · managed" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {currentProfile && (
+                  <span className="text-xs text-muted-foreground">
+                    {Object.keys(currentProfile.formatScores).length} custom format(s) currently scored
+                  </span>
+                )}
+              </div>
+
+              {managedProfileNames.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="mr-1 text-xs text-muted-foreground">Managed:</span>
+                  {managedProfileNames.map((name) => (
+                    <Button
+                      key={name}
+                      variant={name === selectedProfile ? "secondary" : "outline"}
+                      size="sm"
+                      className="h-7"
+                      onClick={() => selectProfile(name)}
+                    >
+                      <ShieldCheck className="mr-1 h-3.5 w-3.5 text-green" />
+                      {name}
+                    </Button>
                   ))}
-                </SelectContent>
-              </Select>
-              {currentProfile && (
-                <span className="text-xs text-muted-foreground">
-                  {Object.keys(currentProfile.formatScores).length} custom format(s) currently scored
-                </span>
+                </div>
               )}
             </div>
 
-            {selectedProfile && (
+            {selectedProfile ? (
               <>
-                {/* Attached formats — every guide custom format scored on the
-                    profile, each with an editable (override) score. */}
-                <div className="flex items-center justify-between gap-2">
-                  <Label className="text-xs text-muted-foreground">
-                    Assigned custom formats ({formats.length})
-                  </Label>
-                  {formats.length > 8 && (
-                    <Input
-                      placeholder="Filter…"
-                      value={attachedQuery}
-                      onChange={(e) => setAttachedQuery(e.target.value)}
-                      className="h-8 w-48"
-                    />
-                  )}
-                </div>
-                <div className="max-h-72 overflow-y-auto overflow-x-hidden rounded-md border border-white/5">
-                  {formats.length === 0 ? (
-                    <p className="p-4 text-center text-sm text-muted-foreground">
-                      No custom formats assigned yet — add some below.
-                    </p>
-                  ) : (
-                    <div className="divide-y divide-white/5">
-                      {formats
-                        .filter((f) => !attachedQuery || f.name.toLowerCase().includes(attachedQuery.toLowerCase()))
-                        .map((f) => (
-                          <div key={f.trashId} className="flex items-center gap-3 px-3 py-2">
-                            <span className="min-w-0 flex-1 truncate text-sm">{f.name}</span>
-                            <div className="flex shrink-0 items-center gap-1.5">
-                              <Label className="text-xs text-muted-foreground">Score</Label>
-                              <Input
-                                type="number"
-                                value={Number.isFinite(f.score) ? f.score : 0}
-                                onChange={(e) => setScore(f.trashId, parseInt(e.target.value, 10) || 0)}
-                                className="h-8 w-24"
-                              />
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8"
-                                onClick={() => removeFormat(f.trashId)}
-                                title="Remove"
-                              >
-                                <X className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
+                {/* Two columns: assigned formats (left) · add formats (right). */}
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  {/* LEFT — assigned formats, highest score first, each editable. */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label className="text-xs text-muted-foreground">
+                        Assigned custom formats ({formats.length})
+                      </Label>
+                      {formats.length > 8 && (
+                        <Input
+                          placeholder="Filter…"
+                          value={attachedQuery}
+                          onChange={(e) => setAttachedQuery(e.target.value)}
+                          className="h-8 w-40"
+                        />
+                      )}
                     </div>
-                  )}
-                </div>
-
-                {/* Add custom formats — drill down by TRaSH category. */}
-                <div className="space-y-2">
-                  <Label className="text-xs">Add a custom format — drill down by category</Label>
-                  <Input
-                    placeholder="Search all custom formats…"
-                    value={cfQuery}
-                    onChange={(e) => setCfQuery(e.target.value)}
-                    className="h-9"
-                  />
-                  <div className="max-h-64 overflow-y-auto overflow-x-hidden rounded-md border border-white/5">
-                    {addableGroups.length === 0 || addableGroups.every((g) => g.items.length === 0) ? (
-                      <p className="p-3 text-center text-xs text-muted-foreground">
-                        No custom formats to add.
-                      </p>
-                    ) : (
-                      <div className="divide-y divide-white/5">
-                        {addableGroups.map((g) => (
-                          <CategorySection
-                            key={g.name}
-                            name={g.name}
-                            count={g.items.length}
-                            expanded={isPickerOpen(g.name)}
-                            onToggle={() => togglePicker(g.name)}
-                          >
-                            {g.items.map((cf) => (
-                              <button
-                                key={cf.trashId}
-                                type="button"
-                                onClick={() => addFormat(cf)}
-                                className="flex w-full items-center justify-between gap-2 px-3 py-1.5 pl-8 text-left text-sm hover:bg-white/5"
-                              >
-                                <span className="flex min-w-0 items-center gap-1.5">
-                                  <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                                  <span className="truncate">{cf.name}</span>
-                                </span>
-                                <span className="ml-2 shrink-0 text-xs text-muted-foreground">
-                                  default {cf.defaultScore}
-                                </span>
-                              </button>
+                    <div className="h-[24rem] overflow-y-auto overflow-x-hidden rounded-md border border-white/5">
+                      {formats.length === 0 ? (
+                        <p className="p-4 text-center text-sm text-muted-foreground">
+                          No custom formats assigned yet — add some from the right.
+                        </p>
+                      ) : (
+                        <div className="divide-y divide-white/5">
+                          {formats
+                            .filter((f) => !attachedQuery || f.name.toLowerCase().includes(attachedQuery.toLowerCase()))
+                            .map((f) => (
+                              <div key={f.trashId} className="flex items-center gap-2 px-3 py-2">
+                                <span className="min-w-0 flex-1 truncate text-sm">{f.name}</span>
+                                <div className="flex shrink-0 items-center gap-1.5">
+                                  <Input
+                                    type="number"
+                                    value={Number.isFinite(f.score) ? f.score : 0}
+                                    onChange={(e) => setScore(f.trashId, parseInt(e.target.value, 10) || 0)}
+                                    className="h-8 w-20"
+                                    title="Score"
+                                  />
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8"
+                                    onClick={() => removeFormat(f.trashId)}
+                                    title="Remove"
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </div>
                             ))}
-                          </CategorySection>
-                        ))}
-                      </div>
-                    )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* RIGHT — add formats, drill down by TRaSH category. */}
+                  <div className="space-y-2">
+                    <Label className="text-xs">Add a custom format — drill down by category</Label>
+                    <Input
+                      placeholder="Search all custom formats…"
+                      value={cfQuery}
+                      onChange={(e) => setCfQuery(e.target.value)}
+                      className="h-8"
+                    />
+                    <div className="h-[24rem] overflow-y-auto overflow-x-hidden rounded-md border border-white/5">
+                      {addableGroups.length === 0 || addableGroups.every((g) => g.items.length === 0) ? (
+                        <p className="p-3 text-center text-xs text-muted-foreground">
+                          No custom formats to add.
+                        </p>
+                      ) : (
+                        <div className="divide-y divide-white/5">
+                          {addableGroups.map((g) => (
+                            <CategorySection
+                              key={g.name}
+                              name={g.name}
+                              count={g.items.length}
+                              expanded={isPickerOpen(g.name)}
+                              onToggle={() => togglePicker(g.name)}
+                            >
+                              {g.items.map((cf) => (
+                                <button
+                                  key={cf.trashId}
+                                  type="button"
+                                  onClick={() => addFormat(cf)}
+                                  className="flex w-full items-center justify-between gap-2 px-3 py-1.5 pl-8 text-left text-sm hover:bg-white/5"
+                                >
+                                  <span className="flex min-w-0 items-center gap-1.5">
+                                    <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                    <span className="truncate">{cf.name}</span>
+                                  </span>
+                                  <span className="ml-2 shrink-0 text-xs text-muted-foreground">
+                                    default {cf.defaultScore}
+                                  </span>
+                                </button>
+                              ))}
+                            </CategorySection>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -1738,6 +1777,10 @@ function ProfileFormatsTab({
                   )}
                 </div>
               </>
+            ) : (
+              <p className="rounded-md border border-dashed border-white/10 p-6 text-center text-sm text-muted-foreground">
+                Select a quality profile above to view and edit its custom-format scores.
+              </p>
             )}
           </>
         )}
