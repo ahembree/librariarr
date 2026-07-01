@@ -1141,6 +1141,7 @@ function ProfileFormatsTab({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [cfQuery, setCfQuery] = useState("");
+  const [attachedQuery, setAttachedQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -1182,11 +1183,30 @@ function ProfileFormatsTab({
   const currentAssignment = selectedProfile ? assignmentFor(selectedProfile) : undefined;
   const currentProfile = profiles.find((p) => p.name === selectedProfile);
 
+  // Guide custom formats keyed by lowercased name (to map a profile's current
+  // scores — which are keyed by name — back to guide trash_ids).
+  const cfByName = useMemo(() => {
+    const m = new Map<string, CatalogCf>();
+    for (const cf of catalogCfs) m.set(cf.name.toLowerCase(), cf);
+    return m;
+  }, [catalogCfs]);
+
   const selectProfile = (name: string) => {
     setSelectedProfile(name);
     setCfQuery("");
+    setAttachedQuery("");
+    const profile = profiles.find((p) => p.name === name);
     const existing = assignmentFor(name);
-    setFormats(existing?.selection?.formats ? [...existing.selection.formats] : []);
+    // Seed with every guide custom format currently scored on the profile, so
+    // all assigned formats are listed and their scores can be overridden…
+    const byTrashId = new Map<string, ProfileCfFormat>();
+    for (const [cfName, score] of Object.entries(profile?.formatScores ?? {})) {
+      const guideCf = cfByName.get(cfName.toLowerCase());
+      if (guideCf) byTrashId.set(guideCf.trashId, { trashId: guideCf.trashId, name: guideCf.name, score });
+    }
+    // …then layer the user's saved overrides on top.
+    for (const f of existing?.selection?.formats ?? []) byTrashId.set(f.trashId, { ...f });
+    setFormats([...byTrashId.values()].sort((a, b) => a.name.localeCompare(b.name)));
   };
 
   const addFormat = (cf: CatalogCf) => {
@@ -1303,9 +1323,10 @@ function ProfileFormatsTab({
       <CardHeader>
         <CardTitle className="text-base">Attach custom formats to a quality profile</CardTitle>
         <CardDescription>
-          Pick any quality profile on {instanceName} — including ones you created yourself — and
-          assign guide custom formats with editable scores. Only the scores you set are changed;
-          the rest of the profile is left alone.
+          Pick any quality profile on {instanceName} — including ones you created yourself. Its
+          guide custom formats and current scores are listed so you can override any of them, and
+          you can add more. Only the scores you set are changed; the rest of the profile is left
+          alone.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -1342,37 +1363,53 @@ function ProfileFormatsTab({
 
             {selectedProfile && (
               <>
-                {/* Attached formats */}
-                <div className="rounded-md border border-white/5">
+                {/* Attached formats — every guide custom format scored on the
+                    profile, each with an editable (override) score. */}
+                <div className="flex items-center justify-between gap-2">
+                  <Label className="text-xs text-muted-foreground">
+                    Assigned custom formats ({formats.length})
+                  </Label>
+                  {formats.length > 8 && (
+                    <Input
+                      placeholder="Filter…"
+                      value={attachedQuery}
+                      onChange={(e) => setAttachedQuery(e.target.value)}
+                      className="h-8 w-48"
+                    />
+                  )}
+                </div>
+                <div className="max-h-72 overflow-y-auto overflow-x-hidden rounded-md border border-white/5">
                   {formats.length === 0 ? (
                     <p className="p-4 text-center text-sm text-muted-foreground">
-                      No custom formats attached yet — add some below.
+                      No custom formats assigned yet — add some below.
                     </p>
                   ) : (
                     <div className="divide-y divide-white/5">
-                      {formats.map((f) => (
-                        <div key={f.trashId} className="flex items-center gap-3 px-3 py-2">
-                          <span className="min-w-0 flex-1 truncate text-sm">{f.name}</span>
-                          <div className="flex items-center gap-1.5">
-                            <Label className="text-xs text-muted-foreground">Score</Label>
-                            <Input
-                              type="number"
-                              value={Number.isFinite(f.score) ? f.score : 0}
-                              onChange={(e) => setScore(f.trashId, parseInt(e.target.value, 10) || 0)}
-                              className="h-8 w-24"
-                            />
+                      {formats
+                        .filter((f) => !attachedQuery || f.name.toLowerCase().includes(attachedQuery.toLowerCase()))
+                        .map((f) => (
+                          <div key={f.trashId} className="flex items-center gap-3 px-3 py-2">
+                            <span className="min-w-0 flex-1 truncate text-sm">{f.name}</span>
+                            <div className="flex shrink-0 items-center gap-1.5">
+                              <Label className="text-xs text-muted-foreground">Score</Label>
+                              <Input
+                                type="number"
+                                value={Number.isFinite(f.score) ? f.score : 0}
+                                onChange={(e) => setScore(f.trashId, parseInt(e.target.value, 10) || 0)}
+                                className="h-8 w-24"
+                              />
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                onClick={() => removeFormat(f.trashId)}
+                                title="Remove"
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </div>
                           </div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 shrink-0"
-                            onClick={() => removeFormat(f.trashId)}
-                            title="Remove"
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      ))}
+                        ))}
                     </div>
                   )}
                 </div>
