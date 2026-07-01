@@ -36,6 +36,7 @@ model User {
   prerollPresets      PrerollPreset[]
   prerollSchedules   PrerollSchedule[]
   savedQueries       SavedQuery[]
+  trashManagedResources TrashManagedResource[]
 
   // SSO subjects are only unique per-issuer. Two users can have sub "abc" if
   // they came from different IdPs. This composite key prevents the cross-IdP
@@ -152,6 +153,7 @@ model SonarrInstance {
   enabled          Boolean           @default(true)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
+  trashManagedResources TrashManagedResource[]
 
   @@index([userId])
 }
@@ -167,6 +169,7 @@ model RadarrInstance {
   enabled          Boolean           @default(true)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
+  trashManagedResources TrashManagedResource[]
 
   @@index([userId])
 }
@@ -654,3 +657,34 @@ model WatchHistory {
   @@index([platform])
 }
 
+
+// Tracks which TRaSH Guides resources (custom formats, quality profiles,
+// quality-size definitions, naming schemes) the user has explicitly assigned
+// Librariarr to manage on a specific Sonarr/Radarr instance. A row exists ONLY
+// after the user opts in ("assigns") the resource. No write is ever made to an
+// Arr app for a resource that has no managed row — this is the consent gate.
+// serviceType discriminates which nullable instance FK is populated; the FK
+// cascades so deleting an instance drops its managed resources.
+model TrashManagedResource {
+  id               String          @id @default(cuid())
+  userId           String
+  user             User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  serviceType      String          // "SONARR" | "RADARR"
+  sonarrInstanceId String?
+  sonarrInstance   SonarrInstance? @relation(fields: [sonarrInstanceId], references: [id], onDelete: Cascade)
+  radarrInstanceId String?
+  radarrInstance   RadarrInstance? @relation(fields: [radarrInstanceId], references: [id], onDelete: Cascade)
+  resourceType     String          // "CUSTOM_FORMAT" | "QUALITY_PROFILE" | "QUALITY_DEFINITION" | "NAMING"
+  trashId          String          // TRaSH trash_id (or a synthetic key for singleton resources like NAMING)
+  name             String          // display name captured at assignment time
+  arrId            Int?            // id of the resource inside the Arr once synced (null for bulk/config resources)
+  selection        Json?           // extra choices for the resource (e.g. chosen naming variants)
+  lastSyncedAt     DateTime?
+  lastSyncHash     String?         // hash of the last-synced TRaSH definition, used to flag upstream guide changes
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([userId])
+  @@index([sonarrInstanceId])
+  @@index([radarrInstanceId])
+}

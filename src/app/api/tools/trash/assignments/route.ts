@@ -1,0 +1,87 @@
+import { NextRequest, NextResponse } from "next/server";
+import { getSession } from "@/lib/auth/session";
+import { prisma } from "@/lib/db";
+import { validateRequest, trashAssignSchema } from "@/lib/validation";
+import { resolveInstance, managedInstanceWhere } from "@/lib/trash/status";
+import type { ServiceType } from "@/lib/trash/types";
+
+// List the managed (assigned) resources, optionally scoped to one instance.
+export async function GET(request: NextRequest) {
+  const session = await getSession();
+  if (!session.isLoggedIn) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { searchParams } = new URL(request.url);
+  const serviceType = searchParams.get("serviceType")?.toUpperCase();
+  const instanceId = searchParams.get("instanceId");
+
+  const instanceFilter =
+    (serviceType === "SONARR" || serviceType === "RADARR") && instanceId
+      ? managedInstanceWhere(serviceType as ServiceType, instanceId)
+      : {};
+
+  const assignments = await prisma.trashManagedResource.findMany({
+    where: { userId: session.userId!, ...instanceFilter },
+    orderBy: { createdAt: "asc" },
+  });
+  return NextResponse.json({ assignments });
+}
+
+// Opt guide resources into Librariarr management. This is the consent gate:
+// creating a managed row is what later permits the sync to write to the Arr.
+// Creating the row itself performs NO Arr write.
+export async function POST(request: NextRequest) {
+  const session = await getSession();
+  if (!session.isLoggedIn) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { data, error } = await validateRequest(request, trashAssignSchema);
+  if (error) return error;
+
+  const inst = await resolveInstance(session.userId!, data.serviceType, data.instanceId);
+  if (!inst) {
+    return NextResponse.json({ error: "Instance not found" }, { status: 404 });
+  }
+
+  const instanceKey = managedInstanceWhere(data.serviceType, data.instanceId);
+  const results = [];
+  for (const item of data.items) {
+    const existing = await prisma.trashManagedResource.findFirst({
+      where: {
+        userId: session.userId!,
+        ...instanceKey,
+        resourceType: item.resourceType,
+        trashId: item.trashId,
+      },
+    });
+    if (existing) {
+      // Re-assigning an already-managed resource just refreshes its metadata
+      // (e.g. a changed naming selection).
+      const updated = await prisma.trashManagedResource.update({
+        where: { id: existing.id },
+        data: {
+          name: item.name,
+          ...(item.selection !== undefined ? { selection: item.selection as object } : {}),
+        },
+      });
+      results.push(updated);
+    } else {
+      const created = await prisma.trashManagedResource.create({
+        data: {
+          userId: session.userId!,
+          serviceType: data.serviceType,
+          ...instanceKey,
+          resourceType: item.resourceType,
+          trashId: item.trashId,
+          name: item.name,
+          ...(item.selection !== undefined ? { selection: item.selection as object } : {}),
+        },
+      });
+      results.push(created);
+    }
+  }
+
+  return NextResponse.json({ assignments: results }, { status: 201 });
+}

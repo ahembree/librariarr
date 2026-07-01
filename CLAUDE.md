@@ -95,7 +95,7 @@ Real-browser end-to-end tests live in `e2e/` (Playwright, **separate from Vitest
   - Settings (`/settings`) — `page.tsx` is the orchestrator (all state + handlers); 7 tab components in `settings/tabs/` are pure render receiving props; shared types in `settings/types.ts`; tab navigation via URL hash (`#general`, `#servers`, etc.)
   - Library: `/library/movies`, `/library/series` (with `/seasons` and `/episodes` sub-routes), `/library/music`
   - Lifecycle: `/lifecycle/rules` (unified rules page with Movies/Series/Music tabs), `/lifecycle/matches`, `/lifecycle/pending`, `/lifecycle/exceptions`
-  - Tools: `/tools/streams` (Stream Manager: active sessions, maintenance mode, transcode manager, blackout schedules), `/tools/preroll` (Preroll Manager: presets, schedules, combine modes)
+  - Tools: `/tools/streams` (Stream Manager: active sessions, maintenance mode, transcode manager, blackout schedules), `/tools/preroll` (Preroll Manager: presets, schedules, combine modes), `/tools/trash` (TRaSH Guide Sync: import custom formats / quality profiles / quality sizes / naming from trash-guides.info into Sonarr/Radarr with an explicit per-item consent gate, diff preview, and dry-run)
 - `src/app/login/` and `src/app/onboarding/` — Public pages
 - `src/app/api/` — API routes (all require authenticated session except auth endpoints)
   - `api/tools/sessions/` — Active session fetching, SSE streaming, termination, artwork proxy
@@ -103,6 +103,7 @@ Real-browser end-to-end tests live in `e2e/` (Playwright, **separate from Vitest
   - `api/tools/transcode-manager/` — Transcode manager settings and criteria
   - `api/tools/blackout/` — Blackout schedule CRUD (one-time and recurring)
   - `api/tools/preroll/` — Preroll presets, schedules, path validation
+  - `api/tools/trash/` — TRaSH Guide Sync: `instances` (Sonarr/Radarr picker), `catalog` (guide fetch + naming variants), `status` (per-item cross-reference), `assignments` (the consent gate — opt resources into management), `sync` (dry-run/diff or apply, writes only managed resources)
 
 ### Key Libraries
 
@@ -118,6 +119,7 @@ Real-browser end-to-end tests live in `e2e/` (Playwright, **separate from Vitest
 - `src/lib/jobs/` — [Graphile Worker](https://worker.graphile.org/) background job queue (Postgres-backed), initialized via `instrumentation.ts`. `worker.ts` runs the in-process worker + static crontab; `dispatch.ts` is the per-minute dispatcher that fans DB-configured schedules into durable jobs; `tasks.ts` holds the task handlers; `client.ts` exposes `enqueueJob()`; `schedule.ts` has the pure cron/preset helpers (`presetToCron`, `isScheduleDue`, `getSystemTimezone`)
 - `src/lib/rules/` — Lifecycle rule engine with recursive AND/OR groups
 - `src/lib/arr/` — Sonarr/Radarr/Lidarr API clients (15s timeout, title validation via `normalizeTitle()`)
+- `src/lib/trash/` — TRaSH Guide Sync engine: `catalog.ts` fetches + caches the guide JSON (from `raw.githubusercontent.com`, overridable via `TRASH_GUIDES_REPO`/`TRASH_GUIDES_REF`); `arr-guide-client.ts` is a focused Sonarr/Radarr v3 client for custom-format/quality-profile/quality-definition/naming endpoints (separate from `src/lib/arr` core clients); `translate.ts` converts guide JSON → Arr payloads (pure, unit-tested — CF field object→array, quality-profile builder resolving qualities/groups/cutoff/CF-scores against the live schema, size + naming appliers); `diff.ts` + `signature.ts` power the change preview and upstream-change detection; `status.ts` cross-references guide↔instance↔managed rows; `sync.ts` builds the plan and applies it. **Consent gate**: nothing is written to an Arr app for a resource without a `TrashManagedResource` row; `sync.ts` only ever writes managed resources (dry-run `items` are preview-only), and taking over an item that already exists requires explicit confirmation in the UI
 - `src/lib/lifecycle/` — Detection (`detect-matches.ts`), action execution (`actions.ts`), orchestration (`processor.ts`), Plex collection sync (`collections.ts` — `syncCollection` unions contributions, `syncCollectionById`/`syncAllCollections` drive it from persisted matches), Arr/Seerr metadata fetching
 - `src/lib/discord/client.ts` — Discord webhook notifications
 - `src/lib/api/sanitize.ts` — `sanitize()` strips sensitive fields from API responses; `sanitizeErrorDetail()` scrubs internal paths/IPs from error messages (see Security below)
@@ -377,6 +379,7 @@ Documentation files to be aware of:
 | Notifications | `features/notifications.mdx` |
 | Stream manager & maintenance | `features/stream-manager.mdx` |
 | Preroll manager | `features/preroll-manager.mdx` |
+| TRaSH Guide Sync | `features/trash-guide-sync.mdx` |
 | System logs | `features/system-logs.mdx` |
 | Integrations | `integrations/plex.mdx`, `integrations/jellyfin-emby.mdx`, `integrations/sonarr.mdx`, `integrations/radarr.mdx`, `integrations/lidarr.mdx`, `integrations/seerr.mdx` |
 | Unraid | `getting-started/unraid.mdx` |

@@ -1,0 +1,95 @@
+---
+title: TRaSH Guide Sync
+description: Import recommended custom formats, quality profiles, quality sizes, and naming schemes from TRaSH Guides into Sonarr and Radarr — with explicit consent and full change previews.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+TRaSH Guide Sync imports the community-maintained recommendations from [TRaSH Guides](https://trash-guides.info/) into your connected Sonarr and Radarr apps. It can manage **custom formats**, **quality profiles**, **quality definitions (file sizes)**, and **naming schemes**.
+
+The defining principle of this feature is **consent**: Librariarr never writes anything to a Sonarr or Radarr app until you explicitly assign a resource to it, and you can preview every change before it is applied.
+
+<Aside type="note">
+  TRaSH Guide Sync reuses the credentials from your existing **Sonarr** and **Radarr** integrations. There is nothing extra to configure — add your apps under **Settings → Integrations** and they appear in the sync picker automatically.
+</Aside>
+
+## How it works
+
+Navigate to **Tools → TRaSH Sync** and pick a Sonarr or Radarr instance. Librariarr then:
+
+1. Downloads the current guide catalog for that app type (cached for several hours).
+2. Reads the app's existing custom formats and quality profiles.
+3. Cross-references both against what you've already assigned, and shows a **status** for every item.
+
+### Item statuses
+
+| Status | Meaning |
+|--------|---------|
+| **Not added** | The guide item does not exist in the app and is not managed. |
+| **Exists — unmanaged** | The item already exists in the app, but Librariarr does not manage it. Assigning it requires explicit confirmation because the next sync will overwrite it. |
+| **Managed** | Librariarr manages this item and it is in sync with the guide. |
+| **Update available** | Librariarr manages this item, but the guide changed upstream since the last sync. |
+| **Missing in app** | You manage this item, but it was deleted from the app externally. The next sync re-creates it. |
+
+## The consent gate
+
+No modification is ever made to a Sonarr or Radarr app for a resource that you have not explicitly **assigned** to Librariarr.
+
+- **Assigning** a resource (clicking **Manage**) only records your intent — it performs **no** write to the app.
+- If the resource **already exists** in the app, assigning it opens a confirmation dialog making it clear that the next sync will **overwrite** the app's copy with the guide version.
+- **Unassigning** (clicking **Unmanage**) removes only Librariarr's management record. It never deletes the resource from the app.
+- A sync only ever writes the resources you currently manage. Preview ("dry-run") items are never written.
+
+<Aside type="caution">
+  Taking over management of an existing custom format or quality profile means Librariarr will replace it with the TRaSH Guides definition on the next sync. Use **Preview diff** first to see exactly what will change.
+</Aside>
+
+## Preview and dry-run
+
+Before anything is written, you can inspect the exact changes:
+
+- **Preview diff** (per item) shows a field-by-field before/after diff for a single resource — even one you haven't assigned yet.
+- **Dry run** (top of the page) produces the full change plan for every managed resource without touching the app.
+
+Each planned change is labelled **Create**, **Update**, **No change**, **Skipped**, or **Error**, and lists any warnings (for example, a quality profile that references a custom format you haven't also chosen to manage).
+
+## Syncing
+
+Click **Sync managed** to apply the changes for every assigned resource. Resources are processed in dependency order — quality definitions and naming first, then custom formats, then quality profiles (so a profile's custom-format scores can reference formats that already exist).
+
+After a sync, the results dialog shows what was created or updated, and each item's status updates accordingly.
+
+## Resource types
+
+### Custom formats
+
+Custom formats are imported with their full specification set. Scores are **not** forced onto the app by the custom format itself — they are applied through quality profiles (matching how the guides are structured).
+
+### Quality profiles
+
+Quality profiles are rebuilt against the app's live quality schema: quality ordering, groups, the cutoff, upgrade settings, and custom-format scores are all resolved from the guide.
+
+A quality profile only assigns scores to custom formats that **already exist** in the app. If a profile references a format you haven't managed, the sync surfaces a warning rather than silently creating the format — assign and sync that custom format too if you want its score to apply.
+
+### Quality definitions (sizes)
+
+The per-quality minimum / preferred / maximum file sizes for the app are updated in bulk from the guide's recommended values. Because an app always has a quality-definition table, this resource is treated as **Exists — unmanaged** until you opt in.
+
+### Naming schemes
+
+Naming schemes let you choose recommended file and folder formats:
+
+- **Radarr** — movie file format and movie folder format.
+- **Sonarr** — series folder, season folder, and standard / daily / anime episode formats.
+
+Pick the variants you want (for example, a Plex- or Jellyfin-flavored layout), then assign and sync. The selection is remembered, and the **Update available** status will flag if the guide changes the chosen variant later.
+
+## Refreshing the catalog
+
+The guide catalog is cached for several hours. Click **Refresh guides** to fetch the latest definitions immediately (for example, after the guides publish an update).
+
+The source repository and branch can be overridden with the `TRASH_GUIDES_REPO` and `TRASH_GUIDES_REF` environment variables — useful if you maintain a fork or an internal mirror.
+
+<Aside type="tip">
+  Librariarr fetches guide files over HTTPS from the public guides repository. If your deployment restricts outbound network access, allow access to `raw.githubusercontent.com` and `api.github.com` (or point the environment variables at a reachable mirror).
+</Aside>

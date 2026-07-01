@@ -698,3 +698,62 @@ export const syncByTypeSchema = z.object({
   libraryType: z.enum(["MOVIE", "SERIES", "MUSIC"]),
 });
 
+
+// ─── TRaSH Guide Sync schemas ───
+
+const trashServiceType = z.enum(["SONARR", "RADARR"]);
+const trashResourceType = z.enum([
+  "CUSTOM_FORMAT",
+  "QUALITY_PROFILE",
+  "QUALITY_DEFINITION",
+  "NAMING",
+]);
+
+const namingSelectionSchema = z
+  .object({
+    folder: z.string().optional(),
+    file: z.string().optional(),
+    series: z.string().optional(),
+    season: z.string().optional(),
+    standard: z.string().optional(),
+    daily: z.string().optional(),
+    anime: z.string().optional(),
+  })
+  .strict();
+
+/** Opt a set of guide resources into Librariarr management (the consent gate). */
+export const trashAssignSchema = z.object({
+  serviceType: trashServiceType,
+  instanceId: z.string().min(1, "instanceId is required"),
+  items: z
+    .array(
+      z.object({
+        resourceType: trashResourceType,
+        trashId: z.string().min(1),
+        name: z.string().min(1),
+        selection: namingSelectionSchema.optional(),
+      }),
+    )
+    .min(1, "At least one item is required"),
+});
+
+/** Update an existing managed resource (currently just its naming selection). */
+export const trashAssignmentUpdateSchema = z.object({
+  selection: namingSelectionSchema,
+});
+
+/** Run a sync or a dry-run/preview. `items` only affects dry-run previews. */
+export const trashSyncSchema = z.object({
+  serviceType: trashServiceType,
+  instanceId: z.string().min(1, "instanceId is required"),
+  dryRun: z.boolean().optional(),
+  items: z
+    .array(
+      z.object({
+        resourceType: trashResourceType,
+        trashId: z.string().min(1),
+        selection: namingSelectionSchema.optional(),
+      }),
+    )
+    .optional(),
+});
