@@ -15,6 +15,8 @@ import {
   CheckCircle2,
   ChevronRight,
   Settings2,
+  MoreHorizontal,
+  Server,
 } from "lucide-react";
 import {
   Card,
@@ -55,6 +57,14 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 // ─── Types (mirror the API responses) ───
@@ -195,12 +205,12 @@ interface QualityProfileSelection {
 
 // ─── Status presentation ───
 
-const STATUS_META: Record<ItemStatus, { label: string; className: string }> = {
-  NEW: { label: "Not added", className: "border-white/15 text-muted-foreground" },
-  UNMANAGED_CONFLICT: { label: "Exists — unmanaged", className: "border-amber/40 text-amber" },
-  MANAGED: { label: "Managed", className: "border-green/40 text-green" },
-  MANAGED_OUTDATED: { label: "Update available", className: "border-blue-400/40 text-blue-400" },
-  MANAGED_MISSING: { label: "Missing in app", className: "border-destructive/40 text-destructive" },
+const STATUS_META: Record<ItemStatus, { label: string; className: string; dot: string }> = {
+  NEW: { label: "Not added", className: "border-white/15 text-muted-foreground", dot: "bg-muted-foreground/50" },
+  UNMANAGED_CONFLICT: { label: "Exists — unmanaged", className: "border-amber/40 text-amber", dot: "bg-amber" },
+  MANAGED: { label: "Managed", className: "border-green/40 text-green", dot: "bg-green" },
+  MANAGED_OUTDATED: { label: "Update available", className: "border-blue-400/40 text-blue-400", dot: "bg-blue-400" },
+  MANAGED_MISSING: { label: "Missing in app", className: "border-destructive/40 text-destructive", dot: "bg-destructive" },
 };
 
 const ACTION_META: Record<PlanItem["action"], { label: string; className: string }> = {
@@ -673,70 +683,67 @@ export default function TrashSyncPage() {
   const namingItem = status?.items.find((i) => i.resourceType === "NAMING");
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight flex items-center gap-2">
-            <SlidersHorizontal className="h-7 w-7" />
-            TRaSH Guide Sync
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
-            Import recommended custom formats, quality profiles, quality sizes and naming schemes
-            into your connected Sonarr / Radarr apps. Nothing is written to an app until you
-            explicitly assign it to Librariarr — and you can preview every change first.
-          </p>
-        </div>
-        {selected && (
-          <Button variant="outline" size="sm" onClick={refreshGuides} disabled={refreshing || loadingStatus}>
-            <RefreshCw className={cn("mr-1.5 h-4 w-4", refreshing && "animate-spin")} />
-            Refresh guides
-          </Button>
-        )}
+    <TooltipProvider delayDuration={200}>
+    <div className="p-4 sm:p-6 lg:p-8 space-y-5">
+      <div>
+        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight flex items-center gap-2">
+          <SlidersHorizontal className="h-7 w-7" />
+          TRaSH Guide Sync
+        </h1>
+        <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
+          Import recommended custom formats, quality profiles, sizes and naming into Sonarr /
+          Radarr. Nothing is written until you assign it — preview every change first.
+        </p>
       </div>
 
-      {/* Instance picker */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Target app</CardTitle>
-          <CardDescription>
-            Choose which connected Sonarr or Radarr instance to manage.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {loadingInstances ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> Loading integrations…
-            </div>
-          ) : instances.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No Sonarr or Radarr integrations found. Add one under{" "}
-              <span className="font-medium text-foreground">Settings → Integrations</span> first.
-            </p>
-          ) : (
-            <div className="flex flex-wrap items-center gap-3">
-              <Select value={selectedKey} onValueChange={setSelectedKey}>
-                <SelectTrigger className="w-72">
-                  <SelectValue placeholder="Select an app" />
-                </SelectTrigger>
-                <SelectContent>
-                  {instances.map((i) => (
-                    <SelectItem key={`${i.serviceType}:${i.id}`} value={`${i.serviceType}:${i.id}`}>
-                      {i.name} · {i.serviceType === "SONARR" ? "Sonarr" : "Radarr"}
-                      {!i.enabled ? " (disabled)" : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {catalog && (
-                <span className="text-xs text-muted-foreground">
-                  Guide {catalog.ref} · {catalog.counts.customFormats} formats ·{" "}
-                  {catalog.counts.qualityProfiles} profiles
-                </span>
-              )}
-            </div>
+      {/* Toolbar: pick the target app, guide meta, refresh */}
+      {loadingInstances ? (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading integrations…
+        </div>
+      ) : instances.length === 0 ? (
+        <Card>
+          <CardContent className="py-4 text-sm text-muted-foreground">
+            No Sonarr or Radarr integrations found. Add one under{" "}
+            <span className="font-medium text-foreground">Settings → Integrations</span> first.
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border bg-card/60 px-3 py-2.5">
+          <Server className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <Select value={selectedKey} onValueChange={setSelectedKey}>
+            <SelectTrigger className="h-9 w-64">
+              <SelectValue placeholder="Select an app" />
+            </SelectTrigger>
+            <SelectContent>
+              {instances.map((i) => (
+                <SelectItem key={`${i.serviceType}:${i.id}`} value={`${i.serviceType}:${i.id}`}>
+                  {i.name} · {i.serviceType === "SONARR" ? "Sonarr" : "Radarr"}
+                  {!i.enabled ? " (disabled)" : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {catalog && (
+            <span className="hidden text-xs text-muted-foreground md:inline">
+              Guide {catalog.ref} · {catalog.counts.customFormats} formats ·{" "}
+              {catalog.counts.qualityProfiles} profiles
+            </span>
           )}
-        </CardContent>
-      </Card>
+          {selected && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto"
+              onClick={refreshGuides}
+              disabled={refreshing || loadingStatus}
+            >
+              <RefreshCw className={cn("mr-1.5 h-4 w-4", refreshing && "animate-spin")} />
+              Refresh
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* Status */}
       {selected && loadingStatus && (
@@ -756,40 +763,34 @@ export default function TrashSyncPage() {
 
       {selected && !loadingStatus && status?.reachable && (
         <>
-          {/* Summary + actions */}
-          <Card>
-            <CardContent className="flex flex-wrap items-center justify-between gap-4 py-4">
-              <div className="flex flex-wrap items-center gap-2 text-sm">
-                <Badge variant="outline" className="border-green/40 text-green">{counts.managed} managed</Badge>
-                {counts.outdated > 0 && (
-                  <Badge variant="outline" className="border-blue-400/40 text-blue-400">{counts.outdated} update{counts.outdated === 1 ? "" : "s"}</Badge>
-                )}
-                <Badge variant="outline" className="border-amber/40 text-amber">{counts.conflict} unmanaged</Badge>
-                <Badge variant="outline">{counts.new} not added</Badge>
-                {counts.missing > 0 && (
-                  <Badge variant="outline" className="border-destructive/40 text-destructive">{counts.missing} missing</Badge>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => preview()}
-                  disabled={syncing || counts.managed === 0 || busyId === "__all__"}
-                >
-                  {busyId === "__all__" ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Eye className="mr-1.5 h-4 w-4" />}
-                  Dry run
-                </Button>
-                <Button size="sm" onClick={applySync} disabled={syncing || counts.managed === 0}>
-                  {syncing ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />}
-                  Sync managed
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+          {/* Status strip + global actions */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm">
+              <CountPill dot="bg-green" label="managed" value={counts.managed} />
+              {counts.outdated > 0 && <CountPill dot="bg-blue-400" label="update" value={counts.outdated} plural />}
+              <CountPill dot="bg-amber" label="unmanaged" value={counts.conflict} />
+              <CountPill dot="bg-muted-foreground/50" label="not added" value={counts.new} />
+              {counts.missing > 0 && <CountPill dot="bg-destructive" label="missing" value={counts.missing} />}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => preview()}
+                disabled={syncing || counts.managed === 0 || busyId === "__all__"}
+              >
+                {busyId === "__all__" ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Eye className="mr-1.5 h-4 w-4" />}
+                Dry run
+              </Button>
+              <Button size="sm" onClick={applySync} disabled={syncing || counts.managed === 0}>
+                {syncing ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />}
+                Sync managed
+              </Button>
+            </div>
+          </div>
 
-          <Tabs defaultValue="cf">
-            <TabsList>
+          <Tabs defaultValue="cf" className="space-y-4">
+            <TabsList className="w-full justify-start overflow-x-auto">
               <TabsTrigger value="cf">Custom Formats ({cfItems.length})</TabsTrigger>
               <TabsTrigger value="qp">Quality Profiles ({qpItems.length})</TabsTrigger>
               <TabsTrigger value="profilecf">Profile Formats</TabsTrigger>
@@ -917,6 +918,30 @@ export default function TrashSyncPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </TooltipProvider>
+  );
+}
+
+// ─── Small count pill for the status strip ───
+
+function CountPill({
+  dot,
+  label,
+  value,
+  plural,
+}: {
+  dot: string;
+  label: string;
+  value: number;
+  plural?: boolean;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+      <span className={cn("h-2 w-2 rounded-full", dot)} />
+      <span className="tabular-nums font-medium text-foreground">{value}</span>
+      {label}
+      {plural && value !== 1 ? "s" : ""}
+    </span>
   );
 }
 
@@ -988,10 +1013,10 @@ function ResourceList({
             placeholder="Search…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="h-9 w-56"
+            className="h-9 min-w-[10rem] flex-1 sm:max-w-xs"
           />
           <Select value={filter} onValueChange={(v) => setFilter(v as typeof filter)}>
-            <SelectTrigger className="h-9 w-40">
+            <SelectTrigger className="h-9 w-36">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -1005,6 +1030,7 @@ function ResourceList({
             <Button
               variant="ghost"
               size="sm"
+              className="text-muted-foreground"
               onClick={() =>
                 setExpanded((prev) =>
                   prev.size >= grouped.length ? new Set() : new Set(grouped.map((g) => g.name)),
@@ -1014,19 +1040,23 @@ function ResourceList({
               {expanded.size >= grouped.length ? "Collapse all" : "Expand all"}
             </Button>
           )}
-          <div className="ml-auto">
-            <Button variant="outline" size="sm" onClick={onBulkAdd} disabled={newCount === 0}>
-              <Plus className="mr-1.5 h-4 w-4" />
-              Add all not-added ({newCount})
-            </Button>
-          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-auto"
+            onClick={onBulkAdd}
+            disabled={newCount === 0}
+          >
+            <Plus className="mr-1.5 h-4 w-4" />
+            Add all ({newCount})
+          </Button>
         </div>
 
         {/* Native vertical scroll (not shadcn ScrollArea): its inner
             display:table wrapper lets long rows grow horizontally, which pushed
             the action buttons off-screen. overflow-x-hidden keeps rows bounded
             so the description truncates and the buttons stay visible. */}
-        <div className="max-h-[26rem] overflow-y-auto overflow-x-hidden rounded-md border border-white/5">
+        <div className="max-h-[30rem] overflow-y-auto overflow-x-hidden rounded-md border border-white/5">
           {filtered.length === 0 ? (
             <p className="p-6 text-center text-sm text-muted-foreground">No items match.</p>
           ) : grouped ? (
@@ -1070,71 +1100,100 @@ function ResourceRow({
 }) {
   const meta = STATUS_META[item.status];
   return (
-    <div className="flex items-center gap-2 px-3 py-2.5">
+    <div className="flex items-center gap-3 px-3 py-2 transition-colors hover:bg-white/[0.02]">
+      {/* Status is a compact colored dot; the legend lives in the status strip. */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className={cn("h-2 w-2 shrink-0 rounded-full", meta.dot)} />
+        </TooltipTrigger>
+        <TooltipContent>{meta.label}</TooltipContent>
+      </Tooltip>
+
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium">{item.name}</span>
-          <Badge variant="outline" className={cn("shrink-0 text-[10.5px]", meta.className)}>
-            {meta.label}
-          </Badge>
-        </div>
+        <div className="truncate text-sm font-medium">{item.name}</div>
         {item.description && (
           <p className="truncate text-xs text-muted-foreground">{item.description}</p>
         )}
       </div>
-      {/* Actions never shrink, so a long description can't push them off-row. */}
-      <div className="flex shrink-0 items-center gap-2">
-        <Button variant="ghost" size="sm" onClick={onPreview} disabled={busy}>
-          <Eye className="mr-1 h-3.5 w-3.5" /> Diff
-        </Button>
-        {item.managed && onOptions && (
+
+      {/* Actions never shrink, so a long description can't push them off-row.
+          Preview stays visible (core to the consent flow); the primary action is
+          one button; secondary options collapse into an overflow menu. */}
+      <div className="flex shrink-0 items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground"
+              onClick={onPreview}
+              disabled={busy}
+            >
+              <Eye className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Preview diff</TooltipContent>
+        </Tooltip>
+
+        {item.managed ? (
+          <>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="w-20"
+              onClick={onSync}
+              disabled={busy}
+              title="Sync just this item"
+            >
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Play className="mr-1 h-3.5 w-3.5" /> Sync</>}
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8" disabled={busy}>
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                {onOptions && (
+                  <>
+                    <DropdownMenuItem onSelect={() => onOptions()}>
+                      <Settings2 className="mr-2 h-4 w-4" /> Options…
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                <DropdownMenuItem onSelect={() => onManage()}>
+                  <X className="mr-2 h-4 w-4" /> Stop managing
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
+        ) : (
           <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={onOptions}
+            variant={item.existsInArr ? "outline" : "default"}
+            size="sm"
+            onClick={onManage}
             disabled={busy}
-            title="Profile options (score set, reset unmatched scores)"
-          >
-            <Settings2 className="h-4 w-4" />
-          </Button>
-        )}
-        {item.managed && (
-          <Button variant="secondary" size="sm" onClick={onSync} disabled={busy} title="Sync just this item">
-            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="mr-1 h-3.5 w-3.5" />}
-            Sync
-          </Button>
-        )}
-        <Button
-          variant={item.managed ? "outline" : "default"}
-          size="sm"
-          onClick={onManage}
-          disabled={busy}
-          className="w-28"
-          title={
-            item.managed
-              ? "Stop managing (leaves the app unchanged)"
-              : item.existsInArr
+            className="w-24"
+            title={
+              item.existsInArr
                 ? "Take over management — the next sync overwrites the app copy"
                 : "Add this to the app now"
-          }
-        >
-          {busy ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : item.managed ? (
-            <>
-              <X className="mr-1 h-3.5 w-3.5" /> Unmanage
-            </>
-          ) : item.existsInArr ? (
-            <>
-              <ShieldCheck className="mr-1 h-3.5 w-3.5" /> Manage
-            </>
-          ) : (
-            <>
-              <Plus className="mr-1 h-3.5 w-3.5" /> Add
-            </>
-          )}
-        </Button>
+            }
+          >
+            {busy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : item.existsInArr ? (
+              <>
+                <ShieldCheck className="mr-1 h-3.5 w-3.5" /> Manage
+              </>
+            ) : (
+              <>
+                <Plus className="mr-1 h-3.5 w-3.5" /> Add
+              </>
+            )}
+          </Button>
+        )}
       </div>
     </div>
   );
