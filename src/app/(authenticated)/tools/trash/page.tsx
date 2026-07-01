@@ -113,6 +113,11 @@ interface CatalogCf {
   defaultScore: number;
 }
 
+interface CfCategory {
+  name: string;
+  trashIds: string[];
+}
+
 interface CatalogSummary {
   service: ServiceType;
   ref: string;
@@ -120,6 +125,7 @@ interface CatalogSummary {
   counts: { customFormats: number; qualityProfiles: number; qualitySize: number; naming: number };
   naming: TrashNaming | null;
   customFormats?: CatalogCf[];
+  categories?: CfCategory[];
 }
 
 interface ArrProfile {
@@ -724,6 +730,7 @@ export default function TrashSyncPage() {
                 instanceId={selected.id}
                 instanceName={selected.name}
                 catalogCfs={catalog?.customFormats ?? []}
+                catalogCategories={catalog?.categories ?? []}
                 onShowReport={(title, items, dryRun) => setDiffReport({ title, items, dryRun })}
               />
             </TabsContent>
@@ -1126,12 +1133,14 @@ function ProfileFormatsTab({
   instanceId,
   instanceName,
   catalogCfs,
+  catalogCategories,
   onShowReport,
 }: {
   serviceType: ServiceType;
   instanceId: string;
   instanceName: string;
   catalogCfs: CatalogCf[];
+  catalogCategories: CfCategory[];
   onShowReport: (title: string, items: PlanItem[], dryRun: boolean) => void;
 }) {
   const [profiles, setProfiles] = useState<ArrProfile[]>([]);
@@ -1141,6 +1150,7 @@ function ProfileFormatsTab({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [cfQuery, setCfQuery] = useState("");
+  const [category, setCategory] = useState<string>("__all");
   const [attachedQuery, setAttachedQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -1312,11 +1322,27 @@ function ProfileFormatsTab({
     }
   };
 
+  // Category drill-down: which trash_ids belong to the selected category.
+  const inAnyGroup = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of catalogCategories) for (const id of c.trashIds) s.add(id);
+    return s;
+  }, [catalogCategories]);
+  const hasUncategorized = catalogCfs.some((cf) => !inAnyGroup.has(cf.trashId));
+  const categoryTrashIds = useMemo(() => {
+    if (category === "__all") return null;
+    if (category === "__uncat") {
+      return new Set(catalogCfs.filter((cf) => !inAnyGroup.has(cf.trashId)).map((cf) => cf.trashId));
+    }
+    return new Set(catalogCategories.find((c) => c.name === category)?.trashIds ?? []);
+  }, [category, catalogCategories, catalogCfs, inAnyGroup]);
+
   const attachedIds = new Set(formats.map((f) => f.trashId));
   const cfMatches = catalogCfs
     .filter((cf) => !attachedIds.has(cf.trashId))
+    .filter((cf) => !categoryTrashIds || categoryTrashIds.has(cf.trashId))
     .filter((cf) => !cfQuery || cf.name.toLowerCase().includes(cfQuery.toLowerCase()))
-    .slice(0, 60);
+    .slice(0, 200);
 
   return (
     <Card>
@@ -1414,36 +1440,55 @@ function ProfileFormatsTab({
                   )}
                 </div>
 
-                {/* Add custom formats */}
+                {/* Add custom formats — drill down by TRaSH category. */}
                 <div className="space-y-2">
-                  <Label className="text-xs">Add a custom format</Label>
-                  <Input
-                    placeholder="Search custom formats…"
-                    value={cfQuery}
-                    onChange={(e) => setCfQuery(e.target.value)}
-                    className="h-9"
-                  />
-                  {cfQuery && (
-                    <div className="max-h-48 overflow-y-auto overflow-x-hidden rounded-md border border-white/5">
-                      {cfMatches.length === 0 ? (
-                        <p className="p-3 text-center text-xs text-muted-foreground">No matches.</p>
-                      ) : (
-                        cfMatches.map((cf) => (
-                          <button
-                            key={cf.trashId}
-                            type="button"
-                            onClick={() => addFormat(cf)}
-                            className="flex w-full items-center justify-between px-3 py-1.5 text-left text-sm hover:bg-white/5"
-                          >
+                  <Label className="text-xs">Add a custom format by category</Label>
+                  <div className="flex flex-wrap gap-2">
+                    <Select value={category} onValueChange={setCategory}>
+                      <SelectTrigger className="h-9 w-72">
+                        <SelectValue placeholder="Category" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__all">All categories</SelectItem>
+                        {catalogCategories.map((c) => (
+                          <SelectItem key={c.name} value={c.name}>
+                            {c.name}
+                          </SelectItem>
+                        ))}
+                        {hasUncategorized && <SelectItem value="__uncat">Uncategorized</SelectItem>}
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      placeholder="Filter within category…"
+                      value={cfQuery}
+                      onChange={(e) => setCfQuery(e.target.value)}
+                      className="h-9 min-w-[10rem] flex-1"
+                    />
+                  </div>
+                  <div className="max-h-56 overflow-y-auto overflow-x-hidden rounded-md border border-white/5">
+                    {cfMatches.length === 0 ? (
+                      <p className="p-3 text-center text-xs text-muted-foreground">
+                        No custom formats to add here.
+                      </p>
+                    ) : (
+                      cfMatches.map((cf) => (
+                        <button
+                          key={cf.trashId}
+                          type="button"
+                          onClick={() => addFormat(cf)}
+                          className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm hover:bg-white/5"
+                        >
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                             <span className="truncate">{cf.name}</span>
-                            <span className="ml-2 shrink-0 text-xs text-muted-foreground">
-                              default {cf.defaultScore}
-                            </span>
-                          </button>
-                        ))
-                      )}
-                    </div>
-                  )}
+                          </span>
+                          <span className="ml-2 shrink-0 text-xs text-muted-foreground">
+                            default {cf.defaultScore}
+                          </span>
+                        </button>
+                      ))
+                    )}
+                  </div>
                 </div>
 
                 {/* Actions */}

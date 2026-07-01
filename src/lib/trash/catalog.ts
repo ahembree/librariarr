@@ -14,6 +14,7 @@ import type {
   ResourceType,
   TrashCatalog,
   TrashCustomFormat,
+  TrashCfGroup,
   TrashQualityProfile,
   TrashQualitySize,
   TrashNaming,
@@ -30,6 +31,12 @@ const http = axios.create({
 interface TreeEntry {
   path: string;
   type: string;
+}
+
+interface RawCfGroup {
+  name?: string;
+  trash_id?: string;
+  custom_formats?: Array<{ trash_id?: string } | null>;
 }
 
 /** Run `worker` over `items` with a bounded number of concurrent tasks. */
@@ -86,12 +93,14 @@ async function buildCatalog(service: ServiceType): Promise<TrashCatalog> {
     files.filter((f) => f.path.startsWith(prefix)).map((f) => f.path);
 
   const cfPaths = inDir(paths.customFormats);
+  const cfGroupPaths = inDir(paths.cfGroups);
   const qpPaths = inDir(paths.qualityProfiles);
   const qsPaths = inDir(paths.qualitySize);
   const namingPaths = inDir(paths.naming);
 
-  const [cfRaw, qpRaw, qsRaw, namingRaw] = await Promise.all([
+  const [cfRaw, cfGroupRaw, qpRaw, qsRaw, namingRaw] = await Promise.all([
     mapConcurrent(cfPaths, FETCH_CONCURRENCY, (p) => fetchJson<TrashCustomFormat>(p)),
+    mapConcurrent(cfGroupPaths, FETCH_CONCURRENCY, (p) => fetchJson<RawCfGroup>(p)),
     mapConcurrent(qpPaths, FETCH_CONCURRENCY, (p) => fetchJson<TrashQualityProfile>(p)),
     mapConcurrent(qsPaths, FETCH_CONCURRENCY, (p) => fetchJson<TrashQualitySize>(p)),
     mapConcurrent(namingPaths, FETCH_CONCURRENCY, (p) => fetchJson<TrashNaming>(p)),
@@ -100,6 +109,16 @@ async function buildCatalog(service: ServiceType): Promise<TrashCatalog> {
   const customFormats = cfRaw.filter(
     (c): c is TrashCustomFormat => !!c && !!c.trash_id && Array.isArray(c.specifications),
   );
+  const cfGroups: TrashCfGroup[] = cfGroupRaw
+    .filter((g): g is RawCfGroup => !!g && !!g.name && Array.isArray(g.custom_formats))
+    .map((g) => ({
+      name: g.name!,
+      trash_id: g.trash_id,
+      customFormats: g.custom_formats!
+        .map((c) => c?.trash_id)
+        .filter((id): id is string => !!id),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
   const qualityProfiles = qpRaw.filter(
     (q): q is TrashQualityProfile => !!q && !!q.trash_id && Array.isArray(q.items),
   );
@@ -116,6 +135,7 @@ async function buildCatalog(service: ServiceType): Promise<TrashCatalog> {
     service,
     ref: TRASH_REF,
     customFormats: customFormats.sort((a, b) => a.name.localeCompare(b.name)),
+    cfGroups,
     qualityProfiles: qualityProfiles.sort((a, b) => a.name.localeCompare(b.name)),
     qualitySize,
     naming,

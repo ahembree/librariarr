@@ -22,6 +22,7 @@ export function servicePaths(service: ServiceType) {
   const svc = service === "SONARR" ? "sonarr" : "radarr";
   return {
     customFormats: `docs/json/${svc}/cf/`,
+    cfGroups: `docs/json/${svc}/cf-groups/`,
     qualityProfiles: `docs/json/${svc}/quality-profiles/`,
     qualitySize: `docs/json/${svc}/quality-size/`,
     naming: `docs/json/${svc}/naming/`,

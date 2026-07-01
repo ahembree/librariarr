@@ -41,6 +41,11 @@ export async function GET(request: NextRequest) {
           name: c.name,
           defaultScore: c.trash_scores?.default ?? 0,
         })),
+        // Guide-defined categories (cf-groups) for drilling down the format list.
+        categories: catalog.cfGroups.map((g) => ({
+          name: g.name,
+          trashIds: g.customFormats,
+        })),
       },
     });
   } catch (err) {

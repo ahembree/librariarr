@@ -53,6 +53,7 @@ const CATALOG = {
   ],
   qualitySize: { trash_id: "qs1", type: "movie", qualities: [{ quality: "Bluray-1080p", min: 5, preferred: 100, max: 200 }] },
   naming: { folder: { default: "{Movie CleanTitle}" }, file: { standard: "{Movie CleanTitle} {Quality Full}" } },
+  cfGroups: [{ name: "[Audio] Audio Formats", trash_id: "g1", customFormats: ["cf1"] }],
 };
 
 // A distinct Sonarr catalog (different trash_ids) so the cross-service gate is
@@ -65,6 +66,7 @@ const SONARR_CATALOG = {
   qualityProfiles: [{ trash_id: "sqp1", name: "WEB-1080p", items: [] }],
   qualitySize: { trash_id: "sqs1", type: "series", qualities: [] },
   naming: { series: { default: "{Series Title}" } },
+  cfGroups: [],
 };
 
 // Keep the real `catalogHasResource` (the route imports it) but stub the fetch.
@@ -183,11 +185,20 @@ describe("GET /api/tools/trash/catalog", () => {
   it("returns catalog counts and naming", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
-    const body = await expectJson<{ catalog: { counts: { customFormats: number }; naming: unknown } }>(
-      await callRoute(getCatalog, { searchParams: { service: "radarr" } }),
-    );
+    const body = await expectJson<{
+      catalog: {
+        counts: { customFormats: number };
+        naming: unknown;
+        categories: { name: string; trashIds: string[] }[];
+        customFormats: { trashId: string; defaultScore: number }[];
+      };
+    }>(await callRoute(getCatalog, { searchParams: { service: "radarr" } }));
     expect(body.catalog.counts.customFormats).toBe(1);
     expect(body.catalog.naming).not.toBeNull();
+    // cf-groups become drill-down categories.
+    expect(body.catalog.categories[0].name).toBe("[Audio] Audio Formats");
+    expect(body.catalog.categories[0].trashIds).toEqual(["cf1"]);
+    expect(body.catalog.customFormats[0]).toMatchObject({ trashId: "cf1", defaultScore: 100 });
   });
 });
 

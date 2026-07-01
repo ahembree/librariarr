@@ -17,6 +17,7 @@ const tree = {
   tree: [
     { path: "docs/json/radarr/cf/amzn.json", type: "blob" },
     { path: "docs/json/radarr/cf/bad.json", type: "blob" },
+    { path: "docs/json/radarr/cf-groups/audio.json", type: "blob" },
     { path: "docs/json/radarr/quality-profiles/hd.json", type: "blob" },
     { path: "docs/json/radarr/quality-size/movie.json", type: "blob" },
     { path: "docs/json/radarr/naming/radarr-naming.json", type: "blob" },
@@ -28,6 +29,11 @@ const tree = {
 const files: Record<string, unknown> = {
   "cf/amzn.json": { trash_id: "amzn", name: "AMZN", specifications: [] },
   "cf/bad.json": { name: "no trash id" },
+  "cf-groups/audio.json": {
+    name: "[Audio] Audio Formats",
+    trash_id: "g1",
+    custom_formats: [{ name: "AMZN", trash_id: "amzn" }, { trash_id: "other-cf" }],
+  },
   "quality-profiles/hd.json": { trash_id: "hd", name: "HD", items: [] },
   "quality-size/movie.json": { trash_id: "qs", type: "movie", qualities: [] },
   "naming/radarr-naming.json": { folder: {}, file: {} },
@@ -54,6 +60,10 @@ describe("fetchTrashCatalog", () => {
     expect(cat.naming).not.toBeNull();
     // Sonarr files are not pulled into the radarr catalog.
     expect(cat.customFormats.some((c) => c.name === "other")).toBe(false);
+    // cf-groups become categories mapping to their custom-format trash_ids.
+    expect(cat.cfGroups).toHaveLength(1);
+    expect(cat.cfGroups[0].name).toBe("[Audio] Audio Formats");
+    expect(cat.cfGroups[0].customFormats).toEqual(["amzn", "other-cf"]);
   });
 
   it("serves the cached catalog on subsequent calls", async () => {
@@ -77,6 +87,7 @@ describe("catalogHasResource (cross-service gate)", () => {
     ref: "master",
     fetchedAt: "2026-01-01T00:00:00Z",
     customFormats: [{ trash_id: "cf1", name: "AMZN", specifications: [] }],
+    cfGroups: [],
     qualityProfiles: [{ trash_id: "qp1", name: "HD", cutoff: "Bluray-1080p", items: [] }],
     qualitySize: { trash_id: "qs1", type: "movie", qualities: [] },
     naming: { folder: {}, file: {} },

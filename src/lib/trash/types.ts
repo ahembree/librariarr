@@ -48,6 +48,14 @@ export interface TrashCustomFormat {
   specifications: TrashSpecification[];
 }
 
+/** A TRaSH "custom format group" — the guide's own categorization of formats. */
+export interface TrashCfGroup {
+  name: string;
+  trash_id?: string;
+  /** trash_ids of the custom formats in this group. */
+  customFormats: string[];
+}
+
 export interface TrashQualityProfileItem {
   name: string;
   allowed: boolean;
@@ -204,6 +212,8 @@ export interface TrashCatalog {
   service: ServiceType;
   ref: string;
   customFormats: TrashCustomFormat[];
+  /** Guide-defined custom-format categories (from cf-groups). */
+  cfGroups: TrashCfGroup[];
   qualityProfiles: TrashQualityProfile[];
   /** One quality-size definition per service (movie / series). */
   qualitySize: TrashQualitySize | null;
