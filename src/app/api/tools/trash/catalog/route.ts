@@ -44,6 +44,15 @@ export async function GET(request: NextRequest) {
         // Top-level categories derived from the cf-group `[Bracket]` prefixes,
         // for drilling down the format list.
         categories: deriveCategories(catalog.cfGroups),
+        // Named score sets the guide's custom formats define (besides `default`),
+        // so a quality profile can pick one (e.g. `sqp-1-2160p`).
+        scoreSets: [
+          ...new Set(
+            catalog.customFormats.flatMap((c) => Object.keys(c.trash_scores ?? {})),
+          ),
+        ]
+          .filter((k) => k !== "default")
+          .sort(),
       },
     });
   } catch (err) {

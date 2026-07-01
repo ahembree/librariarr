@@ -249,6 +249,21 @@ export interface ProfileCfSelection {
   formats: ProfileCfFormat[];
 }
 
+/** Per-profile options stored on a QUALITY_PROFILE managed resource. */
+export interface QualityProfileSelection {
+  /** Override the guide score set used for this profile's custom-format scores. */
+  scoreSet?: string;
+  /**
+   * When true, custom-format scores this profile doesn't manage are reset to 0
+   * (Recyclarr's `reset_unmatched_scores`). Off by default (scores preserved).
+   */
+  resetUnmatchedScores?: boolean;
+  /** Custom-format names excluded from the reset (exact, case-sensitive). */
+  resetExcept?: string[];
+  /** Regex patterns (case-insensitive) excluding custom formats from the reset. */
+  resetExceptPatterns?: string[];
+}
+
 // ─── Status (cross-reference guide ↔ instance ↔ managed) ───
 
 export type ItemStatus =
@@ -276,8 +291,11 @@ export interface TrashStatusItem {
   arrId?: number | null;
   managedResourceId?: string;
   lastSyncedAt?: string | null;
-  /** Currently-managed naming variant selection (NAMING resources only). */
-  selection?: NamingSelection | null;
+  /**
+   * Currently-managed selection: naming variants (NAMING) or per-profile options
+   * (QUALITY_PROFILE). Absent for resource types that carry no selection.
+   */
+  selection?: NamingSelection | QualityProfileSelection | null;
 }
 
 export interface TrashStatus {

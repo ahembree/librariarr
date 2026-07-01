@@ -224,6 +224,22 @@ export interface BuildProfileResult {
   warnings: string[];
 }
 
+/** Per-profile build options (mirrors Recyclarr's `score_set` / `reset_unmatched_scores`). */
+export interface BuildProfileOptions {
+  /** Override which guide score set the profile's custom-format scores come from. */
+  scoreSet?: string;
+  /**
+   * When true, reset every custom-format score the guide profile doesn't manage
+   * back to 0 (except those matched by `resetExcept` / `resetExceptPatterns`).
+   * Off by default, so unmanaged scores are preserved.
+   */
+  resetUnmatchedScores?: boolean;
+  /** Custom-format names excluded from the reset (exact, case-insensitive). */
+  resetExcept?: string[];
+  /** Regex patterns (case-insensitive) excluding custom formats from the reset. */
+  resetExceptPatterns?: string[];
+}
+
 /**
  * Build a Sonarr/Radarr quality profile payload from a TRaSH profile, resolving
  * quality names/groups and custom-format scores against the live instance schema.
@@ -241,14 +257,15 @@ export function buildQualityProfile(
   catalogCfsByTrashId: Map<string, TrashCustomFormat>,
   existing?: ArrQualityProfile,
   languages?: ArrLanguage[],
-  scoreSet?: string,
+  options?: BuildProfileOptions,
 ): BuildProfileResult {
   const warnings: string[] = [];
   const baseByName = flattenSchemaQualities(schema.items);
   // The profile's declared score set selects which entry of each custom
-  // format's `trash_scores` to use. Many formats have no `default`, so this
-  // must be honored or their scores collapse to 0.
-  const resolvedScoreSet = scoreSet ?? trash.trash_score_set;
+  // format's `trash_scores` to use. A per-profile override (`options.scoreSet`)
+  // wins over the guide's own `trash_score_set`. Many formats have no
+  // `default`, so this must be honored or their scores collapse to 0.
+  const resolvedScoreSet = options?.scoreSet ?? trash.trash_score_set;
 
   const items: ArrProfileItem[] = [];
   const used = new Set<string>();
@@ -304,19 +321,47 @@ export function buildQualityProfile(
     cutoff = highestAllowed?.quality?.id ?? highestAllowed?.id ?? items[items.length - 1]?.quality?.id ?? 0;
   }
 
-  // Format scores. Seed from the profile's EXISTING scores rather than zeroing
-  // everything, so custom formats the guide profile doesn't manage (e.g. ones
-  // assigned via PROFILE_CF or set manually) are preserved. This mirrors
-  // Recyclarr's default (`reset_unmatched_scores` off): only the CFs the guide
-  // profile references are changed; all other scores are left untouched.
+  // Format scores. By default, seed from the profile's EXISTING scores rather
+  // than zeroing everything, so custom formats the guide profile doesn't manage
+  // (e.g. ones assigned via PROFILE_CF or set manually) are preserved. This
+  // mirrors Recyclarr's default (`reset_unmatched_scores` off).
+  //
+  // When `resetUnmatchedScores` is on, scores for formats the guide profile
+  // doesn't manage are reset to 0 — except formats matched by `resetExcept`
+  // (exact names) or `resetExceptPatterns` (regex). Guide-managed formats are
+  // always overwritten with the guide score below, regardless.
+  const reset = options?.resetUnmatchedScores ?? false;
+  const exceptNames = new Set((options?.resetExcept ?? []).map((n) => n.toLowerCase()));
+  const exceptRegexes = (options?.resetExceptPatterns ?? [])
+    .map((p) => {
+      try {
+        return new RegExp(p, "i");
+      } catch {
+        return null;
+      }
+    })
+    .filter((r): r is RegExp => r !== null);
+  const isExcepted = (name: string) =>
+    exceptNames.has(name.toLowerCase()) || exceptRegexes.some((r) => r.test(name));
+
+  // Names of the custom formats the guide profile assigns a score to — these are
+  // never "unmatched", so the reset must skip them (they're overwritten anyway).
+  const guideManagedNames = new Set<string>();
+  for (const [cfName, cfTrashId] of Object.entries(trash.formatItems ?? {})) {
+    guideManagedNames.add(cfName.toLowerCase());
+    const catalogName = catalogCfsByTrashId.get(cfTrashId)?.name;
+    if (catalogName) guideManagedNames.add(catalogName.toLowerCase());
+  }
+
   const existingScoreByName = new Map(
     (existing?.formatItems ?? []).map((f) => [f.name, f.score]),
   );
-  const formatItems: ArrFormatItem[] = (schema.formatItems ?? []).map((f) => ({
-    format: f.format,
-    name: f.name,
-    score: existingScoreByName.get(f.name) ?? 0,
-  }));
+  const formatItems: ArrFormatItem[] = (schema.formatItems ?? []).map((f) => {
+    const existingScore = existingScoreByName.get(f.name) ?? 0;
+    const unmanaged = !guideManagedNames.has(f.name.toLowerCase());
+    const score = reset && unmanaged && !isExcepted(f.name) ? 0 : existingScore;
+    return { format: f.format, name: f.name, score };
+  });
   const byName = new Map(formatItems.map((f) => [f.name, f]));
   for (const [cfName, cfTrashId] of Object.entries(trash.formatItems ?? {})) {
     const catalogCf = catalogCfsByTrashId.get(cfTrashId);

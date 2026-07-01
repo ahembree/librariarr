@@ -263,6 +263,90 @@ describe("quality profile builder", () => {
     expect(payload.id).toBe(7);
   });
 
+  // Fixtures shared by the reset-unmatched-scores tests.
+  const schemaWithExtra = {
+    ...schema,
+    formatItems: [
+      { format: 101, name: "Tier 01", score: 0 },
+      { format: 102, name: "Tier 02", score: 0 },
+      { format: 200, name: "My Custom CF", score: 0 },
+      { format: 201, name: "Anime BD Tier", score: 0 },
+    ],
+  };
+  const existingProfile = {
+    id: 7,
+    name: "HD Test",
+    upgradeAllowed: true,
+    cutoff: 7,
+    items: [],
+    minFormatScore: 0,
+    cutoffFormatScore: 0,
+    formatItems: [
+      { format: 101, name: "Tier 01", score: 999 },
+      { format: 102, name: "Tier 02", score: 42 },
+      { format: 200, name: "My Custom CF", score: 500 },
+      { format: 201, name: "Anime BD Tier", score: 77 },
+    ],
+  };
+
+  it("resets unmatched scores to 0 when reset_unmatched_scores is on", () => {
+    const { payload } = buildQualityProfile(trash, schemaWithExtra, "RADARR", cfMap, existingProfile, undefined, {
+      resetUnmatchedScores: true,
+    });
+    // Guide-managed CF is still set to the guide's score.
+    expect(payload.formatItems.find((f) => f.name === "Tier 01")?.score).toBe(100);
+    // Every CF the guide profile doesn't manage is reset to 0.
+    expect(payload.formatItems.find((f) => f.name === "Tier 02")?.score).toBe(0);
+    expect(payload.formatItems.find((f) => f.name === "My Custom CF")?.score).toBe(0);
+    expect(payload.formatItems.find((f) => f.name === "Anime BD Tier")?.score).toBe(0);
+  });
+
+  it("keeps excepted formats (exact names, case-insensitive) during a reset", () => {
+    const { payload } = buildQualityProfile(trash, schemaWithExtra, "RADARR", cfMap, existingProfile, undefined, {
+      resetUnmatchedScores: true,
+      resetExcept: ["my custom cf"],
+    });
+    // Excepted CF keeps its existing score; the other unmatched one is reset.
+    expect(payload.formatItems.find((f) => f.name === "My Custom CF")?.score).toBe(500);
+    expect(payload.formatItems.find((f) => f.name === "Tier 02")?.score).toBe(0);
+  });
+
+  it("keeps formats matching an except regex pattern during a reset", () => {
+    const { payload } = buildQualityProfile(trash, schemaWithExtra, "RADARR", cfMap, existingProfile, undefined, {
+      resetUnmatchedScores: true,
+      resetExceptPatterns: ["^anime"],
+    });
+    // Pattern (case-insensitive) matches "Anime BD Tier" → preserved.
+    expect(payload.formatItems.find((f) => f.name === "Anime BD Tier")?.score).toBe(77);
+    // A non-matching unmatched CF is still reset.
+    expect(payload.formatItems.find((f) => f.name === "My Custom CF")?.score).toBe(0);
+  });
+
+  it("ignores an invalid except regex without throwing", () => {
+    const { payload } = buildQualityProfile(trash, schemaWithExtra, "RADARR", cfMap, existingProfile, undefined, {
+      resetUnmatchedScores: true,
+      resetExceptPatterns: ["("], // invalid regex
+    });
+    // Invalid pattern is dropped; the reset proceeds normally.
+    expect(payload.formatItems.find((f) => f.name === "My Custom CF")?.score).toBe(0);
+  });
+
+  it("options.scoreSet overrides the guide's declared score set", () => {
+    const t: TrashQualityProfile = {
+      ...trash,
+      trash_score_set: "default",
+      formatItems: { "Tier 01": "cf-a" },
+    };
+    const map = new Map<string, TrashCustomFormat>([
+      ["cf-a", { trash_id: "cf-a", name: "Tier 01", trash_scores: { default: 100, "sqp-1-2160p": -50 }, specifications: [] }],
+    ]);
+    const { payload } = buildQualityProfile(t, schema, "RADARR", map, undefined, undefined, {
+      scoreSet: "sqp-1-2160p",
+    });
+    // The override wins over the profile's own trash_score_set.
+    expect(payload.formatItems.find((f) => f.name === "Tier 01")?.score).toBe(-50);
+  });
+
   it("warns when a referenced custom format is not present in the instance", () => {
     const t: TrashQualityProfile = { ...trash, formatItems: { "Ghost CF": "cf-x" } };
     const map = new Map<string, TrashCustomFormat>([

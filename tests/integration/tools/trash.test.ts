@@ -31,7 +31,7 @@ const CATALOG = {
       trash_id: "cf1",
       name: "AMZN",
       includeCustomFormatWhenRenaming: true,
-      trash_scores: { default: 100 },
+      trash_scores: { default: 100, "sqp-1-2160p": -25 },
       specifications: [
         { name: "Amazon", implementation: "ReleaseTitleSpecification", negate: false, required: true, fields: { value: "amzn" } },
       ],
@@ -193,6 +193,7 @@ describe("GET /api/tools/trash/catalog", () => {
         naming: unknown;
         categories: { name: string; trashIds: string[] }[];
         customFormats: { trashId: string; defaultScore: number }[];
+        scoreSets: string[];
       };
     }>(await callRoute(getCatalog, { searchParams: { service: "radarr" } }));
     expect(body.catalog.counts.customFormats).toBe(1);
@@ -201,6 +202,8 @@ describe("GET /api/tools/trash/catalog", () => {
     expect(body.catalog.categories[0].name).toBe("Audio");
     expect(body.catalog.categories[0].trashIds).toEqual(["cf1"]);
     expect(body.catalog.customFormats[0]).toMatchObject({ trashId: "cf1", defaultScore: 100 });
+    // Named score sets (excluding `default`) are exposed for the profile options UI.
+    expect(body.catalog.scoreSets).toEqual(["sqp-1-2160p"]);
   });
 });
 
@@ -467,6 +470,121 @@ describe("POST /api/tools/trash/sync", () => {
     // The guide CF is set to its guide score; the unmanaged CF keeps its score.
     expect(payload.formatItems.find((f) => f.name === "AMZN")?.score).toBe(100);
     expect(payload.formatItems.find((f) => f.name === "My CF")?.score).toBe(500);
+  });
+
+  it("quality-profile sync resets unmatched scores when the option is enabled", async () => {
+    const { user, radarr } = await authedUserWithRadarr();
+    clientMock.getQualityProfiles.mockResolvedValue([
+      {
+        id: 3,
+        name: "HD Bluray + WEB",
+        cutoff: 7,
+        upgradeAllowed: true,
+        minFormatScore: 0,
+        cutoffFormatScore: 0,
+        items: [{ quality: { id: 7, name: "Bluray-1080p" }, items: [], allowed: true }],
+        formatItems: [
+          { format: 55, name: "AMZN", score: 0 },
+          { format: 77, name: "My CF", score: 500 },
+        ],
+      },
+    ]);
+    clientMock.getQualityProfileSchema.mockResolvedValue({
+      ...SCHEMA,
+      formatItems: [
+        { format: 55, name: "AMZN", score: 0 },
+        { format: 77, name: "My CF", score: 0 },
+      ],
+    });
+    await getTestPrisma().trashManagedResource.create({
+      data: {
+        userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id,
+        resourceType: "QUALITY_PROFILE", trashId: "qp1", name: "HD Bluray + WEB",
+        // Opt into resetting unmatched scores.
+        selection: { resetUnmatchedScores: true },
+      },
+    });
+    const res = await callRoute(postSync, {
+      method: "POST",
+      body: { serviceType: "RADARR", instanceId: radarr.id, dryRun: false, items: [{ resourceType: "QUALITY_PROFILE", trashId: "qp1" }] },
+    });
+    await expectJson(res, 200);
+    const [, payload] = clientMock.updateQualityProfile.mock.calls[0] as [number, { formatItems: { name: string; score: number }[] }];
+    // Guide CF still scored; the unmanaged CF is reset to 0.
+    expect(payload.formatItems.find((f) => f.name === "AMZN")?.score).toBe(100);
+    expect(payload.formatItems.find((f) => f.name === "My CF")?.score).toBe(0);
+  });
+
+  it("quality-profile sync honors a per-profile score set override", async () => {
+    const { user, radarr } = await authedUserWithRadarr();
+    clientMock.getQualityProfiles.mockResolvedValue([
+      {
+        id: 3,
+        name: "HD Bluray + WEB",
+        cutoff: 7,
+        upgradeAllowed: true,
+        minFormatScore: 0,
+        cutoffFormatScore: 0,
+        items: [{ quality: { id: 7, name: "Bluray-1080p" }, items: [], allowed: true }],
+        formatItems: [{ format: 55, name: "AMZN", score: 0 }],
+      },
+    ]);
+    await getTestPrisma().trashManagedResource.create({
+      data: {
+        userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id,
+        resourceType: "QUALITY_PROFILE", trashId: "qp1", name: "HD Bluray + WEB",
+        selection: { scoreSet: "sqp-1-2160p" },
+      },
+    });
+    const res = await callRoute(postSync, {
+      method: "POST",
+      body: { serviceType: "RADARR", instanceId: radarr.id, dryRun: false, items: [{ resourceType: "QUALITY_PROFILE", trashId: "qp1" }] },
+    });
+    await expectJson(res, 200);
+    const [, payload] = clientMock.updateQualityProfile.mock.calls[0] as [number, { formatItems: { name: string; score: number }[] }];
+    // AMZN's score comes from the sqp-1-2160p set (-25), not default (100).
+    expect(payload.formatItems.find((f) => f.name === "AMZN")?.score).toBe(-25);
+  });
+
+  it("PUT stores quality-profile options (score set + reset) on the managed row", async () => {
+    const { user, radarr } = await authedUserWithRadarr();
+    const row = await getTestPrisma().trashManagedResource.create({
+      data: {
+        userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id,
+        resourceType: "QUALITY_PROFILE", trashId: "qp1", name: "HD Bluray + WEB",
+      },
+    });
+    const res = await callRouteWithParams(putAssignment, { id: row.id }, {
+      method: "PUT",
+      body: { selection: { scoreSet: "sqp-1-2160p", resetUnmatchedScores: true, resetExcept: ["Keep Me"], resetExceptPatterns: ["^anime"] } },
+    });
+    await expectJson(res, 200);
+    const updated = await getTestPrisma().trashManagedResource.findUnique({ where: { id: row.id } });
+    const sel = updated?.selection as {
+      scoreSet?: string;
+      resetUnmatchedScores?: boolean;
+      resetExcept?: string[];
+      resetExceptPatterns?: string[];
+    };
+    expect(sel.scoreSet).toBe("sqp-1-2160p");
+    expect(sel.resetUnmatchedScores).toBe(true);
+    expect(sel.resetExcept).toEqual(["Keep Me"]);
+    expect(sel.resetExceptPatterns).toEqual(["^anime"]);
+  });
+
+  it("PUT rejects an invalid except regex pattern", async () => {
+    const { user, radarr } = await authedUserWithRadarr();
+    const row = await getTestPrisma().trashManagedResource.create({
+      data: {
+        userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id,
+        resourceType: "QUALITY_PROFILE", trashId: "qp1", name: "HD Bluray + WEB",
+      },
+    });
+    const res = await callRouteWithParams(putAssignment, { id: row.id }, {
+      method: "PUT",
+      body: { selection: { resetUnmatchedScores: true, resetExceptPatterns: ["("] } },
+    });
+    await expectJson(res, 400);
   });
 
   it("apply ignores unmanaged preview items (nothing written without a managed row)", async () => {

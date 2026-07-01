@@ -14,6 +14,7 @@ import {
   X,
   CheckCircle2,
   ChevronRight,
+  Settings2,
 } from "lucide-react";
 import {
   Card,
@@ -26,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -84,7 +86,7 @@ interface StatusItem {
   arrId?: number | null;
   managedResourceId?: string;
   lastSyncedAt?: string | null;
-  selection?: NamingSelection | null;
+  selection?: NamingSelection | QualityProfileSelection | null;
 }
 
 interface TrashStatus {
@@ -127,6 +129,7 @@ interface CatalogSummary {
   naming: TrashNaming | null;
   customFormats?: CatalogCf[];
   categories?: CfCategory[];
+  scoreSets?: string[];
 }
 
 interface ArrProfile {
@@ -181,6 +184,13 @@ interface NamingSelection {
   standard?: string;
   daily?: string;
   anime?: string;
+}
+
+interface QualityProfileSelection {
+  scoreSet?: string;
+  resetUnmatchedScores?: boolean;
+  resetExcept?: string[];
+  resetExceptPatterns?: string[];
 }
 
 // ─── Status presentation ───
@@ -278,6 +288,7 @@ export default function TrashSyncPage() {
 
   // Dialog state
   const [confirmItem, setConfirmItem] = useState<StatusItem | null>(null);
+  const [optionsItem, setOptionsItem] = useState<StatusItem | null>(null);
   const [diffReport, setDiffReport] = useState<{ title: string; items: PlanItem[]; dryRun: boolean } | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -446,6 +457,31 @@ export default function TrashSyncPage() {
     }
   };
 
+  // Persist a managed quality profile's per-profile options (score set +
+  // reset-unmatched-scores). Records the intent only — the profile isn't
+  // rewritten until the next Sync.
+  const saveProfileOptions = async (item: StatusItem, selection: QualityProfileSelection) => {
+    if (!selected || !item.managedResourceId) return;
+    setBusyId(item.trashId);
+    try {
+      const res = await fetch(`/api/tools/trash/assignments/${item.managedResourceId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selection }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.error ?? "Failed to save options");
+        return;
+      }
+      toast.success(`Saved options for “${item.name}” (applied on next sync)`);
+      setOptionsItem(null);
+      await loadStatus(selected);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const onManageClick = (item: StatusItem) => {
     if (item.managed) {
       void unassign(item);
@@ -512,7 +548,10 @@ export default function TrashSyncPage() {
 
   // ─── Preview / sync ───
 
-  const preview = async (item?: StatusItem, selection?: NamingSelection) => {
+  const preview = async (
+    item?: StatusItem,
+    selection?: NamingSelection | QualityProfileSelection,
+  ) => {
     if (!selected) return;
     setBusyId(item?.trashId ?? "__all__");
     try {
@@ -774,9 +813,12 @@ export default function TrashSyncPage() {
                 items={qpItems}
                 busyId={busyId}
                 onManage={onManageClick}
-                onPreview={(i) => preview(i)}
+                // Preview a QP with its saved options so the per-row diff matches
+                // what a real sync would do (score set / reset unmatched scores).
+                onPreview={(i) => preview(i, (i.selection as QualityProfileSelection | null) ?? undefined)}
                 onSync={(i) => syncOne(i)}
                 onBulkAdd={() => bulkAddNew("QUALITY_PROFILE")}
+                onOptions={(i) => setOptionsItem(i)}
               />
             </TabsContent>
 
@@ -846,6 +888,15 @@ export default function TrashSyncPage() {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* Per-profile options (score set + reset unmatched scores) */}
+      <QualityProfileOptionsDialog
+        item={optionsItem}
+        scoreSets={catalog?.scoreSets ?? []}
+        busy={!!optionsItem && busyId === optionsItem.trashId}
+        onClose={() => setOptionsItem(null)}
+        onSave={(sel) => optionsItem && void saveProfileOptions(optionsItem, sel)}
+      />
+
       {/* Diff / report dialog */}
       <Dialog open={!!diffReport} onOpenChange={(o) => !o && setDiffReport(null)}>
         <DialogContent className="max-w-2xl">
@@ -879,6 +930,7 @@ function ResourceList({
   onPreview,
   onSync,
   onBulkAdd,
+  onOptions,
 }: {
   items: StatusItem[];
   busyId: string | null;
@@ -888,6 +940,8 @@ function ResourceList({
   onPreview: (item: StatusItem) => void;
   onSync: (item: StatusItem) => void;
   onBulkAdd: () => void;
+  /** When provided, managed rows get an options (gear) button. */
+  onOptions?: (item: StatusItem) => void;
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "managed" | "unmanaged" | "new">("all");
@@ -922,6 +976,7 @@ function ResourceList({
       onManage={() => onManage(item)}
       onPreview={() => onPreview(item)}
       onSync={() => onSync(item)}
+      onOptions={onOptions ? () => onOptions(item) : undefined}
     />
   );
 
@@ -1003,12 +1058,15 @@ function ResourceRow({
   onManage,
   onPreview,
   onSync,
+  onOptions,
 }: {
   item: StatusItem;
   busy: boolean;
   onManage: () => void;
   onPreview: () => void;
   onSync: () => void;
+  /** When provided and the item is managed, shows an options (gear) button. */
+  onOptions?: () => void;
 }) {
   const meta = STATUS_META[item.status];
   return (
@@ -1029,6 +1087,18 @@ function ResourceRow({
         <Button variant="ghost" size="sm" onClick={onPreview} disabled={busy}>
           <Eye className="mr-1 h-3.5 w-3.5" /> Diff
         </Button>
+        {item.managed && onOptions && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={onOptions}
+            disabled={busy}
+            title="Profile options (score set, reset unmatched scores)"
+          >
+            <Settings2 className="h-4 w-4" />
+          </Button>
+        )}
         {item.managed && (
           <Button variant="secondary" size="sm" onClick={onSync} disabled={busy} title="Sync just this item">
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="mr-1 h-3.5 w-3.5" />}
@@ -1138,7 +1208,7 @@ function NamingCard({
 }) {
   // Seed from the currently-managed selection so a managed naming item shows
   // its variants (the card is keyed per instance, so this re-seeds on switch).
-  const [sel, setSel] = useState<NamingSelection>(item.selection ?? {});
+  const [sel, setSel] = useState<NamingSelection>((item.selection as NamingSelection | null) ?? {});
   const meta = STATUS_META[item.status];
 
   const groups: { key: keyof NamingSelection; label: string; options: Record<string, string> }[] = [];
@@ -1614,6 +1684,167 @@ function ProfileFormatsTab({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// ─── Quality-profile options (score set + reset unmatched scores) ───
+
+const GUIDE_DEFAULT_SCORE_SET = "__default__";
+
+function QualityProfileOptionsDialog({
+  item,
+  scoreSets,
+  busy,
+  onClose,
+  onSave,
+}: {
+  item: StatusItem | null;
+  scoreSets: string[];
+  busy: boolean;
+  onClose: () => void;
+  onSave: (selection: QualityProfileSelection) => void;
+}) {
+  return (
+    <Dialog open={!!item} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-lg">
+        {item && (
+          <OptionsForm
+            key={item.trashId}
+            item={item}
+            scoreSets={scoreSets}
+            busy={busy}
+            onCancel={onClose}
+            onSave={onSave}
+          />
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function OptionsForm({
+  item,
+  scoreSets,
+  busy,
+  onCancel,
+  onSave,
+}: {
+  item: StatusItem;
+  scoreSets: string[];
+  busy: boolean;
+  onCancel: () => void;
+  onSave: (selection: QualityProfileSelection) => void;
+}) {
+  const initial = (item.selection ?? null) as QualityProfileSelection | null;
+  const [scoreSet, setScoreSet] = useState<string>(initial?.scoreSet ?? GUIDE_DEFAULT_SCORE_SET);
+  const [reset, setReset] = useState<boolean>(initial?.resetUnmatchedScores ?? false);
+  const [exceptNames, setExceptNames] = useState<string>((initial?.resetExcept ?? []).join("\n"));
+  const [exceptPatterns, setExceptPatterns] = useState<string>(
+    (initial?.resetExceptPatterns ?? []).join("\n"),
+  );
+
+  const parseLines = (text: string) =>
+    text
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+  const submit = () => {
+    const selection: QualityProfileSelection = {};
+    if (scoreSet && scoreSet !== GUIDE_DEFAULT_SCORE_SET) selection.scoreSet = scoreSet;
+    if (reset) {
+      selection.resetUnmatchedScores = true;
+      const names = parseLines(exceptNames);
+      const patterns = parseLines(exceptPatterns);
+      if (names.length) selection.resetExcept = names;
+      if (patterns.length) selection.resetExceptPatterns = patterns;
+    }
+    onSave(selection);
+  };
+
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle>Profile options — {item.name}</DialogTitle>
+        <DialogDescription>
+          Fine-tune how this quality profile is synced. Changes are recorded now and applied on the
+          next sync.
+        </DialogDescription>
+      </DialogHeader>
+
+      <div className="space-y-5 py-1">
+        <div className="space-y-1.5">
+          <Label className="text-xs">Score set</Label>
+          <Select value={scoreSet} onValueChange={setScoreSet}>
+            <SelectTrigger className="h-9">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={GUIDE_DEFAULT_SCORE_SET}>Guide default</SelectItem>
+              {scoreSets.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-[11px] text-muted-foreground">
+            Which named custom-format score set to use (e.g. an SQP set). Leave on{" "}
+            <span className="font-medium">Guide default</span> to use the profile&apos;s own score
+            set.
+          </p>
+        </div>
+
+        <div className="flex items-start justify-between gap-3 rounded-md border border-white/5 p-3">
+          <div className="min-w-0">
+            <Label className="text-sm">Reset unmatched scores</Label>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              Reset every custom-format score this profile doesn&apos;t manage back to 0. Off by
+              default, so scores you set elsewhere are preserved.
+            </p>
+          </div>
+          <Switch checked={reset} onCheckedChange={setReset} className="mt-0.5 shrink-0" />
+        </div>
+
+        {reset && (
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Keep these formats (exact names)</Label>
+              <textarea
+                value={exceptNames}
+                onChange={(e) => setExceptNames(e.target.value)}
+                placeholder="One custom-format name per line"
+                rows={3}
+                className="w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Keep these formats (regex patterns)</Label>
+              <textarea
+                value={exceptPatterns}
+                onChange={(e) => setExceptPatterns(e.target.value)}
+                placeholder="One regular expression per line (case-insensitive)"
+                rows={3}
+                className="w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                A custom format matching any pattern is left untouched by the reset.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <DialogFooter>
+        <Button variant="outline" onClick={onCancel} disabled={busy}>
+          Cancel
+        </Button>
+        <Button onClick={submit} disabled={busy}>
+          {busy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-1.5 h-4 w-4" />}
+          Save options
+        </Button>
+      </DialogFooter>
+    </>
   );
 }
 

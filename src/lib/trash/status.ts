@@ -11,6 +11,7 @@ import type {
   TrashStatus,
   TrashStatusItem,
   NamingSelection,
+  QualityProfileSelection,
 } from "./types";
 
 export interface ResolvedInstance {
@@ -166,6 +167,9 @@ export async function computeTrashStatus(
       arrId: existing?.id ?? m?.arrId ?? null,
       managedResourceId: m?.id,
       lastSyncedAt: m?.lastSyncedAt?.toISOString() ?? null,
+      // Per-profile options (score set / reset-unmatched-scores) so the UI can
+      // prefill the options dialog for a managed profile.
+      selection: (m?.selection ?? null) as QualityProfileSelection | null,
     });
   }
 

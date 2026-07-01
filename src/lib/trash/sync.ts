@@ -29,6 +29,7 @@ import type {
   TrashCustomFormat,
   NamingSelection,
   ProfileCfSelection,
+  QualityProfileSelection,
   PlanItem,
   SyncReport,
   ArrCustomFormat,
@@ -39,7 +40,7 @@ import type {
   ArrLanguage,
 } from "./types";
 
-type Selection = NamingSelection | ProfileCfSelection | null;
+type Selection = NamingSelection | ProfileCfSelection | QualityProfileSelection | null;
 
 interface Target {
   resourceType: ResourceType;
@@ -58,7 +59,11 @@ export interface SyncOptions {
    *    (e.g. one quality profile) — never anything outside the managed set, so
    *    the consent gate holds. Omit to run the whole managed set.
    */
-  items?: Array<{ resourceType: ResourceType; trashId: string; selection?: NamingSelection | ProfileCfSelection }>;
+  items?: Array<{
+    resourceType: ResourceType;
+    trashId: string;
+    selection?: NamingSelection | ProfileCfSelection | QualityProfileSelection;
+  }>;
 }
 
 /** Order matters: quality defs / naming, then custom formats, then profiles,
@@ -271,6 +276,9 @@ async function planQualityProfile(
     return skip(target, "This quality profile is no longer in the guide.");
   }
   const existing = arrProfiles.find((p) => p.name === qp.name);
+  // Per-profile options (score set + reset-unmatched-scores) live on the managed
+  // row's selection. Dry-run previews may carry an unsaved selection.
+  const selection = (target.selection ?? null) as QualityProfileSelection | null;
   const { payload, warnings } = buildQualityProfile(
     qp,
     schema,
@@ -278,6 +286,7 @@ async function planQualityProfile(
     cfMapByTrashId,
     existing,
     languages,
+    selection ?? undefined,
   );
   const before = existing ? profileComparable(existing, inst.serviceType) : null;
   const after = profileComparable(payload, inst.serviceType);

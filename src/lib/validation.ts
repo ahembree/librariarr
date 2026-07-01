@@ -737,9 +737,50 @@ const profileCfSelectionSchema = z
   })
   .strict();
 
-// A managed resource's optional selection is either a naming variant choice or
-// a profile custom-format mapping, depending on its resourceType.
-const trashSelectionSchema = z.union([namingSelectionSchema, profileCfSelectionSchema]);
+/**
+ * Per-profile options for a QUALITY_PROFILE managed resource: which guide score
+ * set to use, and whether to reset custom-format scores the profile doesn't
+ * manage (with exact-name and regex exceptions). Mirrors Recyclarr's
+ * `quality_profiles` block (`score_set`, `reset_unmatched_scores`).
+ */
+const qualityProfileSelectionSchema = z
+  .object({
+    scoreSet: z.string().min(1).max(100).optional(),
+    resetUnmatchedScores: z.boolean().optional(),
+    resetExcept: z.array(z.string().min(1).max(200)).max(500).optional(),
+    resetExceptPatterns: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .max(200)
+          .refine(
+            (p) => {
+              try {
+                new RegExp(p);
+                return true;
+              } catch {
+                return false;
+              }
+            },
+            { message: "Invalid regular expression" },
+          ),
+      )
+      .max(200)
+      .optional(),
+  })
+  .strict();
+
+// A managed resource's optional selection is either a naming variant choice, a
+// profile custom-format mapping, or per-profile quality-profile options,
+// depending on its resourceType. Ordering matters for the union: the
+// quality-profile schema comes before naming because both accept an empty
+// object, but only naming should never carry the QP-only keys.
+const trashSelectionSchema = z.union([
+  profileCfSelectionSchema,
+  qualityProfileSelectionSchema,
+  namingSelectionSchema,
+]);
 
 /** Opt a set of guide resources into Librariarr management (the consent gate). */
 export const trashAssignSchema = z.object({
