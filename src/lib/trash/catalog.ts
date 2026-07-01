@@ -11,12 +11,14 @@ import {
 } from "./constants";
 import type {
   ServiceType,
+  ResourceType,
   TrashCatalog,
   TrashCustomFormat,
   TrashQualityProfile,
   TrashQualitySize,
   TrashNaming,
 } from "./types";
+import { NAMING_TRASH_ID } from "./types";
 import { TRASH_REF } from "./constants";
 
 const http = axios.create({
@@ -128,4 +130,30 @@ async function buildCatalog(service: ServiceType): Promise<TrashCatalog> {
   );
 
   return catalog;
+}
+
+/**
+ * Whether a (resourceType, trashId) pair belongs to a given service's catalog.
+ * This is the cross-service gate: a Sonarr custom format's trash_id is not in
+ * the Radarr catalog (and vice-versa), so assigning it to the wrong app type is
+ * rejected. NAMING uses one synthetic id that is valid for either service (the
+ * variants themselves are service-specific and applied by service at sync time).
+ */
+export function catalogHasResource(
+  catalog: TrashCatalog,
+  resourceType: ResourceType,
+  trashId: string,
+): boolean {
+  switch (resourceType) {
+    case "CUSTOM_FORMAT":
+      return catalog.customFormats.some((c) => c.trash_id === trashId);
+    case "QUALITY_PROFILE":
+      return catalog.qualityProfiles.some((p) => p.trash_id === trashId);
+    case "QUALITY_DEFINITION":
+      return !!catalog.qualitySize && catalog.qualitySize.trash_id === trashId;
+    case "NAMING":
+      return !!catalog.naming && trashId === NAMING_TRASH_ID;
+    default:
+      return false;
+  }
 }

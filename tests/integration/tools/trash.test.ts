@@ -55,9 +55,26 @@ const CATALOG = {
   naming: { folder: { default: "{Movie CleanTitle}" }, file: { standard: "{Movie CleanTitle} {Quality Full}" } },
 };
 
-vi.mock("@/lib/trash/catalog", () => ({
-  fetchTrashCatalog: vi.fn(async () => CATALOG),
-}));
+// A distinct Sonarr catalog (different trash_ids) so the cross-service gate is
+// exercised: a Radarr trash_id must be rejected on a Sonarr instance.
+const SONARR_CATALOG = {
+  service: "SONARR",
+  ref: "master",
+  fetchedAt: "2026-01-01T00:00:00Z",
+  customFormats: [{ trash_id: "scf1", name: "Sonarr CF", specifications: [] }],
+  qualityProfiles: [{ trash_id: "sqp1", name: "WEB-1080p", items: [] }],
+  qualitySize: { trash_id: "sqs1", type: "series", qualities: [] },
+  naming: { series: { default: "{Series Title}" } },
+};
+
+// Keep the real `catalogHasResource` (the route imports it) but stub the fetch.
+vi.mock("@/lib/trash/catalog", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/trash/catalog")>();
+  return {
+    ...actual,
+    fetchTrashCatalog: vi.fn(async (svc: string) => (svc === "SONARR" ? SONARR_CATALOG : CATALOG)),
+  };
+});
 
 const { clientMock } = vi.hoisted(() => ({
   clientMock: {
@@ -245,6 +262,30 @@ describe("POST /api/tools/trash/assignments", () => {
     await callRoute(postAssignment, { method: "POST", body });
     const rows = await getTestPrisma().trashManagedResource.findMany();
     expect(rows).toHaveLength(1);
+  });
+
+  it("rejects a Sonarr custom format assigned to a Radarr instance (cross-service gate)", async () => {
+    const { radarr } = await authedUserWithRadarr();
+    const res = await callRoute(postAssignment, {
+      method: "POST",
+      // "scf1" is a Sonarr-only trash_id; not in the Radarr catalog.
+      body: { serviceType: "RADARR", instanceId: radarr.id, items: [{ resourceType: "CUSTOM_FORMAT", trashId: "scf1", name: "Sonarr CF" }] },
+    });
+    await expectJson(res, 400);
+    expect(await getTestPrisma().trashManagedResource.count()).toBe(0);
+  });
+
+  it("rejects a Radarr custom format assigned to a Sonarr instance (cross-service gate)", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    const sonarr = await createTestSonarrInstance(user.id);
+    const res = await callRoute(postAssignment, {
+      method: "POST",
+      // "cf1" is a Radarr-only trash_id; not in the Sonarr catalog.
+      body: { serviceType: "SONARR", instanceId: sonarr.id, items: [{ resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN" }] },
+    });
+    await expectJson(res, 400);
+    expect(await getTestPrisma().trashManagedResource.count()).toBe(0);
   });
 
   it("lists assignments for an instance", async () => {

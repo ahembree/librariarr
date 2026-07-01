@@ -9,8 +9,9 @@ vi.mock("axios", () => ({
   default: { create: vi.fn(() => ({ get: mockGet })), isAxiosError: () => false },
 }));
 
-import { fetchTrashCatalog } from "@/lib/trash/catalog";
+import { fetchTrashCatalog, catalogHasResource } from "@/lib/trash/catalog";
 import { appCache } from "@/lib/cache/memory-cache";
+import type { TrashCatalog } from "@/lib/trash/types";
 
 const tree = {
   tree: [
@@ -67,5 +68,40 @@ describe("fetchTrashCatalog", () => {
     const before = mockGet.mock.calls.length;
     await fetchTrashCatalog("RADARR", { force: true });
     expect(mockGet.mock.calls.length).toBeGreaterThan(before);
+  });
+});
+
+describe("catalogHasResource (cross-service gate)", () => {
+  const cat: TrashCatalog = {
+    service: "RADARR",
+    ref: "master",
+    fetchedAt: "2026-01-01T00:00:00Z",
+    customFormats: [{ trash_id: "cf1", name: "AMZN", specifications: [] }],
+    qualityProfiles: [{ trash_id: "qp1", name: "HD", cutoff: "Bluray-1080p", items: [] }],
+    qualitySize: { trash_id: "qs1", type: "movie", qualities: [] },
+    naming: { folder: {}, file: {} },
+  };
+
+  it("accepts ids present in this service's catalog", () => {
+    expect(catalogHasResource(cat, "CUSTOM_FORMAT", "cf1")).toBe(true);
+    expect(catalogHasResource(cat, "QUALITY_PROFILE", "qp1")).toBe(true);
+    expect(catalogHasResource(cat, "QUALITY_DEFINITION", "qs1")).toBe(true);
+    expect(catalogHasResource(cat, "NAMING", "naming")).toBe(true);
+  });
+
+  it("rejects ids from another service's catalog", () => {
+    // A Sonarr custom-format trash_id is not in the Radarr catalog.
+    expect(catalogHasResource(cat, "CUSTOM_FORMAT", "sonarr-cf")).toBe(false);
+    expect(catalogHasResource(cat, "QUALITY_PROFILE", "sonarr-qp")).toBe(false);
+    expect(catalogHasResource(cat, "QUALITY_DEFINITION", "series")).toBe(false);
+  });
+
+  it("rejects the wrong resource type for an id", () => {
+    // cf1 is a custom format, not a quality profile.
+    expect(catalogHasResource(cat, "QUALITY_PROFILE", "cf1")).toBe(false);
+  });
+
+  it("rejects naming when the catalog has none", () => {
+    expect(catalogHasResource({ ...cat, naming: null }, "NAMING", "naming")).toBe(false);
   });
 });

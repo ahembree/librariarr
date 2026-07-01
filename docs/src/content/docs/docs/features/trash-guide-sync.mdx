@@ -39,6 +39,7 @@ No modification is ever made to a Sonarr or Radarr app for a resource that you h
 - If the resource **already exists** in the app, assigning it opens a confirmation dialog making it clear that the next sync will **overwrite** the app's copy with the guide version.
 - **Unassigning** (clicking **Unmanage**) removes only Librariarr's management record. It never deletes the resource from the app.
 - A sync only ever writes the resources you currently manage. Preview ("dry-run") items are never written.
+- Resources are scoped to their app type: Sonarr guide items can only be managed on Sonarr instances and Radarr items only on Radarr instances. Assigning an item to the wrong app type is rejected.
 
 <Aside type="caution">
   Taking over management of an existing custom format or quality profile means Librariarr will replace it with the TRaSH Guides definition on the next sync. Use **Preview diff** first to see exactly what will change.

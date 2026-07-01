@@ -3,6 +3,8 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { validateRequest, trashAssignSchema } from "@/lib/validation";
 import { resolveInstance, managedInstanceWhere } from "@/lib/trash/status";
+import { fetchTrashCatalog, catalogHasResource } from "@/lib/trash/catalog";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import type { ServiceType } from "@/lib/trash/types";
 
 // List the managed (assigned) resources, optionally scoped to one instance.
@@ -43,6 +45,37 @@ export async function POST(request: NextRequest) {
   const inst = await resolveInstance(session.userId!, data.serviceType, data.instanceId);
   if (!inst) {
     return NextResponse.json({ error: "Instance not found" }, { status: 404 });
+  }
+
+  // Cross-service gate: every item must belong to the target service's guide.
+  // `resolveInstance` already forces serviceType to match the instance, so this
+  // rejects e.g. a Sonarr custom format assigned to a Radarr instance — its
+  // trash_id is not in the Radarr catalog.
+  let catalog;
+  try {
+    catalog = await fetchTrashCatalog(data.serviceType);
+  } catch (err) {
+    return NextResponse.json(
+      {
+        error: "Could not verify items against the guide catalog",
+        detail: sanitizeErrorDetail(err instanceof Error ? err.message : undefined),
+      },
+      { status: 502 },
+    );
+  }
+  const invalid = data.items.filter(
+    (item) => !catalogHasResource(catalog, item.resourceType, item.trashId),
+  );
+  if (invalid.length) {
+    const svc = data.serviceType === "SONARR" ? "Sonarr" : "Radarr";
+    return NextResponse.json(
+      {
+        error: `These items are not part of the ${svc} guide and cannot be managed on a ${svc} instance: ${invalid
+          .map((i) => `${i.resourceType} ${i.trashId}`)
+          .join(", ")}`,
+      },
+      { status: 400 },
+    );
   }
 
   const instanceKey = managedInstanceWhere(data.serviceType, data.instanceId);
