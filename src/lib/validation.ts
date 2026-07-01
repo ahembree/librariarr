@@ -707,6 +707,7 @@ const trashResourceType = z.enum([
   "QUALITY_PROFILE",
   "QUALITY_DEFINITION",
   "NAMING",
+  "PROFILE_CF",
 ]);
 
 const namingSelectionSchema = z
@@ -721,6 +722,25 @@ const namingSelectionSchema = z
   })
   .strict();
 
+/** Custom-format score assignments attached to a quality profile. */
+const profileCfSelectionSchema = z
+  .object({
+    formats: z
+      .array(
+        z.object({
+          trashId: z.string().min(1),
+          name: z.string().min(1),
+          score: z.number().int().min(-100000).max(100000),
+        }),
+      )
+      .max(500),
+  })
+  .strict();
+
+// A managed resource's optional selection is either a naming variant choice or
+// a profile custom-format mapping, depending on its resourceType.
+const trashSelectionSchema = z.union([namingSelectionSchema, profileCfSelectionSchema]);
+
 /** Opt a set of guide resources into Librariarr management (the consent gate). */
 export const trashAssignSchema = z.object({
   serviceType: trashServiceType,
@@ -731,15 +751,15 @@ export const trashAssignSchema = z.object({
         resourceType: trashResourceType,
         trashId: z.string().min(1),
         name: z.string().min(1),
-        selection: namingSelectionSchema.optional(),
+        selection: trashSelectionSchema.optional(),
       }),
     )
     .min(1, "At least one item is required"),
 });
 
-/** Update an existing managed resource (currently just its naming selection). */
+/** Update an existing managed resource's selection (naming variants or profile CFs). */
 export const trashAssignmentUpdateSchema = z.object({
-  selection: namingSelectionSchema,
+  selection: trashSelectionSchema,
 });
 
 /** Run a sync or a dry-run/preview. `items` only affects dry-run previews. */
@@ -752,7 +772,7 @@ export const trashSyncSchema = z.object({
       z.object({
         resourceType: trashResourceType,
         trashId: z.string().min(1),
-        selection: namingSelectionSchema.optional(),
+        selection: trashSelectionSchema.optional(),
       }),
     )
     .optional(),

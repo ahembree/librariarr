@@ -44,4 +44,5 @@ export const RESOURCE_LABELS: Record<ResourceType, string> = {
   QUALITY_PROFILE: "Quality Profile",
   QUALITY_DEFINITION: "Quality Definition",
   NAMING: "Naming Scheme",
+  PROFILE_CF: "Profile Custom Formats",
 };

@@ -83,6 +83,16 @@ Quality profiles are rebuilt against the app's live quality schema: quality orde
 
 A quality profile only assigns scores to custom formats that **already exist** in the app. If a profile references a format you haven't managed, the sync surfaces a warning rather than silently creating the format — assign and sync that custom format too if you want its score to apply.
 
+### Profile custom formats
+
+The **Profile Formats** tab lets you attach guide custom formats — with scores — to **any** quality profile on the instance, including profiles you created yourself in Radarr/Sonarr (not just ones imported from the guide).
+
+1. Pick a target quality profile.
+2. Search the guide's custom formats and add the ones you want. Each is added with the guide's **recommended score**, which you can edit per format.
+3. **Save** to record the assignment, then **Sync** to apply the scores to the profile.
+
+This is an **overlay**: only the scores for the custom formats you attach are changed. Every other part of the profile — its qualities, cutoff, and any other format scores — is left untouched. A custom format only scores if it actually exists in the app, so add & sync the custom format itself too (from the Custom Formats tab) if it isn't there yet. **Stop managing** removes the assignment; it does not reset any scores already written.
+
 ### Quality definitions (sizes)
 
 The per-quality minimum / preferred / maximum file sizes for the app are updated in bulk from the guide's recommended values. Because an app always has a quality-definition table, this resource is treated as **Exists — unmanaged** until you opt in.

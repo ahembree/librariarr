@@ -63,9 +63,17 @@ export async function POST(request: NextRequest) {
       { status: 502 },
     );
   }
-  const invalid = data.items.filter(
-    (item) => !catalogHasResource(catalog, item.resourceType, item.trashId),
-  );
+  const invalid = data.items.filter((item) => {
+    // PROFILE_CF targets a profile by name (not a guide item); instead validate
+    // that every custom format it attaches is a guide custom format.
+    if (item.resourceType === "PROFILE_CF") {
+      const sel = item.selection as { formats?: { trashId: string }[] } | undefined;
+      return (sel?.formats ?? []).some(
+        (f) => !catalogHasResource(catalog, "CUSTOM_FORMAT", f.trashId),
+      );
+    }
+    return !catalogHasResource(catalog, item.resourceType, item.trashId);
+  });
   if (invalid.length) {
     const svc = data.serviceType === "SONARR" ? "Sonarr" : "Radarr";
     return NextResponse.json(

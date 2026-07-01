@@ -34,6 +34,13 @@ export async function GET(request: NextRequest) {
           naming: catalog.naming ? 1 : 0,
         },
         naming: catalog.naming,
+        // Lightweight custom-format list (name + id + recommended default
+        // score) for attaching custom formats to a quality profile.
+        customFormats: catalog.customFormats.map((c) => ({
+          trashId: c.trash_id,
+          name: c.name,
+          defaultScore: c.trash_scores?.default ?? 0,
+        })),
       },
     });
   } catch (err) {

@@ -107,12 +107,38 @@ interface TrashNaming {
   };
 }
 
+interface CatalogCf {
+  trashId: string;
+  name: string;
+  defaultScore: number;
+}
+
 interface CatalogSummary {
   service: ServiceType;
   ref: string;
   fetchedAt: string;
   counts: { customFormats: number; qualityProfiles: number; qualitySize: number; naming: number };
   naming: TrashNaming | null;
+  customFormats?: CatalogCf[];
+}
+
+interface ArrProfile {
+  id: number;
+  name: string;
+  formatScores: Record<string, number>;
+}
+
+interface ProfileCfFormat {
+  trashId: string;
+  name: string;
+  score: number;
+}
+
+interface ProfileCfAssignment {
+  id: string;
+  trashId: string; // profile name
+  name: string;
+  selection: { formats: ProfileCfFormat[] } | null;
 }
 
 interface DiffEntry {
@@ -665,6 +691,7 @@ export default function TrashSyncPage() {
             <TabsList>
               <TabsTrigger value="cf">Custom Formats ({cfItems.length})</TabsTrigger>
               <TabsTrigger value="qp">Quality Profiles ({qpItems.length})</TabsTrigger>
+              <TabsTrigger value="profilecf">Profile Formats</TabsTrigger>
               <TabsTrigger value="misc">Sizes &amp; Naming</TabsTrigger>
             </TabsList>
 
@@ -687,6 +714,17 @@ export default function TrashSyncPage() {
                 onPreview={(i) => preview(i)}
                 onSync={(i) => syncOne(i)}
                 onBulkAdd={() => bulkAddNew("QUALITY_PROFILE")}
+              />
+            </TabsContent>
+
+            <TabsContent value="profilecf">
+              <ProfileFormatsTab
+                key={`${selected.serviceType}:${selected.id}`}
+                serviceType={selected.serviceType}
+                instanceId={selected.id}
+                instanceName={selected.name}
+                catalogCfs={catalog?.customFormats ?? []}
+                onShowReport={(title, items, dryRun) => setDiffReport({ title, items, dryRun })}
               />
             </TabsContent>
 
@@ -1076,6 +1114,329 @@ function NamingCard({
             </Button>
           )}
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Profile custom-format assignment ───
+
+function ProfileFormatsTab({
+  serviceType,
+  instanceId,
+  instanceName,
+  catalogCfs,
+  onShowReport,
+}: {
+  serviceType: ServiceType;
+  instanceId: string;
+  instanceName: string;
+  catalogCfs: CatalogCf[];
+  onShowReport: (title: string, items: PlanItem[], dryRun: boolean) => void;
+}) {
+  const [profiles, setProfiles] = useState<ArrProfile[]>([]);
+  const [assignments, setAssignments] = useState<ProfileCfAssignment[]>([]);
+  const [selectedProfile, setSelectedProfile] = useState<string>("");
+  const [formats, setFormats] = useState<ProfileCfFormat[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [cfQuery, setCfQuery] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [pRes, aRes] = await Promise.all([
+        fetch(`/api/tools/trash/profiles?serviceType=${serviceType}&instanceId=${instanceId}`),
+        fetch(`/api/tools/trash/assignments?serviceType=${serviceType}&instanceId=${instanceId}`),
+      ]);
+      const pData = await pRes.json();
+      const aData = await aRes.json();
+      if (pRes.ok) {
+        setProfiles(pData.profiles ?? []);
+        setError(null);
+      } else {
+        setError(pData.error ?? "Failed to load quality profiles");
+      }
+      if (aRes.ok) {
+        setAssignments(
+          (aData.assignments ?? []).filter(
+            (x: { resourceType: string }) => x.resourceType === "PROFILE_CF",
+          ),
+        );
+      }
+    } catch {
+      setError("Failed to load quality profiles");
+    } finally {
+      setLoading(false);
+    }
+  }, [serviceType, instanceId]);
+
+  useEffect(() => {
+    void (async () => {
+      await load();
+    })();
+  }, [load]);
+
+  const assignmentFor = (name: string) => assignments.find((a) => a.trashId === name);
+  const currentAssignment = selectedProfile ? assignmentFor(selectedProfile) : undefined;
+  const currentProfile = profiles.find((p) => p.name === selectedProfile);
+
+  const selectProfile = (name: string) => {
+    setSelectedProfile(name);
+    setCfQuery("");
+    const existing = assignmentFor(name);
+    setFormats(existing?.selection?.formats ? [...existing.selection.formats] : []);
+  };
+
+  const addFormat = (cf: CatalogCf) => {
+    if (formats.some((f) => f.trashId === cf.trashId)) return;
+    setFormats((prev) => [...prev, { trashId: cf.trashId, name: cf.name, score: cf.defaultScore }]);
+    setCfQuery("");
+  };
+  const removeFormat = (trashId: string) =>
+    setFormats((prev) => prev.filter((f) => f.trashId !== trashId));
+  const setScore = (trashId: string, score: number) =>
+    setFormats((prev) => prev.map((f) => (f.trashId === trashId ? { ...f, score } : f)));
+
+  const save = async () => {
+    if (!selectedProfile) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/tools/trash/assignments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          serviceType,
+          instanceId,
+          items: [
+            {
+              resourceType: "PROFILE_CF",
+              trashId: selectedProfile,
+              name: selectedProfile,
+              selection: { formats },
+            },
+          ],
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) {
+        toast.error(d.error ?? "Failed to save");
+        return;
+      }
+      toast.success(`Saved custom formats for “${selectedProfile}” (not applied until you Sync)`);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runSync = async (dryRun: boolean) => {
+    if (!selectedProfile) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/tools/trash/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          serviceType,
+          instanceId,
+          dryRun,
+          items: [
+            {
+              resourceType: "PROFILE_CF",
+              trashId: selectedProfile,
+              // dry-run previews the current (possibly unsaved) edits.
+              ...(dryRun ? { selection: { formats } } : {}),
+            },
+          ],
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) {
+        toast.error(d.error ?? "Sync failed");
+        return;
+      }
+      const items: PlanItem[] = d.report.items;
+      if (!dryRun) {
+        const errored = items.filter((i) => i.action === "ERROR").length;
+        if (errored) toast.error(`Applied with ${errored} error(s)`);
+        else toast.success(`Applied custom-format scores to “${selectedProfile}”`);
+        await load();
+      }
+      onShowReport(
+        dryRun ? `Preview: ${selectedProfile}` : `Applied: ${selectedProfile}`,
+        items,
+        dryRun,
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const unmanage = async () => {
+    if (!currentAssignment) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/tools/trash/assignments/${currentAssignment.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        toast.error("Failed to stop managing");
+        return;
+      }
+      toast.success("Stopped managing (existing scores left unchanged in the app)");
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const attachedIds = new Set(formats.map((f) => f.trashId));
+  const cfMatches = catalogCfs
+    .filter((cf) => !attachedIds.has(cf.trashId))
+    .filter((cf) => !cfQuery || cf.name.toLowerCase().includes(cfQuery.toLowerCase()))
+    .slice(0, 60);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Attach custom formats to a quality profile</CardTitle>
+        <CardDescription>
+          Pick any quality profile on {instanceName} — including ones you created yourself — and
+          assign guide custom formats with editable scores. Only the scores you set are changed;
+          the rest of the profile is left alone.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {loading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading quality profiles…
+          </div>
+        ) : error ? (
+          <p className="text-sm text-destructive">{error}</p>
+        ) : profiles.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No quality profiles found on this instance.</p>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <Select value={selectedProfile} onValueChange={selectProfile}>
+                <SelectTrigger className="w-72">
+                  <SelectValue placeholder="Select a quality profile" />
+                </SelectTrigger>
+                <SelectContent>
+                  {profiles.map((p) => (
+                    <SelectItem key={p.id} value={p.name}>
+                      {p.name}
+                      {assignmentFor(p.name) ? " · managed" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {currentProfile && (
+                <span className="text-xs text-muted-foreground">
+                  {Object.keys(currentProfile.formatScores).length} custom format(s) currently scored
+                </span>
+              )}
+            </div>
+
+            {selectedProfile && (
+              <>
+                {/* Attached formats */}
+                <div className="rounded-md border border-white/5">
+                  {formats.length === 0 ? (
+                    <p className="p-4 text-center text-sm text-muted-foreground">
+                      No custom formats attached yet — add some below.
+                    </p>
+                  ) : (
+                    <div className="divide-y divide-white/5">
+                      {formats.map((f) => (
+                        <div key={f.trashId} className="flex items-center gap-3 px-3 py-2">
+                          <span className="min-w-0 flex-1 truncate text-sm">{f.name}</span>
+                          <div className="flex items-center gap-1.5">
+                            <Label className="text-xs text-muted-foreground">Score</Label>
+                            <Input
+                              type="number"
+                              value={Number.isFinite(f.score) ? f.score : 0}
+                              onChange={(e) => setScore(f.trashId, parseInt(e.target.value, 10) || 0)}
+                              className="h-8 w-24"
+                            />
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 shrink-0"
+                            onClick={() => removeFormat(f.trashId)}
+                            title="Remove"
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Add custom formats */}
+                <div className="space-y-2">
+                  <Label className="text-xs">Add a custom format</Label>
+                  <Input
+                    placeholder="Search custom formats…"
+                    value={cfQuery}
+                    onChange={(e) => setCfQuery(e.target.value)}
+                    className="h-9"
+                  />
+                  {cfQuery && (
+                    <div className="max-h-48 overflow-y-auto overflow-x-hidden rounded-md border border-white/5">
+                      {cfMatches.length === 0 ? (
+                        <p className="p-3 text-center text-xs text-muted-foreground">No matches.</p>
+                      ) : (
+                        cfMatches.map((cf) => (
+                          <button
+                            key={cf.trashId}
+                            type="button"
+                            onClick={() => addFormat(cf)}
+                            className="flex w-full items-center justify-between px-3 py-1.5 text-left text-sm hover:bg-white/5"
+                          >
+                            <span className="truncate">{cf.name}</span>
+                            <span className="ml-2 shrink-0 text-xs text-muted-foreground">
+                              default {cf.defaultScore}
+                            </span>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Actions */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button variant="ghost" size="sm" onClick={() => runSync(true)} disabled={busy || formats.length === 0}>
+                    <Eye className="mr-1 h-3.5 w-3.5" /> Preview diff
+                  </Button>
+                  <Button size="sm" onClick={save} disabled={busy}>
+                    {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="mr-1 h-3.5 w-3.5" />}
+                    Save
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => runSync(false)}
+                    disabled={busy || !currentAssignment}
+                    title={currentAssignment ? "Apply scores to the profile" : "Save first"}
+                  >
+                    <Play className="mr-1 h-3.5 w-3.5" /> Sync
+                  </Button>
+                  {currentAssignment && (
+                    <Button variant="outline" size="sm" onClick={unmanage} disabled={busy}>
+                      Stop managing
+                    </Button>
+                  )}
+                </div>
+              </>
+            )}
+          </>
+        )}
       </CardContent>
     </Card>
   );

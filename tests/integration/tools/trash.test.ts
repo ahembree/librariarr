@@ -104,6 +104,7 @@ import { GET as getStatus } from "@/app/api/tools/trash/status/route";
 import { GET as getAssignments, POST as postAssignment } from "@/app/api/tools/trash/assignments/route";
 import { DELETE as deleteAssignment, PUT as putAssignment } from "@/app/api/tools/trash/assignments/[id]/route";
 import { POST as postSync } from "@/app/api/tools/trash/sync/route";
+import { GET as getProfiles } from "@/app/api/tools/trash/profiles/route";
 import { getTestPrisma } from "../../setup/test-db";
 
 const SCHEMA = {
@@ -427,5 +428,77 @@ describe("POST /api/tools/trash/sync", () => {
     const body = await expectJson<{ report: { items: unknown[] } }>(res);
     expect(body.report.items).toHaveLength(0);
     expect(clientMock.createCustomFormat).not.toHaveBeenCalled();
+  });
+});
+
+describe("Profile custom formats (PROFILE_CF)", () => {
+  it("GET /profiles lists quality profiles with their non-zero scores", async () => {
+    const { radarr } = await authedUserWithRadarr();
+    clientMock.getQualityProfiles.mockResolvedValue([
+      { id: 9, name: "My Profile", formatItems: [{ format: 55, name: "AMZN", score: 200 }, { format: 56, name: "X", score: 0 }] },
+    ]);
+    const body = await expectJson<{ profiles: { name: string; formatScores: Record<string, number> }[] }>(
+      await callRoute(getProfiles, { searchParams: { serviceType: "RADARR", instanceId: radarr.id } }),
+    );
+    expect(body.profiles[0].name).toBe("My Profile");
+    expect(body.profiles[0].formatScores).toEqual({ AMZN: 200 });
+  });
+
+  it("assigns PROFILE_CF when the attached custom formats are in the guide", async () => {
+    const { radarr } = await authedUserWithRadarr();
+    const res = await callRoute(postAssignment, {
+      method: "POST",
+      body: {
+        serviceType: "RADARR",
+        instanceId: radarr.id,
+        items: [
+          { resourceType: "PROFILE_CF", trashId: "My Profile", name: "My Profile", selection: { formats: [{ trashId: "cf1", name: "AMZN", score: 500 }] } },
+        ],
+      },
+    });
+    await expectJson(res, 201);
+    const row = await getTestPrisma().trashManagedResource.findFirst({ where: { resourceType: "PROFILE_CF" } });
+    expect(row?.trashId).toBe("My Profile");
+  });
+
+  it("rejects PROFILE_CF whose attached custom format isn't in the guide", async () => {
+    const { radarr } = await authedUserWithRadarr();
+    const res = await callRoute(postAssignment, {
+      method: "POST",
+      body: {
+        serviceType: "RADARR",
+        instanceId: radarr.id,
+        items: [
+          { resourceType: "PROFILE_CF", trashId: "My Profile", name: "My Profile", selection: { formats: [{ trashId: "not-in-guide", name: "Nope", score: 10 }] } },
+        ],
+      },
+    });
+    await expectJson(res, 400);
+    expect(await getTestPrisma().trashManagedResource.count()).toBe(0);
+  });
+
+  it("sync overlays the assigned scores onto the profile, preserving others", async () => {
+    const { user, radarr } = await authedUserWithRadarr();
+    clientMock.getQualityProfiles.mockResolvedValue([
+      { id: 9, name: "My Profile", formatItems: [{ format: 55, name: "AMZN", score: 0 }, { format: 56, name: "Other", score: 100 }] },
+    ]);
+    await getTestPrisma().trashManagedResource.create({
+      data: {
+        userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id,
+        resourceType: "PROFILE_CF", trashId: "My Profile", name: "My Profile",
+        selection: { formats: [{ trashId: "cf1", name: "AMZN", score: 500 }] },
+      },
+    });
+    const res = await callRoute(postSync, {
+      method: "POST",
+      body: { serviceType: "RADARR", instanceId: radarr.id, dryRun: false, items: [{ resourceType: "PROFILE_CF", trashId: "My Profile" }] },
+    });
+    const body = await expectJson<{ report: { items: { action: string }[] } }>(res);
+    expect(body.report.items[0].action).toBe("UPDATE");
+    expect(clientMock.updateQualityProfile).toHaveBeenCalledTimes(1);
+    const [id, payload] = clientMock.updateQualityProfile.mock.calls[0] as [number, { formatItems: { name: string; score: number }[] }];
+    expect(id).toBe(9);
+    expect(payload.formatItems.find((f) => f.name === "AMZN")?.score).toBe(500);
+    expect(payload.formatItems.find((f) => f.name === "Other")?.score).toBe(100);
   });
 });

@@ -103,7 +103,7 @@ Real-browser end-to-end tests live in `e2e/` (Playwright, **separate from Vitest
   - `api/tools/transcode-manager/` — Transcode manager settings and criteria
   - `api/tools/blackout/` — Blackout schedule CRUD (one-time and recurring)
   - `api/tools/preroll/` — Preroll presets, schedules, path validation
-  - `api/tools/trash/` — TRaSH Guide Sync: `instances` (Sonarr/Radarr picker), `catalog` (guide fetch + naming variants), `status` (per-item cross-reference), `assignments` (the consent gate — opt resources into management), `sync` (dry-run/diff or apply, writes only managed resources)
+  - `api/tools/trash/` — TRaSH Guide Sync: `instances` (Sonarr/Radarr picker), `catalog` (guide fetch + naming variants + custom-format list), `profiles` (the instance's quality profiles + current CF scores), `status` (per-item cross-reference), `assignments` (the consent gate — opt resources into management), `sync` (dry-run/diff or apply, writes only managed resources). Resource types: `CUSTOM_FORMAT`, `QUALITY_PROFILE`, `QUALITY_DEFINITION`, `NAMING`, and `PROFILE_CF` (overlay guide custom-format scores onto any quality profile — keyed by profile name, non-destructive to the rest of the profile)
 
 ### Key Libraries
 

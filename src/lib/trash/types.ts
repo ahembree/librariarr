@@ -18,6 +18,10 @@ export const RESOURCE_TYPES = [
   "QUALITY_PROFILE",
   "QUALITY_DEFINITION",
   "NAMING",
+  // Custom-format scores overlaid onto a specific quality profile (which may be
+  // one the user created directly in the app, not a guide profile). Keyed by
+  // the target profile's name; the selection carries the format→score mapping.
+  "PROFILE_CF",
 ] as const;
 export type ResourceType = (typeof RESOURCE_TYPES)[number];
 
@@ -219,6 +223,20 @@ export interface NamingSelection {
   standard?: string;
   daily?: string;
   anime?: string;
+}
+
+/** One custom-format score attached to a quality profile. */
+export interface ProfileCfFormat {
+  /** Guide custom-format trash_id. */
+  trashId: string;
+  /** Custom-format name (must match the Arr custom format to score it). */
+  name: string;
+  score: number;
+}
+
+/** Selection payload for a PROFILE_CF managed resource. */
+export interface ProfileCfSelection {
+  formats: ProfileCfFormat[];
 }
 
 // ─── Status (cross-reference guide ↔ instance ↔ managed) ───

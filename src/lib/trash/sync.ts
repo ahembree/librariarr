@@ -20,12 +20,14 @@ import {
   trashQualitySizeHash,
   namingSelectionHash,
 } from "./signature";
+import { hashDefinition } from "./hash";
 import { NAMING_TRASH_ID } from "./types";
 import type {
   ResourceType,
   TrashCatalog,
   TrashCustomFormat,
   NamingSelection,
+  ProfileCfSelection,
   PlanItem,
   SyncReport,
   ArrCustomFormat,
@@ -36,11 +38,13 @@ import type {
   ArrLanguage,
 } from "./types";
 
+type Selection = NamingSelection | ProfileCfSelection | null;
+
 interface Target {
   resourceType: ResourceType;
   trashId: string;
   name?: string;
-  selection?: NamingSelection | null;
+  selection?: Selection;
   managedRowId?: string;
 }
 
@@ -53,16 +57,18 @@ export interface SyncOptions {
    *    (e.g. one quality profile) — never anything outside the managed set, so
    *    the consent gate holds. Omit to run the whole managed set.
    */
-  items?: Array<{ resourceType: ResourceType; trashId: string; selection?: NamingSelection }>;
+  items?: Array<{ resourceType: ResourceType; trashId: string; selection?: NamingSelection | ProfileCfSelection }>;
 }
 
-/** Order matters: quality defs / naming, then custom formats, then profiles
- *  (profiles reference custom formats, which must exist first). */
+/** Order matters: quality defs / naming, then custom formats, then profiles,
+ *  then per-profile custom-format overlays (which read the just-synced
+ *  profiles). Profiles reference custom formats, which must exist first. */
 const RESOURCE_ORDER: Record<ResourceType, number> = {
   QUALITY_DEFINITION: 0,
   NAMING: 1,
   CUSTOM_FORMAT: 2,
   QUALITY_PROFILE: 3,
+  PROFILE_CF: 4,
 };
 
 export async function runTrashSync(
@@ -86,12 +92,17 @@ export async function runTrashSync(
   let namingConfig: ArrNamingConfig | undefined;
   let languages: ArrLanguage[] | undefined;
 
+  // Profiles read for PROFILE_CF overlays are fetched separately (and lazily)
+  // so they capture any QUALITY_PROFILE writes made earlier in this same apply.
+  let cfOverlayProfiles: ArrQualityProfile[] | undefined;
+
   const getArrCfs = async () => (arrCfs ??= await client.getCustomFormats());
   const getArrProfiles = async () => (arrProfiles ??= await client.getQualityProfiles());
   const getSchema = async () => (schema ??= await client.getQualityProfileSchema());
   const getQualityDefs = async () => (qualityDefs ??= await client.getQualityDefinitions());
   const getNaming = async () => (namingConfig ??= await client.getNamingConfig());
   const getLanguages = async () => (languages ??= await client.getLanguages());
+  const getCfOverlayProfiles = async () => (cfOverlayProfiles ??= await client.getQualityProfiles());
 
   const items: PlanItem[] = [];
 
@@ -117,6 +128,9 @@ export async function runTrashSync(
           break;
         case "NAMING":
           items.push(await planNaming(target, catalog, await getNaming(), inst, opts, client, userId));
+          break;
+        case "PROFILE_CF":
+          items.push(await planProfileCf(target, await getCfOverlayProfiles(), opts, client, userId));
           break;
       }
     } catch (err) {
@@ -168,7 +182,7 @@ async function resolveTargets(
     resourceType: r.resourceType as ResourceType,
     trashId: r.trashId,
     name: r.name,
-    selection: (r.selection ?? null) as NamingSelection | null,
+    selection: (r.selection ?? null) as Selection,
     managedRowId: r.id,
   }));
   if (opts.items?.length) {
@@ -181,7 +195,7 @@ async function resolveTargets(
 async function updateManagedRow(
   userId: string,
   managedRowId: string | undefined,
-  data: { arrId?: number | null; lastSyncHash: string; selection?: NamingSelection | null },
+  data: { arrId?: number | null; lastSyncHash: string; selection?: Selection },
 ) {
   if (!managedRowId) return;
   await prisma.trashManagedResource.update({
@@ -339,7 +353,7 @@ async function planNaming(
 ): Promise<PlanItem> {
   const naming = catalog.naming;
   if (!naming) return skip(target, "Naming schemes are no longer in the guide.");
-  const selection = target.selection;
+  const selection = target.selection as NamingSelection | null;
   if (!selection || Object.keys(selection).length === 0) {
     return skip(target, "No naming variants selected — choose which formats to apply first.");
   }
@@ -363,6 +377,77 @@ async function planNaming(
     await updateManagedRow(userId, target.managedRowId, {
       arrId: null,
       lastSyncHash: namingSelectionHash(naming, selection, inst.serviceType),
+      selection,
+    });
+    item.applied = true;
+  }
+  return item;
+}
+
+function nonZeroFormatScores(items: ArrQualityProfile["formatItems"]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const f of items ?? []) if (f.score !== 0) out[f.name] = f.score;
+  return out;
+}
+
+/**
+ * Overlay custom-format scores onto a specific quality profile. Only the scores
+ * for the assigned custom formats are changed; every other quality-profile
+ * setting (qualities, cutoff, other format scores) is preserved. The target
+ * profile may be one the user created directly in the app — it is matched by
+ * name, and the row is skipped if that profile no longer exists.
+ */
+async function planProfileCf(
+  target: Target,
+  arrProfiles: ArrQualityProfile[],
+  opts: SyncOptions,
+  client: ReturnType<typeof guideClientFor>,
+  userId: string,
+): Promise<PlanItem> {
+  const profileName = target.trashId;
+  const selection = (target.selection ?? null) as ProfileCfSelection | null;
+  const formats = selection?.formats ?? [];
+
+  const profile = arrProfiles.find((p) => p.name === profileName);
+  if (!profile || profile.id === undefined) {
+    return skip(target, `Quality profile "${profileName}" was not found on this instance.`);
+  }
+
+  const warnings: string[] = [];
+  const present = new Set((profile.formatItems ?? []).map((f) => f.name));
+  const desired = new Map(formats.map((f) => [f.name, f.score]));
+  for (const f of formats) {
+    if (!present.has(f.name)) {
+      warnings.push(
+        `Custom format "${f.name}" is not present in this instance — add & sync it to apply its score.`,
+      );
+    }
+  }
+
+  const newFormatItems = (profile.formatItems ?? []).map((fi) =>
+    desired.has(fi.name) ? { ...fi, score: desired.get(fi.name)! } : fi,
+  );
+  const before = { formatScores: nonZeroFormatScores(profile.formatItems) };
+  const after = { formatScores: nonZeroFormatScores(newFormatItems) };
+  const diff = diffValues(before, after);
+  const action = diff.length ? "UPDATE" : "NOOP";
+
+  const item: PlanItem = {
+    resourceType: "PROFILE_CF",
+    trashId: profileName,
+    name: profileName,
+    action,
+    diff,
+    warnings,
+  };
+
+  if (!opts.dryRun) {
+    if (action === "UPDATE") {
+      await client.updateQualityProfile(profile.id, { ...profile, formatItems: newFormatItems });
+    }
+    await updateManagedRow(userId, target.managedRowId, {
+      arrId: profile.id,
+      lastSyncHash: hashDefinition(formats),
       selection,
     });
     item.applied = true;

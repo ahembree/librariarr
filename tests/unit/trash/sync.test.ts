@@ -123,6 +123,47 @@ describe("runTrashSync", () => {
     expect(report.items[1].resourceType).toBe("CUSTOM_FORMAT");
   });
 
+  it("PROFILE_CF overlays scores onto the target profile, preserving other scores", async () => {
+    prismaMock.trashManagedResource.findMany.mockResolvedValue([
+      {
+        id: "pcf",
+        resourceType: "PROFILE_CF",
+        trashId: "My Profile",
+        name: "My Profile",
+        selection: { formats: [{ trashId: "cf1", name: "AMZN", score: 500 }] },
+      },
+    ]);
+    clientMock.getQualityProfiles.mockResolvedValue([
+      {
+        id: 9,
+        name: "My Profile",
+        formatItems: [
+          { format: 55, name: "AMZN", score: 0 },
+          { format: 56, name: "Other", score: 100 },
+        ],
+      },
+    ]);
+    clientMock.updateQualityProfile.mockResolvedValue({});
+    const report = await runTrashSync("u1", INST, { dryRun: false });
+    expect(report.items[0].resourceType).toBe("PROFILE_CF");
+    expect(report.items[0].action).toBe("UPDATE");
+    expect(clientMock.updateQualityProfile).toHaveBeenCalledTimes(1);
+    const [id, payload] = clientMock.updateQualityProfile.mock.calls[0] as [number, { formatItems: { name: string; score: number }[] }];
+    expect(id).toBe(9);
+    expect(payload.formatItems.find((f) => f.name === "AMZN")?.score).toBe(500);
+    expect(payload.formatItems.find((f) => f.name === "Other")?.score).toBe(100);
+  });
+
+  it("PROFILE_CF skips when the target profile no longer exists", async () => {
+    prismaMock.trashManagedResource.findMany.mockResolvedValue([
+      { id: "pcf", resourceType: "PROFILE_CF", trashId: "Ghost", name: "Ghost", selection: { formats: [] } },
+    ]);
+    clientMock.getQualityProfiles.mockResolvedValue([]);
+    const report = await runTrashSync("u1", INST, { dryRun: false });
+    expect(report.items[0].action).toBe("SKIP");
+    expect(clientMock.updateQualityProfile).not.toHaveBeenCalled();
+  });
+
   it("skips naming with no selection", async () => {
     prismaMock.trashManagedResource.findMany.mockResolvedValue([
       { id: "n", resourceType: "NAMING", trashId: "naming", name: "Naming", selection: null },
