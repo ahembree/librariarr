@@ -382,6 +382,36 @@ describe("POST /api/tools/trash/sync", () => {
     expect(row?.lastSyncedAt).not.toBeNull();
   });
 
+  it("apply with items syncs only that managed resource, leaving others untouched", async () => {
+    const { user, radarr } = await authedUserWithRadarr();
+    await getTestPrisma().trashManagedResource.createMany({
+      data: [
+        { userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id, resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN" },
+        { userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id, resourceType: "QUALITY_DEFINITION", trashId: "qs1", name: "Sizes" },
+      ],
+    });
+
+    const res = await callRoute(postSync, {
+      method: "POST",
+      body: {
+        serviceType: "RADARR",
+        instanceId: radarr.id,
+        dryRun: false,
+        items: [{ resourceType: "CUSTOM_FORMAT", trashId: "cf1" }],
+      },
+    });
+    const body = await expectJson<{ report: { items: { resourceType: string }[] } }>(res);
+    // Only the custom format was in scope.
+    expect(body.report.items).toHaveLength(1);
+    expect(body.report.items[0].resourceType).toBe("CUSTOM_FORMAT");
+    expect(clientMock.createCustomFormat).toHaveBeenCalledTimes(1);
+    expect(clientMock.updateQualityDefinitions).not.toHaveBeenCalled();
+
+    // The quality-definition row was left unsynced.
+    const qdRow = await getTestPrisma().trashManagedResource.findFirst({ where: { resourceType: "QUALITY_DEFINITION" } });
+    expect(qdRow?.lastSyncedAt).toBeNull();
+  });
+
   it("apply ignores unmanaged preview items (nothing written without a managed row)", async () => {
     const { radarr } = await authedUserWithRadarr();
     // No managed rows; passing items with dryRun:false must not write anything.

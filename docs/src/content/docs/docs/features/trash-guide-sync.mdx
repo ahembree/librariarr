@@ -56,7 +56,10 @@ Each planned change is labelled **Create**, **Update**, **No change**, **Skipped
 
 ## Syncing
 
-Click **Sync managed** to apply the changes for every assigned resource. Resources are processed in dependency order — quality definitions and naming first, then custom formats, then quality profiles (so a profile's custom-format scores can reference formats that already exist).
+There are two ways to sync:
+
+- **Sync managed** (top of the page) applies the changes for **every** assigned resource. Resources are processed in dependency order — quality definitions and naming first, then custom formats, then quality profiles (so a profile's custom-format scores can reference formats that already exist).
+- **Sync** on an individual row (or **Sync now** on the sizes / naming cards) applies just that one managed resource — for example, pushing a single quality profile without touching anything else. Per-item sync is only offered once an item is managed, and it can still only write resources you've assigned.
 
 After a sync, the results dialog shows what was created or updated, and each item's status updates accordingly.
 

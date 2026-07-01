@@ -425,6 +425,38 @@ export default function TrashSyncPage() {
     }
   };
 
+  // Apply just one managed resource. The backend intersects `items` with the
+  // managed set, so this only ever writes an already-assigned resource.
+  const syncOne = async (item: StatusItem) => {
+    if (!selected) return;
+    setBusyId(item.trashId);
+    try {
+      const res = await fetch("/api/tools/trash/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          serviceType: selected.serviceType,
+          instanceId: selected.id,
+          dryRun: false,
+          items: [{ resourceType: item.resourceType, trashId: item.trashId }],
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? "Sync failed");
+        return;
+      }
+      const report: SyncReport = data.report;
+      const errored = report.items.filter((i) => i.action === "ERROR").length;
+      if (errored) toast.error(`“${item.name}” synced with errors`);
+      else toast.success(`Synced “${item.name}”`);
+      setDiffReport({ title: `Sync: ${item.name}`, items: report.items, dryRun: false });
+      await loadStatus(selected);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   // ─── Derived ───
 
   const counts = useMemo(() => {
@@ -573,6 +605,7 @@ export default function TrashSyncPage() {
                 busyId={busyId}
                 onManage={onManageClick}
                 onPreview={(i) => preview(i)}
+                onSync={(i) => syncOne(i)}
                 onBulkAdd={() => bulkAssignNew("CUSTOM_FORMAT")}
               />
             </TabsContent>
@@ -583,6 +616,7 @@ export default function TrashSyncPage() {
                 busyId={busyId}
                 onManage={onManageClick}
                 onPreview={(i) => preview(i)}
+                onSync={(i) => syncOne(i)}
                 onBulkAdd={() => bulkAssignNew("QUALITY_PROFILE")}
               />
             </TabsContent>
@@ -594,6 +628,7 @@ export default function TrashSyncPage() {
                   busy={busyId === qdItem.trashId}
                   onManage={() => onManageClick(qdItem)}
                   onPreview={() => preview(qdItem)}
+                  onSync={() => syncOne(qdItem)}
                 />
               )}
               {namingItem && (
@@ -606,6 +641,7 @@ export default function TrashSyncPage() {
                   onManage={(sel) => assign(namingItem, sel)}
                   onUnmanage={() => unassign(namingItem)}
                   onPreview={(sel) => preview(namingItem, sel)}
+                  onSync={() => syncOne(namingItem)}
                 />
               )}
             </TabsContent>
@@ -669,12 +705,14 @@ function ResourceList({
   busyId,
   onManage,
   onPreview,
+  onSync,
   onBulkAdd,
 }: {
   items: StatusItem[];
   busyId: string | null;
   onManage: (item: StatusItem) => void;
   onPreview: (item: StatusItem) => void;
+  onSync: (item: StatusItem) => void;
   onBulkAdd: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -730,6 +768,7 @@ function ResourceList({
                   busy={busyId === item.trashId}
                   onManage={() => onManage(item)}
                   onPreview={() => onPreview(item)}
+                  onSync={() => onSync(item)}
                 />
               ))
             )}
@@ -745,15 +784,17 @@ function ResourceRow({
   busy,
   onManage,
   onPreview,
+  onSync,
 }: {
   item: StatusItem;
   busy: boolean;
   onManage: () => void;
   onPreview: () => void;
+  onSync: () => void;
 }) {
   const meta = STATUS_META[item.status];
   return (
-    <div className="flex items-center gap-3 px-3 py-2.5">
+    <div className="flex items-center gap-2 px-3 py-2.5">
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="truncate text-sm font-medium">{item.name}</span>
@@ -768,6 +809,12 @@ function ResourceRow({
       <Button variant="ghost" size="sm" onClick={onPreview} disabled={busy}>
         <Eye className="mr-1 h-3.5 w-3.5" /> Diff
       </Button>
+      {item.managed && (
+        <Button variant="secondary" size="sm" onClick={onSync} disabled={busy} title="Sync just this item">
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="mr-1 h-3.5 w-3.5" />}
+          Sync
+        </Button>
+      )}
       <Button
         variant={item.managed ? "outline" : "default"}
         size="sm"
@@ -798,11 +845,13 @@ function SingletonCard({
   busy,
   onManage,
   onPreview,
+  onSync,
 }: {
   item: StatusItem;
   busy: boolean;
   onManage: () => void;
   onPreview: () => void;
+  onSync: () => void;
 }) {
   const meta = STATUS_META[item.status];
   return (
@@ -820,6 +869,12 @@ function SingletonCard({
         <Button variant="ghost" size="sm" onClick={onPreview} disabled={busy}>
           <Eye className="mr-1 h-3.5 w-3.5" /> Preview diff
         </Button>
+        {item.managed && (
+          <Button variant="secondary" size="sm" onClick={onSync} disabled={busy}>
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="mr-1 h-3.5 w-3.5" />}
+            Sync now
+          </Button>
+        )}
         <Button variant={item.managed ? "outline" : "default"} size="sm" onClick={onManage} disabled={busy}>
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : item.managed ? "Stop managing" : "Manage sizes"}
         </Button>
@@ -838,6 +893,7 @@ function NamingCard({
   onManage,
   onUnmanage,
   onPreview,
+  onSync,
 }: {
   service: ServiceType;
   item: StatusItem;
@@ -846,6 +902,7 @@ function NamingCard({
   onManage: (selection: NamingSelection) => void;
   onUnmanage: () => void;
   onPreview: (selection: NamingSelection) => void;
+  onSync: () => void;
 }) {
   // Seed from the currently-managed selection so a managed naming item shows
   // its variants (the card is keyed per instance, so this re-seeds on switch).
@@ -920,6 +977,12 @@ function NamingCard({
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="mr-1 h-3.5 w-3.5" />}
             {item.managed ? "Update selection" : "Manage naming"}
           </Button>
+          {item.managed && (
+            <Button variant="secondary" size="sm" onClick={onSync} disabled={busy}>
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="mr-1 h-3.5 w-3.5" />}
+              Sync now
+            </Button>
+          )}
           {item.managed && (
             <Button variant="outline" size="sm" onClick={onUnmanage} disabled={busy}>
               Stop managing

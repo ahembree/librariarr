@@ -98,6 +98,21 @@ describe("runTrashSync", () => {
     );
   });
 
+  it("apply with items only writes the matching managed rows (per-item sync)", async () => {
+    prismaMock.trashManagedResource.findMany.mockResolvedValue([
+      { id: "cfRow", resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN", selection: null },
+      { id: "qdRow", resourceType: "QUALITY_DEFINITION", trashId: "qs1", name: "Sizes", selection: null },
+    ]);
+    const report = await runTrashSync("u1", INST, {
+      dryRun: false,
+      items: [{ resourceType: "CUSTOM_FORMAT", trashId: "cf1" }],
+    });
+    expect(report.items).toHaveLength(1);
+    expect(report.items[0].resourceType).toBe("CUSTOM_FORMAT");
+    expect(clientMock.createCustomFormat).toHaveBeenCalledTimes(1);
+    expect(clientMock.updateQualityDefinitions).not.toHaveBeenCalled();
+  });
+
   it("processes quality definitions before custom formats", async () => {
     prismaMock.trashManagedResource.findMany.mockResolvedValue([
       { id: "cfRow", resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN", selection: null },

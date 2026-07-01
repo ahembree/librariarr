@@ -47,9 +47,11 @@ interface Target {
 export interface SyncOptions {
   dryRun: boolean;
   /**
-   * Preview-only: specific items to plan (may be unassigned). Ignored when
-   * applying — an apply always operates strictly on the assigned/managed set,
-   * so nothing is ever written without a managed row (the consent gate).
+   * Scope the run to specific items.
+   *  - Dry-run: previews exactly these items (they may be unassigned).
+   *  - Apply: intersected with the managed rows, so it syncs just this subset
+   *    (e.g. one quality profile) — never anything outside the managed set, so
+   *    the consent gate holds. Omit to run the whole managed set.
    */
   items?: Array<{ resourceType: ResourceType; trashId: string; selection?: NamingSelection }>;
 }
@@ -146,25 +148,34 @@ async function resolveTargets(
   inst: ResolvedInstance,
   opts: SyncOptions,
 ): Promise<Target[]> {
-  // Apply mode (or a full-instance dry-run) always uses the managed rows.
-  if (!opts.dryRun || !opts.items?.length) {
-    const rows = await prisma.trashManagedResource.findMany({
-      where: { userId, ...managedInstanceWhere(inst.serviceType, inst.id) },
-    });
-    return rows.map((r) => ({
-      resourceType: r.resourceType as ResourceType,
-      trashId: r.trashId,
-      name: r.name,
-      selection: (r.selection ?? null) as NamingSelection | null,
-      managedRowId: r.id,
+  // Dry-run of a specific set may include not-yet-assigned items (preview).
+  if (opts.dryRun && opts.items?.length) {
+    return opts.items.map((i) => ({
+      resourceType: i.resourceType,
+      trashId: i.trashId,
+      selection: i.selection ?? null,
     }));
   }
-  // Preview a specific set (possibly unassigned).
-  return opts.items.map((i) => ({
-    resourceType: i.resourceType,
-    trashId: i.trashId,
-    selection: i.selection ?? null,
+
+  // Otherwise operate on the managed set — the consent gate. When `items` is
+  // given (a per-item apply, e.g. "sync just this quality profile"), intersect
+  // it with the managed rows so nothing outside the managed set is ever
+  // written; the stored row selection/metadata is always used.
+  const rows = await prisma.trashManagedResource.findMany({
+    where: { userId, ...managedInstanceWhere(inst.serviceType, inst.id) },
+  });
+  let targets: Target[] = rows.map((r) => ({
+    resourceType: r.resourceType as ResourceType,
+    trashId: r.trashId,
+    name: r.name,
+    selection: (r.selection ?? null) as NamingSelection | null,
+    managedRowId: r.id,
   }));
+  if (opts.items?.length) {
+    const wanted = new Set(opts.items.map((i) => `${i.resourceType}:${i.trashId}`));
+    targets = targets.filter((t) => wanted.has(`${t.resourceType}:${t.trashId}`));
+  }
+  return targets;
 }
 
 async function updateManagedRow(
