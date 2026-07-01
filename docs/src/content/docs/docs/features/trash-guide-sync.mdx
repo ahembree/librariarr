@@ -50,7 +50,7 @@ No modification is ever made to a Sonarr or Radarr app for a resource that you h
 Before anything is written, you can inspect the exact changes:
 
 - **Preview diff** (per item) shows a field-by-field before/after diff for a single resource — even one you haven't assigned yet.
-- **Dry run** (top of the page) produces the full change plan for every managed resource without touching the app.
+- **Dry run** (top of the page) produces the change plan for every managed resource without touching the app. It lists **only the items that would change** — resources already in sync are hidden (with a count of how many were skipped).
 
 Each planned change is labelled **Create**, **Update**, **No change**, **Skipped**, or **Error**, and lists any warnings (for example, a quality profile that references a custom format you haven't also chosen to manage).
 

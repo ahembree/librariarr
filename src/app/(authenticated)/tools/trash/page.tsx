@@ -857,7 +857,7 @@ export default function TrashSyncPage() {
                 : "The following changes were applied."}
             </DialogDescription>
           </DialogHeader>
-          <ReportBody items={diffReport?.items ?? []} />
+          <ReportBody items={diffReport?.items ?? []} dryRun={diffReport?.dryRun ?? false} />
           <DialogFooter>
             <Button variant="outline" onClick={() => setDiffReport(null)}>
               Close
@@ -1619,14 +1619,22 @@ function ProfileFormatsTab({
 
 // ─── Report / diff body ───
 
-function ReportBody({ items }: { items: PlanItem[] }) {
-  if (items.length === 0) {
-    return <p className="py-4 text-sm text-muted-foreground">Nothing to sync.</p>;
+function ReportBody({ items, dryRun }: { items: PlanItem[]; dryRun: boolean }) {
+  // A dry run only lists items that would change; in-sync (NOOP) items are hidden.
+  const visible = dryRun ? items.filter((i) => i.action !== "NOOP") : items;
+  const hiddenInSync = items.length - visible.length;
+
+  if (visible.length === 0) {
+    return (
+      <p className="py-4 text-sm text-muted-foreground">
+        {items.length === 0 ? "Nothing to sync." : "No changes — everything is already in sync."}
+      </p>
+    );
   }
   return (
     <ScrollArea className="max-h-[24rem]">
       <div className="space-y-4 pr-2">
-        {items.map((item) => {
+        {visible.map((item) => {
           const meta = ACTION_META[item.action];
           return (
             <div key={`${item.resourceType}:${item.trashId}`} className="rounded-md border border-white/5 p-3">
@@ -1666,6 +1674,11 @@ function ReportBody({ items }: { items: PlanItem[] }) {
             </div>
           );
         })}
+        {dryRun && hiddenInSync > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {hiddenInSync} item{hiddenInSync === 1 ? "" : "s"} already in sync (hidden).
+          </p>
+        )}
       </div>
     </ScrollArea>
   );
