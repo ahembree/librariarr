@@ -32,9 +32,12 @@ export function servicePaths(service: ServiceType) {
 /** Catalog cache: guide content changes rarely, so cache for hours. */
 export const CATALOG_CACHE_PREFIX = "trash-catalog:";
 export const CATALOG_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+// Bump when the parsed catalog shape changes so a running process doesn't serve
+// a stale cached catalog missing new fields (e.g. cfGroups / categories).
+export const CATALOG_SCHEMA_VERSION = 2;
 
 export function catalogCacheKey(service: ServiceType): string {
-  return `${CATALOG_CACHE_PREFIX}${TRASH_REPO}@${TRASH_REF}:${service}`;
+  return `${CATALOG_CACHE_PREFIX}v${CATALOG_SCHEMA_VERSION}:${TRASH_REPO}@${TRASH_REF}:${service}`;
 }
 
 /** Bounded concurrency when fetching many small raw files. */

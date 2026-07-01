@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   SlidersHorizontal,
@@ -13,6 +13,7 @@ import {
   Plus,
   X,
   CheckCircle2,
+  ChevronRight,
 } from "lucide-react";
 import {
   Card,
@@ -206,6 +207,61 @@ function fmt(value: unknown): string {
   if (typeof value === "string") return value;
   const s = JSON.stringify(value);
   return s.length > 160 ? s.slice(0, 157) + "…" : s;
+}
+
+/**
+ * Group items by their TRaSH category (an item may appear under more than one).
+ * Items in no category fall into a trailing "Uncategorized" group. Categories
+ * with no matching items are omitted.
+ */
+function groupByCategory<T extends { trashId: string }>(
+  items: T[],
+  categories: CfCategory[],
+): { name: string; items: T[] }[] {
+  const byId = new Map(items.map((i) => [i.trashId, i]));
+  const used = new Set<string>();
+  const groups: { name: string; items: T[] }[] = [];
+  for (const cat of categories) {
+    const catItems = cat.trashIds
+      .map((id) => byId.get(id))
+      .filter((x): x is T => !!x);
+    if (catItems.length) {
+      groups.push({ name: cat.name, items: catItems });
+      for (const i of catItems) used.add(i.trashId);
+    }
+  }
+  const uncategorized = items.filter((i) => !used.has(i.trashId));
+  if (uncategorized.length) groups.push({ name: "Uncategorized", items: uncategorized });
+  return groups;
+}
+
+function CategorySection({
+  name,
+  count,
+  expanded,
+  onToggle,
+  children,
+}: {
+  name: string;
+  count: number;
+  expanded: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center gap-2 bg-white/[0.02] px-3 py-2 text-left hover:bg-white/5"
+      >
+        <ChevronRight className={cn("h-4 w-4 shrink-0 transition-transform", expanded && "rotate-90")} />
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">{name}</span>
+        <Badge variant="outline" className="shrink-0 text-[10.5px]">{count}</Badge>
+      </button>
+      {expanded && <div className="divide-y divide-white/5 border-t border-white/5">{children}</div>}
+    </div>
+  );
 }
 
 // ─── Page ───
@@ -705,6 +761,7 @@ export default function TrashSyncPage() {
               <ResourceList
                 items={cfItems}
                 busyId={busyId}
+                categories={catalog?.categories ?? []}
                 onManage={onManageClick}
                 onPreview={(i) => preview(i)}
                 onSync={(i) => syncOne(i)}
@@ -817,6 +874,7 @@ export default function TrashSyncPage() {
 function ResourceList({
   items,
   busyId,
+  categories,
   onManage,
   onPreview,
   onSync,
@@ -824,6 +882,8 @@ function ResourceList({
 }: {
   items: StatusItem[];
   busyId: string | null;
+  /** When provided, items are grouped into an expandable category drilldown. */
+  categories?: CfCategory[];
   onManage: (item: StatusItem) => void;
   onPreview: (item: StatusItem) => void;
   onSync: (item: StatusItem) => void;
@@ -831,6 +891,7 @@ function ResourceList({
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "managed" | "unmanaged" | "new">("all");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const filtered = items.filter((i) => {
     if (query && !i.name.toLowerCase().includes(query.toLowerCase())) return false;
@@ -840,6 +901,29 @@ function ResourceList({
     return true;
   });
   const newCount = items.filter((i) => i.status === "NEW").length;
+
+  const grouped = categories && categories.length ? groupByCategory(filtered, categories) : null;
+  // While searching, auto-expand everything so matches are visible.
+  const searching = query.trim().length > 0;
+  const isOpen = (name: string) => searching || expanded.has(name);
+  const toggle = (name: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+
+  const renderRow = (item: StatusItem) => (
+    <ResourceRow
+      key={item.trashId}
+      item={item}
+      busy={busyId === item.trashId}
+      onManage={() => onManage(item)}
+      onPreview={() => onPreview(item)}
+      onSync={() => onSync(item)}
+    />
+  );
 
   return (
     <Card>
@@ -862,6 +946,19 @@ function ResourceList({
               <SelectItem value="new">Not added</SelectItem>
             </SelectContent>
           </Select>
+          {grouped && grouped.length > 0 && !searching && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                setExpanded((prev) =>
+                  prev.size >= grouped.length ? new Set() : new Set(grouped.map((g) => g.name)),
+                )
+              }
+            >
+              {expanded.size >= grouped.length ? "Collapse all" : "Expand all"}
+            </Button>
+          )}
           <div className="ml-auto">
             <Button variant="outline" size="sm" onClick={onBulkAdd} disabled={newCount === 0}>
               <Plus className="mr-1.5 h-4 w-4" />
@@ -875,22 +972,25 @@ function ResourceList({
             the action buttons off-screen. overflow-x-hidden keeps rows bounded
             so the description truncates and the buttons stay visible. */}
         <div className="max-h-[26rem] overflow-y-auto overflow-x-hidden rounded-md border border-white/5">
-          <div className="divide-y divide-white/5">
-            {filtered.length === 0 ? (
-              <p className="p-6 text-center text-sm text-muted-foreground">No items match.</p>
-            ) : (
-              filtered.map((item) => (
-                <ResourceRow
-                  key={item.trashId}
-                  item={item}
-                  busy={busyId === item.trashId}
-                  onManage={() => onManage(item)}
-                  onPreview={() => onPreview(item)}
-                  onSync={() => onSync(item)}
-                />
-              ))
-            )}
-          </div>
+          {filtered.length === 0 ? (
+            <p className="p-6 text-center text-sm text-muted-foreground">No items match.</p>
+          ) : grouped ? (
+            <div className="divide-y divide-white/5">
+              {grouped.map((g) => (
+                <CategorySection
+                  key={g.name}
+                  name={g.name}
+                  count={g.items.length}
+                  expanded={isOpen(g.name)}
+                  onToggle={() => toggle(g.name)}
+                >
+                  {g.items.map(renderRow)}
+                </CategorySection>
+              ))}
+            </div>
+          ) : (
+            <div className="divide-y divide-white/5">{filtered.map(renderRow)}</div>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -1150,7 +1250,7 @@ function ProfileFormatsTab({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [cfQuery, setCfQuery] = useState("");
-  const [category, setCategory] = useState<string>("__all");
+  const [pickerExpanded, setPickerExpanded] = useState<Set<string>>(new Set());
   const [attachedQuery, setAttachedQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -1322,27 +1422,24 @@ function ProfileFormatsTab({
     }
   };
 
-  // Category drill-down: which trash_ids belong to the selected category.
-  const inAnyGroup = useMemo(() => {
-    const s = new Set<string>();
-    for (const c of catalogCategories) for (const id of c.trashIds) s.add(id);
-    return s;
-  }, [catalogCategories]);
-  const hasUncategorized = catalogCfs.some((cf) => !inAnyGroup.has(cf.trashId));
-  const categoryTrashIds = useMemo(() => {
-    if (category === "__all") return null;
-    if (category === "__uncat") {
-      return new Set(catalogCfs.filter((cf) => !inAnyGroup.has(cf.trashId)).map((cf) => cf.trashId));
-    }
-    return new Set(catalogCategories.find((c) => c.name === category)?.trashIds ?? []);
-  }, [category, catalogCategories, catalogCfs, inAnyGroup]);
-
+  // Addable custom formats (not already attached), grouped into the guide's
+  // categories for the drilldown picker.
   const attachedIds = new Set(formats.map((f) => f.trashId));
-  const cfMatches = catalogCfs
+  const addableCfs = catalogCfs
     .filter((cf) => !attachedIds.has(cf.trashId))
-    .filter((cf) => !categoryTrashIds || categoryTrashIds.has(cf.trashId))
-    .filter((cf) => !cfQuery || cf.name.toLowerCase().includes(cfQuery.toLowerCase()))
-    .slice(0, 200);
+    .filter((cf) => !cfQuery || cf.name.toLowerCase().includes(cfQuery.toLowerCase()));
+  const addableGroups = catalogCategories.length
+    ? groupByCategory(addableCfs, catalogCategories)
+    : [{ name: "All custom formats", items: addableCfs }];
+  const pickerSearching = cfQuery.trim().length > 0;
+  const isPickerOpen = (name: string) => pickerSearching || pickerExpanded.has(name);
+  const togglePicker = (name: string) =>
+    setPickerExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
 
   return (
     <Card>
@@ -1442,51 +1539,47 @@ function ProfileFormatsTab({
 
                 {/* Add custom formats — drill down by TRaSH category. */}
                 <div className="space-y-2">
-                  <Label className="text-xs">Add a custom format by category</Label>
-                  <div className="flex flex-wrap gap-2">
-                    <Select value={category} onValueChange={setCategory}>
-                      <SelectTrigger className="h-9 w-72">
-                        <SelectValue placeholder="Category" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__all">All categories</SelectItem>
-                        {catalogCategories.map((c) => (
-                          <SelectItem key={c.name} value={c.name}>
-                            {c.name}
-                          </SelectItem>
-                        ))}
-                        {hasUncategorized && <SelectItem value="__uncat">Uncategorized</SelectItem>}
-                      </SelectContent>
-                    </Select>
-                    <Input
-                      placeholder="Filter within category…"
-                      value={cfQuery}
-                      onChange={(e) => setCfQuery(e.target.value)}
-                      className="h-9 min-w-[10rem] flex-1"
-                    />
-                  </div>
-                  <div className="max-h-56 overflow-y-auto overflow-x-hidden rounded-md border border-white/5">
-                    {cfMatches.length === 0 ? (
+                  <Label className="text-xs">Add a custom format — drill down by category</Label>
+                  <Input
+                    placeholder="Search all custom formats…"
+                    value={cfQuery}
+                    onChange={(e) => setCfQuery(e.target.value)}
+                    className="h-9"
+                  />
+                  <div className="max-h-64 overflow-y-auto overflow-x-hidden rounded-md border border-white/5">
+                    {addableGroups.length === 0 || addableGroups.every((g) => g.items.length === 0) ? (
                       <p className="p-3 text-center text-xs text-muted-foreground">
-                        No custom formats to add here.
+                        No custom formats to add.
                       </p>
                     ) : (
-                      cfMatches.map((cf) => (
-                        <button
-                          key={cf.trashId}
-                          type="button"
-                          onClick={() => addFormat(cf)}
-                          className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm hover:bg-white/5"
-                        >
-                          <span className="flex min-w-0 items-center gap-1.5">
-                            <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                            <span className="truncate">{cf.name}</span>
-                          </span>
-                          <span className="ml-2 shrink-0 text-xs text-muted-foreground">
-                            default {cf.defaultScore}
-                          </span>
-                        </button>
-                      ))
+                      <div className="divide-y divide-white/5">
+                        {addableGroups.map((g) => (
+                          <CategorySection
+                            key={g.name}
+                            name={g.name}
+                            count={g.items.length}
+                            expanded={isPickerOpen(g.name)}
+                            onToggle={() => togglePicker(g.name)}
+                          >
+                            {g.items.map((cf) => (
+                              <button
+                                key={cf.trashId}
+                                type="button"
+                                onClick={() => addFormat(cf)}
+                                className="flex w-full items-center justify-between gap-2 px-3 py-1.5 pl-8 text-left text-sm hover:bg-white/5"
+                              >
+                                <span className="flex min-w-0 items-center gap-1.5">
+                                  <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                  <span className="truncate">{cf.name}</span>
+                                </span>
+                                <span className="ml-2 shrink-0 text-xs text-muted-foreground">
+                                  default {cf.defaultScore}
+                                </span>
+                              </button>
+                            ))}
+                          </CategorySection>
+                        ))}
+                      </div>
                     )}
                   </div>
                 </div>

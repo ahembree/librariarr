@@ -77,6 +77,8 @@ After a sync, the results dialog shows what was created or updated, and each ite
 
 Custom formats are imported with their full specification set. Scores are **not** forced onto the app by the custom format itself — they are applied through quality profiles (matching how the guides are structured).
 
+The Custom Formats tab groups formats into the guide's own **categories** (audio, HDR, streaming services, unwanted, release groups, etc.). Click a category to expand it and drill down to its formats; searching expands everything so matches are visible.
+
 ### Quality profiles
 
 Quality profiles are rebuilt against the app's live quality schema: quality ordering, groups, the cutoff, upgrade settings, and custom-format scores are all resolved from the guide.
@@ -88,7 +90,7 @@ A quality profile only assigns scores to custom formats that **already exist** i
 The **Profile Formats** tab lets you attach guide custom formats — with scores — to **any** quality profile on the instance, including profiles you created yourself in Radarr/Sonarr (not just ones imported from the guide).
 
 1. Pick a target quality profile. Every guide custom format already scored on that profile is **listed with its current score**, so you can see and **override** any of them.
-2. Add more from the guide's custom formats — use the **category** dropdown to drill down by the guide's own groupings (audio, HDR, streaming services, unwanted, release groups, etc.), then click a format to add it. Each is added with the guide's **recommended score**, and every score is editable inline.
+2. Add more from the guide's custom formats — they're grouped into the guide's own **categories**; expand a category to drill down and click a format to add it. Each is added with the guide's **recommended score**, and every score is editable inline.
 3. **Save** to record the assignment, then **Sync** to apply the scores to the profile.
 
 This is an **overlay**: only the scores for the custom formats you attach are changed. Every other part of the profile — its qualities, cutoff, and any other format scores — is left untouched. A custom format only scores if it actually exists in the app, so add & sync the custom format itself too (from the Custom Formats tab) if it isn't there yet. **Stop managing** removes the assignment; it does not reset any scores already written.
