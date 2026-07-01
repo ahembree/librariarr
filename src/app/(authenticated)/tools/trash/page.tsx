@@ -311,21 +311,70 @@ export default function TrashSyncPage() {
     }
   };
 
+  // Add a resource that does NOT exist in the app yet: assign it and create it
+  // in one step. Safe without confirmation — there is nothing to overwrite.
+  const addItem = async (item: StatusItem) => {
+    if (!selected) return;
+    setBusyId(item.trashId);
+    try {
+      const assignRes = await fetch("/api/tools/trash/assignments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          serviceType: selected.serviceType,
+          instanceId: selected.id,
+          items: [{ resourceType: item.resourceType, trashId: item.trashId, name: item.name }],
+        }),
+      });
+      if (!assignRes.ok) {
+        const d = await assignRes.json().catch(() => ({}));
+        toast.error(d.error ?? "Failed to add");
+        return;
+      }
+      const syncRes = await fetch("/api/tools/trash/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          serviceType: selected.serviceType,
+          instanceId: selected.id,
+          dryRun: false,
+          items: [{ resourceType: item.resourceType, trashId: item.trashId }],
+        }),
+      });
+      const data = await syncRes.json();
+      if (!syncRes.ok) {
+        toast.error(data.error ?? "Added, but sync failed");
+        await loadStatus(selected);
+        return;
+      }
+      const report: SyncReport = data.report;
+      const errored = report.items.filter((i) => i.action === "ERROR").length;
+      if (errored) toast.error(`Added “${item.name}” with errors`);
+      else toast.success(`Added “${item.name}” to ${selected.name}`);
+      setDiffReport({ title: `Add: ${item.name}`, items: report.items, dryRun: false });
+      await loadStatus(selected);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const onManageClick = (item: StatusItem) => {
     if (item.managed) {
       void unassign(item);
       return;
     }
     // Existing resources need explicit confirmation before Librariarr can
-    // overwrite them on the next sync.
+    // overwrite them on the next sync; not-yet-existing ones are just added.
     if (item.existsInArr) {
       setConfirmItem(item);
     } else {
-      void assign(item);
+      void addItem(item);
     }
   };
 
-  const bulkAssignNew = async (resourceType: ResourceType) => {
+  // Add every not-yet-existing resource of a type: assign them all, then create
+  // them in the app. Only touches items with nothing to overwrite.
+  const bulkAddNew = async (resourceType: ResourceType) => {
     if (!selected || !status) return;
     const toAdd = status.items.filter(
       (i) => i.resourceType === resourceType && i.status === "NEW",
@@ -333,7 +382,7 @@ export default function TrashSyncPage() {
     if (!toAdd.length) return;
     setSyncing(true);
     try {
-      const res = await fetch("/api/tools/trash/assignments", {
+      const assignRes = await fetch("/api/tools/trash/assignments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -342,11 +391,31 @@ export default function TrashSyncPage() {
           items: toAdd.map((i) => ({ resourceType: i.resourceType, trashId: i.trashId, name: i.name })),
         }),
       });
-      if (!res.ok) {
-        toast.error("Failed to assign");
+      if (!assignRes.ok) {
+        toast.error("Failed to add");
         return;
       }
-      toast.success(`Managing ${toAdd.length} new item${toAdd.length === 1 ? "" : "s"}`);
+      const syncRes = await fetch("/api/tools/trash/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          serviceType: selected.serviceType,
+          instanceId: selected.id,
+          dryRun: false,
+          items: toAdd.map((i) => ({ resourceType: i.resourceType, trashId: i.trashId })),
+        }),
+      });
+      const data = await syncRes.json();
+      if (!syncRes.ok) {
+        toast.error(data.error ?? "Added, but sync failed");
+        await loadStatus(selected);
+        return;
+      }
+      const report: SyncReport = data.report;
+      const errored = report.items.filter((i) => i.action === "ERROR").length;
+      if (errored) toast.error(`Added ${toAdd.length} item(s) with ${errored} error(s)`);
+      else toast.success(`Added ${toAdd.length} item${toAdd.length === 1 ? "" : "s"} to ${selected.name}`);
+      setDiffReport({ title: `Add ${toAdd.length} item(s)`, items: report.items, dryRun: false });
       await loadStatus(selected);
     } finally {
       setSyncing(false);
@@ -606,7 +675,7 @@ export default function TrashSyncPage() {
                 onManage={onManageClick}
                 onPreview={(i) => preview(i)}
                 onSync={(i) => syncOne(i)}
-                onBulkAdd={() => bulkAssignNew("CUSTOM_FORMAT")}
+                onBulkAdd={() => bulkAddNew("CUSTOM_FORMAT")}
               />
             </TabsContent>
 
@@ -617,7 +686,7 @@ export default function TrashSyncPage() {
                 onManage={onManageClick}
                 onPreview={(i) => preview(i)}
                 onSync={(i) => syncOne(i)}
-                onBulkAdd={() => bulkAssignNew("QUALITY_PROFILE")}
+                onBulkAdd={() => bulkAddNew("QUALITY_PROFILE")}
               />
             </TabsContent>
 
@@ -751,7 +820,7 @@ function ResourceList({
           <div className="ml-auto">
             <Button variant="outline" size="sm" onClick={onBulkAdd} disabled={newCount === 0}>
               <Plus className="mr-1.5 h-4 w-4" />
-              Manage all not-added ({newCount})
+              Add all not-added ({newCount})
             </Button>
           </div>
         </div>
@@ -821,6 +890,13 @@ function ResourceRow({
         onClick={onManage}
         disabled={busy}
         className="w-28"
+        title={
+          item.managed
+            ? "Stop managing (leaves the app unchanged)"
+            : item.existsInArr
+              ? "Take over management — the next sync overwrites the app copy"
+              : "Add this to the app now"
+        }
       >
         {busy ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -828,9 +904,13 @@ function ResourceRow({
           <>
             <X className="mr-1 h-3.5 w-3.5" /> Unmanage
           </>
-        ) : (
+        ) : item.existsInArr ? (
           <>
             <ShieldCheck className="mr-1 h-3.5 w-3.5" /> Manage
+          </>
+        ) : (
+          <>
+            <Plus className="mr-1 h-3.5 w-3.5" /> Add
           </>
         )}
       </Button>

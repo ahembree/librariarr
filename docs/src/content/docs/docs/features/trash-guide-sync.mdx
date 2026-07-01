@@ -56,6 +56,14 @@ Each planned change is labelled **Create**, **Update**, **No change**, **Skipped
 
 ## Syncing
 
+### Adding new resources
+
+For a guide item that **doesn't exist yet** in the app (status **Not added**), the row shows an **Add** button. Clicking it assigns the item and creates it in the app in one step — there's nothing to overwrite, so no confirmation is needed (use **Diff** first if you want to preview). **Add all not-added** does this for every not-yet-existing item of that type at once.
+
+Items that **already exist** in the app instead show **Manage**, which takes over management (with an overwrite confirmation) but does not write anything until you **Sync** — so an existing configuration is never replaced without a deliberate second step.
+
+### Syncing existing / managed resources
+
 There are two ways to sync:
 
 - **Sync managed** (top of the page) applies the changes for **every** assigned resource. Resources are processed in dependency order — quality definitions and naming first, then custom formats, then quality profiles (so a profile's custom-format scores can reference formats that already exist).
