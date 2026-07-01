@@ -159,6 +159,29 @@ async function buildCatalog(service: ServiceType): Promise<TrashCatalog> {
  * rejected. NAMING uses one synthetic id that is valid for either service (the
  * variants themselves are service-specific and applied by service at sync time).
  */
+/**
+ * Collapse cf-group names into top-level categories using the `[Bracket]`
+ * prefix — e.g. "[Audio] Audio Formats" and "[Audio] Audio Channels" both
+ * become the "Audio" category, merging their custom formats. Groups without a
+ * bracket keep their full name. Sorted by category name.
+ */
+export function deriveCategories(cfGroups: TrashCfGroup[]): { name: string; trashIds: string[] }[] {
+  const map = new Map<string, Set<string>>();
+  for (const g of cfGroups) {
+    const match = g.name.match(/^\s*\[([^\]]+)\]/);
+    const name = (match ? match[1] : g.name).trim();
+    let set = map.get(name);
+    if (!set) {
+      set = new Set();
+      map.set(name, set);
+    }
+    for (const id of g.customFormats) set.add(id);
+  }
+  return [...map.entries()]
+    .map(([name, ids]) => ({ name, trashIds: [...ids] }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export function catalogHasResource(
   catalog: TrashCatalog,
   resourceType: ResourceType,

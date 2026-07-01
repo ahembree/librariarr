@@ -9,7 +9,7 @@ vi.mock("axios", () => ({
   default: { create: vi.fn(() => ({ get: mockGet })), isAxiosError: () => false },
 }));
 
-import { fetchTrashCatalog, catalogHasResource } from "@/lib/trash/catalog";
+import { fetchTrashCatalog, catalogHasResource, deriveCategories } from "@/lib/trash/catalog";
 import { appCache } from "@/lib/cache/memory-cache";
 import type { TrashCatalog } from "@/lib/trash/types";
 
@@ -114,5 +114,23 @@ describe("catalogHasResource (cross-service gate)", () => {
 
   it("rejects naming when the catalog has none", () => {
     expect(catalogHasResource({ ...cat, naming: null }, "NAMING", "naming")).toBe(false);
+  });
+});
+
+describe("deriveCategories", () => {
+  it("uses the [Bracket] prefix as the category and merges groups that share it", () => {
+    const cats = deriveCategories([
+      { name: "[Audio] Audio Formats", customFormats: ["a1", "a2"] },
+      { name: "[Audio] Audio Channels", customFormats: ["a3"] },
+      { name: "[HDR Formats] HDR", customFormats: ["h1"] },
+    ]);
+    // Sorted by name; the two [Audio] groups merge into one "Audio" category.
+    expect(cats.map((c) => c.name)).toEqual(["Audio", "HDR Formats"]);
+    expect(cats.find((c) => c.name === "Audio")?.trashIds.sort()).toEqual(["a1", "a2", "a3"]);
+  });
+
+  it("falls back to the full name when there is no bracket", () => {
+    const cats = deriveCategories([{ name: "Unwanted", customFormats: ["x"] }]);
+    expect(cats[0].name).toBe("Unwanted");
   });
 });

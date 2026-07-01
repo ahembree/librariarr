@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
-import { fetchTrashCatalog } from "@/lib/trash/catalog";
+import { fetchTrashCatalog, deriveCategories } from "@/lib/trash/catalog";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import type { ServiceType } from "@/lib/trash/types";
 
@@ -41,11 +41,9 @@ export async function GET(request: NextRequest) {
           name: c.name,
           defaultScore: c.trash_scores?.default ?? 0,
         })),
-        // Guide-defined categories (cf-groups) for drilling down the format list.
-        categories: catalog.cfGroups.map((g) => ({
-          name: g.name,
-          trashIds: g.customFormats,
-        })),
+        // Top-level categories derived from the cf-group `[Bracket]` prefixes,
+        // for drilling down the format list.
+        categories: deriveCategories(catalog.cfGroups),
       },
     });
   } catch (err) {

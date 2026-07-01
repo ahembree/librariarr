@@ -195,8 +195,8 @@ describe("GET /api/tools/trash/catalog", () => {
     }>(await callRoute(getCatalog, { searchParams: { service: "radarr" } }));
     expect(body.catalog.counts.customFormats).toBe(1);
     expect(body.catalog.naming).not.toBeNull();
-    // cf-groups become drill-down categories.
-    expect(body.catalog.categories[0].name).toBe("[Audio] Audio Formats");
+    // cf-groups become drill-down categories keyed by their [Bracket] prefix.
+    expect(body.catalog.categories[0].name).toBe("Audio");
     expect(body.catalog.categories[0].trashIds).toEqual(["cf1"]);
     expect(body.catalog.customFormats[0]).toMatchObject({ trashId: "cf1", defaultScore: 100 });
   });
