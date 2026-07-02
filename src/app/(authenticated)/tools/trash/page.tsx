@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   SlidersHorizontal,
@@ -106,6 +106,8 @@ interface TrashStatus {
   instanceName: string;
   reachable: boolean;
   error?: string;
+  /** Set when the guide catalog couldn't be loaded (Arr itself is reachable). */
+  catalogError?: string;
   items: StatusItem[];
   /** Count of PROFILE_CF assignments (not in `items`) — they count as managed. */
   managedProfileCf?: number;
@@ -312,6 +314,10 @@ export default function TrashSyncPage() {
   const [diffReport, setDiffReport] = useState<{ title: string; items: PlanItem[]; dryRun: boolean } | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
+  // Monotonic token so a slow load for a previously-selected instance can't
+  // clobber the results of a newer one when the user switches quickly.
+  const loadSeqRef = useRef(0);
+
   const selected = useMemo(
     () => instances.find((i) => `${i.serviceType}:${i.id}` === selectedKey) ?? null,
     [instances, selectedKey],
@@ -320,7 +326,7 @@ export default function TrashSyncPage() {
   const loadInstances = useCallback(async () => {
     try {
       const res = await fetch("/api/tools/trash/instances");
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       const list: GuideInstance[] = data.instances ?? [];
       setInstances(list);
       // Auto-select the first instance if none is chosen yet.
@@ -334,6 +340,8 @@ export default function TrashSyncPage() {
 
   const loadStatus = useCallback(
     async (inst: GuideInstance, opts: { refresh?: boolean; background?: boolean } = {}) => {
+      const seq = ++loadSeqRef.current;
+      const isCurrent = () => loadSeqRef.current === seq;
       // Background refresh (after an action): keep the current view mounted and
       // swap in the new data when it arrives, instead of blanking to a loader.
       if (opts.background) {
@@ -348,19 +356,30 @@ export default function TrashSyncPage() {
           fetch(`/api/tools/trash/catalog?service=${svc}${opts.refresh ? "&refresh=1" : ""}`),
           fetch(`/api/tools/trash/status?serviceType=${inst.serviceType}&instanceId=${inst.id}`),
         ]);
-        const catData = await catRes.json();
-        const statusData = await statusRes.json();
-        if (catRes.ok) setCatalog(catData.catalog);
+        // Defensive parse: a proxy/gateway can answer a 5xx with a non-JSON body.
+        const catData = await catRes.json().catch(() => ({}));
+        const statusData = await statusRes.json().catch(() => ({}));
+        // A newer load superseded this one — drop its results so we never render
+        // stale data for a no-longer-selected instance.
+        if (!isCurrent()) return;
+        // Replace the catalog on success, and CLEAR it on failure so the
+        // previously-selected instance's catalog can't linger against this one.
+        setCatalog(catRes.ok ? catData.catalog : null);
         if (statusRes.ok) {
           setStatus(statusData.status);
         } else {
+          setStatus(null);
           toast.error(statusData.error ?? "Failed to load status");
         }
       } catch {
-        toast.error("Failed to load guide status");
+        if (isCurrent()) toast.error("Failed to load guide status");
       } finally {
-        if (opts.background) setRefreshingStatus(false);
-        else setLoadingStatus(false);
+        // Only the newest load owns the loading flags; a superseded one must not
+        // flip them off underneath the load that replaced it.
+        if (isCurrent()) {
+          if (opts.background) setRefreshingStatus(false);
+          else setLoadingStatus(false);
+        }
       }
     },
     [],
@@ -471,7 +490,7 @@ export default function TrashSyncPage() {
           items: [{ resourceType: item.resourceType, trashId: item.trashId }],
         }),
       });
-      const data = await syncRes.json();
+      const data = await syncRes.json().catch(() => ({}));
       if (!syncRes.ok) {
         toast.error(data.error ?? "Added, but sync failed");
         await loadStatus(selected, { background: true });
@@ -557,7 +576,7 @@ export default function TrashSyncPage() {
           items: toAdd.map((i) => ({ resourceType: i.resourceType, trashId: i.trashId })),
         }),
       });
-      const data = await syncRes.json();
+      const data = await syncRes.json().catch(() => ({}));
       if (!syncRes.ok) {
         toast.error(data.error ?? "Added, but sync failed");
         await loadStatus(selected, { background: true });
@@ -633,7 +652,7 @@ export default function TrashSyncPage() {
             : {}),
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         toast.error(data.error ?? "Preview failed");
         return;
@@ -662,7 +681,7 @@ export default function TrashSyncPage() {
           dryRun: false,
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         toast.error(data.error ?? "Sync failed");
         return;
@@ -695,7 +714,7 @@ export default function TrashSyncPage() {
           items: [{ resourceType: item.resourceType, trashId: item.trashId }],
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         toast.error(data.error ?? "Sync failed");
         return;
@@ -812,7 +831,29 @@ export default function TrashSyncPage() {
         </Card>
       )}
 
-      {selected && !loadingStatus && status?.reachable && (
+      {/* The Arr is reachable but the TRaSH guide catalog couldn't be loaded
+          (e.g. a GitHub outage). Keep the instance selected and offer a retry
+          instead of rendering empty tabs that look like "nothing to manage". */}
+      {selected && !loadingStatus && status?.reachable && status.catalogError && (
+        <Card className="border-amber/40">
+          <CardContent className="flex flex-wrap items-center gap-3 py-4 text-sm">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber" />
+            <span className="text-muted-foreground">{status.catalogError}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="ml-auto"
+              onClick={refreshGuides}
+              disabled={refreshing}
+            >
+              <RefreshCw className={cn("mr-1.5 h-4 w-4", refreshing && "animate-spin")} />
+              Retry
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {selected && !loadingStatus && status?.reachable && !status.catalogError && (
         <>
           {/* Status strip + global actions */}
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -833,12 +874,12 @@ export default function TrashSyncPage() {
                 variant="outline"
                 size="sm"
                 onClick={() => preview()}
-                disabled={syncing || counts.managed === 0 || busyId === "__all__"}
+                disabled={syncing || counts.managed === 0 || busyId !== null}
               >
                 {busyId === "__all__" ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Eye className="mr-1.5 h-4 w-4" />}
                 Dry run
               </Button>
-              <Button size="sm" onClick={applySync} disabled={syncing || counts.managed === 0}>
+              <Button size="sm" onClick={applySync} disabled={syncing || counts.managed === 0 || busyId !== null}>
                 {syncing ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />}
                 Sync managed
               </Button>
@@ -1054,7 +1095,11 @@ function ResourceList({
   const selectableFiltered = filtered.filter((i) => !i.managed);
   const allSelected =
     selectableFiltered.length > 0 && selectableFiltered.every((i) => selected.has(i.trashId));
-  const selectedItems = items.filter((i) => selected.has(i.trashId) && !i.managed);
+  // Bulk actions operate ONLY on rows that are both selected AND currently
+  // visible — never on a selection hidden by the active filter/search. Otherwise
+  // "select all" under one filter then switching filters would silently act on
+  // items the user can no longer see.
+  const selectedItems = filtered.filter((i) => selected.has(i.trashId) && !i.managed);
   const selectedNew = selectedItems.filter((i) => i.status === "NEW");
   const selectedExisting = selectedItems.filter((i) => i.status === "UNMANAGED_CONFLICT");
 
@@ -1100,7 +1145,9 @@ function ResourceList({
     <ResourceRow
       key={item.trashId}
       item={item}
-      busy={busyId === item.trashId}
+      // Disable a row's actions while its own action runs AND during any global
+      // or bulk sync, so per-row and instance-wide writes can't overlap.
+      busy={busyId === item.trashId || syncing}
       selectable={!item.managed}
       selected={selected.has(item.trashId)}
       onToggleSelect={() => toggleOne(item.trashId)}
@@ -1134,7 +1181,15 @@ function ResourceList({
             onChange={(e) => setQuery(e.target.value)}
             className="h-9 min-w-[9rem] flex-1 sm:max-w-xs"
           />
-          <Select value={filter} onValueChange={(v) => setFilter(v as typeof filter)}>
+          <Select
+            value={filter}
+            onValueChange={(v) => {
+              setFilter(v as typeof filter);
+              // Switching category is a deliberate context change — drop any
+              // selection from the previous category so it can't linger unseen.
+              clearSelection();
+            }}
+          >
             <SelectTrigger className="h-9 w-36">
               <SelectValue />
             </SelectTrigger>
@@ -1542,6 +1597,63 @@ function sortFormatsByScore(list: ProfileCfFormat[]): ProfileCfFormat[] {
   return [...list].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
 }
 
+/**
+ * Integer score field with a local text buffer. A bare `type="number"` bound to
+ * the numeric state can't hold the intermediate states of typing a negative
+ * value — `parseInt("-") || 0` snaps the field to 0 the instant you type "-",
+ * so a negative score is impossible to enter. This keeps the raw text while
+ * editing (allowing "" and "-"), commits the parsed integer to state, and
+ * normalizes on blur. Re-syncs from the prop only while unfocused so an external
+ * change (profile switch, reload) doesn't clobber active typing.
+ */
+function ScoreInput({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+  disabled?: boolean;
+}) {
+  const [text, setText] = useState(String(Number.isFinite(value) ? value : 0));
+  const focusedRef = useRef(false);
+  useEffect(() => {
+    if (!focusedRef.current) setText(String(Number.isFinite(value) ? value : 0));
+  }, [value]);
+  return (
+    <Input
+      type="text"
+      inputMode="numeric"
+      value={text}
+      disabled={disabled}
+      onFocus={() => {
+        focusedRef.current = true;
+      }}
+      onChange={(e) => {
+        const raw = e.target.value;
+        // Empty or a lone "-" are valid *intermediate* states while typing.
+        if (raw === "" || raw === "-") {
+          setText(raw);
+          onChange(0);
+          return;
+        }
+        if (!/^-?\d+$/.test(raw)) return; // ignore non-integer keystrokes
+        setText(raw);
+        onChange(parseInt(raw, 10));
+      }}
+      onBlur={() => {
+        focusedRef.current = false;
+        const n = parseInt(text, 10);
+        const val = Number.isFinite(n) ? n : 0;
+        setText(String(val));
+        onChange(val);
+      }}
+      className="h-8 w-24 text-right tabular-nums"
+      title="Score"
+    />
+  );
+}
+
 function ProfileFormatsTab({
   serviceType,
   instanceId,
@@ -1566,7 +1678,9 @@ function ProfileFormatsTab({
   const [formats, setFormats] = useState<ProfileCfFormat[]>([]);
   // Custom-format names that actually exist in the app — a score only applies to
   // one of these, so an assigned format outside this set is flagged inline.
-  const [instanceFormats, setInstanceFormats] = useState<Set<string>>(new Set());
+  // `null` means "not loaded yet" (distinct from a genuinely empty instance, so
+  // a fresh instance with zero custom formats still shows the Add affordance).
+  const [instanceFormats, setInstanceFormats] = useState<Set<string> | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [cfQuery, setCfQuery] = useState("");
@@ -1631,9 +1745,10 @@ function ProfileFormatsTab({
 
   // A score only applies to a custom format that already exists in the app. When
   // we know the instance's format names, flag any assigned format outside that
-  // set (mirrors the backend's exact-name presence check). If we don't have the
-  // list yet, assume present so nothing is falsely flagged.
-  const isInApp = (name: string) => instanceFormats.size === 0 || instanceFormats.has(name);
+  // set (mirrors the backend's exact-name presence check). Until the list has
+  // loaded (`null`), assume present so nothing is falsely flagged — but once
+  // loaded, an empty set correctly reports every format as not-yet-in-app.
+  const isInApp = (name: string) => instanceFormats === null || instanceFormats.has(name);
 
   // Unsaved-edit guard: a real (non-dry-run) Sync applies the STORED selection,
   // so syncing with unsaved edits would silently apply stale scores while
@@ -1699,7 +1814,7 @@ function ProfileFormatsTab({
           ],
         }),
       });
-      const d = await res.json();
+      const d = await res.json().catch(() => ({}));
       if (!res.ok) {
         toast.error(d.error ?? "Failed to save");
         return;
@@ -1733,7 +1848,7 @@ function ProfileFormatsTab({
           ],
         }),
       });
-      const d = await res.json();
+      const d = await res.json().catch(() => ({}));
       if (!res.ok) {
         toast.error(d.error ?? "Sync failed");
         return;
@@ -1801,7 +1916,10 @@ function ProfileFormatsTab({
       if (!cfSync.ok) {
         const d = await cfSync.json().catch(() => ({}));
         toast.error(d.error ?? "Failed to create in app");
+        // The custom format(s) were already assigned (managed rows exist), so
+        // refresh the page-level status too — not just this tab.
         await load();
+        onManagedChange?.();
         return;
       }
       // 2) Persist this profile's custom-format selection.
@@ -1814,6 +1932,7 @@ function ProfileFormatsTab({
         const d = await saveRes.json().catch(() => ({}));
         toast.error(d.error ?? "Added to app, but failed to save the profile");
         await load();
+        onManagedChange?.();
         return;
       }
       // 3) Apply the profile scores now that the format(s) exist.
@@ -1823,10 +1942,11 @@ function ProfileFormatsTab({
         dryRun: false,
         items: [{ resourceType: "PROFILE_CF", trashId: selectedProfile }],
       });
-      const d = await pfSync.json();
+      const d = await pfSync.json().catch(() => ({}));
       if (!pfSync.ok) {
         toast.error(d.error ?? "Added to app, but the profile sync failed");
         await load();
+        onManagedChange?.();
         return;
       }
       const errored = (d.report?.items ?? []).filter((i: PlanItem) => i.action === "ERROR").length;
@@ -2018,12 +2138,10 @@ function ProfileFormatsTab({
                                       <Plus className="mr-1 h-3.5 w-3.5" /> Add
                                     </Button>
                                   )}
-                                  <Input
-                                    type="number"
-                                    value={Number.isFinite(f.score) ? f.score : 0}
-                                    onChange={(e) => setScore(f.trashId, parseInt(e.target.value, 10) || 0)}
-                                    className="h-8 w-24 text-right tabular-nums"
-                                    title="Score"
+                                  <ScoreInput
+                                    value={f.score}
+                                    onChange={(n) => setScore(f.trashId, n)}
+                                    disabled={busy}
                                   />
                                   <Button
                                     variant="ghost"
