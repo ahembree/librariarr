@@ -103,6 +103,44 @@ describe("configureRetry", () => {
     }
   });
 
+  // ── Timeouts on non-idempotent methods ───────────────────────────
+  //
+  // A client/socket timeout may already have reached the server, so retrying a
+  // write could double-apply it. Timeouts are retried only for idempotent
+  // methods; connection-transport codes (ECONNRESET/EPIPE/…) still retry for any
+  // method because they indicate the connection dropped, not a possible success.
+  describe("timeout codes on non-idempotent methods do not retry", () => {
+    for (const code of ["ECONNABORTED", "ETIMEDOUT"]) {
+      for (const method of ["post", "put", "patch", "delete"]) {
+        it(`does not retry ${code} on ${method.toUpperCase()}`, async () => {
+          const error = makeAxiosError({ code, method });
+          await expect(mockAxios.triggerError(error)).rejects.toBe(error);
+          expect(mockAxios.requestMock).not.toHaveBeenCalled();
+        });
+      }
+    }
+
+    for (const method of ["get", "head"]) {
+      it(`still retries ECONNABORTED on ${method.toUpperCase()}`, async () => {
+        const error = makeAxiosError({ code: "ECONNABORTED", method });
+        mockAxios.requestMock.mockResolvedValue({ data: "ok" });
+        const promise = mockAxios.triggerError(error);
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(await promise).toEqual({ data: "ok" });
+        expect(mockAxios.requestMock).toHaveBeenCalledTimes(1);
+      });
+    }
+
+    it("still retries a connection-transport code (ECONNRESET) on POST", async () => {
+      const error = makeAxiosError({ code: "ECONNRESET", method: "post" });
+      mockAxios.requestMock.mockResolvedValue({ data: "ok" });
+      const promise = mockAxios.triggerError(error);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await promise).toEqual({ data: "ok" });
+      expect(mockAxios.requestMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // ── SSL/TLS errors ────────────────────────────────────────────────
 
   describe("retryable SSL/TLS errors", () => {

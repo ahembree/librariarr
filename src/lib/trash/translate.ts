@@ -110,6 +110,18 @@ export function cfComparable(cf: ArrCustomFormat): CfComparable {
  * (e.g. a LanguageSpecification stores `exceptLanguage` even when the guide
  * only sets `value`), which the guide never sends — so without this, those
  * defaults register as a perpetual diff and the format never reports "in sync".
+ *
+ * KNOWN LIMITATION (intentionally not "fixed"): this drops any field present in
+ * the Arr copy but absent from the guide's version, on the assumption it's an
+ * Arr-added default. That means the one case it *cannot* distinguish is the
+ * guide legitimately REMOVING a field from a spec upstream — that removal is
+ * projected away too, so it won't surface as a diff until some other field in
+ * the spec changes. Correctly telling "Arr default" from "guide removed a field"
+ * would require a canonical per-implementation table of Arr default fields,
+ * which the guide doesn't publish and Sonarr/Radarr change between versions. Any
+ * heuristic short of that table re-introduces the perpetual-diff bug this
+ * function exists to prevent, so we accept the narrower miss. Field *additions*
+ * and *value changes* (the overwhelmingly common upstream edits) are unaffected.
  */
 export function projectManagedFields(before: CfComparable, after: CfComparable): CfComparable {
   const specifications: Record<string, CfComparableSpec> = {};
