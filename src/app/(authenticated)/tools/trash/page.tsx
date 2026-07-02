@@ -1789,9 +1789,16 @@ function ProfileFormatsTab({
                   </SelectTrigger>
                   <SelectContent>
                     {profiles.map((p) => (
-                      <SelectItem key={p.id} value={p.name}>
-                        {p.name}
-                        {assignmentFor(p.name) ? " · managed" : ""}
+                      <SelectItem key={p.id} value={p.name} textValue={p.name}>
+                        <span className="flex items-center gap-1.5">
+                          {p.name}
+                          {assignmentFor(p.name) && (
+                            <ShieldCheck
+                              className="h-3.5 w-3.5 shrink-0 text-green"
+                              aria-label="managed"
+                            />
+                          )}
+                        </span>
                       </SelectItem>
                     ))}
                   </SelectContent>
