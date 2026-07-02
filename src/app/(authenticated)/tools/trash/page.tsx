@@ -30,6 +30,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -506,14 +507,10 @@ export default function TrashSyncPage() {
     }
   };
 
-  // Add every not-yet-existing resource of a type: assign them all, then create
-  // them in the app. Only touches items with nothing to overwrite.
-  const bulkAddNew = async (resourceType: ResourceType) => {
-    if (!selected || !status) return;
-    const toAdd = status.items.filter(
-      (i) => i.resourceType === resourceType && i.status === "NEW",
-    );
-    if (!toAdd.length) return;
+  // Bulk-add not-yet-existing resources: assign them all, then create them in
+  // the app in one step. Only touches items with nothing to overwrite.
+  const bulkAddItems = async (toAdd: StatusItem[]) => {
+    if (!selected || !toAdd.length) return;
     setSyncing(true);
     try {
       const assignRes = await fetch("/api/tools/trash/assignments", {
@@ -526,7 +523,8 @@ export default function TrashSyncPage() {
         }),
       });
       if (!assignRes.ok) {
-        toast.error("Failed to add");
+        const d = await assignRes.json().catch(() => ({}));
+        toast.error(d.error ?? "Failed to add");
         return;
       }
       const syncRes = await fetch("/api/tools/trash/sync", {
@@ -550,6 +548,36 @@ export default function TrashSyncPage() {
       if (errored) toast.error(`Added ${toAdd.length} item(s) with ${errored} error(s)`);
       else toast.success(`Added ${toAdd.length} item${toAdd.length === 1 ? "" : "s"} to ${selected.name}`);
       setDiffReport({ title: `Add ${toAdd.length} item(s)`, items: report.items, dryRun: false });
+      await loadStatus(selected);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // Bulk take-over: assign managed rows for existing resources (the consent
+  // gate). Writes nothing to the app — the next sync overwrites them. The
+  // caller (bulk bar) confirms the overwrite first.
+  const bulkManageItems = async (toManage: StatusItem[]) => {
+    if (!selected || !toManage.length) return;
+    setSyncing(true);
+    try {
+      const res = await fetch("/api/tools/trash/assignments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          serviceType: selected.serviceType,
+          instanceId: selected.id,
+          items: toManage.map((i) => ({ resourceType: i.resourceType, trashId: i.trashId, name: i.name })),
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.error ?? "Failed to manage");
+        return;
+      }
+      toast.success(
+        `Librariarr now manages ${toManage.length} item${toManage.length === 1 ? "" : "s"} — sync to apply`,
+      );
       await loadStatus(selected);
     } finally {
       setSyncing(false);
@@ -801,11 +829,13 @@ export default function TrashSyncPage() {
               <ResourceList
                 items={cfItems}
                 busyId={busyId}
+                syncing={syncing}
                 categories={catalog?.categories ?? []}
                 onManage={onManageClick}
                 onPreview={(i) => preview(i)}
                 onSync={(i) => syncOne(i)}
-                onBulkAdd={() => bulkAddNew("CUSTOM_FORMAT")}
+                onBulkAdd={bulkAddItems}
+                onBulkManage={bulkManageItems}
               />
             </TabsContent>
 
@@ -813,12 +843,14 @@ export default function TrashSyncPage() {
               <ResourceList
                 items={qpItems}
                 busyId={busyId}
+                syncing={syncing}
                 onManage={onManageClick}
                 // Preview a QP with its saved options so the per-row diff matches
                 // what a real sync would do (score set / reset unmatched scores).
                 onPreview={(i) => preview(i, (i.selection as QualityProfileSelection | null) ?? undefined)}
                 onSync={(i) => syncOne(i)}
-                onBulkAdd={() => bulkAddNew("QUALITY_PROFILE")}
+                onBulkAdd={bulkAddItems}
+                onBulkManage={bulkManageItems}
                 onOptions={(i) => setOptionsItem(i)}
               />
             </TabsContent>
@@ -950,27 +982,36 @@ function CountPill({
 function ResourceList({
   items,
   busyId,
+  syncing,
   categories,
   onManage,
   onPreview,
   onSync,
   onBulkAdd,
+  onBulkManage,
   onOptions,
 }: {
   items: StatusItem[];
   busyId: string | null;
+  /** A bulk operation is in flight (disables the selection actions). */
+  syncing: boolean;
   /** When provided, items are grouped into an expandable category drilldown. */
   categories?: CfCategory[];
   onManage: (item: StatusItem) => void;
   onPreview: (item: StatusItem) => void;
   onSync: (item: StatusItem) => void;
-  onBulkAdd: () => void;
+  /** Assign + create the given not-yet-existing items. */
+  onBulkAdd: (items: StatusItem[]) => Promise<void>;
+  /** Take over (assign) the given existing items — caller confirms first here. */
+  onBulkManage: (items: StatusItem[]) => Promise<void>;
   /** When provided, managed rows get an options (gear) button. */
   onOptions?: (item: StatusItem) => void;
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "managed" | "unmanaged" | "new">("all");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmManage, setConfirmManage] = useState(false);
 
   const filtered = items.filter((i) => {
     if (query && !i.name.toLowerCase().includes(query.toLowerCase())) return false;
@@ -979,7 +1020,40 @@ function ResourceList({
     if (filter === "new") return i.status === "NEW";
     return true;
   });
-  const newCount = items.filter((i) => i.status === "NEW").length;
+
+  // Only not-yet-managed rows can be bulk-selected (to Add or take over).
+  const selectableFiltered = filtered.filter((i) => !i.managed);
+  const allSelected =
+    selectableFiltered.length > 0 && selectableFiltered.every((i) => selected.has(i.trashId));
+  const selectedItems = items.filter((i) => selected.has(i.trashId) && !i.managed);
+  const selectedNew = selectedItems.filter((i) => i.status === "NEW");
+  const selectedExisting = selectedItems.filter((i) => i.status === "UNMANAGED_CONFLICT");
+
+  const toggleOne = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleAll = () =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allSelected) selectableFiltered.forEach((i) => next.delete(i.trashId));
+      else selectableFiltered.forEach((i) => next.add(i.trashId));
+      return next;
+    });
+  const clearSelection = () => setSelected(new Set());
+
+  const doAdd = async () => {
+    await onBulkAdd(selectedNew);
+    clearSelection();
+  };
+  const doManage = async () => {
+    setConfirmManage(false);
+    await onBulkManage(selectedExisting);
+    clearSelection();
+  };
 
   const grouped = categories && categories.length ? groupByCategory(filtered, categories) : null;
   // While searching, auto-expand everything so matches are visible.
@@ -998,6 +1072,9 @@ function ResourceList({
       key={item.trashId}
       item={item}
       busy={busyId === item.trashId}
+      selectable={!item.managed}
+      selected={selected.has(item.trashId)}
+      onToggleSelect={() => toggleOne(item.trashId)}
       onManage={() => onManage(item)}
       onPreview={() => onPreview(item)}
       onSync={() => onSync(item)}
@@ -1009,11 +1086,24 @@ function ResourceList({
     <Card>
       <CardContent className="space-y-3 py-4">
         <div className="flex flex-wrap items-center gap-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="flex h-9 items-center pl-1 pr-1">
+                <Checkbox
+                  checked={allSelected}
+                  onCheckedChange={toggleAll}
+                  disabled={selectableFiltered.length === 0}
+                  aria-label="Select all shown"
+                />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>Select all shown ({selectableFiltered.length})</TooltipContent>
+          </Tooltip>
           <Input
             placeholder="Search…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="h-9 min-w-[10rem] flex-1 sm:max-w-xs"
+            className="h-9 min-w-[9rem] flex-1 sm:max-w-xs"
           />
           <Select value={filter} onValueChange={(v) => setFilter(v as typeof filter)}>
             <SelectTrigger className="h-9 w-36">
@@ -1040,17 +1130,39 @@ function ResourceList({
               {expanded.size >= grouped.length ? "Collapse all" : "Expand all"}
             </Button>
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            className="ml-auto"
-            onClick={onBulkAdd}
-            disabled={newCount === 0}
-          >
-            <Plus className="mr-1.5 h-4 w-4" />
-            Add all ({newCount})
-          </Button>
         </div>
+
+        {/* Bulk action bar — appears once anything is selected. */}
+        {selectedItems.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2">
+            <span className="text-sm font-medium">
+              {selectedItems.length} selected
+            </span>
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              {selectedNew.length > 0 && (
+                <Button size="sm" onClick={doAdd} disabled={syncing}>
+                  {syncing ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Plus className="mr-1.5 h-4 w-4" />}
+                  Add ({selectedNew.length})
+                </Button>
+              )}
+              {selectedExisting.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setConfirmManage(true)}
+                  disabled={syncing}
+                  title="Take over management — the next sync overwrites the app copies"
+                >
+                  <ShieldCheck className="mr-1.5 h-4 w-4" />
+                  Manage ({selectedExisting.length})
+                </Button>
+              )}
+              <Button variant="ghost" size="sm" onClick={clearSelection} disabled={syncing}>
+                Clear
+              </Button>
+            </div>
+          </div>
+        )}
 
         {/* Native vertical scroll (not shadcn ScrollArea): its inner
             display:table wrapper lets long rows grow horizontally, which pushed
@@ -1078,6 +1190,26 @@ function ResourceList({
           )}
         </div>
       </CardContent>
+
+      {/* Bulk take-over confirmation */}
+      <AlertDialog open={confirmManage} onOpenChange={(o) => !o && setConfirmManage(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Manage {selectedExisting.length} existing item{selectedExisting.length === 1 ? "" : "s"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              These already exist in the app. Assigning them to Librariarr means the next sync will{" "}
+              <span className="font-medium text-amber">overwrite</span> them with the TRaSH Guides
+              versions. Nothing changes in the app until you sync.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={doManage}>Manage &amp; allow overwrite</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }
@@ -1085,6 +1217,9 @@ function ResourceList({
 function ResourceRow({
   item,
   busy,
+  selectable,
+  selected,
+  onToggleSelect,
   onManage,
   onPreview,
   onSync,
@@ -1092,6 +1227,10 @@ function ResourceRow({
 }: {
   item: StatusItem;
   busy: boolean;
+  /** Not-yet-managed rows can be checked for a bulk Add / Manage. */
+  selectable: boolean;
+  selected: boolean;
+  onToggleSelect: () => void;
   onManage: () => void;
   onPreview: () => void;
   onSync: () => void;
@@ -1100,7 +1239,19 @@ function ResourceRow({
 }) {
   const meta = STATUS_META[item.status];
   return (
-    <div className="flex items-center gap-3 px-3 py-2 transition-colors hover:bg-white/[0.02]">
+    <div
+      className={cn(
+        "flex items-center gap-3 px-3 py-2 transition-colors hover:bg-white/[0.02]",
+        selected && "bg-primary/5",
+      )}
+    >
+      {/* Selection checkbox (only for not-yet-managed rows); a fixed-width slot
+          keeps the status dot aligned across selectable and managed rows. */}
+      <span className="flex w-4 shrink-0 justify-center">
+        {selectable && (
+          <Checkbox checked={selected} onCheckedChange={onToggleSelect} aria-label={`Select ${item.name}`} />
+        )}
+      </span>
       {/* Status is a compact colored dot; the legend lives in the status strip. */}
       <Tooltip>
         <TooltipTrigger asChild>

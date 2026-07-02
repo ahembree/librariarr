@@ -58,9 +58,18 @@ Each planned change is labelled **Create**, **Update**, **No change**, **Skipped
 
 ### Adding new resources
 
-For a guide item that **doesn't exist yet** in the app (status **Not added**), the row shows an **Add** button. Clicking it assigns the item and creates it in the app in one step — there's nothing to overwrite, so no confirmation is needed (use **Diff** first if you want to preview). **Add all not-added** does this for every not-yet-existing item of that type at once.
+For a guide item that **doesn't exist yet** in the app (status **Not added**), the row shows an **Add** button. Clicking it assigns the item and creates it in the app in one step — there's nothing to overwrite, so no confirmation is needed (use **Diff** first if you want to preview).
 
 Items that **already exist** in the app instead show **Manage**, which takes over management (with an overwrite confirmation) but does not write anything until you **Sync** — so an existing configuration is never replaced without a deliberate second step.
+
+#### Selecting multiple items
+
+Each not-yet-managed row has a checkbox, and the checkbox at the top of the list selects everything currently shown (respecting the search and filter). Once anything is selected, a bulk action bar appears with:
+
+- **Add (N)** — assigns and creates every selected **Not added** item in one step.
+- **Manage (N)** — takes over every selected item that **already exists** in the app (one overwrite confirmation covers the whole batch); nothing is written until you sync.
+
+To add every not-yet-existing item at once, set the filter to **Not added**, tick the header checkbox, then **Add**.
 
 ### Syncing existing / managed resources
 
