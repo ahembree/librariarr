@@ -108,6 +108,8 @@ import { GET as getAssignments, POST as postAssignment } from "@/app/api/tools/t
 import { DELETE as deleteAssignment, PUT as putAssignment } from "@/app/api/tools/trash/assignments/[id]/route";
 import { POST as postSync } from "@/app/api/tools/trash/sync/route";
 import { GET as getProfiles } from "@/app/api/tools/trash/profiles/route";
+import { trashCfHash } from "@/lib/trash/signature";
+import type { TrashCustomFormat } from "@/lib/trash/types";
 import { getTestPrisma } from "../../setup/test-db";
 
 const SCHEMA = {
@@ -220,9 +222,16 @@ describe("GET /api/tools/trash/status", () => {
   it("classifies items: new / unmanaged / managed", async () => {
     const { user, radarr } = await authedUserWithRadarr();
     // The AMZN custom format exists in the Arr and is managed by Librariarr.
+    // A matching lastSyncHash marks it genuinely in-sync with the guide, so it
+    // classifies as MANAGED (a managed row with no lastSyncHash — an untaken-over
+    // resource never synced — is MANAGED_OUTDATED instead).
     clientMock.getCustomFormats.mockResolvedValue([{ id: 55, name: "AMZN", specifications: [] }]);
     await getTestPrisma().trashManagedResource.create({
-      data: { userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id, resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN" },
+      data: {
+        userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id,
+        resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN",
+        lastSyncHash: trashCfHash(CATALOG.customFormats[0] as TrashCustomFormat),
+      },
     });
 
     const body = await expectJson<{ status: { reachable: boolean; items: { resourceType: string; status: string }[] } }>(

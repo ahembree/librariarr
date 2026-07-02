@@ -6,7 +6,15 @@ vi.mock("@/lib/logger", () => ({
 
 const { mockGet } = vi.hoisted(() => ({ mockGet: vi.fn() }));
 vi.mock("axios", () => ({
-  default: { create: vi.fn(() => ({ get: mockGet })), isAxiosError: () => false },
+  default: {
+    // configureRetry attaches a response interceptor at module load, so the
+    // mocked instance must expose the interceptors API (a no-op here).
+    create: vi.fn(() => ({
+      get: mockGet,
+      interceptors: { response: { use: vi.fn() } },
+    })),
+    isAxiosError: () => false,
+  },
 }));
 
 import { fetchTrashCatalog, catalogHasResource, deriveCategories } from "@/lib/trash/catalog";

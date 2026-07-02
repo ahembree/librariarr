@@ -304,6 +304,8 @@ export interface TrashStatus {
   instanceName: string;
   reachable: boolean;
   error?: string;
+  /** Set when the guide catalog couldn't be loaded (distinct from Arr being unreachable). */
+  catalogError?: string;
   items: TrashStatusItem[];
   /**
    * Count of PROFILE_CF managed rows for this instance. These aren't in `items`

@@ -140,6 +140,19 @@ export function findArrCfByName(
   );
 }
 
+/** Match a quality profile by name, exact first then case-insensitive/trimmed —
+ *  so a profile that differs only in case updates instead of erroring on create. */
+export function findArrProfileByName(
+  profiles: ArrQualityProfile[],
+  name: string,
+): ArrQualityProfile | undefined {
+  const lower = name.trim().toLowerCase();
+  return (
+    profiles.find((p) => p.name === name) ??
+    profiles.find((p) => p.name.trim().toLowerCase() === lower)
+  );
+}
+
 // ─── Quality definitions (sizes) ───
 
 /**
@@ -203,8 +216,11 @@ function resolveLanguage(
   schema: ArrQualityProfileSchema,
   languages: ArrLanguage[] | undefined,
   warnings: string[],
+  existing?: ArrLanguage,
 ): ArrLanguage | undefined {
-  if (!trashLanguage) return schema.language;
+  // Guide omits language → keep the profile's current language (or the schema
+  // default for a brand-new profile) rather than forcing it to the schema default.
+  if (!trashLanguage) return existing ?? schema.language;
   const lower = trashLanguage.toLowerCase();
   if (lower === "any") return { id: -1, name: "Any" };
   if (lower === "original") return { id: -2, name: "Original" };
@@ -392,7 +408,7 @@ export function buildQualityProfile(
   // Radarr profiles carry a language; Sonarr sets language per item, so we
   // leave it off the Sonarr payload.
   if (service === "RADARR") {
-    const language = resolveLanguage(trash.language, schema, languages, warnings);
+    const language = resolveLanguage(trash.language, schema, languages, warnings, existing?.language);
     if (language) payload.language = language;
   }
 
@@ -407,12 +423,25 @@ export function buildQualityProfile(
  */
 export function profileComparable(profile: ArrQualityProfile, service: ServiceType) {
   const idToName = new Map<number, string>();
-  const orderedQualities: Array<{ name: string; allowed: boolean }> = [];
+  const orderedQualities: Array<{
+    name: string;
+    allowed: boolean;
+    members?: Array<{ name: string; allowed: boolean }>;
+  }> = [];
   for (const it of profile.items ?? []) {
     const name = it.name ?? it.quality?.name ?? "?";
     if (it.quality) idToName.set(it.quality.id, name);
     else if (it.id !== undefined) idToName.set(it.id, name);
-    orderedQualities.push({ name, allowed: it.allowed });
+    // Capture group membership — otherwise a guide change to which qualities a
+    // group contains (or a child's allowed flag) is invisible to the diff, so it
+    // applies as a NOOP and the change is silently lost while the hash advances.
+    const members = (it.items ?? []).length
+      ? it.items.map((child) => {
+          if (child.quality) idToName.set(child.quality.id, child.quality.name);
+          return { name: child.quality?.name ?? child.name ?? "?", allowed: child.allowed };
+        })
+      : undefined;
+    orderedQualities.push(members ? { name, allowed: it.allowed, members } : { name, allowed: it.allowed });
   }
   const formatScores: Record<string, number> = {};
   for (const f of profile.formatItems ?? []) {

@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/db";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { GuideArrClient } from "./arr-guide-client";
 import { fetchTrashCatalog } from "./catalog";
-import { findArrCfByName } from "./translate";
+import { findArrCfByName, findArrProfileByName } from "./translate";
 import { trashCfHash, trashProfileHash, trashQualitySizeHash, namingSelectionHash } from "./signature";
 import { NAMING_TRASH_ID } from "./types";
 import type {
@@ -88,7 +89,11 @@ function statusFor(
 ): ItemStatus {
   if (managed) {
     if (canGoMissing && !existsInArr) return "MANAGED_MISSING";
-    if (managed.lastSyncHash && currentHash && managed.lastSyncHash !== currentHash) {
+    // Never synced yet (e.g. an existing resource just taken over) — it hasn't
+    // been reconciled with the guide, so surface it as needing a sync rather
+    // than green "in sync".
+    if (!managed.lastSyncHash) return "MANAGED_OUTDATED";
+    if (currentHash && managed.lastSyncHash !== currentHash) {
       return "MANAGED_OUTDATED";
     }
     return "MANAGED";
@@ -106,7 +111,6 @@ export async function computeTrashStatus(
   userId: string,
   inst: ResolvedInstance,
 ): Promise<TrashStatus> {
-  const catalog = await fetchTrashCatalog(inst.serviceType);
   const client = guideClientFor(inst);
 
   const managedRows = (await prisma.trashManagedResource.findMany({
@@ -122,6 +126,27 @@ export async function computeTrashStatus(
   // surface their count for the managed total / global sync buttons.
   const managedProfileCf = managedRows.filter((m) => m.resourceType === "PROFILE_CF").length;
 
+  // Load the guide catalog. A guide (GitHub) outage must not blank the whole
+  // page when the Arr instance itself is fine — report it as a distinct
+  // `catalogError` so the instance stays selected and the user can retry.
+  let catalog;
+  try {
+    catalog = await fetchTrashCatalog(inst.serviceType);
+  } catch (err) {
+    return {
+      serviceType: inst.serviceType,
+      instanceId: inst.id,
+      instanceName: inst.name,
+      reachable: true,
+      items: [],
+      managedProfileCf,
+      catalogError:
+        sanitizeErrorDetail(err instanceof Error ? err.message : undefined) ??
+        "The TRaSH guide catalog is temporarily unavailable.",
+    };
+  }
+  const cfMapByTrashId = new Map(catalog.customFormats.map((c) => [c.trash_id, c]));
+
   let arrCfs, arrProfiles;
   try {
     [arrCfs, arrProfiles] = await Promise.all([
@@ -134,7 +159,9 @@ export async function computeTrashStatus(
       instanceId: inst.id,
       instanceName: inst.name,
       reachable: false,
-      error: err instanceof Error ? err.message : "Unable to reach instance",
+      error:
+        sanitizeErrorDetail(err instanceof Error ? err.message : undefined) ??
+        "Unable to reach instance",
       items: [],
       managedProfileCf,
     };
@@ -159,14 +186,19 @@ export async function computeTrashStatus(
   }
 
   for (const qp of catalog.qualityProfiles) {
-    const existing = arrProfiles.find((p) => p.name === qp.name);
+    const existing = findArrProfileByName(arrProfiles, qp.name);
     const m = keyOf("QUALITY_PROFILE", qp.trash_id);
     items.push({
       resourceType: "QUALITY_PROFILE",
       trashId: qp.trash_id,
       name: qp.name,
       description: cleanDescription(qp.trash_description),
-      status: statusFor(!!existing, m, trashProfileHash(qp), true),
+      status: statusFor(
+        !!existing,
+        m,
+        trashProfileHash(qp, cfMapByTrashId, (m?.selection ?? null) as QualityProfileSelection | null),
+        true,
+      ),
       existsInArr: !!existing,
       managed: !!m,
       arrId: existing?.id ?? m?.arrId ?? null,

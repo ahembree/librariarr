@@ -8,6 +8,7 @@ import {
   cfComparable,
   projectManagedFields,
   findArrCfByName,
+  findArrProfileByName,
   applyQualitySizes,
   qualityDefsComparable,
   buildQualityProfile,
@@ -15,6 +16,7 @@ import {
   applyNaming,
   namingComparable,
 } from "./translate";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import {
   trashCfHash,
   trashProfileHash,
@@ -77,7 +79,36 @@ const RESOURCE_ORDER: Record<ResourceType, number> = {
   PROFILE_CF: 4,
 };
 
+// Serialize apply-syncs per instance: two concurrent applies could both read
+// "no existing resource" and double-create. Dry-runs are read-only, so they
+// don't take the lock. In-process is sufficient (the app runs a single node).
+const instanceLocks = new Map<string, Promise<void>>();
+async function withInstanceLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = instanceLocks.get(key) ?? Promise.resolve();
+  let done!: () => void;
+  const next = new Promise<void>((res) => (done = res));
+  instanceLocks.set(key, next);
+  await prev.catch(() => {});
+  try {
+    return await fn();
+  } finally {
+    done();
+    if (instanceLocks.get(key) === next) instanceLocks.delete(key);
+  }
+}
+
 export async function runTrashSync(
+  userId: string,
+  inst: ResolvedInstance,
+  opts: SyncOptions,
+): Promise<SyncReport> {
+  if (opts.dryRun) return runTrashSyncInner(userId, inst, opts);
+  return withInstanceLock(`${inst.serviceType}:${inst.id}`, () =>
+    runTrashSyncInner(userId, inst, opts),
+  );
+}
+
+async function runTrashSyncInner(
   userId: string,
   inst: ResolvedInstance,
   opts: SyncOptions,
@@ -147,7 +178,7 @@ export async function runTrashSync(
         action: "ERROR",
         diff: [],
         warnings: [],
-        error: err instanceof Error ? err.message : "Unknown error",
+        error: sanitizeErrorDetail(err instanceof Error ? err.message : undefined) ?? "Unknown error",
       });
     }
   }
@@ -275,7 +306,7 @@ async function planQualityProfile(
   if (!qp) {
     return skip(target, "This quality profile is no longer in the guide.");
   }
-  const existing = arrProfiles.find((p) => p.name === qp.name);
+  const existing = findArrProfileByName(arrProfiles, qp.name);
   // Per-profile options (score set + reset-unmatched-scores) live on the managed
   // row's selection. Dry-run previews may carry an unsaved selection.
   const selection = (target.selection ?? null) as QualityProfileSelection | null;
@@ -310,7 +341,10 @@ async function planQualityProfile(
     } else if (action === "UPDATE" && existing?.id !== undefined) {
       await client.updateQualityProfile(existing.id, payload);
     }
-    await updateManagedRow(userId, target.managedRowId, { arrId, lastSyncHash: trashProfileHash(qp) });
+    await updateManagedRow(userId, target.managedRowId, {
+      arrId,
+      lastSyncHash: trashProfileHash(qp, cfMapByTrashId, selection),
+    });
     item.applied = true;
   }
   return item;
@@ -420,7 +454,7 @@ async function planProfileCf(
   const selection = (target.selection ?? null) as ProfileCfSelection | null;
   const formats = selection?.formats ?? [];
 
-  const profile = arrProfiles.find((p) => p.name === profileName);
+  const profile = findArrProfileByName(arrProfiles, profileName);
   if (!profile || profile.id === undefined) {
     return skip(target, `Quality profile "${profileName}" was not found on this instance.`);
   }

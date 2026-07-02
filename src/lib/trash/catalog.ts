@@ -1,6 +1,7 @@
 import axios from "axios";
 import { appCache } from "@/lib/cache/memory-cache";
 import { logger } from "@/lib/logger";
+import { configureRetry } from "@/lib/http-retry";
 import {
   treeUrl,
   rawUrl,
@@ -27,6 +28,9 @@ const http = axios.create({
   // GitHub's API rejects requests without a User-Agent.
   headers: { "User-Agent": "librariarr-trash-sync", Accept: "application/json" },
 });
+// Retry transient network/5xx blips on these idempotent GETs so a single failed
+// file doesn't fail (and un-cache) the whole catalog build unnecessarily.
+configureRetry(http, "TrashCatalog", logger);
 
 interface TreeEntry {
   path: string;
@@ -57,13 +61,21 @@ async function mapConcurrent<T, R>(
   return results;
 }
 
-async function fetchJson<T>(path: string): Promise<T | null> {
+/**
+ * Fetch one guide file. A failure here THROWS (after the axios-level retries) so
+ * the whole catalog build fails and is NOT cached — previously a transient
+ * per-file blip was swallowed to `null`, filtered out, and an incomplete catalog
+ * was cached for hours, silently dropping managed resources and (for a profile
+ * referencing the dropped CF) zeroing its score on the next sync.
+ */
+async function fetchJson<T>(path: string): Promise<T> {
   try {
     const { data } = await http.get<T>(rawUrl(path));
     return data;
   } catch (err) {
-    logger.warn("TrashSync", `Failed to fetch guide file ${path}: ${(err as Error).message}`);
-    return null;
+    const msg = (err as Error).message;
+    logger.warn("TrashSync", `Failed to fetch guide file ${path}: ${msg}`);
+    throw new Error(`Failed to fetch guide file ${path}: ${msg}`);
   }
 }
 

@@ -6,6 +6,7 @@ import type {
   TrashQualitySize,
   TrashNaming,
   NamingSelection,
+  QualityProfileSelection,
 } from "./types";
 
 /**
@@ -22,7 +23,28 @@ export function trashCfHash(cf: TrashCustomFormat): string {
   });
 }
 
-export function trashProfileHash(p: TrashQualityProfile): string {
+/**
+ * Content hash of a managed quality profile. Beyond the guide profile's own
+ * fields it folds in (a) the *resolved scores* of every custom format the profile
+ * references — these live in the separate CF catalog, so a guide score re-tune
+ * (the most common upstream change) would otherwise be invisible — and (b) the
+ * per-profile `selection` (score-set override / reset-unmatched options), so a
+ * local option change flips the profile to "update available" too. Both call
+ * sites (status check and sync write) pass the same catalog + selection, so the
+ * stored and recomputed hashes stay consistent.
+ */
+export function trashProfileHash(
+  p: TrashQualityProfile,
+  cfMapByTrashId?: Map<string, TrashCustomFormat>,
+  selection?: QualityProfileSelection | null,
+): string {
+  const referencedScores: Record<string, Record<string, number>> = {};
+  if (cfMapByTrashId) {
+    for (const trashId of Object.values(p.formatItems ?? {})) {
+      const cf = cfMapByTrashId.get(trashId);
+      if (cf?.trash_scores) referencedScores[trashId] = cf.trash_scores;
+    }
+  }
   return hashDefinition({
     name: p.name,
     cutoff: p.cutoff,
@@ -34,6 +56,8 @@ export function trashProfileHash(p: TrashQualityProfile): string {
     language: p.language ?? null,
     items: p.items,
     formatItems: p.formatItems ?? {},
+    referencedScores,
+    selection: selection ?? null,
   });
 }
 
