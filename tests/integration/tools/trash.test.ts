@@ -236,6 +236,23 @@ describe("GET /api/tools/trash/status", () => {
     expect(qd?.status).toBe("UNMANAGED_CONFLICT");
   });
 
+  it("counts PROFILE_CF assignments in managedProfileCf (they aren't in items)", async () => {
+    const { user, radarr } = await authedUserWithRadarr();
+    await getTestPrisma().trashManagedResource.create({
+      data: {
+        userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id,
+        resourceType: "PROFILE_CF", trashId: "My Profile", name: "My Profile",
+        selection: { formats: [{ trashId: "cf1", name: "AMZN", score: 500 }] },
+      },
+    });
+    const body = await expectJson<{ status: { managedProfileCf: number; items: { resourceType: string }[] } }>(
+      await callRoute(getStatus, { searchParams: { serviceType: "RADARR", instanceId: radarr.id } }),
+    );
+    // Counted as managed, but not surfaced as a status item (lives in its own tab).
+    expect(body.status.managedProfileCf).toBe(1);
+    expect(body.status.items.some((i) => i.resourceType === "PROFILE_CF")).toBe(false);
+  });
+
   it("reports unreachable instances without throwing", async () => {
     const { radarr } = await authedUserWithRadarr();
     clientMock.getCustomFormats.mockRejectedValueOnce(new Error("ECONNREFUSED"));

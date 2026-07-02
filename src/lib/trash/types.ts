@@ -305,6 +305,12 @@ export interface TrashStatus {
   reachable: boolean;
   error?: string;
   items: TrashStatusItem[];
+  /**
+   * Count of PROFILE_CF managed rows for this instance. These aren't in `items`
+   * (they live in the Profile Formats tab) but are managed resources a full sync
+   * writes, so they count toward the managed total and the global sync buttons.
+   */
+  managedProfileCf: number;
 }
 
 // ─── Sync plan / report (dry-run + apply) ───

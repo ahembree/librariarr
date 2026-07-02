@@ -117,6 +117,10 @@ export async function computeTrashStatus(
     managedByKey.set(`${m.resourceType}:${m.trashId}`, m);
   }
   const keyOf = (rt: ResourceType, trashId: string) => managedByKey.get(`${rt}:${trashId}`);
+  // PROFILE_CF assignments aren't cross-referenced into `items` (they live in the
+  // Profile Formats tab), but they ARE managed resources a full sync writes — so
+  // surface their count for the managed total / global sync buttons.
+  const managedProfileCf = managedRows.filter((m) => m.resourceType === "PROFILE_CF").length;
 
   let arrCfs, arrProfiles;
   try {
@@ -132,6 +136,7 @@ export async function computeTrashStatus(
       reachable: false,
       error: err instanceof Error ? err.message : "Unable to reach instance",
       items: [],
+      managedProfileCf,
     };
   }
 
@@ -219,5 +224,6 @@ export async function computeTrashStatus(
     instanceName: inst.name,
     reachable: true,
     items,
+    managedProfileCf,
   };
 }

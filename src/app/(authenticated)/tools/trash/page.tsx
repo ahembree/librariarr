@@ -107,6 +107,8 @@ interface TrashStatus {
   reachable: boolean;
   error?: string;
   items: StatusItem[];
+  /** Count of PROFILE_CF assignments (not in `items`) — they count as managed. */
+  managedProfileCf?: number;
 }
 
 interface TrashNaming {
@@ -720,6 +722,9 @@ export default function TrashSyncPage() {
       else if (i.status === "NEW") c.new++;
       else if (i.status === "MANAGED_MISSING") { c.managed++; c.missing++; }
     }
+    // Profile-format assignments are managed too (a full sync writes them), so
+    // they count toward the managed total that gates the global sync buttons.
+    c.managed += status?.managedProfileCf ?? 0;
     return c;
   }, [status]);
 
@@ -887,6 +892,7 @@ export default function TrashSyncPage() {
                 catalogCfs={catalog?.customFormats ?? []}
                 catalogCategories={catalog?.categories ?? []}
                 onShowReport={(title, items, dryRun) => setDiffReport({ title, items, dryRun })}
+                onManagedChange={() => selected && void loadStatus(selected, { background: true })}
               />
             </TabsContent>
 
@@ -1543,6 +1549,7 @@ function ProfileFormatsTab({
   catalogCfs,
   catalogCategories,
   onShowReport,
+  onManagedChange,
 }: {
   serviceType: ServiceType;
   instanceId: string;
@@ -1550,6 +1557,8 @@ function ProfileFormatsTab({
   catalogCfs: CatalogCf[];
   catalogCategories: CfCategory[];
   onShowReport: (title: string, items: PlanItem[], dryRun: boolean) => void;
+  /** Refresh the page-level status after a change here (managed totals, buttons). */
+  onManagedChange?: () => void;
 }) {
   const [profiles, setProfiles] = useState<ArrProfile[]>([]);
   const [assignments, setAssignments] = useState<ProfileCfAssignment[]>([]);
@@ -1697,6 +1706,7 @@ function ProfileFormatsTab({
       }
       toast.success(`Saved custom formats for “${selectedProfile}” (not applied until you Sync)`);
       await load();
+      onManagedChange?.();
     } finally {
       setBusy(false);
     }
@@ -1734,6 +1744,7 @@ function ProfileFormatsTab({
         if (errored) toast.error(`Applied with ${errored} error(s)`);
         else toast.success(`Applied custom-format scores to “${selectedProfile}”`);
         await load();
+        onManagedChange?.();
       }
       onShowReport(
         dryRun ? `Preview: ${selectedProfile}` : `Applied: ${selectedProfile}`,
@@ -1758,6 +1769,7 @@ function ProfileFormatsTab({
       }
       toast.success("Stopped managing (existing scores left unchanged in the app)");
       await load();
+      onManagedChange?.();
     } finally {
       setBusy(false);
     }
@@ -1825,6 +1837,7 @@ function ProfileFormatsTab({
         );
       onShowReport(`Add & apply: ${selectedProfile}`, d.report?.items ?? [], false);
       await load();
+      onManagedChange?.();
     } finally {
       setBusy(false);
     }
