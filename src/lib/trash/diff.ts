@@ -38,7 +38,14 @@ export function diffValues(before: unknown, after: unknown, path = ""): DiffEntr
     const b = after as unknown[];
     const len = Math.max(a.length, b.length);
     for (let i = 0; i < len; i++) {
-      entries.push(...diffValues(a[i], b[i], `${path}[${i}]`));
+      // When array elements are identified objects (e.g. a quality profile's
+      // `qualities` / `members`, which each carry a `name`), key the path by that
+      // name so the diff reads `qualities[Remux-2160p].allowed` instead of the
+      // opaque `qualities[17].allowed`. Falls back to the index for primitives
+      // or unnamed objects. Prefer the "after" element's name so an item's label
+      // matches what it will be once the change applies.
+      const label = elementLabel(b[i]) ?? elementLabel(a[i]) ?? String(i);
+      entries.push(...diffValues(a[i], b[i], `${path}[${label}]`));
     }
     return entries;
   }
@@ -50,6 +57,14 @@ export function diffValues(before: unknown, after: unknown, path = ""): DiffEntr
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+/** A readable path key for an array element: its `name` when it's an identified object. */
+function elementLabel(value: unknown): string | undefined {
+  if (isPlainObject(value) && typeof value.name === "string" && value.name.length > 0) {
+    return value.name;
+  }
+  return undefined;
 }
 
 function isEqual(a: unknown, b: unknown): boolean {
