@@ -1555,6 +1555,9 @@ function ProfileFormatsTab({
   const [assignments, setAssignments] = useState<ProfileCfAssignment[]>([]);
   const [selectedProfile, setSelectedProfile] = useState<string>("");
   const [formats, setFormats] = useState<ProfileCfFormat[]>([]);
+  // Custom-format names that actually exist in the app — a score only applies to
+  // one of these, so an assigned format outside this set is flagged inline.
+  const [instanceFormats, setInstanceFormats] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [cfQuery, setCfQuery] = useState("");
@@ -1573,6 +1576,7 @@ function ProfileFormatsTab({
       const aData = await aRes.json();
       if (pRes.ok) {
         setProfiles(pData.profiles ?? []);
+        setInstanceFormats(new Set<string>(pData.instanceFormatNames ?? []));
         setError(null);
       } else {
         setError(pData.error ?? "Failed to load quality profiles");
@@ -1615,6 +1619,23 @@ function ProfileFormatsTab({
     for (const cf of catalogCfs) m.set(cf.name.toLowerCase(), cf);
     return m;
   }, [catalogCfs]);
+
+  // A score only applies to a custom format that already exists in the app. When
+  // we know the instance's format names, flag any assigned format outside that
+  // set (mirrors the backend's exact-name presence check). If we don't have the
+  // list yet, assume present so nothing is falsely flagged.
+  const isInApp = (name: string) => instanceFormats.size === 0 || instanceFormats.has(name);
+
+  // Unsaved-edit guard: a real (non-dry-run) Sync applies the STORED selection,
+  // so syncing with unsaved edits would silently apply stale scores while
+  // Preview shows the live ones. Disable Sync until the edits are saved.
+  const formatsKey = (fmts?: ProfileCfFormat[] | null) =>
+    JSON.stringify(
+      (fmts ?? []).map((f) => [f.trashId, f.score]).sort((a, b) => (a[0] < b[0] ? -1 : 1)),
+    );
+  const isDirty =
+    !!currentAssignment &&
+    formatsKey(formats) !== formatsKey(currentAssignment.selection?.formats);
 
   const selectProfile = (name: string) => {
     setSelectedProfile(name);
@@ -1848,6 +1869,15 @@ function ProfileFormatsTab({
                         />
                       )}
                     </div>
+                    {formats.some((f) => !isInApp(f.name)) && (
+                      <p className="flex items-start gap-1.5 rounded-md border border-amber/30 bg-amber/5 px-2.5 py-1.5 text-[11px] text-amber">
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        <span>
+                          Some formats below aren&apos;t in this app yet — their score won&apos;t apply
+                          until you add &amp; sync the custom format (Custom Formats tab).
+                        </span>
+                      </p>
+                    )}
                     <div className="h-[24rem] overflow-y-auto overflow-x-hidden rounded-md border border-white/5">
                       {formats.length === 0 ? (
                         <p className="p-4 text-center text-sm text-muted-foreground">
@@ -1859,7 +1889,27 @@ function ProfileFormatsTab({
                             .filter((f) => !attachedQuery || f.name.toLowerCase().includes(attachedQuery.toLowerCase()))
                             .map((f) => (
                               <div key={f.trashId} className="flex items-center gap-2 px-3 py-2">
-                                <span className="min-w-0 flex-1 truncate text-sm">{f.name}</span>
+                                <span className="min-w-0 flex-1 truncate text-sm">
+                                  {f.name}
+                                  {!isInApp(f.name) ? (
+                                    <Badge
+                                      variant="outline"
+                                      className="ml-2 border-amber/40 text-[10px] text-amber"
+                                      title="Not in this app yet — add & sync it from the Custom Formats tab"
+                                    >
+                                      not in app
+                                    </Badge>
+                                  ) : (
+                                    f.score === 0 && (
+                                      <span
+                                        className="ml-2 text-[10px] text-muted-foreground"
+                                        title="A score of 0 has no effect — set a score for this format to matter"
+                                      >
+                                        0 · no effect
+                                      </span>
+                                    )
+                                  )}
+                                </span>
                                 <div className="flex shrink-0 items-center gap-1.5">
                                   <Input
                                     type="number"
@@ -1946,11 +1996,20 @@ function ProfileFormatsTab({
                     variant="secondary"
                     size="sm"
                     onClick={() => runSync(false)}
-                    disabled={busy || !currentAssignment}
-                    title={currentAssignment ? "Apply scores to the profile" : "Save first"}
+                    disabled={busy || !currentAssignment || isDirty}
+                    title={
+                      !currentAssignment
+                        ? "Save first"
+                        : isDirty
+                          ? "Save your changes before syncing"
+                          : "Apply scores to the profile"
+                    }
                   >
                     <Play className="mr-1 h-3.5 w-3.5" /> Sync
                   </Button>
+                  {isDirty && (
+                    <span className="text-xs text-amber">Unsaved changes — Save to sync</span>
+                  )}
                   {currentAssignment && (
                     <Button variant="outline" size="sm" onClick={unmanage} disabled={busy}>
                       Stop managing
@@ -2134,8 +2193,12 @@ function OptionsForm({
 // ─── Report / diff body ───
 
 function ReportBody({ items, dryRun }: { items: PlanItem[]; dryRun: boolean }) {
-  // A dry run only lists items that would change; in-sync (NOOP) items are hidden.
-  const visible = dryRun ? items.filter((i) => i.action !== "NOOP") : items;
+  // A dry run hides items that are truly in sync (NOOP), but KEEPS a NOOP item
+  // that carries a warning — e.g. "custom format not present — add & sync it
+  // first". Otherwise the user sees "no diff" with no explanation of why.
+  const visible = dryRun
+    ? items.filter((i) => i.action !== "NOOP" || i.warnings.length > 0)
+    : items;
   const hiddenInSync = items.length - visible.length;
 
   if (visible.length === 0) {
@@ -2182,7 +2245,7 @@ function ReportBody({ items, dryRun }: { items: PlanItem[]; dryRun: boolean }) {
                   )}
                 </div>
               )}
-              {item.diff.length === 0 && item.action === "NOOP" && (
+              {item.diff.length === 0 && item.action === "NOOP" && item.warnings.length === 0 && (
                 <p className="text-xs text-muted-foreground">Already up to date.</p>
               )}
             </div>

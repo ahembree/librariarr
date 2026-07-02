@@ -606,16 +606,21 @@ describe("POST /api/tools/trash/sync", () => {
 });
 
 describe("Profile custom formats (PROFILE_CF)", () => {
-  it("GET /profiles lists quality profiles with their non-zero scores", async () => {
+  it("GET /profiles lists quality profiles with their non-zero scores and the instance's format names", async () => {
     const { radarr } = await authedUserWithRadarr();
     clientMock.getQualityProfiles.mockResolvedValue([
       { id: 9, name: "My Profile", formatItems: [{ format: 55, name: "AMZN", score: 200 }, { format: 56, name: "X", score: 0 }] },
+      { id: 10, name: "Other", formatItems: [{ format: 55, name: "AMZN", score: 0 }, { format: 57, name: "DV", score: 0 }] },
     ]);
-    const body = await expectJson<{ profiles: { name: string; formatScores: Record<string, number> }[] }>(
-      await callRoute(getProfiles, { searchParams: { serviceType: "RADARR", instanceId: radarr.id } }),
-    );
+    const body = await expectJson<{
+      profiles: { name: string; formatScores: Record<string, number> }[];
+      instanceFormatNames: string[];
+    }>(await callRoute(getProfiles, { searchParams: { serviceType: "RADARR", instanceId: radarr.id } }));
     expect(body.profiles[0].name).toBe("My Profile");
     expect(body.profiles[0].formatScores).toEqual({ AMZN: 200 });
+    // Union of every custom-format name present across the instance's profiles,
+    // sorted — used by the UI to flag an assigned format that isn't in the app.
+    expect(body.instanceFormatNames).toEqual(["AMZN", "DV", "X"]);
   });
 
   it("assigns PROFILE_CF when the attached custom formats are in the guide", async () => {

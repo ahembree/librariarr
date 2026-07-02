@@ -116,9 +116,11 @@ Profiles you already manage are **always listed** as quick-select chips, so you 
 1. Pick a target quality profile (from the dropdown, or a managed-profile chip). The editor splits horizontally: **assigned formats on the left, the add-from list on the right**.
 2. On the left, every guide custom format already scored on that profile is **listed with its current score, highest score first**, so you can see and **override** any of them.
 3. On the right, add more from the guide's custom formats — they're grouped into the guide's own **categories**; expand a category to drill down and click a format to add it. Each is added with the guide's **recommended score** (dropping into its score position), and every score is editable inline.
-4. **Save** to record the assignment, then **Sync** to apply the scores to the profile.
+4. **Save** to record the assignment, then **Sync** to apply the scores to the profile. **Sync is disabled until your edits are saved** (a "Unsaved changes — Save to sync" note appears), because a sync always applies the last-saved assignment — this prevents Preview showing one thing while Sync applies another.
 
-This is an **overlay**: only the scores for the custom formats you attach are changed. Every other part of the profile — its qualities, cutoff, and any other format scores — is left untouched. A custom format only scores if it actually exists in the app, so add & sync the custom format itself too (from the Custom Formats tab) if it isn't there yet. **Stop managing** removes the assignment; it does not reset any scores already written.
+This is an **overlay**: only the scores for the custom formats you attach are changed. Every other part of the profile — its qualities, cutoff, and any other format scores — is left untouched. **Stop managing** removes the assignment; it does not reset any scores already written.
+
+A custom format only scores if it **actually exists in the app**. An assigned format that isn't in the app yet is flagged **not in app** in the list, and both **Preview diff** and the sync report explain it (*"…is not present in this instance — add & sync it to apply its score"*) rather than silently showing no change. Add & sync that custom format first (from the **Custom Formats** tab), then its score will apply. A format left at score **0** is flagged **no effect**, since a zero score does nothing.
 
 ### Quality definitions (sizes)
 

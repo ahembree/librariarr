@@ -31,7 +31,14 @@ export async function GET(request: NextRequest) {
   try {
     const client = guideClientFor(inst);
     const profiles = await client.getQualityProfiles();
+    // Every custom format that exists in the instance (Arr lists all of them on
+    // each profile's formatItems). Used by the UI to flag an assigned format
+    // that isn't in the app yet — scoring it is a no-op until it's added & synced.
+    const instanceFormatNames = [
+      ...new Set(profiles.flatMap((p) => (p.formatItems ?? []).map((f) => f.name))),
+    ].sort();
     return NextResponse.json({
+      instanceFormatNames,
       profiles: profiles.map((p) => ({
         id: p.id,
         name: p.name,
