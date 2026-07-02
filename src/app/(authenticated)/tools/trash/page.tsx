@@ -296,6 +296,10 @@ export default function TrashSyncPage() {
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  // Controlled so the active tab survives the status reload after an action
+  // (the Tabs subtree unmounts while status is refetching, and an uncontrolled
+  // Tabs would snap back to its default tab).
+  const [activeTab, setActiveTab] = useState("profilecf");
 
   // Dialog state
   const [confirmItem, setConfirmItem] = useState<StatusItem | null>(null);
@@ -817,7 +821,7 @@ export default function TrashSyncPage() {
             </div>
           </div>
 
-          <Tabs defaultValue="profilecf" className="space-y-4">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
             <TabsList className="w-full justify-start overflow-x-auto">
               <TabsTrigger value="profilecf">Profile Formats</TabsTrigger>
               <TabsTrigger value="cf">Custom Formats ({cfItems.length})</TabsTrigger>
