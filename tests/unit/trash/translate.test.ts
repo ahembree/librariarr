@@ -372,6 +372,38 @@ describe("quality profile builder", () => {
     expect(comp.qualities.find((q) => q.name === "Bluray-720p")?.allowed).toBe(true);
   });
 
+  it("does NOT compare a group member's allowed (avoids a permanent phantom diff)", () => {
+    // Radarr/Sonarr return nested group members as `allowed: true` even when the
+    // group itself is disabled. buildQualityProfile builds members mirroring the
+    // group's allowed, so comparing member.allowed produced a diff that never
+    // converged. The comparable must ignore it (the group's own allowed is
+    // authoritative) while still capturing membership by name.
+    const { payload } = buildQualityProfile(trash, schema, "RADARR", cfMap);
+    const group = payload.items.find((i) => i.name === "WEB 1080p");
+    expect(group).toBeDefined();
+
+    // Same profile as Radarr echoes it back: group members forced to allowed:true.
+    const echoed = {
+      ...payload,
+      items: payload.items.map((it) =>
+        it.items?.length ? { ...it, items: it.items.map((c) => ({ ...c, allowed: true })) } : it,
+      ),
+    };
+    expect(diffValues(profileComparable(echoed, "RADARR"), profileComparable(payload, "RADARR"))).toEqual([]);
+
+    // But a real membership change (a quality added to / removed from the group)
+    // must still surface as a diff.
+    const changedMembership = {
+      ...payload,
+      items: payload.items.map((it) =>
+        it.name === "WEB 1080p" ? { ...it, items: [it.items[0]] } : it,
+      ),
+    };
+    expect(
+      diffValues(profileComparable(changedMembership, "RADARR"), profileComparable(payload, "RADARR")).length,
+    ).toBeGreaterThan(0);
+  });
+
   it("honors the profile's declared score set (not just default)", () => {
     // A profile with a named score set must pull each CF's score from that set,
     // falling back to default only when the set key is absent.

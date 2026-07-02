@@ -438,19 +438,24 @@ export function profileComparable(profile: ArrQualityProfile, service: ServiceTy
   const orderedQualities: Array<{
     name: string;
     allowed: boolean;
-    members?: Array<{ name: string; allowed: boolean }>;
+    members?: Array<{ name: string }>;
   }> = [];
   for (const it of profile.items ?? []) {
     const name = it.name ?? it.quality?.name ?? "?";
     if (it.quality) idToName.set(it.quality.id, name);
     else if (it.id !== undefined) idToName.set(it.id, name);
-    // Capture group membership — otherwise a guide change to which qualities a
-    // group contains (or a child's allowed flag) is invisible to the diff, so it
-    // applies as a NOOP and the change is silently lost while the hash advances.
+    // Capture group membership (the set of member NAMES) so a guide change to
+    // which qualities a group contains still surfaces as a diff. We deliberately
+    // do NOT compare each member's `allowed`: within a group every member's
+    // allowed mirrors the group's, and Radarr/Sonarr return nested members as
+    // `allowed: true` even when the group itself is disabled — so comparing it
+    // produced a permanent phantom diff (`members[x].allowed: true → false`) that
+    // never converged no matter how many times the profile was synced. The
+    // group's own `allowed` (below) is the authoritative enable/disable signal.
     const members = (it.items ?? []).length
       ? it.items.map((child) => {
           if (child.quality) idToName.set(child.quality.id, child.quality.name);
-          return { name: child.quality?.name ?? child.name ?? "?", allowed: child.allowed };
+          return { name: child.quality?.name ?? child.name ?? "?" };
         })
       : undefined;
     orderedQualities.push(members ? { name, allowed: it.allowed, members } : { name, allowed: it.allowed });
