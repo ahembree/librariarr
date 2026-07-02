@@ -139,6 +139,8 @@ Pick the variants you want (for example, a Plex- or Jellyfin-flavored layout), t
 
 The guide catalog is cached for several hours. Click **Refresh guides** to fetch the latest definitions immediately (for example, after the guides publish an update).
 
+If the guide can't be reached (a GitHub outage, or blocked outbound access), the page keeps your app selected and shows a **guide catalog unavailable** notice with a **Retry** button, rather than a partial or empty list. A failed fetch is never cached, so a later retry loads the complete catalog once the source is reachable again.
+
 The source repository and branch can be overridden with the `TRASH_GUIDES_REPO` and `TRASH_GUIDES_REF` environment variables — useful if you maintain a fork or an internal mirror.
 
 <Aside type="tip">
