@@ -1637,6 +1637,9 @@ function ProfileFormatsTab({
     !!currentAssignment &&
     formatsKey(formats) !== formatsKey(currentAssignment.selection?.formats);
 
+  // Assigned formats that don't yet exist in the app (their score can't apply).
+  const missingFormats = formats.filter((f) => !isInApp(f.name));
+
   const selectProfile = (name: string) => {
     setSelectedProfile(name);
     setCfQuery("");
@@ -1760,6 +1763,73 @@ function ProfileFormatsTab({
     }
   };
 
+  // One-click "add & score": create the missing custom format(s) in the app
+  // (the consent-gated write), then persist and sync this profile's selection so
+  // the scores actually apply — without leaving the tab.
+  const addToAppAndApply = async (toAdd: ProfileCfFormat[]) => {
+    if (!selectedProfile || toAdd.length === 0) return;
+    const postJson = (url: string, body: unknown) =>
+      fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    setBusy(true);
+    try {
+      const cfItems = toAdd.map((f) => ({ resourceType: "CUSTOM_FORMAT", trashId: f.trashId, name: f.name }));
+      // 1) Assign + create the custom format(s) in the app.
+      const assignRes = await postJson("/api/tools/trash/assignments", { serviceType, instanceId, items: cfItems });
+      if (!assignRes.ok) {
+        const d = await assignRes.json().catch(() => ({}));
+        toast.error(d.error ?? "Failed to add to app");
+        return;
+      }
+      const cfSync = await postJson("/api/tools/trash/sync", {
+        serviceType,
+        instanceId,
+        dryRun: false,
+        items: cfItems.map((i) => ({ resourceType: i.resourceType, trashId: i.trashId })),
+      });
+      if (!cfSync.ok) {
+        const d = await cfSync.json().catch(() => ({}));
+        toast.error(d.error ?? "Failed to create in app");
+        await load();
+        return;
+      }
+      // 2) Persist this profile's custom-format selection.
+      const saveRes = await postJson("/api/tools/trash/assignments", {
+        serviceType,
+        instanceId,
+        items: [{ resourceType: "PROFILE_CF", trashId: selectedProfile, name: selectedProfile, selection: { formats } }],
+      });
+      if (!saveRes.ok) {
+        const d = await saveRes.json().catch(() => ({}));
+        toast.error(d.error ?? "Added to app, but failed to save the profile");
+        await load();
+        return;
+      }
+      // 3) Apply the profile scores now that the format(s) exist.
+      const pfSync = await postJson("/api/tools/trash/sync", {
+        serviceType,
+        instanceId,
+        dryRun: false,
+        items: [{ resourceType: "PROFILE_CF", trashId: selectedProfile }],
+      });
+      const d = await pfSync.json();
+      if (!pfSync.ok) {
+        toast.error(d.error ?? "Added to app, but the profile sync failed");
+        await load();
+        return;
+      }
+      const errored = (d.report?.items ?? []).filter((i: PlanItem) => i.action === "ERROR").length;
+      if (errored) toast.error(`Applied with ${errored} error(s)`);
+      else
+        toast.success(
+          `Added ${toAdd.length} custom format${toAdd.length === 1 ? "" : "s"} to ${instanceName} and applied the scores`,
+        );
+      onShowReport(`Add & apply: ${selectedProfile}`, d.report?.items ?? [], false);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // Addable custom formats (not already attached), grouped into the guide's
   // categories for the drilldown picker.
   const attachedIds = new Set(formats.map((f) => f.trashId));
@@ -1869,14 +1939,26 @@ function ProfileFormatsTab({
                         />
                       )}
                     </div>
-                    {formats.some((f) => !isInApp(f.name)) && (
-                      <p className="flex items-start gap-1.5 rounded-md border border-amber/30 bg-amber/5 px-2.5 py-1.5 text-[11px] text-amber">
+                    {missingFormats.length > 0 && (
+                      <div className="flex items-start gap-2 rounded-md border border-amber/30 bg-amber/5 px-2.5 py-2 text-[11px] text-amber">
                         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                        <span>
-                          Some formats below aren&apos;t in this app yet — their score won&apos;t apply
-                          until you add &amp; sync the custom format (Custom Formats tab).
+                        <span className="flex-1">
+                          {missingFormats.length} format{missingFormats.length === 1 ? "" : "s"} below{" "}
+                          {missingFormats.length === 1 ? "isn't" : "aren't"} in this app yet — the score
+                          won&apos;t apply until the custom format exists.
                         </span>
-                      </p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 shrink-0 border-amber/40 text-amber hover:text-amber"
+                          onClick={() => addToAppAndApply(missingFormats)}
+                          disabled={busy}
+                          title="Add the missing custom formats to the app and apply their scores"
+                        >
+                          {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Plus className="mr-1 h-3.5 w-3.5" />}
+                          Add all &amp; apply ({missingFormats.length})
+                        </Button>
+                      </div>
                     )}
                     <div className="h-[24rem] overflow-y-auto overflow-x-hidden rounded-md border border-white/5">
                       {formats.length === 0 ? (
@@ -1911,6 +1993,18 @@ function ProfileFormatsTab({
                                   )}
                                 </span>
                                 <div className="flex shrink-0 items-center gap-1.5">
+                                  {!isInApp(f.name) && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-8 border-amber/40 text-amber hover:text-amber"
+                                      onClick={() => addToAppAndApply([f])}
+                                      disabled={busy}
+                                      title="Add this custom format to the app and apply its score"
+                                    >
+                                      <Plus className="mr-1 h-3.5 w-3.5" /> Add
+                                    </Button>
+                                  )}
                                   <Input
                                     type="number"
                                     value={Number.isFinite(f.score) ? f.score : 0}
