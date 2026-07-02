@@ -1858,7 +1858,7 @@ function ProfileFormatsTab({
                                     type="number"
                                     value={Number.isFinite(f.score) ? f.score : 0}
                                     onChange={(e) => setScore(f.trashId, parseInt(e.target.value, 10) || 0)}
-                                    className="h-8 w-20"
+                                    className="h-8 w-24 text-right tabular-nums"
                                     title="Score"
                                   />
                                   <Button
