@@ -294,6 +294,9 @@ export default function TrashSyncPage() {
   const [catalog, setCatalog] = useState<CatalogSummary | null>(null);
   const [loadingInstances, setLoadingInstances] = useState(true);
   const [loadingStatus, setLoadingStatus] = useState(false);
+  // A non-blocking status refresh after an action — keeps the list/tabs mounted
+  // (only the first load and instance switches blank the view).
+  const [refreshingStatus, setRefreshingStatus] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [syncing, setSyncing] = useState(false);
   // Controlled so the active tab survives the status reload after an action
@@ -327,29 +330,39 @@ export default function TrashSyncPage() {
     }
   }, []);
 
-  const loadStatus = useCallback(async (inst: GuideInstance, opts: { refresh?: boolean } = {}) => {
-    setLoadingStatus(true);
-    setStatus(null);
-    try {
-      const svc = inst.serviceType.toLowerCase();
-      const [catRes, statusRes] = await Promise.all([
-        fetch(`/api/tools/trash/catalog?service=${svc}${opts.refresh ? "&refresh=1" : ""}`),
-        fetch(`/api/tools/trash/status?serviceType=${inst.serviceType}&instanceId=${inst.id}`),
-      ]);
-      const catData = await catRes.json();
-      const statusData = await statusRes.json();
-      if (catRes.ok) setCatalog(catData.catalog);
-      if (statusRes.ok) {
-        setStatus(statusData.status);
+  const loadStatus = useCallback(
+    async (inst: GuideInstance, opts: { refresh?: boolean; background?: boolean } = {}) => {
+      // Background refresh (after an action): keep the current view mounted and
+      // swap in the new data when it arrives, instead of blanking to a loader.
+      if (opts.background) {
+        setRefreshingStatus(true);
       } else {
-        toast.error(statusData.error ?? "Failed to load status");
+        setLoadingStatus(true);
+        setStatus(null);
       }
-    } catch {
-      toast.error("Failed to load guide status");
-    } finally {
-      setLoadingStatus(false);
-    }
-  }, []);
+      try {
+        const svc = inst.serviceType.toLowerCase();
+        const [catRes, statusRes] = await Promise.all([
+          fetch(`/api/tools/trash/catalog?service=${svc}${opts.refresh ? "&refresh=1" : ""}`),
+          fetch(`/api/tools/trash/status?serviceType=${inst.serviceType}&instanceId=${inst.id}`),
+        ]);
+        const catData = await catRes.json();
+        const statusData = await statusRes.json();
+        if (catRes.ok) setCatalog(catData.catalog);
+        if (statusRes.ok) {
+          setStatus(statusData.status);
+        } else {
+          toast.error(statusData.error ?? "Failed to load status");
+        }
+      } catch {
+        toast.error("Failed to load guide status");
+      } finally {
+        if (opts.background) setRefreshingStatus(false);
+        else setLoadingStatus(false);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     void (async () => {
@@ -368,7 +381,8 @@ export default function TrashSyncPage() {
   const refreshGuides = async () => {
     if (!selected) return;
     setRefreshing(true);
-    await loadStatus(selected, { refresh: true });
+    // In-place: the Refresh button shows its own spinner, so keep the list up.
+    await loadStatus(selected, { refresh: true, background: true });
     setRefreshing(false);
     toast.success("Guide catalog refreshed");
   };
@@ -401,7 +415,7 @@ export default function TrashSyncPage() {
         return;
       }
       toast.success(`Librariarr now manages “${item.name}”`);
-      await loadStatus(selected);
+      await loadStatus(selected, { background: true });
     } finally {
       setBusyId(null);
     }
@@ -419,7 +433,7 @@ export default function TrashSyncPage() {
         return;
       }
       toast.success(`Stopped managing “${item.name}” (unchanged in the app)`);
-      await loadStatus(selected);
+      await loadStatus(selected, { background: true });
     } finally {
       setBusyId(null);
     }
@@ -458,7 +472,7 @@ export default function TrashSyncPage() {
       const data = await syncRes.json();
       if (!syncRes.ok) {
         toast.error(data.error ?? "Added, but sync failed");
-        await loadStatus(selected);
+        await loadStatus(selected, { background: true });
         return;
       }
       const report: SyncReport = data.report;
@@ -466,7 +480,7 @@ export default function TrashSyncPage() {
       if (errored) toast.error(`Added “${item.name}” with errors`);
       else toast.success(`Added “${item.name}” to ${selected.name}`);
       setDiffReport({ title: `Add: ${item.name}`, items: report.items, dryRun: false });
-      await loadStatus(selected);
+      await loadStatus(selected, { background: true });
     } finally {
       setBusyId(null);
     }
@@ -491,7 +505,7 @@ export default function TrashSyncPage() {
       }
       toast.success(`Saved options for “${item.name}” (applied on next sync)`);
       setOptionsItem(null);
-      await loadStatus(selected);
+      await loadStatus(selected, { background: true });
     } finally {
       setBusyId(null);
     }
@@ -544,7 +558,7 @@ export default function TrashSyncPage() {
       const data = await syncRes.json();
       if (!syncRes.ok) {
         toast.error(data.error ?? "Added, but sync failed");
-        await loadStatus(selected);
+        await loadStatus(selected, { background: true });
         return;
       }
       const report: SyncReport = data.report;
@@ -552,7 +566,7 @@ export default function TrashSyncPage() {
       if (errored) toast.error(`Added ${toAdd.length} item(s) with ${errored} error(s)`);
       else toast.success(`Added ${toAdd.length} item${toAdd.length === 1 ? "" : "s"} to ${selected.name}`);
       setDiffReport({ title: `Add ${toAdd.length} item(s)`, items: report.items, dryRun: false });
-      await loadStatus(selected);
+      await loadStatus(selected, { background: true });
     } finally {
       setSyncing(false);
     }
@@ -582,7 +596,7 @@ export default function TrashSyncPage() {
       toast.success(
         `Librariarr now manages ${toManage.length} item${toManage.length === 1 ? "" : "s"} — sync to apply`,
       );
-      await loadStatus(selected);
+      await loadStatus(selected, { background: true });
     } finally {
       setSyncing(false);
     }
@@ -657,7 +671,7 @@ export default function TrashSyncPage() {
       if (errored) toast.error(`Sync completed with ${errored} error${errored === 1 ? "" : "s"}`);
       else toast.success(changed ? `Synced ${changed} change${changed === 1 ? "" : "s"}` : "Everything already up to date");
       setDiffReport({ title: "Sync results", items: report.items, dryRun: false });
-      await loadStatus(selected);
+      await loadStatus(selected, { background: true });
     } finally {
       setSyncing(false);
     }
@@ -689,7 +703,7 @@ export default function TrashSyncPage() {
       if (errored) toast.error(`“${item.name}” synced with errors`);
       else toast.success(`Synced “${item.name}”`);
       setDiffReport({ title: `Sync: ${item.name}`, items: report.items, dryRun: false });
-      await loadStatus(selected);
+      await loadStatus(selected, { background: true });
     } finally {
       setBusyId(null);
     }
@@ -803,6 +817,11 @@ export default function TrashSyncPage() {
               <CountPill dot="bg-amber" label="unmanaged" value={counts.conflict} />
               <CountPill dot="bg-muted-foreground/50" label="not added" value={counts.new} />
               {counts.missing > 0 && <CountPill dot="bg-destructive" label="missing" value={counts.missing} />}
+              {refreshingStatus && (
+                <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Updating…
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <Button
