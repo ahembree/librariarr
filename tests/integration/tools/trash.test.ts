@@ -342,6 +342,21 @@ describe("POST /api/tools/trash/assignments", () => {
     );
     expect(body.assignments).toHaveLength(1);
   });
+
+  it("rejects an over-large items array (unbounded-upsert guard)", async () => {
+    const { radarr } = await authedUserWithRadarr();
+    const items = Array.from({ length: 1001 }, (_, i) => ({
+      resourceType: "CUSTOM_FORMAT" as const,
+      trashId: `cf${i}`,
+      name: `CF ${i}`,
+    }));
+    const res = await callRoute(postAssignment, {
+      method: "POST",
+      body: { serviceType: "RADARR", instanceId: radarr.id, items },
+    });
+    await expectJson(res, 400);
+    expect(await getTestPrisma().trashManagedResource.count()).toBe(0);
+  });
 });
 
 describe("assignments/[id]", () => {
@@ -384,6 +399,45 @@ describe("assignments/[id]", () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
     await expectJson(await callRouteWithParams(deleteAssignment, { id: row.id }, { method: "DELETE" }), 404);
+  });
+
+  it("re-validates a PROFILE_CF selection against the guide on update (cross-service gate)", async () => {
+    const { user, radarr } = await authedUserWithRadarr();
+    const row = await getTestPrisma().trashManagedResource.create({
+      data: {
+        userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id,
+        resourceType: "PROFILE_CF", trashId: "My Profile", name: "My Profile",
+        selection: { formats: [{ trashId: "cf1", name: "AMZN", score: 100 }] },
+      },
+    });
+    // "scf1" is a Sonarr-only trash_id — not in the Radarr catalog. The PUT must
+    // reject it the same way the POST consent gate would.
+    const res = await callRouteWithParams(putAssignment, { id: row.id }, {
+      method: "PUT",
+      body: { selection: { formats: [{ trashId: "scf1", name: "Sonarr CF", score: 50 }] } },
+    });
+    await expectJson(res, 400);
+    // The stored selection is unchanged.
+    const after = await getTestPrisma().trashManagedResource.findUnique({ where: { id: row.id } });
+    expect((after?.selection as { formats: { trashId: string }[] }).formats[0].trashId).toBe("cf1");
+  });
+
+  it("accepts a PROFILE_CF selection whose formats are all in the guide", async () => {
+    const { user, radarr } = await authedUserWithRadarr();
+    const row = await getTestPrisma().trashManagedResource.create({
+      data: {
+        userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id,
+        resourceType: "PROFILE_CF", trashId: "My Profile", name: "My Profile",
+        selection: { formats: [] },
+      },
+    });
+    const res = await callRouteWithParams(putAssignment, { id: row.id }, {
+      method: "PUT",
+      body: { selection: { formats: [{ trashId: "cf1", name: "AMZN", score: 250 }] } },
+    });
+    await expectJson(res, 200);
+    const after = await getTestPrisma().trashManagedResource.findUnique({ where: { id: row.id } });
+    expect((after?.selection as { formats: { score: number }[] }).formats[0].score).toBe(250);
   });
 });
 

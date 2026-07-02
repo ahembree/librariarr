@@ -33,8 +33,11 @@ CREATE INDEX "TrashManagedResource_radarrInstanceId_idx" ON "TrashManagedResourc
 -- One managed row per (user, instance, resource). Two composite uniques (one
 -- per instance FK) because exactly one FK is populated per row; NULLs are
 -- distinct in Postgres, so each constraint governs only the rows it names.
-CREATE UNIQUE INDEX "TrashManagedResource_userId_sonarrInstanceId_resourceType_trashId_key" ON "TrashManagedResource"("userId", "sonarrInstanceId", "resourceType", "trashId");
-CREATE UNIQUE INDEX "TrashManagedResource_userId_radarrInstanceId_resourceType_trashId_key" ON "TrashManagedResource"("userId", "radarrInstanceId", "resourceType", "trashId");
+-- Short explicit names: the auto-generated names are 69 chars and Postgres
+-- truncates to 63, which disagrees with Prisma's own truncation and causes
+-- phantom index drift on every db push. See schema.prisma @@unique map:.
+CREATE UNIQUE INDEX "TrashManagedResource_sonarr_key" ON "TrashManagedResource"("userId", "sonarrInstanceId", "resourceType", "trashId");
+CREATE UNIQUE INDEX "TrashManagedResource_radarr_key" ON "TrashManagedResource"("userId", "radarrInstanceId", "resourceType", "trashId");
 
 -- AddForeignKey
 ALTER TABLE "TrashManagedResource"

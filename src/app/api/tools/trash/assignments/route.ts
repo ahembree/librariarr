@@ -87,47 +87,50 @@ export async function POST(request: NextRequest) {
   }
 
   const instanceKey = managedInstanceWhere(data.serviceType, data.instanceId);
-  const results = [];
-  for (const item of data.items) {
-    // Atomic upsert on the (user, instance, resource) composite unique — a
-    // concurrent double-submit can't create duplicate managed rows. Re-assigning
-    // an already-managed resource just refreshes its metadata (e.g. a changed
-    // naming selection).
-    const selectionData =
-      item.selection !== undefined ? { selection: item.selection as object } : {};
-    const where =
-      data.serviceType === "SONARR"
-        ? {
-            userId_sonarrInstanceId_resourceType_trashId: {
-              userId: session.userId!,
-              sonarrInstanceId: data.instanceId,
-              resourceType: item.resourceType,
-              trashId: item.trashId,
-            },
-          }
-        : {
-            userId_radarrInstanceId_resourceType_trashId: {
-              userId: session.userId!,
-              radarrInstanceId: data.instanceId,
-              resourceType: item.resourceType,
-              trashId: item.trashId,
-            },
-          };
-    const upserted = await prisma.trashManagedResource.upsert({
-      where,
-      create: {
-        userId: session.userId!,
-        serviceType: data.serviceType,
-        ...instanceKey,
-        resourceType: item.resourceType,
-        trashId: item.trashId,
-        name: item.name,
-        ...selectionData,
-      },
-      update: { name: item.name, ...selectionData },
-    });
-    results.push(upserted);
-  }
+  // Apply the whole batch atomically: a mid-loop failure (e.g. one bad row)
+  // must not leave a partially-assigned set behind — either all requested
+  // resources become managed or none do.
+  const results = await prisma.$transaction(
+    data.items.map((item) => {
+      // Atomic upsert on the (user, instance, resource) composite unique — a
+      // concurrent double-submit can't create duplicate managed rows. Re-assigning
+      // an already-managed resource just refreshes its metadata (e.g. a changed
+      // naming selection).
+      const selectionData =
+        item.selection !== undefined ? { selection: item.selection as object } : {};
+      const where =
+        data.serviceType === "SONARR"
+          ? {
+              userId_sonarrInstanceId_resourceType_trashId: {
+                userId: session.userId!,
+                sonarrInstanceId: data.instanceId,
+                resourceType: item.resourceType,
+                trashId: item.trashId,
+              },
+            }
+          : {
+              userId_radarrInstanceId_resourceType_trashId: {
+                userId: session.userId!,
+                radarrInstanceId: data.instanceId,
+                resourceType: item.resourceType,
+                trashId: item.trashId,
+              },
+            };
+      return prisma.trashManagedResource.upsert({
+        where,
+        create: {
+          userId: session.userId!,
+          serviceType: data.serviceType,
+          ...instanceKey,
+          resourceType: item.resourceType,
+          trashId: item.trashId,
+          name: item.name,
+          ...selectionData,
+        },
+        update: { name: item.name, ...selectionData },
+      });
+    }),
+  );
 
   return NextResponse.json({ assignments: results }, { status: 201 });
 }

@@ -688,8 +688,13 @@ model TrashManagedResource {
   // one per instance FK — because exactly one FK is set per row; the other is
   // NULL (and Postgres treats NULLs as distinct, so each constraint only
   // governs the rows whose FK it names). Makes assignment an atomic upsert.
-  @@unique([userId, sonarrInstanceId, resourceType, trashId])
-  @@unique([userId, radarrInstanceId, resourceType, trashId])
+  //
+  // Explicit short `map:` names: the auto-generated names are 69 chars, and
+  // Postgres truncates identifiers to 63 — but Prisma's own 63-char truncation
+  // keeps the `_key` suffix, so the two disagree and every `db push` / diff sees
+  // phantom index drift. Short mapped names sidestep the truncation entirely.
+  @@unique([userId, sonarrInstanceId, resourceType, trashId], map: "TrashManagedResource_sonarr_key")
+  @@unique([userId, radarrInstanceId, resourceType, trashId], map: "TrashManagedResource_radarr_key")
   @@index([userId])
   @@index([sonarrInstanceId])
   @@index([radarrInstanceId])

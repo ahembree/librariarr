@@ -795,7 +795,11 @@ export const trashAssignSchema = z.object({
         selection: trashSelectionSchema.optional(),
       }),
     )
-    .min(1, "At least one item is required"),
+    .min(1, "At least one item is required")
+    // The full guide has a few hundred resources; cap well above that so a
+    // "select all" is fine but a malformed/hostile payload can't drive an
+    // unbounded upsert loop.
+    .max(1000, "Too many items in one request"),
 });
 
 /** Update an existing managed resource's selection (naming variants or profile CFs). */
@@ -816,5 +820,6 @@ export const trashSyncSchema = z.object({
         selection: trashSelectionSchema.optional(),
       }),
     )
+    .max(1000, "Too many items in one request")
     .optional(),
 });
