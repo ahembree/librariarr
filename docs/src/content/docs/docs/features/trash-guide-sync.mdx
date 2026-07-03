@@ -103,9 +103,8 @@ A managed quality profile has an **options** button (the gear icon on its row) t
 - **Score set** — some guide custom formats publish more than one recommended score under named sets (for example an SQP set like `sqp-1-2160p`). Pick a set to use its scores for this profile instead of the profile's own default. Leave it on **Guide default** to use the profile's declared score set.
 - **Reset unmatched scores** — off by default. When enabled, every custom-format score the profile doesn't manage is reset to **0** on sync (the equivalent of Recyclarr's `reset_unmatched_scores: true`). Use this when you want the profile to exactly mirror the guide.
   - **Keep these formats (exact names)** — custom formats listed here (one name per line, case-insensitive) are left untouched by the reset.
-  - **Keep these formats (regex patterns)** — custom formats whose name matches any pattern (one regular expression per line, case-insensitive) are also left untouched.
 
-With reset **off**, unmanaged scores are always preserved regardless of the exception lists.
+With reset **off**, unmanaged scores are always preserved regardless of the exception list.
 
 ### Profile custom formats
 

@@ -748,26 +748,6 @@ const qualityProfileSelectionSchema = z
     scoreSet: z.string().min(1).max(100).optional(),
     resetUnmatchedScores: z.boolean().optional(),
     resetExcept: z.array(z.string().min(1).max(200)).max(500).optional(),
-    resetExceptPatterns: z
-      .array(
-        z
-          .string()
-          .min(1)
-          .max(200)
-          .refine(
-            (p) => {
-              try {
-                new RegExp(p);
-                return true;
-              } catch {
-                return false;
-              }
-            },
-            { message: "Invalid regular expression" },
-          ),
-      )
-      .max(200)
-      .optional(),
   })
   .strict();
 

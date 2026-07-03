@@ -304,31 +304,12 @@ describe("quality profile builder", () => {
   it("keeps excepted formats (exact names, case-insensitive) during a reset", () => {
     const { payload } = buildQualityProfile(trash, schemaWithExtra, "RADARR", cfMap, existingProfile, undefined, {
       resetUnmatchedScores: true,
-      resetExcept: ["my custom cf"],
+      resetExcept: ["my custom cf", "anime bd tier"],
     });
-    // Excepted CF keeps its existing score; the other unmatched one is reset.
+    // Excepted CFs keep their existing score; the other unmatched one is reset.
     expect(payload.formatItems.find((f) => f.name === "My Custom CF")?.score).toBe(500);
-    expect(payload.formatItems.find((f) => f.name === "Tier 02")?.score).toBe(0);
-  });
-
-  it("keeps formats matching an except regex pattern during a reset", () => {
-    const { payload } = buildQualityProfile(trash, schemaWithExtra, "RADARR", cfMap, existingProfile, undefined, {
-      resetUnmatchedScores: true,
-      resetExceptPatterns: ["^anime"],
-    });
-    // Pattern (case-insensitive) matches "Anime BD Tier" → preserved.
     expect(payload.formatItems.find((f) => f.name === "Anime BD Tier")?.score).toBe(77);
-    // A non-matching unmatched CF is still reset.
-    expect(payload.formatItems.find((f) => f.name === "My Custom CF")?.score).toBe(0);
-  });
-
-  it("ignores an invalid except regex without throwing", () => {
-    const { payload } = buildQualityProfile(trash, schemaWithExtra, "RADARR", cfMap, existingProfile, undefined, {
-      resetUnmatchedScores: true,
-      resetExceptPatterns: ["("], // invalid regex
-    });
-    // Invalid pattern is dropped; the reset proceeds normally.
-    expect(payload.formatItems.find((f) => f.name === "My Custom CF")?.score).toBe(0);
+    expect(payload.formatItems.find((f) => f.name === "Tier 02")?.score).toBe(0);
   });
 
   it("options.scoreSet overrides the guide's declared score set", () => {

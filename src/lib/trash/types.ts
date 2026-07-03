@@ -258,10 +258,8 @@ export interface QualityProfileSelection {
    * (Recyclarr's `reset_unmatched_scores`). Off by default (scores preserved).
    */
   resetUnmatchedScores?: boolean;
-  /** Custom-format names excluded from the reset (exact, case-sensitive). */
+  /** Custom-format names excluded from the reset (exact, case-insensitive). */
   resetExcept?: string[];
-  /** Regex patterns (case-insensitive) excluding custom formats from the reset. */
-  resetExceptPatterns?: string[];
 }
 
 // ─── Status (cross-reference guide ↔ instance ↔ managed) ───

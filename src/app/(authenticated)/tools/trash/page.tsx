@@ -205,7 +205,6 @@ interface QualityProfileSelection {
   scoreSet?: string;
   resetUnmatchedScores?: boolean;
   resetExcept?: string[];
-  resetExceptPatterns?: string[];
 }
 
 // ─── Status presentation ───
@@ -2306,9 +2305,6 @@ function OptionsForm({
   const [scoreSet, setScoreSet] = useState<string>(initial?.scoreSet ?? GUIDE_DEFAULT_SCORE_SET);
   const [reset, setReset] = useState<boolean>(initial?.resetUnmatchedScores ?? false);
   const [exceptNames, setExceptNames] = useState<string>((initial?.resetExcept ?? []).join("\n"));
-  const [exceptPatterns, setExceptPatterns] = useState<string>(
-    (initial?.resetExceptPatterns ?? []).join("\n"),
-  );
 
   const parseLines = (text: string) =>
     text
@@ -2322,9 +2318,7 @@ function OptionsForm({
     if (reset) {
       selection.resetUnmatchedScores = true;
       const names = parseLines(exceptNames);
-      const patterns = parseLines(exceptPatterns);
       if (names.length) selection.resetExcept = names;
-      if (patterns.length) selection.resetExceptPatterns = patterns;
     }
     onSave(selection);
   };
@@ -2374,30 +2368,19 @@ function OptionsForm({
         </div>
 
         {reset && (
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label className="text-xs">Keep these formats (exact names)</Label>
-              <textarea
-                value={exceptNames}
-                onChange={(e) => setExceptNames(e.target.value)}
-                placeholder="One custom-format name per line"
-                rows={3}
-                className="w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Keep these formats (regex patterns)</Label>
-              <textarea
-                value={exceptPatterns}
-                onChange={(e) => setExceptPatterns(e.target.value)}
-                placeholder="One regular expression per line (case-insensitive)"
-                rows={3}
-                className="w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              />
-              <p className="text-[11px] text-muted-foreground">
-                A custom format matching any pattern is left untouched by the reset.
-              </p>
-            </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Keep these formats (exact names)</Label>
+            <textarea
+              value={exceptNames}
+              onChange={(e) => setExceptNames(e.target.value)}
+              placeholder="One custom-format name per line"
+              rows={3}
+              className="w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              A custom format whose name (case-insensitive) is listed here is left untouched by the
+              reset.
+            </p>
           </div>
         )}
       </div>

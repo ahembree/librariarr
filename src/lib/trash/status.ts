@@ -70,12 +70,19 @@ interface ManagedRow {
   lastSyncHash: string | null;
 }
 
-/** TRaSH descriptions embed HTML (`<br>`, etc.); render them as plain text. */
-function cleanDescription(desc: string | undefined): string | undefined {
+/**
+ * TRaSH descriptions embed HTML (`<br>`, etc.); render them as inert plain text.
+ * Exported for direct testing of the sanitization (it must leave no `<`/`>`).
+ */
+export function cleanDescription(desc: string | undefined): string | undefined {
   if (!desc) return undefined;
   const text = desc
     .replace(/<br\s*\/?>/gi, " · ")
-    .replace(/<[^>]+>/g, "")
+    .replace(/<[^>]*>/g, "")
+    // Strip any residual angle brackets. Removing only complete `<…>` tags leaves
+    // dangling fragments (e.g. an unclosed `<script`); dropping every `<`/`>`
+    // guarantees the result is inert plain text with no HTML element surface.
+    .replace(/[<>]/g, "")
     .replace(/\s+/g, " ")
     .trim();
   return text.length ? text : undefined;

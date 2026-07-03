@@ -258,14 +258,12 @@ export interface BuildProfileOptions {
   scoreSet?: string;
   /**
    * When true, reset every custom-format score the guide profile doesn't manage
-   * back to 0 (except those matched by `resetExcept` / `resetExceptPatterns`).
-   * Off by default, so unmanaged scores are preserved.
+   * back to 0 (except those listed in `resetExcept`). Off by default, so
+   * unmanaged scores are preserved.
    */
   resetUnmatchedScores?: boolean;
   /** Custom-format names excluded from the reset (exact, case-insensitive). */
   resetExcept?: string[];
-  /** Regex patterns (case-insensitive) excluding custom formats from the reset. */
-  resetExceptPatterns?: string[];
 }
 
 /**
@@ -355,22 +353,12 @@ export function buildQualityProfile(
   // mirrors Recyclarr's default (`reset_unmatched_scores` off).
   //
   // When `resetUnmatchedScores` is on, scores for formats the guide profile
-  // doesn't manage are reset to 0 — except formats matched by `resetExcept`
-  // (exact names) or `resetExceptPatterns` (regex). Guide-managed formats are
-  // always overwritten with the guide score below, regardless.
+  // doesn't manage are reset to 0 — except formats named in `resetExcept`
+  // (exact, case-insensitive). Guide-managed formats are always overwritten with
+  // the guide score below, regardless.
   const reset = options?.resetUnmatchedScores ?? false;
   const exceptNames = new Set((options?.resetExcept ?? []).map((n) => n.toLowerCase()));
-  const exceptRegexes = (options?.resetExceptPatterns ?? [])
-    .map((p) => {
-      try {
-        return new RegExp(p, "i");
-      } catch {
-        return null;
-      }
-    })
-    .filter((r): r is RegExp => r !== null);
-  const isExcepted = (name: string) =>
-    exceptNames.has(name.toLowerCase()) || exceptRegexes.some((r) => r.test(name));
+  const isExcepted = (name: string) => exceptNames.has(name.toLowerCase());
 
   // Names of the custom formats the guide profile assigns a score to — these are
   // never "unmatched", so the reset must skip them (they're overwritten anyway).

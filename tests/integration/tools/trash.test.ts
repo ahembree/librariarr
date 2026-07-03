@@ -636,7 +636,7 @@ describe("POST /api/tools/trash/sync", () => {
     });
     const res = await callRouteWithParams(putAssignment, { id: row.id }, {
       method: "PUT",
-      body: { selection: { scoreSet: "sqp-1-2160p", resetUnmatchedScores: true, resetExcept: ["Keep Me"], resetExceptPatterns: ["^anime"] } },
+      body: { selection: { scoreSet: "sqp-1-2160p", resetUnmatchedScores: true, resetExcept: ["Keep Me"] } },
     });
     await expectJson(res, 200);
     const updated = await getTestPrisma().trashManagedResource.findUnique({ where: { id: row.id } });
@@ -644,15 +644,13 @@ describe("POST /api/tools/trash/sync", () => {
       scoreSet?: string;
       resetUnmatchedScores?: boolean;
       resetExcept?: string[];
-      resetExceptPatterns?: string[];
     };
     expect(sel.scoreSet).toBe("sqp-1-2160p");
     expect(sel.resetUnmatchedScores).toBe(true);
     expect(sel.resetExcept).toEqual(["Keep Me"]);
-    expect(sel.resetExceptPatterns).toEqual(["^anime"]);
   });
 
-  it("PUT rejects an invalid except regex pattern", async () => {
+  it("PUT rejects the removed regex-pattern option (strict schema)", async () => {
     const { user, radarr } = await authedUserWithRadarr();
     const row = await getTestPrisma().trashManagedResource.create({
       data: {
@@ -660,9 +658,10 @@ describe("POST /api/tools/trash/sync", () => {
         resourceType: "QUALITY_PROFILE", trashId: "qp1", name: "HD Bluray + WEB",
       },
     });
+    // resetExceptPatterns was removed; the strict selection schema rejects it.
     const res = await callRouteWithParams(putAssignment, { id: row.id }, {
       method: "PUT",
-      body: { selection: { resetUnmatchedScores: true, resetExceptPatterns: ["("] } },
+      body: { selection: { resetUnmatchedScores: true, resetExceptPatterns: ["^anime"] } },
     });
     await expectJson(res, 400);
   });
