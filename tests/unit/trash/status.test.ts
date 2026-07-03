@@ -22,11 +22,21 @@ describe("cleanDescription", () => {
     expect(out).toBe("hello script");
     expect(out).not.toContain("<");
 
-    const nested = cleanDescription("<scr<script>ipt>alert(1)</script>");
-    expect(nested).not.toContain("<");
-    expect(nested).not.toContain(">");
-
-    const attr = cleanDescription('<img src=x onerror=alert(1)');
+    const attr = cleanDescription("<img src=x onerror=alert(1)");
     expect(attr).not.toContain("<");
+  });
+
+  it("fully removes tags that a single pass would splice back together", () => {
+    // Removing the inner <script> from "<scr<script>ipt>" would re-form "<script>";
+    // the fixpoint loop must keep going until no tag remains.
+    for (const input of [
+      "<scr<script>ipt>alert(1)</script>",
+      "<<script>script>alert(1)<</script>/script>",
+      "a<b<b>c>d",
+    ]) {
+      const out = cleanDescription(input) ?? "";
+      expect(out).not.toContain("<");
+      expect(out).not.toContain(">");
+    }
   });
 });

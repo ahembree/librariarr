@@ -76,12 +76,18 @@ interface ManagedRow {
  */
 export function cleanDescription(desc: string | undefined): string | undefined {
   if (!desc) return undefined;
-  const text = desc
-    .replace(/<br\s*\/?>/gi, " · ")
-    .replace(/<[^>]*>/g, "")
-    // Strip any residual angle brackets. Removing only complete `<…>` tags leaves
-    // dangling fragments (e.g. an unclosed `<script`); dropping every `<`/`>`
-    // guarantees the result is inert plain text with no HTML element surface.
+  let text = desc.replace(/<br\s*\/?>/gi, " · ");
+  // Strip HTML tags to plain text. A single pass is incomplete: removing an
+  // inner tag can splice its neighbours into a brand-new tag (e.g.
+  // "<scr<script>ipt>" → "<script>"), so repeat until the string stops changing.
+  let previous: string;
+  do {
+    previous = text;
+    text = text.replace(/<[^<>]*>/g, "");
+  } while (text !== previous);
+  // Drop any residual angle brackets left by an unclosed fragment (e.g. a bare
+  // "<script" with no closing ">"), so the result is inert plain text.
+  text = text
     .replace(/[<>]/g, "")
     .replace(/\s+/g, " ")
     .trim();
