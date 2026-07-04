@@ -1,0 +1,147 @@
+---
+title: TRaSH Guide Sync
+description: Import recommended custom formats, quality profiles, quality sizes, and naming schemes from TRaSH Guides into Sonarr and Radarr — with explicit consent and full change previews.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+TRaSH Guide Sync imports the community-maintained recommendations from [TRaSH Guides](https://trash-guides.info/) into your connected Sonarr and Radarr apps. It can manage **custom formats**, **quality profiles**, **quality definitions (file sizes)**, and **naming schemes**.
+
+The defining principle of this feature is **consent**: Librariarr never writes anything to a Sonarr or Radarr app until you explicitly assign a resource to it, and you can preview every change before it is applied.
+
+<Aside type="note">
+  TRaSH Guide Sync reuses the credentials from your existing **Sonarr** and **Radarr** integrations. There is nothing extra to configure — add your apps under **Settings → Integrations** and they appear in the sync picker automatically.
+</Aside>
+
+## How it works
+
+Navigate to **Tools → TRaSH Sync** and pick a Sonarr or Radarr instance. Librariarr then:
+
+1. Downloads the current guide catalog for that app type (cached for several hours).
+2. Reads the app's existing custom formats and quality profiles.
+3. Cross-references both against what you've already assigned, and shows a **status** for every item.
+
+### Item statuses
+
+| Status | Meaning |
+|--------|---------|
+| **Not added** | The guide item does not exist in the app and is not managed. |
+| **Exists — unmanaged** | The item already exists in the app, but Librariarr does not manage it. Assigning it requires explicit confirmation because the next sync will overwrite it. |
+| **Managed** | Librariarr manages this item and it is in sync with the guide. |
+| **Update available** | Librariarr manages this item, but the guide changed upstream since the last sync. |
+| **Missing in app** | You manage this item, but it was deleted from the app externally. The next sync re-creates it. |
+
+## The consent gate
+
+No modification is ever made to a Sonarr or Radarr app for a resource that you have not explicitly **assigned** to Librariarr.
+
+- **Assigning** a resource (clicking **Manage**) only records your intent — it performs **no** write to the app.
+- If the resource **already exists** in the app, assigning it opens a confirmation dialog making it clear that the next sync will **overwrite** the app's copy with the guide version.
+- **Unassigning** (clicking **Unmanage**) removes only Librariarr's management record. It never deletes the resource from the app.
+- A sync only ever writes the resources you currently manage. Preview ("dry-run") items are never written.
+- Resources are scoped to their app type: Sonarr guide items can only be managed on Sonarr instances and Radarr items only on Radarr instances. Assigning an item to the wrong app type is rejected.
+
+<Aside type="caution">
+  Taking over management of an existing custom format or quality profile means Librariarr will replace it with the TRaSH Guides definition on the next sync. Use **Preview diff** first to see exactly what will change.
+</Aside>
+
+## Preview and dry-run
+
+Before anything is written, you can inspect the exact changes:
+
+- **Preview diff** (per item) shows a field-by-field before/after diff for a single resource — even one you haven't assigned yet.
+- **Dry run** (top of the page) produces the change plan for every managed resource without touching the app. It lists **only the items that would change** — resources already in sync are hidden (with a count of how many were skipped).
+
+Each planned change is labelled **Create**, **Update**, **No change**, **Skipped**, or **Error**, and lists any warnings (for example, a quality profile that references a custom format you haven't also chosen to manage).
+
+## Syncing
+
+### Adding new resources
+
+For a guide item that **doesn't exist yet** in the app (status **Not added**), the row shows an **Add** button. Clicking it assigns the item and creates it in the app in one step — there's nothing to overwrite, so no confirmation is needed (use **Diff** first if you want to preview).
+
+Items that **already exist** in the app instead show **Manage**, which takes over management (with an overwrite confirmation) but does not write anything until you **Sync** — so an existing configuration is never replaced without a deliberate second step.
+
+#### Selecting multiple items
+
+Each not-yet-managed row has a checkbox, and the checkbox at the top of the list selects everything currently shown (respecting the search and filter). Once anything is selected, a bulk action bar appears with:
+
+- **Add (N)** — assigns and creates every selected **Not added** item in one step.
+- **Manage (N)** — takes over every selected item that **already exists** in the app (one overwrite confirmation covers the whole batch); nothing is written until you sync.
+
+To add every not-yet-existing item at once, set the filter to **Not added**, tick the header checkbox, then **Add**.
+
+### Syncing existing / managed resources
+
+There are two ways to sync:
+
+- **Sync managed** (top of the page) applies the changes for **every** assigned resource. Resources are processed in dependency order — quality definitions and naming first, then custom formats, then quality profiles (so a profile's custom-format scores can reference formats that already exist).
+- **Sync** on an individual row (or **Sync now** on the sizes / naming cards) applies just that one managed resource — for example, pushing a single quality profile without touching anything else. Per-item sync is only offered once an item is managed, and it can still only write resources you've assigned.
+
+After a sync, the results dialog shows what was created or updated, and each item's status updates accordingly.
+
+## Resource types
+
+### Custom formats
+
+Custom formats are imported with their full specification set. Scores are **not** forced onto the app by the custom format itself — they are applied through quality profiles (matching how the guides are structured).
+
+The Custom Formats tab groups formats into the guide's own **categories** (audio, HDR, streaming services, unwanted, release groups, etc.). Click a category to expand it and drill down to its formats; searching expands everything so matches are visible.
+
+### Quality profiles
+
+Quality profiles are rebuilt against the app's live quality schema: quality ordering, groups, the cutoff, upgrade settings, and custom-format scores are all resolved from the guide.
+
+A quality profile only assigns scores to custom formats that **already exist** in the app. If a profile references a format you haven't managed, the sync surfaces a warning rather than silently creating the format — assign and sync that custom format too if you want its score to apply.
+
+Syncing a quality profile **does not reset** custom-format scores it doesn't manage. Only the scores the guide profile defines are changed; every other score on the profile — including ones you assigned in the **Profile Formats** tab or set yourself in the app — is preserved. (This matches Recyclarr's default, where `reset_unmatched_scores` is off.)
+
+#### Per-profile options
+
+A managed quality profile has an **options** button (the gear icon on its row) that fine-tunes how it is synced. Options are recorded immediately but only take effect on the next sync:
+
+- **Score set** — some guide custom formats publish more than one recommended score under named sets (for example an SQP set like `sqp-1-2160p`). Pick a set to use its scores for this profile instead of the profile's own default. Leave it on **Guide default** to use the profile's declared score set.
+- **Reset unmatched scores** — off by default. When enabled, every custom-format score the profile doesn't manage is reset to **0** on sync (the equivalent of Recyclarr's `reset_unmatched_scores: true`). Use this when you want the profile to exactly mirror the guide.
+  - **Keep these formats (exact names)** — custom formats listed here (one name per line, case-insensitive) are left untouched by the reset.
+
+With reset **off**, unmanaged scores are always preserved regardless of the exception list.
+
+### Profile custom formats
+
+The **Profile Formats** tab (the first tab) lets you attach guide custom formats — with scores — to **any** quality profile on the instance, including profiles you created yourself in Radarr/Sonarr (not just ones imported from the guide).
+
+Profiles you already manage are **always listed** as quick-select chips, so you can jump straight to one without opening the dropdown.
+
+1. Pick a target quality profile (from the dropdown, or a managed-profile chip). The editor splits horizontally: **assigned formats on the left, the add-from list on the right**.
+2. On the left, every guide custom format already scored on that profile is **listed with its current score, highest score first**, so you can see and **override** any of them.
+3. On the right, add more from the guide's custom formats — they're grouped into the guide's own **categories**; expand a category to drill down and click a format to add it. Each is added with the guide's **recommended score** (dropping into its score position), and every score is editable inline.
+4. **Save** to record the assignment, then **Sync** to apply the scores to the profile. **Sync is disabled until your edits are saved** (a "Unsaved changes — Save to sync" note appears), because a sync always applies the last-saved assignment — this prevents Preview showing one thing while Sync applies another.
+
+This is an **overlay**: only the scores for the custom formats you attach are changed. Every other part of the profile — its qualities, cutoff, and any other format scores — is left untouched. **Stop managing** removes the assignment; it does not reset any scores already written.
+
+A custom format only scores if it **actually exists in the app**. An assigned format that isn't in the app yet is flagged **not in app** in the list, and both **Preview diff** and the sync report explain it (*"…is not present in this instance — add & sync it to apply its score"*) rather than silently showing no change. To fix it in one step, click **Add** on the flagged row (or **Add all & apply** in the banner): Librariarr creates the missing custom format in the app and then applies the profile's scores — no need to visit the Custom Formats tab first. A format left at score **0** is flagged **no effect**, since a zero score does nothing.
+
+### Quality definitions (sizes)
+
+The per-quality minimum / preferred / maximum file sizes for the app are updated in bulk from the guide's recommended values. Because an app always has a quality-definition table, this resource is treated as **Exists — unmanaged** until you opt in.
+
+### Naming schemes
+
+Naming schemes let you choose recommended file and folder formats:
+
+- **Radarr** — movie file format and movie folder format.
+- **Sonarr** — series folder, season folder, and standard / daily / anime episode formats.
+
+Pick the variants you want (for example, a Plex- or Jellyfin-flavored layout), then assign and sync. The selection is remembered, and the **Update available** status will flag if the guide changes the chosen variant later.
+
+## Refreshing the catalog
+
+The guide catalog is cached for several hours. Click **Refresh guides** to fetch the latest definitions immediately (for example, after the guides publish an update).
+
+If the guide can't be reached (a GitHub outage, or blocked outbound access), the page keeps your app selected and shows a **guide catalog unavailable** notice with a **Retry** button, rather than a partial or empty list. A failed fetch is never cached, so a later retry loads the complete catalog once the source is reachable again.
+
+The source repository and branch can be overridden with the `TRASH_GUIDES_REPO` and `TRASH_GUIDES_REF` environment variables — useful if you maintain a fork or an internal mirror.
+
+<Aside type="tip">
+  Librariarr fetches guide files over HTTPS from the public guides repository. If your deployment restricts outbound network access, allow access to `raw.githubusercontent.com` and `api.github.com` (or point the environment variables at a reachable mirror).
+</Aside>

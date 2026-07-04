@@ -698,3 +698,108 @@ export const syncByTypeSchema = z.object({
   libraryType: z.enum(["MOVIE", "SERIES", "MUSIC"]),
 });
 
+
+// ─── TRaSH Guide Sync schemas ───
+
+const trashServiceType = z.enum(["SONARR", "RADARR"]);
+const trashResourceType = z.enum([
+  "CUSTOM_FORMAT",
+  "QUALITY_PROFILE",
+  "QUALITY_DEFINITION",
+  "NAMING",
+  "PROFILE_CF",
+]);
+
+const namingSelectionSchema = z
+  .object({
+    folder: z.string().optional(),
+    file: z.string().optional(),
+    series: z.string().optional(),
+    season: z.string().optional(),
+    standard: z.string().optional(),
+    daily: z.string().optional(),
+    anime: z.string().optional(),
+  })
+  .strict();
+
+/** Custom-format score assignments attached to a quality profile. */
+const profileCfSelectionSchema = z
+  .object({
+    formats: z
+      .array(
+        z.object({
+          trashId: z.string().min(1),
+          name: z.string().min(1),
+          score: z.number().int().min(-100000).max(100000),
+        }),
+      )
+      .max(500),
+  })
+  .strict();
+
+/**
+ * Per-profile options for a QUALITY_PROFILE managed resource: which guide score
+ * set to use, and whether to reset custom-format scores the profile doesn't
+ * manage (with exact-name and regex exceptions). Mirrors Recyclarr's
+ * `quality_profiles` block (`score_set`, `reset_unmatched_scores`).
+ */
+const qualityProfileSelectionSchema = z
+  .object({
+    scoreSet: z.string().min(1).max(100).optional(),
+    resetUnmatchedScores: z.boolean().optional(),
+    resetExcept: z.array(z.string().min(1).max(200)).max(500).optional(),
+  })
+  .strict();
+
+// A managed resource's optional selection is either a naming variant choice, a
+// profile custom-format mapping, or per-profile quality-profile options,
+// depending on its resourceType. Ordering matters for the union: the
+// quality-profile schema comes before naming because both accept an empty
+// object, but only naming should never carry the QP-only keys.
+const trashSelectionSchema = z.union([
+  profileCfSelectionSchema,
+  qualityProfileSelectionSchema,
+  namingSelectionSchema,
+]);
+
+/** Opt a set of guide resources into Librariarr management (the consent gate). */
+export const trashAssignSchema = z.object({
+  serviceType: trashServiceType,
+  instanceId: z.string().min(1, "instanceId is required"),
+  items: z
+    .array(
+      z.object({
+        resourceType: trashResourceType,
+        trashId: z.string().min(1),
+        name: z.string().min(1),
+        selection: trashSelectionSchema.optional(),
+      }),
+    )
+    .min(1, "At least one item is required")
+    // The full guide has a few hundred resources; cap well above that so a
+    // "select all" is fine but a malformed/hostile payload can't drive an
+    // unbounded upsert loop.
+    .max(1000, "Too many items in one request"),
+});
+
+/** Update an existing managed resource's selection (naming variants or profile CFs). */
+export const trashAssignmentUpdateSchema = z.object({
+  selection: trashSelectionSchema,
+});
+
+/** Run a sync or a dry-run/preview. `items` only affects dry-run previews. */
+export const trashSyncSchema = z.object({
+  serviceType: trashServiceType,
+  instanceId: z.string().min(1, "instanceId is required"),
+  dryRun: z.boolean().optional(),
+  items: z
+    .array(
+      z.object({
+        resourceType: trashResourceType,
+        trashId: z.string().min(1),
+        selection: trashSelectionSchema.optional(),
+      }),
+    )
+    .max(1000, "Too many items in one request")
+    .optional(),
+});

@@ -18,6 +18,7 @@ export function getTestPrisma(): PrismaClient {
  */
 export async function cleanDatabase() {
   const prisma = getTestPrisma();
+  await prisma.trashManagedResource.deleteMany();
   await prisma.lifecycleAction.deleteMany();
   await prisma.logEntry.deleteMany();
   await prisma.mediaStream.deleteMany();

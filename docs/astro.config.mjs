@@ -98,6 +98,10 @@ export default defineConfig({
               slug: "docs/features/preroll-manager",
             },
             {
+              label: "TRaSH Guide Sync",
+              slug: "docs/features/trash-guide-sync",
+            },
+            {
               label: "Backup & Restore",
               slug: "docs/features/backup-restore",
             },
