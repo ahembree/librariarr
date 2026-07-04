@@ -40,6 +40,7 @@ export const PAGES: { path: string; heading: RegExp }[] = [
   // Tools.
   { path: "/tools/streams", heading: /Stream Manager/i },
   { path: "/tools/preroll", heading: /Preroll Manager/i },
+  { path: "/tools/trash", heading: /TRaSH Guide Sync/i },
 
   // System.
   { path: "/system/logs", heading: /^Logs$/i },
@@ -64,6 +65,7 @@ export const NAV_LINKS: { name: RegExp; path: string }[] = [
   { name: /^Exceptions$/i, path: "/lifecycle/exceptions" },
   { name: /^Streams$/i, path: "/tools/streams" },
   { name: /^Prerolls$/i, path: "/tools/preroll" },
+  { name: /^TRaSH Sync$/i, path: "/tools/trash" },
   { name: /^Settings$/i, path: "/settings" },
   { name: /^Logs$/i, path: "/system/logs" },
 ];

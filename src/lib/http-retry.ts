@@ -11,10 +11,27 @@ const RETRYABLE_NETWORK_CODES = new Set([
   "EAI_AGAIN",
 ]);
 
+// Timeout-family codes: a client/socket timeout does NOT prove the request never
+// reached the server — it may already have been received and processed. Retrying
+// a non-idempotent method (POST/PUT/PATCH/DELETE) on one of these risks applying
+// the write twice (e.g. creating a duplicate Arr custom format), so we only retry
+// these for idempotent methods.
+const TIMEOUT_CODES = new Set(["ECONNABORTED", "ETIMEDOUT"]);
+
+function isIdempotent(error: AxiosError): boolean {
+  const method = error.config?.method?.toUpperCase();
+  // Treat an unknown method as non-idempotent (conservative — don't double-apply).
+  return method === "GET" || method === "HEAD";
+}
+
 function isRetryable(error: AxiosError): boolean {
-  // Network-level errors — request never reached the server, safe to retry any method
+  // Network-level errors — no HTTP response was received.
   if (!error.response) {
-    if (error.code && RETRYABLE_NETWORK_CODES.has(error.code)) return true;
+    if (error.code && RETRYABLE_NETWORK_CODES.has(error.code)) {
+      // Timeouts are ambiguous: only retry them for idempotent methods.
+      if (TIMEOUT_CODES.has(error.code) && !isIdempotent(error)) return false;
+      return true;
+    }
     // SSL/TLS mid-connection failures
     if (
       error.message?.includes("decryption failed") ||
@@ -26,8 +43,7 @@ function isRetryable(error: AxiosError): boolean {
   }
   // Server errors — only retry idempotent methods
   if ([502, 503, 504].includes(error.response.status)) {
-    const method = error.config?.method?.toUpperCase();
-    return method === "GET" || method === "HEAD";
+    return isIdempotent(error);
   }
   return false;
 }
