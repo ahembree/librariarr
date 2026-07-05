@@ -87,7 +87,10 @@ describe("POST /api/query/actions", () => {
     await expectJson(response, 401);
   });
 
-  it("rejects a selection larger than the per-action item limit", async () => {
+  it("rejects a single request larger than the per-request item cap", async () => {
+    // The client chunks big selections into batches that stay within this cap;
+    // the server still enforces it as a safety bound (each item drives its own
+    // *arr calls), so an oversized single request is rejected before any work.
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });
     const radarr = await createTestRadarrInstance(user.id);

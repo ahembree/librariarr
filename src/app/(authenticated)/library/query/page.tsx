@@ -81,6 +81,8 @@ import { EmptyState } from "@/components/empty-state";
 import { ConvertQueryToRuleDialog } from "@/components/convert-query-to-rule-dialog";
 import { QueryProgress, useStreamProgress } from "@/components/query-progress";
 import { consumeProgressStream } from "@/lib/progress/client";
+import type { ProgressUpdate } from "@/lib/progress/types";
+import { batchIds } from "@/lib/query/batch";
 import { QueryActionBar, type ArrFamily, type ArrFamilyMeta, type QueryActionConfig } from "@/components/query-action-bar";
 import { toast } from "sonner";
 
@@ -898,36 +900,82 @@ export default function QueryPage() {
     async (config: QueryActionConfig) => {
       setExecutingAction(true);
       resetActionProgress();
+      // The server caps each request at MAX_QUERY_ACTION_ITEMS ids (a safety
+      // bound — every item drives its own *arr calls). Chunk a larger selection
+      // into sequential, individually-bounded requests so any size can run.
+      // Each batch is re-validated against the live query server-side, and its
+      // completed actions are recorded before the next batch starts, so a
+      // failure part-way never rolls back already-finished work.
+      const definition = lastRunDefinitionRef.current ?? buildDefinition();
+      const batches = batchIds([...selectedIds]);
+      const totals = { executed: 0, failed: 0, skipped: 0, errors: [] as string[] };
+      const multi = batches.length > 1;
       try {
-        const resp = await fetch("/api/query/actions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            query: lastRunDefinitionRef.current ?? buildDefinition(),
-            mediaItemIds: [...selectedIds],
-            ...config,
-          }),
-        });
-        if (!resp.ok) {
-          // Auth/validation failures come back as plain JSON (before streaming).
-          const data = await resp.json().catch(() => null);
-          toast.error("Action failed", { description: data?.error ?? "Unknown error" });
-          return;
+        for (let b = 0; b < batches.length; b++) {
+          // Label each phase with its batch position so the shared progress bar
+          // shows "Batch 2/3 · Running action" without any change to the stream.
+          const forward = (update: ProgressUpdate) => {
+            if (multi && update.type === "plan") {
+              onActionProgress({
+                ...update,
+                phases: update.phases.map((p) => ({ ...p, label: `Batch ${b + 1}/${batches.length} · ${p.label}` })),
+              });
+            } else {
+              onActionProgress(update);
+            }
+          };
+
+          const resp = await fetch("/api/query/actions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ query: definition, mediaItemIds: batches[b], ...config }),
+          });
+          if (!resp.ok) {
+            // Auth/validation failures come back as plain JSON (before streaming).
+            const data = await resp.json().catch(() => null);
+            const reason = data?.error ?? "Unknown error";
+            const done = totals.executed + totals.failed + totals.skipped;
+            if (done > 0) {
+              // Some batches already completed and are recorded server-side.
+              // Stop here (fail-closed), but report the partial result and
+              // refresh so the finished work is reflected.
+              const parts = [`${totals.executed} executed`];
+              if (totals.failed > 0) parts.push(`${totals.failed} failed`);
+              if (totals.skipped > 0) parts.push(`${totals.skipped} skipped`);
+              toast.warning("Action stopped part-way", {
+                description: `Batch ${b + 1}/${batches.length} failed: ${reason}. Completed so far: ${parts.join(", ")}. Re-run to finish the rest.`,
+              });
+              clearSelection();
+              runQuery();
+            } else {
+              toast.error("Action failed", {
+                description: multi ? `Batch ${b + 1}/${batches.length}: ${reason}` : reason,
+              });
+            }
+            return;
+          }
+
+          // The result is streamed as NDJSON with live phase progress.
+          const data = await consumeProgressStream<{
+            executed: number;
+            failed: number;
+            skipped: number;
+            errors: string[];
+          }>(resp, forward);
+          totals.executed += data.executed;
+          totals.failed += data.failed;
+          totals.skipped += data.skipped;
+          if (data.errors?.length) totals.errors.push(...data.errors);
         }
-        // The result is streamed as NDJSON with live phase progress.
-        const data = await consumeProgressStream<{
-          executed: number;
-          failed: number;
-          skipped: number;
-          errors: string[];
-        }>(resp, onActionProgress);
-        const parts = [`${data.executed} executed`];
-        if (data.failed > 0) parts.push(`${data.failed} failed`);
-        if (data.skipped > 0) parts.push(`${data.skipped} skipped`);
-        if (data.failed > 0) {
-          toast.warning("Action completed with errors", { description: parts.join(", ") });
+
+        const parts = [`${totals.executed} executed`];
+        if (totals.failed > 0) parts.push(`${totals.failed} failed`);
+        if (totals.skipped > 0) parts.push(`${totals.skipped} skipped`);
+        const suffix = multi ? ` across ${batches.length} batches` : "";
+        if (totals.failed > 0) {
+          toast.warning("Action completed with errors", { description: `${parts.join(", ")}${suffix}` });
         } else {
-          toast.success("Action complete", { description: parts.join(", ") });
+          toast.success("Action complete", { description: `${parts.join(", ")}${suffix}` });
         }
         clearSelection();
         runQuery();
@@ -935,7 +983,20 @@ export default function QueryPage() {
         // Reached on a network failure OR an in-band stream error event. Keep
         // the message neutral — the server's raw error isn't surfaced — and
         // avoid implying a connectivity problem when the server did respond.
-        toast.error("Action failed", { description: "The action could not be completed." });
+        const done = totals.executed + totals.failed + totals.skipped;
+        if (done > 0) {
+          // Earlier batches finished and are recorded server-side; refresh so
+          // the results reflect them and let the user re-run for the rest.
+          toast.error("Action stopped part-way", {
+            description: "Some items were processed before the error — re-run to finish the rest.",
+          });
+          clearSelection();
+          runQuery();
+        } else {
+          // Nothing landed — leave the selection intact so a transient error is
+          // trivial to retry.
+          toast.error("Action failed", { description: "The action could not be completed." });
+        }
       } finally {
         setExecutingAction(false);
         resetActionProgress();

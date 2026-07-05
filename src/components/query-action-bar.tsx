@@ -211,14 +211,14 @@ export function QueryActionBar({
   const skippedCount = selectedCount - targetCount;
 
   const noSelection = selectedCount === 0;
-  // A single action targets at most MAX_QUERY_ACTION_ITEMS items — the server
-  // rejects a larger selection outright (queryActionSchema), so gate it here
-  // and explain why instead of letting the request fail with a bare toast.
-  const overLimit = selectedCount > MAX_QUERY_ACTION_ITEMS;
+  // The server caps each request at MAX_QUERY_ACTION_ITEMS ids, so a larger
+  // selection is sent as several sequential requests (chunked client-side).
+  // Surface the batch count so a big run isn't a surprise — it never blocks.
+  const batchCount = Math.ceil(selectedCount / MAX_QUERY_ACTION_ITEMS);
+  const willBatch = batchCount > 1;
 
   const canRun =
     !noSelection &&
-    !overLimit &&
     !!effectiveActionType &&
     !!arrInstanceId &&
     targetCount > 0 &&
@@ -269,9 +269,9 @@ export function QueryActionBar({
           <>
             {selectedCount.toLocaleString()} selected
             {selectedSize > 0 ? ` · ${formatBytesNum(selectedSize)}` : ""}
-            {overLimit && (
-              <span className="ml-1 font-normal text-amber-400">
-                · max {MAX_QUERY_ACTION_ITEMS.toLocaleString()} per action
+            {willBatch && (
+              <span className="ml-1 font-normal text-muted-foreground">
+                · {batchCount} batches
               </span>
             )}
           </>
@@ -360,11 +360,6 @@ export function QueryActionBar({
 
       {noSelection ? (
         <span className="text-xs text-muted-foreground">Select results below to run an action.</span>
-      ) : overLimit ? (
-        <span className="text-xs text-amber-400">
-          Selection exceeds the {MAX_QUERY_ACTION_ITEMS.toLocaleString()}-item limit for a single action.
-          Narrow your filter or deselect items to run one.
-        </span>
       ) : noFamilies ? (
         <span className="text-xs text-muted-foreground">
           Select an Arr instance above for the media type(s) you want to act on.
@@ -376,10 +371,13 @@ export function QueryActionBar({
           <AlertDialogHeader>
             <AlertDialogTitle>Run “{actionLabel}”?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will run <strong>{actionLabel}</strong> on <strong>{targetCount}</strong>{" "}
+              This will run <strong>{actionLabel}</strong> on <strong>{targetCount.toLocaleString()}</strong>{" "}
               {family ? FAMILY_LABEL[family].toLowerCase() : ""} item{targetCount === 1 ? "" : "s"} immediately.
               {skippedCount > 0 && (
-                <> {skippedCount} other selected item{skippedCount === 1 ? "" : "s"} of a different media type will be skipped.</>
+                <> {skippedCount.toLocaleString()} other selected item{skippedCount === 1 ? "" : "s"} of a different media type will be skipped.</>
+              )}{" "}
+              {willBatch && (
+                <> Your selection runs in <strong>{batchCount}</strong> sequential batches of up to {MAX_QUERY_ACTION_ITEMS.toLocaleString()} items.</>
               )}{" "}
               {effectiveActionType.includes("DELETE") && "This cannot be undone."}
             </AlertDialogDescription>
