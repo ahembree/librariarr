@@ -44,6 +44,7 @@ import {
   supportsSearchAfter as canSearchAfter,
 } from "@/lib/lifecycle/action-types";
 import { formatBytesNum } from "@/lib/format";
+import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 
 export type ArrFamily = "radarr" | "sonarr" | "lidarr";
 type MediaType = "MOVIE" | "SERIES" | "MUSIC";
@@ -210,9 +211,14 @@ export function QueryActionBar({
   const skippedCount = selectedCount - targetCount;
 
   const noSelection = selectedCount === 0;
+  // A single action targets at most MAX_QUERY_ACTION_ITEMS items — the server
+  // rejects a larger selection outright (queryActionSchema), so gate it here
+  // and explain why instead of letting the request fail with a bare toast.
+  const overLimit = selectedCount > MAX_QUERY_ACTION_ITEMS;
 
   const canRun =
     !noSelection &&
+    !overLimit &&
     !!effectiveActionType &&
     !!arrInstanceId &&
     targetCount > 0 &&
@@ -257,9 +263,19 @@ export function QueryActionBar({
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2">
       <span className="text-sm font-medium">
-        {noSelection
-          ? "Actions"
-          : `${selectedCount} selected${selectedSize > 0 ? ` · ${formatBytesNum(selectedSize)}` : ""}`}
+        {noSelection ? (
+          "Actions"
+        ) : (
+          <>
+            {selectedCount.toLocaleString()} selected
+            {selectedSize > 0 ? ` · ${formatBytesNum(selectedSize)}` : ""}
+            {overLimit && (
+              <span className="ml-1 font-normal text-amber-400">
+                · max {MAX_QUERY_ACTION_ITEMS.toLocaleString()} per action
+              </span>
+            )}
+          </>
+        )}
       </span>
       <Button
         variant="ghost"
@@ -344,6 +360,11 @@ export function QueryActionBar({
 
       {noSelection ? (
         <span className="text-xs text-muted-foreground">Select results below to run an action.</span>
+      ) : overLimit ? (
+        <span className="text-xs text-amber-400">
+          Selection exceeds the {MAX_QUERY_ACTION_ITEMS.toLocaleString()}-item limit for a single action.
+          Narrow your filter or deselect items to run one.
+        </span>
       ) : noFamilies ? (
         <span className="text-xs text-muted-foreground">
           Select an Arr instance above for the media type(s) you want to act on.

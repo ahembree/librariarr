@@ -234,6 +234,7 @@ The result count line above the results also reports the **total file size of al
 Notes:
 
 - **Runs immediately** — there is no delay, unlike scheduled rule actions.
+- **Up to 1,000 items per run** — a single action targets at most 1,000 selected items. This is a safety limit: each item triggers its own *arr API calls, so an unbounded batch could run for a very long time (and, for deletions, leave a partially-applied result). If your selection is larger, the **Run action** button is disabled and the Actions bar shows the limit — narrow your filter (or deselect some items) and run it in batches.
 - **One Arr family per run** — an action applies only to selected results of its media type (e.g. *Delete from Radarr* acts on selected movies); selected items of other types are skipped and reported in the result toast.
 - Before acting, the query is re-run so only items that still match are affected, and items on the [Lifecycle Exceptions](/docs/features/deletion-safety/) list are skipped automatically.
 - Every run is recorded in the **Actions** history (and deletion stats) labelled *Ad-hoc query action*, so there's a full audit trail even though no rule set exists.

@@ -1,5 +1,6 @@
 import { z } from "zod/v4";
 import { NextResponse } from "next/server";
+import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 
 /**
  * Parse and validate request JSON against a Zod schema.
@@ -668,7 +669,10 @@ export const executeQuerySchema = z.object({
 // Ad-hoc lifecycle action triggered on selected query results (no rule set).
 export const queryActionSchema = z.object({
   query: queryDefinitionSchema,
-  mediaItemIds: z.array(z.string()).min(1, "At least one item is required").max(1000),
+  mediaItemIds: z
+    .array(z.string())
+    .min(1, "At least one item is required")
+    .max(MAX_QUERY_ACTION_ITEMS, `You can act on at most ${MAX_QUERY_ACTION_ITEMS} items in a single action`),
   actionType: z.string().min(1),
   arrInstanceId: z.string().nullable().optional(),
   targetQualityProfileId: z.number().int().nullable().optional(),

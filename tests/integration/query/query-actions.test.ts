@@ -14,6 +14,7 @@ import {
   createTestSonarrInstance,
 } from "../../setup/test-helpers";
 import type { QueryResult } from "@/lib/query/query-engine";
+import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 
 // Critical: redirect prisma to test database
 vi.mock("@/lib/db", async () => {
@@ -84,6 +85,28 @@ describe("POST /api/query/actions", () => {
       body: { query: BASE_QUERY, mediaItemIds: ["x"], actionType: "DELETE_RADARR" },
     });
     await expectJson(response, 401);
+  });
+
+  it("rejects a selection larger than the per-action item limit", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const radarr = await createTestRadarrInstance(user.id);
+    const tooMany = Array.from({ length: MAX_QUERY_ACTION_ITEMS + 1 }, (_, i) => `id-${i}`);
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: {
+        query: BASE_QUERY,
+        mediaItemIds: tooMany,
+        actionType: "DELETE_RADARR",
+        arrInstanceId: radarr.id,
+      },
+    });
+
+    const body = await expectJson<{ error: string }>(response, 400);
+    expect(body.error).toBe("Validation failed");
+    // Rejected up front — the safety re-query must not run for an oversized batch.
+    expect(mockedExecuteQuery).not.toHaveBeenCalled();
   });
 
   it("executes a movie delete and records an ad-hoc COMPLETED action", async () => {
