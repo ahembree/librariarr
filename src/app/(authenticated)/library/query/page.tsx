@@ -83,6 +83,8 @@ import { QueryProgress, useStreamProgress } from "@/components/query-progress";
 import { consumeProgressStream } from "@/lib/progress/client";
 import type { ProgressUpdate } from "@/lib/progress/types";
 import { buildActionBatches, actionMediaType } from "@/lib/query/batch";
+import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
+import { actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
 import { QueryActionBar, type ArrFamily, type ArrFamilyMeta, type QueryActionConfig } from "@/components/query-action-bar";
 import { toast } from "sonner";
 
@@ -898,19 +900,55 @@ export default function QueryPage() {
 
   const executeAction = useCallback(
     async (config: QueryActionConfig) => {
-      setExecutingAction(true);
-      resetActionProgress();
+      const definition = lastRunDefinitionRef.current ?? buildDefinition();
+      const selectedItems = results.filter((r) => selectedIds.has(r.id));
+      const targetType = actionMediaType(config.actionType);
+
+      // Guard (deletion-safety): a whole-record series action can't safely span a
+      // single show across batches — the server collapses-and-fires it once per
+      // batch, so a show with more than a batch's worth of selected episodes would
+      // double-fire. Refuse and steer the user to the grouped series view, which
+      // acts on the whole show as one unit.
+      if (targetType === "SERIES" && definition.includeEpisodes && !actionHonorsMemberIds(config.actionType)) {
+        const perShow = new Map<string, number>();
+        for (const it of selectedItems) {
+          if (it.type !== "SERIES") continue;
+          const key = (it.parentTitle ?? it.title ?? "").trim().toLowerCase();
+          perShow.set(key, (perShow.get(key) ?? 0) + 1);
+        }
+        if ([...perShow.values()].some((n) => n > MAX_QUERY_ACTION_ITEMS)) {
+          toast.error("Too many episodes for one series", {
+            description: `Acting on more than ${MAX_QUERY_ACTION_ITEMS.toLocaleString()} episodes of a single show at once isn't supported in episode view — switch to the grouped series view to act on the whole show.`,
+          });
+          return;
+        }
+      }
+
       // The server caps each request at MAX_QUERY_ACTION_ITEMS ids (a safety
       // bound — every item drives its own *arr calls), so a larger selection is
       // chunked into sequential, individually-bounded requests. buildActionBatches
-      // scopes to the action's own media family and keeps each series' episodes
-      // in one batch (so the server's whole-record collapse + exception guard see
-      // the full set). Completed actions are recorded before the next batch runs,
-      // so a stop part-way never rolls back already-finished work.
-      const definition = lastRunDefinitionRef.current ?? buildDefinition();
-      const selectedItems = results.filter((r) => selectedIds.has(r.id));
-      const batches = buildActionBatches(selectedItems, actionMediaType(config.actionType));
-      const totals = { executed: 0, failed: 0, skipped: 0, errors: [] as string[] };
+      // scopes to the action's own media family and keeps each series' episodes in
+      // one batch (so the server's whole-record collapse + exception guard see the
+      // full set). Completed actions are recorded before the next batch runs, so a
+      // stop part-way never rolls back already-finished work.
+      const batches = buildActionBatches(selectedItems, targetType);
+      // Defensive: the action bar only enables Run when the selection has items of
+      // the action's family, so this shouldn't happen — but never report a phantom
+      // success or wipe the selection if it does.
+      if (batches.length === 0) {
+        toast.info("Nothing to act on", {
+          description: "None of the selected items match this action's media type.",
+        });
+        return;
+      }
+
+      setExecutingAction(true);
+      resetActionProgress();
+      // Items of other media types are dropped here (only this family is sent), so
+      // seed `skipped` with them — the confirmation dialog already counted them, so
+      // the completion summary must match.
+      const targeted = batches.reduce((n, b) => n + b.length, 0);
+      const totals = { executed: 0, failed: 0, skipped: selectedItems.length - targeted, errors: [] as string[] };
       const multi = batches.length > 1;
       // Share one run id across a multi-batch run so the server memoizes the
       // deletion-safety re-query (+ Arr/Seerr fetch) instead of repeating it per
@@ -987,12 +1025,15 @@ export default function QueryPage() {
           totals.skipped += data.skipped;
           if (data.errors?.length) totals.errors.push(...data.errors);
 
-          // Circuit-breaker: a whole batch failing with nothing executed signals a
-          // systemic downstream failure (e.g. the Arr instance is down). Stop
-          // rather than marching every remaining batch through the same doomed,
-          // slow (15s-timeout) calls — the old ≤1000 cap made a down instance a
-          // single failed batch; batching removed that natural backstop.
-          if (data.executed === 0 && data.failed > 0 && b < batches.length - 1) {
+          // Circuit-breaker: a batch where failures DOMINATE and nothing executed
+          // signals a systemic downstream failure (e.g. the Arr instance is down).
+          // Stop rather than marching every remaining batch through the same
+          // doomed, slow (15s-timeout) calls — the old ≤1000 cap made a down
+          // instance a single failed batch; batching removed that backstop.
+          // Require failed > skipped so a batch that merely fell out of the live
+          // set (mostly skipped) plus one incidental error doesn't abort a run
+          // whose remaining batches are still valid.
+          if (data.executed === 0 && data.failed > data.skipped && b < batches.length - 1) {
             const remaining = batches.length - b - 1;
             toast.error("Action stopped", {
               description: `Batch ${b + 1}/${batches.length} failed entirely${reasonSuffix()}. Skipped ${remaining} remaining batch${remaining === 1 ? "" : "es"} — check the Arr instance, then re-run.`,

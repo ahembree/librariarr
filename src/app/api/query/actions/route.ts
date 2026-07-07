@@ -219,23 +219,32 @@ export async function POST(request: NextRequest) {
             for (const id of validIds) episodeIdMap.set(id, [id]);
           } else {
             // Whole-record series action on individual episodes: collapse the
-            // selected episodes by show to ONE action per series, otherwise the
-            // whole-series op runs once per selected episode (N-1 spurious
-            // "series not found" failures + per-episode deletedBytes). The
-            // representative's members are the selected episodes of that show so
-            // the exception guard below can still see them.
-            const byShow = new Map<string, { rep: string; members: string[] }>();
+            // selected episodes to ONE action per series (otherwise the whole-
+            // series op runs once per selected episode → spurious "series not
+            // found" failures + per-episode deletedBytes).
+            //
+            // The member set is ALL matched episodes of the show (from the live
+            // set), NOT just the selected ones. A whole-record delete destroys
+            // the entire series, so the exception guard below must see an
+            // excepted episode of the show even when the user didn't select it —
+            // otherwise it would silently destroy protected content. This
+            // mirrors the grouped path and the scheduler (processor.ts).
+            const matchedByShow = new Map<string, string[]>();
+            for (const it of liveOfType) {
+              const key = showKey(it.parentTitle ?? it.title);
+              const arr = matchedByShow.get(key) ?? [];
+              arr.push(it.id);
+              matchedByShow.set(key, arr);
+            }
+            const seenShows = new Set<string>();
+            actionUnitIds = [];
             for (const id of validIds) {
               const item = liveOfType.find((it) => String(it.id) === id);
               const key = showKey(item?.parentTitle ?? item?.title);
-              const entry = byShow.get(key);
-              if (entry) entry.members.push(id);
-              else byShow.set(key, { rep: id, members: [id] });
-            }
-            actionUnitIds = [];
-            for (const { rep, members } of byShow.values()) {
-              actionUnitIds.push(rep);
-              episodeIdMap.set(rep, members);
+              if (seenShows.has(key)) continue; // one representative per show
+              seenShows.add(key);
+              actionUnitIds.push(id);
+              episodeIdMap.set(id, matchedByShow.get(key) ?? [id]);
             }
           }
         } else {

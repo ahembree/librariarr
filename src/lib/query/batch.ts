@@ -24,11 +24,15 @@ export function actionMediaType(actionType: string): BatchMediaType | null {
 
 /** Grouping key used to keep a logical unit inside one request. A series'
  *  episodes share a key (by show) so a whole-record series action isn't
- *  collapsed-and-fired once per batch; every other item is its own group. */
+ *  collapsed-and-fired once per batch; every other item is its own group.
+ *
+ *  SERIES items ALWAYS group by show — including the blank-title case. The
+ *  server's `showKey` (LOWER(TRIM(parentTitle))) collapses blank-title series
+ *  under a single "" key, so giving them per-id groups here would split that
+ *  server-group across batches and re-introduce the double-fire. */
 function groupKey(item: BatchableItem): string {
   if (item.type === "SERIES") {
-    const show = (item.parentTitle ?? item.title ?? "").trim().toLowerCase();
-    if (show) return `series:${show}`;
+    return `series:${(item.parentTitle ?? item.title ?? "").trim().toLowerCase()}`;
   }
   return `id:${item.id}`;
 }
