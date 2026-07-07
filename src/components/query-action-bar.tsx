@@ -213,8 +213,11 @@ export function QueryActionBar({
   const noSelection = selectedCount === 0;
   // The server caps each request at MAX_QUERY_ACTION_ITEMS ids, so a larger
   // selection is sent as several sequential requests (chunked client-side).
-  // Surface the batch count so a big run isn't a surprise — it never blocks.
-  const batchCount = Math.ceil(selectedCount / MAX_QUERY_ACTION_ITEMS);
+  // Count against the action's own family (`targetCount`) — only those items are
+  // sent — so a mixed selection isn't over-batched. Before an action is picked
+  // the family is unknown, so fall back to the whole selection as a rough hint.
+  const batchBasis = family ? targetCount : selectedCount;
+  const batchCount = Math.ceil(batchBasis / MAX_QUERY_ACTION_ITEMS);
   const willBatch = batchCount > 1;
 
   const canRun =
