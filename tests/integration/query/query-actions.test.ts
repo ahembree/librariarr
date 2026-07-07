@@ -15,6 +15,7 @@ import {
 } from "../../setup/test-helpers";
 import type { QueryResult } from "@/lib/query/query-engine";
 import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
+import { appCache } from "@/lib/cache/memory-cache";
 
 // Critical: redirect prisma to test database
 vi.mock("@/lib/db", async () => {
@@ -110,6 +111,70 @@ describe("POST /api/query/actions", () => {
     expect(body.error).toBe("Validation failed");
     // Rejected up front — the safety re-query must not run for an oversized batch.
     expect(mockedExecuteQuery).not.toHaveBeenCalled();
+  });
+
+  it("memoizes the safety re-query across batches sharing a runId", async () => {
+    appCache.clear();
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+    const m1 = await createTestMediaItem(library.id, { type: "MOVIE", title: "A" });
+    const m2 = await createTestMediaItem(library.id, { type: "MOVIE", title: "B" });
+    await createTestExternalId(m1.id, "TMDB", "111");
+    await createTestExternalId(m2.id, "TMDB", "222");
+    const radarr = await createTestRadarrInstance(user.id);
+
+    // Both movies are live-matching; each "batch" acts on one of them.
+    mockedExecuteQuery.mockResolvedValue(
+      queryResult([
+        { id: m1.id, type: "MOVIE", title: "A", parentTitle: null },
+        { id: m2.id, type: "MOVIE", title: "B", parentTitle: null },
+      ]),
+    );
+
+    const runId = "run-memo-test";
+    const batch = (id: string) =>
+      callRoute(POST, {
+        method: "POST",
+        body: { query: BASE_QUERY, mediaItemIds: [id], runId, actionType: "DELETE_RADARR", arrInstanceId: radarr.id },
+      });
+
+    const { result: b1 } = await expectStreamResult<{ executed: number }>(await batch(m1.id));
+    const { result: b2 } = await expectStreamResult<{ executed: number }>(await batch(m2.id));
+
+    expect(b1.executed).toBe(1);
+    expect(b2.executed).toBe(1);
+    // The whole-library safety re-query ran ONCE for the run, not once per batch.
+    expect(mockedExecuteQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-runs the safety query per request when no runId is shared", async () => {
+    appCache.clear();
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+    const m1 = await createTestMediaItem(library.id, { type: "MOVIE", title: "A" });
+    const m2 = await createTestMediaItem(library.id, { type: "MOVIE", title: "B" });
+    await createTestExternalId(m1.id, "TMDB", "111");
+    await createTestExternalId(m2.id, "TMDB", "222");
+    const radarr = await createTestRadarrInstance(user.id);
+    mockedExecuteQuery.mockResolvedValue(
+      queryResult([
+        { id: m1.id, type: "MOVIE", title: "A", parentTitle: null },
+        { id: m2.id, type: "MOVIE", title: "B", parentTitle: null },
+      ]),
+    );
+
+    const req = (id: string) =>
+      callRoute(POST, {
+        method: "POST",
+        body: { query: BASE_QUERY, mediaItemIds: [id], actionType: "DELETE_RADARR", arrInstanceId: radarr.id },
+      });
+    await expectStreamResult(await req(m1.id));
+    await expectStreamResult(await req(m2.id));
+
+    // No shared runId → no memoization → the re-query runs for each request.
+    expect(mockedExecuteQuery).toHaveBeenCalledTimes(2);
   });
 
   it("executes a movie delete and records an ad-hoc COMPLETED action", async () => {

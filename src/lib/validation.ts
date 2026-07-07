@@ -673,6 +673,11 @@ export const queryActionSchema = z.object({
     .array(z.string())
     .min(1, "At least one item is required")
     .max(MAX_QUERY_ACTION_ITEMS, `You can act on at most ${MAX_QUERY_ACTION_ITEMS} items in a single action`),
+  // Optional per-run id shared by all batches of one selection, so the server can
+  // memoize the deletion-safety re-query across batches instead of re-running the
+  // whole-library query (+ Arr/Seerr fetch) per batch. Client-generated; used only
+  // as a cache-key component, so it's constrained to a safe, bounded charset.
+  runId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/, "invalid runId").optional(),
   actionType: z.string().min(1),
   arrInstanceId: z.string().nullable().optional(),
   targetQualityProfileId: z.number().int().nullable().optional(),

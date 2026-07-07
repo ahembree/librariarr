@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeQuery } from "@/lib/query/query-engine";
+import { appCache } from "@/lib/cache/memory-cache";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { validateRequest, queryActionSchema } from "@/lib/validation";
@@ -65,6 +66,7 @@ export async function POST(request: NextRequest) {
   const {
     query,
     mediaItemIds,
+    runId,
     actionType,
     arrInstanceId,
     targetQualityProfileId,
@@ -150,15 +152,39 @@ export async function POST(request: NextRequest) {
         };
       };
 
+      // Multi-batch runs (a >1000 selection chunked client-side) call this route
+      // once per batch, each otherwise re-running the whole-library safety query
+      // AND re-fetching all Arr/Seerr metadata (the slow part). The live match set
+      // is constant across a run — the check reads local MediaItem rows, which
+      // don't change mid-run (the same reason a later batch still sees an earlier
+      // batch's deleted items) — so memoize it per client `runId` and reuse it
+      // across batches. Keyed by run id (unique per run) so there's no cross-run
+      // staleness; without a run id (a single request) it just computes.
+      type LiveItem = { id: string; type: string; parentTitle: string | null; title: string | null };
+      const RUN_LIVE_TTL_MS = 10 * 60 * 1000;
+      const toLiveItems = (items: Array<Record<string, unknown>>): LiveItem[] =>
+        items.map((it) => ({
+          id: String(it.id),
+          type: String(it.type),
+          parentTitle: (it.parentTitle ?? null) as string | null,
+          title: (it.title ?? null) as string | null,
+        }));
+      const liveMatch = (variant: string, compute: () => Promise<LiveItem[]>): Promise<LiveItem[]> =>
+        runId
+          ? appCache.getOrSet(`query-action-live:${userId}:${runId}:${variant}`, compute, RUN_LIVE_TTL_MS)
+          : compute();
+
       // SAFETY: re-run the query and only act on items that are still in the live
       // result set AND of the action's media type. This is the ad-hoc analog of
       // the RuleMatch validation used by rule-based execution.
       validateStep("Re-checking your selection");
-      const liveResult = await executeQuery(
-        query as QueryDefinition, userId, 1, 0, forwardReQuery("Re-checking your selection"),
-      );
-      const liveOfType = liveResult.items.filter((it) => it.type === resolvedType);
-      const liveIds = new Set(liveOfType.map((it) => String(it.id)));
+      const liveOfType = await liveMatch("main", async () => {
+        const liveResult = await executeQuery(
+          query as QueryDefinition, userId, 1, 0, forwardReQuery("Re-checking your selection"),
+        );
+        return toLiveItems(liveResult.items.filter((it) => it.type === resolvedType));
+      });
+      const liveIds = new Set(liveOfType.map((it) => it.id));
 
       const validIds = mediaItemIds.filter((id) => liveIds.has(id));
       let skipped = mediaItemIds.length - validIds.length;
@@ -216,19 +242,23 @@ export async function POST(request: NextRequest) {
           // Grouped by show: re-run at episode level and map each selected show's
           // representative episode id to all matched episode ids of that show.
           validateStep("Resolving matched episodes");
-          const episodeResult = await executeQuery(
-            { ...(query as QueryDefinition), includeEpisodes: true },
-            userId,
-            1,
-            0,
-            forwardReQuery("Resolving matched episodes"),
-          );
+          const episodeItems = await liveMatch("episodes", async () => {
+            const episodeResult = await executeQuery(
+              { ...(query as QueryDefinition), includeEpisodes: true },
+              userId,
+              1,
+              0,
+              forwardReQuery("Resolving matched episodes"),
+            );
+            return toLiveItems(
+              episodeResult.items.filter((it) => it.type === "SERIES" && it.parentTitle != null),
+            );
+          });
           const groups = new Map<string, string[]>();
-          for (const ep of episodeResult.items) {
-            if (ep.type !== "SERIES" || ep.parentTitle == null) continue;
+          for (const ep of episodeItems) {
             const key = showKey(ep.parentTitle);
             const arr = groups.get(key) ?? [];
-            arr.push(String(ep.id));
+            arr.push(ep.id);
             groups.set(key, arr);
           }
           for (const id of validIds) {

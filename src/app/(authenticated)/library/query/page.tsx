@@ -912,6 +912,13 @@ export default function QueryPage() {
       const batches = buildActionBatches(selectedItems, actionMediaType(config.actionType));
       const totals = { executed: 0, failed: 0, skipped: 0, errors: [] as string[] };
       const multi = batches.length > 1;
+      // Share one run id across a multi-batch run so the server memoizes the
+      // deletion-safety re-query (+ Arr/Seerr fetch) instead of repeating it per
+      // batch. Not crypto — just a per-run cache key, so avoid crypto.randomUUID
+      // (unavailable on plain-http self-hosted origins).
+      const runId = multi
+        ? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+        : undefined;
 
       // "Did real work happen?" — skips don't count (an all-skipped batch changed
       // nothing), so they must not tip the partial-vs-total-failure decisions.
@@ -947,7 +954,7 @@ export default function QueryPage() {
           const resp = await fetch("/api/query/actions", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query: definition, mediaItemIds: batches[b], ...config }),
+            body: JSON.stringify({ query: definition, mediaItemIds: batches[b], runId, ...config }),
           });
           if (!resp.ok) {
             // Auth/validation failures come back as plain JSON (before streaming).
