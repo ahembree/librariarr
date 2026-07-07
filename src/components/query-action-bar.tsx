@@ -44,6 +44,7 @@ import {
   supportsSearchAfter as canSearchAfter,
 } from "@/lib/lifecycle/action-types";
 import { formatBytesNum } from "@/lib/format";
+import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 
 export type ArrFamily = "radarr" | "sonarr" | "lidarr";
 type MediaType = "MOVIE" | "SERIES" | "MUSIC";
@@ -210,6 +211,14 @@ export function QueryActionBar({
   const skippedCount = selectedCount - targetCount;
 
   const noSelection = selectedCount === 0;
+  // The server caps each request at MAX_QUERY_ACTION_ITEMS ids, so a larger
+  // selection is sent as several sequential requests (chunked client-side).
+  // Count against the action's own family (`targetCount`) — only those items are
+  // sent — so a mixed selection isn't over-batched. Before an action is picked
+  // the family is unknown, so fall back to the whole selection as a rough hint.
+  const batchBasis = family ? targetCount : selectedCount;
+  const batchCount = Math.ceil(batchBasis / MAX_QUERY_ACTION_ITEMS);
+  const willBatch = batchCount > 1;
 
   const canRun =
     !noSelection &&
@@ -257,9 +266,19 @@ export function QueryActionBar({
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2">
       <span className="text-sm font-medium">
-        {noSelection
-          ? "Actions"
-          : `${selectedCount} selected${selectedSize > 0 ? ` · ${formatBytesNum(selectedSize)}` : ""}`}
+        {noSelection ? (
+          "Actions"
+        ) : (
+          <>
+            {selectedCount.toLocaleString()} selected
+            {selectedSize > 0 ? ` · ${formatBytesNum(selectedSize)}` : ""}
+            {willBatch && (
+              <span className="ml-1 font-normal text-muted-foreground">
+                · {batchCount} batches
+              </span>
+            )}
+          </>
+        )}
       </span>
       <Button
         variant="ghost"
@@ -355,10 +374,13 @@ export function QueryActionBar({
           <AlertDialogHeader>
             <AlertDialogTitle>Run “{actionLabel}”?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will run <strong>{actionLabel}</strong> on <strong>{targetCount}</strong>{" "}
+              This will run <strong>{actionLabel}</strong> on <strong>{targetCount.toLocaleString()}</strong>{" "}
               {family ? FAMILY_LABEL[family].toLowerCase() : ""} item{targetCount === 1 ? "" : "s"} immediately.
               {skippedCount > 0 && (
-                <> {skippedCount} other selected item{skippedCount === 1 ? "" : "s"} of a different media type will be skipped.</>
+                <> {skippedCount.toLocaleString()} other selected item{skippedCount === 1 ? "" : "s"} of a different media type will be skipped.</>
+              )}{" "}
+              {willBatch && (
+                <> Your selection runs in <strong>{batchCount}</strong> sequential batches of up to {MAX_QUERY_ACTION_ITEMS.toLocaleString()} items.</>
               )}{" "}
               {effectiveActionType.includes("DELETE") && "This cannot be undone."}
             </AlertDialogDescription>

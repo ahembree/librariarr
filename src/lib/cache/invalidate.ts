@@ -27,6 +27,10 @@ const MEDIA_CACHE_PREFIXES = [
   // URL/token change can alter these, so drop them here too rather than waiting
   // out the 5-min TTL.
   "image-meta:",
+  // Per-run memoized safety re-query for batched ad-hoc query actions. Derived
+  // from the live media set, so a mutation (sync/purge) must drop it — a
+  // mid-run batch then recomputes against fresh data rather than a stale set.
+  "query-action-live:",
 ] as const;
 
 export function invalidateMediaCaches(): void {
