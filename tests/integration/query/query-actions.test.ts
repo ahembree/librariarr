@@ -642,6 +642,43 @@ describe("POST /api/query/actions", () => {
     expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
   });
 
+  it("refuses a whole-series DELETE_SONARR from episode view when an unselected-but-matching episode is excepted", async () => {
+    // Deletion-safety: a whole-record delete destroys the ENTIRE series, so the
+    // exception guard must consider EVERY matched episode of the show, not just
+    // the selected ones. S1E3 matches the query and is excepted but is NOT
+    // selected; the delete must still be refused, else protected S1E3 is
+    // destroyed with the rest of the series.
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" });
+    const ep1 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E1", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
+    const ep2 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E2", parentTitle: "Show", seasonNumber: 1, episodeNumber: 2 });
+    const ep3 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E3", parentTitle: "Show", seasonNumber: 1, episodeNumber: 3 });
+    const sonarr = await createTestSonarrInstance(user.id);
+    const prisma = getTestPrisma();
+    await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: ep3.id } });
+
+    // All three episodes match the episode-view query; the user selects only ep1 & ep2.
+    mockedExecuteQuery.mockResolvedValue(queryResult([
+      { id: ep1.id, type: "SERIES", title: "S1E1", parentTitle: "Show" },
+      { id: ep2.id, type: "SERIES", title: "S1E2", parentTitle: "Show" },
+      { id: ep3.id, type: "SERIES", title: "S1E3", parentTitle: "Show" },
+    ]));
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: {
+        query: { ...BASE_QUERY, includeEpisodes: true },
+        mediaItemIds: [ep1.id, ep2.id],
+        actionType: "DELETE_SONARR",
+        arrInstanceId: sonarr.id,
+      },
+    });
+    const { result: body } = await expectStreamResult<{ executed: number }>(response);
+    expect(body.executed).toBe(0);
+    expect(mockedExecuteAction).not.toHaveBeenCalled();
+  });
+
   it("acts per-episode for a member-scoped file delete in episode (includeEpisodes) mode", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });

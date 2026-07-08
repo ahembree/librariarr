@@ -77,6 +77,23 @@ describe("buildActionBatches", () => {
     expect(batches[0]).toEqual(["A-e0", "A-e1", "A-e2", "B-e0", "B-e1", "B-e2"]);
   });
 
+  it("keeps blank-title SERIES items in one batch (matching the server's blank grouping)", () => {
+    // Two shows of 600 with two blank-title SERIES rows interleaved. Per-id
+    // grouping would pack the blanks as singletons and split them across the
+    // 1000 boundary; the server collapses all blank-title series under one ""
+    // key, so the client must keep them together or a whole-record action would
+    // collapse-and-fire the blank "show" once per batch.
+    const items: BatchableItem[] = [
+      ...episodes("A", 600),
+      { id: "blank1", type: "SERIES", parentTitle: null, title: null },
+      ...episodes("B", 600),
+      { id: "blank2", type: "SERIES", parentTitle: "", title: "" },
+    ];
+    const batches = buildActionBatches(items, "SERIES", 1000);
+    const batchOf = (id: string) => batches.findIndex((b) => b.includes(id));
+    expect(batchOf("blank1")).toBe(batchOf("blank2"));
+  });
+
   it("hard-splits a single show larger than the batch size", () => {
     const batches = buildActionBatches(episodes("Big", 1500), "SERIES", 1000);
     expect(batches.map((b) => b.length)).toEqual([1000, 500]);
