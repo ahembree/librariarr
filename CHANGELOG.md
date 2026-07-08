@@ -2,54 +2,33 @@
 
 ## [0.27.0](https://github.com/ahembree/librariarr/compare/v0.26.0...v0.27.0) (2026-07-08)
 
+Highlights: a new **TRaSH Guide Sync** tool for Sonarr/Radarr, and **Query bulk actions on selections larger than 1000 items**.
 
 ### Features
 
-* **query:** action selections over 1000 items via auto-batching ([379d29f](https://github.com/ahembree/librariarr/commit/379d29f36556f97b50f81bb144f7e3db5b0a58c7))
-* **query:** surface the 1000-item bulk-action limit in the UI ([77edea3](https://github.com/ahembree/librariarr/commit/77edea313fdcc3472610b7f11b816a9e8c972abe))
-* **tools:** add an explicit "Add" action for non-existing TRaSH resources ([63ba7d5](https://github.com/ahembree/librariarr/commit/63ba7d52d1c500d5e22e90efe48d6b27f4ea4a6b))
-* **tools:** add TRaSH Guide Sync for Sonarr/Radarr ([2f7e0c2](https://github.com/ahembree/librariarr/commit/2f7e0c2e66a7c290db28e6cf45082de72f9fdcab))
-* **tools:** allow syncing individual TRaSH resources ([ec8e3de](https://github.com/ahembree/librariarr/commit/ec8e3dec6e2a6984043d327e2e67d68af32f25d9))
-* **tools:** attach custom formats to quality profiles (PROFILE_CF) ([2d3461a](https://github.com/ahembree/librariarr/commit/2d3461a44d5af76ff9a572f6df15c96406a07ec5))
-* **tools:** bulk-select items to add or take over management ([a5fe1bb](https://github.com/ahembree/librariarr/commit/a5fe1bb60d0fe78c4565649ecd88000780387f74))
-* **tools:** categorize custom formats and drill down by category ([143a7a1](https://github.com/ahembree/librariarr/commit/143a7a135a0b101c8704c711b47f396ea19efcdc))
-* **tools:** dry run report lists only items that would change ([21c51e6](https://github.com/ahembree/librariarr/commit/21c51e66a43f895d5db48612d7c1dca9dcff9d4b))
-* **tools:** list a profile's assigned custom formats with editable scores ([acfc284](https://github.com/ahembree/librariarr/commit/acfc284e20f0f59947da8e5323d8f85e741395fe))
-* **tools:** one-click "Add & apply" for profile custom formats not in the app ([54e1d54](https://github.com/ahembree/librariarr/commit/54e1d542ca94a5e998de5f64363fb45b7393fa76))
-* **tools:** per-profile score set and reset-unmatched-scores for quality profiles ([95e9ba2](https://github.com/ahembree/librariarr/commit/95e9ba235d4bc483555fbc86fd045d03f195fa51))
-* **tools:** refresh TRaSH status in place after actions ([b138d8e](https://github.com/ahembree/librariarr/commit/b138d8e24e0429a51f66575e6a67512c5b706bbd))
-* **tools:** show a shield icon (not "· managed" text) in the profile picker ([caafdae](https://github.com/ahembree/librariarr/commit/caafdaefe6eb02977144ef6544ca8ff7a4a90d30))
-* **tools:** use the cf-group [Bracket] prefix as the category ([0a57c04](https://github.com/ahembree/librariarr/commit/0a57c040b213dc06937747c98b9d6cdb180749d2))
-* **trash:** label diff paths by item name instead of array index ([1e87852](https://github.com/ahembree/librariarr/commit/1e87852deed699d8d67eebc47c63db417c2037d9))
+* **TRaSH Guide Sync for Sonarr/Radarr** — import custom formats, quality profiles, quality sizes, and naming from [trash-guides.info](https://trash-guides.info) behind an explicit per-item consent gate, with category drill-down, diff preview, and a dry-run that lists only what would change. Also overlays guide custom-format scores onto existing quality profiles (`PROFILE_CF`), supports per-profile score sets and opt-in reset-of-unmatched-scores, individual/bulk add & take-over, and one-click "Add & apply". ([2f7e0c2](https://github.com/ahembree/librariarr/commit/2f7e0c2e66a7c290db28e6cf45082de72f9fdcab))
+* **query:** run bulk actions on selections over 1000 items via automatic, family-scoped batching, with the limit surfaced in the UI ([379d29f](https://github.com/ahembree/librariarr/commit/379d29f36556f97b50f81bb144f7e3db5b0a58c7), [77edea3](https://github.com/ahembree/librariarr/commit/77edea313fdcc3472610b7f11b816a9e8c972abe))
 
 
 ### Bug Fixes
 
 * **http-retry:** don't retry timeouts on non-idempotent methods ([fe5697f](https://github.com/ahembree/librariarr/commit/fe5697fdecd4866c0e0a30ef058d5addf11a4588))
-* **query:** close deletion-safety hole and harden batched bulk actions ([44c6b2c](https://github.com/ahembree/librariarr/commit/44c6b2c357272831200b92a853503119fa6d52e3))
-* **query:** close deletion-safety hole and harden batched bulk actions ([f32c96c](https://github.com/ahembree/librariarr/commit/f32c96cff1a871a3e0572b65d440ce76e584617f))
-* **query:** make bulk-action batching family-scoped, series-safe, and abortable ([7c00f72](https://github.com/ahembree/librariarr/commit/7c00f72f2e419ed162970fa34fdc01ee7480b97a))
-* **tools:** correct TRaSH score-sets, language, naming hydration, assign race ([a73eb8a](https://github.com/ahembree/librariarr/commit/a73eb8a5a37a3b862c7bb28ab89c1c74e34d7637))
-* **tools:** explain (and prevent) silent no-diff when scoring profile custom formats ([be325f7](https://github.com/ahembree/librariarr/commit/be325f761c48b1e3cda1c39e14b16905d90b52c9))
-* **tools:** gate TRaSH assignments to the target app type ([6243d4c](https://github.com/ahembree/librariarr/commit/6243d4c209a08740ddc81028702fcdbea1f1de55))
-* **tools:** keep the active TRaSH tab after an action ([2c0c99b](https://github.com/ahembree/librariarr/commit/2c0c99b883c82632d36d466f990b18fade77c983))
-* **tools:** keep TRaSH managed totals live after Profile Formats changes ([4211e02](https://github.com/ahembree/librariarr/commit/4211e02a0f8723f28ba4bd26857b2f551491d85d))
-* **tools:** keep TRaSH row action buttons visible for long descriptions ([1c0f7c0](https://github.com/ahembree/librariarr/commit/1c0f7c0a3f4746a65db41a1b2805fc1fa7fac2a3))
-* **tools:** quality-profile sync preserves unmanaged custom-format scores ([296c94d](https://github.com/ahembree/librariarr/commit/296c94df1ea4e5628c21a1785c74fbffe7dd21bc))
-* **tools:** real category drilldown + apply it to the Custom Formats tab ([a241966](https://github.com/ahembree/librariarr/commit/a2419665d4f048caa747d22b1ca708ebb7ac1b46))
-* **tools:** stop perpetual custom-format diffs from app-added fields ([45245a2](https://github.com/ahembree/librariarr/commit/45245a2e24a92046028404a8a58ca9dd5b7d9e20))
-* **tools:** widen the profile-format score input for large scores ([51d08bc](https://github.com/ahembree/librariarr/commit/51d08bc1678d3928c1f5269c71fecae230178def))
-* **trash:** guard assignment API — atomic batch, item cap, PUT re-validation, index names ([5eeca54](https://github.com/ahembree/librariarr/commit/5eeca546bcefd44d2b57fdfb6ce1755662798248))
-* **trash:** harden catalog fetch, profile diffs, status & sync consistency ([6d35660](https://github.com/ahembree/librariarr/commit/6d356608421507659cb447ddd7c3bbe3abae0d3e))
-* **trash:** harden TRaSH sync page — races, stale state, negative scores, bulk scope ([62fdf25](https://github.com/ahembree/librariarr/commit/62fdf25a421f169be42f5e5164cb6f013f038461))
-* **trash:** resolve CodeQL findings — HTML sanitization + drop user-regex option ([e51eab6](https://github.com/ahembree/librariarr/commit/e51eab653f166c435ee91e1f80c60f786669d682))
-* **trash:** stop a permanent phantom diff on quality-profile group members ([7e9d0d8](https://github.com/ahembree/librariarr/commit/7e9d0d8a04468d1b5e1ce4ea8ed243d7abf694c1))
-* **trash:** strip HTML tags in a fixpoint loop (CodeQL incomplete sanitization) ([a5b07e1](https://github.com/ahembree/librariarr/commit/a5b07e1dedb1f5f6f93f4741ef99572eeb5a9286))
 
+<details>
+<summary>Full commit list</summary>
 
-### Performance Improvements
+Both new features landed over a series of commits; the entries below refine and harden them rather than fix previously released behavior.
 
-* **query:** memoize the bulk-action safety re-query across batches ([0141f49](https://github.com/ahembree/librariarr/commit/0141f494f302050710e8885f09981ac7a5ee1686))
+**TRaSH Guide Sync**
+* add TRaSH Guide Sync for Sonarr/Radarr ([2f7e0c2](https://github.com/ahembree/librariarr/commit/2f7e0c2e66a7c290db28e6cf45082de72f9fdcab)), individual-resource sync ([ec8e3de](https://github.com/ahembree/librariarr/commit/ec8e3dec6e2a6984043d327e2e67d68af32f25d9)), explicit "Add" for non-existing resources ([63ba7d5](https://github.com/ahembree/librariarr/commit/63ba7d52d1c500d5e22e90efe48d6b27f4ea4a6b)), bulk add / take-over ([a5fe1bb](https://github.com/ahembree/librariarr/commit/a5fe1bb60d0fe78c4565649ecd88000780387f74))
+* attach custom formats to quality profiles / PROFILE_CF ([2d3461a](https://github.com/ahembree/librariarr/commit/2d3461a44d5af76ff9a572f6df15c96406a07ec5)), editable per-profile scores ([acfc284](https://github.com/ahembree/librariarr/commit/acfc284e20f0f59947da8e5323d8f85e741395fe)), per-profile score set + reset-unmatched-scores ([95e9ba2](https://github.com/ahembree/librariarr/commit/95e9ba235d4bc483555fbc86fd045d03f195fa51)), one-click "Add & apply" ([54e1d54](https://github.com/ahembree/librariarr/commit/54e1d542ca94a5e998de5f64363fb45b7393fa76))
+* category drill-down ([143a7a1](https://github.com/ahembree/librariarr/commit/143a7a135a0b101c8704c711b47f396ea19efcdc), [0a57c04](https://github.com/ahembree/librariarr/commit/0a57c040b213dc06937747c98b9d6cdb180749d2)), dry-run shows only changes ([21c51e6](https://github.com/ahembree/librariarr/commit/21c51e66a43f895d5db48612d7c1dca9dcff9d4b)), in-place status refresh ([b138d8e](https://github.com/ahembree/librariarr/commit/b138d8e24e0429a51f66575e6a67512c5b706bbd)), diff paths labeled by item name ([1e87852](https://github.com/ahembree/librariarr/commit/1e87852deed699d8d67eebc47c63db417c2037d9)), managed shield icon in profile picker ([caafdae](https://github.com/ahembree/librariarr/commit/caafdaefe6eb02977144ef6544ca8ff7a4a90d30))
+* refinements: score-set/language/naming hydration & assign race ([a73eb8a](https://github.com/ahembree/librariarr/commit/a73eb8a5a37a3b862c7bb28ab89c1c74e34d7637)), silent no-diff when scoring ([be325f7](https://github.com/ahembree/librariarr/commit/be325f761c48b1e3cda1c39e14b16905d90b52c9)), assignments gated to target app type ([6243d4c](https://github.com/ahembree/librariarr/commit/6243d4c209a08740ddc81028702fcdbea1f1de55)), keep active tab after actions ([2c0c99b](https://github.com/ahembree/librariarr/commit/2c0c99b883c82632d36d466f990b18fade77c983)), live managed totals ([4211e02](https://github.com/ahembree/librariarr/commit/4211e02a0f8723f28ba4bd26857b2f551491d85d)), action buttons visible for long descriptions ([1c0f7c0](https://github.com/ahembree/librariarr/commit/1c0f7c0a3f4746a65db41a1b2805fc1fa7fac2a3)), preserve unmanaged CF scores ([296c94d](https://github.com/ahembree/librariarr/commit/296c94df1ea4e5628c21a1785c74fbffe7dd21bc)), real category drilldown on Custom Formats tab ([a241966](https://github.com/ahembree/librariarr/commit/a2419665d4f048caa747d22b1ca708ebb7ac1b46)), stop perpetual diffs from app-added fields ([45245a2](https://github.com/ahembree/librariarr/commit/45245a2e24a92046028404a8a58ca9dd5b7d9e20)), widen score input ([51d08bc](https://github.com/ahembree/librariarr/commit/51d08bc1678d3928c1f5269c71fecae230178def)), guard assignment API ([5eeca54](https://github.com/ahembree/librariarr/commit/5eeca546bcefd44d2b57fdfb6ce1755662798248)), harden catalog/profile/status/sync ([6d35660](https://github.com/ahembree/librariarr/commit/6d356608421507659cb447ddd7c3bbe3abae0d3e)), harden sync page ([62fdf25](https://github.com/ahembree/librariarr/commit/62fdf25a421f169be42f5e5164cb6f013f038461)), CodeQL HTML sanitization + drop user-regex ([e51eab6](https://github.com/ahembree/librariarr/commit/e51eab653f166c435ee91e1f80c60f786669d682), [a5b07e1](https://github.com/ahembree/librariarr/commit/a5b07e1dedb1f5f6f93f4741ef99572eeb5a9286)), stop phantom group-member diff ([7e9d0d8](https://github.com/ahembree/librariarr/commit/7e9d0d8a04468d1b5e1ce4ea8ed243d7abf694c1))
+
+**Query bulk actions (1000+)**
+* auto-batching ([379d29f](https://github.com/ahembree/librariarr/commit/379d29f36556f97b50f81bb144f7e3db5b0a58c7)), surface the limit in the UI ([77edea3](https://github.com/ahembree/librariarr/commit/77edea313fdcc3472610b7f11b816a9e8c972abe)), family-scoped/series-safe/abortable batching ([7c00f72](https://github.com/ahembree/librariarr/commit/7c00f72f2e419ed162970fa34fdc01ee7480b97a)), close deletion-safety hole ([f32c96c](https://github.com/ahembree/librariarr/commit/f32c96cff1a871a3e0572b65d440ce76e584617f), [44c6b2c](https://github.com/ahembree/librariarr/commit/44c6b2c357272831200b92a853503119fa6d52e3)), memoize safety re-query across batches ([0141f49](https://github.com/ahembree/librariarr/commit/0141f494f302050710e8885f09981ac7a5ee1686))
+
+</details>
 
 ## [0.26.0](https://github.com/ahembree/librariarr/compare/v0.25.1...v0.26.0) (2026-06-24)
 
