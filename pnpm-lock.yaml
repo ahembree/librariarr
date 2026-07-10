@@ -75,8 +75,8 @@ importers:
         specifier: ^8.6.0
         version: 8.6.0(react@19.2.7)
       graphile-worker:
-        specifier: ^0.17.2
-        version: 0.17.2(typescript@6.0.3)
+        specifier: ^0.17.3
+        version: 0.17.3(typescript@6.0.3)
       iron-session:
         specifier: ^8.0.4
         version: 8.0.4
@@ -3801,8 +3801,8 @@ packages:
     resolution: {integrity: sha512-uMdF9Rt8/NwT1wVXNleYgM5ro2hHDodHiKA3efJhgdU8iP+r/hksnghOHreMva0sF5tV73f4TpiELPUR0g7O9w==}
     engines: {node: '>=16'}
 
-  graphile-worker@0.17.2:
-    resolution: {integrity: sha512-zRM6797XNltD9+b0W7R49b5tcYEtlJmVembygjnvyc3kgo+qu4GURLUaFYg8gclxgRNETw0eByuUx+7N3IWyNg==}
+  graphile-worker@0.17.3:
+    resolution: {integrity: sha512-5vX/nDit7vXDw6JauGE7CpE4uYWu8XLTDkcL3msqwVRwrtxBqawL1C55INfXGtoyV1DIkWvvPdeKtXuLRGYyLg==}
     engines: {node: '>=14.0.0', yarn: ^1.22.22}
     hasBin: true
 
@@ -9429,7 +9429,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  graphile-worker@0.17.2(typescript@6.0.3):
+  graphile-worker@0.17.3(typescript@6.0.3):
     dependencies:
       '@graphile/logger': 0.2.0
       '@types/debug': 4.1.13
