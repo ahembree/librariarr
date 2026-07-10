@@ -142,6 +142,7 @@ export async function syncCollection(
   });
 
   const contributingRuleSetIds = contributions.map((c) => c.ruleSetId);
+  const totalMatchedItems = contributions.reduce((n, c) => n + c.items.length, 0);
   const seriesScopeByRuleSet = new Map(
     contributions.map((c) => [c.ruleSetId, c.seriesScope])
   );
@@ -169,10 +170,7 @@ export async function syncCollection(
     try {
       if (!library.mediaServer?.machineId) {
         // A Plex collection is written via a server://<machineId>/… URI, so a
-        // server with no stored machineId cannot be synced at all. This used to
-        // skip silently, which is one way a collection stays empty with no
-        // explanation. Surface it so the fix (re-add the server via the Plex
-        // picker) is obvious.
+        // server with no stored machineId cannot be synced at all.
         logger.warn(
           "Lifecycle",
           `Skipping library "${library.title}" for collection "${collectionName}": Plex server "${library.mediaServer?.name ?? "?"}" has no machineId — re-add the server so its identifier is stored`,
@@ -205,9 +203,11 @@ export async function syncCollection(
 
       // Union of desired rating keys for THIS library across all contributions.
       const desiredSet = new Set<string>();
+      let libItemCount = 0;
       for (const contrib of contributions) {
         const libItems = contrib.items.filter((i) => i.libraryId === library.id);
         if (libItems.length === 0) continue;
+        libItemCount += libItems.length;
         if (collection.type === "SERIES" && contrib.seriesScope && seriesKeyByTitle) {
           for (const it of libItems) {
             const key = seriesKeyByTitle.get(normTitle(it.parentTitle ?? it.title));
@@ -219,24 +219,29 @@ export async function syncCollection(
       }
       const desiredKeys = [...desiredSet];
 
-      // Resolution-failure guard: if contributing rule sets matched items but NONE
-      // resolved to a rating key in THIS library, do not touch the Plex collection
-      // at all. An empty desired set here means a stale ratingKey, a wrong server
-      // machineId, or a cross-server / non-Plex match — NOT that the collection
-      // should be emptied. Without this we would strip every current member (and
-      // then delete the collection) purely because resolution failed, silently
-      // destroying a collection the user still wants. Genuine "nothing matches
-      // anywhere" (all contributions empty) falls through to the normal
-      // empty-handling below, which still cleans the collection up.
-      if (desiredKeys.length === 0) {
-        const matchedItemCount = contributions.reduce((n, c) => n + c.items.length, 0);
-        if (matchedItemCount > 0) {
+      // Resolution-failure guard: if rule sets matched items but NONE resolved
+      // to a rating key in THIS library, leave the Plex collection alone —
+      // emptying it here would strip every current member (and then delete it)
+      // purely because resolution failed, silently destroying a collection the
+      // user still wants. Only genuine "nothing matches anywhere" (all
+      // contributions empty) falls through to the normal empty-handling below.
+      if (desiredKeys.length === 0 && totalMatchedItems > 0) {
+        if (libItemCount > 0) {
+          // Items belong to this library but no rating key resolved (the
+          // series-title lookup against live Plex data came up empty).
           logger.warn(
             "Lifecycle",
-            `Leaving Plex collection "${collectionName}" untouched in library "${library.title}": rule sets matched ${matchedItemCount} item(s) but none resolved to this library — check for stale ratingKeys, a wrong server machineId, or matches on another server`,
+            `Leaving Plex collection "${collectionName}" untouched in library "${library.title}": ${libItemCount} matched item(s) belong to this library but none resolved to a Plex rating key — series titles may be stale; sync the library and re-run detection`,
           );
-          continue;
+        } else {
+          // Matches simply live in other libraries or servers — the normal
+          // steady state in multi-library setups, so don't warn every cycle.
+          logger.debug(
+            "Lifecycle",
+            `Leaving Plex collection "${collectionName}" untouched in library "${library.title}": all ${totalMatchedItems} matched item(s) live in other libraries or servers`,
+          );
         }
+        continue;
       }
 
       const plexType = collection.type === "MOVIE" ? 1 : 2;
@@ -476,7 +481,7 @@ export async function removeItemFromCollections(
       logger.error(
         "Lifecycle",
         `Failed to remove item from collection "${collectionName}" in library ${library.id}`,
-        { error: String(error) }
+        { error: describePlexError(error) }
       );
     }
   }
@@ -523,7 +528,7 @@ export async function removePlexCollection(
       logger.error(
         "Lifecycle",
         `Failed to remove collection "${collectionName}" from library ${library.id}`,
-        { error: String(error) }
+        { error: describePlexError(error) }
       );
     }
   }
@@ -569,7 +574,7 @@ export async function renameCollectionInPlex(
       logger.error(
         "Lifecycle",
         `Failed to rename collection "${oldName}" → "${newName}" in library ${library.id}`,
-        { error: String(error) }
+        { error: describePlexError(error) }
       );
     }
   }

@@ -6,6 +6,7 @@ import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { logger } from "@/lib/logger";
 import { syncCollectionById, syncAllCollections } from "@/lib/lifecycle/collections";
+import { describePlexError } from "@/lib/plex/errors";
 
 interface RuleSetConfig {
   id: string;
@@ -638,7 +639,7 @@ export async function syncCollectionsAfterDetection(
       try {
         await syncCollectionById(id, plexItemsCache);
       } catch (error) {
-        logger.error("Lifecycle", `Collection sync failed for collection ${id} during detection`, { error: String(error) });
+        logger.error("Lifecycle", `Collection sync failed for collection ${id} during detection`, { error: describePlexError(error) });
       }
     }
   } else {

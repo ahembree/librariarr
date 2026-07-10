@@ -350,7 +350,7 @@ The Matches page reads directly from the database, but the Plex collection is po
 - **Stale rating keys.** If Plex regenerated its rating keys (a library rebuild, "Optimize database", or removing and re-adding the section), the stored keys no longer resolve and Plex rejects the update. Run a full **sync** of that library so Librariarr relearns the current keys.
 - **The matched copy lives on a different (or non-Plex) server.** A movie present on more than one server resolves to whichever copy was matched; only its own server's library can hold it in a Plex collection.
 
-As a safety measure, Librariarr will **not** empty or delete a collection when its rules matched items but none of them resolved to that Plex library — it leaves the collection intact and logs a warning, so a resolution problem never silently wipes a shelf. A collection is only removed when its rules genuinely match nothing.
+As a safety measure, Librariarr will **not** empty or delete a collection when its rules matched items but none of them resolved to that Plex library — it leaves the collection intact, so a resolution problem never silently wipes a shelf. When the matched items belong to that library but couldn't be resolved to Plex rating keys (stale series titles, for example), a warning is logged; when they simply live in another library or server — normal in multi-library setups — the skip is only visible in debug logs. A collection is only removed when its rules genuinely match nothing.
 
 ## How Rules Are Evaluated
 

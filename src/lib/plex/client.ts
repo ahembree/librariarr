@@ -437,9 +437,8 @@ export class PlexClient implements MediaServerClient {
     ratingKeys: string[],
     type: number
   ): Promise<PlexCollection> {
-    // Create with the first batch, then add any remainder in further batches so
-    // the create request URI can't exceed the server/proxy request-line limit
-    // (see COLLECTION_ITEM_BATCH_SIZE).
+    // Create with the first batch only; the remainder goes through the chunked
+    // addCollectionItems (see COLLECTION_ITEM_BATCH_SIZE).
     const firstBatch = ratingKeys.slice(0, COLLECTION_ITEM_BATCH_SIZE);
     const response = await this.client.post("/library/collections", null, {
       params: {
@@ -471,8 +470,7 @@ export class PlexClient implements MediaServerClient {
     machineId: string,
     ratingKeys: string[]
   ): Promise<void> {
-    // Chunk so a large add can't produce an over-long request URI that Plex or a
-    // reverse proxy rejects with a generic 400 (see COLLECTION_ITEM_BATCH_SIZE).
+    // Chunked — see COLLECTION_ITEM_BATCH_SIZE.
     for (let i = 0; i < ratingKeys.length; i += COLLECTION_ITEM_BATCH_SIZE) {
       const batch = ratingKeys.slice(i, i + COLLECTION_ITEM_BATCH_SIZE);
       await this.client.put(
