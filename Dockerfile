@@ -58,17 +58,26 @@ COPY --chown=node:node --from=builder /app/prisma ./prisma
 COPY --chown=node:node --from=builder /app/prisma.config.ts ./prisma.config.ts
 COPY --chown=node:node --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY --chown=node:node --from=builder /app/node_modules/pg ./node_modules/pg
-# Replace the standalone's traced sharp/@img (symlinks whose dlopen'd libvips
-# .so is missing from the bundle) with the self-contained dereferenced tree.
-# Staged via /tmp and moved in a RUN because COPY can't merge a real dir onto
-# the standalone's existing @img/* symlinks (buildkit: "cannot copy to
-# non-directory: .../@img/colour").
-COPY --from=builder /sharp-runtime/node_modules /tmp/sharp-runtime
-RUN rm -rf node_modules/sharp node_modules/@img && \
-    cp -R /tmp/sharp-runtime/sharp node_modules/sharp && \
-    cp -R /tmp/sharp-runtime/@img node_modules/@img && \
-    rm -rf /tmp/sharp-runtime && \
-    chown -R node:node node_modules/sharp node_modules/@img
+COPY --chown=node:node --from=builder /app/node_modules/sharp ./node_modules/sharp
+COPY --chown=node:node --from=builder /app/node_modules/@img ./node_modules/@img
+# sharp 0.35 dlopens libvips-cpp.so from a *separate* @img/sharp-libvips-*
+# package that sits next to the native binding and is resolved via the binding's
+# RPATH ($ORIGIN/../../sharp-libvips-*/lib). Because that load is dynamic,
+# Next.js output tracing drops it and the standalone image crashed on boot with
+# "libvips-cpp.so...: No such file or directory". The app loads sharp from the
+# traced pnpm-store copy, so drop the real (dereferenced) libvips package next
+# to EVERY sharp native binding in the image — version/arch-agnostic.
+COPY --from=builder /sharp-runtime/node_modules/@img /tmp/img-real
+RUN set -eu; \
+    find node_modules -type f -name 'sharp-*.node' | while read -r nodefile; do \
+      imgdir=$(cd "$(dirname "$nodefile")/../.." && pwd); \
+      for libvips in /tmp/img-real/sharp-libvips-*; do \
+        [ -d "$libvips" ] || continue; \
+        rm -rf "$imgdir/$(basename "$libvips")"; \
+        cp -R "$libvips" "$imgdir/"; \
+      done; \
+    done; \
+    rm -rf /tmp/img-real
 COPY --from=prisma-cli /opt/prisma /opt/prisma
 COPY --chown=node:node --from=builder /app/docker-entrypoint.sh ./docker-entrypoint.sh
 
