@@ -58,8 +58,17 @@ COPY --chown=node:node --from=builder /app/prisma ./prisma
 COPY --chown=node:node --from=builder /app/prisma.config.ts ./prisma.config.ts
 COPY --chown=node:node --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY --chown=node:node --from=builder /app/node_modules/pg ./node_modules/pg
-COPY --chown=node:node --from=builder /sharp-runtime/node_modules/sharp ./node_modules/sharp
-COPY --chown=node:node --from=builder /sharp-runtime/node_modules/@img ./node_modules/@img
+# Replace the standalone's traced sharp/@img (symlinks whose dlopen'd libvips
+# .so is missing from the bundle) with the self-contained dereferenced tree.
+# Staged via /tmp and moved in a RUN because COPY can't merge a real dir onto
+# the standalone's existing @img/* symlinks (buildkit: "cannot copy to
+# non-directory: .../@img/colour").
+COPY --from=builder /sharp-runtime/node_modules /tmp/sharp-runtime
+RUN rm -rf node_modules/sharp node_modules/@img && \
+    cp -R /tmp/sharp-runtime/sharp node_modules/sharp && \
+    cp -R /tmp/sharp-runtime/@img node_modules/@img && \
+    rm -rf /tmp/sharp-runtime && \
+    chown -R node:node node_modules/sharp node_modules/@img
 COPY --from=prisma-cli /opt/prisma /opt/prisma
 COPY --chown=node:node --from=builder /app/docker-entrypoint.sh ./docker-entrypoint.sh
 
