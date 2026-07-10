@@ -14,6 +14,17 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN pnpm exec prisma generate && pnpm build
 
+# sharp 0.35 links its native binding against libvips from a *separate*
+# @img/sharp-libvips-* package and loads that .so via dlopen at runtime. Because
+# the load is dynamic (not a static require), Next.js output-file tracing omits
+# it from the standalone bundle, so the production image crashes on boot with
+# "libvips-cpp.so...: No such file or directory". Dereference sharp and its @img
+# platform packages (which are pnpm symlinks into the virtual store) into a
+# self-contained tree so the .so ships alongside the .node it is linked against.
+RUN mkdir -p /sharp-runtime/node_modules && \
+    cp -RL node_modules/sharp /sharp-runtime/node_modules/sharp && \
+    cp -RL node_modules/@img /sharp-runtime/node_modules/@img
+
 # Isolated prisma CLI install with all transitive dependencies.
 # Pin the CLI to the SAME version range as the generated client (read from
 # package.json) so a future Prisma publish can't install a mismatched `latest`
@@ -47,8 +58,8 @@ COPY --chown=node:node --from=builder /app/prisma ./prisma
 COPY --chown=node:node --from=builder /app/prisma.config.ts ./prisma.config.ts
 COPY --chown=node:node --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY --chown=node:node --from=builder /app/node_modules/pg ./node_modules/pg
-COPY --chown=node:node --from=builder /app/node_modules/sharp ./node_modules/sharp
-COPY --chown=node:node --from=builder /app/node_modules/@img ./node_modules/@img
+COPY --chown=node:node --from=builder /sharp-runtime/node_modules/sharp ./node_modules/sharp
+COPY --chown=node:node --from=builder /sharp-runtime/node_modules/@img ./node_modules/@img
 COPY --from=prisma-cli /opt/prisma /opt/prisma
 COPY --chown=node:node --from=builder /app/docker-entrypoint.sh ./docker-entrypoint.sh
 
