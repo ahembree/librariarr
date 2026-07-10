@@ -4,8 +4,8 @@ import { prisma } from "@/lib/db";
 import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
-import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
-import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { fetchArrMetadata, hasEnabledArrInstances, arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
+import { fetchSeerrMetadata, hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { validateRequest, ruleDiffSchema } from "@/lib/validation";
 
 interface DiffItem {
@@ -84,6 +84,29 @@ export async function POST(
       removedItems: enrichedRemovedItems,
       counts: { added: 0, removed: removed.length, retained: 0 },
     });
+  }
+
+  // MATCH-ALL SAFETY: mirror detection — Arr/Seerr rules with no enabled
+  // instance behind them would diff against a vacuous whole-library match set.
+  if (hasArrRules(typedRules) && !(await hasEnabledArrInstances(session.userId!, type))) {
+    return NextResponse.json(
+      { error: `Rules use Arr criteria but no enabled ${arrFamilyLabel(type)} instance is configured` },
+      { status: 400 }
+    );
+  }
+  if (hasSeerrRules(typedRules)) {
+    if (type === "MUSIC") {
+      return NextResponse.json(
+        { error: "Seerr criteria are not supported for music rules" },
+        { status: 400 }
+      );
+    }
+    if (!(await hasEnabledSeerrInstances(session.userId!))) {
+      return NextResponse.json(
+        { error: "Rules use Seerr criteria but no enabled Seerr instance is configured" },
+        { status: 400 }
+      );
+    }
   }
 
   // Evaluate the new rules to get candidate matches

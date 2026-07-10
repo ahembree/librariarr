@@ -269,6 +269,7 @@ The lifecycle system operates in three phases, orchestrated by `src/lib/lifecycl
 - Incremental mode is used by the scheduler; full re-eval is triggered manually via "Re-evaluate All" button or when a rule set is edited (clears all matches so next run starts fresh)
 - Items that no longer match are automatically removed from `RuleMatch` during incremental runs
 - Fetches Arr/Seerr metadata lazily and caches per type (Movie/Series/Music) to share across rule sets
+- **No-enabled-instance guard**: a rule set whose rules use Arr fields is skipped (warning logged, matches untouched) when no enabled instance of the matching Arr family exists — evaluating against an empty metadata map would make `foundInArr = false` vacuously true for the entire library. Same for Seerr fields with no enabled Seerr instance, and Seerr fields on MUSIC rule sets (Seerr data is never fetched for music; the fields also carry `invalidForLibraryType: ["MUSIC"]` so create/update rejects them). Both `processLifecycleRules` and `runDetection` enforce this via `hasEnabledArrInstances`/`hasEnabledSeerrInstances` (in the fetch-\*-metadata modules); the preview/test-item/diff routes return 400 instead
 - Enriches items with `matchedCriteria`, `actualValues`, `arrId`, and `servers[]`
 - For series with `seriesScope: false`, tracks individual episode IDs via `memberIds` in `itemData`
 - **Multi-server**: when a rule set targets more than one server, matches that resolve to the same Arr record (same TMDB/TVDB/MBID) are collapsed by `arrId` (merging `servers[]`) so the same title doesn't schedule two destructive actions or double-count `deletedBytes`. Dedup is by Arr id (not `dedupCanonical`) because a rule set may target a server subset whose canonical copy lives on a non-targeted server
@@ -283,6 +284,7 @@ The lifecycle system operates in three phases, orchestrated by `src/lib/lifecycl
 **Phase 3 — Execution** (`executeLifecycleActions`):
 
 - Validates each pending action against `RuleMatch` table before executing (stale check)
+- **Whole-record exception guard** (`src/lib/lifecycle/exception-guard.ts`): a whole-record destructive action (`DELETE_SONARR`/`DELETE_LIDARR` — destroys every episode/track, not just matched members) is cancelled when ANY item of the same `parentTitle`+type carries a `LifecycleException`, even one the rule never matched (the member-based inviolability check only sees `matchedMediaItemIds`). Enforced in the scheduled executor, the manual execute route, force-retry, and the query-page actions route
 - Tag operations execute first (add/remove Arr tags), then main action (delete, unmonitor, etc.)
 - Title validation via `normalizeTitle()` prevents acting on wrong items when resolving Arr records
 - `extractActionError()` extracts meaningful error messages from Arr API responses (HTTP status + response body)

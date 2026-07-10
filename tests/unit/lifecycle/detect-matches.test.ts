@@ -41,6 +41,8 @@ const mockGetMatchedCriteriaForItems = vi.hoisted(() => vi.fn());
 const mockGetActualValuesForAllRules = vi.hoisted(() => vi.fn());
 const mockFetchArrMetadata = vi.hoisted(() => vi.fn());
 const mockFetchSeerrMetadata = vi.hoisted(() => vi.fn());
+const mockHasEnabledArrInstances = vi.hoisted(() => vi.fn());
+const mockHasEnabledSeerrInstances = vi.hoisted(() => vi.fn());
 const mockSyncCollectionById = vi.hoisted(() => vi.fn());
 const mockSyncAllCollections = vi.hoisted(() => vi.fn());
 
@@ -63,9 +65,13 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
 }));
 vi.mock("@/lib/lifecycle/fetch-arr-metadata", () => ({
   fetchArrMetadata: mockFetchArrMetadata,
+  hasEnabledArrInstances: mockHasEnabledArrInstances,
+  arrFamilyLabel: (type: string) =>
+    type === "MOVIE" ? "Radarr" : type === "MUSIC" ? "Lidarr" : "Sonarr",
 }));
 vi.mock("@/lib/lifecycle/fetch-seerr-metadata", () => ({
   fetchSeerrMetadata: mockFetchSeerrMetadata,
+  hasEnabledSeerrInstances: mockHasEnabledSeerrInstances,
 }));
 vi.mock("@/lib/lifecycle/collections", () => ({
   syncCollectionById: mockSyncCollectionById,
@@ -447,6 +453,10 @@ describe("runDetection", () => {
     mockGetMatchedCriteriaForItems.mockReturnValue(new Map());
     mockGetActualValuesForAllRules.mockReturnValue(new Map());
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+    // Default: instances exist — individual tests flip these to exercise the
+    // no-instance match-all guard.
+    mockHasEnabledArrInstances.mockResolvedValue(true);
+    mockHasEnabledSeerrInstances.mockResolvedValue(true);
   });
 
   it("returns empty results when no enabled rule sets", async () => {
@@ -519,6 +529,83 @@ describe("runDetection", () => {
 
     // fetchArrMetadata should only be called once for MOVIE type
     expect(mockFetchArrMetadata).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips rule sets with Arr rules when no enabled Arr instance exists (match-all guard)", async () => {
+    // fetchArrMetadata would return {} and "foundInArr = false" would match
+    // the whole library — the rule set must be skipped, not evaluated.
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasArrRules.mockReturnValue(true);
+    mockHasSeerrRules.mockReturnValue(false);
+    mockHasEnabledArrInstances.mockResolvedValue(false);
+
+    mockPrisma.ruleSet.findMany.mockResolvedValue([
+      {
+        id: "rs1", userId: "u1", name: "Orphans", type: "MOVIE",
+        rules: [{ field: "foundInArr", operator: "equals", value: "false", enabled: true }],
+        seriesScope: false, serverIds: ["s1"], actionEnabled: true, actionType: "DELETE_RADARR",
+        actionDelayDays: 0, arrInstanceId: "radarr1", addImportExclusion: false,
+        addArrTags: [], removeArrTags: [], collectionId: null,
+        stickyMatches: false,
+        user: { mediaServers: [{ id: "s1" }] },
+      },
+    ]);
+
+    const results = await runDetection("u1");
+
+    expect(results).toEqual([]);
+    expect(mockFetchArrMetadata).not.toHaveBeenCalled();
+    expect(mockEvaluateRules).not.toHaveBeenCalled();
+    // Existing matches must be left untouched — this is a skip, not a clear.
+    expect(mockPrisma.ruleMatch.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("skips rule sets with Seerr rules when no enabled Seerr instance exists (match-all guard)", async () => {
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasArrRules.mockReturnValue(false);
+    mockHasSeerrRules.mockReturnValue(true);
+    mockHasEnabledSeerrInstances.mockResolvedValue(false);
+
+    mockPrisma.ruleSet.findMany.mockResolvedValue([
+      {
+        id: "rs1", userId: "u1", name: "Unrequested", type: "MOVIE",
+        rules: [{ field: "seerrRequested", operator: "equals", value: "false", enabled: true }],
+        seriesScope: false, serverIds: ["s1"], actionEnabled: false, actionType: null,
+        actionDelayDays: 0, arrInstanceId: null, addImportExclusion: false,
+        addArrTags: [], removeArrTags: [], collectionId: null,
+        stickyMatches: false,
+        user: { mediaServers: [{ id: "s1" }] },
+      },
+    ]);
+
+    const results = await runDetection("u1");
+
+    expect(results).toEqual([]);
+    expect(mockFetchSeerrMetadata).not.toHaveBeenCalled();
+    expect(mockEvaluateRules).not.toHaveBeenCalled();
+  });
+
+  it("skips MUSIC rule sets with Seerr rules", async () => {
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasArrRules.mockReturnValue(false);
+    mockHasSeerrRules.mockReturnValue(true);
+
+    mockPrisma.ruleSet.findMany.mockResolvedValue([
+      {
+        id: "rs1", userId: "u1", name: "Music seerr", type: "MUSIC",
+        rules: [{ field: "seerrRequested", operator: "equals", value: "false", enabled: true }],
+        seriesScope: true, serverIds: ["s1"], actionEnabled: false, actionType: null,
+        actionDelayDays: 0, arrInstanceId: null, addImportExclusion: false,
+        addArrTags: [], removeArrTags: [], collectionId: null,
+        stickyMatches: false,
+        user: { mediaServers: [{ id: "s1" }] },
+      },
+    ]);
+
+    const results = await runDetection("u1");
+
+    expect(results).toEqual([]);
+    expect(mockEvaluateMusicScope).not.toHaveBeenCalled();
   });
 
 });

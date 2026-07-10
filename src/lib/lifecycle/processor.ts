@@ -5,9 +5,10 @@ import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { logger } from "@/lib/logger";
 import { normalizeTitle, executeAction, extractActionError } from "@/lib/lifecycle/actions";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
+import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
-import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
-import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { fetchArrMetadata, hasEnabledArrInstances, arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
+import { fetchSeerrMetadata, hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
 import { syncAllCollections } from "@/lib/lifecycle/collections";
 import { syncMediaServer } from "@/lib/sync/sync-server";
@@ -227,6 +228,26 @@ export async function processLifecycleRules(userId?: string) {
       if (!hasAnyActiveRules(rules)) {
         logger.debug("Lifecycle", `Skipping rule set "${ruleSet.name}" — no active rules`);
         continue;
+      }
+
+      // MATCH-ALL SAFETY: Arr/Seerr rules with no enabled instance behind them
+      // must skip the rule set (leaving existing matches untouched, exactly
+      // like a metadata fetch failure). Evaluating with an empty metadata map
+      // instead makes "foundInArr = false" / "seerrRequested = false" match
+      // the whole library and schedule destructive actions for everything.
+      if (hasArrRules(rules) && !(await hasEnabledArrInstances(ruleSet.userId, ruleSet.type))) {
+        logger.warn("Lifecycle", `Skipping rule set "${ruleSet.name}" — rules use Arr criteria but no enabled ${arrFamilyLabel(ruleSet.type)} instance exists (evaluating without one would match the entire library)`);
+        continue;
+      }
+      if (hasSeerrRules(rules)) {
+        if (ruleSet.type === "MUSIC") {
+          logger.warn("Lifecycle", `Skipping rule set "${ruleSet.name}" — Seerr criteria are not supported for music rule sets`);
+          continue;
+        }
+        if (!(await hasEnabledSeerrInstances(ruleSet.userId))) {
+          logger.warn("Lifecycle", `Skipping rule set "${ruleSet.name}" — rules use Seerr criteria but no enabled Seerr instance exists (evaluating without one would match the entire library)`);
+          continue;
+        }
       }
 
       let arrData: ArrDataMap | undefined;
@@ -519,6 +540,21 @@ export async function executeLifecycleActions(userId?: string) {
           continue;
         }
         logger.info("Lifecycle", `Filtered ${original.length - filteredMatchedIds.length} excepted episodes/tracks from action on "${mediaItem.title}"`);
+      }
+    }
+
+    // Exception inviolability, part 2: the member check above only sees the
+    // MATCHED episodes/tracks. A whole-record destructive action destroys the
+    // entire series/artist — including siblings the rule never matched — so an
+    // exception on ANY item of the same parent must also refuse the action.
+    if (isWholeRecordDestructiveAction(action.actionType) && mediaItem.parentTitle) {
+      const protectedParents = await findExceptionProtectedParents(action.userId, [
+        { parentTitle: mediaItem.parentTitle, type: mediaItem.type },
+      ]);
+      if (protectedParents.has(mediaItem.parentTitle)) {
+        await prisma.lifecycleAction.delete({ where: { id: action.id } });
+        logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${mediaItem.parentTitle}" — an episode/track of it is excluded via lifecycle exception and a ${action.actionType} cannot exclude it`);
+        continue;
       }
     }
 

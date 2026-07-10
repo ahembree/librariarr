@@ -2,8 +2,8 @@ import { prisma } from "@/lib/db";
 import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
-import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
-import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { fetchArrMetadata, hasEnabledArrInstances, arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
+import { fetchSeerrMetadata, hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { logger } from "@/lib/logger";
 import { syncCollectionById, syncAllCollections } from "@/lib/lifecycle/collections";
 import { describePlexError } from "@/lib/plex/errors";
@@ -525,6 +525,25 @@ export async function runDetection(userId: string, ruleSetId?: string, fullReEva
 
     const rules = rs.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
     if (!hasAnyActiveRules(rules)) continue;
+
+    // MATCH-ALL SAFETY: mirror processLifecycleRules — Arr/Seerr rules with no
+    // enabled instance behind them skip the rule set instead of evaluating
+    // against an empty metadata map (which would make "foundInArr = false" /
+    // "seerrRequested = false" match the whole library).
+    if (hasArrRules(rules) && !(await hasEnabledArrInstances(userId, rs.type))) {
+      logger.warn("Lifecycle", `Skipping rule set "${rs.name}" — rules use Arr criteria but no enabled ${arrFamilyLabel(rs.type)} instance exists (evaluating without one would match the entire library)`);
+      continue;
+    }
+    if (hasSeerrRules(rules)) {
+      if (rs.type === "MUSIC") {
+        logger.warn("Lifecycle", `Skipping rule set "${rs.name}" — Seerr criteria are not supported for music rule sets`);
+        continue;
+      }
+      if (!(await hasEnabledSeerrInstances(userId))) {
+        logger.warn("Lifecycle", `Skipping rule set "${rs.name}" — rules use Seerr criteria but no enabled Seerr instance exists (evaluating without one would match the entire library)`);
+        continue;
+      }
+    }
 
     // Resolve Arr metadata
     let arrData: ArrDataMap | undefined;

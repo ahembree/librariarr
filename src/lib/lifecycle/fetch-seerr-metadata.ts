@@ -8,6 +8,19 @@ import type { SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 // hang lifecycle processing indefinitely. 1000 pages × 100 per page = 100k requests.
 const MAX_PAGES = 1000;
 
+/**
+ * Whether at least one ENABLED Seerr instance exists. Rule sets that reference
+ * Seerr fields must be skipped when this is false: `fetchSeerrMetadata` would
+ * return an empty map, and the Phase 2 evaluator substitutes a default
+ * "never requested" record for missing entries — making rules like
+ * `seerrRequested equals false` vacuously true for the ENTIRE library.
+ * "No instance" must read as "Seerr data unavailable", never as "nothing was
+ * ever requested".
+ */
+export async function hasEnabledSeerrInstances(userId: string): Promise<boolean> {
+  return (await prisma.seerrInstance.count({ where: { userId, enabled: true } })) > 0;
+}
+
 export async function fetchSeerrMetadata(
   userId: string,
   type: "MOVIE" | "SERIES",

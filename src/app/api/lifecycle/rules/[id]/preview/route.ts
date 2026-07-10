@@ -4,8 +4,8 @@ import { prisma } from "@/lib/db";
 import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, groupSeriesResults } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
-import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
-import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { fetchArrMetadata, hasEnabledArrInstances, arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
+import { fetchSeerrMetadata, hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
 
 export async function POST(
   _request: NextRequest,
@@ -45,6 +45,29 @@ export async function POST(
   const serverIds = ruleSet.serverIds.filter((sid) => enabledServerIds.includes(sid));
   if (serverIds.length === 0) {
     return NextResponse.json({ items: [], count: 0 });
+  }
+
+  // MATCH-ALL SAFETY: mirror detection — Arr/Seerr rules with no enabled
+  // instance behind them would preview the entire library as matching.
+  if (hasArrRules(rules) && !(await hasEnabledArrInstances(session.userId!, ruleSet.type))) {
+    return NextResponse.json(
+      { error: `Rules use Arr criteria but no enabled ${arrFamilyLabel(ruleSet.type)} instance is configured` },
+      { status: 400 }
+    );
+  }
+  if (hasSeerrRules(rules)) {
+    if (ruleSet.type === "MUSIC") {
+      return NextResponse.json(
+        { error: "Seerr criteria are not supported for music rules" },
+        { status: 400 }
+      );
+    }
+    if (!(await hasEnabledSeerrInstances(session.userId!))) {
+      return NextResponse.json(
+        { error: "Rules use Seerr criteria but no enabled Seerr instance is configured" },
+        { status: 400 }
+      );
+    }
   }
 
   let arrData: ArrDataMap | undefined;

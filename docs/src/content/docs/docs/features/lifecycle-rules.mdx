@@ -131,6 +131,10 @@ These fields require configured [Sonarr](/docs/integrations/sonarr/), [Radarr](/
 If an item isn't in the linked *arr instance, or a specific field has no value (for example a movie with no downloaded file has no quality name, quality-cutoff, or size), **no comparison operator matches it** — including negative operators like *Not Equals* / *Not Contains* and the *NOT* toggle. This is deliberate so lifecycle rules never delete an item on the strength of absent *arr data. To target items with missing data, use the *Is Empty* (`isNull`) operator, or the `foundInArr` field.
 :::
 
+:::caution[*arr criteria need at least one enabled instance]
+A rule set that uses *arr fields is **skipped entirely** by detection (with a warning in System Logs) while no enabled instance of the matching *arr family exists — for example if you disable or delete your only Radarr instance. Without this, `foundInArr = false` would be true for **every item in your library** the moment the instance disappears, and a destructive action would be queued for all of it. Previews of such a rule set return an error instead of a misleading whole-library match list. Re-enable (or re-add) the instance and the rule set resumes on the next detection run.
+:::
+
 ### Seerr Fields
 
 These fields require a configured [Seerr](/docs/integrations/seerr/) integration.
@@ -145,7 +149,9 @@ These fields require a configured [Seerr](/docs/integrations/seerr/) integration
 | `seerrDeclineDate` | When declined |
 
 :::caution[Seerr criteria need a connected Seerr instance]
-If a rule set uses Seerr fields but no Seerr instance is connected — for example after **importing** a rule set — the rule builder shows a **"Seerr instance required"** warning and disables Preview, Test Media, and Save until you connect Overseerr or Jellyseerr in Settings → Integrations. Without one, items requiring Seerr lookups would never match.
+If a rule set uses Seerr fields but no Seerr instance is connected — for example after **importing** a rule set — the rule builder shows a **"Seerr instance required"** warning and disables Preview, Test Media, and Save until you connect Overseerr or Jellyseerr in Settings → Integrations. Detection also skips such a rule set entirely (with a warning in System Logs) while no enabled Seerr instance exists — otherwise `seerrRequested = false` would be vacuously true for every item in your library.
+
+Seerr fields are only available on **movie and series** rule sets. Seerr doesn't manage music requests, so music rule sets reject Seerr criteria at save time.
 :::
 
 ## Operators

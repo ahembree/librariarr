@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const { mockPrisma, mockClient } = vi.hoisted(() => ({
   mockPrisma: {
     $queryRawUnsafe: vi.fn(),
+    lifecycleException: { count: vi.fn() },
   },
   mockClient: {
     bulkListingIncomplete: false,
@@ -373,5 +374,112 @@ describe("syncMediaServer", () => {
 
     const nameUpdateCalls = findDbCalls('UPDATE "MediaServer"', "New Name");
     expect(nameUpdateCalls.length).toBeGreaterThan(0);
+  });
+});
+
+// The stale purge cascades RuleMatch AND LifecycleException rows away with the
+// MediaItems it deletes, so a spurious purge silently strips "never delete
+// this" lifecycle protection. These tests pin the guard conditions.
+describe("syncMediaServer stale-item purge guard", () => {
+  const STALE_ROW = { id: "stale-1", thumbUrl: null, parentThumbUrl: null, seasonThumbUrl: null };
+
+  function mockSyncDb(opts: { staleRows?: (typeof STALE_ROW)[]; existingCount?: bigint }) {
+    mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string) => {
+      if (sql.includes('INSERT INTO "SyncJob"')) return [{ id: "sync-job-id" }];
+      if (sql.includes('SELECT "cancelRequested"')) return [{ cancelRequested: false }];
+      if (sql.includes('SELECT "id" FROM "SyncJob"')) return [{ id: "sync-job-id" }];
+      if (sql.includes('UPDATE "SyncJob"')) return [];
+      if (sql.includes('SELECT') && sql.includes('"MediaServer"')) {
+        return [{
+          id: "server-1", name: "Test Plex", url: "http://plex:32400",
+          accessToken: "token", type: "PLEX", userId: "user-1",
+          tlsSkipVerify: false, enabled: true,
+        }];
+      }
+      if (sql.includes('INSERT INTO "Library"')) return [{ id: "lib-1", enabled: true }];
+      if (sql.includes('SELECT') && sql.includes('"Library"') && sql.includes('enabled')) return [];
+      if (sql.includes('COUNT(*)') && sql.includes('"MediaItem"')) {
+        return [{ count: opts.existingCount ?? BigInt(0) }];
+      }
+      // Stale-item candidate select (updatedAt < librarySyncStart)
+      if (sql.includes('"updatedAt"<$2')) return opts.staleRows ?? [];
+      // Existing-thumbs page prefetch
+      if (sql.includes('"ratingKey" = ANY')) return [];
+      if (sql.includes('INSERT INTO "MediaItem"')) return [];
+      return [];
+    });
+    mockClient.getLibraries.mockResolvedValue([
+      { key: "1", title: "Movies", type: "movie", agent: "", scanner: "" },
+    ]);
+    mockClient.getWatchCounts.mockResolvedValue(new Map());
+    mockPrisma.lifecycleException.count.mockResolvedValue(0);
+  }
+
+  const staleDelete = () => findDbCalls('DELETE FROM "MediaItem" WHERE "id" = ANY');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockClient.testConnection.mockResolvedValue({ ok: true, serverName: "Test Plex" });
+  });
+
+  it("refuses to wipe a previously populated library when the server returns zero items", async () => {
+    // A flaky "HTTP 200 + empty list + total=0" response must NOT purge —
+    // the wipe would cascade away every lifecycle exception in the library.
+    mockSyncDb({ staleRows: [STALE_ROW], existingCount: BigInt(42) });
+    mockClient.getLibraryItemsPage.mockResolvedValue({ items: [], total: 0 });
+
+    await syncMediaServer("server-1");
+
+    expect(staleDelete().length).toBe(0);
+    // The stale-candidate select must not even run
+    expect(findDbCalls('"updatedAt"<$2').length).toBe(0);
+    expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBeGreaterThan(0);
+  });
+
+  it("skips the purge when a silently truncated page yields fewer items than the reported total", async () => {
+    // Server reports 10 items but returns a single short page of 1 (silent
+    // truncation) — previously the short page counted as "reached the end"
+    // and the untouched remainder was wiped.
+    mockSyncDb({ staleRows: [STALE_ROW] });
+    mockClient.getLibraryItemsPage.mockResolvedValue({
+      items: [{ ratingKey: "rk1", title: "Movie A", type: "movie" }],
+      total: 10,
+    });
+
+    await syncMediaServer("server-1");
+
+    expect(staleDelete().length).toBe(0);
+    expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBeGreaterThan(0);
+  });
+
+  it("purges stale rows after a complete traversal and surfaces cascaded exceptions", async () => {
+    mockSyncDb({ staleRows: [STALE_ROW] });
+    mockClient.getLibraryItemsPage.mockResolvedValue({
+      items: [{ ratingKey: "rk1", title: "Movie A", type: "movie" }],
+      total: 1,
+    });
+    mockPrisma.lifecycleException.count.mockResolvedValue(2);
+
+    await syncMediaServer("server-1");
+
+    expect(staleDelete().length).toBe(1);
+    // The purge checks how many lifecycle exceptions it is about to cascade away
+    expect(mockPrisma.lifecycleException.count).toHaveBeenCalledWith({
+      where: { mediaItemId: { in: ["stale-1"] } },
+    });
+    expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBeGreaterThan(0);
+  });
+
+  it("still purges an emptied library once a non-empty sync confirms the library state", async () => {
+    // Zero items fetched but the library had no rows either — nothing to
+    // protect, the (empty) purge path is allowed through.
+    mockSyncDb({ staleRows: [], existingCount: BigInt(0) });
+    mockClient.getLibraryItemsPage.mockResolvedValue({ items: [], total: 0 });
+
+    await syncMediaServer("server-1");
+
+    // Stale select ran (guard not tripped), found nothing, deleted nothing.
+    expect(findDbCalls('"updatedAt"<$2').length).toBe(1);
+    expect(staleDelete().length).toBe(0);
   });
 });

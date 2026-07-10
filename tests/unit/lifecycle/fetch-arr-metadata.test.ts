@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const mockPrisma = vi.hoisted(() => ({
-  radarrInstance: { findMany: vi.fn() },
-  sonarrInstance: { findMany: vi.fn() },
-  lidarrInstance: { findMany: vi.fn() },
+  radarrInstance: { findMany: vi.fn(), count: vi.fn() },
+  sonarrInstance: { findMany: vi.fn(), count: vi.fn() },
+  lidarrInstance: { findMany: vi.fn(), count: vi.fn() },
 }));
 
 const mockRadarrClient = vi.hoisted(() => ({
@@ -36,7 +36,45 @@ vi.mock("@/lib/arr/lidarr-client", () => ({
   LidarrClient: function () { return mockLidarrClient; },
 }));
 
-import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
+import { fetchArrMetadata, hasEnabledArrInstances, arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
+
+describe("hasEnabledArrInstances", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("counts enabled Radarr instances for MOVIE", async () => {
+    mockPrisma.radarrInstance.count.mockResolvedValue(1);
+    await expect(hasEnabledArrInstances("u1", "MOVIE")).resolves.toBe(true);
+    expect(mockPrisma.radarrInstance.count).toHaveBeenCalledWith({
+      where: { userId: "u1", enabled: true },
+    });
+  });
+
+  it("counts enabled Sonarr instances for SERIES", async () => {
+    mockPrisma.sonarrInstance.count.mockResolvedValue(0);
+    await expect(hasEnabledArrInstances("u1", "SERIES")).resolves.toBe(false);
+    expect(mockPrisma.sonarrInstance.count).toHaveBeenCalledWith({
+      where: { userId: "u1", enabled: true },
+    });
+  });
+
+  it("counts enabled Lidarr instances for MUSIC", async () => {
+    mockPrisma.lidarrInstance.count.mockResolvedValue(0);
+    await expect(hasEnabledArrInstances("u1", "MUSIC")).resolves.toBe(false);
+    expect(mockPrisma.lidarrInstance.count).toHaveBeenCalledWith({
+      where: { userId: "u1", enabled: true },
+    });
+  });
+});
+
+describe("arrFamilyLabel", () => {
+  it("maps each library type to its Arr family", () => {
+    expect(arrFamilyLabel("MOVIE")).toBe("Radarr");
+    expect(arrFamilyLabel("SERIES")).toBe("Sonarr");
+    expect(arrFamilyLabel("MUSIC")).toBe("Lidarr");
+  });
+});
 
 describe("fetchArrMetadata", () => {
   beforeEach(() => {

@@ -52,10 +52,14 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
 
 vi.mock("@/lib/lifecycle/fetch-arr-metadata", () => ({
   fetchArrMetadata: vi.fn().mockResolvedValue({}),
+  hasEnabledArrInstances: vi.fn().mockResolvedValue(true),
+  arrFamilyLabel: (type: string) =>
+    type === "MOVIE" ? "Radarr" : type === "MUSIC" ? "Lidarr" : "Sonarr",
 }));
 
 vi.mock("@/lib/lifecycle/fetch-seerr-metadata", () => ({
   fetchSeerrMetadata: vi.fn().mockResolvedValue({}),
+  hasEnabledSeerrInstances: vi.fn().mockResolvedValue(true),
 }));
 
 // Import AFTER mocks

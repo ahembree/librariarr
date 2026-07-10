@@ -6,6 +6,7 @@ import { executeQuery } from "@/lib/query/query-engine";
 import { appCache } from "@/lib/cache/memory-cache";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
+import { findExceptionProtectedParents } from "@/lib/lifecycle/exception-guard";
 import { validateRequest, queryActionSchema } from "@/lib/validation";
 import { progressStreamResponse } from "@/lib/progress/stream";
 import type { ProgressPhase, ProgressEmit } from "@/lib/progress/types";
@@ -325,7 +326,7 @@ export async function POST(request: NextRequest) {
 
       // Fetch ownership-verified media items with external IDs.
       validateStep("Loading items to act on");
-      const items = await prisma.mediaItem.findMany({
+      let items = await prisma.mediaItem.findMany({
         where: {
           id: { in: actionableIds },
           library: { mediaServer: { userId } },
@@ -333,6 +334,30 @@ export async function POST(request: NextRequest) {
         include: { externalIds: true },
       });
       skipped += actionableIds.length - items.length;
+
+      // Exception inviolability, part 2: the member check above only sees the
+      // MATCHED episodes/tracks. A whole-record destructive action destroys
+      // the entire series/artist — including siblings the query never matched
+      // — so an exception on ANY item of the same parent must refuse it.
+      if (isWholeRecordDestructive) {
+        const protectedParents = await findExceptionProtectedParents(userId, items);
+        if (protectedParents.size > 0) {
+          const before = items.length;
+          items = items.filter((i) => !i.parentTitle || !protectedParents.has(i.parentTitle));
+          if (items.length < before) {
+            skipped += before - items.length;
+            logger.warn("Lifecycle", `Ad-hoc ${actionType}: skipped ${before - items.length} whole-record target(s) — an episode/track of the series/artist is excluded via lifecycle exception`);
+          }
+          if (items.length === 0) {
+            return {
+              executed: 0,
+              failed: 0,
+              skipped,
+              errors: ["All selected items belong to series/artists with excluded episodes or tracks — a whole-record delete cannot exclude them"],
+            };
+          }
+        }
+      }
 
       // Per-item progress drives the determinate "Running action" segment.
       emit({ type: "phase", key: "execute", fraction: 0 });

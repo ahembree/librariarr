@@ -44,6 +44,8 @@ const mockExtractActionError = vi.hoisted(() => vi.fn());
 const mockSyncAllCollections = vi.hoisted(() => vi.fn());
 const mockFetchArrMetadata = vi.hoisted(() => vi.fn());
 const mockFetchSeerrMetadata = vi.hoisted(() => vi.fn());
+const mockHasEnabledArrInstances = vi.hoisted(() => vi.fn());
+const mockHasEnabledSeerrInstances = vi.hoisted(() => vi.fn());
 const mockSyncMediaServer = vi.hoisted(() => vi.fn());
 const mockSendDiscordNotification = vi.hoisted(() => vi.fn());
 const mockBuildSuccessSummaryEmbed = vi.hoisted(() => vi.fn());
@@ -75,9 +77,13 @@ vi.mock("@/lib/lifecycle/collections", () => ({
 }));
 vi.mock("@/lib/lifecycle/fetch-arr-metadata", () => ({
   fetchArrMetadata: mockFetchArrMetadata,
+  hasEnabledArrInstances: mockHasEnabledArrInstances,
+  arrFamilyLabel: (type: string) =>
+    type === "MOVIE" ? "Radarr" : type === "MUSIC" ? "Lidarr" : "Sonarr",
 }));
 vi.mock("@/lib/lifecycle/fetch-seerr-metadata", () => ({
   fetchSeerrMetadata: mockFetchSeerrMetadata,
+  hasEnabledSeerrInstances: mockHasEnabledSeerrInstances,
 }));
 vi.mock("@/lib/sync/sync-server", () => ({
   syncMediaServer: mockSyncMediaServer,
@@ -598,6 +604,10 @@ describe("scheduleActionsForRuleSet", () => {
 describe("processLifecycleRules", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: instances exist — individual tests flip these to exercise the
+    // no-instance match-all guard.
+    mockHasEnabledArrInstances.mockResolvedValue(true);
+    mockHasEnabledSeerrInstances.mockResolvedValue(true);
   });
 
   it("skips rule sets with no valid servers", async () => {
@@ -711,6 +721,120 @@ describe("processLifecycleRules", () => {
 
     expect(mockFetchArrMetadata).toHaveBeenCalledWith("u1", "MOVIE");
     expect(mockDetectAndSaveMatches).toHaveBeenCalled();
+  });
+
+  it("skips rule sets with Arr rules when no enabled Arr instance exists (match-all guard)", async () => {
+    // With zero enabled instances fetchArrMetadata would return {}, and
+    // "foundInArr = false" would then match the ENTIRE library — the rule set
+    // must be skipped instead, leaving existing matches untouched.
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasArrRules.mockReturnValue(true);
+    mockHasSeerrRules.mockReturnValue(false);
+    mockHasEnabledArrInstances.mockResolvedValue(false);
+
+    mockPrisma.ruleSet.findMany.mockResolvedValueOnce([
+      {
+        id: "rs1",
+        userId: "u1",
+        name: "Orphan hunter",
+        type: "MOVIE",
+        rules: [{ field: "foundInArr", operator: "equals", value: "false", enabled: true }],
+        seriesScope: false,
+        serverIds: ["s1"],
+        actionEnabled: true,
+        actionType: "DELETE_RADARR",
+        actionDelayDays: 0,
+        arrInstanceId: "radarr1",
+        targetQualityProfileId: null,
+        addImportExclusion: false,
+        addArrTags: [],
+        removeArrTags: [],
+        collectionId: null,
+        discordNotifyOnMatch: false,
+        stickyMatches: false,
+        searchAfterAction: false,
+        user: { mediaServers: [{ id: "s1" }] },
+      },
+    ]);
+
+    await processLifecycleRules("u1");
+
+    expect(mockFetchArrMetadata).not.toHaveBeenCalled();
+    expect(mockDetectAndSaveMatches).not.toHaveBeenCalled();
+  });
+
+  it("skips MUSIC rule sets with Seerr rules (Seerr data is never fetched for music)", async () => {
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasArrRules.mockReturnValue(false);
+    mockHasSeerrRules.mockReturnValue(true);
+
+    mockPrisma.ruleSet.findMany.mockResolvedValueOnce([
+      {
+        id: "rs1",
+        userId: "u1",
+        name: "Music seerr",
+        type: "MUSIC",
+        rules: [{ field: "seerrRequested", operator: "equals", value: "false", enabled: true }],
+        seriesScope: true,
+        serverIds: ["s1"],
+        actionEnabled: false,
+        actionType: null,
+        actionDelayDays: 0,
+        arrInstanceId: null,
+        targetQualityProfileId: null,
+        addImportExclusion: false,
+        addArrTags: [],
+        removeArrTags: [],
+        collectionId: null,
+        discordNotifyOnMatch: false,
+        stickyMatches: false,
+        searchAfterAction: false,
+        user: { mediaServers: [{ id: "s1" }] },
+      },
+    ]);
+
+    await processLifecycleRules("u1");
+
+    expect(mockFetchSeerrMetadata).not.toHaveBeenCalled();
+    expect(mockDetectAndSaveMatches).not.toHaveBeenCalled();
+  });
+
+  it("skips rule sets with Seerr rules when no enabled Seerr instance exists (match-all guard)", async () => {
+    // "seerrRequested = false" against an empty Seerr map matches everything.
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasArrRules.mockReturnValue(false);
+    mockHasSeerrRules.mockReturnValue(true);
+    mockHasEnabledSeerrInstances.mockResolvedValue(false);
+
+    mockPrisma.ruleSet.findMany.mockResolvedValueOnce([
+      {
+        id: "rs1",
+        userId: "u1",
+        name: "Unrequested",
+        type: "MOVIE",
+        rules: [{ field: "seerrRequested", operator: "equals", value: "false", enabled: true }],
+        seriesScope: false,
+        serverIds: ["s1"],
+        actionEnabled: false,
+        actionType: null,
+        actionDelayDays: 0,
+        arrInstanceId: null,
+        targetQualityProfileId: null,
+        addImportExclusion: false,
+        addArrTags: [],
+        removeArrTags: [],
+        collectionId: null,
+        discordNotifyOnMatch: false,
+        stickyMatches: false,
+        searchAfterAction: false,
+        user: { mediaServers: [{ id: "s1" }] },
+      },
+    ]);
+
+    await processLifecycleRules("u1");
+
+    expect(mockFetchSeerrMetadata).not.toHaveBeenCalled();
+    expect(mockDetectAndSaveMatches).not.toHaveBeenCalled();
   });
 
   it("syncs collections once after processing all rule sets", async () => {
@@ -925,6 +1049,90 @@ describe("executeLifecycleActions", () => {
     expect(mockExecuteAction).toHaveBeenCalledTimes(1);
     const passed = mockExecuteAction.mock.calls[0][0];
     expect(passed.matchedMediaItemIds).toEqual(["e1", "e3"]); // e2 filtered, not deleted
+  });
+
+  it("cancels a whole-record DELETE_SONARR when a NON-matching sibling episode is excepted", async () => {
+    // The excepted episode e9 never matched the rule, so it is not in
+    // matchedMediaItemIds — the member-based inviolability check can't see it.
+    // A whole-series delete would still destroy it, so the action must cancel.
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      {
+        id: "a1",
+        userId: "u1",
+        mediaItemId: "ep1",
+        mediaItemTitle: "Show",
+        mediaItem: {
+          id: "ep1",
+          title: "Show",
+          parentTitle: "Show",
+          type: "SERIES",
+          year: null,
+          library: { key: "1", mediaServerId: "s1" },
+          externalIds: [],
+        },
+        ruleSetId: "rs1",
+        actionType: "DELETE_SONARR", // whole-record; ignores member list
+        matchedMediaItemIds: ["ep1"],
+        ruleSet: { name: "Test", discordNotifyOnAction: false, userId: "u1" },
+      },
+    ]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "ep1" }]);
+    // First shape: the plain exceptionSet lookup (excepted sibling e9 — not a
+    // matched member). Second shape: the exception-guard's parentTitle lookup.
+    mockPrisma.lifecycleException.findMany.mockImplementation(
+      async (args: { where?: { mediaItem?: unknown } }) =>
+        args?.where?.mediaItem
+          ? [{ mediaItem: { parentTitle: "Show" } }]
+          : [{ userId: "u1", mediaItemId: "e9" }],
+    );
+    mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+
+    await executeLifecycleActions("u1");
+
+    expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(mockExecuteAction).not.toHaveBeenCalled();
+  });
+
+  it("still runs a member-scoped DELETE_FILES_SONARR when only a non-member sibling is excepted", async () => {
+    // Member-scoped deletes act only on matchedMediaItemIds — an exception on
+    // a sibling episode outside the member list must not block them.
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      {
+        id: "a1",
+        userId: "u1",
+        mediaItemId: "ep1",
+        mediaItemTitle: "Show",
+        mediaItem: {
+          id: "ep1",
+          title: "Show",
+          parentTitle: "Show",
+          type: "SERIES",
+          year: null,
+          library: { key: "1", mediaServerId: "s1" },
+          externalIds: [],
+        },
+        ruleSetId: "rs1",
+        actionType: "DELETE_FILES_SONARR", // member-scoped
+        matchedMediaItemIds: ["ep1"],
+        ruleSet: { name: "Test", discordNotifyOnAction: false, userId: "u1" },
+      },
+    ]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "ep1" }]);
+    mockPrisma.lifecycleException.findMany.mockImplementation(
+      async (args: { where?: { mediaItem?: unknown } }) =>
+        args?.where?.mediaItem
+          ? [{ mediaItem: { parentTitle: "Show" } }]
+          : [{ userId: "u1", mediaItemId: "e9" }],
+    );
+    mockExecuteAction.mockResolvedValue(undefined);
+    mockPrisma.mediaItem.findMany.mockResolvedValue([]);
+    mockPrisma.lifecycleAction.update.mockResolvedValue({});
+    mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
+
+    await executeLifecycleActions("u1");
+
+    expect(mockExecuteAction).toHaveBeenCalledTimes(1);
+    expect(mockExecuteAction.mock.calls[0][0].matchedMediaItemIds).toEqual(["ep1"]);
   });
 
   it("deletes stale actions for items no longer in match set", async () => {

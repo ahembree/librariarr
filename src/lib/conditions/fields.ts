@@ -100,12 +100,17 @@ export const CONDITION_FIELDS: ConditionField[] = [
   { value: "arrMonitoredEpisodeCount", label: "Monitored Episodes", type: "number", section: "arrEpisodes", requiresArr: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
 
   // ─── Seerr ──────────────────────────────────────────────────────────────
-  { value: "seerrRequested", label: "Has Request", type: "boolean", section: "seerr", knownValues: ["true", "false"], requiresSeerr: true },
-  { value: "seerrRequestDate", label: "Request Date", type: "date", section: "seerr", requiresSeerr: true },
-  { value: "seerrRequestCount", label: "Request Count", type: "number", section: "seerr", requiresSeerr: true },
-  { value: "seerrRequestedBy", label: "Requested By", type: "text", section: "seerr", enumerable: true, requiresSeerr: true },
-  { value: "seerrApprovalDate", label: "Approval Date", type: "date", section: "seerr", requiresSeerr: true },
-  { value: "seerrDeclineDate", label: "Decline Date", type: "date", section: "seerr", requiresSeerr: true },
+  // Seerr manages movie/TV requests only — no Seerr data is ever fetched for
+  // MUSIC, so a Seerr rule on a music rule set evaluates against the default
+  // "never requested" record ("seerrRequested = false" would vacuously match
+  // every artist). invalidForLibraryType makes the create/update routes reject
+  // that instead of silently accepting a match-all hazard.
+  { value: "seerrRequested", label: "Has Request", type: "boolean", section: "seerr", knownValues: ["true", "false"], requiresSeerr: true, invalidForLibraryType: ["MUSIC"] },
+  { value: "seerrRequestDate", label: "Request Date", type: "date", section: "seerr", requiresSeerr: true, invalidForLibraryType: ["MUSIC"] },
+  { value: "seerrRequestCount", label: "Request Count", type: "number", section: "seerr", requiresSeerr: true, invalidForLibraryType: ["MUSIC"] },
+  { value: "seerrRequestedBy", label: "Requested By", type: "text", section: "seerr", enumerable: true, requiresSeerr: true, invalidForLibraryType: ["MUSIC"] },
+  { value: "seerrApprovalDate", label: "Approval Date", type: "date", section: "seerr", requiresSeerr: true, invalidForLibraryType: ["MUSIC"] },
+  { value: "seerrDeclineDate", label: "Decline Date", type: "date", section: "seerr", requiresSeerr: true, invalidForLibraryType: ["MUSIC"] },
 
   // ─── Series (aggregate fields, computed by aggregating across episodes) ─
   { value: "latestEpisodeViewDate", label: "Latest Episode View Date", type: "date", section: "series", isSeriesAggregate: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },

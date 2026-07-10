@@ -9,6 +9,37 @@ import type { ArrDataMap } from "@/lib/rules/lifecycle-engine";
 // How often (in items) the in-memory mapping loop reports sub-progress.
 const MAP_PROGRESS_INTERVAL = 500;
 
+/** Human label for the Arr family that serves a library type. */
+export function arrFamilyLabel(type: "MOVIE" | "SERIES" | "MUSIC"): string {
+  return type === "MOVIE" ? "Radarr" : type === "MUSIC" ? "Lidarr" : "Sonarr";
+}
+
+/**
+ * Whether at least one ENABLED Arr instance of the family serving `type`
+ * exists. Rule sets that reference Arr fields must be skipped when this is
+ * false: `fetchArrMetadata` would return an empty map, and Phase 2 then
+ * evaluates every item with `meta === undefined` — which makes
+ * `foundInArr equals false` (the common "not managed by Radarr" rule)
+ * vacuously true for the ENTIRE library. With a destructive action attached,
+ * one detection cycle while an instance is disabled floods RuleMatch and
+ * schedules deletes for everything; re-enabling the instance before the next
+ * detection would then let those actions execute. "No instance" must read as
+ * "Arr data unavailable" (skip, like a fetch failure), never as "nothing is
+ * in Arr".
+ */
+export async function hasEnabledArrInstances(
+  userId: string,
+  type: "MOVIE" | "SERIES" | "MUSIC",
+): Promise<boolean> {
+  if (type === "MOVIE") {
+    return (await prisma.radarrInstance.count({ where: { userId, enabled: true } })) > 0;
+  }
+  if (type === "MUSIC") {
+    return (await prisma.lidarrInstance.count({ where: { userId, enabled: true } })) > 0;
+  }
+  return (await prisma.sonarrInstance.count({ where: { userId, enabled: true } })) > 0;
+}
+
 export async function fetchArrMetadata(
   userId: string,
   type: "MOVIE" | "SERIES" | "MUSIC",

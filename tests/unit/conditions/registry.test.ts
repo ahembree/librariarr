@@ -97,6 +97,22 @@ describe("CONDITION_FIELDS registry", () => {
     }
   });
 
+  // Seerr manages movie/TV requests only — no Seerr data is ever fetched for
+  // MUSIC, so every Seerr field must be gated off music rule sets. An ungated
+  // Seerr field on a music rule evaluates against the default "never
+  // requested" record: "seerrRequested = false" would vacuously match every
+  // artist (a match-all hazard for the deletion pipeline).
+  it("gates every Seerr field off MUSIC", () => {
+    const seerrFields = CONDITION_FIELDS.filter((f) => f.section === "seerr");
+    expect(seerrFields.length).toBeGreaterThan(0);
+    for (const field of seerrFields) {
+      expect(
+        field.invalidForLibraryType ?? [],
+        `${field.value} must be invalid for MUSIC`,
+      ).toContain("MUSIC");
+    }
+  });
+
   // The complement: Arr fields populated for every media type must stay
   // ungated, so they remain usable in all rule/query builders.
   it("leaves all-type Arr fields ungated", () => {

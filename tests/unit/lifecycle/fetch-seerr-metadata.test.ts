@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const mockPrisma = vi.hoisted(() => ({
-  seerrInstance: { findMany: vi.fn() },
+  seerrInstance: { findMany: vi.fn(), count: vi.fn() },
 }));
 
 const mockSeerrClient = vi.hoisted(() => ({
@@ -13,7 +13,26 @@ vi.mock("@/lib/seerr/seerr-client", () => ({
   SeerrClient: function () { return mockSeerrClient; },
 }));
 
-import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { fetchSeerrMetadata, hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
+
+describe("hasEnabledSeerrInstances", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("is true when an enabled instance exists", async () => {
+    mockPrisma.seerrInstance.count.mockResolvedValue(2);
+    await expect(hasEnabledSeerrInstances("u1")).resolves.toBe(true);
+    expect(mockPrisma.seerrInstance.count).toHaveBeenCalledWith({
+      where: { userId: "u1", enabled: true },
+    });
+  });
+
+  it("is false when none exist", async () => {
+    mockPrisma.seerrInstance.count.mockResolvedValue(0);
+    await expect(hasEnabledSeerrInstances("u1")).resolves.toBe(false);
+  });
+});
 
 describe("fetchSeerrMetadata", () => {
   beforeEach(() => {

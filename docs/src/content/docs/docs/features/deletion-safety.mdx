@@ -105,6 +105,8 @@ Other rule fields need information from outside the database — for example, wh
 
 The danger here is subtle: if the engine had a bug where one of these "outside" fields produced no constraint at all, the database query could return your entire library, and a missing follow-up check could let everything through. The engine is built so this can't happen — when it sees a rule it can't translate to a database query, it explicitly marks it as "must be checked in memory" and propagates that marker through the rule's AND/OR logic. The result is that the database query is always at least as broad as the final answer, and the in-memory pass that follows always narrows it down. There is no path where an outside-system rule lets your whole library through.
 
+There's a related trap on the outside-system side itself: fields like `foundInArr` and `seerrRequested` describe an item's **absence** from the external system, so if the external data simply isn't there — you disabled or deleted your only Radarr instance, or never connected Seerr — "not found in Arr" would be true for *everything*. Detection therefore refuses to evaluate a rule set whose *arr/Seerr fields have **no enabled instance** behind them: the rule set is skipped with a warning in System Logs, its existing matches are left untouched, and previews return an error instead of a whole-library match list. An unreachable (but still enabled) instance behaves the same way for a different reason — the metadata fetch fails and the rule set is skipped for that cycle. Seerr fields are additionally rejected outright on music rule sets, where no Seerr data can ever exist.
+
 ### Check 3 — A final safety net for unrecognized rules
 
 Even if checks 1 and 2 had a bug, there's a third check at the bottom of the engine. After translating every rule, it asks itself: *"Did all of these rules produce nothing the database can act on, and is there no in-memory follow-up planned?"*
@@ -174,6 +176,8 @@ Any item you've added to your **Lifecycle Exceptions** list:
 
 For series rules that target individual episodes, the system tracks each episode separately. If you've excepted some episodes of a show but not others, only the non-excepted ones can be acted on. If you've excepted every targeted episode of a show, the entire action is cancelled.
 
+Whole-record actions get an extra check. *Delete from Sonarr* / *Delete from Lidarr* remove the **entire** series or artist — including episodes or tracks the rule never matched. Because a "surgical" exclusion is impossible for those, the action is refused outright when *any* episode of the series (or track of the artist) is on the exception list, even one that isn't part of the current match. This applies to scheduled execution, the manual **Execute** button, retries of failed actions, and ad-hoc Query-page actions alike, and every refusal is logged.
+
 ## Layer 4 — When the action runs
 
 Even after all the previous layers approve, there are still checks the moment before each individual deletion happens.
@@ -206,7 +210,7 @@ There's also a **year guard** that runs first, because title normalization strip
 
 If neither check passes, the action is rejected with an error logged to System Logs and surfaced in the Pending Actions page. The action moves to "Failed" status — it does not execute against the unverified record.
 
-When you retry a failed action manually from the Pending Actions page, you have the option to skip title validation if you've inspected the mismatch and confirmed it's safe (for example, a legitimate rename you've already verified).
+When you retry a failed action manually from the Pending Actions page, you have the option to skip title validation if you've inspected the mismatch and confirmed it's safe (for example, a legitimate rename you've already verified). A retry still runs every other guard: the rule set must be **enabled** (a disabled rule set's matches are frozen, so its failed actions can't be re-fired), the item must still be a current match, and the exception checks — including the whole-record sibling check — must pass.
 
 ### Recoverability depends on *arr's recycle bin, not on Librariarr
 

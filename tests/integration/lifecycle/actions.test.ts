@@ -853,6 +853,131 @@ describe("Lifecycle Actions", () => {
       const { executeAction } = await import("@/lib/lifecycle/actions");
       expect(executeAction).toHaveBeenCalledTimes(1);
     });
+
+    it("refuses to retry when the rule set is disabled", async () => {
+      // A disabled rule set's matches are frozen (detection skips it), so the
+      // stale-match guard alone would wave a destructive retry through.
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { title: "Frozen Movie", type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, { name: "Disabled Rule", enabled: false });
+      const action = await createTestAction(user.id, item.id, ruleSet.id, {
+        status: "FAILED",
+        actionType: "DELETE_RADARR",
+      });
+      await createTestRuleMatch(ruleSet.id, item.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRouteWithParams(actionRetry, { id: action.id }, {
+        url: `/api/lifecycle/actions/${action.id}`,
+        method: "POST",
+      });
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/disabled/i);
+
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
+    it("refuses a whole-record retry when a sibling episode has an exception", async () => {
+      // DELETE_SONARR destroys the entire series — an exception on an episode
+      // the rule never matched must still block the retry.
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const ep1 = await createTestMediaItem(library.id, {
+        title: "Ep 1", type: "SERIES", parentTitle: "Retry Show", seasonNumber: 1, episodeNumber: 1,
+      });
+      const ep2 = await createTestMediaItem(library.id, {
+        title: "Ep 2", type: "SERIES", parentTitle: "Retry Show", seasonNumber: 1, episodeNumber: 2,
+      });
+      const ruleSet = await createTestRuleSet(user.id, { name: "Series Retry Rule", type: "SERIES" });
+      const action = await createTestAction(user.id, ep1.id, ruleSet.id, {
+        status: "FAILED",
+        actionType: "DELETE_SONARR",
+      });
+      await createTestRuleMatch(ruleSet.id, ep1.id);
+
+      const prisma = getTestPrisma();
+      await prisma.lifecycleException.create({
+        data: { userId: user.id, mediaItemId: ep2.id, reason: "keep this episode" },
+      });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRouteWithParams(actionRetry, { id: action.id }, {
+        url: `/api/lifecycle/actions/${action.id}`,
+        method: "POST",
+      });
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/exception/i);
+
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("POST /api/lifecycle/actions/execute — whole-record exception guard", () => {
+    it("refuses a whole-record delete when a NON-matching sibling episode is excepted", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const ep1 = await createTestMediaItem(library.id, {
+        title: "Ep 1", type: "SERIES", parentTitle: "Guarded Show", seasonNumber: 1, episodeNumber: 1,
+      });
+      const ep2 = await createTestMediaItem(library.id, {
+        title: "Ep 2", type: "SERIES", parentTitle: "Guarded Show", seasonNumber: 1, episodeNumber: 2,
+      });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Whole Record Rule",
+        type: "SERIES",
+        actionType: "DELETE_SONARR",
+        arrInstanceId: "arr-1",
+      });
+      // Only ep1 matched the rule; ep2 is protected but never matched.
+      await createTestRuleMatch(ruleSet.id, ep1.id);
+      const prisma = getTestPrisma();
+      await prisma.lifecycleException.create({
+        data: { userId: user.id, mediaItemId: ep2.id, reason: "never delete" },
+      });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id },
+      });
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/exclude/i);
+
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
+    it("executes the whole-record delete when no sibling is excepted", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const ep1 = await createTestMediaItem(library.id, {
+        title: "Ep 1", type: "SERIES", parentTitle: "Free Show", seasonNumber: 1, episodeNumber: 1,
+      });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Whole Record Rule 2",
+        type: "SERIES",
+        actionType: "DELETE_SONARR",
+        arrInstanceId: "arr-1",
+      });
+      await createTestRuleMatch(ruleSet.id, ep1.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id },
+      });
+      const body = await expectJson<{ executed: number }>(response, 200);
+      expect(body.executed).toBe(1);
+    });
   });
 
 });

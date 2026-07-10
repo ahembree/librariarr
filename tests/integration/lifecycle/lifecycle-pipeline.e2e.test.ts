@@ -134,4 +134,40 @@ describe("lifecycle pipeline (e2e)", () => {
     expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
     expect(await prisma.lifecycleAction.count({ where: { ruleSetId: ruleSet.id, status: "PENDING" } })).toBe(0);
   });
+
+  it("never floods matches for a foundInArr rule when no enabled Radarr instance exists (match-all guard)", async () => {
+    // With zero enabled Radarr instances, "foundInArr = false" would be
+    // vacuously true for the ENTIRE movie library — one detection cycle would
+    // persist a match and schedule a DELETE for every item. The pipeline must
+    // skip the rule set instead, writing nothing.
+    const prisma = getTestPrisma();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "MOVIE" });
+    await createTestMediaItem(library.id, { title: "Movie A", type: "MOVIE", playCount: 0 });
+    await createTestMediaItem(library.id, { title: "Movie B", type: "MOVIE", playCount: 5 });
+
+    const ruleSet = await createTestRuleSet(user.id, {
+      name: "Orphan purge",
+      type: "MOVIE",
+      rules: [
+        {
+          id: "g1",
+          condition: "AND",
+          rules: [{ id: "r1", field: "foundInArr", operator: "equals", value: "false", condition: "AND" }],
+          groups: [],
+        },
+      ],
+      serverIds: [server.id],
+      actionEnabled: true,
+      actionType: "DELETE_RADARR",
+      arrInstanceId: "radarr-gone",
+      actionDelayDays: 0,
+    });
+
+    await processLifecycleRules(user.id);
+
+    expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
+    expect(await prisma.lifecycleAction.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
+  });
 });
