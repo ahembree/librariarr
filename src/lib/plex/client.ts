@@ -22,6 +22,20 @@ export interface PlexClientOptions {
   skipTlsVerify?: boolean;
 }
 
+/**
+ * Max rating keys to pack into a single collection `uri` query param. Plex (and
+ * any reverse proxy in front of it) rejects an over-long request URI with a
+ * generic HTML "400 Bad Request" — not a Plex error — so a large collection
+ * (e.g. a big "Leaving Soon" shelf) whose every member is sent in one request
+ * silently fails to populate. Chunking keeps each request well under the
+ * request-line limit.
+ */
+const COLLECTION_ITEM_BATCH_SIZE = 50;
+
+function buildCollectionUri(machineId: string, ratingKeys: string[]): string {
+  return `server://${machineId}/com.plexapp.plugins.library/library/metadata/${ratingKeys.join(",")}`;
+}
+
 export class PlexClient implements MediaServerClient {
   readonly bulkListingIncomplete = true;
   private client: AxiosInstance;
@@ -423,12 +437,26 @@ export class PlexClient implements MediaServerClient {
     ratingKeys: string[],
     type: number
   ): Promise<PlexCollection> {
-    const uri = `server://${machineId}/com.plexapp.plugins.library/library/metadata/${ratingKeys.join(",")}`;
+    // Create with the first batch, then add any remainder in further batches so
+    // the create request URI can't exceed the server/proxy request-line limit
+    // (see COLLECTION_ITEM_BATCH_SIZE).
+    const firstBatch = ratingKeys.slice(0, COLLECTION_ITEM_BATCH_SIZE);
     const response = await this.client.post("/library/collections", null, {
-      params: { type, title, smart: 0, sectionId: sectionKey, uri },
+      params: {
+        type,
+        title,
+        smart: 0,
+        sectionId: sectionKey,
+        uri: buildCollectionUri(machineId, firstBatch),
+      },
     });
     const metadata = response.data.MediaContainer.Metadata;
-    return metadata[0];
+    const collection: PlexCollection = metadata[0];
+    const rest = ratingKeys.slice(COLLECTION_ITEM_BATCH_SIZE);
+    if (rest.length > 0 && collection?.ratingKey) {
+      await this.addCollectionItems(collection.ratingKey, machineId, rest);
+    }
+    return collection;
   }
 
   async getCollectionItems(collectionRatingKey: string): Promise<PlexMetadataItem[]> {
@@ -443,13 +471,16 @@ export class PlexClient implements MediaServerClient {
     machineId: string,
     ratingKeys: string[]
   ): Promise<void> {
-    if (ratingKeys.length === 0) return;
-    const uri = `server://${machineId}/com.plexapp.plugins.library/library/metadata/${ratingKeys.join(",")}`;
-    await this.client.put(
-      `/library/collections/${collectionRatingKey}/items`,
-      null,
-      { params: { uri } }
-    );
+    // Chunk so a large add can't produce an over-long request URI that Plex or a
+    // reverse proxy rejects with a generic 400 (see COLLECTION_ITEM_BATCH_SIZE).
+    for (let i = 0; i < ratingKeys.length; i += COLLECTION_ITEM_BATCH_SIZE) {
+      const batch = ratingKeys.slice(i, i + COLLECTION_ITEM_BATCH_SIZE);
+      await this.client.put(
+        `/library/collections/${collectionRatingKey}/items`,
+        null,
+        { params: { uri: buildCollectionUri(machineId, batch) } }
+      );
+    }
   }
 
   async removeCollectionItem(
