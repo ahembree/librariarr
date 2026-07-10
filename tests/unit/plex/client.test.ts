@@ -356,6 +356,25 @@ describe("PlexClient", () => {
         }
       );
     });
+
+    it("batches the create + remainder so the request URI can't overflow", async () => {
+      // 120 keys with a batch size of 50 => create with the first 50, then two
+      // PUT batches (50 + 20) for the remainder.
+      const keys = Array.from({ length: 120 }, (_, i) => String(i + 1));
+      mockAxiosInstance.post.mockResolvedValueOnce({
+        data: { MediaContainer: { Metadata: [{ ratingKey: "col", title: "Big" }] } },
+      });
+      mockAxiosInstance.put.mockResolvedValue({});
+
+      await client.createCollection("1", "Big", "machine-id", keys, 1);
+
+      const postUri = mockAxiosInstance.post.mock.calls[0][2].params.uri as string;
+      expect(postUri.split("/metadata/")[1].split(",")).toHaveLength(50);
+      // Remainder added via two PUT batches.
+      expect(mockAxiosInstance.put).toHaveBeenCalledTimes(2);
+      const secondBatch = mockAxiosInstance.put.mock.calls[1][2].params.uri as string;
+      expect(secondBatch.split("/metadata/")[1].split(",")).toHaveLength(20);
+    });
   });
 
   describe("addCollectionItems", () => {
@@ -376,6 +395,20 @@ describe("PlexClient", () => {
     it("skips when ratingKeys is empty", async () => {
       await client.addCollectionItems("100", "machine-id", []);
       expect(mockAxiosInstance.put).not.toHaveBeenCalled();
+    });
+
+    it("splits a large add into batches of 50", async () => {
+      const keys = Array.from({ length: 105 }, (_, i) => String(i + 1));
+      mockAxiosInstance.put.mockResolvedValue({});
+
+      await client.addCollectionItems("100", "machine-id", keys);
+
+      // 105 keys => 50 + 50 + 5 => three PUT requests.
+      expect(mockAxiosInstance.put).toHaveBeenCalledTimes(3);
+      const batchSizes = mockAxiosInstance.put.mock.calls.map(
+        (c) => (c[2].params.uri as string).split("/metadata/")[1].split(",").length,
+      );
+      expect(batchSizes).toEqual([50, 50, 5]);
     });
   });
 
