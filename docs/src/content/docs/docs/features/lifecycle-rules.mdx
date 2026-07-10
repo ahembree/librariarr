@@ -342,6 +342,16 @@ With **Sort order: Action date**, items are arranged soonest-scheduled-action fi
 - Disabling collection sync on a rule, or deleting the rule, simply detaches it — the collection is re-synced to the remaining rules' matches. The Plex collection is removed only when it has no remaining members.
 - To delete a collection definition outright, select it in the dropdown and use the **trash** button. You can delete it from the **last rule that uses it** — doing so removes the collection from that rule and deletes it from Plex. The button is disabled (and the API refuses) only while **other** rules still reference it, so remove it from those first.
 
+### Troubleshooting: matches exist but the collection is empty
+
+The Matches page reads directly from the database, but the Plex collection is populated by a separate sync step that pushes each matched item to Plex by its rating key. If a rule has matches yet the Plex collection shows **0 items**, check **System > Logs** for a line like `Failed to sync collection "…" for library …` — it now names the exact Plex request, HTTP status, and Plex's own error message so you can tell what was rejected. Common causes:
+
+- **The Plex server has no stored machine identifier.** Collections are written using the server's identifier, so a server added without it is skipped (you'll see a `… has no machineId` warning). Re-add the server through the Plex picker to store it.
+- **Stale rating keys.** If Plex regenerated its rating keys (a library rebuild, "Optimize database", or removing and re-adding the section), the stored keys no longer resolve and Plex rejects the update. Run a full **sync** of that library so Librariarr relearns the current keys.
+- **The matched copy lives on a different (or non-Plex) server.** A movie present on more than one server resolves to whichever copy was matched; only its own server's library can hold it in a Plex collection.
+
+As a safety measure, Librariarr will **not** empty or delete a collection when its rules matched items but none of them resolved to that Plex library — it leaves the collection intact and logs a warning, so a resolution problem never silently wipes a shelf. A collection is only removed when its rules genuinely match nothing.
+
 ## How Rules Are Evaluated
 
 Rules are evaluated in two steps:

@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { PlexClient } from "@/lib/plex/client";
+import { describePlexError } from "@/lib/plex/errors";
 import { logger } from "@/lib/logger";
 
 /** A saved, reusable Plex collection definition. */
@@ -103,7 +104,7 @@ export async function syncAllCollections(
       await syncCollectionById(c.id, plexItemsCache);
     } catch (error) {
       logger.error("Lifecycle", `Collection sync failed for collection ${c.id}`, {
-        error: String(error),
+        error: describePlexError(error),
       });
     }
   }
@@ -166,7 +167,18 @@ export async function syncCollection(
 
   for (const library of userLibraries) {
     try {
-      if (!library.mediaServer?.machineId) continue;
+      if (!library.mediaServer?.machineId) {
+        // A Plex collection is written via a server://<machineId>/… URI, so a
+        // server with no stored machineId cannot be synced at all. This used to
+        // skip silently, which is one way a collection stays empty with no
+        // explanation. Surface it so the fix (re-add the server via the Plex
+        // picker) is obvious.
+        logger.warn(
+          "Lifecycle",
+          `Skipping library "${library.title}" for collection "${collectionName}": Plex server "${library.mediaServer?.name ?? "?"}" has no machineId — re-add the server so its identifier is stored`,
+        );
+        continue;
+      }
       const server = library.mediaServer;
       const client = new PlexClient(server.url, server.accessToken, {
         skipTlsVerify: server.tlsSkipVerify,
@@ -206,6 +218,26 @@ export async function syncCollection(
         }
       }
       const desiredKeys = [...desiredSet];
+
+      // Resolution-failure guard: if contributing rule sets matched items but NONE
+      // resolved to a rating key in THIS library, do not touch the Plex collection
+      // at all. An empty desired set here means a stale ratingKey, a wrong server
+      // machineId, or a cross-server / non-Plex match — NOT that the collection
+      // should be emptied. Without this we would strip every current member (and
+      // then delete the collection) purely because resolution failed, silently
+      // destroying a collection the user still wants. Genuine "nothing matches
+      // anywhere" (all contributions empty) falls through to the normal
+      // empty-handling below, which still cleans the collection up.
+      if (desiredKeys.length === 0) {
+        const matchedItemCount = contributions.reduce((n, c) => n + c.items.length, 0);
+        if (matchedItemCount > 0) {
+          logger.warn(
+            "Lifecycle",
+            `Leaving Plex collection "${collectionName}" untouched in library "${library.title}": rule sets matched ${matchedItemCount} item(s) but none resolved to this library — check for stale ratingKeys, a wrong server machineId, or matches on another server`,
+          );
+          continue;
+        }
+      }
 
       const plexType = collection.type === "MOVIE" ? 1 : 2;
 
@@ -296,7 +328,7 @@ export async function syncCollection(
       logger.error(
         "Lifecycle",
         `Failed to sync collection "${collectionName}" for library ${library.id}`,
-        { error: String(error) }
+        { error: describePlexError(error) }
       );
     }
   }
