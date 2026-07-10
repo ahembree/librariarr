@@ -53,6 +53,16 @@ describe("describePlexError", () => {
     expect(msg).toContain('{"error":"bad"}');
   });
 
+  it("drops HTML error pages (reverse-proxy 400s) and falls back to the axios message", () => {
+    const msg = describePlexError(
+      makeAxiosError({ status: 400, data: "<html><body><h1>400 Bad Request</h1></body></html>" }),
+    );
+    expect(msg).not.toContain("<html>");
+    expect(msg).toBe(
+      "PUT /library/collections/col1/items → HTTP 400 (Request failed with status code 400)",
+    );
+  });
+
   it("strips the query string (which carries the token) from the path", () => {
     const msg = describePlexError(
       makeAxiosError({ url: "/library/collections/col1/items?X-Plex-Token=secret", status: 400, data: "nope" }),

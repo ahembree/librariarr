@@ -173,11 +173,11 @@ describe("syncCollection", () => {
     expect(mockPlexClient.createCollection).not.toHaveBeenCalled();
   });
 
-  it("does NOT touch the collection when rule sets matched but nothing resolved to this library", async () => {
-    // The collection exists and holds items, but every matched item's libraryId
-    // points at a different library (e.g. a cross-server / non-Plex match, or a
-    // stale ratingKey). The resolution-failure guard must leave it untouched
-    // rather than stripping every member and deleting it.
+  it("does NOT touch the collection when all matches live in another library (quiet skip)", async () => {
+    // Every matched item's libraryId points at a different library (a
+    // cross-server / non-Plex match) — the normal steady state in multi-library
+    // setups. The guard must leave the collection untouched rather than
+    // stripping every member and deleting it, and must NOT warn every cycle.
     mockPrisma.library.findMany.mockResolvedValue(oneMovieLibrary);
 
     await syncCollection(makeCollection(), [
@@ -187,9 +187,35 @@ describe("syncCollection", () => {
     expect(mockPlexClient.getCollections).not.toHaveBeenCalled();
     expect(mockPlexClient.removeCollectionItem).not.toHaveBeenCalled();
     expect(mockPlexClient.deleteCollection).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.debug).toHaveBeenCalledWith(
+      "Lifecycle",
+      expect.stringContaining("live in other libraries or servers"),
+    );
+  });
+
+  it("warns when items belong to this library but none resolved to a Plex rating key", async () => {
+    // Series-scope items claim this library, but their series title is missing
+    // from the live Plex library — a genuine resolution failure worth a warning.
+    mockPrisma.library.findMany.mockResolvedValue([
+      { id: "lib1", key: "1", title: "TV Shows", mediaServer: defaultServer, mediaServerId: "s1" },
+    ]);
+    mockPlexClient.getLibraryItems.mockResolvedValue([
+      { title: "Some Other Show", ratingKey: "series-rk-9" },
+    ]);
+
+    await syncCollection(makeCollection({ type: "SERIES" }), [
+      contribution(
+        [{ libraryId: "lib1", ratingKey: "ep-rk-1", title: "Ep 1", parentTitle: "Gone Show" }],
+        { seriesScope: true },
+      ),
+    ]);
+
+    expect(mockPlexClient.getCollections).not.toHaveBeenCalled();
+    expect(mockPlexClient.deleteCollection).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(
       "Lifecycle",
-      expect.stringContaining("none resolved to this library"),
+      expect.stringContaining("none resolved to a Plex rating key"),
     );
   });
 
@@ -206,7 +232,7 @@ describe("syncCollection", () => {
     expect(mockPlexClient.deleteCollection).toHaveBeenCalledWith("col1");
   });
 
-  it("warns (not silently) when a library's server has no machineId", async () => {
+  it("skips (and warns about) a library whose server has no machineId", async () => {
     mockPrisma.library.findMany.mockResolvedValue([
       { id: "lib1", key: "1", title: "Movies", mediaServer: { ...defaultServer, machineId: null }, mediaServerId: "s1" },
     ]);
@@ -318,18 +344,6 @@ describe("syncCollection", () => {
     ]);
 
     expect(mockPlexClient.updateCollectionVisibility).toHaveBeenCalledWith("1", "col1", true, true, true);
-  });
-
-  it("skips library without machineId", async () => {
-    mockPrisma.library.findMany.mockResolvedValue([
-      { id: "lib1", key: "1", title: "Movies", mediaServer: { ...defaultServer, machineId: null }, mediaServerId: "s1" },
-    ]);
-
-    await syncCollection(makeCollection(), [
-      contribution([{ libraryId: "lib1", ratingKey: "rk1", title: "Movie 1", parentTitle: null }]),
-    ]);
-
-    expect(mockPlexClient.getCollections).not.toHaveBeenCalled();
   });
 
   it("handles MUSIC type with plexType 2", async () => {

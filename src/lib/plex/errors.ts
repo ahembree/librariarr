@@ -8,18 +8,13 @@ function scrubToken(s: string): string {
 }
 
 /**
- * Turn a failed Plex request into a diagnostic string that names the HTTP
- * method, the request path, the status code, and Plex's response body.
+ * Turn a failed Plex request into `METHOD /path → HTTP <status>: <detail>`.
  *
- * Plex answers a bad collection write — e.g. a
- * `server://<machineId>/com.plexapp.plugins.library/library/metadata/<ratingKeys>`
- * URI it cannot resolve because the server's stored `machineId` is wrong or the
- * `ratingKeys` are stale (Plex regenerated them after a library rebuild) — with a
- * bare HTTP 400 whose only default message is "Request failed with status code
- * 400". That is useless for telling which of the half-dozen calls in
- * `syncCollection` failed or why, which is exactly how an empty-collection bug
- * stays invisible. This surfaces the missing detail. Any `X-Plex-Token` echoed
- * back by Plex is masked before it reaches the logs.
+ * Plex answers a bad request (e.g. a collection write with stale rating keys)
+ * with a bare 400 whose axios message is just "Request failed with status code
+ * 400" — useless for telling which call failed or why. This names the method,
+ * path, status, and Plex's own error body. The query string is stripped and any
+ * echoed `X-Plex-Token` masked so tokens never reach the logs.
  */
 export function describePlexError(error: unknown): string {
   if (axios.isAxiosError(error)) {
@@ -30,7 +25,10 @@ export function describePlexError(error: unknown): string {
     const data = error.response?.data;
     let body: string | null = null;
     if (typeof data === "string") {
-      body = data;
+      // Skip HTML error pages (reverse-proxy 400/502s) — they bloat the log
+      // without adding signal. Same policy as IntegrationError.
+      const trimmed = data.trim();
+      body = trimmed.startsWith("<") ? null : trimmed;
     } else if (data && typeof data === "object") {
       const message = (data as Record<string, unknown>).message;
       body = typeof message === "string" ? message : JSON.stringify(data);
