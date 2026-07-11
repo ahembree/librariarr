@@ -763,10 +763,13 @@ describe("processLifecycleRules", () => {
     expect(mockDetectAndSaveMatches).not.toHaveBeenCalled();
   });
 
-  it("skips MUSIC rule sets with Seerr rules (Seerr data is never fetched for music)", async () => {
+  it("skips AND DISARMS MUSIC rule sets with Seerr rules (permanently unevaluable)", async () => {
     mockHasAnyActiveRules.mockReturnValue(true);
     mockHasArrRules.mockReturnValue(false);
     mockHasSeerrRules.mockReturnValue(true);
+    // Pre-existing vacuous flood: matches + armed actions from before the guard
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 3 });
+    mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 40 });
 
     mockPrisma.ruleSet.findMany.mockResolvedValueOnce([
       {
@@ -797,6 +800,52 @@ describe("processLifecycleRules", () => {
 
     expect(mockFetchSeerrMetadata).not.toHaveBeenCalled();
     expect(mockDetectAndSaveMatches).not.toHaveBeenCalled();
+    // A permanently unevaluable rule set is DISARMED, not just skipped — its
+    // vacuous whole-library matches and armed actions must not survive.
+    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({
+      where: { ruleSetId: "rs1", status: "PENDING" },
+    });
+    expect(mockPrisma.ruleMatch.deleteMany).toHaveBeenCalledWith({
+      where: { ruleSetId: "rs1" },
+    });
+  });
+
+  it("does NOT disarm on the transient no-instance skip (matches stay untouched)", async () => {
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasArrRules.mockReturnValue(true);
+    mockHasSeerrRules.mockReturnValue(false);
+    mockHasEnabledArrInstances.mockResolvedValue(false);
+
+    mockPrisma.ruleSet.findMany.mockResolvedValueOnce([
+      {
+        id: "rs1",
+        userId: "u1",
+        name: "Transient",
+        type: "MOVIE",
+        rules: [{ field: "foundInArr", operator: "equals", value: "false", enabled: true }],
+        seriesScope: false,
+        serverIds: ["s1"],
+        actionEnabled: true,
+        actionType: "DELETE_RADARR",
+        actionDelayDays: 0,
+        arrInstanceId: "radarr1",
+        targetQualityProfileId: null,
+        addImportExclusion: false,
+        addArrTags: [],
+        removeArrTags: [],
+        collectionId: null,
+        discordNotifyOnMatch: false,
+        stickyMatches: false,
+        searchAfterAction: false,
+        user: { mediaServers: [{ id: "s1" }] },
+      },
+    ]);
+
+    await processLifecycleRules("u1");
+
+    expect(mockDetectAndSaveMatches).not.toHaveBeenCalled();
+    expect(mockPrisma.lifecycleAction.deleteMany).not.toHaveBeenCalled();
+    expect(mockPrisma.ruleMatch.deleteMany).not.toHaveBeenCalled();
   });
 
   it("skips rule sets with Seerr rules when no enabled Seerr instance exists (match-all guard)", async () => {
@@ -1049,6 +1098,48 @@ describe("executeLifecycleActions", () => {
     expect(mockExecuteAction).toHaveBeenCalledTimes(1);
     const passed = mockExecuteAction.mock.calls[0][0];
     expect(passed.matchedMediaItemIds).toEqual(["e1", "e3"]); // e2 filtered, not deleted
+  });
+
+  it("cancels armed actions of a permanently unevaluable MUSIC+Seerr rule set (backstop)", async () => {
+    // Detection disarms such rule sets, but this executor can run BEFORE the
+    // first post-upgrade detection cycle — a pre-existing vacuous flood of
+    // DELETE_LIDARR actions must not fire.
+    mockHasSeerrRules.mockReturnValue(true);
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      {
+        id: "a1",
+        userId: "u1",
+        mediaItemId: "track1",
+        mediaItemTitle: "Track",
+        mediaItem: {
+          id: "track1",
+          title: "Track",
+          parentTitle: "Artist",
+          type: "MUSIC",
+          year: null,
+          library: { key: "1", mediaServerId: "s1" },
+          externalIds: [],
+        },
+        ruleSetId: "rs1",
+        actionType: "DELETE_LIDARR",
+        matchedMediaItemIds: [],
+        ruleSet: {
+          name: "Music seerr",
+          discordNotifyOnAction: false,
+          userId: "u1",
+          type: "MUSIC",
+          rules: [{ field: "seerrRequested", operator: "equals", value: "false", enabled: true }],
+        },
+      },
+    ]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "track1" }]);
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+    mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+
+    await executeLifecycleActions("u1");
+
+    expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
   it("cancels a whole-record DELETE_SONARR when a NON-matching sibling episode is excepted", async () => {

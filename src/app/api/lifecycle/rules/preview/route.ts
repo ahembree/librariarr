@@ -3,8 +3,9 @@ import { getSession } from "@/lib/auth/session";
 import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
-import { fetchArrMetadata, hasEnabledArrInstances, arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
-import { fetchSeerrMetadata, hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
+import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { validateRequest, rulePreviewSchema } from "@/lib/validation";
 import { progressStreamResponse } from "@/lib/progress/stream";
 import type { ProgressPhase } from "@/lib/progress/types";
@@ -36,25 +37,9 @@ export async function POST(request: NextRequest) {
   // ("foundInArr = false" / "seerrRequested = false" go vacuously true).
   // Detection skips such rule sets, so error here instead of previewing a
   // result detection would never produce.
-  if (hasArrRules(typedRules) && !(await hasEnabledArrInstances(session.userId!, type))) {
-    return NextResponse.json(
-      { error: `Rules use Arr criteria but no enabled ${arrFamilyLabel(type)} instance is configured` },
-      { status: 400 }
-    );
-  }
-  if (hasSeerrRules(typedRules)) {
-    if (type === "MUSIC") {
-      return NextResponse.json(
-        { error: "Seerr criteria are not supported for music rules" },
-        { status: 400 }
-      );
-    }
-    if (!(await hasEnabledSeerrInstances(session.userId!))) {
-      return NextResponse.json(
-        { error: "Rules use Seerr criteria but no enabled Seerr instance is configured" },
-        { status: 400 }
-      );
-    }
+  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, type, typedRules);
+  if (!evaluability.evaluable) {
+    return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }
 
   const willFetchArr = hasArrRules(typedRules);

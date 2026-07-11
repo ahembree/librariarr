@@ -7,8 +7,9 @@ import { normalizeTitle, executeAction, extractActionError } from "@/lib/lifecyc
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
-import { fetchArrMetadata, hasEnabledArrInstances, arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
-import { fetchSeerrMetadata, hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
+import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
 import { syncAllCollections } from "@/lib/lifecycle/collections";
 import { syncMediaServer } from "@/lib/sync/sync-server";
@@ -230,24 +231,27 @@ export async function processLifecycleRules(userId?: string) {
         continue;
       }
 
-      // MATCH-ALL SAFETY: Arr/Seerr rules with no enabled instance behind them
-      // must skip the rule set (leaving existing matches untouched, exactly
-      // like a metadata fetch failure). Evaluating with an empty metadata map
-      // instead makes "foundInArr = false" / "seerrRequested = false" match
-      // the whole library and schedule destructive actions for everything.
-      if (hasArrRules(rules) && !(await hasEnabledArrInstances(ruleSet.userId, ruleSet.type))) {
-        logger.warn("Lifecycle", `Skipping rule set "${ruleSet.name}" — rules use Arr criteria but no enabled ${arrFamilyLabel(ruleSet.type)} instance exists (evaluating without one would match the entire library)`);
+      // MATCH-ALL SAFETY: Arr/Seerr rules whose instances are unavailable must
+      // skip the rule set — evaluating with an empty metadata map makes
+      // "foundInArr = false" / "seerrRequested = false" match the whole
+      // library and schedule destructive actions for everything. Transient
+      // failures (instance disabled) leave matches/actions untouched, exactly
+      // like a metadata fetch failure; a PERMANENT failure (Seerr on MUSIC)
+      // also disarms the rule set, because a vacuous flood armed before this
+      // guard existed would otherwise stay frozen forever and still execute.
+      const evaluability = await checkLifecycleRuleEvaluability(ruleSet.userId, ruleSet.type, rules);
+      if (!evaluability.evaluable) {
+        logger.warn("Lifecycle", `Skipping rule set "${ruleSet.name}" — ${evaluability.reason}`);
+        if (evaluability.permanent) {
+          const cancelled = await prisma.lifecycleAction.deleteMany({
+            where: { ruleSetId: ruleSet.id, status: "PENDING" },
+          });
+          const cleared = await prisma.ruleMatch.deleteMany({ where: { ruleSetId: ruleSet.id } });
+          if (cancelled.count > 0 || cleared.count > 0) {
+            logger.warn("Lifecycle", `Disarmed permanently unevaluable rule set "${ruleSet.name}" — cancelled ${cancelled.count} pending action(s) and cleared ${cleared.count} stale match(es)`);
+          }
+        }
         continue;
-      }
-      if (hasSeerrRules(rules)) {
-        if (ruleSet.type === "MUSIC") {
-          logger.warn("Lifecycle", `Skipping rule set "${ruleSet.name}" — Seerr criteria are not supported for music rule sets`);
-          continue;
-        }
-        if (!(await hasEnabledSeerrInstances(ruleSet.userId))) {
-          logger.warn("Lifecycle", `Skipping rule set "${ruleSet.name}" — rules use Seerr criteria but no enabled Seerr instance exists (evaluating without one would match the entire library)`);
-          continue;
-        }
       }
 
       let arrData: ArrDataMap | undefined;
@@ -390,6 +394,8 @@ export async function executeLifecycleActions(userId?: string) {
           name: true,
           discordNotifyOnAction: true,
           userId: true,
+          type: true,
+          rules: true,
         },
       },
     },
@@ -426,6 +432,24 @@ export async function executeLifecycleActions(userId?: string) {
   });
   const exceptionSet = new Set(allExceptions.map((e) => `${e.userId}:${e.mediaItemId}`));
 
+  // Batch the whole-record sibling-exception lookup (exception inviolability,
+  // part 2 — see the per-action check below) once per run instead of once per
+  // action: findExceptionProtectedParents is batch-shaped, and when the user
+  // has no exceptions at all there is nothing to look up.
+  const wholeRecordTargetsByUser = new Map<string, Array<{ parentTitle: string; type: string }>>();
+  for (const a of pendingActions) {
+    if (!a.mediaItem?.parentTitle || !isWholeRecordDestructiveAction(a.actionType)) continue;
+    const targets = wholeRecordTargetsByUser.get(a.userId) ?? [];
+    targets.push({ parentTitle: a.mediaItem.parentTitle, type: a.mediaItem.type });
+    wholeRecordTargetsByUser.set(a.userId, targets);
+  }
+  const protectedParentsByUser = new Map<string, Set<string>>();
+  if (allExceptions.length > 0) {
+    for (const [uid, targets] of wholeRecordTargetsByUser) {
+      protectedParentsByUser.set(uid, await findExceptionProtectedParents(uid, targets));
+    }
+  }
+
   logger.info("Lifecycle", `Processing ${pendingActions.length} pending actions (${currentMatches.length} current matches across ${ruleSetIds.length} rule sets)`);
 
   // Track server/library pairs that need a sync after destructive actions
@@ -457,6 +481,21 @@ export async function executeLifecycleActions(userId?: string) {
     }
 
     const mediaItem = action.mediaItem;
+
+    // Permanent-invalidity backstop: a MUSIC rule set with Seerr criteria can
+    // never evaluate (Seerr has no music requests), so its matches are the
+    // vacuous whole-library flood this PR's detection guard now refuses to
+    // produce. Detection disarms such rule sets, but this executor can run
+    // BEFORE the first post-upgrade detection cycle — cancel here too rather
+    // than fire a pre-existing armed flood.
+    if (
+      action.ruleSet?.type === "MUSIC" &&
+      hasSeerrRules(action.ruleSet.rules as unknown as LifecycleRuleGroup[])
+    ) {
+      await prisma.lifecycleAction.delete({ where: { id: action.id } });
+      logger.warn("Lifecycle", `Cancelled action ${action.id} — rule set "${action.ruleSet.name}" uses Seerr criteria on a music library, which can never evaluate (its matches are vacuous)`);
+      continue;
+    }
 
     // Delete actions for items excluded via LifecycleException
     if (exceptionSet.has(`${action.userId}:${action.mediaItemId}`)) {
@@ -547,15 +586,15 @@ export async function executeLifecycleActions(userId?: string) {
     // MATCHED episodes/tracks. A whole-record destructive action destroys the
     // entire series/artist — including siblings the rule never matched — so an
     // exception on ANY item of the same parent must also refuse the action.
-    if (isWholeRecordDestructiveAction(action.actionType) && mediaItem.parentTitle) {
-      const protectedParents = await findExceptionProtectedParents(action.userId, [
-        { parentTitle: mediaItem.parentTitle, type: mediaItem.type },
-      ]);
-      if (protectedParents.has(mediaItem.parentTitle)) {
-        await prisma.lifecycleAction.delete({ where: { id: action.id } });
-        logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${mediaItem.parentTitle}" — an episode/track of it is excluded via lifecycle exception and a ${action.actionType} cannot exclude it`);
-        continue;
-      }
+    // (Protected parents are batch-resolved before the loop.)
+    if (
+      isWholeRecordDestructiveAction(action.actionType) &&
+      mediaItem.parentTitle &&
+      protectedParentsByUser.get(action.userId)?.has(mediaItem.parentTitle)
+    ) {
+      await prisma.lifecycleAction.delete({ where: { id: action.id } });
+      logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${mediaItem.parentTitle}" — an episode/track of it is excluded via lifecycle exception and a ${action.actionType} cannot exclude it`);
+      continue;
     }
 
     try {

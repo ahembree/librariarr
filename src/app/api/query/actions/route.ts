@@ -5,8 +5,11 @@ import { logger } from "@/lib/logger";
 import { executeQuery } from "@/lib/query/query-engine";
 import { appCache } from "@/lib/cache/memory-cache";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
-import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
-import { findExceptionProtectedParents } from "@/lib/lifecycle/exception-guard";
+import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
+import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
+import { arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
+import { hasArrRules, hasSeerrRules } from "@/lib/conditions/helpers";
+import type { ConditionGroup } from "@/lib/conditions/types";
 import { validateRequest, queryActionSchema } from "@/lib/validation";
 import { progressStreamResponse } from "@/lib/progress/stream";
 import type { ProgressPhase, ProgressEmit } from "@/lib/progress/types";
@@ -115,6 +118,52 @@ export async function POST(request: NextRequest) {
   }
   const resolvedType: MediaType = targetType;
 
+  // MATCH-ALL SAFETY: Arr/Seerr criteria the engine cannot actually evaluate
+  // are treated as "not found / never requested", which makes negative rules
+  // like `foundInArr = false` vacuously TRUE for every item of the affected
+  // type — the same hazard the lifecycle detection/preview guards refuse.
+  // Refuse to run ANY action on results the query cannot faithfully produce:
+  //  - Arr rules require an Arr server SELECTED on the query for the action's
+  //    media type, and that instance must still exist (the engine fetches
+  //    from the selected instance only — see fetchArrDataForQuery).
+  //  - Seerr rules can never be evaluated for MUSIC (Seerr has no music
+  //    requests), and otherwise require the selected instance to exist and
+  //    be enabled (mirroring fetchSeerrDataForQuery's lookup).
+  const queryGroups = (query.groups ?? []) as unknown as ConditionGroup[];
+  if (hasArrRules(queryGroups)) {
+    const familyKey = resolvedType === "MOVIE" ? "radarr" : resolvedType === "SERIES" ? "sonarr" : "lidarr";
+    const selectedArrId = query.arrServerIds?.[familyKey];
+    const arrAvailable = selectedArrId
+      ? await arrInstanceMatchesType(selectedArrId, userId, resolvedType)
+      : false;
+    if (!arrAvailable) {
+      return NextResponse.json(
+        { error: `The query uses Arr criteria but no ${arrFamilyLabel(resolvedType)} server is selected for it — rules like "Found In Arr = false" would match the entire library` },
+        { status: 400 },
+      );
+    }
+  }
+  if (hasSeerrRules(queryGroups)) {
+    if (resolvedType === "MUSIC") {
+      return NextResponse.json(
+        { error: "The query uses Seerr criteria, which can never be evaluated for music — they would match every artist" },
+        { status: 400 },
+      );
+    }
+    const seerrAvailable = query.seerrInstanceId
+      ? await prisma.seerrInstance.findFirst({
+          where: { id: query.seerrInstanceId, userId, enabled: true },
+          select: { id: true },
+        })
+      : null;
+    if (!seerrAvailable) {
+      return NextResponse.json(
+        { error: 'The query uses Seerr criteria but no enabled Seerr instance is selected for it — rules like "Has Request = false" would match the entire library' },
+        { status: 400 },
+      );
+    }
+  }
+
   // Stream phase-by-phase progress, then the final result, as NDJSON so the
   // query page can render a live progress bar (re-validating the selection, then
   // running the action item-by-item) instead of a bare spinner. A client
@@ -199,7 +248,7 @@ export async function POST(request: NextRequest) {
       // ENTIRE series and ignore the member list; member-scoped actions
       // (DELETE_FILES_SONARR, …) act only on the named episodes.
       const isMemberScoped = actionHonorsMemberIds(actionType);
-      const isWholeRecordDestructive = isDestructiveActionType(actionType) && !isMemberScoped;
+      const isWholeRecordDestructive = isWholeRecordDestructiveAction(actionType);
 
       // Group by the SAME key the query engine uses for grouped shows
       // (LOWER(TRIM(parentTitle))). Using a looser key (e.g. normalizeTitle)

@@ -1562,18 +1562,18 @@ export default function QueryPage() {
               <p className="text-muted-foreground">
                 This query uses Arr criteria but no Arr server is{" "}
                 {hasAnyArrInstanceAvailable
-                  ? "selected above for the relevant media type. Pick one to evaluate Arr rules — otherwise no items will match."
-                  : "configured. Connect Radarr, Sonarr, or Lidarr in Settings → Integrations — otherwise no items will match these rules."}
+                  ? "selected above for the relevant media type. Pick one to evaluate Arr rules — until then these rules can't reflect real Arr data (negative rules like \u201cFound In Arr = false\u201d would match everything), and actions on the results are blocked."
+                  : "configured. Connect Radarr, Sonarr, or Lidarr in Settings → Integrations — until then these rules can't reflect real Arr data, and actions on the results are blocked."}
               </p>
             )}
             {orphanSeerrRules && (
               <p className="text-muted-foreground">
-                This query uses Seerr criteria but no Seerr instance is configured. Connect Overseerr or Jellyseerr in Settings → Integrations — otherwise no items will match these rules.
+                This query uses Seerr criteria but no Seerr instance is configured. Connect Overseerr or Jellyseerr in Settings → Integrations — until then these rules can&apos;t reflect real request data (negative rules like &ldquo;Has Request = false&rdquo; would match everything), and actions on the results are blocked.
               </p>
             )}
             {seerrWithMusic && (
               <p className="text-muted-foreground">
-                Seerr does not support music — music items will never match Seerr criteria, even when Seerr is connected.
+                Seerr does not support music — Seerr criteria can&apos;t be evaluated for music items even when Seerr is connected, and actions on music results are blocked.
               </p>
             )}
           </div>
