@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError } from "@/lib/lifecycle/actions";
+import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
 
 export async function DELETE(
   _request: NextRequest,
@@ -70,6 +71,22 @@ export async function POST(
     );
   }
 
+  // A disabled rule set must not fire actions, even via force-retry. Detection
+  // skips disabled sets, so their RuleMatch rows are frozen — the stale-match
+  // guard below stays green forever and would happily wave a destructive
+  // retry through. The scheduled executor and the manual execute route both
+  // enforce this gate; force-retry needs it too.
+  const ruleSet = await prisma.ruleSet.findFirst({
+    where: { id: action.ruleSetId, userId: session.userId },
+    select: { enabled: true },
+  });
+  if (!ruleSet?.enabled) {
+    return NextResponse.json(
+      { error: "Rule set is disabled — enable it before retrying actions" },
+      { status: 400 }
+    );
+  }
+
   if (!action.mediaItem || !action.mediaItemId) {
     return NextResponse.json(
       { error: "Cannot retry actions — media item no longer exists" },
@@ -104,6 +121,21 @@ export async function POST(
       { error: "This item has a lifecycle exception and cannot be actioned" },
       { status: 400 }
     );
+  }
+
+  // Whole-record destructive actions destroy every episode/track of the
+  // series/artist — refuse the retry if ANY sibling is excepted (mirrors the
+  // scheduled executor and the manual execute route).
+  if (isWholeRecordDestructiveAction(action.actionType) && action.mediaItem.parentTitle) {
+    const protectedParents = await findExceptionProtectedParents(session.userId!, [
+      { parentTitle: action.mediaItem.parentTitle, type: action.mediaItem.type },
+    ]);
+    if (protectedParents.has(action.mediaItem.parentTitle)) {
+      return NextResponse.json(
+        { error: "An episode/track of this series/artist has a lifecycle exception — a whole-record delete cannot exclude it" },
+        { status: 400 }
+      );
+    }
   }
 
   const mediaItem = action.mediaItem;

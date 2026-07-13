@@ -975,13 +975,42 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       // Items NOT touched are stale (removed from the server since last sync).
       //
       // GUARD: only delete when the page loop actually traversed the entire
-      // library — either it reached a legitimate terminal condition (short/empty
-      // final page or reported total reached) or it processed at least as many
-      // items as the library claims to have. If a fetch was suspiciously short
-      // (e.g. a transient server error returned fewer items), skip deletion so
-      // we don't wipe items that still exist on the server.
-      const traversedFullLibrary = reachedLibraryEnd || (libraryTotal != null && libraryItemCount >= libraryTotal);
-      const staleItems = traversedFullLibrary
+      // library. Deleting a MediaItem CASCADE-deletes its RuleMatch AND
+      // LifecycleException rows — a spurious purge silently strips "never
+      // delete this" protection from items the lifecycle pipeline may later
+      // destroy for real — so this guard fails toward keeping rows:
+      //  - When the server reports a total, require the traversal to have
+      //    processed at least that many items. A short page silently truncated
+      //    by the server (HTTP 200 with fewer items than remain, no error)
+      //    previously counted as "reached the end" and wiped the untouched
+      //    remainder.
+      //  - Without a reported total, fall back to the short/empty-final-page
+      //    terminal condition (reachedLibraryEnd).
+      const traversedFullLibrary = libraryTotal != null
+        ? libraryItemCount >= libraryTotal
+        : reachedLibraryEnd;
+
+      let skipPurgeReason: string | null = null;
+      if (!traversedFullLibrary) {
+        skipPurgeReason = `library not fully traversed (${libraryItemCount}/${libraryTotal ?? "unknown"} items processed)`;
+      } else if (libraryItemCount === 0) {
+        // A sync that processed ZERO items must never wipe a previously
+        // populated library: a flaky "200 + empty list + total=0" response
+        // (server mid-scan, backing storage offline) is indistinguishable
+        // from a genuinely emptied library, and the wipe is the destructive
+        // branch. Skip and warn; a later sync that returns items purges
+        // whatever is then genuinely stale.
+        const existingRows = await prisma.$queryRawUnsafe<{ count: bigint }[]>(
+          `SELECT COUNT(*)::bigint AS count FROM "MediaItem" WHERE "libraryId"=$1`,
+          library.id,
+        );
+        const existingCount = existingRows[0]?.count ?? BigInt(0);
+        if (existingCount > BigInt(0)) {
+          skipPurgeReason = `server returned 0 items for a library that previously had ${existingCount} — refusing to wipe it`;
+        }
+      }
+
+      const staleItems = skipPurgeReason === null
         ? await prisma.$queryRawUnsafe<
             { id: string; thumbUrl: string | null; parentThumbUrl: string | null; seasonThumbUrl: string | null }[]
           >(
@@ -990,10 +1019,10 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
           )
         : [];
 
-      if (!traversedFullLibrary) {
-        logger.info(
+      if (skipPurgeReason) {
+        logger.warn(
           "Sync",
-          `Library "${lib.title}": skipping stale-item deletion — library not fully traversed (${libraryItemCount}/${libraryTotal ?? "unknown"} items processed)`,
+          `Library "${lib.title}": skipping stale-item deletion — ${skipPurgeReason}`,
         );
       }
 
@@ -1003,6 +1032,18 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
           await invalidateCachedUrls([staleItem.thumbUrl, staleItem.parentThumbUrl, staleItem.seasonThumbUrl]);
         }
         const staleIds = staleItems.map((s) => s.id);
+        // Purging cascades away lifecycle exceptions tied to these rows — that
+        // protection does NOT come back if the item later reappears under a new
+        // ratingKey, so make the loss visible in the logs.
+        const cascadedExceptions = await prisma.lifecycleException.count({
+          where: { mediaItemId: { in: staleIds } },
+        });
+        if (cascadedExceptions > 0) {
+          logger.warn(
+            "Sync",
+            `Removing ${staleItems.length} stale item(s) from library "${lib.title}" deletes ${cascadedExceptions} lifecycle exception(s) attached to them — re-create the exception(s) if the item(s) reappear`,
+          );
+        }
         await prisma.$queryRawUnsafe(
           `DELETE FROM "MediaItem" WHERE "id" = ANY($1)`, staleIds,
         );

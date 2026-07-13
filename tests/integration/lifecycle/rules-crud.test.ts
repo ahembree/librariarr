@@ -196,6 +196,39 @@ describe("Lifecycle Rules CRUD", () => {
       expect(count).toBe(0);
     });
 
+    it("rejects Seerr fields on a MUSIC rule set (Seerr data is never fetched for music)", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      // Seerr rules on music evaluate against a default "never requested"
+      // record: "seerrRequested = false" would vacuously match every artist —
+      // a match-all hazard for the deletion pipeline, so the write must 400.
+      const rules = [
+        {
+          id: "g1",
+          condition: "AND",
+          rules: [
+            { id: "r1", field: "seerrRequested", operator: "equals", value: "false", condition: "AND" },
+          ],
+          groups: [],
+        },
+      ];
+
+      const response = await callRoute(POST, {
+        url: "/api/lifecycle/rules",
+        method: "POST",
+        body: { name: "Bad Music Rule", type: "MUSIC", rules, serverIds: [server.id] },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toContain("seerrRequested");
+
+      const prisma = getTestPrisma();
+      const count = await prisma.ruleSet.count({ where: { userId: user.id } });
+      expect(count).toBe(0);
+    });
+
     it("creates a rule set with all optional fields", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);

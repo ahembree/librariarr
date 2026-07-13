@@ -131,6 +131,10 @@ These fields require configured [Sonarr](/docs/integrations/sonarr/), [Radarr](/
 If an item isn't in the linked *arr instance, or a specific field has no value (for example a movie with no downloaded file has no quality name, quality-cutoff, or size), **no comparison operator matches it** — including negative operators like *Not Equals* / *Not Contains* and the *NOT* toggle. This is deliberate so lifecycle rules never delete an item on the strength of absent *arr data. To target items with missing data, use the *Is Empty* (`isNull`) operator, or the `foundInArr` field.
 :::
 
+:::caution[*arr criteria need at least one enabled instance]
+A rule set that uses *arr fields is **skipped entirely** by detection (with a warning in System Logs) while no enabled instance of the matching *arr family exists — for example if you disable or delete your only Radarr instance. Without this, `foundInArr = false` would be true for **every item in your library** the moment the instance disappears, and a destructive action would be queued for all of it. Previews of such a rule set return an error instead of a misleading whole-library match list. Re-enable (or re-add) the instance and the rule set resumes on the next detection run.
+:::
+
 ### Seerr Fields
 
 These fields require a configured [Seerr](/docs/integrations/seerr/) integration.
@@ -145,7 +149,9 @@ These fields require a configured [Seerr](/docs/integrations/seerr/) integration
 | `seerrDeclineDate` | When declined |
 
 :::caution[Seerr criteria need a connected Seerr instance]
-If a rule set uses Seerr fields but no Seerr instance is connected — for example after **importing** a rule set — the rule builder shows a **"Seerr instance required"** warning and disables Preview, Test Media, and Save until you connect Overseerr or Jellyseerr in Settings → Integrations. Without one, items requiring Seerr lookups would never match.
+If a rule set uses Seerr fields but no Seerr instance is connected — for example after **importing** a rule set — the rule builder shows a **"Seerr instance required"** warning and disables Preview, Test Media, and Save until you connect Overseerr or Jellyseerr in Settings → Integrations. Detection also skips such a rule set entirely (with a warning in System Logs) while no enabled Seerr instance exists — otherwise `seerrRequested = false` would be vacuously true for every item in your library.
+
+Seerr fields are only available on **movie and series** rule sets. Seerr doesn't manage music requests, so music rule sets reject Seerr criteria at save time. A legacy music rule set that already carries Seerr criteria (saved before this gate existed) is permanently unevaluable: detection skips it **and disarms it** — its stale matches are cleared and any pending actions are cancelled, and the action executor refuses its actions as a backstop.
 :::
 
 ## Operators
@@ -237,6 +243,7 @@ Notes:
 - **Any selection size — run in batches of 1,000** — you can select as many items as you like. The server processes at most 1,000 items per request (a safety bound: each item drives its own *arr API calls), so a larger selection is automatically split into sequential batches of up to 1,000. Only the items of the action's own media type are batched (the rest are skipped anyway), and a series' episodes are always kept in the same batch. When the run needs more than one batch, the Actions bar shows the count (e.g. *· 3 batches*), the confirmation dialog spells it out, and the progress bar labels each pass (*Batch 2/3 · Running action*). Each batch's completed actions are recorded before the next starts, so if a run stops part-way nothing already done is lost — just re-run to finish the rest. If a whole batch fails (for example the *arr instance is down), the run stops early instead of retrying every remaining batch. One exception: a **whole-series** action (e.g. *Delete from Sonarr*) on more than 1,000 episodes of a *single* show while viewing individual episodes is refused — switch to the grouped series view, which acts on the whole show in one unit.
 - **One Arr family per run** — an action applies only to selected results of its media type (e.g. *Delete from Radarr* acts on selected movies); selected items of other types are skipped and reported in the result toast.
 - Before acting, the query is re-run so only items that still match are affected, and items on the [Lifecycle Exceptions](/docs/features/deletion-safety/) list are skipped automatically.
+- Actions are refused outright when the query's Arr or Seerr criteria can't actually be evaluated — no Arr server selected (or the selected one no longer exists) for the action's media type, no enabled Seerr instance selected, or Seerr criteria driving a music action. Without real external data, negative rules like *Found In Arr = false* would match your entire library, so the run is blocked with an explanatory error instead.
 - Every run is recorded in the **Actions** history (and deletion stats) labelled *Ad-hoc query action*, so there's a full audit trail even though no rule set exists.
 
 ## Previewing Matches

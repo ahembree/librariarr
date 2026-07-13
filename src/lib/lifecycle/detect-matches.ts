@@ -4,6 +4,7 @@ import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { logger } from "@/lib/logger";
 import { syncCollectionById, syncAllCollections } from "@/lib/lifecycle/collections";
 import { describePlexError } from "@/lib/plex/errors";
@@ -66,6 +67,26 @@ export async function detectAndSaveMatches(
       select: { itemData: true },
     });
     logger.info("Lifecycle", `Skipping rule set "${ruleSet.name}" — no active rules (preserving ${existingMatches.length} existing matches)`);
+    return {
+      items: existingMatches.map((m) => m.itemData as Record<string, unknown>),
+      count: existingMatches.length,
+      episodeIdMap: new Map(),
+      currentItems: [],
+    };
+  }
+
+  // Defense-in-depth: refuse to evaluate when the rules' Arr/Seerr instances
+  // are unavailable — an empty metadata map turns "foundInArr = false" /
+  // "seerrRequested = false" into a whole-library match. Callers normally
+  // pre-check via the same helper (and handle permanent-case disarming); this
+  // internal check is the choke point that protects any future caller.
+  const evaluability = await checkLifecycleRuleEvaluability(ruleSet.userId, ruleSet.type, rules);
+  if (!evaluability.evaluable) {
+    const existingMatches = await prisma.ruleMatch.findMany({
+      where: { ruleSetId: ruleSet.id },
+      select: { itemData: true },
+    });
+    logger.warn("Lifecycle", `Refusing to evaluate rule set "${ruleSet.name}" — ${evaluability.reason} (preserving ${existingMatches.length} existing matches)`);
     return {
       items: existingMatches.map((m) => m.itemData as Record<string, unknown>),
       count: existingMatches.length,
@@ -525,6 +546,26 @@ export async function runDetection(userId: string, ruleSetId?: string, fullReEva
 
     const rules = rs.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
     if (!hasAnyActiveRules(rules)) continue;
+
+    // MATCH-ALL SAFETY: mirror processLifecycleRules — Arr/Seerr rules whose
+    // instances are unavailable skip the rule set instead of evaluating
+    // against an empty metadata map (which would make "foundInArr = false" /
+    // "seerrRequested = false" match the whole library). Permanent failures
+    // (Seerr on MUSIC) also disarm the rule set — see evaluability.ts.
+    const evaluability = await checkLifecycleRuleEvaluability(userId, rs.type, rules);
+    if (!evaluability.evaluable) {
+      logger.warn("Lifecycle", `Skipping rule set "${rs.name}" — ${evaluability.reason}`);
+      if (evaluability.permanent) {
+        const cancelled = await prisma.lifecycleAction.deleteMany({
+          where: { ruleSetId: rs.id, status: "PENDING" },
+        });
+        const cleared = await prisma.ruleMatch.deleteMany({ where: { ruleSetId: rs.id } });
+        if (cancelled.count > 0 || cleared.count > 0) {
+          logger.warn("Lifecycle", `Disarmed permanently unevaluable rule set "${rs.name}" — cancelled ${cancelled.count} pending action(s) and cleared ${cleared.count} stale match(es)`);
+        }
+      }
+      continue;
+    }
 
     // Resolve Arr metadata
     let arrData: ArrDataMap | undefined;

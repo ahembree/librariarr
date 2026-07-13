@@ -6,6 +6,7 @@ import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { validateRequest, ruleDiffSchema } from "@/lib/validation";
 
 interface DiffItem {
@@ -84,6 +85,13 @@ export async function POST(
       removedItems: enrichedRemovedItems,
       counts: { added: 0, removed: removed.length, retained: 0 },
     });
+  }
+
+  // MATCH-ALL SAFETY: mirror detection — Arr/Seerr rules with no enabled
+  // instance behind them would diff against a vacuous whole-library match set.
+  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, type, typedRules);
+  if (!evaluability.evaluable) {
+    return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }
 
   // Evaluate the new rules to get candidate matches

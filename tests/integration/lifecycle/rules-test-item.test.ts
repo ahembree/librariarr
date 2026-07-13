@@ -43,12 +43,19 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   lookupSeerrMeta: vi.fn().mockReturnValue(undefined),
 }));
 
+const mockHasEnabledArrInstances = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const mockHasEnabledSeerrInstances = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+
 vi.mock("@/lib/lifecycle/fetch-arr-metadata", () => ({
   fetchArrMetadata: vi.fn().mockResolvedValue({}),
+  hasEnabledArrInstances: mockHasEnabledArrInstances,
+  arrFamilyLabel: (type: string) =>
+    type === "MOVIE" ? "Radarr" : type === "MUSIC" ? "Lidarr" : "Sonarr",
 }));
 
 vi.mock("@/lib/lifecycle/fetch-seerr-metadata", () => ({
   fetchSeerrMetadata: vi.fn().mockResolvedValue({}),
+  hasEnabledSeerrInstances: mockHasEnabledSeerrInstances,
 }));
 
 // Import AFTER mocks
@@ -63,6 +70,8 @@ describe("POST /api/lifecycle/rules/test-item", () => {
     mockHasArrRules.mockReturnValue(false);
     mockHasSeerrRules.mockReturnValue(false);
     mockHasStreamRules.mockReturnValue(false);
+    mockHasEnabledArrInstances.mockResolvedValue(true);
+    mockHasEnabledSeerrInstances.mockResolvedValue(true);
     mockEvaluateAllRulesInMemory.mockReturnValue(true);
     mockGetMatchedCriteriaForItems.mockReturnValue(new Map());
     mockGetActualValuesForAllRules.mockReturnValue(new Map());
@@ -73,6 +82,33 @@ describe("POST /api/lifecycle/rules/test-item", () => {
   });
 
   const validRules = [{ field: "playCount", operator: "equals", value: 0 }];
+
+  it("returns 400 when rules use Arr criteria and no enabled Arr instance exists (match-all guard)", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "MOVIE" });
+    const item = await createTestMediaItem(library.id, { title: "Any Movie", type: "MOVIE" });
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    mockHasArrRules.mockReturnValue(true);
+    mockHasEnabledArrInstances.mockResolvedValue(false);
+
+    const response = await callRoute(POST, {
+      url: "/api/lifecycle/rules/test-item",
+      method: "POST",
+      body: {
+        rules: [{ field: "foundInArr", operator: "equals", value: "false" }],
+        type: "MOVIE",
+        mediaItemId: item.id,
+        serverIds: [server.id],
+      },
+    });
+
+    const body = await expectJson<{ error: string }>(response, 400);
+    expect(body.error).toMatch(/no enabled Radarr instance/i);
+    // The vacuous "matches: true" evaluation never runs
+    expect(mockEvaluateAllRulesInMemory).not.toHaveBeenCalled();
+  });
 
   it("returns 401 when not authenticated", async () => {
     const response = await callRoute(POST, {

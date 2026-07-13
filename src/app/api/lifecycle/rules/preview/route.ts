@@ -5,6 +5,7 @@ import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { validateRequest, rulePreviewSchema } from "@/lib/validation";
 import { progressStreamResponse } from "@/lib/progress/stream";
 import type { ProgressPhase } from "@/lib/progress/types";
@@ -29,6 +30,16 @@ export async function POST(request: NextRequest) {
   // SAFETY: Refuse to evaluate if no rules are active — would match everything
   if (!hasAnyActiveRules(typedRules)) {
     return NextResponse.json({ error: "No active rules to evaluate" }, { status: 400 });
+  }
+
+  // MATCH-ALL SAFETY: Arr/Seerr rules with no enabled instance would evaluate
+  // against an empty metadata map and preview the ENTIRE library as matching
+  // ("foundInArr = false" / "seerrRequested = false" go vacuously true).
+  // Detection skips such rule sets, so error here instead of previewing a
+  // result detection would never produce.
+  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, type, typedRules);
+  if (!evaluability.evaluable) {
+    return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }
 
   const willFetchArr = hasArrRules(typedRules);

@@ -15,6 +15,7 @@ import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { validateRequest, ruleTestItemSchema } from "@/lib/validation";
 
 export async function POST(request: NextRequest) {
@@ -57,6 +58,13 @@ export async function POST(request: NextRequest) {
 
   if (!item) {
     return NextResponse.json({ error: "Media item not found" }, { status: 404 });
+  }
+
+  // MATCH-ALL SAFETY: mirror detection — Arr/Seerr rules with no enabled
+  // instance behind them would report a vacuous "matches" for any item.
+  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, type, typedRules);
+  if (!evaluability.evaluable) {
+    return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }
 
   // Fetch Arr/Seerr metadata if needed

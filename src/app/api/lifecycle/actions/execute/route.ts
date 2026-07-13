@@ -5,6 +5,7 @@ import { logger } from "@/lib/logger";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { validateRequest, actionExecuteSchema } from "@/lib/validation";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
+import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
 import { sendDiscordNotification, buildFailureSummaryEmbed } from "@/lib/discord/client";
 
 export async function POST(request: NextRequest) {
@@ -188,13 +189,34 @@ export async function POST(request: NextRequest) {
   }
 
   // Fetch media items with external IDs (ownership-validated)
-  const items = await prisma.mediaItem.findMany({
+  let items = await prisma.mediaItem.findMany({
     where: {
       id: { in: itemIds },
       library: { mediaServer: { userId: session.userId } },
     },
     include: { externalIds: true },
   });
+
+  // Exception inviolability, part 2: the member check above only sees MATCHED
+  // episodes/tracks. A whole-record destructive action (e.g. DELETE_SONARR)
+  // destroys the entire series/artist — including siblings the rule never
+  // matched — so an exception on ANY item of the same parent must refuse it.
+  if (isWholeRecordDestructiveAction(ruleSet.actionType ?? "")) {
+    const protectedParents = await findExceptionProtectedParents(session.userId!, items);
+    if (protectedParents.size > 0) {
+      const before = items.length;
+      items = items.filter((i) => !i.parentTitle || !protectedParents.has(i.parentTitle));
+      if (items.length < before) {
+        logger.warn("Lifecycle", `Skipped ${before - items.length} whole-record ${ruleSet.actionType} target(s) for rule set "${ruleSet.id}" — an episode/track of the series/artist is excluded via lifecycle exception`);
+      }
+      if (items.length === 0) {
+        return NextResponse.json(
+          { error: "All selected items belong to series/artists with excluded episodes or tracks — a whole-record delete cannot exclude them" },
+          { status: 400 }
+        );
+      }
+    }
+  }
 
   // SAFETY: Log the bounded execution count before starting any destructive operations
   logger.info("Lifecycle", `Executing ${ruleSet.actionType ?? "DO_NOTHING"} on ${items.length} items for rule set "${ruleSet.id}" (${itemIds.length} match IDs, ${items.length} ownership-verified)`);

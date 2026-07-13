@@ -737,4 +737,132 @@ describe("POST /api/query/actions", () => {
     const actions = await prisma.lifecycleAction.findMany({ where: { userId: user.id } });
     expect(actions[0].status).toBe("FAILED");
   });
+
+  it("refuses a whole-series DELETE_SONARR when a NON-matching sibling episode is excepted", async () => {
+    // The member-based check only sees episodes in the live query result. A
+    // whole-series delete also destroys episodes the query never matched, so
+    // an exception on such a sibling must block the show too.
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" });
+    const ep1 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E1", parentTitle: "Guarded Show", seasonNumber: 1, episodeNumber: 1 });
+    const ep3 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E3", parentTitle: "Guarded Show", seasonNumber: 1, episodeNumber: 3 });
+    const sonarr = await createTestSonarrInstance(user.id);
+    const prisma = getTestPrisma();
+    // ep3 never matches the query — it exists only as a protected sibling
+    await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: ep3.id } });
+
+    mockedExecuteQuery.mockImplementation(async (q: { includeEpisodes?: boolean }) => {
+      if (q.includeEpisodes) {
+        return queryResult([{ id: ep1.id, type: "SERIES", title: "S1E1", parentTitle: "Guarded Show" }]);
+      }
+      return queryResult([{ id: ep1.id, type: "SERIES", title: "Guarded Show", parentTitle: null }]);
+    });
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { query: BASE_QUERY, mediaItemIds: [ep1.id], actionType: "DELETE_SONARR", arrInstanceId: sonarr.id },
+    });
+    const { result: body } = await expectStreamResult<{ executed: number; skipped: number; errors: string[] }>(response);
+    expect(body.executed).toBe(0);
+    expect(body.skipped).toBe(1);
+    expect(mockedExecuteAction).not.toHaveBeenCalled();
+  });
+
+  // MATCH-ALL SAFETY: Arr/Seerr rules the engine cannot evaluate make negative
+  // rules vacuously true for every item — the route must refuse to act on such
+  // results (mirrors the lifecycle detection/preview guards).
+  describe("unevaluable Arr/Seerr criteria guard", () => {
+    const arrRuleGroups = [
+      {
+        id: "g1",
+        condition: "AND" as const,
+        rules: [
+          { id: "r1", field: "foundInArr", operator: "equals", value: "false", condition: "AND" as const },
+        ],
+        groups: [],
+      },
+    ];
+
+    it("returns 400 when the query uses Arr criteria but no Arr server is selected for the action's type", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const radarr = await createTestRadarrInstance(user.id);
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: { ...BASE_QUERY, groups: arrRuleGroups }, // no arrServerIds
+          mediaItemIds: ["m1"],
+          actionType: "DELETE_RADARR",
+          arrInstanceId: radarr.id, // action instance valid — the QUERY still can't evaluate
+        },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/Arr criteria.*no Radarr server is selected/i);
+      expect(mockedExecuteQuery).not.toHaveBeenCalled();
+      expect(mockedExecuteAction).not.toHaveBeenCalled();
+    });
+
+    it("proceeds when the query's Arr criteria have a selected, existing instance", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+      const movie = await createTestMediaItem(library.id, { type: "MOVIE", title: "Orphan Movie" });
+      const radarr = await createTestRadarrInstance(user.id);
+
+      mockedExecuteQuery.mockResolvedValue(
+        queryResult([{ id: movie.id, type: "MOVIE", title: "Orphan Movie", parentTitle: null }]),
+      );
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: { ...BASE_QUERY, groups: arrRuleGroups, arrServerIds: { radarr: radarr.id } },
+          mediaItemIds: [movie.id],
+          actionType: "DELETE_RADARR",
+          arrInstanceId: radarr.id,
+        },
+      });
+
+      const { result: body } = await expectStreamResult<{ executed: number }>(response);
+      expect(body.executed).toBe(1);
+    });
+
+    it("returns 400 for Seerr criteria driving a music action", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const prisma = getTestPrisma();
+      const lidarr = await prisma.lidarrInstance.create({
+        data: { userId: user.id, name: "Lidarr", url: "http://lidarr:8686", apiKey: "k", enabled: true },
+      });
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: {
+            ...BASE_QUERY,
+            groups: [
+              {
+                id: "g1",
+                condition: "AND" as const,
+                rules: [
+                  { id: "r1", field: "seerrRequested", operator: "equals", value: "false", condition: "AND" as const },
+                ],
+                groups: [],
+              },
+            ],
+          },
+          mediaItemIds: ["t1"],
+          actionType: "DELETE_LIDARR",
+          arrInstanceId: lidarr.id,
+        },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/Seerr criteria.*never be evaluated for music/i);
+      expect(mockedExecuteAction).not.toHaveBeenCalled();
+    });
+  });
 });

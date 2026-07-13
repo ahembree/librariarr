@@ -6,6 +6,7 @@ import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 
 export async function POST(
   _request: NextRequest,
@@ -45,6 +46,13 @@ export async function POST(
   const serverIds = ruleSet.serverIds.filter((sid) => enabledServerIds.includes(sid));
   if (serverIds.length === 0) {
     return NextResponse.json({ items: [], count: 0 });
+  }
+
+  // MATCH-ALL SAFETY: mirror detection — Arr/Seerr rules with no enabled
+  // instance behind them would preview the entire library as matching.
+  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, ruleSet.type, rules);
+  if (!evaluability.evaluable) {
+    return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }
 
   let arrData: ArrDataMap | undefined;

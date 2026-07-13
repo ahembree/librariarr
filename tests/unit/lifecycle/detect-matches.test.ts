@@ -15,6 +15,9 @@ const mockPrisma = vi.hoisted(() => ({
   lifecycleException: {
     findMany: vi.fn(),
   },
+  lifecycleAction: {
+    deleteMany: vi.fn(),
+  },
   // Detection runs its match writes inside a transaction in two shapes:
   //   - callback form: $transaction(async (tx) => { ... }) (full re-eval)
   //   - array form:    $transaction([p1, p2])              (incremental)
@@ -41,6 +44,8 @@ const mockGetMatchedCriteriaForItems = vi.hoisted(() => vi.fn());
 const mockGetActualValuesForAllRules = vi.hoisted(() => vi.fn());
 const mockFetchArrMetadata = vi.hoisted(() => vi.fn());
 const mockFetchSeerrMetadata = vi.hoisted(() => vi.fn());
+const mockHasEnabledArrInstances = vi.hoisted(() => vi.fn());
+const mockHasEnabledSeerrInstances = vi.hoisted(() => vi.fn());
 const mockSyncCollectionById = vi.hoisted(() => vi.fn());
 const mockSyncAllCollections = vi.hoisted(() => vi.fn());
 
@@ -63,9 +68,13 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
 }));
 vi.mock("@/lib/lifecycle/fetch-arr-metadata", () => ({
   fetchArrMetadata: mockFetchArrMetadata,
+  hasEnabledArrInstances: mockHasEnabledArrInstances,
+  arrFamilyLabel: (type: string) =>
+    type === "MOVIE" ? "Radarr" : type === "MUSIC" ? "Lidarr" : "Sonarr",
 }));
 vi.mock("@/lib/lifecycle/fetch-seerr-metadata", () => ({
   fetchSeerrMetadata: mockFetchSeerrMetadata,
+  hasEnabledSeerrInstances: mockHasEnabledSeerrInstances,
 }));
 vi.mock("@/lib/lifecycle/collections", () => ({
   syncCollectionById: mockSyncCollectionById,
@@ -447,6 +456,10 @@ describe("runDetection", () => {
     mockGetMatchedCriteriaForItems.mockReturnValue(new Map());
     mockGetActualValuesForAllRules.mockReturnValue(new Map());
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+    // Default: instances exist — individual tests flip these to exercise the
+    // no-instance match-all guard.
+    mockHasEnabledArrInstances.mockResolvedValue(true);
+    mockHasEnabledSeerrInstances.mockResolvedValue(true);
   });
 
   it("returns empty results when no enabled rule sets", async () => {
@@ -521,6 +534,130 @@ describe("runDetection", () => {
     expect(mockFetchArrMetadata).toHaveBeenCalledTimes(1);
   });
 
+  it("skips rule sets with Arr rules when no enabled Arr instance exists (match-all guard)", async () => {
+    // fetchArrMetadata would return {} and "foundInArr = false" would match
+    // the whole library — the rule set must be skipped, not evaluated.
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasArrRules.mockReturnValue(true);
+    mockHasSeerrRules.mockReturnValue(false);
+    mockHasEnabledArrInstances.mockResolvedValue(false);
+
+    mockPrisma.ruleSet.findMany.mockResolvedValue([
+      {
+        id: "rs1", userId: "u1", name: "Orphans", type: "MOVIE",
+        rules: [{ field: "foundInArr", operator: "equals", value: "false", enabled: true }],
+        seriesScope: false, serverIds: ["s1"], actionEnabled: true, actionType: "DELETE_RADARR",
+        actionDelayDays: 0, arrInstanceId: "radarr1", addImportExclusion: false,
+        addArrTags: [], removeArrTags: [], collectionId: null,
+        stickyMatches: false,
+        user: { mediaServers: [{ id: "s1" }] },
+      },
+    ]);
+
+    const results = await runDetection("u1");
+
+    expect(results).toEqual([]);
+    expect(mockFetchArrMetadata).not.toHaveBeenCalled();
+    expect(mockEvaluateRules).not.toHaveBeenCalled();
+    // Existing matches must be left untouched — this is a skip, not a clear.
+    expect(mockPrisma.ruleMatch.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("skips rule sets with Seerr rules when no enabled Seerr instance exists (match-all guard)", async () => {
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasArrRules.mockReturnValue(false);
+    mockHasSeerrRules.mockReturnValue(true);
+    mockHasEnabledSeerrInstances.mockResolvedValue(false);
+
+    mockPrisma.ruleSet.findMany.mockResolvedValue([
+      {
+        id: "rs1", userId: "u1", name: "Unrequested", type: "MOVIE",
+        rules: [{ field: "seerrRequested", operator: "equals", value: "false", enabled: true }],
+        seriesScope: false, serverIds: ["s1"], actionEnabled: false, actionType: null,
+        actionDelayDays: 0, arrInstanceId: null, addImportExclusion: false,
+        addArrTags: [], removeArrTags: [], collectionId: null,
+        stickyMatches: false,
+        user: { mediaServers: [{ id: "s1" }] },
+      },
+    ]);
+
+    const results = await runDetection("u1");
+
+    expect(results).toEqual([]);
+    expect(mockFetchSeerrMetadata).not.toHaveBeenCalled();
+    expect(mockEvaluateRules).not.toHaveBeenCalled();
+  });
+
+  it("skips AND DISARMS MUSIC rule sets with Seerr rules (permanently unevaluable)", async () => {
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasArrRules.mockReturnValue(false);
+    mockHasSeerrRules.mockReturnValue(true);
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 2 });
+    mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 10 });
+
+    mockPrisma.ruleSet.findMany.mockResolvedValue([
+      {
+        id: "rs1", userId: "u1", name: "Music seerr", type: "MUSIC",
+        rules: [{ field: "seerrRequested", operator: "equals", value: "false", enabled: true }],
+        seriesScope: true, serverIds: ["s1"], actionEnabled: false, actionType: null,
+        actionDelayDays: 0, arrInstanceId: null, addImportExclusion: false,
+        addArrTags: [], removeArrTags: [], collectionId: null,
+        stickyMatches: false,
+        user: { mediaServers: [{ id: "s1" }] },
+      },
+    ]);
+
+    const results = await runDetection("u1");
+
+    expect(results).toEqual([]);
+    expect(mockEvaluateMusicScope).not.toHaveBeenCalled();
+    // Permanently unevaluable → vacuous matches + armed actions are disarmed
+    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({
+      where: { ruleSetId: "rs1", status: "PENDING" },
+    });
+    expect(mockPrisma.ruleMatch.deleteMany).toHaveBeenCalledWith({ where: { ruleSetId: "rs1" } });
+  });
+
+});
+
+describe("detectAndSaveMatches evaluability defense-in-depth", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetMatchedCriteriaForItems.mockReturnValue(new Map());
+    mockGetActualValuesForAllRules.mockReturnValue(new Map());
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+    mockHasEnabledArrInstances.mockResolvedValue(true);
+    mockHasEnabledSeerrInstances.mockResolvedValue(true);
+  });
+
+  it("refuses to evaluate directly-called rule sets whose Arr instances are unavailable", async () => {
+    // The choke point: even a caller that forgets the pre-check cannot make
+    // detectAndSaveMatches evaluate arr rules against an empty metadata map.
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasArrRules.mockReturnValue(true);
+    mockHasSeerrRules.mockReturnValue(false);
+    mockHasEnabledArrInstances.mockResolvedValue(false);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([
+      { itemData: { id: "item1", title: "Existing Match" } },
+    ]);
+
+    const result = await detectAndSaveMatches(
+      makeRuleSetConfig({
+        rules: [{ field: "foundInArr", operator: "equals", value: "false", enabled: true }],
+      }),
+      ["s1"],
+      {}, // empty ArrDataMap — exactly the vacuous input the guard must refuse
+      undefined,
+      false,
+    );
+
+    // Existing matches preserved, nothing evaluated, nothing written
+    expect(result.count).toBe(1);
+    expect(result.items[0]).toEqual({ id: "item1", title: "Existing Match" });
+    expect(mockEvaluateRules).not.toHaveBeenCalled();
+    expect(mockPrisma.ruleMatch.createMany).not.toHaveBeenCalled();
+    expect(mockPrisma.ruleMatch.deleteMany).not.toHaveBeenCalled();
+  });
 });
 
 describe("syncCollectionsAfterDetection", () => {

@@ -50,12 +50,19 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   getActualValuesForAllRules: mockGetActualValuesForAllRules,
 }));
 
+const mockHasEnabledArrInstances = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const mockHasEnabledSeerrInstances = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+
 vi.mock("@/lib/lifecycle/fetch-arr-metadata", () => ({
   fetchArrMetadata: vi.fn().mockResolvedValue({}),
+  hasEnabledArrInstances: mockHasEnabledArrInstances,
+  arrFamilyLabel: (type: string) =>
+    type === "MOVIE" ? "Radarr" : type === "MUSIC" ? "Lidarr" : "Sonarr",
 }));
 
 vi.mock("@/lib/lifecycle/fetch-seerr-metadata", () => ({
   fetchSeerrMetadata: vi.fn().mockResolvedValue({}),
+  hasEnabledSeerrInstances: mockHasEnabledSeerrInstances,
 }));
 
 // Import AFTER mocks
@@ -69,6 +76,8 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
     mockHasAnyActiveRules.mockReturnValue(true);
     mockHasArrRules.mockReturnValue(false);
     mockHasSeerrRules.mockReturnValue(false);
+    mockHasEnabledArrInstances.mockResolvedValue(true);
+    mockHasEnabledSeerrInstances.mockResolvedValue(true);
     mockEvaluateRules.mockResolvedValue([]);
   });
 
@@ -89,6 +98,35 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
       }
     );
     await expectJson(response, 401);
+  });
+
+  it("returns 400 when rules use Arr criteria and no enabled Arr instance exists (match-all guard)", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const ruleSet = await createTestRuleSet(user.id, { name: "Arr diff", type: "MOVIE" });
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    mockHasArrRules.mockReturnValue(true);
+    mockHasEnabledArrInstances.mockResolvedValue(false);
+
+    const response = await callRouteWithParams(
+      POST,
+      { id: ruleSet.id },
+      {
+        url: `/api/lifecycle/rules/${ruleSet.id}/diff`,
+        method: "POST",
+        body: {
+          rules: [{ field: "foundInArr", operator: "equals", value: "false" }],
+          type: "MOVIE",
+          serverIds: [server.id],
+        },
+      }
+    );
+
+    const body = await expectJson<{ error: string }>(response, 400);
+    expect(body.error).toMatch(/no enabled Radarr instance/i);
+    // The vacuous whole-library evaluation never runs
+    expect(mockEvaluateRules).not.toHaveBeenCalled();
   });
 
   it("returns 400 for invalid body (missing rules)", async () => {

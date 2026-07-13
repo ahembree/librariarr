@@ -11,6 +11,7 @@ import {
   createTestLibrary,
   createTestMediaItem,
   createTestRuleSet,
+  createTestRadarrInstance,
 } from "../../setup/test-helpers";
 
 // Critical: redirect prisma to test database
@@ -471,6 +472,110 @@ describe("Lifecycle Rules Preview", () => {
 
       const body = await expectJson<{ error: string }>(response, 400);
       expect(body.error).toBe("No active rules to evaluate");
+    });
+  });
+
+  // Arr/Seerr rules evaluated with no enabled instance behind them would
+  // preview the ENTIRE library as matching ("foundInArr = false" goes
+  // vacuously true) — the routes must refuse instead.
+  describe("no-enabled-instance match-all guard", () => {
+    it("saved preview returns 400 when rules use Arr criteria and no enabled Arr instance exists", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      await createTestMediaItem(library.id, { title: "Any Movie", type: "MOVIE" });
+
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Orphan hunter",
+        type: "MOVIE",
+        serverIds: [server.id],
+        rules: [
+          { id: "r1", field: "foundInArr", operator: "equals", value: "false", condition: "AND" },
+        ],
+      });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRouteWithParams(
+        savedPreviewPOST,
+        { id: ruleSet.id },
+        { url: `/api/lifecycle/rules/${ruleSet.id}/preview`, method: "POST" }
+      );
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/no enabled Radarr instance/i);
+    });
+
+    it("saved preview evaluates Arr rules normally once an enabled instance exists", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      await createTestMediaItem(library.id, { title: "Unmanaged Movie", type: "MOVIE" });
+      await createTestRadarrInstance(user.id, { enabled: true });
+
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Orphan hunter 2",
+        type: "MOVIE",
+        serverIds: [server.id],
+        rules: [
+          { id: "r1", field: "foundInArr", operator: "equals", value: "false", condition: "AND" },
+        ],
+      });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRouteWithParams(
+        savedPreviewPOST,
+        { id: ruleSet.id },
+        { url: `/api/lifecycle/rules/${ruleSet.id}/preview`, method: "POST" }
+      );
+
+      // Instance exists (mocked client returns an empty Radarr library), so
+      // "not found in Arr" legitimately matches the unmanaged item.
+      const body = await expectJson<{ count: number }>(response, 200);
+      expect(body.count).toBe(1);
+    });
+
+    it("ad-hoc preview returns 400 when rules use Arr criteria and no enabled Arr instance exists", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      await createTestLibrary(server.id, { type: "MOVIE" });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(adHocPreviewPOST, {
+        url: "/api/lifecycle/rules/preview",
+        method: "POST",
+        body: {
+          type: "MOVIE",
+          serverIds: [server.id],
+          rules: [
+            { id: "r1", field: "foundInArr", operator: "equals", value: "false", condition: "AND" },
+          ],
+        },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/no enabled Radarr instance/i);
+    });
+
+    it("ad-hoc preview returns 400 for Seerr criteria on a MUSIC preview", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      await createTestLibrary(server.id, { type: "MUSIC" });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(adHocPreviewPOST, {
+        url: "/api/lifecycle/rules/preview",
+        method: "POST",
+        body: {
+          type: "MUSIC",
+          serverIds: [server.id],
+          rules: [
+            { id: "r1", field: "seerrRequested", operator: "equals", value: "false", condition: "AND" },
+          ],
+        },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/Seerr criteria are not supported for music/i);
     });
   });
 });
