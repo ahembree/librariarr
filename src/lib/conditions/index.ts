@@ -48,3 +48,4 @@ export * from "./wildcard";
 export * from "./series-aggregates";
 export * from "./library-type-guard";
 export * from "./negation";
+export * from "./array-field-eval";

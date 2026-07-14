@@ -16,6 +16,7 @@ import {
   MB_IN_BYTES,
   DURATION_MS_PER_MIN,
   wildcardToRegex,
+  matchArrayField,
 } from "@/lib/conditions";
 import {
   isUnconfiguredContainsRule,
@@ -1017,53 +1018,14 @@ function evaluateRuleAgainstItem(
     return negate ? !result : result;
   }
 
-  // Genre / Labels / Country (JSON array fields). Enumerable multi-select:
-  // `contains` means "any selected value is present in the array".
+  // Genre / Labels / Country (JSON array fields) — evaluated via the shared
+  // `matchArrayField` (case-insensitive; see Bug 5 regression) so this
+  // post-filter is identical to the query engine's and can't drift.
   if (field === "genre" || field === "labels" || field === "country") {
     const sourceCol = field === "labels" ? "labels" : field === "country" ? "countries" : "genres";
-    const arr = Array.isArray(item[sourceCol]) ? (item[sourceCol] as string[]).map((g) => g.toLowerCase()) : [];
-    const strValue = String(value).toLowerCase();
-    let result: boolean;
-    switch (operator) {
-      case "equals":
-        result = arr.some((g) => g === strValue);
-        break;
-      case "contains": {
-        const parts = strValue.split("|").filter(Boolean);
-        const matchValues = parts.length > 0 ? parts : [strValue];
-        result = matchValues.some((v) => arr.some((g) => g === v));
-        break;
-      }
-      case "notContains": {
-        const parts = strValue.split("|").filter(Boolean);
-        const matchValues = parts.length > 0 ? parts : [strValue];
-        result = !matchValues.some((v) => arr.some((g) => g === v));
-        break;
-      }
-      case "notEquals":
-        result = !arr.some((g) => g === strValue);
-        break;
-      case "matchesWildcard": {
-        const re = wildcardToRegex(strValue);
-        result = arr.some((g) => re.test(g));
-        break;
-      }
-      case "notMatchesWildcard": {
-        const re = wildcardToRegex(strValue);
-        result = !arr.some((g) => re.test(g));
-        break;
-      }
-      case "isNull":
-        // No genres assigned (NULL JSON column OR empty array). Mirrors the
-        // Phase 1 `{ [column]: { equals: Prisma.DbNull } }` and treats the
-        // "no assignments" case symmetrically.
-        result = arr.length === 0;
-        break;
-      case "isNotNull":
-        result = arr.length > 0;
-        break;
-      default: return false;
-    }
+    const result = matchArrayField(item[sourceCol], operator, String(value));
+    // Unknown operator (null) → match nothing, bypassing negate (never fail open).
+    if (result === null) return false;
     return negate ? !result : result;
   }
 

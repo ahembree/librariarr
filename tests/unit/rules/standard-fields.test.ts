@@ -937,10 +937,15 @@ describe("Country field (JSON array, movies)", () => {
     expect(result.get("2")).toHaveLength(0);
   });
 
-  it("case-insensitive matching for country equals", () => {
+  it("case-insensitive matching for country equals (matches genre/labels)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "country", operator: "equals", value: "france" })])];
-    const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(matched(items, rules).get("1")!.length).toBeGreaterThan(0);
+  });
+
+  it("wildcard on country is case-insensitive", () => {
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "country", operator: "matchesWildcard", value: "GER*" })])];
+    // uppercase pattern matches title-cased "Germany"
+    expect(matched(items, rules).get("1")!.length).toBeGreaterThan(0);
   });
 });
 

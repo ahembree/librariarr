@@ -21,6 +21,7 @@ import {
   MB_IN_BYTES,
   DURATION_MS_PER_MIN,
   wildcardToRegex,
+  matchArrayField,
   aggregateEpisodesIntoSeries,
   serializeSeriesAggregateForEval,
   type AggregableEpisode,
@@ -961,8 +962,9 @@ function evaluateStreamCountInMemory(
   return negate ? !result : result;
 }
 
-/** Evaluate a JSON array field (genre, labels, country) in memory. Enumerable
- * multi-select: `contains` with pipe-separated values is list membership. */
+/** Evaluate a JSON array field (genre, labels, country) in memory via the
+ * shared `matchArrayField` — the single source of truth both engines use so
+ * their in-memory results (and case-sensitivity) can't drift. */
 function evaluateArrayFieldInMemory(
   column: string,
   operator: string,
@@ -970,51 +972,9 @@ function evaluateArrayFieldInMemory(
   negate: boolean | undefined,
   item: Record<string, unknown>,
 ): boolean {
-  // Coerce a missing key (undefined) to null so aggregated-series items — which
-  // omit `labels`/`countries` entirely — read as "no assignments" (matching
-  // Phase 1's Prisma.DbNull semantics) instead of crashing on `.includes()`.
-  const arr = (item[column] ?? null) as string[] | null;
-  let result: boolean;
-  switch (operator) {
-    case "equals":
-      result = arr !== null && arr.includes(value);
-      break;
-    case "notEquals":
-      // NULL array matches notEquals (Phase 1 unions Prisma.DbNull)
-      result = arr === null || !arr.includes(value);
-      break;
-    case "contains": {
-      const parts = value.split("|").filter(Boolean);
-      const matchValues = parts.length > 0 ? parts : [value];
-      result = arr !== null && matchValues.some((v) => arr.includes(v));
-      break;
-    }
-    case "notContains": {
-      const parts = value.split("|").filter(Boolean);
-      const matchValues = parts.length > 0 ? parts : [value];
-      result = arr === null || !matchValues.some((v) => arr.includes(v));
-      break;
-    }
-    case "matchesWildcard": {
-      const re = wildcardToRegex(value.toLowerCase());
-      result = arr !== null && arr.some((v) => re.test(String(v).toLowerCase()));
-      break;
-    }
-    case "notMatchesWildcard": {
-      const re = wildcardToRegex(value.toLowerCase());
-      result = arr === null || !arr.some((v) => re.test(String(v).toLowerCase()));
-      break;
-    }
-    case "isNull":
-      result = arr === null || arr.length === 0;
-      break;
-    case "isNotNull":
-      result = arr !== null && arr.length > 0;
-      break;
-    default:
-      // Unknown operator → match nothing (bypass negate), never fail open
-      return false;
-  }
+  const result = matchArrayField(item[column], operator, value);
+  // Unknown operator (null) → match nothing, bypassing negate (never fail open).
+  if (result === null) return false;
   return negate ? !result : result;
 }
 
