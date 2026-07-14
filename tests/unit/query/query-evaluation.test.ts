@@ -253,6 +253,48 @@ describe("evaluateAllQueryRulesInMemory — standard fields", () => {
     expect(evaluateAllQueryRulesInMemory(groups, { genres: null }, undefined, undefined)).toBe(false);
   });
 
+  it("country array contains (movies)", () => {
+    const groups: QueryGroup[] = [{
+      id: "g1", condition: "AND", groups: [],
+      rules: [makeRule({ field: "country", operator: "contains", value: "France" })],
+    }];
+    expect(evaluateAllQueryRulesInMemory(groups, { countries: ["France", "Germany"] }, undefined, undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(groups, { countries: ["Japan"] }, undefined, undefined)).toBe(false);
+    expect(evaluateAllQueryRulesInMemory(groups, { countries: null }, undefined, undefined)).toBe(false);
+  });
+
+  it("country multi-select + isNull/isNotNull", () => {
+    const multi: QueryGroup[] = [{
+      id: "g1", condition: "AND", groups: [],
+      rules: [makeRule({ field: "country", operator: "contains", value: "France|Japan" })],
+    }];
+    expect(evaluateAllQueryRulesInMemory(multi, { countries: ["Japan"] }, undefined, undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(multi, { countries: ["Italy"] }, undefined, undefined)).toBe(false);
+
+    const isNull: QueryGroup[] = [{
+      id: "g1", condition: "AND", groups: [],
+      rules: [makeRule({ field: "country", operator: "isNull", value: "" })],
+    }];
+    expect(evaluateAllQueryRulesInMemory(isNull, { countries: null }, undefined, undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(isNull, { countries: ["France"] }, undefined, undefined)).toBe(false);
+  });
+
+  it("country on an item missing the key (aggregated series) reads as no-assignments, never crashes", () => {
+    // Aggregated-series items omit `countries` entirely — the field must
+    // behave like NULL rather than throwing on `.includes()`.
+    const contains: QueryGroup[] = [{
+      id: "g1", condition: "AND", groups: [],
+      rules: [makeRule({ field: "country", operator: "contains", value: "France" })],
+    }];
+    expect(evaluateAllQueryRulesInMemory(contains, { title: "A Series" }, undefined, undefined)).toBe(false);
+
+    const notContains: QueryGroup[] = [{
+      id: "g1", condition: "AND", groups: [],
+      rules: [makeRule({ field: "country", operator: "notContains", value: "France" })],
+    }];
+    expect(evaluateAllQueryRulesInMemory(notContains, { title: "A Series" }, undefined, undefined)).toBe(true);
+  });
+
   it("fileSize field (MB conversion)", () => {
     const groups: QueryGroup[] = [{
       id: "g1", condition: "AND", groups: [],

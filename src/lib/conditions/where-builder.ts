@@ -388,7 +388,7 @@ const resolutionHandler: FieldHandler = () => {
   return {};
 };
 const genreLabelsHandler: FieldHandler = (operator, value, field, negate) => {
-  const column = field === "labels" ? "labels" : "genres";
+  const column = field === "labels" ? "labels" : field === "country" ? "countries" : "genres";
   const strValue = String(value);
   const parts = (operator === "contains" || operator === "notContains")
     ? strValue.split("|").filter(Boolean)
@@ -703,6 +703,7 @@ export const FIELD_HANDLERS: Record<string, FieldHandler> = (() => {
     resolution: resolutionHandler,
     genre: genreLabelsHandler,
     labels: genreLabelsHandler,
+    country: genreLabelsHandler,
     hasExternalId: hasExternalIdHandler,
     audioLanguage: streamRelationHandler,
     subtitleLanguage: streamRelationHandler,

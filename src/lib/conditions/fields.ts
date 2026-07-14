@@ -16,6 +16,10 @@ export const CONDITION_FIELDS: ConditionField[] = [
   { value: "studio", label: "Studio", type: "text", section: "content", enumerable: true },
   { value: "genre", label: "Genre", type: "text", section: "content", enumerable: true },
   { value: "labels", label: "Label", type: "text", section: "content", enumerable: true },
+  // Country of origin (Plex `Country` tags). Only populated for movies — TV
+  // episodes carry no country tag and there is no show-level fallback, so the
+  // field is gated to MOVIE.
+  { value: "country", label: "Country", type: "text", section: "content", enumerable: true, invalidForLibraryType: ["SERIES", "MUSIC"] },
 
   // ─── Activity ───────────────────────────────────────────────────────────
   { value: "playCount", label: "Play Count", type: "number", section: "activity" },

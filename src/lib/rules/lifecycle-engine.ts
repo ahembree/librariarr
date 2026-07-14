@@ -1017,10 +1017,10 @@ function evaluateRuleAgainstItem(
     return negate ? !result : result;
   }
 
-  // Genre / Labels (JSON array fields). Enumerable multi-select: `contains`
-  // means "any selected value is present in the array".
-  if (field === "genre" || field === "labels") {
-    const sourceCol = field === "labels" ? "labels" : "genres";
+  // Genre / Labels / Country (JSON array fields). Enumerable multi-select:
+  // `contains` means "any selected value is present in the array".
+  if (field === "genre" || field === "labels" || field === "country") {
+    const sourceCol = field === "labels" ? "labels" : field === "country" ? "countries" : "genres";
     const arr = Array.isArray(item[sourceCol]) ? (item[sourceCol] as string[]).map((g) => g.toLowerCase()) : [];
     const strValue = String(value).toLowerCase();
     let result: boolean;
@@ -1671,9 +1671,9 @@ function getActualValueForField(
     return null;
   }
 
-  // Genre / Labels (JSON array fields)
-  if (field === "genre" || field === "labels") {
-    const sourceCol = field === "labels" ? "labels" : "genres";
+  // Genre / Labels / Country (JSON array fields)
+  if (field === "genre" || field === "labels" || field === "country") {
+    const sourceCol = field === "labels" ? "labels" : field === "country" ? "countries" : "genres";
     const arr = Array.isArray(item[sourceCol]) ? (item[sourceCol] as string[]) : [];
     return arr.length > 0 ? arr.join(", ") : "none";
   }

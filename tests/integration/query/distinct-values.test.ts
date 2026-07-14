@@ -220,6 +220,35 @@ describe("GET /api/query/distinct-values", () => {
     expect(actionCount).toBe(1);
   });
 
+  it("returns distinct countries from JSONB arrays", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, isLoggedIn: true });
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id);
+
+    await createTestMediaItem(lib.id, {
+      title: "French Film",
+      type: "MOVIE",
+      countries: ["France", "Germany"],
+    });
+    await createTestMediaItem(lib.id, {
+      title: "Co-Production",
+      type: "MOVIE",
+      countries: ["France", "Japan"],
+    });
+
+    const response = await callRoute(GET, {
+      url: "/api/query/distinct-values",
+    });
+    const body = await expectJson<{ country: string[] }>(response, 200);
+
+    expect(body.country).toContain("France");
+    expect(body.country).toContain("Germany");
+    expect(body.country).toContain("Japan");
+    // No duplicates (France appears in both items)
+    expect(body.country.filter((c: string) => c === "France").length).toBe(1);
+  });
+
   it("includes labels and stream-query color fields", async () => {
     const user = await createTestUser();
     setMockSession({ userId: user.id, isLoggedIn: true });

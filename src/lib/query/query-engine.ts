@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { QueryRule, QueryGroup, QueryDefinition, LifecycleRuleCondition } from "./types";
-import { GENRE_FIELD, LABELS_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules, hasStreamCountRules } from "./types";
+import { GENRE_FIELD, LABELS_FIELD, COUNTRY_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules, hasStreamCountRules } from "./types";
 import {
   isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
@@ -125,6 +125,7 @@ const ITEM_SELECT = {
 const ITEM_SELECT_FULL = {
   ...ITEM_SELECT,
   labels: true,
+  countries: true,
   audioSamplingRate: true,
   audioBitrate: true,
   ratingCount: true,
@@ -960,7 +961,7 @@ function evaluateStreamCountInMemory(
   return negate ? !result : result;
 }
 
-/** Evaluate a JSON array field (genre, labels) in memory. Enumerable
+/** Evaluate a JSON array field (genre, labels, country) in memory. Enumerable
  * multi-select: `contains` with pipe-separated values is list membership. */
 function evaluateArrayFieldInMemory(
   column: string,
@@ -969,7 +970,10 @@ function evaluateArrayFieldInMemory(
   negate: boolean | undefined,
   item: Record<string, unknown>,
 ): boolean {
-  const arr = item[column] as string[] | null;
+  // Coerce a missing key (undefined) to null so aggregated-series items — which
+  // omit `labels`/`countries` entirely — read as "no assignments" (matching
+  // Phase 1's Prisma.DbNull semantics) instead of crashing on `.includes()`.
+  const arr = (item[column] ?? null) as string[] | null;
   let result: boolean;
   switch (operator) {
     case "equals":
@@ -1160,9 +1164,9 @@ function evaluateQueryRuleInMemory(
     return evaluateStreamCountInMemory(field, operator, Number(value), negate, item, value);
   }
 
-  // Genre / Labels (JSON arrays)
-  if (field === GENRE_FIELD || field === LABELS_FIELD) {
-    const column = field === LABELS_FIELD ? "labels" : "genres";
+  // Genre / Labels / Country (JSON arrays)
+  if (field === GENRE_FIELD || field === LABELS_FIELD || field === COUNTRY_FIELD) {
+    const column = field === LABELS_FIELD ? "labels" : field === COUNTRY_FIELD ? "countries" : "genres";
     return evaluateArrayFieldInMemory(column, operator, String(value), negate, item);
   }
 

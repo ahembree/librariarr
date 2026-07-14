@@ -49,7 +49,7 @@ export async function GET() {
   const cached = appCache.get<Record<string, unknown>>(CACHE_KEY);
   if (cached) return NextResponse.json(cached);
 
-  const [aggRows, genres, labelRows, streamDistinct, sqDistinct, ruleSets, watchUsers] = await Promise.all([
+  const [aggRows, genres, labelRows, countryRows, streamDistinct, sqDistinct, ruleSets, watchUsers] = await Promise.all([
     prisma.$queryRaw<AggRow[]>`
       SELECT
         array_agg(DISTINCT resolution) FILTER (WHERE resolution IS NOT NULL) AS resolutions,
@@ -84,6 +84,15 @@ export async function GET() {
       CROSS JOIN LATERAL jsonb_array_elements_text(mi.labels) AS l(label)
       WHERE mi.labels IS NOT NULL AND jsonb_typeof(mi.labels) = 'array'
       ORDER BY l.label
+    `,
+    // Countries (JSONB array, same shape as genres) for the enumerable
+    // `country` field. Only movies carry country tags today.
+    prisma.$queryRaw<{ country: string }[]>`
+      SELECT DISTINCT c.country AS "country"
+      FROM "MediaItem" mi
+      CROSS JOIN LATERAL jsonb_array_elements_text(mi.countries) AS c(country)
+      WHERE mi.countries IS NOT NULL AND jsonb_typeof(mi.countries) = 'array'
+      ORDER BY c.country
     `,
     prisma.$queryRaw<{
       audioLanguages: string[] | null;
@@ -164,6 +173,15 @@ export async function GET() {
     }
   }
 
+  // Deduplicate countries the same way as genres.
+  const countryMap = new Map<string, string>();
+  for (const c of countryRows) {
+    const key = c.country.toLowerCase();
+    if (!countryMap.has(key)) {
+      countryMap.set(key, c.country);
+    }
+  }
+
   const result = {
     resolution: STANDARD_RESOLUTIONS.filter((std) =>
       (r.resolutions ?? []).some((v) => normalizeResolutionLabel(v) === std)
@@ -177,6 +195,7 @@ export async function GET() {
     studio: (r.studios ?? []).sort((a, b) => a.localeCompare(b)),
     genre: Array.from(genreMap.values()).sort((a, b) => a.localeCompare(b)),
     labels: Array.from(labelMap.values()).sort((a, b) => a.localeCompare(b)),
+    country: Array.from(countryMap.values()).sort((a, b) => a.localeCompare(b)),
     year: (r.years ?? []).sort((a, b) => b - a),
     videoBitDepth: (r.videoBitDepths ?? []).sort((a, b) => b - a),
     videoProfile: (r.videoProfiles ?? []).sort((a, b) => a.localeCompare(b)),

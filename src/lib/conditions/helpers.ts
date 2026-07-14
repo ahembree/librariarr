@@ -254,6 +254,7 @@ export const CROSS_SYSTEM_FIELDS = CROSS_SYSTEM_FIELD_VALUES;
 // Constant field names used by both engines for direct comparison
 export const GENRE_FIELD = "genre";
 export const LABELS_FIELD = "labels";
+export const COUNTRY_FIELD = "country";
 export const EXTERNAL_ID_FIELD = "hasExternalId";
 
 // ─── Tree walkers ────────────────────────────────────────────────────────
