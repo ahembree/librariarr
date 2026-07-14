@@ -155,6 +155,18 @@ describe("CONDITION_FIELDS registry", () => {
     expect(isSeriesAggregateField("seriesLastPlayedAt")).toBe(true);
     expect([...(field!.invalidForLibraryType ?? [])].sort()).toEqual(["MOVIE", "MUSIC"]);
   });
+
+  // Country tags are only populated for movies (Plex `Country`); TV episodes
+  // carry none and there's no show-level fallback. Gating it to MOVIE keeps it
+  // out of the SERIES/MUSIC builders where it would match nothing.
+  it("country is an enumerable content field gated to MOVIE only", () => {
+    const field = CONDITION_FIELDS.find((f) => f.value === "country");
+    expect(field).toBeDefined();
+    expect(field!.type).toBe("text");
+    expect(field!.section).toBe("content");
+    expect(field!.enumerable).toBe(true);
+    expect([...(field!.invalidForLibraryType ?? [])].sort()).toEqual(["MUSIC", "SERIES"]);
+  });
 });
 
 describe("Field-set predicates derive from registry", () => {

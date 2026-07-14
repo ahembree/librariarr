@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { QueryRule, QueryGroup, QueryDefinition, LifecycleRuleCondition } from "./types";
-import { GENRE_FIELD, LABELS_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules, hasStreamCountRules } from "./types";
+import { GENRE_FIELD, LABELS_FIELD, COUNTRY_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules, hasStreamCountRules } from "./types";
 import {
   isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
@@ -21,6 +21,7 @@ import {
   MB_IN_BYTES,
   DURATION_MS_PER_MIN,
   wildcardToRegex,
+  matchArrayField,
   aggregateEpisodesIntoSeries,
   serializeSeriesAggregateForEval,
   type AggregableEpisode,
@@ -125,6 +126,7 @@ const ITEM_SELECT = {
 const ITEM_SELECT_FULL = {
   ...ITEM_SELECT,
   labels: true,
+  countries: true,
   audioSamplingRate: true,
   audioBitrate: true,
   ratingCount: true,
@@ -960,8 +962,9 @@ function evaluateStreamCountInMemory(
   return negate ? !result : result;
 }
 
-/** Evaluate a JSON array field (genre, labels) in memory. Enumerable
- * multi-select: `contains` with pipe-separated values is list membership. */
+/** Evaluate a JSON array field (genre, labels, country) in memory via the
+ * shared `matchArrayField` — the single source of truth both engines use so
+ * their in-memory results (and case-sensitivity) can't drift. */
 function evaluateArrayFieldInMemory(
   column: string,
   operator: string,
@@ -969,48 +972,9 @@ function evaluateArrayFieldInMemory(
   negate: boolean | undefined,
   item: Record<string, unknown>,
 ): boolean {
-  const arr = item[column] as string[] | null;
-  let result: boolean;
-  switch (operator) {
-    case "equals":
-      result = arr !== null && arr.includes(value);
-      break;
-    case "notEquals":
-      // NULL array matches notEquals (Phase 1 unions Prisma.DbNull)
-      result = arr === null || !arr.includes(value);
-      break;
-    case "contains": {
-      const parts = value.split("|").filter(Boolean);
-      const matchValues = parts.length > 0 ? parts : [value];
-      result = arr !== null && matchValues.some((v) => arr.includes(v));
-      break;
-    }
-    case "notContains": {
-      const parts = value.split("|").filter(Boolean);
-      const matchValues = parts.length > 0 ? parts : [value];
-      result = arr === null || !matchValues.some((v) => arr.includes(v));
-      break;
-    }
-    case "matchesWildcard": {
-      const re = wildcardToRegex(value.toLowerCase());
-      result = arr !== null && arr.some((v) => re.test(String(v).toLowerCase()));
-      break;
-    }
-    case "notMatchesWildcard": {
-      const re = wildcardToRegex(value.toLowerCase());
-      result = arr === null || !arr.some((v) => re.test(String(v).toLowerCase()));
-      break;
-    }
-    case "isNull":
-      result = arr === null || arr.length === 0;
-      break;
-    case "isNotNull":
-      result = arr !== null && arr.length > 0;
-      break;
-    default:
-      // Unknown operator → match nothing (bypass negate), never fail open
-      return false;
-  }
+  const result = matchArrayField(item[column], operator, value);
+  // Unknown operator (null) → match nothing, bypassing negate (never fail open).
+  if (result === null) return false;
   return negate ? !result : result;
 }
 
@@ -1160,9 +1124,9 @@ function evaluateQueryRuleInMemory(
     return evaluateStreamCountInMemory(field, operator, Number(value), negate, item, value);
   }
 
-  // Genre / Labels (JSON arrays)
-  if (field === GENRE_FIELD || field === LABELS_FIELD) {
-    const column = field === LABELS_FIELD ? "labels" : "genres";
+  // Genre / Labels / Country (JSON arrays)
+  if (field === GENRE_FIELD || field === LABELS_FIELD || field === COUNTRY_FIELD) {
+    const column = field === LABELS_FIELD ? "labels" : field === COUNTRY_FIELD ? "countries" : "genres";
     return evaluateArrayFieldInMemory(column, operator, String(value), negate, item);
   }
 

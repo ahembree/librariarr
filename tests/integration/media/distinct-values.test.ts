@@ -325,6 +325,35 @@ describe("GET /api/media/distinct-values", () => {
     expect(actionCount).toBe(1);
   });
 
+  it("returns distinct countries from JSONB arrays deduplicated", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id);
+
+    await createTestMediaItem(lib.id, {
+      title: "Movie 1",
+      type: "MOVIE",
+      countries: ["France", "Germany"],
+    });
+    await createTestMediaItem(lib.id, {
+      title: "Movie 2",
+      type: "MOVIE",
+      countries: ["France", "Japan"],
+    });
+
+    const response = await callRoute(GET, {
+      url: "/api/media/distinct-values",
+    });
+    const body = await expectJson<{ country: string[] }>(response, 200);
+
+    expect(body.country).toContain("France");
+    expect(body.country).toContain("Germany");
+    expect(body.country).toContain("Japan");
+    // No duplicates
+    expect(body.country.filter((c: string) => c === "France").length).toBe(1);
+  });
+
   it("returns file size min/max as strings (BigInt)", async () => {
     const user = await createTestUser();
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });

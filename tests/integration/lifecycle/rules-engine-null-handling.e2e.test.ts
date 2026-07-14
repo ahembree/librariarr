@@ -65,6 +65,7 @@ beforeAll(async () => {
     fileSize: BigInt(5000 * 1024 * 1024), // exactly 5000 binary MB (engine uses MB_IN_BYTES = 1<<20)
     genres: ["Action", "Drama"],
     labels: ["watched"],
+    countries: ["United States", "Canada"],
     playCount: 2,
     addedAt: new Date("2024-01-15"),
     lastPlayedAt: new Date("2024-06-01"),
@@ -157,6 +158,23 @@ describe("Rule engine — NULL handling for notEquals/notContains (Phase 1 must 
   it("labels notEquals + notContains on nullable JSON array include NULL rows", async () => {
     expect(await count(group("labels", "notEquals", "watched"))).toBe(NULL_COUNT);
     expect(await count(group("labels", "notContains", "watched"))).toBe(NULL_COUNT);
+  });
+
+  it("country contains matches populated rows via Phase 1 array_contains", async () => {
+    // Group A countries=["United States","Canada"]. contains "Canada" → FULL_COUNT.
+    expect(await count(group("country", "contains", "Canada"))).toBe(FULL_COUNT);
+    // Multi-select: matches if any selected value is present.
+    expect(await count(group("country", "contains", "Canada|France"))).toBe(FULL_COUNT);
+  });
+
+  it("country notEquals + notContains on nullable JSON array include NULL rows", async () => {
+    expect(await count(group("country", "notEquals", "United States"))).toBe(NULL_COUNT);
+    expect(await count(group("country", "notContains", "United States"))).toBe(NULL_COUNT);
+  });
+
+  it("country isNull / isNotNull symmetric coverage", async () => {
+    expect(await count(group("country", "isNull", ""))).toBe(NULL_COUNT);
+    expect(await count(group("country", "isNotNull", ""))).toBe(FULL_COUNT);
   });
 
   it("genre isNull returns rows with NULL genres array", async () => {

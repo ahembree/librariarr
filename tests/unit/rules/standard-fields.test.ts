@@ -900,6 +900,55 @@ describe("Genre field (JSON array)", () => {
   });
 });
 
+describe("Country field (JSON array, movies)", () => {
+  const items = [
+    { id: "1", countries: ["France", "Germany"] },
+    { id: "2", countries: ["Japan"] },
+    { id: "3", countries: [] },
+  ];
+
+  it("equals matches item with that country", () => {
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "country", operator: "equals", value: "France" })])];
+    const result = matched(items, rules);
+    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(0);
+  });
+
+  it("contains supports pipe-separated multi-select", () => {
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "country", operator: "contains", value: "Japan|Germany" })])];
+    const result = matched(items, rules);
+    expect(result.get("1")!.length).toBeGreaterThan(0); // has Germany
+    expect(result.get("2")!.length).toBeGreaterThan(0); // has Japan
+    expect(result.get("3")).toHaveLength(0); // empty
+  });
+
+  it("notContains excludes matching country and includes empty", () => {
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "country", operator: "notContains", value: "France" })])];
+    const result = matched(items, rules);
+    expect(result.get("1")).toHaveLength(0);
+    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("3")!.length).toBeGreaterThan(0);
+  });
+
+  it("matchesWildcard against the country array", () => {
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "country", operator: "matchesWildcard", value: "Ger*" })])];
+    const result = matched(items, rules);
+    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(0);
+  });
+
+  it("case-insensitive matching for country equals (matches genre/labels)", () => {
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "country", operator: "equals", value: "france" })])];
+    expect(matched(items, rules).get("1")!.length).toBeGreaterThan(0);
+  });
+
+  it("wildcard on country is case-insensitive", () => {
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "country", operator: "matchesWildcard", value: "GER*" })])];
+    // uppercase pattern matches title-cased "Germany"
+    expect(matched(items, rules).get("1")!.length).toBeGreaterThan(0);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 5. hasExternalId
 // ---------------------------------------------------------------------------

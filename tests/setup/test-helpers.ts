@@ -215,6 +215,7 @@ export async function createTestMediaItem(
     duration: number;
     genres: string[];
     labels: string[];
+    countries: string[];
     contentRating: string;
     studio: string;
     filePath: string;
@@ -247,6 +248,7 @@ export async function createTestMediaItem(
       duration: overrides?.duration ?? 7200000,
       genres: overrides?.genres,
       labels: overrides?.labels,
+      countries: overrides?.countries,
       contentRating: overrides?.contentRating,
       studio: overrides?.studio,
       filePath: overrides?.filePath,

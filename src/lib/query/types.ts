@@ -14,6 +14,7 @@ import {
   STREAM_FIELDS as STREAM_FIELDS_ARRAY,
   GENRE_FIELD as _GENRE_FIELD,
   LABELS_FIELD as _LABELS_FIELD,
+  COUNTRY_FIELD as _COUNTRY_FIELD,
   EXTERNAL_ID_FIELD as _EXTERNAL_ID_FIELD,
   isArrField,
   isSeerrField,
@@ -55,6 +56,7 @@ export const STREAM_FIELDS = new Set<string>(STREAM_FIELDS_ARRAY);
 
 export const GENRE_FIELD = _GENRE_FIELD;
 export const LABELS_FIELD = _LABELS_FIELD;
+export const COUNTRY_FIELD = _COUNTRY_FIELD;
 export const EXTERNAL_ID_FIELD = _EXTERNAL_ID_FIELD;
 
 // ─── Predicates ──────────────────────────────────────────────────────────
