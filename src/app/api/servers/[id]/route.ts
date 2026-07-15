@@ -7,6 +7,7 @@ import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
 import { validateRequest, serverEditSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
+import { eventBus } from "@/lib/events/event-bus";
 
 export async function PUT(
   request: NextRequest,
@@ -91,6 +92,10 @@ export async function PUT(
     await recomputeCanonical(session.userId!);
     invalidateMediaCaches();
   }
+
+  // Reconcile the realtime WebSocket: an enable/disable, url/token, or TLS
+  // change all affect whether/how we connect to this server.
+  eventBus.emit({ type: "server:changed", userId: session.userId!, meta: { serverId: server.id } });
 
   return NextResponse.json({ server: sanitize(updated) });
 }
@@ -192,6 +197,9 @@ export async function DELETE(
 
   // Recompute canonical flags for remaining items
   await recomputeCanonical(userId);
+
+  // Close the realtime WebSocket for the removed server.
+  eventBus.emit({ type: "server:changed", userId, meta: { serverId: server.id } });
 
   return NextResponse.json({ success: true });
 }

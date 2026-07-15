@@ -153,6 +153,8 @@ Controls how often Librariarr fetches metadata from your connected media servers
 | Weekly | Weekly on Monday at the Daily Run Time |
 | Custom | A custom schedule expression |
 
+When [Real-Time Sync](/docs/features/real-time-sync/) is enabled, library and watch-state changes on a server also trigger an incremental sync between scheduled runs, so this schedule mainly acts as a full reconciliation pass.
+
 ### Lifecycle Detection Schedule
 
 Controls when Librariarr evaluates lifecycle rules to find matching media. Default: every 6 hours.
@@ -178,6 +180,7 @@ All schedules show their next run time and last run time in the Settings UI. If 
 ### Display
 
 - **Deduplicate stats across servers**: When enabled, media appearing on multiple servers is counted only once in dashboard statistics
+- **Real-time server sync**: When enabled (default), Librariarr keeps a live WebSocket to each server for instant active-session updates and stream enforcement, plus near-real-time library and watch-history sync between scheduled runs. Turn it off to rely on scheduled polling only (useful if a reverse proxy blocks WebSocket upgrades). See [Real-Time Sync](/docs/features/real-time-sync/)
 
 ### Library Display (Multi-Server)
 

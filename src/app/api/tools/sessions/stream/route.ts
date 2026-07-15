@@ -2,10 +2,16 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
+import { realtimeBus } from "@/lib/media-server/realtime";
 import type { MediaSession } from "@/lib/media-server/types";
 import type { MediaServerType } from "@/generated/prisma/client";
 
 export const dynamic = "force-dynamic";
+
+// Minimum spacing between realtime-triggered polls. A playing stream emits
+// session events ~every second, so without this the socket would drive one
+// getSessions() per second per active stream — worse than plain polling.
+const EVENT_POLL_MIN_MS = 2000;
 
 interface SessionWithServer extends MediaSession {
   serverId: string;
@@ -121,8 +127,32 @@ export async function GET() {
       // Initial fetch — send immediately
       await poll();
 
-      // Poll Plex servers every 5 seconds
+      // Poll servers every 5 seconds (fallback / reconciliation when realtime
+      // is disabled or a socket is down)
       const pollTimer = setInterval(poll, POLL_INTERVAL);
+
+      // Real-time: push within ~EVENT_POLL_MIN_MS of any session change pushed
+      // by a media-server WebSocket, instead of waiting for the next poll tick.
+      let lastEventPoll = 0;
+      let trailingTimer: ReturnType<typeof setTimeout> | null = null;
+      const onRealtimeSession = () => {
+        if (closed) return;
+        const now = Date.now();
+        const elapsed = now - lastEventPoll;
+        if (elapsed >= EVENT_POLL_MIN_MS) {
+          lastEventPoll = now;
+          void poll();
+        } else if (!trailingTimer) {
+          trailingTimer = setTimeout(() => {
+            trailingTimer = null;
+            lastEventPoll = Date.now();
+            void poll();
+          }, EVENT_POLL_MIN_MS - elapsed);
+        }
+      };
+      const realtimeUnsub = realtimeBus.subscribe((event) => {
+        if (event.kind === "session-changed") onRealtimeSession();
+      });
 
       // Heartbeat to keep connection alive
       const heartbeatTimer = setInterval(() => {
@@ -146,6 +176,8 @@ export async function GET() {
           clearInterval(heartbeatTimer);
           clearInterval(checkClosed);
           clearTimeout(maxLifetimeTimer);
+          realtimeUnsub();
+          if (trailingTimer) clearTimeout(trailingTimer);
           try {
             controller.close();
           } catch {

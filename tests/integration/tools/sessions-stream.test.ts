@@ -5,6 +5,7 @@ import {
   callRoute,
   expectJson,
   createTestUser,
+  createTestServer,
 } from "../../setup/test-helpers";
 
 // Redirect prisma to test database
@@ -30,6 +31,9 @@ vi.mock("@/lib/media-server/factory", () => ({
 
 // Import route handler AFTER mocks
 import { GET } from "@/app/api/tools/sessions/stream/route";
+import { createMediaServerClient } from "@/lib/media-server/factory";
+// Same singleton the route subscribes to (bus.ts is one module regardless of import path).
+import { realtimeBus } from "@/lib/media-server/realtime/bus";
 
 describe("GET /api/tools/sessions/stream", () => {
   beforeEach(async () => {
@@ -93,6 +97,42 @@ describe("GET /api/tools/sessions/stream", () => {
     expect(text).toContain("data:");
 
     // Cancel the reader to clean up
+    await reader.cancel();
+  });
+
+  it("pushes an update when a realtime session event fires", async () => {
+    const user = await createTestUser();
+    await createTestServer(user.id);
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    // First poll: no sessions. After the realtime event: one active session.
+    const getSessions = vi.fn().mockResolvedValue([]);
+    vi.mocked(createMediaServerClient).mockImplementation(function () {
+      return { getSessions } as never;
+    });
+
+    const response = await callRoute(GET, { url: "/api/tools/sessions/stream" });
+    const reader = response.body!.getReader();
+
+    // Consume the initial (empty) sessions event.
+    const first = new TextDecoder().decode((await reader.read()).value);
+    expect(first).toContain("event: sessions");
+
+    // A stream starts on the server; a realtime event drives an immediate re-poll.
+    getSessions.mockResolvedValue([
+      { sessionId: "rt-1", player: { state: "playing", local: true }, session: { bandwidth: 0, location: "lan" } },
+    ]);
+    realtimeBus.emit({ kind: "session-changed", serverId: "x", serverType: "PLEX", at: Date.now() });
+
+    let text = "";
+    for (let i = 0; i < 3; i++) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += new TextDecoder().decode(value);
+      if (text.includes("rt-1")) break;
+    }
+    expect(text).toContain("rt-1");
+
     await reader.cancel();
   });
 });

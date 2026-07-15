@@ -161,6 +161,10 @@ export const dedupSettingsSchema = z.object({
   dedupStats: z.boolean(),
 });
 
+export const realtimeSettingsSchema = z.object({
+  realtimeSync: z.boolean(),
+});
+
 export const titlePreferenceSchema = z.object({
   serverId: z.string().nullable().optional(),
   field: z.enum(["title", "artwork"]),

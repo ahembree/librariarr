@@ -94,6 +94,10 @@ export default defineConfig({
               slug: "docs/features/stream-manager",
             },
             {
+              label: "Real-Time Sync",
+              slug: "docs/features/real-time-sync",
+            },
+            {
               label: "Preroll Manager",
               slug: "docs/features/preroll-manager",
             },
