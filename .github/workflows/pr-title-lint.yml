@@ -1,0 +1,50 @@
+name: Lint PR Title
+
+# Squash-merging a PR uses the PR *title* as the commit subject on `main`.
+# release-please classifies commits by that subject, so a non-conventional
+# title (e.g. "Add country field support") is silently dropped from the
+# release and changelog. The local commit-msg husky hook only validates
+# locally-made commits, not a title typed into GitHub's merge UI, so this
+# workflow enforces the same Conventional Commits contract server-side.
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - reopened
+      - synchronize
+
+permissions:
+  pull-requests: read
+
+jobs:
+  lint-pr-title:
+    name: Validate conventional commit title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Mirror @commitlint/config-conventional (used by the commit-msg hook).
+          types: |
+            build
+            chore
+            ci
+            docs
+            feat
+            fix
+            perf
+            refactor
+            revert
+            style
+            test
+          requireScope: false
+          # config-conventional forbids sentence/start/pascal/upper-case subjects;
+          # requiring a lowercase first character mirrors that intent.
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: |
+            The subject "{subject}" must start with a lowercase letter to match
+            @commitlint/config-conventional. A capitalized subject like
+            "Add country field support" is what causes release-please to drop the
+            change from the release.

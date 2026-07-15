@@ -395,9 +395,11 @@ Documentation files to be aware of:
 - `.github/workflows/release-please.yml` — On push to main, runs release-please; when a release is created, builds and pushes the Docker image with `latest` + semver tags
 - `.github/workflows/docker-nightly.yml` — On push to `main` (or manual dispatch), builds and pushes the `nightly` rolling tag + immutable `nightly-<sha>` tags for the trunk-based bleeding-edge channel. Never publishes `latest`/semver (reserved for releases)
 - `.github/workflows/docker-publish.yml` — Manual (`workflow_dispatch`) Docker Hub image publish
+- `.github/workflows/pr-title-lint.yml` — Validates every PR **title** against Conventional Commits (mirrors `@commitlint/config-conventional`). Because squash-merging uses the PR title as the commit subject on `main`, and release-please classifies commits by that subject, a non-conventional title would be silently dropped from the release/changelog. The local `commit-msg` hook can't catch a title typed into GitHub's merge UI, so this check enforces it server-side.
 
 ### Git Conventions
 
 - Husky pre-commit hook runs `pnpm exec eslint --quiet`
 - Husky commit-msg hook enforces [Conventional Commits](https://www.conventionalcommits.org/) via commitlint (`@commitlint/config-conventional`)
 - Commit format: `type(scope): description` — e.g. `feat: add stream manager`, `fix(auth): handle expired tokens`
+- **When squash-merging a PR, the PR title becomes the commit subject on `main` — it MUST be a valid Conventional Commit** (enforced by `pr-title-lint.yml`). release-please reads that subject to decide the version bump and changelog; a squashed PR titled `Add X` (not `feat: add X`) is dropped from the release entirely. Merge-commit PRs are safe because release-please reads the inner commits, but squash collapses them into the one title.
