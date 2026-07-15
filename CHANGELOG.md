@@ -1,13 +1,19 @@
 # Changelog
 
-## [0.27.1](https://github.com/ahembree/librariarr/compare/v0.27.0...v0.27.1) (2026-07-15)
+## [0.28.0](https://github.com/ahembree/librariarr/compare/v0.27.0...v0.28.0) (2026-07-15)
+
+
+### Features
+
+* **query:** add a **Country** field for movie queries and lifecycle rules — exposes Plex `Country` tags as a queryable/rule condition (movies only), evaluated in both engine phases with the enumerable dropdown populated from distinct values ([#304](https://github.com/ahembree/librariarr/pull/304), [59aafde](https://github.com/ahembree/librariarr/commit/59aafde9a58f0ddd4d25b5e2d8cb3e543b4f7cd9))
 
 
 ### Bug Fixes
 
+* **lifecycle:** add match-all safety guards for Arr/Seerr rules and whole-record exceptions — skip rule sets whose Arr/Seerr fields have no enabled instance (a vacuous match-all would flood matches and schedule library-wide deletes), block whole-record `DELETE_SONARR`/`DELETE_LIDARR`/`DELETE_RADARR` when any sibling episode/track carries an exception, gate the stale-item purge behind a complete library traversal, reject Seerr fields on MUSIC rule sets, and require an enabled rule set for force-retry ([#303](https://github.com/ahembree/librariarr/pull/303), [eef72d3](https://github.com/ahembree/librariarr/commit/eef72d3033f24ff708b09fd866da88b42aca3752))
+* **rules:** share one case-insensitive Phase-2 evaluator for genre/labels/country so the query engine and lifecycle engine agree on case ([59aafde](https://github.com/ahembree/librariarr/commit/59aafde9a58f0ddd4d25b5e2d8cb3e543b4f7cd9))
 * **lifecycle:** surface Plex collection sync failures and guard against silent wipes ([6c0317d](https://github.com/ahembree/librariarr/commit/6c0317dfcbe4f5e452f48a2e040c506c71168685))
-* **plex:** batch collection item adds to avoid over-long request URIs ([8589c1e](https://github.com/ahembree/librariarr/commit/8589c1e2665a69098f9e9ea538c75d4d4145abfa))
-* **plex:** batch collection item adds to avoid over-long request URIs ([b80c44e](https://github.com/ahembree/librariarr/commit/b80c44eb7e2aa2379899554fed497c3dd0791e9b))
+* **plex:** batch collection item adds to avoid over-long request URIs ([8589c1e](https://github.com/ahembree/librariarr/commit/8589c1e2665a69098f9e9ea538c75d4d4145abfa), [b80c44e](https://github.com/ahembree/librariarr/commit/b80c44eb7e2aa2379899554fed497c3dd0791e9b))
 
 ## [0.27.0](https://github.com/ahembree/librariarr/compare/v0.26.0...v0.27.0) (2026-07-08)
 
