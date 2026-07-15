@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.27.1](https://github.com/ahembree/librariarr/compare/v0.27.0...v0.27.1) (2026-07-15)
+
+
+### Bug Fixes
+
+* **lifecycle:** surface Plex collection sync failures and guard against silent wipes ([6c0317d](https://github.com/ahembree/librariarr/commit/6c0317dfcbe4f5e452f48a2e040c506c71168685))
+* **plex:** batch collection item adds to avoid over-long request URIs ([8589c1e](https://github.com/ahembree/librariarr/commit/8589c1e2665a69098f9e9ea538c75d4d4145abfa))
+* **plex:** batch collection item adds to avoid over-long request URIs ([b80c44e](https://github.com/ahembree/librariarr/commit/b80c44eb7e2aa2379899554fed497c3dd0791e9b))
+
 ## [0.27.0](https://github.com/ahembree/librariarr/compare/v0.26.0...v0.27.0) (2026-07-08)
 
 Highlights: a new **TRaSH Guide Sync** tool for Sonarr/Radarr, and **Query bulk actions on selections larger than 1000 items**.
