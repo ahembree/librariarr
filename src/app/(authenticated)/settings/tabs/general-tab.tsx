@@ -70,6 +70,11 @@ export interface GeneralTabProps {
   savingDedup: boolean;
   onSaveDedupSetting: (checked: boolean) => void;
 
+  // Real-time server sync
+  realtimeSync: boolean;
+  savingRealtime: boolean;
+  onSaveRealtimeSetting: (checked: boolean) => void;
+
   // Log retention
   logRetentionDays: number;
   logRetentionInput: string;
@@ -121,6 +126,9 @@ export function GeneralTab({
   dedupStats,
   savingDedup,
   onSaveDedupSetting,
+  realtimeSync,
+  savingRealtime,
+  onSaveRealtimeSetting,
   logRetentionDays,
   logRetentionInput,
   savingLogRetention,
@@ -270,6 +278,24 @@ export function GeneralTab({
               checked={dedupStats}
               onCheckedChange={(checked) => onSaveDedupSetting(checked)}
               disabled={savingDedup}
+            />
+          </div>
+
+          <Separator />
+
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label>Real-time server sync</Label>
+              <p className="text-sm text-muted-foreground">
+                Keep a live WebSocket to each server for instant active-session updates and stream enforcement,
+                plus near-real-time library and watch-history sync between scheduled runs. Turn off to rely on
+                scheduled polling only (useful if a reverse proxy blocks WebSockets).
+              </p>
+            </div>
+            <Switch
+              checked={realtimeSync}
+              onCheckedChange={(checked) => onSaveRealtimeSetting(checked)}
+              disabled={savingRealtime}
             />
           </div>
 

@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const m = vi.hoisted(() => ({
   syncMediaServer: vi.fn().mockResolvedValue(undefined),
+  syncWatchHistory: vi.fn().mockResolvedValue({ count: 0 }),
+  invalidateMediaCaches: vi.fn(),
   processLifecycleRules: vi.fn().mockResolvedValue(undefined),
   executeLifecycleActions: vi.fn().mockResolvedValue(undefined),
   createBackup: vi.fn().mockResolvedValue("backup.json.gz"),
@@ -14,12 +16,15 @@ const m = vi.hoisted(() => ({
   lifecycleAction: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
 }));
 const {
-  syncMediaServer, processLifecycleRules, executeLifecycleActions, createBackup,
+  syncMediaServer, syncWatchHistory, invalidateMediaCaches, processLifecycleRules,
+  executeLifecycleActions, createBackup,
   getBackupPassphrase, pruneBackups, archiveLogs, dispatchScheduledJobs,
   syncJob, appSettings, lifecycleAction,
 } = m;
 
 vi.mock("@/lib/sync/sync-server", () => ({ syncMediaServer: m.syncMediaServer }));
+vi.mock("@/lib/sync/sync-watch-history", () => ({ syncWatchHistory: m.syncWatchHistory }));
+vi.mock("@/lib/cache/invalidate", () => ({ invalidateMediaCaches: m.invalidateMediaCaches }));
 vi.mock("@/lib/lifecycle/processor", () => ({
   processLifecycleRules: m.processLifecycleRules,
   executeLifecycleActions: m.executeLifecycleActions,
@@ -42,6 +47,7 @@ import { taskList, cleanupOldActions, runScheduledBackup } from "@/lib/jobs/task
 import {
   TASK_DISPATCH,
   TASK_SYNC_SERVER,
+  TASK_SYNC_WATCH_HISTORY,
   TASK_LIFECYCLE_DETECTION,
   TASK_LIFECYCLE_EXECUTION,
   TASK_SCHEDULED_BACKUP,
@@ -65,6 +71,7 @@ describe("taskList", () => {
       [
         TASK_DISPATCH,
         TASK_SYNC_SERVER,
+        TASK_SYNC_WATCH_HISTORY,
         TASK_LIFECYCLE_DETECTION,
         TASK_LIFECYCLE_EXECUTION,
         TASK_SCHEDULED_BACKUP,
@@ -73,6 +80,26 @@ describe("taskList", () => {
         TASK_PRUNE_IMAGE_CACHE,
       ].sort(),
     );
+  });
+
+  it("watch-history task refreshes history and invalidates caches when no full sync is running", async () => {
+    syncWatchHistory.mockResolvedValue({ count: 12 });
+    await (taskList[TASK_SYNC_WATCH_HISTORY] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1" },
+      helpers,
+    );
+    expect(syncWatchHistory).toHaveBeenCalledWith("server-1");
+    expect(invalidateMediaCaches).toHaveBeenCalledOnce();
+  });
+
+  it("watch-history task skips when a full sync is already running", async () => {
+    syncJob.findFirst.mockResolvedValue({ id: "running" });
+    await (taskList[TASK_SYNC_WATCH_HISTORY] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1" },
+      helpers,
+    );
+    expect(syncWatchHistory).not.toHaveBeenCalled();
+    expect(invalidateMediaCaches).not.toHaveBeenCalled();
   });
 
   it("dispatch task runs the dispatcher", async () => {

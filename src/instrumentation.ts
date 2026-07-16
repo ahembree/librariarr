@@ -17,6 +17,11 @@ export async function register() {
     initializeMaintenanceEnforcer();
     initializePrerollEnforcer();
 
+    // Open a WebSocket per enabled media server for real-time session, library,
+    // and watch-state events (instant enforcement + incremental sync).
+    const { startRealtime } = await import("@/lib/media-server/realtime");
+    startRealtime();
+
     // Backfill dedupKeys for items synced before the dedup columns were added
     const { runBackfillIfNeeded } = await import("@/lib/dedup/recompute-canonical");
     runBackfillIfNeeded();

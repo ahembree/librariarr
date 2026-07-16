@@ -2,6 +2,8 @@ import type { Task, TaskList } from "graphile-worker";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { syncMediaServer } from "@/lib/sync/sync-server";
+import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
+import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { processLifecycleRules, executeLifecycleActions } from "@/lib/lifecycle/processor";
 import { createBackup, getBackupPassphrase, pruneBackups } from "@/lib/backup/backup-service";
 import { archiveLogs } from "@/lib/logs/archive";
@@ -10,6 +12,7 @@ import { dispatchScheduledJobs } from "@/lib/jobs/dispatch";
 import {
   TASK_DISPATCH,
   TASK_SYNC_SERVER,
+  TASK_SYNC_WATCH_HISTORY,
   TASK_LIFECYCLE_DETECTION,
   TASK_LIFECYCLE_EXECUTION,
   TASK_SCHEDULED_BACKUP,
@@ -17,6 +20,7 @@ import {
   TASK_CLEANUP_ACTIONS,
   TASK_PRUNE_IMAGE_CACHE,
   type SyncServerPayload,
+  type SyncWatchHistoryPayload,
   type UserPayload,
 } from "@/lib/jobs/constants";
 
@@ -86,6 +90,27 @@ const syncServer: Task = async (payload) => {
   await syncMediaServer(serverId, libraryKey, skipWatchHistory ? { skipWatchHistory: true } : undefined);
 };
 
+const syncWatchHistoryTask: Task = async (payload) => {
+  const { serverId } = payload as SyncWatchHistoryPayload;
+
+  // A full sync already refreshes watch history — if one is running/queued for
+  // this server, skip the standalone refresh to avoid redundant work.
+  const running = await prisma.syncJob.findFirst({
+    where: { mediaServerId: serverId, status: { in: ["RUNNING", "PENDING"] } },
+    select: { id: true },
+  });
+  if (running) {
+    logger.info("Jobs", `Skipping watch-history refresh for server ${serverId} — full sync in progress`);
+    return;
+  }
+
+  const { count } = await syncWatchHistory(serverId);
+  // Watch-history-derived caches (filters, stats) must drop so listings reflect
+  // the fresh play data instead of waiting out the TTL.
+  invalidateMediaCaches();
+  logger.info("Jobs", `Watch-history refresh for server ${serverId} synced ${count} entries`);
+};
+
 const lifecycleDetection: Task = async (payload) => {
   const { userId } = payload as UserPayload;
   await processLifecycleRules(userId);
@@ -116,6 +141,7 @@ const pruneImageCacheTask: Task = async () => {
 export const taskList: TaskList = {
   [TASK_DISPATCH]: dispatch,
   [TASK_SYNC_SERVER]: syncServer,
+  [TASK_SYNC_WATCH_HISTORY]: syncWatchHistoryTask,
   [TASK_LIFECYCLE_DETECTION]: lifecycleDetection,
   [TASK_LIFECYCLE_EXECUTION]: lifecycleExecution,
   [TASK_SCHEDULED_BACKUP]: scheduledBackup,

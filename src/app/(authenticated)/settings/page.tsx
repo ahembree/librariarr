@@ -318,6 +318,8 @@ export default function SettingsPage() {
   const [savingActionRetention, setSavingActionRetention] = useState(false);
   const [dedupStats, setDedupStats] = useState(true);
   const [savingDedup, setSavingDedup] = useState(false);
+  const [realtimeSync, setRealtimeSync] = useState(true);
+  const [savingRealtime, setSavingRealtime] = useState(false);
 
   // Connection test state (add form)
   const [sonarrTesting, setSonarrTesting] = useState(false);
@@ -423,6 +425,18 @@ export default function SettingsPage() {
       if (response.ok) {
         const data = await response.json();
         setDedupStats(data.dedupStats ?? true);
+      }
+    } catch {
+      // Silent
+    }
+  }, []);
+
+  const fetchRealtimeSetting = useCallback(async () => {
+    try {
+      const response = await fetch("/api/settings/realtime");
+      if (response.ok) {
+        const data = await response.json();
+        setRealtimeSync(data.realtimeSync ?? true);
       }
     } catch {
       // Silent
@@ -660,6 +674,7 @@ export default function SettingsPage() {
         fetchScheduleInfo(),
         fetchDiscordSettings(),
         fetchDedupSetting(),
+        fetchRealtimeSetting(),
         fetchImageCacheStats(),
         fetchChangelog(),
       ]);
@@ -669,7 +684,7 @@ export default function SettingsPage() {
     fetch("/api/settings/auth").then((r) => r.json()).then(setAuthInfo).catch(() => {});
     // Fetch display preferences separately (non-blocking)
     fetch("/api/settings/title-preference").then((r) => r.ok ? r.json() : null).then((data) => { if (data) { setPreferredTitleServerId(data.preferredTitleServerId ?? null); setPreferredArtworkServerId(data.preferredArtworkServerId ?? null); } }).catch(() => {});
-  }, [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchDedupSetting, fetchImageCacheStats, fetchChangelog]);
+  }, [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchDedupSetting, fetchRealtimeSetting, fetchImageCacheStats, fetchChangelog]);
 
   // Poll server data during active sync for real-time progress bar
   const hasActiveSync = servers.some(
@@ -1323,6 +1338,27 @@ export default function SettingsPage() {
       toast.error("Failed to save deduplication setting");
     } finally {
       setSavingDedup(false);
+    }
+  };
+
+  const saveRealtimeSetting = async (value: boolean) => {
+    setSavingRealtime(true);
+    try {
+      const res = await fetch("/api/settings/realtime", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ realtimeSync: value }),
+      });
+      if (!res.ok) {
+        toast.error("Failed to save real-time sync setting");
+        return;
+      }
+      setRealtimeSync(value);
+      toast.success(value ? "Real-time sync enabled" : "Real-time sync disabled");
+    } catch {
+      toast.error("Failed to save real-time sync setting");
+    } finally {
+      setSavingRealtime(false);
     }
   };
 
@@ -2209,6 +2245,9 @@ export default function SettingsPage() {
             dedupStats={dedupStats}
             savingDedup={savingDedup}
             onSaveDedupSetting={saveDedupSetting}
+            realtimeSync={realtimeSync}
+            savingRealtime={savingRealtime}
+            onSaveRealtimeSetting={saveRealtimeSetting}
             logRetentionDays={logRetentionDays}
             logRetentionInput={logRetentionInput}
             savingLogRetention={savingLogRetention}

@@ -5,6 +5,7 @@ import { createMediaServerClient } from "@/lib/media-server/factory";
 import type { MediaServerType } from "@/generated/prisma/client";
 import { validateRequest, serverAddSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { eventBus } from "@/lib/events/event-bus";
 
 export async function GET() {
   const session = await getSession();
@@ -65,6 +66,8 @@ export async function POST(request: NextRequest) {
         where: { id: existing.id },
         data: { name, url, accessToken, tlsSkipVerify: !!tlsSkipVerify },
       });
+      // Reconcile the realtime WebSocket (url/token may have changed).
+      eventBus.emit({ type: "server:changed", userId: session.userId!, meta: { serverId: server.id } });
       return NextResponse.json({ server: sanitize(server), updated: true }, { status: 200 });
     }
   }
@@ -80,6 +83,9 @@ export async function POST(request: NextRequest) {
       tlsSkipVerify: !!tlsSkipVerify,
     },
   });
+
+  // Open a realtime WebSocket for the newly-added server.
+  eventBus.emit({ type: "server:changed", userId: session.userId!, meta: { serverId: server.id } });
 
   return NextResponse.json({ server: sanitize(server) }, { status: 201 });
 }

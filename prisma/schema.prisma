@@ -109,6 +109,10 @@ model AppSettings {
   scheduledJobTime              String    @default("00:00")
   // Display
   dedupStats                    Boolean   @default(true)
+  // Real-time media-server WebSocket sync (instant sessions/enforcement,
+  // incremental library + watch-history sync). Master switch — off closes all
+  // server WebSockets and falls back to scheduled polling only.
+  realtimeSync                  Boolean   @default(true)
   // Retention
   actionHistoryRetentionDays    Int       @default(30)
   // Deletion stats

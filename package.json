@@ -95,6 +95,7 @@
     "sharp": "^0.35.3",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
+    "ws": "^8.21.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -107,6 +108,7 @@
     "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^4.1.9",
     "eslint": "^10.6.0",
     "eslint-config-next": "16.2.9",

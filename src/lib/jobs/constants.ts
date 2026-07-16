@@ -11,6 +11,13 @@ export const TASK_DISPATCH = "dispatch-scheduled";
 /** Sync a single media server (optionally scoped to one library). */
 export const TASK_SYNC_SERVER = "sync-server";
 
+/**
+ * Refresh a single server's watch history only (no full library re-scan).
+ * Enqueued by the realtime manager on a `watch-changed` event so watch state
+ * lands without waiting for the next full scheduled sync.
+ */
+export const TASK_SYNC_WATCH_HISTORY = "sync-watch-history";
+
 /** Run lifecycle rule detection for a user. */
 export const TASK_LIFECYCLE_DETECTION = "lifecycle-detection";
 
@@ -44,6 +51,11 @@ export interface SyncServerPayload {
   serverId: string;
   libraryKey?: string;
   skipWatchHistory?: boolean;
+}
+
+/** Payload for {@link TASK_SYNC_WATCH_HISTORY}. */
+export interface SyncWatchHistoryPayload {
+  serverId: string;
 }
 
 /** Payload for lifecycle detection/execution tasks. */
