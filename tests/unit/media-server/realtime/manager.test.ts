@@ -15,7 +15,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { RealtimeManager } from "@/lib/media-server/realtime/manager";
-import { MAIN_QUEUE, TASK_SYNC_SERVER, TASK_SYNC_WATCH_HISTORY } from "@/lib/jobs/constants";
+import { MAIN_QUEUE, TASK_SYNC_SERVER, TASK_SYNC_WATCH_HISTORY, TASK_SYNC_INCREMENTAL } from "@/lib/jobs/constants";
 import type { RealtimeSocket, SocketFactory } from "@/lib/media-server/realtime/socket";
 import type { RealtimeServerConfig } from "@/lib/media-server/realtime/types";
 
@@ -161,16 +161,45 @@ describe("RealtimeManager", () => {
     expect(h.runEnforcerTick).toHaveBeenCalledTimes(2); // single trailing run
   });
 
-  it("enqueues a debounced incremental sync on a library change", async () => {
+  it("enqueues a debounced incremental sync with the changed/removed ids", async () => {
     const { sockets } = await setup([jfServer]);
-    sockets[0].fireMessage({ MessageType: "LibraryChanged", Data: { ItemsAdded: ["x"] } });
+    sockets[0].fireMessage({
+      MessageType: "LibraryChanged",
+      Data: { ItemsAdded: ["x"], ItemsUpdated: ["y"], ItemsRemoved: ["z"] },
+    });
     expect(h.enqueueJob).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(30_000);
+    expect(h.enqueueJob).toHaveBeenCalledWith(
+      TASK_SYNC_INCREMENTAL,
+      { serverId: "j1", changedIds: ["x", "y"], removedIds: ["z"] },
+      expect.objectContaining({ queueName: MAIN_QUEUE }),
+    );
+  });
+
+  it("falls back to a full sync when a change carries no item ids", async () => {
+    const { sockets } = await setup([jfServer]);
+    // Empty LibraryChanged (no specific items) → can't apply incrementally.
+    sockets[0].fireMessage({ MessageType: "LibraryChanged", Data: {} });
     vi.advanceTimersByTime(30_000);
     expect(h.enqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_SERVER,
       { serverId: "j1" },
       expect.objectContaining({ jobKey: "sync:j1", queueName: MAIN_QUEUE }),
     );
+    expect(h.enqueueJob.mock.calls.some((c) => c[0] === TASK_SYNC_INCREMENTAL)).toBe(false);
+  });
+
+  it("falls back to a full sync when the change set exceeds the threshold", async () => {
+    const { sockets } = await setup([jfServer]);
+    const many = Array.from({ length: 150 }, (_, i) => `m${i}`);
+    sockets[0].fireMessage({ MessageType: "LibraryChanged", Data: { ItemsAdded: many } });
+    vi.advanceTimersByTime(30_000);
+    expect(h.enqueueJob).toHaveBeenCalledWith(
+      TASK_SYNC_SERVER,
+      { serverId: "j1" },
+      expect.objectContaining({ jobKey: "sync:j1" }),
+    );
+    expect(h.enqueueJob.mock.calls.some((c) => c[0] === TASK_SYNC_INCREMENTAL)).toBe(false);
   });
 
   it("enqueues a debounced watch-history refresh on a watch change", async () => {
@@ -184,15 +213,20 @@ describe("RealtimeManager", () => {
     );
   });
 
-  it("coalesces a burst of library changes into a single sync", async () => {
+  it("coalesces a burst of library changes into a single incremental sync with all ids", async () => {
     const { sockets } = await setup([jfServer]);
     for (let i = 0; i < 10; i++) {
       sockets[0].fireMessage({ MessageType: "LibraryChanged", Data: { ItemsAdded: [`x${i}`] } });
       vi.advanceTimersByTime(1000);
     }
     vi.advanceTimersByTime(30_000);
-    const syncCalls = h.enqueueJob.mock.calls.filter((c) => c[0] === TASK_SYNC_SERVER);
+    const syncCalls = h.enqueueJob.mock.calls.filter((c) => c[0] === TASK_SYNC_INCREMENTAL);
     expect(syncCalls).toHaveLength(1);
+    expect(syncCalls[0][1]).toEqual({
+      serverId: "j1",
+      changedIds: Array.from({ length: 10 }, (_, i) => `x${i}`),
+      removedIds: [],
+    });
   });
 
   it("stopAll closes every connection", async () => {

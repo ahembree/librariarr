@@ -43,6 +43,19 @@ export interface RealtimeEvent {
 }
 
 /**
+ * `detail` shape carried on a `library-changed` event, so the manager can drive
+ * an incremental sync of just the affected items instead of the whole server.
+ * A `library-changed` event with NEITHER list populated (e.g. Plex's scan-ended
+ * `activity`) means "something changed but we don't know what" → full sync.
+ */
+export interface LibraryChangeDetail {
+  /** ratingKeys to fetch + upsert (or delete if the server reports them gone). */
+  changedIds?: string[];
+  /** ratingKeys the server reported as removed. */
+  removedIds?: string[];
+}
+
+/**
  * Minimal server configuration the realtime layer needs to open a connection.
  * Keyed by `id` so multiple servers of the same type (several Plex / Jellyfin /
  * Emby instances) each get their own independent connection.

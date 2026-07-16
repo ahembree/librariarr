@@ -15,6 +15,7 @@ import type { MediaItemWithRelations } from "@/lib/types";
 import { useCardSize, BREAKPOINTS, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
+import { useRealtime } from "@/hooks/use-realtime";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
@@ -186,6 +187,9 @@ export default function AllEpisodesPage() {
     const timeout = setTimeout(() => fetchEpisodes(), 300);
     return () => clearTimeout(timeout);
   }, [fetchEpisodes]);
+
+  // Auto-update when real-time sync adds/removes items — no manual refresh.
+  useRealtime("sync:completed", fetchEpisodes);
 
   const virtualRows = virtualizer.getVirtualItems();
 

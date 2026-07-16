@@ -41,22 +41,23 @@ export function normalizePlexMessage(raw: unknown, ctx: { serverId: string }): R
     }
     case "timeline": {
       const entries = asArray(container.TimelineEntry);
-      // Plex fires a timeline entry for every step of its processing pipeline:
-      // states 0-4 are intermediate (created/matching/downloading/processing) and
-      // repeat per item during a scan/analysis; state 5 = finished (added or
-      // updated) and 9 = deleted are the meaningful "content changed" signals.
-      // Emitting on every intermediate state would force a full sync every few
-      // minutes of background activity, so skip a frame only when ALL its entries
-      // are intermediate. Entries without a numeric state still emit (don't miss
-      // a change on a server/version that omits it).
-      const isIntermediate = (e: unknown) => {
-        if (!isRecord(e) || e.state == null) return false;
-        const state = Number(e.state);
-        return Number.isFinite(state) && state >= 0 && state <= 4;
-      };
-      const meaningful = entries.some((e) => !isIntermediate(e));
-      if (meaningful) {
-        events.push({ ...base, kind: "library-changed", detail: { entries: entries.length } });
+      // Emit on ANY timeline entry. Plex's timeline `state` field is not a
+      // reliable "added vs deleted vs intermediate" discriminator across
+      // versions/operations — a scan that detects a file removed from disk (e.g.
+      // deleted by Radarr) doesn't always carry the completed/deleted state you'd
+      // expect, so filtering by state risks silently dropping deletions. Scan
+      // chatter is harmless here: the per-server debouncer (30s quiet / 5min max)
+      // coalesces a burst into a single sync regardless of how many entries fire,
+      // so being permissive costs nothing but catches every real change.
+      if (entries.length > 0) {
+        // Carry each entry's itemID (ratingKey) so the manager can sync just
+        // those items. Plex doesn't cleanly label add vs delete, so all go to
+        // `changedIds`; the incremental sync resolves each (present → upsert,
+        // gone → delete).
+        const changedIds = entries
+          .map((e) => (isRecord(e) && e.itemID != null ? String(e.itemID) : null))
+          .filter((id): id is string => id != null);
+        events.push({ ...base, kind: "library-changed", detail: { entries: entries.length, changedIds } });
       }
       break;
     }

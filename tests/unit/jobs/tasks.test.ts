@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const m = vi.hoisted(() => ({
   syncMediaServer: vi.fn().mockResolvedValue(undefined),
   syncWatchHistory: vi.fn().mockResolvedValue({ count: 0 }),
+  syncMediaServerItems: vi.fn().mockResolvedValue({ status: "done", upserted: 1, deleted: 0 }),
+  enqueueJob: vi.fn().mockResolvedValue(true),
   invalidateMediaCaches: vi.fn(),
   processLifecycleRules: vi.fn().mockResolvedValue(undefined),
   executeLifecycleActions: vi.fn().mockResolvedValue(undefined),
@@ -16,7 +18,8 @@ const m = vi.hoisted(() => ({
   lifecycleAction: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
 }));
 const {
-  syncMediaServer, syncWatchHistory, invalidateMediaCaches, processLifecycleRules,
+  syncMediaServer, syncWatchHistory, syncMediaServerItems, enqueueJob, invalidateMediaCaches,
+  processLifecycleRules,
   executeLifecycleActions, createBackup,
   getBackupPassphrase, pruneBackups, archiveLogs, dispatchScheduledJobs,
   syncJob, appSettings, lifecycleAction,
@@ -24,6 +27,8 @@ const {
 
 vi.mock("@/lib/sync/sync-server", () => ({ syncMediaServer: m.syncMediaServer }));
 vi.mock("@/lib/sync/sync-watch-history", () => ({ syncWatchHistory: m.syncWatchHistory }));
+vi.mock("@/lib/sync/sync-incremental", () => ({ syncMediaServerItems: m.syncMediaServerItems }));
+vi.mock("@/lib/jobs/client", () => ({ enqueueJob: m.enqueueJob }));
 vi.mock("@/lib/cache/invalidate", () => ({ invalidateMediaCaches: m.invalidateMediaCaches }));
 vi.mock("@/lib/lifecycle/processor", () => ({
   processLifecycleRules: m.processLifecycleRules,
@@ -48,6 +53,7 @@ import {
   TASK_DISPATCH,
   TASK_SYNC_SERVER,
   TASK_SYNC_WATCH_HISTORY,
+  TASK_SYNC_INCREMENTAL,
   TASK_LIFECYCLE_DETECTION,
   TASK_LIFECYCLE_EXECUTION,
   TASK_SCHEDULED_BACKUP,
@@ -64,6 +70,8 @@ describe("taskList", () => {
     vi.clearAllMocks();
     syncJob.findFirst.mockResolvedValue(null);
     appSettings.findFirst.mockResolvedValue({ actionHistoryRetentionDays: 30, backupRetentionCount: 7 });
+    syncMediaServerItems.mockResolvedValue({ status: "done", upserted: 1, deleted: 0 });
+    enqueueJob.mockResolvedValue(true);
   });
 
   it("registers every task identifier", () => {
@@ -72,6 +80,7 @@ describe("taskList", () => {
         TASK_DISPATCH,
         TASK_SYNC_SERVER,
         TASK_SYNC_WATCH_HISTORY,
+        TASK_SYNC_INCREMENTAL,
         TASK_LIFECYCLE_DETECTION,
         TASK_LIFECYCLE_EXECUTION,
         TASK_SCHEDULED_BACKUP,
@@ -79,6 +88,29 @@ describe("taskList", () => {
         TASK_CLEANUP_ACTIONS,
         TASK_PRUNE_IMAGE_CACHE,
       ].sort(),
+    );
+  });
+
+  it("incremental task applies the changed/removed items", async () => {
+    await (taskList[TASK_SYNC_INCREMENTAL] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", changedIds: ["a", "b"], removedIds: ["c"] },
+      helpers,
+    );
+    expect(syncMediaServerItems).toHaveBeenCalledWith("server-1", ["a", "b"], ["c"]);
+    // Did not fall back — no full sync enqueued.
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it("incremental task enqueues a full sync when it falls back", async () => {
+    syncMediaServerItems.mockResolvedValue({ status: "fell-back", upserted: 0, deleted: 0, reason: "too many" });
+    await (taskList[TASK_SYNC_INCREMENTAL] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", changedIds: ["a"], removedIds: [] },
+      helpers,
+    );
+    expect(enqueueJob).toHaveBeenCalledWith(
+      TASK_SYNC_SERVER,
+      { serverId: "server-1" },
+      expect.objectContaining({ jobKey: "sync:server-1" }),
     );
   });
 

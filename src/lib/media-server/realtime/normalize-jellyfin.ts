@@ -38,8 +38,23 @@ export function normalizeJellyfinMessage(
         { ...base, kind: "session-changed" },
         { ...base, kind: "watch-changed" },
       ];
-    case "LibraryChanged":
-      return [{ ...base, kind: "library-changed", detail: summarizeLibraryChange(raw.Data) }];
+    case "LibraryChanged": {
+      const data = raw.Data;
+      const ids = (key: string) =>
+        isRecord(data) && Array.isArray(data[key]) ? (data[key] as unknown[]).map((v) => String(v)) : [];
+      return [
+        {
+          ...base,
+          kind: "library-changed",
+          detail: {
+            ...summarizeLibraryChange(data),
+            // Added + updated are fetched/upserted; removed are deleted.
+            changedIds: [...ids("ItemsAdded"), ...ids("ItemsUpdated")],
+            removedIds: ids("ItemsRemoved"),
+          },
+        },
+      ];
+    }
     case "UserDataChanged":
       return [{ ...base, kind: "watch-changed" }];
     default:

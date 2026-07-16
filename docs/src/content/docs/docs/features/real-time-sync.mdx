@@ -15,10 +15,10 @@ This runs alongside — not instead of — the [scheduled sync](/docs/getting-st
 |-----------|-------------------|----------------|
 | Active sessions view | Refreshes every 5s | Pushes within ~2s of a play/pause/stop |
 | Maintenance / blackout / transcode enforcement | New streams seen up to 30s late | New streams seen within ~½s, so the termination delay starts promptly |
-| New / removed / updated media | Appears on the next scheduled sync | Triggers an incremental sync seconds after the server's scan settles |
+| New / removed / updated media | Appears on the next scheduled sync | Syncs just the changed/removed items seconds after the server's scan settles |
 | Watch state (played / unplayed, last watched) | Refreshed on the next full sync | Refreshed shortly after a play finishes |
 
-Because a real-time library change enqueues the same sync job the scheduler uses, the normal in-app "sync completed" refresh applies — updated listings surface automatically.
+Real-time library changes carry the specific items that changed, so Librariarr fetches and updates **only those items** (and deletes the removed ones) instead of re-scanning the whole server. It falls back to a full sync when a change is too large (100+ items at once), can't be mapped to a library, or a full sync is already running — and the scheduled full sync remains the periodic reconciliation backstop. Either way the normal in-app "sync completed" refresh applies, so updated listings surface automatically.
 
 ## Supported servers
 
@@ -33,7 +33,7 @@ All three server types are supported, and each connected server gets its own ind
 ## How it behaves
 
 - **Self-healing.** If a connection drops, Librariarr reconnects automatically with exponential backoff (1s up to 60s). On reconnect it re-reads current state so nothing is missed.
-- **Debounced.** A library scan that emits hundreds of change events is coalesced into a single sync; a burst of playback progress events is throttled so your server isn't hammered.
+- **Debounced.** A library scan that emits hundreds of change events is coalesced — the changed item IDs are accumulated and applied in a single incremental pass; a burst of playback progress events is throttled so your server isn't hammered.
 - **Reconciled.** Adding, editing, enabling/disabling, or removing a server immediately opens or closes its connection. A safety re-check also runs every minute.
 
 ## Enabling / disabling
