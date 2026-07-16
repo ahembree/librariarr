@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useRealtime } from "@/hooks/use-realtime";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useChipColors } from "@/components/chip-color-provider";
@@ -49,6 +50,10 @@ export default function ArtistDetailPage() {
   // and overwriting the current artist's data.
   const reqToken = useRef(0);
 
+  const [syncTick, setSyncTick] = useState(0);
+  // Auto-update on real-time sync (new/removed items) without a manual refresh.
+  useRealtime("sync:completed", () => setSyncTick((t) => t + 1));
+
   useEffect(() => {
     const token = ++reqToken.current;
     async function fetchData() {
@@ -76,7 +81,7 @@ export default function ArtistDetailPage() {
       }
     }
     fetchData();
-  }, [id]);
+  }, [id, syncTick]);
 
   if (loading) {
     return (

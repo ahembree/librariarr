@@ -12,8 +12,11 @@ import { wsSocketFactory, type SocketFactory } from "./socket";
 import type { RealtimeEvent, RealtimeServerConfig, RealtimeConnectionStatus, LibraryChangeDetail } from "./types";
 
 // A library scan emits a burst of change events; coalesce them into one sync
-// after the scan goes quiet, but never wait longer than the max.
-const LIBRARY_SYNC_QUIET_MS = 30_000;
+// after it goes quiet, but never wait longer than the max. The quiet window is
+// short so an isolated add/remove shows up in the UI within a few seconds; a
+// continuous scan (events closer than the quiet window) is still governed by the
+// max cap, so shortening this doesn't increase load during a big scan.
+const LIBRARY_SYNC_QUIET_MS = 5_000;
 const LIBRARY_SYNC_MAX_MS = 5 * 60_000;
 // Above this many accumulated changed/removed items, a full library listing is
 // cheaper than fetching each item, so enqueue a full sync instead of incremental.

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useRealtime } from "@/hooks/use-realtime";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useChipColors } from "@/components/chip-color-provider";
@@ -51,6 +52,10 @@ export default function SeriesDetailPage() {
   // Token guards against a stale slow response landing after a quick id change.
   const reqToken = useRef(0);
 
+  const [syncTick, setSyncTick] = useState(0);
+  // Auto-update on real-time sync (new/removed items) without a manual refresh.
+  useRealtime("sync:completed", () => setSyncTick((t) => t + 1));
+
   useEffect(() => {
     const token = ++reqToken.current;
     async function fetchData() {
@@ -80,7 +85,7 @@ export default function SeriesDetailPage() {
       }
     }
     fetchData();
-  }, [id]);
+  }, [id, syncTick]);
 
   // Series summary comes from the live media server — fetch independently so it
   // never blocks the page render when the server is unreachable.

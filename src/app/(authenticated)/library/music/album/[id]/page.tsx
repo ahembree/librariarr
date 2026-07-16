@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useRealtime } from "@/hooks/use-realtime";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useLocalStorage } from "@/hooks/use-local-storage";
 import { cn } from "@/lib/utils";
@@ -71,6 +72,10 @@ export default function AlbumDetailPage() {
   // and overwriting the current album's tracks.
   const reqToken = useRef(0);
 
+  const [syncTick, setSyncTick] = useState(0);
+  // Auto-update on real-time sync (new/removed items) without a manual refresh.
+  useRealtime("sync:completed", () => setSyncTick((t) => t + 1));
+
   useEffect(() => {
     const token = ++reqToken.current;
     async function fetchData() {
@@ -103,7 +108,7 @@ export default function AlbumDetailPage() {
       }
     }
     fetchData();
-  }, [id]);
+  }, [id, syncTick]);
 
   const sortedTracks = useMemo(() => {
     const sorted = [...tracks].sort((a, b) => {

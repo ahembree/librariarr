@@ -17,6 +17,7 @@ import Link from "next/link";
 import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
+import { useRealtime } from "@/hooks/use-realtime";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
@@ -282,6 +283,9 @@ export default function AllSeasonsPage() {
     const timeout = setTimeout(() => fetchSeasons(), 300);
     return () => clearTimeout(timeout);
   }, [fetchSeasons]);
+
+  // Auto-update when real-time sync adds/removes items — no manual refresh.
+  useRealtime("sync:completed", fetchSeasons);
 
   const toggleSort = (field: string) => {
     if (sortBy === field) {
