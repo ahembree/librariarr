@@ -37,27 +37,20 @@ describe("normalizePlexMessage", () => {
     expect(events[0].kind).toBe("session-changed");
   });
 
-  it("maps a completed timeline entry to library-changed", () => {
-    const events = normalizePlexMessage(
-      { NotificationContainer: { type: "timeline", TimelineEntry: [{ itemID: "5", state: 5 }] } },
-      ctx,
-    );
-    expect(events).toHaveLength(1);
-    expect(events[0].kind).toBe("library-changed");
-  });
-
-  it("skips intermediate timeline states but emits on completed/deleted/unknown", () => {
+  it("emits library-changed for any timeline entry, regardless of state", () => {
     const timeline = (entries: unknown[]) =>
       normalizePlexMessage({ NotificationContainer: { type: "timeline", TimelineEntry: entries } }, ctx);
-    // All-intermediate processing states → no event (avoids scan-time storm).
-    expect(timeline([{ itemID: "1", state: 0 }, { itemID: "1", state: 3 }])).toEqual([]);
     // Completed (5) — added/updated.
-    expect(timeline([{ state: 2 }, { state: 5 }])[0].kind).toBe("library-changed");
-    expect(timeline([{ state: "5" }])[0].kind).toBe("library-changed");
-    // Deleted (9) must NOT be dropped.
+    expect(timeline([{ itemID: "5", state: 5 }])[0].kind).toBe("library-changed");
+    // Intermediate states must NOT be dropped — a scan-detected deletion can
+    // arrive with an unexpected state and must still trigger a reconciling sync.
+    expect(timeline([{ itemID: "1", state: 0 }])[0].kind).toBe("library-changed");
+    expect(timeline([{ itemID: "1", state: 3 }])[0].kind).toBe("library-changed");
+    // Deleted (9) and stateless entries too.
     expect(timeline([{ state: 9 }])[0].kind).toBe("library-changed");
-    // Missing state → still emits (don't miss changes on servers that omit it).
     expect(timeline([{ itemID: "9" }])[0].kind).toBe("library-changed");
+    // Only a truly empty frame produces nothing.
+    expect(timeline([])).toEqual([]);
   });
 
   it("maps an ended library.* activity to library-changed", () => {
