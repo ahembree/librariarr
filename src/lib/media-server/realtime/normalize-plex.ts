@@ -50,7 +50,14 @@ export function normalizePlexMessage(raw: unknown, ctx: { serverId: string }): R
       // coalesces a burst into a single sync regardless of how many entries fire,
       // so being permissive costs nothing but catches every real change.
       if (entries.length > 0) {
-        events.push({ ...base, kind: "library-changed", detail: { entries: entries.length } });
+        // Carry each entry's itemID (ratingKey) so the manager can sync just
+        // those items. Plex doesn't cleanly label add vs delete, so all go to
+        // `changedIds`; the incremental sync resolves each (present → upsert,
+        // gone → delete).
+        const changedIds = entries
+          .map((e) => (isRecord(e) && e.itemID != null ? String(e.itemID) : null))
+          .filter((id): id is string => id != null);
+        events.push({ ...base, kind: "library-changed", detail: { entries: entries.length, changedIds } });
       }
       break;
     }

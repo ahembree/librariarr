@@ -3,24 +3,29 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { syncMediaServer } from "@/lib/sync/sync-server";
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
+import { syncMediaServerItems } from "@/lib/sync/sync-incremental";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { processLifecycleRules, executeLifecycleActions } from "@/lib/lifecycle/processor";
 import { createBackup, getBackupPassphrase, pruneBackups } from "@/lib/backup/backup-service";
 import { archiveLogs } from "@/lib/logs/archive";
 import { pruneImageCache } from "@/lib/image-cache/image-cache";
 import { dispatchScheduledJobs } from "@/lib/jobs/dispatch";
+import { enqueueJob } from "@/lib/jobs/client";
 import {
   TASK_DISPATCH,
   TASK_SYNC_SERVER,
   TASK_SYNC_WATCH_HISTORY,
+  TASK_SYNC_INCREMENTAL,
   TASK_LIFECYCLE_DETECTION,
   TASK_LIFECYCLE_EXECUTION,
   TASK_SCHEDULED_BACKUP,
   TASK_ARCHIVE_LOGS,
   TASK_CLEANUP_ACTIONS,
   TASK_PRUNE_IMAGE_CACHE,
+  MAIN_QUEUE,
   type SyncServerPayload,
   type SyncWatchHistoryPayload,
+  type SyncIncrementalPayload,
   type UserPayload,
 } from "@/lib/jobs/constants";
 
@@ -111,6 +116,20 @@ const syncWatchHistoryTask: Task = async (payload) => {
   logger.info("Jobs", `Watch-history refresh for server ${serverId} synced ${count} entries`);
 };
 
+const syncIncremental: Task = async (payload) => {
+  const { serverId, changedIds, removedIds } = payload as SyncIncrementalPayload;
+  const result = await syncMediaServerItems(serverId, changedIds ?? [], removedIds ?? []);
+  if (result.status === "fell-back") {
+    logger.info("Jobs", `Incremental sync for ${serverId} fell back to full sync (${result.reason})`);
+    // Same jobKey as the scheduler so it dedupes with any pending full sync.
+    await enqueueJob(
+      TASK_SYNC_SERVER,
+      { serverId },
+      { jobKey: `sync:${serverId}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
+    );
+  }
+};
+
 const lifecycleDetection: Task = async (payload) => {
   const { userId } = payload as UserPayload;
   await processLifecycleRules(userId);
@@ -142,6 +161,7 @@ export const taskList: TaskList = {
   [TASK_DISPATCH]: dispatch,
   [TASK_SYNC_SERVER]: syncServer,
   [TASK_SYNC_WATCH_HISTORY]: syncWatchHistoryTask,
+  [TASK_SYNC_INCREMENTAL]: syncIncremental,
   [TASK_LIFECYCLE_DETECTION]: lifecycleDetection,
   [TASK_LIFECYCLE_EXECUTION]: lifecycleExecution,
   [TASK_SCHEDULED_BACKUP]: scheduledBackup,

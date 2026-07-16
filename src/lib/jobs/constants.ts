@@ -18,6 +18,14 @@ export const TASK_SYNC_SERVER = "sync-server";
  */
 export const TASK_SYNC_WATCH_HISTORY = "sync-watch-history";
 
+/**
+ * Incrementally sync only the specific items that a real-time `library-changed`
+ * event reported as changed/removed — fetch + upsert the changed ones, delete
+ * the removed ones — instead of re-scanning the whole server. Falls back to a
+ * full {@link TASK_SYNC_SERVER} for oversized or unmappable change sets.
+ */
+export const TASK_SYNC_INCREMENTAL = "sync-incremental";
+
 /** Run lifecycle rule detection for a user. */
 export const TASK_LIFECYCLE_DETECTION = "lifecycle-detection";
 
@@ -56,6 +64,15 @@ export interface SyncServerPayload {
 /** Payload for {@link TASK_SYNC_WATCH_HISTORY}. */
 export interface SyncWatchHistoryPayload {
   serverId: string;
+}
+
+/** Payload for {@link TASK_SYNC_INCREMENTAL}. */
+export interface SyncIncrementalPayload {
+  serverId: string;
+  /** ratingKeys to fetch + upsert (present → upsert, missing on server → delete). */
+  changedIds: string[];
+  /** ratingKeys known to be removed — deleted directly, no fetch. */
+  removedIds: string[];
 }
 
 /** Payload for lifecycle detection/execution tasks. */

@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { enqueueJob } from "@/lib/jobs/client";
-import { MAIN_QUEUE, TASK_SYNC_SERVER, TASK_SYNC_WATCH_HISTORY } from "@/lib/jobs/constants";
+import { MAIN_QUEUE, TASK_SYNC_SERVER, TASK_SYNC_WATCH_HISTORY, TASK_SYNC_INCREMENTAL } from "@/lib/jobs/constants";
 import { runEnforcerTick } from "@/lib/maintenance/enforcer";
 import type { MediaServerType } from "@/generated/prisma/client";
 import { realtimeBus } from "./bus";
@@ -9,12 +9,15 @@ import { Debouncer } from "./debounce";
 import { Throttle } from "./throttle";
 import { ServerRealtimeConnection } from "./connection";
 import { wsSocketFactory, type SocketFactory } from "./socket";
-import type { RealtimeEvent, RealtimeServerConfig, RealtimeConnectionStatus } from "./types";
+import type { RealtimeEvent, RealtimeServerConfig, RealtimeConnectionStatus, LibraryChangeDetail } from "./types";
 
 // A library scan emits a burst of change events; coalesce them into one sync
 // after the scan goes quiet, but never wait longer than the max.
 const LIBRARY_SYNC_QUIET_MS = 30_000;
 const LIBRARY_SYNC_MAX_MS = 5 * 60_000;
+// Above this many accumulated changed/removed items, a full library listing is
+// cheaper than fetching each item, so enqueue a full sync instead of incremental.
+const INCREMENTAL_MAX_ITEMS = 100;
 const WATCH_SYNC_QUIET_MS = 30_000;
 const WATCH_SYNC_MAX_MS = 5 * 60_000;
 // New sessions must be *seen* fast (so their termination delay starts promptly).
@@ -58,6 +61,10 @@ export class RealtimeManager {
   private readonly connections = new Map<string, ManagedConnection>();
   private readonly syncDebouncers = new Map<string, Debouncer>();
   private readonly watchDebouncers = new Map<string, Debouncer>();
+  // Accumulated changed/removed ratingKeys per server, applied on the sync
+  // debounce fire. `forceFull` is set when an event can't be applied
+  // incrementally (no ids — e.g. Plex's scan-ended activity) → full sync.
+  private readonly pendingChanges = new Map<string, { changed: Set<string>; removed: Set<string>; forceFull: boolean }>();
   private readonly enforcerThrottle: Throttle;
   private readonly socketFactory: SocketFactory;
   private reconciling = false;
@@ -173,6 +180,7 @@ export class RealtimeManager {
         this.enforcerThrottle.trigger();
         break;
       case "library-changed":
+        this.accumulateLibraryChange(event);
         this.getSyncDebouncer(event.serverId).trigger();
         break;
       case "watch-changed":
@@ -183,26 +191,74 @@ export class RealtimeManager {
     }
   }
 
+  private accumulateLibraryChange(event: RealtimeEvent): void {
+    let pending = this.pendingChanges.get(event.serverId);
+    if (!pending) {
+      pending = { changed: new Set(), removed: new Set(), forceFull: false };
+      this.pendingChanges.set(event.serverId, pending);
+    }
+    const detail = event.detail as LibraryChangeDetail | undefined;
+    const changed = detail?.changedIds ?? [];
+    const removed = detail?.removedIds ?? [];
+    if (changed.length === 0 && removed.length === 0) {
+      // No specific items (e.g. Plex's scan-ended activity) — reconcile fully.
+      pending.forceFull = true;
+    } else {
+      for (const id of changed) pending.changed.add(id);
+      for (const id of removed) pending.removed.add(id);
+    }
+  }
+
   private getSyncDebouncer(serverId: string): Debouncer {
     let debouncer = this.syncDebouncers.get(serverId);
     if (!debouncer) {
-      debouncer = new Debouncer(
-        () => {
-          // Same jobKey as the scheduled dispatcher so a realtime-triggered sync
-          // and a scheduled one dedupe into a single queued job.
-          void enqueueJob(
-            TASK_SYNC_SERVER,
-            { serverId },
-            { jobKey: `sync:${serverId}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
-          ).then((ok) => {
-            if (ok) logger.info("Realtime", `Enqueued incremental sync for server ${serverId} (library changed)`);
-          });
-        },
-        { quietMs: LIBRARY_SYNC_QUIET_MS, maxWaitMs: LIBRARY_SYNC_MAX_MS },
-      );
+      debouncer = new Debouncer(() => this.flushLibraryChanges(serverId), {
+        quietMs: LIBRARY_SYNC_QUIET_MS,
+        maxWaitMs: LIBRARY_SYNC_MAX_MS,
+      });
       this.syncDebouncers.set(serverId, debouncer);
     }
     return debouncer;
+  }
+
+  private flushLibraryChanges(serverId: string): void {
+    // Snapshot + clear synchronously so events arriving during the async enqueue
+    // start a fresh accumulator (no lost ids).
+    const pending = this.pendingChanges.get(serverId);
+    this.pendingChanges.delete(serverId);
+
+    const changedIds = pending ? [...pending.changed] : [];
+    const removedIds = pending ? [...pending.removed] : [];
+    const total = changedIds.length + removedIds.length;
+    const forceFull = pending?.forceFull ?? true;
+
+    if (forceFull || total === 0 || total > INCREMENTAL_MAX_ITEMS) {
+      // Full reconciliation — same jobKey as the scheduler so it dedupes.
+      void enqueueJob(
+        TASK_SYNC_SERVER,
+        { serverId },
+        { jobKey: `sync:${serverId}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
+      ).then((ok) => {
+        if (ok) logger.info("Realtime", `Enqueued full sync for server ${serverId} (library changed)`);
+      });
+      return;
+    }
+
+    // Incremental — apply just the changed/removed items. No jobKey: each fire
+    // carries a distinct id set (the accumulator already coalesced the burst),
+    // and the incremental task skips itself if a full sync is already queued.
+    void enqueueJob(
+      TASK_SYNC_INCREMENTAL,
+      { serverId, changedIds, removedIds },
+      { queueName: MAIN_QUEUE, maxAttempts: 3 },
+    ).then((ok) => {
+      if (ok) {
+        logger.info(
+          "Realtime",
+          `Enqueued incremental sync for server ${serverId} (${changedIds.length} changed, ${removedIds.length} removed)`,
+        );
+      }
+    });
   }
 
   private getWatchDebouncer(serverId: string): Debouncer {
@@ -230,6 +286,7 @@ export class RealtimeManager {
     this.syncDebouncers.delete(serverId);
     this.watchDebouncers.get(serverId)?.cancel();
     this.watchDebouncers.delete(serverId);
+    this.pendingChanges.delete(serverId);
   }
 
   private async isRealtimeEnabled(): Promise<boolean> {

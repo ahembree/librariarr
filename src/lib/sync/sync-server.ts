@@ -435,7 +435,7 @@ function buildRowParams(
  * intermediate arrays) are definitively out of scope when it returns, making them
  * immediately eligible for garbage collection.
  */
-async function processBatch(
+export async function processBatch(
   items: MediaMetadataItem[],
   libraryId: string,
   libraryType: "MOVIE" | "SERIES" | "MUSIC",

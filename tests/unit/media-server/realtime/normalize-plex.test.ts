@@ -53,6 +53,14 @@ describe("normalizePlexMessage", () => {
     expect(timeline([])).toEqual([]);
   });
 
+  it("carries changed item ratingKeys (itemID) for incremental sync", () => {
+    const events = normalizePlexMessage(
+      { NotificationContainer: { type: "timeline", TimelineEntry: [{ itemID: 12, state: 5 }, { itemID: 34, state: 9 }] } },
+      ctx,
+    );
+    expect(events[0].detail?.changedIds).toEqual(["12", "34"]);
+  });
+
   it("maps an ended library.* activity to library-changed", () => {
     const events = normalizePlexMessage(
       {

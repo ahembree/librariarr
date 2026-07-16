@@ -26,12 +26,15 @@ describe("normalizeJellyfinMessage", () => {
     ]);
   });
 
-  it("maps LibraryChanged to library-changed with counts", () => {
+  it("maps LibraryChanged to library-changed with counts and item ids", () => {
     const events = normalizeJellyfinMessage(
-      { MessageType: "LibraryChanged", Data: { ItemsAdded: ["a", "b"], ItemsRemoved: [], ItemsUpdated: ["c"] } },
+      { MessageType: "LibraryChanged", Data: { ItemsAdded: ["a", "b"], ItemsRemoved: ["z"], ItemsUpdated: ["c"] } },
       ctx,
     );
-    expect(events[0]).toMatchObject({ kind: "library-changed", detail: { added: 2, removed: 0, updated: 1 } });
+    expect(events[0]).toMatchObject({
+      kind: "library-changed",
+      detail: { added: 2, removed: 1, updated: 1, changedIds: ["a", "b", "c"], removedIds: ["z"] },
+    });
   });
 
   it("maps UserDataChanged to watch-changed", () => {
