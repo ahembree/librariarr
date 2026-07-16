@@ -106,6 +106,11 @@ export class RealtimeManager {
           managed.conn.stop();
           this.connections.delete(id);
           this.disposeDebouncers(id);
+        } else {
+          // Kept connection: refresh non-identity fields (e.g. a rename that
+          // didn't change the signature) so the status API reflects the current
+          // name without needlessly tearing down the socket.
+          managed.config = want;
         }
       }
 

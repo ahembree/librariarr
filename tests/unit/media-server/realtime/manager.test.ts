@@ -117,6 +117,16 @@ describe("RealtimeManager", () => {
     expect(mgr.getStatuses().map((s) => s.serverId)).toEqual(["j1"]);
   });
 
+  it("refreshes the reported server name on a rename without reconnecting", async () => {
+    const { mgr, sockets } = await setup([jfServer]);
+    expect(mgr.getStatuses()[0].name).toBe("JF");
+    // Only the name changed → signature unchanged → connection kept, name refreshed.
+    h.mediaServer.findMany.mockResolvedValue([{ ...jfServer, name: "Renamed JF" }]);
+    await mgr.reconcile();
+    expect(sockets).toHaveLength(1);
+    expect(mgr.getStatuses()[0].name).toBe("Renamed JF");
+  });
+
   it("recycles a connection when the server config changes (new token)", async () => {
     const { mgr, sockets } = await setup([jfServer]);
     h.mediaServer.findMany.mockResolvedValue([{ ...jfServer, accessToken: "new-token" }]);

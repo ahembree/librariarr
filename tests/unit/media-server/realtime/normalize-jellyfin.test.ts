@@ -86,6 +86,15 @@ describe("jellyfinSessionsSignature", () => {
     expect(jellyfinSessionsSignature([playing({ TranscodingInfo: {} })])).not.toBe(base);
   });
 
+  it("distinguishes transcode kind (video vs audio vs both)", () => {
+    const videoOnly = jellyfinSessionsSignature([playing({ TranscodingInfo: { IsVideoDirect: false, IsAudioDirect: true } })]);
+    const audioOnly = jellyfinSessionsSignature([playing({ TranscodingInfo: { IsVideoDirect: true, IsAudioDirect: false } })]);
+    const both = jellyfinSessionsSignature([playing({ TranscodingInfo: { IsVideoDirect: false, IsAudioDirect: false } })]);
+    const direct = jellyfinSessionsSignature([playing()]);
+    // All four playback modes produce distinct signatures.
+    expect(new Set([videoOnly, audioOnly, both, direct]).size).toBe(4);
+  });
+
   it("is order-independent across sessions", () => {
     const s1 = playing({ Id: "a", NowPlayingItem: { Id: "i1" } });
     const s2 = playing({ Id: "b", NowPlayingItem: { Id: "i2" } });

@@ -41,7 +41,21 @@ export function normalizePlexMessage(raw: unknown, ctx: { serverId: string }): R
     }
     case "timeline": {
       const entries = asArray(container.TimelineEntry);
-      if (entries.length > 0) {
+      // Plex fires a timeline entry for every step of its processing pipeline:
+      // states 0-4 are intermediate (created/matching/downloading/processing) and
+      // repeat per item during a scan/analysis; state 5 = finished (added or
+      // updated) and 9 = deleted are the meaningful "content changed" signals.
+      // Emitting on every intermediate state would force a full sync every few
+      // minutes of background activity, so skip a frame only when ALL its entries
+      // are intermediate. Entries without a numeric state still emit (don't miss
+      // a change on a server/version that omits it).
+      const isIntermediate = (e: unknown) => {
+        if (!isRecord(e) || e.state == null) return false;
+        const state = Number(e.state);
+        return Number.isFinite(state) && state >= 0 && state <= 4;
+      };
+      const meaningful = entries.some((e) => !isIntermediate(e));
+      if (meaningful) {
         events.push({ ...base, kind: "library-changed", detail: { entries: entries.length } });
       }
       break;

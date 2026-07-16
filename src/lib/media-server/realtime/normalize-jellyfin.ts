@@ -68,7 +68,14 @@ export function jellyfinSessionsSignature(data: unknown): string {
       const item = session.NowPlayingItem as Record<string, unknown>;
       const playState = isRecord(session.PlayState) ? session.PlayState : {};
       const paused = playState.IsPaused ? 1 : 0;
-      const transcoding = session.TranscodingInfo ? 1 : 0;
+      // Capture the transcode *kind* (video/audio direct flags), not just its
+      // presence, so a mid-stream video<->audio transcode switch — which can
+      // flip a transcode-manager criterion — changes the signature and wakes the
+      // enforcer promptly. Stays stable across bitrate/position churn.
+      const ti = session.TranscodingInfo;
+      const transcoding = isRecord(ti)
+        ? `${ti.IsVideoDirect ? "" : "v"}${ti.IsAudioDirect ? "" : "a"}` || "t"
+        : "0";
       return `${session.Id}|${item.Id}|${paused}|${transcoding}`;
     })
     .sort()
