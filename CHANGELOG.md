@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.29.0](https://github.com/ahembree/librariarr/compare/v0.28.0...v0.29.0) (2026-07-18)
+
+
+### Features
+
+* add real-time WebSocket sync for Plex, Jellyfin, and Emby ([#306](https://github.com/ahembree/librariarr/issues/306)) ([966e142](https://github.com/ahembree/librariarr/commit/966e142e9169d60ca5cf7d8cd4301d652fc67b9f))
+* **realtime:** incremental library sync (apply only changed items) ([#308](https://github.com/ahembree/librariarr/issues/308)) ([3caa22a](https://github.com/ahembree/librariarr/commit/3caa22af7e963294bbba3ec8675cb9a18afd5f10))
+
 ## [0.28.0](https://github.com/ahembree/librariarr/compare/v0.27.0...v0.28.0) (2026-07-15)
 
 
