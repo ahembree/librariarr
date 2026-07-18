@@ -110,7 +110,7 @@
     "@types/react-dom": "^19",
     "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^4.1.9",
-    "eslint": "^10.6.0",
+    "eslint": "^10.7.0",
     "eslint-config-next": "16.2.10",
     "husky": "^9.1.7",
     "prisma": "^7.8.0",
