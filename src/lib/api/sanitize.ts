@@ -9,9 +9,10 @@ const SENSITIVE_FIELDS = new Set([
   "passwordHash",
   "backupEncryptionPassword",
   "oidcClientSecret",
+  "aiApiKey",
 ]);
 
-const MASKED_VALUE = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
+export const MASKED_VALUE = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
 
 /**
  * Recursively strips sensitive fields from an object,

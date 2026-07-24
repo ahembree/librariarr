@@ -20,6 +20,7 @@ import {
   History,
   ShieldOff,
   SlidersHorizontal,
+  Sparkles,
 } from "lucide-react";
 
 type LibraryType = "MOVIE" | "SERIES" | "MUSIC";
@@ -86,6 +87,7 @@ function buildNavigation(
         { name: "Streams", href: "/tools/streams", icon: CirclePlay, badge: badges?.streams },
         { name: "Prerolls", href: "/tools/preroll", icon: Clapperboard },
         { name: "TRaSH Sync", href: "/tools/trash", icon: SlidersHorizontal },
+        { name: "AI Analysis", href: "/tools/ai", icon: Sparkles },
       ],
     },
     {

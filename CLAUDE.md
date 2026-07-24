@@ -95,7 +95,7 @@ Real-browser end-to-end tests live in `e2e/` (Playwright, **separate from Vitest
   - Settings (`/settings`) — `page.tsx` is the orchestrator (all state + handlers); 7 tab components in `settings/tabs/` are pure render receiving props; shared types in `settings/types.ts`; tab navigation via URL hash (`#general`, `#servers`, etc.)
   - Library: `/library/movies`, `/library/series` (with `/seasons` and `/episodes` sub-routes), `/library/music`
   - Lifecycle: `/lifecycle/rules` (unified rules page with Movies/Series/Music tabs), `/lifecycle/matches`, `/lifecycle/pending`, `/lifecycle/exceptions`
-  - Tools: `/tools/streams` (Stream Manager: active sessions, maintenance mode, transcode manager, blackout schedules), `/tools/preroll` (Preroll Manager: presets, schedules, combine modes), `/tools/trash` (TRaSH Guide Sync: import custom formats / quality profiles / quality sizes / naming from trash-guides.info into Sonarr/Radarr with an explicit per-item consent gate, diff preview, and dry-run)
+  - Tools: `/tools/streams` (Stream Manager: active sessions, maintenance mode, transcode manager, blackout schedules), `/tools/preroll` (Preroll Manager: presets, schedules, combine modes), `/tools/trash` (TRaSH Guide Sync: import custom formats / quality profiles / quality sizes / naming from trash-guides.info into Sonarr/Radarr with an explicit per-item consent gate, diff preview, and dry-run), `/tools/ai` (AI Analysis: read-only natural-language assistant over the library — see AI Analysis below)
 - `src/app/login/` and `src/app/onboarding/` — Public pages
 - `src/app/api/` — API routes (all require authenticated session except auth endpoints)
   - `api/tools/sessions/` — Active session fetching, SSE streaming, termination, artwork proxy
@@ -122,6 +122,8 @@ Real-browser end-to-end tests live in `e2e/` (Playwright, **separate from Vitest
 - `src/lib/trash/` — TRaSH Guide Sync engine: `catalog.ts` fetches + caches the guide JSON (from `raw.githubusercontent.com`, overridable via `TRASH_GUIDES_REPO`/`TRASH_GUIDES_REF`); `arr-guide-client.ts` is a focused Sonarr/Radarr v3 client for custom-format/quality-profile/quality-definition/naming endpoints (separate from `src/lib/arr` core clients); `translate.ts` converts guide JSON → Arr payloads (pure, unit-tested — CF field object→array, quality-profile builder resolving qualities/groups/cutoff/CF-scores against the live schema, plus per-profile options mirroring Recyclarr — `scoreSet` override and opt-in `resetUnmatchedScores` with exact-name/regex exceptions, both stored on the QUALITY_PROFILE managed row's `selection`; size + naming appliers); `diff.ts` + `signature.ts` power the change preview and upstream-change detection; `status.ts` cross-references guide↔instance↔managed rows; `sync.ts` builds the plan and applies it. **Consent gate**: nothing is written to an Arr app for a resource without a `TrashManagedResource` row; `sync.ts` only ever writes managed resources (dry-run `items` are preview-only), and taking over an item that already exists requires explicit confirmation in the UI
 - `src/lib/lifecycle/` — Detection (`detect-matches.ts`), action execution (`actions.ts`), orchestration (`processor.ts`), Plex collection sync (`collections.ts` — `syncCollection` unions contributions, `syncCollectionById`/`syncAllCollections` drive it from persisted matches), Arr/Seerr metadata fetching
 - `src/lib/discord/client.ts` — Discord webhook notifications
+- `src/lib/ai/` — AI analysis assistant (read-only, tool-calling agent over the library). `provider.ts` is the provider-neutral client (axios; `openai-compatible` covers OpenAI/Ollama/LM Studio/OpenRouter/Groq/vLLM/…, plus native `anthropic`) — no SDK dependency; `tools.ts` is the fixed set of **read-only** tools (each validates args and calls the shared query/aggregation functions — no raw SQL, no mutations, Arr/Seerr fields excluded from `search_media` to avoid vacuous matches); `analyst.ts` runs the bounded tool-calling loop and returns `{ answer, evidence }`; `system-prompt.ts` builds the prompt from the field/dimension registries (never drifts); `config.ts` resolves the config from `AppSettings`. See "AI Analysis" below.
+- `src/lib/media/` — shared media-aggregation compute extracted from the stats routes so the routes AND the AI tools share one implementation (anti-drift): `library-stats.ts` (`computeLibraryStats`), `breakdown.ts` (`computeBreakdown`), `cross-tab.ts` (`computeCrossTab`), `timeline.ts` (`computeTimeline`), `stats-scope.ts` (`resolveStatsScope` — server/dedup scoping), and net-new `watch-analytics.ts` (`computeWatchTrends`/`computeWatchLeaderboard` — rolling-window "trending"/leaderboards over `WatchHistory.watchedAt`). The `/api/media/stats/*` routes are thin wrappers over these.
 - `src/lib/api/sanitize.ts` — `sanitize()` strips sensitive fields from API responses; `sanitizeErrorDetail()` scrubs internal paths/IPs from error messages (see Security below)
 - `src/lib/rate-limit/rate-limiter.ts` — In-memory `RateLimiter` class; `authRateLimiter` singleton (10 attempts / 15 min) applied to auth endpoints
 - `src/lib/logger.ts` — Structured logging with DB persistence: `logger` (backend), `apiLogger` (API), `dbLogger` (database). Logs to console and writes to `LogEntry` table. Debug logs require `LOG_DEBUG=true`
@@ -179,7 +181,7 @@ import { sanitize } from "@/lib/api/sanitize";
 return NextResponse.json({ server: sanitize(server) });
 ```
 
-- Recursively masks `accessToken`, `apiKey`, `plexToken`, `passwordHash`, `backupEncryptionPassword` fields with `"••••••••"`
+- Recursively masks `accessToken`, `apiKey`, `plexToken`, `passwordHash`, `backupEncryptionPassword`, `oidcClientSecret`, `aiApiKey` fields with `"••••••••"` (exported as `MASKED_VALUE`)
 - Error responses use `sanitizeErrorDetail()` to strip internal file paths and private IPs
 - Integration edit flows use server-side `[id]/test-connection` endpoints (POST to `/api/integrations/{type}/{id}/test-connection`) instead of sending stored API keys to the frontend
 - Auth endpoints (login, Plex init/callback) are rate-limited via `authRateLimiter` — check before processing, return 429 with `Retry-After` header
@@ -303,6 +305,16 @@ A `Collection` is a reusable, named Plex-collection definition (`prisma/schema.p
 - **Ordering**: `ACTION_DATE` sort pools the PENDING `LifecycleAction` rows of **all** contributing rule sets, so scheduled-action order is correct across rules. Collection sync therefore runs **after** action scheduling (`processLifecycleRules` after its loop; the manual `runDetection` path via `syncCollectionsAfterDetection` called from `/api/lifecycle/rules/run` after `scheduleActionsForRuleSet`).
 - **CRUD**: `GET/POST /api/lifecycle/collections`, `PUT/DELETE /api/lifecycle/collections/[id]` (PUT renames on Plex + re-syncs; DELETE removes from Plex + `SetNull` detaches rules), `POST /api/lifecycle/collections/sync` (`{ collectionId }`). Managed inline from the lifecycle rule editor's collection dropdown — settings edit the shared collection. There is no `collectionEnabled`/`collectionName`/inline-settings on `RuleSet` anymore (migration `0010_add_collections` backfills + auto-merges same `(userId, type, name)`).
 
+### AI Analysis
+
+A read-only natural-language assistant over the media library (`/tools/ai`, `src/lib/ai/`), configured under Settings → AI (`AppSettings.aiEnabled/aiProvider/aiBaseUrl/aiApiKey/aiModel`).
+
+- **Provider-neutral, no SDK**: `provider.ts` is a thin axios client for two providers — `openai-compatible` (OpenAI, Ollama, LM Studio, OpenRouter, Groq, vLLM, LocalAI, …) and `anthropic` (native Messages API). This is deliberate: the "support any AI incl. local models" requirement needs OpenAI-compatible support, and the codebase's axios-everywhere/zero-SDK convention means no `@anthropic-ai/sdk`. `aiBaseUrl` is admin-configured (no SSRF block — local models live on private IPs, and only the single admin sets it).
+- **Safety model** (the important part): the model can ONLY call the fixed read-only tools in `tools.ts` — there are no mutating tools, so it can't delete/unmonitor/act even if asked. Tools take **structured, Zod-shaped args** (never model-authored SQL) and delegate to the shared `src/lib/media/*` + `executeQuery` functions, inheriting per-user scoping/dedup. `search_media` excludes Arr/Seerr fields to avoid the vacuous-match hazard the lifecycle evaluability guard guards against (documented v1 limitation). The system prompt tells the model to treat tool-result text as data, not instructions.
+- **Grounding**: the prompt (`system-prompt.ts`, built from the field/dimension registries) forbids inventing numbers — every claim must come from a tool result. Scope is local-only (the user's library + their servers' watch history), never global/outside-world trends.
+- **Orchestration**: `analyst.ts` runs a bounded (≤6 iteration) tool-calling loop, streaming `status`/`tool` events via `progressStreamResponse` and returning `{ answer, evidence }` (evidence renders as charts/tables in the UI). Routes: `GET/PUT /api/settings/ai` (key masked via `sanitize()`; PUT skips writing the `MASKED_VALUE` placeholder; can't enable without a model), `POST /api/settings/ai/test` (test-connection, rate-limited), `POST /api/ai/chat` (streaming, rate-limited via `checkAuthRateLimit`, requires enabled+configured).
+- **Secret handling**: `aiApiKey` is in `SENSITIVE_FIELDS`; GET returns the mask, the client echoes it back, and PUT/test treat the mask as "keep saved".
+
 ### Notifications
 
 - `src/lib/discord/client.ts` — Discord webhook notifications for lifecycle events (action success/failure, match count changes) and maintenance mode changes
@@ -382,6 +394,7 @@ Documentation files to be aware of:
 | Backup & restore | `features/backup-restore.mdx` |
 | Notifications | `features/notifications.mdx` |
 | Stream manager & maintenance | `features/stream-manager.mdx` |
+| AI Analysis | `features/ai-analysis.mdx` |
 | Real-time media-server sync | `features/real-time-sync.mdx` |
 | Preroll manager | `features/preroll-manager.mdx` |
 | TRaSH Guide Sync | `features/trash-guide-sync.mdx` |

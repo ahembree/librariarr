@@ -109,6 +109,7 @@ export default defineConfig({
               label: "Backup & Restore",
               slug: "docs/features/backup-restore",
             },
+            { label: "AI Analysis", slug: "docs/features/ai-analysis" },
             { label: "Notifications", slug: "docs/features/notifications" },
             { label: "System Logs", slug: "docs/features/system-logs" },
           ],

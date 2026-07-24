@@ -205,6 +205,16 @@ Configure in **Settings → General** under the Backup section. See the [Backup 
 - **Retention**: Number of backups to keep (default: 7)
 - **Encryption Password**: Optional password-based encryption for all backups (minimum 8 characters)
 
+## AI Analysis
+
+Configure in **Settings → AI**. Connect a provider to ask questions about your library in plain language (read-only). See the [AI Analysis](/docs/features/ai-analysis/) guide for full details.
+
+- **Enable AI assistant**: Show the AI Analysis page and allow it to answer questions (default off)
+- **Provider**: `OpenAI-compatible` (OpenAI, Ollama, LM Studio, OpenRouter, Groq, vLLM, …) or `Anthropic (Claude)`
+- **API base URL**: Optional override; leave blank for the provider default, or point at a local model (e.g. `http://localhost:11434/v1`)
+- **API key**: Optional (local models often need none); stored on your server and masked in responses
+- **Model**: The model identifier your provider expects (must support tool / function calling)
+
 ## System
 
 The **Settings → System** tab displays system information and release notes.

@@ -18,6 +18,7 @@ import {
   Monitor,
   Bell,
   Lock,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SettingsSkeleton } from "@/components/skeletons";
@@ -32,6 +33,8 @@ import { NotificationsTab } from "./tabs/notifications-tab";
 import { AuthenticationTab } from "./tabs/authentication-tab";
 import type { CredentialsForm, PromptForm } from "./tabs/authentication-tab";
 import { SystemTab } from "./tabs/system-tab";
+import { AiTab } from "./tabs/ai-tab";
+import type { AiProvider } from "./tabs/ai-tab";
 
 // ─── Shared types ───
 import type {
@@ -51,7 +54,7 @@ import { PRESET_VALUES } from "./types";
 
 // ─── Tab navigation ───
 
-type SettingsTab = "general" | "scheduling" | "servers" | "integrations" | "notifications" | "authentication" | "system";
+type SettingsTab = "general" | "scheduling" | "servers" | "integrations" | "notifications" | "authentication" | "ai" | "system";
 
 const SETTINGS_TABS: { value: SettingsTab; label: string; icon: typeof SettingsIcon }[] = [
   { value: "general", label: "General", icon: SettingsIcon },
@@ -60,6 +63,7 @@ const SETTINGS_TABS: { value: SettingsTab; label: string; icon: typeof SettingsI
   { value: "integrations", label: "Integrations", icon: Puzzle },
   { value: "notifications", label: "Notifications", icon: Bell },
   { value: "authentication", label: "Authentication", icon: Lock },
+  { value: "ai", label: "AI", icon: Sparkles },
   { value: "system", label: "System", icon: Monitor },
 ];
 
@@ -341,6 +345,16 @@ export default function SettingsPage() {
   const [discordSaving, setDiscordSaving] = useState(false);
   const [discordTesting, setDiscordTesting] = useState(false);
   const [discordTestResult, setDiscordTestResult] = useState<TestResult | null>(null);
+
+  // AI assistant settings
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [aiProvider, setAiProvider] = useState<AiProvider>("openai-compatible");
+  const [aiBaseUrl, setAiBaseUrl] = useState("");
+  const [aiApiKey, setAiApiKey] = useState("");
+  const [aiModel, setAiModel] = useState("");
+  const [aiSaving, setAiSaving] = useState(false);
+  const [aiTesting, setAiTesting] = useState(false);
+  const [aiTestResult, setAiTestResult] = useState<TestResult | null>(null);
 
   // Sonarr edit state
   const [editingSonarrId, setEditingSonarrId] = useState<string | null>(null);
@@ -653,6 +667,20 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const fetchAiSettings = useCallback(async () => {
+    try {
+      const response = await fetch("/api/settings/ai");
+      const data = await response.json();
+      setAiEnabled(!!data.enabled);
+      setAiProvider((data.provider as AiProvider) ?? "openai-compatible");
+      setAiBaseUrl(data.baseUrl ?? "");
+      setAiApiKey(data.apiKey ?? "");
+      setAiModel(data.model ?? "");
+    } catch (error) {
+      console.error("Failed to fetch AI settings:", error);
+    }
+  }, []);
+
   // ─── Initial data loading ───
 
   useEffect(() => {
@@ -673,6 +701,7 @@ export default function SettingsPage() {
         fetchLifecycleSchedule(),
         fetchScheduleInfo(),
         fetchDiscordSettings(),
+        fetchAiSettings(),
         fetchDedupSetting(),
         fetchRealtimeSetting(),
         fetchImageCacheStats(),
@@ -684,7 +713,7 @@ export default function SettingsPage() {
     fetch("/api/settings/auth").then((r) => r.json()).then(setAuthInfo).catch(() => {});
     // Fetch display preferences separately (non-blocking)
     fetch("/api/settings/title-preference").then((r) => r.ok ? r.json() : null).then((data) => { if (data) { setPreferredTitleServerId(data.preferredTitleServerId ?? null); setPreferredArtworkServerId(data.preferredArtworkServerId ?? null); } }).catch(() => {});
-  }, [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchDedupSetting, fetchRealtimeSetting, fetchImageCacheStats, fetchChangelog]);
+  }, [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchDedupSetting, fetchRealtimeSetting, fetchImageCacheStats, fetchChangelog]);
 
   // Poll server data during active sync for real-time progress bar
   const hasActiveSync = servers.some(
@@ -2010,6 +2039,72 @@ export default function SettingsPage() {
     }
   };
 
+  // ─── AI assistant handlers ───
+
+  const saveAiSettings = async () => {
+    setAiSaving(true);
+    setAiTestResult(null);
+    try {
+      const res = await fetch("/api/settings/ai", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: aiEnabled,
+          provider: aiProvider,
+          baseUrl: aiBaseUrl,
+          apiKey: aiApiKey,
+          model: aiModel,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        const detail = data?.details?.[0]?.message ?? data?.detail;
+        toast.error("Failed to save AI settings", { description: detail ?? data?.error });
+        return;
+      }
+      const data = await res.json();
+      // Reflect the masked key returned by the server so the field shows saved state.
+      setAiApiKey(data.apiKey ?? "");
+      toast.success("AI settings saved");
+    } catch (error) {
+      console.error("Failed to save AI settings:", error);
+      toast.error("Failed to save AI settings");
+    } finally {
+      setAiSaving(false);
+    }
+  };
+
+  const testAiConnection = async () => {
+    setAiTesting(true);
+    setAiTestResult(null);
+    try {
+      const res = await fetch("/api/settings/ai/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: aiProvider,
+          baseUrl: aiBaseUrl,
+          apiKey: aiApiKey,
+          model: aiModel,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setAiTestResult({ ok: true });
+        toast.success("AI connection successful");
+      } else {
+        setAiTestResult({ ok: false, error: data.error || "Connection failed" });
+        toast.error("AI connection failed", { description: data.error });
+      }
+    } catch (error) {
+      setAiTestResult({ ok: false, error: "Request failed" });
+      console.error("Failed to test AI connection:", error);
+      toast.error("AI connection failed");
+    } finally {
+      setAiTesting(false);
+    }
+  };
+
   // ─── Authentication handlers ───
 
   const handlePlexLink = () => plexOAuth.startAuth();
@@ -2567,6 +2662,26 @@ export default function SettingsPage() {
             onChangeCredentials={handleChangeCredentials}
             onPlexLink={handlePlexLink}
             onCreateCredentialsAndEnable={handleCreateCredentialsAndEnable}
+          />
+        </TabsContent>
+
+        <TabsContent value="ai" id="settings-panel-ai" aria-labelledby="settings-tab-ai">
+          <AiTab
+            aiEnabled={aiEnabled}
+            aiProvider={aiProvider}
+            aiBaseUrl={aiBaseUrl}
+            aiApiKey={aiApiKey}
+            aiModel={aiModel}
+            aiSaving={aiSaving}
+            aiTesting={aiTesting}
+            aiTestResult={aiTestResult}
+            onAiEnabledChange={setAiEnabled}
+            onAiProviderChange={setAiProvider}
+            onAiBaseUrlChange={setAiBaseUrl}
+            onAiApiKeyChange={setAiApiKey}
+            onAiModelChange={setAiModel}
+            onSaveAiSettings={saveAiSettings}
+            onTestAiConnection={testAiConnection}
           />
         </TabsContent>
 

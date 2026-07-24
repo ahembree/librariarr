@@ -1,0 +1,79 @@
+---
+title: AI Analysis
+description: Ask questions about your media library in plain language. A read-only assistant that answers from your own data, backed by any OpenAI-compatible provider or the native Anthropic API — including local models.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+AI Analysis lets you ask questions about your library in plain language — "is there a pattern between resolution and video codec?", "what have I never watched?", "what are my ten largest movies?" — and get answers grounded in your own data.
+
+The assistant is **read-only**. It can inspect and summarize your library through a fixed set of analysis tools, but it can never change, delete, download, or act on anything.
+
+## How it works
+
+When you ask a question, the model translates it into calls to a small set of validated, read-only tools (the same query and aggregation engine that powers the dashboard and the Query workspace). Those tools run against your database, and the model narrates the **actual numbers they return** — it does not invent figures or answer from memory.
+
+- **Grounded** — every quantitative claim comes from a tool result. Charts and tables shown beneath an answer are the exact data the answer is based on.
+- **Bounded** — the model can only call the analysis tools listed below. It cannot run arbitrary SQL, and there are no tools that modify anything.
+- **Local-scope** — the assistant only knows about *your* library and *your* servers' watch history. It knows nothing about the outside world: global popularity, streaming-service trends, ratings sites, or release news. "What's popular right now" means most-played on your servers recently, not globally.
+
+## Setup
+
+<Steps>
+
+1. Open **Settings → AI**.
+
+2. Choose a **Provider**:
+   - **OpenAI-compatible** — works with OpenAI and any endpoint that speaks the OpenAI chat-completions API: **Ollama**, **LM Studio**, **OpenRouter**, **Groq**, **vLLM**, **LocalAI**, and more.
+   - **Anthropic (Claude)** — the native Claude Messages API.
+
+3. Set the **API base URL** (optional). Leave blank to use the provider default. For a local model, point it at that model's endpoint — for example `http://localhost:11434/v1` for Ollama or `http://localhost:1234/v1` for LM Studio.
+
+4. Enter an **API key** if your provider needs one. Local models usually don't. The key is stored on your server and masked in every response — it is never shown again.
+
+5. Enter the **Model** identifier your provider expects (e.g. `gpt-4o-mini`, `claude-sonnet-5`, `llama3.1`). The model must support **tool / function calling**.
+
+6. Click **Test connection**, then **Save**, and turn on **Enable AI assistant**.
+
+</Steps>
+
+Once enabled, open **Tools → AI Analysis** to start asking questions.
+
+<Aside type="tip">
+  Prefer to keep everything on your own hardware? Run a local model with [Ollama](https://ollama.com/) or [LM Studio](https://lmstudio.ai/), pick **OpenAI-compatible**, and point the base URL at it. No data leaves your machine. Pick a model that supports tool calling (e.g. a recent Llama, Qwen, or Mistral instruct model).
+</Aside>
+
+## What you can ask
+
+The assistant is strongest at understanding, auditing, and cleaning up your library:
+
+- **Overview & composition** — "give me an overview", "what's the genre breakdown", "how much space do my 4K movies take".
+- **Technical quality & hygiene** — "is there a pattern between resolution and video codec", "how much is still H.264", "what percentage is HDR".
+- **Storage & cleanup** — "my 20 largest files", "which genres use the most space", "space used by unwatched titles older than two years".
+- **Watch behavior** — "most popular shows right now", "what have I never watched", "not played in a year", "who watches the most", "which devices are used most".
+- **Anomalies** — "duplicate titles across servers", "items missing external IDs".
+- **Reporting** — "summarize my library", "how has it grown over the past year".
+
+## Tools the assistant can use
+
+| Tool | What it does |
+|------|--------------|
+| `get_library_overview` | Counts, storage, top resolutions/codecs/genres, most-played titles (all-time) |
+| `get_breakdown` | Distribution across one dimension (resolution, codec, genre, year, …) |
+| `get_cross_tab` | Relationship between two dimensions (e.g. resolution × codec) |
+| `get_timeline` | How the library changed over time, optionally split by a dimension |
+| `search_media` | Find and rank specific items by metadata filters |
+| `get_watch_trends` | Most-played titles within a recent rolling window ("popular right now") |
+| `get_watch_leaderboard` | Rank users / devices / platforms by recent plays |
+
+## Privacy & security
+
+- The assistant is **read-only** — there are no tools that delete, unmonitor, download, or otherwise change anything, so it cannot take a destructive action even if asked.
+- The tools never run model-generated SQL. They take structured, validated arguments and run the same safe queries the rest of the app uses.
+- Your library **metadata** (titles, technical details, watch history) is sent to the provider you configure. Use a **local model** if you'd rather keep everything on your own hardware.
+- The API key is stored on your server and masked in all API responses.
+- The chat endpoint is rate-limited and requires an authenticated session.
+
+<Aside type="caution">
+  The assistant reads your own library and your servers' watch history — not the outside world. It also can't do everything: quality-upgrade questions that depend on Sonarr/Radarr metadata, true personalized recommendations, and global/streaming-service trends are out of scope in this version. Double-check anything important before acting on it.
+</Aside>

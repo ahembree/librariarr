@@ -117,6 +117,16 @@ model AppSettings {
   actionHistoryRetentionDays    Int       @default(30)
   // Deletion stats
   deletionStatsResetAt          DateTime?
+  // AI analysis (read-only library assistant). Provider-neutral so any backend
+  // works — "openai-compatible" covers OpenAI, Ollama, LM Studio, OpenRouter,
+  // Groq, vLLM, LocalAI, etc.; "anthropic" is the native Claude Messages API.
+  // aiBaseUrl overrides the provider default (required for local models);
+  // aiApiKey is optional (local models often need none) and masked by sanitize().
+  aiEnabled                     Boolean   @default(false)
+  aiProvider                    String    @default("openai-compatible")
+  aiBaseUrl                     String?
+  aiApiKey                      String?
+  aiModel                       String?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 }
