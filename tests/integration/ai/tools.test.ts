@@ -12,6 +12,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { getAiToolMap } from "@/lib/ai/tools";
+import { getTestPrisma } from "../../setup/test-db";
 import {
   createTestUser,
   createTestServer,
@@ -94,6 +95,50 @@ describe("ai/tools", () => {
       filters: [{ field: "arrMonitored", operator: "equals", value: "true" }],
     });
     expect((bad.data as any).error).toContain("not available");
+  });
+
+  it("search_media collapses multi-server duplicates by dedupKey", async () => {
+    const prisma = getTestPrisma();
+    const user = await createTestUser();
+    // Two enabled servers → cross-server dedup applies (dedupStats defaults on).
+    const serverA = await createTestServer(user.id, { name: "Plex" });
+    const serverB = await createTestServer(user.id, { name: "Jellyfin" });
+    const libA = await createTestLibrary(serverA.id);
+    const libB = await createTestLibrary(serverB.id);
+    // Same movie on both servers → shared dedupKey, one marked canonical.
+    const a = await createTestMediaItem(libA.id, { title: "Dune", year: 2021, fileSize: BigInt(8_000_000_000) });
+    const b = await createTestMediaItem(libB.id, { title: "Dune", year: 2021, fileSize: BigInt(8_000_000_000) });
+    await prisma.mediaItem.update({ where: { id: a.id }, data: { dedupKey: "dune-2021", dedupCanonical: true } });
+    await prisma.mediaItem.update({ where: { id: b.id }, data: { dedupKey: "dune-2021", dedupCanonical: false } });
+
+    const res = await tools.get("search_media")!.execute(user.id, {
+      mediaTypes: ["MOVIE"],
+      filters: [{ field: "title", operator: "equals", value: "Dune" }],
+    });
+    const data = res.data as any;
+    // Without dedup this would be 2 (one row per server); the tool must collapse
+    // to the single logical title so counts match the other aggregation tools.
+    expect(data.count).toBe(1);
+    expect(data.items[0].title).toBe("Dune");
+  });
+
+  it("search_media sorts fileSize numerically, not lexicographically", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id);
+    // 15 GB must sort above 2 GB above 900 MB. Lexicographic string compare on
+    // the serialized BigInt ("15000000000" < "2000000000") would put 2 GB first.
+    await createTestMediaItem(lib.id, { title: "Two GB", fileSize: BigInt(2_000_000_000) });
+    await createTestMediaItem(lib.id, { title: "Fifteen GB", fileSize: BigInt(15_000_000_000) });
+    await createTestMediaItem(lib.id, { title: "Point Nine GB", fileSize: BigInt(900_000_000) });
+
+    // No mediaTypes → the grouped/combined path runs sortCombinedResults.
+    const res = await tools.get("search_media")!.execute(user.id, {
+      sortBy: "fileSize",
+      sortOrder: "desc",
+    });
+    const data = res.data as any;
+    expect(data.items.map((i: any) => i.title)).toEqual(["Fifteen GB", "Two GB", "Point Nine GB"]);
   });
 
   it("returns a no-servers note when nothing is connected", async () => {

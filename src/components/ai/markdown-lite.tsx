@@ -153,8 +153,12 @@ export function MarkdownLite({ content }: { content: string }) {
       continue;
     }
 
-    // Paragraph
-    const para: string[] = [];
+    // Paragraph. Consume the current line unconditionally so `i` always
+    // advances — a line that reached here without matching any specialized
+    // branch (e.g. a stray "|" that isn't a well-formed table) must not stall
+    // the outer loop into an infinite spin.
+    const para: string[] = [lines[i]];
+    i++;
     while (i < lines.length && lines[i].trim() && !SPECIAL.test(lines[i])) {
       para.push(lines[i]);
       i++;

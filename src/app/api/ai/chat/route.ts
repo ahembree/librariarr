@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { validateRequest, aiChatSchema } from "@/lib/validation";
-import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
+import { aiRateLimiter, checkRateLimit } from "@/lib/rate-limit/rate-limiter";
 import { progressStreamResponse } from "@/lib/progress/stream";
 import type { ProgressEmit } from "@/lib/progress/types";
 import { asProvider, getStoredAiSettings, resolveAiConfig } from "@/lib/ai/config";
@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 export async function POST(request: Request) {
-  const rateLimited = checkAuthRateLimit(request, "ai-chat");
+  const rateLimited = checkRateLimit(request, aiRateLimiter, "ai-chat");
   if (rateLimited) return rateLimited;
 
   const session = await getSession();

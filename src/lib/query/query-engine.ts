@@ -218,12 +218,20 @@ function sortCombinedResults(
   sortOrder: "asc" | "desc",
 ): void {
   const dir = sortOrder === "desc" ? -1 : 1;
+  // fileSize is serialized to a string (it's a BigInt column), so compare it
+  // numerically — otherwise "2000000000" (2 GB) sorts above "15000000000"
+  // (15 GB) lexicographically, breaking "largest files" style queries on the
+  // grouped/combined path.
+  const numeric = sortBy === "fileSize";
   items.sort((a, b) => {
     const aVal = a[sortBy];
     const bVal = b[sortBy];
     if (aVal == null && bVal == null) return 0;
     if (aVal == null) return 1; // nulls last
     if (bVal == null) return -1;
+    if (numeric) {
+      return (Number(aVal) - Number(bVal)) * dir;
+    }
     if (typeof aVal === "string" && typeof bVal === "string") {
       return aVal.localeCompare(bVal) * dir;
     }

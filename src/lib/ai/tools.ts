@@ -330,27 +330,46 @@ const searchMedia: AiTool = {
       includeEpisodes: false,
     };
     const limit = clampInt(args.limit, 25, 1, 50);
-    const result = await executeQuery(definition, userId, 1, limit);
+    // When multi-server dedup is enabled, over-fetch and collapse rows that
+    // share a dedupKey (the same title held on more than one server) so the
+    // assistant's counts match every other tool — executeQuery never dedups.
+    // Items without a dedupKey (null) are always kept.
+    const fetchLimit = s.dedupEnabled ? Math.min(limit * 3, 150) : limit;
+    const result = await executeQuery(definition, userId, 1, fetchLimit);
 
-    const items = result.items.map((it) => {
-      const r = it as Record<string, unknown>;
-      return {
-        title: r.title,
-        parentTitle: r.parentTitle ?? undefined,
-        year: r.year ?? undefined,
-        type: r.type,
-        resolution: r.resolution ?? undefined,
-        videoCodec: r.videoCodec ?? undefined,
-        audioCodec: r.audioCodec ?? undefined,
-        dynamicRange: r.dynamicRange ?? undefined,
-        container: r.container ?? undefined,
-        sizeGB: r.fileSize != null ? gb(r.fileSize as string) : undefined,
-        playCount: r.playCount ?? undefined,
-        lastPlayedAt: r.lastPlayedAt ?? undefined,
-        studio: r.studio ?? undefined,
-      };
-    });
-    const data = { count: items.length, hasMore: result.pagination.hasMore, items };
+    let rows = result.items as Record<string, unknown>[];
+    let truncated = false;
+    if (s.dedupEnabled) {
+      const seen = new Set<string>();
+      const deduped: Record<string, unknown>[] = [];
+      for (const it of rows) {
+        const key = it.dedupKey;
+        if (typeof key === "string" && key) {
+          if (seen.has(key)) continue;
+          seen.add(key);
+        }
+        deduped.push(it);
+      }
+      truncated = deduped.length > limit;
+      rows = deduped.slice(0, limit);
+    }
+
+    const items = rows.map((r) => ({
+      title: r.title,
+      parentTitle: r.parentTitle ?? undefined,
+      year: r.year ?? undefined,
+      type: r.type,
+      resolution: r.resolution ?? undefined,
+      videoCodec: r.videoCodec ?? undefined,
+      audioCodec: r.audioCodec ?? undefined,
+      dynamicRange: r.dynamicRange ?? undefined,
+      container: r.container ?? undefined,
+      sizeGB: r.fileSize != null ? gb(r.fileSize as string) : undefined,
+      playCount: r.playCount ?? undefined,
+      lastPlayedAt: r.lastPlayedAt ?? undefined,
+      studio: r.studio ?? undefined,
+    }));
+    const data = { count: items.length, hasMore: result.pagination.hasMore || truncated, items };
     return {
       data,
       evidence: { tool: "search_media", kind: "search", title: "Matching items", data },
