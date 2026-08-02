@@ -4,6 +4,7 @@ import type { MediaServerClient } from "@/lib/media-server/client";
 import { PlexClient } from "@/lib/plex/client";
 import { logger, dbLogger } from "@/lib/logger";
 import type { MediaMetadataItem, MediaStream, MediaPart } from "@/lib/media-server/types";
+import { partitionMediaItems } from "@/lib/media-server/item-types";
 import axios from "axios";
 import v8 from "v8";
 import { randomUUID } from "crypto";
@@ -823,7 +824,16 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       // Record when this library sync started so we can identify stale items
       // (items not touched by upserts will have updatedAt < syncStartTime).
       const librarySyncStart = new Date();
+      // Two distinct counters, deliberately not merged:
+      //  - libraryItemCount: real media actually upserted. Drives the "server
+      //    returned nothing — refuse to wipe" guard, which must ask "did we
+      //    store any media?", not "did the response have rows in it?".
+      //  - librarySeenCount: every listing row traversed, containers included.
+      //    Drives the "did we reach the end of the library?" check, which is
+      //    compared against the server's reported total — and the server
+      //    counted the containers in that total.
       let libraryItemCount = 0;
+      let librarySeenCount = 0;
       let skippedEnrichment = 0;
 
       // Fetch and process items page by page to limit peak memory.
@@ -840,6 +850,28 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       let reachedLibraryEnd = false;
 
       while (pageItems && pageItems.length > 0) {
+        // Defence in depth: a library listing can carry non-media containers
+        // (Plex collections, Jellyfin/Emby box sets and playlists). They have
+        // no file, no streams and no size, so storing one produces a phantom
+        // MediaItem that pollutes listings, dedup and lifecycle matches.
+        // Clients filter these server-side, so this normally skips nothing.
+        //
+        // The skipped items still count toward the traversal totals: the
+        // server counted them in the total it reported, and the stale-item
+        // purge below only runs when the traversal accounted for every
+        // reported item — dropping them silently would disable the purge.
+        const rawPageSize = pageItems.length;
+        const { media, skipped: nonMediaCount } = partitionMediaItems(pageItems);
+        if (nonMediaCount > 0) {
+          logger.info(
+            "Sync",
+            `Library "${lib.title}": skipping ${nonMediaCount} non-media item(s) (collections/playlists) returned by the server`,
+          );
+          pageItems = media;
+          processedItems += nonMediaCount;
+          librarySeenCount += nonMediaCount;
+        }
+
         // Pre-fetch existing thumb URLs for the entire page in a single query
         // (instead of per-batch) to reduce DB round trips.
         const pageRatingKeys = pageItems.map((item) => item.ratingKey);
@@ -908,6 +940,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
 
           processedItems += batch.length;
           libraryItemCount += batch.length;
+          librarySeenCount += batch.length;
 
           // Null out processed items from the page array so V8 can collect
           // the heavy Plex metadata objects (Media/Part/Stream, summary text,
@@ -936,8 +969,10 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
         // Release current page before fetching next
         pageItems = null;
 
-        pageOffset += pageRatingKeys.length;
-        if (pageRatingKeys.length < effectivePageSize || (libraryTotal != null && pageOffset >= libraryTotal)) {
+        // Advance by the RAW page size, not the filtered one: the offset is the
+        // server's window, and skipped containers still occupy a slot in it.
+        pageOffset += rawPageSize;
+        if (rawPageSize < effectivePageSize || (libraryTotal != null && pageOffset >= libraryTotal)) {
           // Reached the end: either the server returned a short (final) page, or
           // we've fetched at least as many items as the reported total.
           reachedLibraryEnd = true;
@@ -987,15 +1022,17 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       //  - Without a reported total, fall back to the short/empty-final-page
       //    terminal condition (reachedLibraryEnd).
       const traversedFullLibrary = libraryTotal != null
-        ? libraryItemCount >= libraryTotal
+        ? librarySeenCount >= libraryTotal
         : reachedLibraryEnd;
 
       let skipPurgeReason: string | null = null;
       if (!traversedFullLibrary) {
-        skipPurgeReason = `library not fully traversed (${libraryItemCount}/${libraryTotal ?? "unknown"} items processed)`;
+        skipPurgeReason = `library not fully traversed (${librarySeenCount}/${libraryTotal ?? "unknown"} items processed)`;
       } else if (libraryItemCount === 0) {
-        // A sync that processed ZERO items must never wipe a previously
-        // populated library: a flaky "200 + empty list + total=0" response
+        // A sync that stored ZERO real media must never wipe a previously
+        // populated library — including a listing that was non-empty but held
+        // nothing but containers, which is the same "we learned nothing about
+        // this library" situation. A flaky "200 + empty list + total=0" response
         // (server mid-scan, backing storage offline) is indistinguishable
         // from a genuinely emptied library, and the wipe is the destructive
         // branch. Skip and warn; a later sync that returns items purges

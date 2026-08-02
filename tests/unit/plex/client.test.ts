@@ -89,6 +89,26 @@ describe("PlexClient", () => {
       const result = await client.getLibraryItems("1");
       expect(result).toEqual([]);
     });
+
+    it("drops collections returned by an untyped section listing", async () => {
+      // Callers resolve series rating keys by title from this list. A Plex
+      // collection sharing a series' title would otherwise resolve to the
+      // collection and get nested inside another collection.
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            Metadata: [
+              { ratingKey: "1", title: "Breaking Bad", type: "show" },
+              { ratingKey: "99", title: "Breaking Bad", type: "collection" },
+            ],
+          },
+        },
+      });
+      const result = await client.getLibraryItems("2");
+      expect(result).toEqual([
+        { ratingKey: "1", title: "Breaking Bad", type: "show" },
+      ]);
+    });
   });
 
   describe("getLibraryShows", () => {
@@ -165,7 +185,12 @@ describe("PlexClient", () => {
       expect(result.total).toBeNull();
     });
 
-    it("fetches paginated items for movie type (no type param)", async () => {
+    it("fetches paginated items for movie type with an explicit type=1", async () => {
+      // An untyped `/all` listing returns the section's COLLECTIONS alongside
+      // its movies, and the sync stored those as phantom media items. Filtering
+      // server-side (rather than dropping them from the response) also keeps
+      // `totalSize` consistent with the returned page — the sync's paging and
+      // stale-item purge accounting both depend on that.
       mockAxiosInstance.get.mockResolvedValueOnce({
         data: { MediaContainer: { Metadata: [{ ratingKey: "1" }] } },
       });
@@ -173,8 +198,17 @@ describe("PlexClient", () => {
       expect(result.items).toHaveLength(1);
       // No totalSize → null (see note above); loop terminates on short page.
       expect(result.total).toBeNull();
-      const callParams = mockAxiosInstance.get.mock.calls[0][1].params;
-      expect(callParams.type).toBeUndefined();
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith(
+        "/library/sections/1/all",
+        {
+          params: {
+            includeGuids: 1,
+            "X-Plex-Container-Start": 10,
+            "X-Plex-Container-Size": 25,
+            type: 1,
+          },
+        }
+      );
     });
   });
 
