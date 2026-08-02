@@ -348,6 +348,7 @@ With **Sort order: Action date**, items are arranged soonest-scheduled-action fi
 ### Lifecycle of a collection
 
 - Disabling collection sync on a rule, or deleting the rule, simply detaches it — the collection is re-synced to the remaining rules' matches. The Plex collection is removed only when it has no remaining members.
+- The collection Librariarr writes to Plex is never read back in as a library item. Collections are containers, not media, so the [library sync](/docs/features/library/#library-views) skips them — a "Leaving Soon" shelf can't turn into a fake movie in your Movies list, and it can never be matched by a rule.
 - To delete a collection definition outright, select it in the dropdown and use the **trash** button. You can delete it from the **last rule that uses it** — doing so removes the collection from that rule and deletes it from Plex. The button is disabled (and the API refuses) only while **other** rules still reference it, so remove it from those first.
 
 ### Troubleshooting: matches exist but the collection is empty
