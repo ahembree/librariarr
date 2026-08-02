@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import type { MediaMetadataItem } from "@/lib/media-server/types";
-import { isMediaItem } from "@/lib/media-server/item-types";
+import { isMediaItem, isItemForLibraryType } from "@/lib/media-server/item-types";
 import type { MediaServerType } from "@/generated/prisma/client";
 import { processBatch } from "@/lib/sync/sync-server";
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
@@ -157,6 +157,17 @@ export async function syncMediaServerItems(
     if (!libraryId || !libById.has(libraryId)) {
       return fellBack(`cannot map item ${item.ratingKey} to a known library`);
     }
+    if (!isItemForLibraryType(item, libById.get(libraryId)!.type)) {
+      // Real media, but not the type this library stores — a show or season
+      // alongside the episode that actually changed, an album alongside the
+      // track. The full sync lists one type per library and would never store
+      // these, so writing them here creates a phantom row that the next full
+      // sync purges. Skip (don't delete: unlike a container, a mistyped id is
+      // ambiguous enough that guessing a deletion isn't worth it — the full
+      // sync's stale purge cleans up anything written before this guard).
+      skippedNonMedia++;
+      continue;
+    }
     const bucket = groups.get(libraryId) ?? [];
     bucket.push(item);
     groups.set(libraryId, bucket);
@@ -232,7 +243,8 @@ export async function syncMediaServerItems(
   if (skippedNonMedia > 0) {
     logger.info(
       "SyncIncremental",
-      `Server "${server.name}": skipped ${skippedNonMedia} non-media item(s) (collections/playlists)`,
+      `Server "${server.name}": skipped ${skippedNonMedia} changed id(s) that are not library media ` +
+        `(collections/playlists, or shows/seasons/albums above the item that changed)`,
     );
   }
 

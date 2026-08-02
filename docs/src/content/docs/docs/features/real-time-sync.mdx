@@ -20,7 +20,10 @@ This runs alongside — not instead of — the [scheduled sync](/docs/getting-st
 
 Real-time library changes carry the specific items that changed, so Librariarr fetches and updates **only those items** (and deletes the removed ones) instead of re-scanning the whole server. It falls back to a full sync when a change is too large (100+ items at once), can't be mapped to a library, or a full sync is already running — and the scheduled full sync remains the periodic reconciliation backstop. Either way the normal in-app "sync completed" refresh applies, so updated listings surface automatically.
 
-Changes that turn out to be **containers** rather than media — a Plex collection, a Jellyfin/Emby box set, a playlist — are skipped. This matters most for Librariarr's own [collection sync](/docs/features/lifecycle-rules/#plex-collections): writing a collection to Plex makes Plex report a library change, which would otherwise pull that collection straight back in as a phantom item.
+Only changes that are actually library media are applied. Two kinds are skipped:
+
+- **Containers** — a Plex collection, a Jellyfin/Emby box set, a playlist. This matters most for Librariarr's own [collection sync](/docs/features/lifecycle-rules/#plex-collections): writing a collection to Plex makes Plex report a library change, which would otherwise pull that collection straight back in as a phantom item.
+- **The levels above the item that changed** — adding one episode makes a server report the episode, its season *and* its show as changed. A series library stores episodes (and a music library stores tracks), so only the episode is applied; the show and season would otherwise appear as phantom rows until the next full sync cleared them.
 
 ## Supported servers
 

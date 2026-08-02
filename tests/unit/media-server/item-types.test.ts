@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   isMediaItem,
+  isItemForLibraryType,
   partitionMediaItems,
   NON_MEDIA_ITEM_TYPES,
 } from "@/lib/media-server/item-types";
@@ -41,6 +42,46 @@ describe("isMediaItem", () => {
   it("keeps an unknown-but-real type (deny-list, not allow-list)", () => {
     expect(isMediaItem({ type: "musicvideo" })).toBe(true);
     expect(isMediaItem({ type: "some-future-server-type" })).toBe(true);
+  });
+});
+
+describe("isItemForLibraryType", () => {
+  it("accepts the one type each library stores", () => {
+    expect(isItemForLibraryType({ type: "movie" }, "MOVIE")).toBe(true);
+    expect(isItemForLibraryType({ type: "episode" }, "SERIES")).toBe(true);
+    expect(isItemForLibraryType({ type: "track" }, "MUSIC")).toBe(true);
+  });
+
+  it("rejects the containers above the item that changed", () => {
+    // A single new episode makes Plex emit timeline entries for the episode,
+    // its season AND its show; Jellyfin's LibraryChanged.ItemsAdded likewise.
+    // These are real media, so isMediaItem passes them — but a SERIES library
+    // stores episodes, and the full sync would never list them.
+    expect(isItemForLibraryType({ type: "show" }, "SERIES")).toBe(false);
+    expect(isItemForLibraryType({ type: "season" }, "SERIES")).toBe(false);
+    expect(isItemForLibraryType({ type: "album" }, "MUSIC")).toBe(false);
+    expect(isItemForLibraryType({ type: "artist" }, "MUSIC")).toBe(false);
+  });
+
+  it("rejects a media type belonging to a different library", () => {
+    expect(isItemForLibraryType({ type: "episode" }, "MOVIE")).toBe(false);
+    expect(isItemForLibraryType({ type: "movie" }, "SERIES")).toBe(false);
+    expect(isItemForLibraryType({ type: "track" }, "MOVIE")).toBe(false);
+  });
+
+  it("rejects containers too", () => {
+    expect(isItemForLibraryType({ type: "collection" }, "MOVIE")).toBe(false);
+    expect(isItemForLibraryType({ type: "boxset" }, "SERIES")).toBe(false);
+  });
+
+  it("matches case-insensitively", () => {
+    expect(isItemForLibraryType({ type: "Movie" }, "MOVIE")).toBe(true);
+    expect(isItemForLibraryType({ type: "EPISODE" }, "SERIES")).toBe(true);
+  });
+
+  it("keeps an item with no type — the listing was already type-filtered", () => {
+    expect(isItemForLibraryType({}, "MOVIE")).toBe(true);
+    expect(isItemForLibraryType({ type: "" }, "SERIES")).toBe(true);
   });
 });
 

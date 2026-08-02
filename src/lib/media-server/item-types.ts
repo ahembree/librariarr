@@ -42,6 +42,43 @@ export function isMediaItem(item: { type?: string }): boolean {
 }
 
 /**
+ * The one item type each library type stores as a `MediaItem`. The full sync
+ * enforces this server-side — it lists a library with exactly one type filter
+ * (Plex `type=1/4/10`, Jellyfin `IncludeItemTypes=Movie/Episode/Audio`) — so a
+ * SERIES library holds episodes, never the shows or seasons above them.
+ *
+ * The incremental sync has no such filter: it fetches whatever rating keys a
+ * `library-changed` event carried, and a single new episode makes Plex emit
+ * timeline entries for the episode AND its season AND its show (Jellyfin's
+ * `LibraryChanged.ItemsAdded` likewise). Those are real media, not containers,
+ * so `isMediaItem` passes them — hence this second, stricter check.
+ */
+const LIBRARY_ITEM_TYPE = {
+  MOVIE: "movie",
+  SERIES: "episode",
+  MUSIC: "track",
+} as const;
+
+/**
+ * True when the item is the type its library actually stores.
+ *
+ * Anything the full sync would not have listed must not be written by the
+ * incremental sync either — a row the periodic full sync then purges as stale
+ * is a phantom entry in the UI until it runs.
+ *
+ * Items with no `type` are kept, as in `isMediaItem`: the server already
+ * type-filtered the listing they came from, so a missing field is a gap in the
+ * response, not evidence of the wrong type.
+ */
+export function isItemForLibraryType(
+  item: { type?: string },
+  libraryType: keyof typeof LIBRARY_ITEM_TYPE,
+): boolean {
+  if (!item.type) return true;
+  return item.type.toLowerCase() === LIBRARY_ITEM_TYPE[libraryType];
+}
+
+/**
  * Split a listing into the media items to sync and the non-media containers to
  * skip. The caller needs the skipped count, not just the filtered list: the
  * sync engine's paging/stale-purge accounting compares processed items against

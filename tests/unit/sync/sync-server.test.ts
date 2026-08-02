@@ -513,6 +513,26 @@ describe("syncMediaServer stale-item purge guard", () => {
     expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBeGreaterThan(0);
   });
 
+  it("refuses to wipe a populated library when every item the server returned was a container", async () => {
+    // The zero-item guard asks "did we store any real media?", NOT "did we see
+    // any rows?". A listing of nothing but collections resolves to zero real
+    // items, so it must be treated exactly like an empty listing — otherwise
+    // the purge wipes the library and cascades away its lifecycle exceptions.
+    mockSyncDb({ staleRows: [STALE_ROW], existingCount: BigInt(42) });
+    mockClient.getLibraryItemsPage.mockResolvedValue({
+      items: [
+        { ratingKey: "coll-1", title: "Leaving Soon", type: "collection" },
+        { ratingKey: "coll-2", title: "Oscar Winners", type: "collection" },
+      ],
+      total: 2,
+    });
+
+    await syncMediaServer("server-1");
+
+    expect(staleDelete().length).toBe(0);
+    expect(findDbCalls('"updatedAt"<$2').length).toBe(0);
+  });
+
   it("keeps paging past an all-container page instead of ending the traversal early", async () => {
     // A page that filters down to nothing must not look like the end of the
     // library — the page offset advances by the RAW page size, so the next
