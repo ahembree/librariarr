@@ -131,6 +131,44 @@ describe("syncMediaServerItems", () => {
     expect(mockGetItemMetadata).not.toHaveBeenCalled();
   });
 
+  it("never stores a collection as a media item", async () => {
+    // Librariarr creates Plex collections itself, and the server reports that
+    // write back as a library change — so without this guard the app's own
+    // collections round-trip in as phantom movies. A collection maps cleanly
+    // to a known library, so nothing else would stop it.
+    const { server } = await seed();
+    mockGetItemMetadata.mockResolvedValue(
+      movieMeta("coll-1", { type: "collection", title: "Leaving Soon" })
+    );
+
+    const result = await syncMediaServerItems(server.id, ["coll-1"], []);
+
+    expect(result.status).toBe("done");
+    expect(result.upserted).toBe(0);
+    expect(
+      await getTestPrisma().mediaItem.findFirst({ where: { ratingKey: "coll-1" } })
+    ).toBeNull();
+  });
+
+  it("cleans up a phantom row for an item that turns out to be a collection", async () => {
+    // Self-healing for rows synced before the guard existed: nothing
+    // legitimate shares a container's ratingKey, so the row is removed rather
+    // than waiting for the next full sync's stale-item purge.
+    const { server, library } = await seed();
+    await createTestMediaItem(library.id, { ratingKey: "coll-2", title: "Leaving Soon" });
+    mockGetItemMetadata.mockResolvedValue(
+      movieMeta("coll-2", { type: "collection", title: "Leaving Soon" })
+    );
+
+    const result = await syncMediaServerItems(server.id, ["coll-2"], []);
+
+    expect(result.status).toBe("done");
+    expect(result.deleted).toBe(1);
+    expect(
+      await getTestPrisma().mediaItem.findFirst({ where: { ratingKey: "coll-2" } })
+    ).toBeNull();
+  });
+
   it("falls back when a new item can't be mapped to a known library", async () => {
     const { server } = await seed();
     // No existing row and a librarySectionID that matches no library.

@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import type { MediaMetadataItem } from "@/lib/media-server/types";
+import { isMediaItem } from "@/lib/media-server/item-types";
 import type { MediaServerType } from "@/generated/prisma/client";
 import { processBatch } from "@/lib/sync/sync-server";
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
@@ -116,11 +117,25 @@ export async function syncMediaServerItems(
   // Fetch each changed item; classify present (upsert) vs gone (delete).
   const fetched: MediaMetadataItem[] = [];
   const toDelete = new Set(removedIds);
+  let skippedNonMedia = 0;
   for (const id of changedIds) {
     try {
       const item = await client.getItemMetadata(id);
-      if (item && item.ratingKey) fetched.push(item);
-      else toDelete.add(id);
+      if (!item || !item.ratingKey) {
+        toDelete.add(id);
+      } else if (!isMediaItem(item)) {
+        // A container, not media (Plex collection, Jellyfin box set). This is
+        // the hot path for it: librariarr creates Plex collections itself, and
+        // the server reports that write back as a library change — so without
+        // this guard the app's own collections round-trip in as phantom items.
+        // Route the id to the delete set so a phantom row synced before this
+        // guard existed is cleaned up rather than waiting for a full sync
+        // (nothing legitimate shares a container's ratingKey).
+        toDelete.add(id);
+        skippedNonMedia++;
+      } else {
+        fetched.push(item);
+      }
     } catch (error) {
       if (isNotFound(error)) {
         toDelete.add(id);
@@ -212,6 +227,13 @@ export async function syncMediaServerItems(
       await prisma.$queryRawUnsafe(`DELETE FROM "MediaItem" WHERE "id" = ANY($1)`, ids);
       deleted = rows.length;
     }
+  }
+
+  if (skippedNonMedia > 0) {
+    logger.info(
+      "SyncIncremental",
+      `Server "${server.name}": skipped ${skippedNonMedia} non-media item(s) (collections/playlists)`,
+    );
   }
 
   if (upserted === 0 && deleted === 0) {

@@ -4,6 +4,7 @@ import type { MediaServerClient } from "@/lib/media-server/client";
 import { PlexClient } from "@/lib/plex/client";
 import { logger, dbLogger } from "@/lib/logger";
 import type { MediaMetadataItem, MediaStream, MediaPart } from "@/lib/media-server/types";
+import { partitionMediaItems } from "@/lib/media-server/item-types";
 import axios from "axios";
 import v8 from "v8";
 import { randomUUID } from "crypto";
@@ -840,6 +841,28 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       let reachedLibraryEnd = false;
 
       while (pageItems && pageItems.length > 0) {
+        // Defence in depth: a library listing can carry non-media containers
+        // (Plex collections, Jellyfin/Emby box sets and playlists). They have
+        // no file, no streams and no size, so storing one produces a phantom
+        // MediaItem that pollutes listings, dedup and lifecycle matches.
+        // Clients filter these server-side, so this normally skips nothing.
+        //
+        // The skipped items still count toward the traversal totals: the
+        // server counted them in the total it reported, and the stale-item
+        // purge below only runs when the traversal accounted for every
+        // reported item — dropping them silently would disable the purge.
+        const rawPageSize = pageItems.length;
+        const { media, skipped: nonMediaCount } = partitionMediaItems(pageItems);
+        if (nonMediaCount > 0) {
+          logger.info(
+            "Sync",
+            `Library "${lib.title}": skipping ${nonMediaCount} non-media item(s) (collections/playlists) returned by the server`,
+          );
+          pageItems = media;
+          processedItems += nonMediaCount;
+          libraryItemCount += nonMediaCount;
+        }
+
         // Pre-fetch existing thumb URLs for the entire page in a single query
         // (instead of per-batch) to reduce DB round trips.
         const pageRatingKeys = pageItems.map((item) => item.ratingKey);
@@ -936,8 +959,10 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
         // Release current page before fetching next
         pageItems = null;
 
-        pageOffset += pageRatingKeys.length;
-        if (pageRatingKeys.length < effectivePageSize || (libraryTotal != null && pageOffset >= libraryTotal)) {
+        // Advance by the RAW page size, not the filtered one: the offset is the
+        // server's window, and skipped containers still occupy a slot in it.
+        pageOffset += rawPageSize;
+        if (rawPageSize < effectivePageSize || (libraryTotal != null && pageOffset >= libraryTotal)) {
           // Reached the end: either the server returned a short (final) page, or
           // we've fetched at least as many items as the reported total.
           reachedLibraryEnd = true;

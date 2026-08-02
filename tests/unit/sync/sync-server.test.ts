@@ -482,4 +482,62 @@ describe("syncMediaServer stale-item purge guard", () => {
     expect(findDbCalls('"updatedAt"<$2').length).toBe(1);
     expect(staleDelete().length).toBe(0);
   });
+
+  it("skips non-media containers without disabling the stale-item purge", async () => {
+    // A collection is not a media item: it has no file, no streams and no
+    // size, so storing it produces a phantom row in the library listing.
+    // It must NOT be upserted — but it DOES still count toward the traversal
+    // totals, because the server counted it in the total it reported. Dropping
+    // it silently would leave libraryItemCount(2) < total(3) and permanently
+    // disable the purge for every library that contains a collection.
+    mockSyncDb({ staleRows: [STALE_ROW] });
+    mockClient.getLibraryItemsPage.mockResolvedValue({
+      items: [
+        { ratingKey: "rk1", title: "Movie A", type: "movie" },
+        { ratingKey: "coll-1", title: "Leaving Soon", type: "collection" },
+        { ratingKey: "rk2", title: "Movie B", type: "movie" },
+      ],
+      total: 3,
+    });
+
+    await syncMediaServer("server-1");
+
+    const inserts = findDbCalls('INSERT INTO "MediaItem"');
+    expect(inserts.length).toBe(1);
+    expect(inserts[0]).toContain("rk1");
+    expect(inserts[0]).toContain("rk2");
+    expect(inserts[0]).not.toContain("coll-1");
+
+    // Traversal still counted 3/3, so the purge ran normally.
+    expect(staleDelete().length).toBe(1);
+    expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBeGreaterThan(0);
+  });
+
+  it("keeps paging past an all-container page instead of ending the traversal early", async () => {
+    // A page that filters down to nothing must not look like the end of the
+    // library — the page offset advances by the RAW page size, so the next
+    // window still starts in the right place and the purge accounting holds.
+    mockSyncDb({ staleRows: [STALE_ROW] });
+    const containerPage = Array.from({ length: 500 }, (_, i) => ({
+      ratingKey: `coll-${i}`,
+      title: `Collection ${i}`,
+      type: "collection",
+    }));
+    mockClient.getLibraryItemsPage
+      .mockResolvedValueOnce({ items: containerPage, total: 501 })
+      .mockResolvedValueOnce({
+        items: [{ ratingKey: "rk1", title: "Movie A", type: "movie" }],
+        total: 501,
+      });
+
+    await syncMediaServer("server-1");
+
+    // Second page was requested at offset 500 (raw size), not 0.
+    expect(mockClient.getLibraryItemsPage).toHaveBeenNthCalledWith(2, "1", "movie", 500, 500);
+    const inserts = findDbCalls('INSERT INTO "MediaItem"');
+    expect(inserts.length).toBe(1);
+    expect(inserts[0]).toContain("rk1");
+    // 500 skipped + 1 upserted == the reported total, so the purge still runs.
+    expect(staleDelete().length).toBe(1);
+  });
 });
