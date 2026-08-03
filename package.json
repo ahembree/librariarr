@@ -91,7 +91,7 @@
     "radix-ui": "^1.6.2",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "recharts": "^3.9.2",
+    "recharts": "^3.10.1",
     "sharp": "^0.35.3",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
