@@ -154,5 +154,15 @@ jobs:
           file: Dockerfile
           push: false
           load: false
+          # Read the cache populated by main-branch builds (docker-nightly /
+          # release-please), but deliberately do NOT write one back.
+          #
+          # GitHub scopes a cache to the branch that created it: a cache written
+          # here is readable only by this same PR and is evicted when the PR
+          # closes. Exporting it cost more than it saved — `mode=max` pushes
+          # every layer of all five Dockerfile stages, and the export runs in
+          # "Post Set up Docker Buildx", which regularly took 4-35 min against a
+          # ~3 min build. With several PRs open at once they also contend for
+          # one cache scope and evict main's entry, which every PR does benefit
+          # from reading. Restoring stays fast; only the wasted upload is gone.
           cache-from: type=gha
-          cache-to: type=gha,mode=max
