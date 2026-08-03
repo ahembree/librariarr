@@ -7,6 +7,16 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
+    groups:
+      # react and react-dom are pinned to exact versions and MUST stay on the
+      # same one: react-dom throws "Incompatible React versions" at runtime
+      # otherwise, which breaks SSR on every page. react-dom's peer range is
+      # permissive (^19.2.7 accepts 19.2.8), so an ungrouped bump of one alone
+      # installs cleanly and passes CI while being broken at runtime.
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
 
   - package-ecosystem: "npm"
     directory: "/docs"
