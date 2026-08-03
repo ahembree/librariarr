@@ -29,6 +29,7 @@ import {
   Info,
   Loader2,
   Newspaper,
+  RefreshCw,
   Trash2,
 } from "lucide-react";
 import type { SystemInfo, ImageCacheStats, ReleaseNote } from "../types";
@@ -40,6 +41,9 @@ export interface SystemTabProps {
   onClearImageCache: () => void;
   releaseNotes: ReleaseNote[];
   loadingChangelog: boolean;
+  /** Non-null when the GitHub read failed (distinct from "no releases yet"). */
+  changelogError: string | null;
+  onRetryChangelog: () => void;
 }
 
 /**
@@ -194,6 +198,8 @@ export function SystemTab({
   onClearImageCache,
   releaseNotes,
   loadingChangelog,
+  changelogError,
+  onRetryChangelog,
 }: SystemTabProps) {
   const [confirmClearCache, setConfirmClearCache] = useState(false);
 
@@ -325,9 +331,20 @@ export function SystemTab({
                 </div>
               ))}
             </div>
+          ) : changelogError ? (
+            <div className="flex flex-col items-center gap-2 py-6 text-center">
+              <p className="text-sm text-muted-foreground">
+                Couldn&apos;t reach GitHub to load release notes.
+              </p>
+              <p className="text-xs text-muted-foreground/70 font-mono">{changelogError}</p>
+              <Button variant="outline" size="sm" className="mt-1" onClick={onRetryChangelog}>
+                <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                Retry
+              </Button>
+            </div>
           ) : (
             <p className="py-6 text-center text-sm text-muted-foreground">
-              Unable to load release notes. Version information may be unavailable.
+              No release notes have been published yet.
             </p>
           )}
       </SettingsSection>

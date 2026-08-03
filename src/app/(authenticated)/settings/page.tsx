@@ -260,7 +260,8 @@ export default function SettingsPage() {
 
   // Changelog
   const [releaseNotes, setReleaseNotes] = useState<ReleaseNote[]>([]);
-  const [loadingChangelog, setLoadingChangelog] = useState(false);
+  const [loadingChangelog, setLoadingChangelog] = useState(true);
+  const [changelogError, setChangelogError] = useState<string | null>(null);
 
   // Server editing
   const [editingServerId, setEditingServerId] = useState<string | null>(null);
@@ -509,12 +510,21 @@ export default function SettingsPage() {
 
   const fetchChangelog = useCallback(async () => {
     setLoadingChangelog(true);
+    setChangelogError(null);
     try {
       const response = await fetch("/api/system/changelog");
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
       const data = await response.json();
       setReleaseNotes(data.notes ?? []);
+      // `ok: false` means GitHub could not be read — distinct from a repo with
+      // no releases, which returns ok with an empty list.
+      setChangelogError(data.ok === false ? (data.error ?? "Could not reach GitHub") : null);
     } catch (error) {
       console.error("Failed to fetch changelog:", error);
+      setReleaseNotes([]);
+      setChangelogError(error instanceof Error ? error.message : String(error));
     } finally {
       setLoadingChangelog(false);
     }
@@ -705,9 +715,12 @@ export default function SettingsPage() {
         fetchDedupSetting(),
         fetchRealtimeSetting(),
         fetchImageCacheStats(),
-        fetchChangelog(),
       ]);
       setLoading(false);
+      // Release notes come from GitHub, so this is by far the slowest request
+      // on the page. Run it after the loading gate lifts so a slow (or failing)
+      // GitHub read never holds up the rest of Settings.
+      await fetchChangelog();
     })();
     // Fetch auth info separately (non-blocking)
     fetch("/api/settings/auth").then((r) => r.json()).then(setAuthInfo).catch(() => {});
@@ -2693,6 +2706,8 @@ export default function SettingsPage() {
             onClearImageCache={handleClearImageCache}
             releaseNotes={releaseNotes}
             loadingChangelog={loadingChangelog}
+            changelogError={changelogError}
+            onRetryChangelog={fetchChangelog}
           />
         </TabsContent>
           </div>

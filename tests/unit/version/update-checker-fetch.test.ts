@@ -8,6 +8,7 @@ import {
   checkForUpdate,
   fetchChangelog,
   deduplicateReleaseBody,
+  __resetVersionCacheState,
 } from "@/lib/version/update-checker";
 import { appCache } from "@/lib/cache/memory-cache";
 
@@ -26,6 +27,7 @@ describe("update-checker fetch behavior", () => {
     vi.clearAllMocks();
     // Clear cache so checkForUpdate/fetchChangelog don't bleed between tests.
     appCache.clear();
+    __resetVersionCacheState();
     vi.stubGlobal("fetch", vi.fn());
     process.env.NEXT_PUBLIC_APP_VERSION = "1.2.0";
   });
@@ -33,6 +35,7 @@ describe("update-checker fetch behavior", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     appCache.clear();
+    __resetVersionCacheState();
     if (ORIGINAL_VERSION === undefined) {
       delete process.env.NEXT_PUBLIC_APP_VERSION;
     } else {
@@ -132,6 +135,24 @@ describe("update-checker fetch behavior", () => {
       expect(result.updateAvailable).toBe(false);
     });
 
+    it("does not pin a failed check for the full hour", async () => {
+      const fetchMock = vi.mocked(fetch);
+      fetchMock.mockRejectedValueOnce(new Error("transient"));
+
+      const failedResult = await checkForUpdate();
+      expect(failedResult.error).toBeTruthy();
+
+      // Simulate the short failure TTL elapsing.
+      appCache.invalidate("version:latest");
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({ tag_name: "v1.3.0", html_url: "u", name: "n" }),
+      );
+
+      const retried = await checkForUpdate();
+      expect(retried.error).toBeNull();
+      expect(retried.latestVersion).toBe("1.3.0");
+    });
+
     it("caches the result so a second call does not re-fetch", async () => {
       const fetchMock = vi.mocked(fetch);
       fetchMock.mockResolvedValueOnce(
@@ -147,12 +168,14 @@ describe("update-checker fetch behavior", () => {
   });
 
   describe("fetchChangelog", () => {
-    it("returns an empty array when the version is unknown (no fetch)", async () => {
+    it("returns a failed result when the version is unknown (no fetch)", async () => {
       process.env.NEXT_PUBLIC_APP_VERSION = "unknown";
       const fetchMock = vi.mocked(fetch);
 
-      const notes = await fetchChangelog();
-      expect(notes).toEqual([]);
+      const result = await fetchChangelog();
+      expect(result.notes).toEqual([]);
+      expect(result.ok).toBe(false);
+      expect(result.error).toBeTruthy();
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
@@ -183,8 +206,11 @@ describe("update-checker fetch behavior", () => {
         ]),
       );
 
-      const notes = await fetchChangelog();
+      const { notes, ok, stale, error } = await fetchChangelog();
 
+      expect(ok).toBe(true);
+      expect(stale).toBe(false);
+      expect(error).toBeNull();
       expect(notes.map((n) => n.version)).toEqual(["1.3.0", "1.2.0", "1.1.0"]);
       expect(notes[0].isLatest).toBe(true);
       expect(notes[1].isLatest).toBe(false);
@@ -202,7 +228,7 @@ describe("update-checker fetch behavior", () => {
         ]),
       );
 
-      const notes = await fetchChangelog();
+      const { notes } = await fetchChangelog();
       expect(notes.map((n) => n.version)).toEqual(["1.3.0"]);
     });
 
@@ -216,7 +242,7 @@ describe("update-checker fetch behavior", () => {
       }));
       vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(releases));
 
-      const notes = await fetchChangelog();
+      const { notes } = await fetchChangelog();
       expect(notes.length).toBe(10);
     });
 
@@ -231,28 +257,108 @@ describe("update-checker fetch behavior", () => {
         ]),
       );
 
-      const notes = await fetchChangelog();
+      const { notes } = await fetchChangelog();
       expect(notes[0].publishedAt).toBe("2024-05-01T00:00:00Z");
       expect(notes[0].name).toBeNull();
       expect(notes[0].url).toBe("");
     });
 
-    it("returns an empty array on a non-OK response", async () => {
+    it("reports an error on a non-OK response", async () => {
       vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(null, false, 500));
-      const notes = await fetchChangelog();
-      expect(notes).toEqual([]);
+      const result = await fetchChangelog();
+      expect(result.notes).toEqual([]);
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("500");
     });
 
-    it("returns an empty array when the payload is not an array", async () => {
+    it("reports an error when the payload is not an array", async () => {
       vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ message: "Not Found" }));
-      const notes = await fetchChangelog();
-      expect(notes).toEqual([]);
+      const result = await fetchChangelog();
+      expect(result.notes).toEqual([]);
+      expect(result.ok).toBe(false);
+      expect(result.error).toBeTruthy();
     });
 
-    it("never throws on a network error (returns empty array)", async () => {
+    it("never throws on a network error (reports it instead)", async () => {
       vi.mocked(fetch).mockRejectedValueOnce(new Error("boom"));
-      const notes = await fetchChangelog();
-      expect(notes).toEqual([]);
+      const result = await fetchChangelog();
+      expect(result.notes).toEqual([]);
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("boom");
+    });
+
+    it("reports a timeout distinctly when the request aborts", async () => {
+      const abort = new Error("aborted");
+      abort.name = "AbortError";
+      vi.mocked(fetch).mockRejectedValueOnce(abort);
+
+      const result = await fetchChangelog();
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("Timed out");
+    });
+
+    it("reports ok with no notes when the repo has no releases", async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(jsonResponse([]));
+
+      const result = await fetchChangelog();
+      // An empty-but-successful read is NOT an error — the UI shows
+      // "no releases published" rather than "couldn't reach GitHub".
+      expect(result.ok).toBe(true);
+      expect(result.error).toBeNull();
+      expect(result.notes).toEqual([]);
+    });
+
+    it("does not pin a failure for the full hour (retries on the next call)", async () => {
+      const fetchMock = vi.mocked(fetch);
+      fetchMock.mockRejectedValueOnce(new Error("transient"));
+
+      const failedResult = await fetchChangelog();
+      expect(failedResult.ok).toBe(false);
+
+      // Simulate the short failure TTL elapsing.
+      appCache.invalidate("version:changelog");
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse([{ tag_name: "v1.3.0", name: "1.3.0", body: "b", html_url: "u" }]),
+      );
+
+      const retried = await fetchChangelog();
+      expect(retried.ok).toBe(true);
+      expect(retried.notes.map((n) => n.version)).toEqual(["1.3.0"]);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("serves the last good copy as stale when a later refresh fails", async () => {
+      const fetchMock = vi.mocked(fetch);
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse([{ tag_name: "v1.3.0", name: "1.3.0", body: "b", html_url: "u" }]),
+      );
+
+      const fresh = await fetchChangelog();
+      expect(fresh.ok).toBe(true);
+      expect(fresh.stale).toBe(false);
+
+      // Expire the cached entry, then fail the refresh.
+      appCache.invalidate("version:changelog");
+      fetchMock.mockRejectedValueOnce(new Error("github down"));
+
+      const stale = await fetchChangelog();
+      expect(stale.ok).toBe(true);
+      expect(stale.stale).toBe(true);
+      expect(stale.error).toContain("github down");
+      expect(stale.notes.map((n) => n.version)).toEqual(["1.3.0"]);
+    });
+
+    it("caches a successful read so a second call does not re-fetch", async () => {
+      const fetchMock = vi.mocked(fetch);
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse([{ tag_name: "v1.3.0", name: "1.3.0", body: "b", html_url: "u" }]),
+      );
+
+      const first = await fetchChangelog();
+      const second = await fetchChangelog();
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(second).toEqual(first);
     });
 
     it("deduplicates changelog body lines that differ only by commit hash", async () => {
@@ -267,7 +373,7 @@ describe("update-checker fetch behavior", () => {
         ]),
       );
 
-      const notes = await fetchChangelog();
+      const { notes } = await fetchChangelog();
       const lines = notes[0].body.split("\n");
       const fixBugLines = lines.filter((l) => l.includes("fix bug"));
       expect(fixBugLines.length).toBe(1);

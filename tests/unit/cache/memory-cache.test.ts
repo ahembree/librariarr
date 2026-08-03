@@ -192,6 +192,29 @@ describe("MemoryCache", () => {
       expect(compute).toHaveBeenCalledTimes(2);
     });
 
+    it("derives the TTL from the computed value when given a function", async () => {
+      // Lets a caller cache a good result for a long time but a failed one
+      // briefly, so a transient upstream error isn't pinned for the full TTL.
+      const ttlFor = (v: { ok: boolean }) => (v.ok ? 60_000 : 1000);
+
+      const failing = vi.fn().mockResolvedValue({ ok: false });
+      await cache.getOrSet("key", failing, ttlFor);
+
+      vi.advanceTimersByTime(1001);
+      const succeeding = vi.fn().mockResolvedValue({ ok: true });
+      await cache.getOrSet("key", succeeding, ttlFor);
+      expect(succeeding).toHaveBeenCalledOnce();
+
+      // The successful value now sticks for the long TTL.
+      vi.advanceTimersByTime(30_000);
+      await cache.getOrSet("key", succeeding, ttlFor);
+      expect(succeeding).toHaveBeenCalledOnce();
+
+      vi.advanceTimersByTime(30_001);
+      await cache.getOrSet("key", succeeding, ttlFor);
+      expect(succeeding).toHaveBeenCalledTimes(2);
+    });
+
     it("caches different keys independently", async () => {
       const computeA = vi.fn().mockResolvedValue("A");
       const computeB = vi.fn().mockResolvedValue("B");

@@ -5,7 +5,49 @@ const GITHUB_REPO = "ahembree/librariarr";
 const CACHE_KEY = "version:latest";
 const CHANGELOG_CACHE_KEY = "version:changelog";
 const CACHE_TTL_MS = 3_600_000; // 1 hour
+/**
+ * Failed GitHub reads are cached only briefly. Caching a failure for the full
+ * hour meant one blip (rate limit, DNS hiccup, timeout) left the System tab
+ * stuck on "Unable to load release notes" with no way to recover.
+ */
+const FAILURE_CACHE_TTL_MS = 60_000; // 1 minute
 const REQUEST_TIMEOUT_MS = 10_000;
+
+/** Last successful GitHub read, served as a fallback when a refresh fails. */
+let lastGoodChangelog: { notes: ReleaseNote[]; fetchedAt: string } | null = null;
+
+/** Describe a thrown fetch error in terms a user can act on. */
+function describeFetchError(error: unknown): string {
+  if (error instanceof Error && error.name === "AbortError") {
+    return `Timed out contacting GitHub after ${REQUEST_TIMEOUT_MS / 1000}s`;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** GET a GitHub API URL with the shared timeout, headers, and no-store policy. */
+async function githubFetch(url: string, version: string): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, {
+      headers: {
+        Accept: "application/vnd.github.v3+json",
+        "User-Agent": `Librariarr/${version}`,
+      },
+      signal: controller.signal,
+      // This module does its own TTL caching via appCache; opt out of the
+      // framework fetch cache so the two can't disagree.
+      cache: "no-store",
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Reset module-level state. Test-only. */
+export function __resetVersionCacheState(): void {
+  lastGoodChangelog = null;
+}
 
 export interface UpdateCheckResult {
   currentVersion: string;
@@ -14,6 +56,8 @@ export interface UpdateCheckResult {
   releaseUrl: string | null;
   releaseName: string | null;
   checkedAt: string;
+  /** Null when the check succeeded; a reason string when GitHub could not be read. */
+  error?: string | null;
 }
 
 /**
@@ -66,42 +110,30 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
     };
   }
 
+  const failed = (error: string): UpdateCheckResult => {
+    logger.debug("VersionCheck", "Failed to check for updates", { error });
+    return {
+      currentVersion,
+      latestVersion: null,
+      updateAvailable: false,
+      releaseUrl: null,
+      releaseName: null,
+      checkedAt: new Date().toISOString(),
+      error,
+    };
+  };
+
   return appCache.getOrSet<UpdateCheckResult>(
     CACHE_KEY,
     async () => {
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(
-          () => controller.abort(),
-          REQUEST_TIMEOUT_MS,
-        );
-
-        const response = await fetch(
+        const response = await githubFetch(
           `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
-          {
-            headers: {
-              Accept: "application/vnd.github.v3+json",
-              "User-Agent": `Librariarr/${currentVersion}`,
-            },
-            signal: controller.signal,
-          },
+          currentVersion,
         );
-
-        clearTimeout(timeout);
 
         if (!response.ok) {
-          logger.debug(
-            "VersionCheck",
-            `GitHub API returned ${response.status}`,
-          );
-          return {
-            currentVersion,
-            latestVersion: null,
-            updateAvailable: false,
-            releaseUrl: null,
-            releaseName: null,
-            checkedAt: new Date().toISOString(),
-          };
+          return failed(`GitHub API returned ${response.status}`);
         }
 
         const data = await response.json();
@@ -119,22 +151,14 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
           releaseUrl,
           releaseName,
           checkedAt: new Date().toISOString(),
+          error: null,
         };
       } catch (error) {
-        logger.debug("VersionCheck", "Failed to check for updates", {
-          error: String(error),
-        });
-        return {
-          currentVersion,
-          latestVersion: null,
-          updateAvailable: false,
-          releaseUrl: null,
-          releaseName: null,
-          checkedAt: new Date().toISOString(),
-        };
+        return failed(describeFetchError(error));
       }
     },
-    CACHE_TTL_MS,
+    // Retry a failed check on the next request instead of pinning it for an hour.
+    (result) => (result.error ? FAILURE_CACHE_TTL_MS : CACHE_TTL_MS),
   );
 }
 
@@ -187,96 +211,136 @@ export function deduplicateReleaseBody(body: string): string {
   return result.join("\n");
 }
 
+export interface ChangelogResult {
+  notes: ReleaseNote[];
+  /** True when notes are available to render (even if `stale`). */
+  ok: boolean;
+  /** True when GitHub could not be reached and a previous good copy is served. */
+  stale: boolean;
+  /** Null on success; a reason string when the GitHub read failed. */
+  error: string | null;
+  fetchedAt: string;
+}
+
+/**
+ * Parse a GitHub releases payload into sorted, flagged release notes.
+ * Returns up to 10 notes: any newer versions, the current version, and recent
+ * prior versions.
+ */
+function toReleaseNotes(releases: unknown[], currentVersion: string): ReleaseNote[] {
+  const notes: ReleaseNote[] = [];
+
+  for (const entry of releases) {
+    const release = entry as Record<string, unknown>;
+    if (release.draft) continue;
+
+    const tag = typeof release.tag_name === "string" ? release.tag_name : "";
+    const version = tag.replace(/^v/, "");
+    if (!version) continue;
+
+    notes.push({
+      version,
+      name: typeof release.name === "string" ? release.name : null,
+      body: deduplicateReleaseBody(
+        typeof release.body === "string" ? release.body : "",
+      ),
+      url: typeof release.html_url === "string" ? release.html_url : "",
+      publishedAt:
+        (typeof release.published_at === "string" ? release.published_at : null) ??
+        (typeof release.created_at === "string" ? release.created_at : null) ??
+        "",
+      isCurrent: compareSemver(version, currentVersion) === 0,
+      isLatest: false,
+    });
+  }
+
+  // Sort newest first, then mark the latest
+  notes.sort((a, b) => compareSemver(b.version, a.version));
+  if (notes.length > 0) notes[0].isLatest = true;
+
+  return notes.slice(0, 10);
+}
+
 /**
  * Fetch changelog/release notes from GitHub Releases.
- * Returns up to 10 release notes: any newer versions, the current version,
- * and recent prior versions. Results are cached for 1 hour.
+ *
+ * A successful read is cached for an hour; a failed one for a minute, so a
+ * transient GitHub error clears itself instead of blanking the System tab for
+ * the rest of the hour. When a refresh fails but a previous read succeeded,
+ * the last good copy is served with `stale: true`.
  */
-export async function fetchChangelog(): Promise<ReleaseNote[]> {
+export async function fetchChangelog(): Promise<ChangelogResult> {
   const currentVersion = process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown";
 
-  if (currentVersion === "unknown") return [];
+  if (currentVersion === "unknown") {
+    return {
+      notes: [],
+      ok: false,
+      stale: false,
+      error: "Application version is unavailable",
+      fetchedAt: new Date().toISOString(),
+    };
+  }
 
-  return appCache.getOrSet<ReleaseNote[]>(
+  const failed = (error: string): ChangelogResult => {
+    logger.debug("Changelog", "Failed to fetch changelog", { error });
+    if (lastGoodChangelog) {
+      return {
+        notes: lastGoodChangelog.notes,
+        ok: true,
+        stale: true,
+        error,
+        fetchedAt: lastGoodChangelog.fetchedAt,
+      };
+    }
+    return {
+      notes: [],
+      ok: false,
+      stale: false,
+      error,
+      fetchedAt: new Date().toISOString(),
+    };
+  };
+
+  return appCache.getOrSet<ChangelogResult>(
     CHANGELOG_CACHE_KEY,
     async () => {
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(
-          () => controller.abort(),
-          REQUEST_TIMEOUT_MS,
-        );
-
-        const response = await fetch(
+        const response = await githubFetch(
           `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=25`,
-          {
-            headers: {
-              Accept: "application/vnd.github.v3+json",
-              "User-Agent": `Librariarr/${currentVersion}`,
-            },
-            signal: controller.signal,
-          },
+          currentVersion,
         );
-
-        clearTimeout(timeout);
 
         if (!response.ok) {
-          logger.debug(
-            "Changelog",
-            `GitHub API returned ${response.status}`,
-          );
-          return [];
+          return failed(`GitHub API returned ${response.status}`);
         }
 
         const releases = await response.json();
-        if (!Array.isArray(releases)) return [];
-
-        const notes: ReleaseNote[] = [];
-
-        for (const release of releases) {
-          if (release.draft) continue;
-
-          const tag: string = release.tag_name ?? "";
-          const version = tag.replace(/^v/, "");
-          if (!version) continue;
-
-          const cmp = compareSemver(version, currentVersion);
-
-          notes.push({
-            version,
-            name: release.name ?? null,
-            body: deduplicateReleaseBody(release.body ?? ""),
-            url: release.html_url ?? "",
-            publishedAt: release.published_at ?? release.created_at ?? "",
-            isCurrent: cmp === 0,
-            isLatest: false,
-          });
+        if (!Array.isArray(releases)) {
+          return failed("Unexpected response from the GitHub API");
         }
 
-        // Sort newest first
-        notes.sort((a, b) => compareSemver(b.version, a.version));
+        const notes = toReleaseNotes(releases, currentVersion);
+        const fetchedAt = new Date().toISOString();
+        lastGoodChangelog = { notes, fetchedAt };
 
-        // Mark the latest (first after sorting)
-        if (notes.length > 0) {
-          notes[0].isLatest = true;
-        }
-
-        // Keep all newer versions + enough older ones to total 10
-        return notes.slice(0, 10);
+        return { notes, ok: true, stale: false, error: null, fetchedAt };
       } catch (error) {
-        logger.debug("Changelog", "Failed to fetch changelog", {
-          error: String(error),
-        });
-        return [];
+        return failed(describeFetchError(error));
       }
     },
-    CACHE_TTL_MS,
+    // Anything carrying an error (including a stale-served copy) is retried
+    // shortly rather than being pinned for the full hour.
+    (result) => (result.error ? FAILURE_CACHE_TTL_MS : CACHE_TTL_MS),
   );
 }
 
 /**
- * Pre-warm the version check cache. Called by the background scheduler.
+ * Pre-warm the version and changelog caches. Called on boot and on an interval
+ * by the background scheduler, so a user request never pays the GitHub
+ * round-trip itself (that request is the slowest on the Settings page, and it
+ * is the one that fails when the network is slow or a proxy times out).
  */
 export async function warmVersionCache(): Promise<void> {
-  await checkForUpdate();
+  await Promise.all([checkForUpdate(), fetchChangelog()]);
 }

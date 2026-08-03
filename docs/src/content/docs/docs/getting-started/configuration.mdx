@@ -234,6 +234,17 @@ Displays changelog entries fetched from GitHub Releases, including:
 - Release notes for any newer versions, if an update is available (auto-expanded)
 - Each release can be expanded/collapsed to view its full changelog
 
+Release notes are fetched from `api.github.com` and cached on your server for an
+hour. The cache is pre-warmed on startup and refreshed every 30 minutes, so
+opening the System tab does not wait on GitHub.
+
+If GitHub cannot be reached, the section shows the reason along with a **Retry**
+button, and the failed result is only cached for a minute so the next attempt
+tries again. Once a version list has loaded successfully, that copy keeps being
+shown even if a later refresh fails. Outbound HTTPS access to `api.github.com`
+is required for this section and for the update indicator; without it, both are
+unavailable and the rest of the app is unaffected.
+
 ### Image Cache
 
 - Shows the number of cached images and total size

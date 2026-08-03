@@ -8,7 +8,9 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const notes = await fetchChangelog();
+  const { notes, ok, stale, error, fetchedAt } = await fetchChangelog();
 
-  return NextResponse.json({ notes });
+  // Always 200: the changelog is informational, and the client distinguishes
+  // "GitHub unreachable" from "no releases published" via `ok`/`error`.
+  return NextResponse.json({ notes, ok, stale, error, fetchedAt });
 }

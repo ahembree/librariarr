@@ -212,7 +212,7 @@ When users connect multiple servers, dedup prevents duplicate items from appeari
 
 `appCache` from `src/lib/cache/memory-cache.ts` — in-process cache (no Redis), does not persist across restarts:
 
-- `appCache.get<T>(key)`, `set(key, data, ttlMs?)`, `getOrSet(key, compute, ttlMs?)` (compute-and-cache, **single-flight**: concurrent misses for the same key share one `compute()` call)
+- `appCache.get<T>(key)`, `set(key, data, ttlMs?)`, `getOrSet(key, compute, ttlMs?)` (compute-and-cache, **single-flight**: concurrent misses for the same key share one `compute()` call). `getOrSet`'s `ttlMs` may be a **function of the computed value**, so a caller fetching from an external service can cache a success for a long TTL but a failure for a short one — pinning a transient upstream error for the full TTL is how the release-notes panel used to get stuck on an error for an hour (`src/lib/version/update-checker.ts`)
 - `invalidate(key)`, `invalidatePrefix(prefix)` (bulk invalidation by namespace), `clear()`
 - Default 60s TTL; the store is **bounded** (evicts expired-then-oldest past `maxEntries`) so a long-running process can't grow unbounded
 - Used by `resolveServerFilter`, available-letters endpoints, and other read-heavy paths

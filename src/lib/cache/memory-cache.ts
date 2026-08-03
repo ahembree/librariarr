@@ -48,8 +48,16 @@ export class MemoryCache {
   /**
    * Get cached value or compute and cache it. Concurrent callers that miss the
    * same key await a single shared `compute()` invocation (single-flight).
+   *
+   * `ttlMs` may be a function of the computed value, so a caller can cache a
+   * successful result for a long time but a failed/degraded one only briefly
+   * (otherwise one transient upstream error is pinned for the full TTL).
    */
-  async getOrSet<T>(key: string, compute: () => Promise<T>, ttlMs?: number): Promise<T> {
+  async getOrSet<T>(
+    key: string,
+    compute: () => Promise<T>,
+    ttlMs?: number | ((data: T) => number),
+  ): Promise<T> {
     const cached = this.get<T>(key);
     if (cached !== undefined) return cached;
 
@@ -59,7 +67,7 @@ export class MemoryCache {
     const promise = (async () => {
       try {
         const data = await compute();
-        this.set(key, data, ttlMs);
+        this.set(key, data, typeof ttlMs === "function" ? ttlMs(data) : ttlMs);
         return data;
       } finally {
         this.inflight.delete(key);

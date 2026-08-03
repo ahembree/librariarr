@@ -26,9 +26,10 @@ export async function register() {
     const { runBackfillIfNeeded } = await import("@/lib/dedup/recompute-canonical");
     runBackfillIfNeeded();
 
-    // Pre-warm version check cache and refresh every 6 hours
+    // Pre-warm the version + changelog caches, refreshing more often than their
+    // 1h TTL so a user request never pays the GitHub round-trip itself.
     const { warmVersionCache } = await import("@/lib/version/update-checker");
     warmVersionCache();
-    setInterval(() => { warmVersionCache(); }, 6 * 60 * 60 * 1000);
+    setInterval(() => { warmVersionCache(); }, 30 * 60 * 1000);
   }
 }
