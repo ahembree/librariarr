@@ -16,6 +16,7 @@ import type {
   PlexSession,
 } from "./types";
 import type { MediaServerClient, LibraryItemType } from "@/lib/media-server/client";
+import { isMediaItem } from "@/lib/media-server/item-types";
 import { logger } from "@/lib/logger";
 
 export interface PlexClientOptions {
@@ -118,7 +119,13 @@ export class PlexClient implements MediaServerClient {
         params: { includeGuids: 1 },
       }
     );
-    return response.data.MediaContainer.Metadata || [];
+    const items: PlexMetadataItem[] = response.data.MediaContainer.Metadata || [];
+    // An untyped section listing returns the section's collections alongside
+    // its movies/shows. Callers of this method want real media (see
+    // `lifecycle/collections.ts`, which resolves series rating keys by title —
+    // a collection sharing a series' title would otherwise resolve to the
+    // collection and get nested inside another collection).
+    return items.filter(isMediaItem);
   }
 
   /**
@@ -172,13 +179,19 @@ export class PlexClient implements MediaServerClient {
     offset: number,
     limit: number,
   ): Promise<{ items: PlexMetadataItem[]; total: number | null }> {
-    const typeParam = type === "episode" ? 4 : type === "track" ? 10 : undefined;
+    // Always send an explicit metadata type (1=movie, 4=episode, 10=track).
+    // Movies previously sent none, and an untyped `/all` listing includes the
+    // section's collections (type 18) — which the sync then stored as phantom
+    // movies. Filtering server-side (rather than dropping them from the
+    // response here) also keeps `totalSize` consistent with the returned page,
+    // which the sync's paging and stale-item purge accounting depend on.
+    const typeParam = type === "episode" ? 4 : type === "track" ? 10 : 1;
     const params: Record<string, unknown> = {
       includeGuids: 1,
       "X-Plex-Container-Start": offset,
       "X-Plex-Container-Size": limit,
+      type: typeParam,
     };
-    if (typeParam) params.type = typeParam;
 
     const response = await this.client.get(
       `/library/sections/${sectionKey}/all`,

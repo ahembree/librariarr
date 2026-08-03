@@ -131,6 +131,85 @@ describe("syncMediaServerItems", () => {
     expect(mockGetItemMetadata).not.toHaveBeenCalled();
   });
 
+  it("never stores a collection as a media item", async () => {
+    // Librariarr creates Plex collections itself, and the server reports that
+    // write back as a library change — so without this guard the app's own
+    // collections round-trip in as phantom movies. A collection maps cleanly
+    // to a known library, so nothing else would stop it.
+    const { server } = await seed();
+    mockGetItemMetadata.mockResolvedValue(
+      movieMeta("coll-1", { type: "collection", title: "Leaving Soon" })
+    );
+
+    const result = await syncMediaServerItems(server.id, ["coll-1"], []);
+
+    expect(result.status).toBe("done");
+    expect(result.upserted).toBe(0);
+    expect(
+      await getTestPrisma().mediaItem.findFirst({ where: { ratingKey: "coll-1" } })
+    ).toBeNull();
+  });
+
+  it("cleans up a phantom row for an item that turns out to be a collection", async () => {
+    // Self-healing for rows synced before the guard existed: nothing
+    // legitimate shares a container's ratingKey, so the row is removed rather
+    // than waiting for the next full sync's stale-item purge.
+    const { server, library } = await seed();
+    await createTestMediaItem(library.id, { ratingKey: "coll-2", title: "Leaving Soon" });
+    mockGetItemMetadata.mockResolvedValue(
+      movieMeta("coll-2", { type: "collection", title: "Leaving Soon" })
+    );
+
+    const result = await syncMediaServerItems(server.id, ["coll-2"], []);
+
+    expect(result.status).toBe("done");
+    expect(result.deleted).toBe(1);
+    expect(
+      await getTestPrisma().mediaItem.findFirst({ where: { ratingKey: "coll-2" } })
+    ).toBeNull();
+  });
+
+  it("never stores a show or season as an episode row", async () => {
+    // A Plex timeline burst for a new episode also carries the show (type 2)
+    // and season (type 3) rating keys, and Jellyfin's LibraryChanged.ItemsAdded
+    // does the same. Those are not containers, so the collection guard doesn't
+    // catch them — but the full sync only ever stores episodes in a SERIES
+    // library, so storing them here creates a phantom row that the next full
+    // sync purges anyway.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    await createTestLibrary(server.id, { key: "2", type: "SERIES" });
+
+    mockGetItemMetadata.mockImplementation(async (id: string) =>
+      id === "ep-1"
+        ? {
+            ratingKey: "ep-1",
+            key: "/library/metadata/ep-1",
+            type: "episode",
+            title: "Pilot",
+            parentIndex: 1,
+            index: 1,
+            grandparentTitle: "Breaking Bad",
+            librarySectionID: 2,
+          }
+        : {
+            ratingKey: id,
+            key: `/library/metadata/${id}`,
+            type: id === "show-1" ? "show" : "season",
+            title: "Breaking Bad",
+            librarySectionID: 2,
+          }
+    );
+
+    const result = await syncMediaServerItems(server.id, ["show-1", "season-1", "ep-1"], []);
+
+    expect(result.status).toBe("done");
+    // Only the episode is real library media.
+    expect(result.upserted).toBe(1);
+    const rows = await getTestPrisma().mediaItem.findMany({ select: { ratingKey: true } });
+    expect(rows.map((r) => r.ratingKey)).toEqual(["ep-1"]);
+  });
+
   it("falls back when a new item can't be mapped to a known library", async () => {
     const { server } = await seed();
     // No existing row and a librarySectionID that matches no library.

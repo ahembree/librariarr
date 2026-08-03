@@ -30,6 +30,12 @@ Series are grouped by show title. Drill down into:
 
 Music is organized by artist. Browse artists, albums, and individual tracks with audio format, quality, and duration details.
 
+<Aside type="note" title="Collections are not library items">
+Plex collections, Jellyfin/Emby box sets, and playlists are *containers* — they group media but have no file, resolution, or size of their own. Librariarr's sync skips them, so they never show up in your movie, series, or music listings, and a [lifecycle rule](/docs/features/lifecycle-rules/) can never match one. This includes the collections Librariarr creates itself for [collection sync](/docs/features/lifecycle-rules/#plex-collections).
+
+If a collection was listed as an item before, the next full sync of that library removes it — no action needed on your part.
+</Aside>
+
 ## View Modes
 
 Toggle between two view modes:
