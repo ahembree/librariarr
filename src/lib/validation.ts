@@ -816,3 +816,49 @@ export const trashSyncSchema = z.object({
     .max(1000, "Too many items in one request")
     .optional(),
 });
+
+// ─── AI analysis schemas ───
+
+/** Supported AI backends. "openai-compatible" covers OpenAI, Ollama, LM Studio,
+ *  OpenRouter, Groq, vLLM, LocalAI, etc.; "anthropic" is the native Claude API. */
+export const AI_PROVIDERS = ["openai-compatible", "anthropic"] as const;
+
+const aiBaseUrlSchema = z
+  .union([z.url("Invalid URL format"), z.literal("")])
+  .optional();
+
+/** Update the AI assistant configuration (all fields optional — partial update). */
+export const aiSettingsUpdateSchema = z.object({
+  enabled: z.boolean().optional(),
+  provider: z.enum(AI_PROVIDERS).optional(),
+  baseUrl: aiBaseUrlSchema,
+  // apiKey may arrive as the sanitize() mask when the form echoes it back
+  // unchanged; the route skips persisting that placeholder. An empty string
+  // explicitly clears the saved key (local models often need none).
+  apiKey: z.string().max(400).optional(),
+  model: z.string().max(200).optional(),
+});
+
+/** Test an AI connection with the given config (unset secrets fall back to the
+ *  saved values so the admin can re-test without re-entering the key). */
+export const aiTestSchema = z.object({
+  provider: z.enum(AI_PROVIDERS),
+  baseUrl: aiBaseUrlSchema,
+  apiKey: z.string().max(400).optional(),
+  model: z.string().min(1, "Model is required").max(200),
+});
+
+/** A single turn in the AI chat conversation, as sent from the client. Only
+ *  user/assistant roles are accepted — the server injects the system prompt. */
+const aiChatMessageSchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  content: z.string().min(1).max(8000),
+});
+
+/** Ask the AI assistant a question about the media library. */
+export const aiChatSchema = z.object({
+  messages: z
+    .array(aiChatMessageSchema)
+    .min(1, "At least one message is required")
+    .max(40, "Conversation is too long"),
+});
