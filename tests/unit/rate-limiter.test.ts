@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
-import { RateLimiter, getClientIp } from "@/lib/rate-limit/rate-limiter";
+import { RateLimiter, getClientIp, checkRateLimit } from "@/lib/rate-limit/rate-limiter";
 
 describe("RateLimiter", () => {
   let limiter: RateLimiter;
@@ -94,6 +94,47 @@ describe("RateLimiter", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("checkRateLimit", () => {
+  it("returns null while under the limit", () => {
+    const limiter = new RateLimiter(2, 60_000);
+    const req = new Request("http://localhost/api/ai/chat", {
+      headers: { "x-forwarded-for": "1.2.3.4" },
+    });
+    expect(checkRateLimit(req, limiter, "ai-chat")).toBeNull();
+    expect(checkRateLimit(req, limiter, "ai-chat")).toBeNull();
+  });
+
+  it("returns a 429 with Retry-After once the limit is exceeded", async () => {
+    const limiter = new RateLimiter(1, 60_000);
+    const req = new Request("http://localhost/api/ai/chat", {
+      headers: { "x-forwarded-for": "1.2.3.4" },
+    });
+    expect(checkRateLimit(req, limiter, "ai-chat")).toBeNull();
+    const limited = checkRateLimit(req, limiter, "ai-chat");
+    expect(limited).not.toBeNull();
+    expect(limited!.status).toBe(429);
+    expect(Number(limited!.headers.get("Retry-After"))).toBeGreaterThan(0);
+    expect((await limited!.json()).error).toContain("Too many");
+  });
+
+  it("buckets independently per bucket name and per client IP", () => {
+    const limiter = new RateLimiter(1, 60_000);
+    const reqA = new Request("http://localhost/api/ai/chat", {
+      headers: { "x-forwarded-for": "1.1.1.1" },
+    });
+    const reqB = new Request("http://localhost/api/ai/chat", {
+      headers: { "x-forwarded-for": "2.2.2.2" },
+    });
+    expect(checkRateLimit(reqA, limiter, "ai-chat")).toBeNull();
+    // Different IP → separate bucket, still allowed.
+    expect(checkRateLimit(reqB, limiter, "ai-chat")).toBeNull();
+    // Same IP + bucket → now limited.
+    expect(checkRateLimit(reqA, limiter, "ai-chat")).not.toBeNull();
+    // Same IP, different bucket → separate counter, allowed.
+    expect(checkRateLimit(reqA, limiter, "ai-other")).toBeNull();
   });
 });
 
