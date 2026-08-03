@@ -47,16 +47,28 @@ export class RateLimiter {
 // 10 attempts per 15-minute window
 export const authRateLimiter = new RateLimiter(10, 15 * 60 * 1000);
 
+// AI chat/test is interactive — a user asks many questions in a session, so the
+// tight auth limit is wrong here. Still bounded so a runaway client (or a leaked
+// session) can't hammer a paid LLM endpoint: 30 requests per 5-minute window.
+export const aiRateLimiter = new RateLimiter(30, 5 * 60 * 1000);
+
 // Cleanup expired entries every 5 minutes
-setInterval(() => authRateLimiter.cleanup(), 5 * 60 * 1000).unref();
+setInterval(() => {
+  authRateLimiter.cleanup();
+  aiRateLimiter.cleanup();
+}, 5 * 60 * 1000).unref();
 
 /**
- * Check auth rate limit and return a 429 Response if limited, or null if allowed.
- * Consolidates the repeated rate-limit check pattern used across auth endpoints.
+ * Check a rate limit against the given limiter and return a 429 Response if
+ * limited, or null if allowed. Buckets per client IP (see getClientIp).
  */
-export function checkAuthRateLimit(request: Request, bucket: string): Response | null {
+export function checkRateLimit(
+  request: Request,
+  limiter: RateLimiter,
+  bucket: string,
+): Response | null {
   const ip = getClientIp(request);
-  const rateCheck = authRateLimiter.check(`${bucket}:${ip}`);
+  const rateCheck = limiter.check(`${bucket}:${ip}`);
   if (rateCheck.limited) {
     return Response.json(
       { error: "Too many attempts. Try again later." },
@@ -69,6 +81,14 @@ export function checkAuthRateLimit(request: Request, bucket: string): Response |
     );
   }
   return null;
+}
+
+/**
+ * Check auth rate limit and return a 429 Response if limited, or null if allowed.
+ * Consolidates the repeated rate-limit check pattern used across auth endpoints.
+ */
+export function checkAuthRateLimit(request: Request, bucket: string): Response | null {
+  return checkRateLimit(request, authRateLimiter, bucket);
 }
 
 /**
