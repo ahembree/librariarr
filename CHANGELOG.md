@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.29.0](https://github.com/ahembree/librariarr/compare/v0.28.0...v0.29.0) (2026-08-03)
+
+
+### Features
+
+* add read-only AI analysis assistant for the media library ([#320](https://github.com/ahembree/librariarr/issues/320)) ([e7c212f](https://github.com/ahembree/librariarr/commit/e7c212fc0d9b8b50426a1d86d5df7325702d07c1))
+* add real-time WebSocket sync for Plex, Jellyfin, and Emby ([#306](https://github.com/ahembree/librariarr/issues/306)) ([966e142](https://github.com/ahembree/librariarr/commit/966e142e9169d60ca5cf7d8cd4301d652fc67b9f))
+* **realtime:** incremental library sync (apply only changed items) ([#308](https://github.com/ahembree/librariarr/issues/308)) ([3caa22a](https://github.com/ahembree/librariarr/commit/3caa22af7e963294bbba3ec8675cb9a18afd5f10))
+
+
+### Bug Fixes
+
+* **sync:** stop syncing collections into media libraries ([#333](https://github.com/ahembree/librariarr/issues/333)) ([6f6069f](https://github.com/ahembree/librariarr/commit/6f6069fb56394127388254a8152ea3f49d211f4a))
+
 ## [0.28.0](https://github.com/ahembree/librariarr/compare/v0.27.0...v0.28.0) (2026-07-15)
 
 
