@@ -26,7 +26,7 @@ For each active stream:
 | Connection | Local or remote |
 | Bandwidth | Network bandwidth consumed |
 | Progress | Current position / total duration |
-| Transcoding | Whether the stream is being converted, and hardware acceleration status |
+| Transcoding | Whether the stream is being converted, the encoder in use (`VAAPI`, `NVENC`, `QSV`, … or `SW`), and transcode speed |
 
 ### Working with Sessions
 
@@ -76,8 +76,12 @@ Automatically terminate streams that match transcoding criteria.
 | **Any Transcoding** | Terminate sessions where video or audio is being transcoded |
 | **Video Transcoding** | Terminate sessions where video is being transcoded |
 | **Audio Transcoding** | Terminate sessions where audio is being transcoded |
-| **4K Transcoding** | Terminate sessions that are transcoding 4K content |
+| **4K Transcoding** | Terminate sessions where the **video** of 4K content (source width ≥ 3840 or height ≥ 2160) is being transcoded |
 | **Remote Transcoding** | Terminate remote (non-local) sessions that are transcoding |
+
+<Aside>
+  **4K Transcoding only matches video transcodes.** A 4K stream that is direct-playing or direct-streaming its video and transcoding only the audio (for example, downmixing TrueHD to stereo) costs the server almost nothing, so it is *not* matched. To catch those too, enable **Audio Transcoding** or **Any Transcoding** as well.
+</Aside>
 
 ### Settings
 
@@ -86,6 +90,19 @@ Automatically terminate streams that match transcoding criteria.
 | **Delay** | Seconds to wait before terminating matching streams (default: 30) |
 | **Custom Message** | Message displayed to users when their session is terminated |
 | **Excluded Users** | Users who bypass transcode restrictions |
+| **Skip Hardware Transcodes** | Never terminate a stream the server is encoding on a GPU, regardless of criteria (default: off) |
+
+### Skip Hardware Transcodes
+
+A hardware (GPU) encode costs the CPU very little, so this option exempts those streams from every transcode criterion. It applies to the transcode manager only — maintenance mode and blackout schedules still terminate the stream.
+
+Only the **encode** counts. A hardware *decode* feeding a software encode is still doing the expensive work on the CPU, so it is not exempt.
+
+<Aside type="caution">
+  Hardware acceleration means the CPU is spared — **not** that the transcode is keeping up. A saturated GPU still reports hardware acceleration while running below realtime, and the viewer buffers. Check the stream's **Speed** in the session detail: anything under 1.0× means the transcode is losing ground. With this option on, such a stream is exempt and will not be terminated.
+</Aside>
+
+Librariarr reads the acceleration API actually in use, not the one requested — Plex reports `transcodeHwDecoding`/`transcodeHwEncoding` and can fall back to software silently, and Jellyfin/Emby report `HardwareAccelerationType`. The session detail shows the real encoder (`VAAPI`, `NVENC`, `QSV`, …) or `No (CPU)`. Neither server reports which physical device is used, only the API, so an Intel iGPU and a discrete Arc card both show `QSV` or `VAAPI`.
 
 ### Enforcement
 
@@ -93,6 +110,10 @@ The enforcer checks active streams every 30 seconds. Sessions matching any enabl
 
 <Aside type="caution">
   Enforcement depends on what your media server reports about each stream. Some player apps may not accurately report their status.
+</Aside>
+
+<Aside>
+  On Jellyfin and Emby the custom message is pushed to the client as an on-screen notification just before playback stops — players that cannot display messages simply stop. Plex delivers the reason with the stop itself.
 </Aside>
 
 ## Blackout Schedules
@@ -108,6 +129,10 @@ Set repeating windows on specific days and times.
 - **Days of week**: Select one or more days
 - **Start/End time**: 24-hour format
 - **Example**: Monday, Wednesday, Friday — 2:00 AM to 4:00 AM
+
+<Aside>
+  **Overnight windows** are supported: if the end time is at or before the start time, the window runs past midnight into the next calendar day. The selected days are the days the window **starts** on — a Friday 22:00–06:00 blackout runs from Friday night through Saturday at 06:00, and does not touch Friday morning.
+</Aside>
 
 #### One-Time
 
@@ -132,9 +157,15 @@ During a blackout window:
 | **Warn Then Terminate** | Send a warning, then terminate after a configurable delay |
 | **Block New Only** | Allow existing sessions to continue but block new connections |
 
+<Aside>
+  **Block New Only** grandfathers whatever is playing on **each** connected server at the moment the window opens, so multi-server setups keep their in-flight streams. Because the snapshot is held in memory, restarting Librariarr mid-blackout re-grandfathers whatever is playing at that point.
+</Aside>
+
 ## Limitations
 
 - Stream data accuracy depends on the media server's API reporting
 - Maintenance mode and blackout enforcement have up to a 30-second delay between checks
 - Some player apps may not immediately respond to a stop request
 - Stream conversion detection relies on what your media server reports, which varies by player app
+- Blackout and recurring schedule times are evaluated in the server's local timezone (set `TZ` on the container to control it)
+- On Jellyfin and Emby, LAN vs WAN is inferred from the client's IP address (private, loopback, link-local and CGNAT/tailnet ranges count as local) because those servers report no explicit "local" flag. Plex reports it directly.

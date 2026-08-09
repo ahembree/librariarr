@@ -96,6 +96,8 @@ import { FadeImage } from "@/components/ui/fade-image";
 import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatDurationClock } from "@/lib/format";
+import { hardwareEncoder, hardwareDecoder } from "@/lib/media-server/hardware-transcode";
+import { cn } from "@/lib/utils";
 import {
   SERVER_TYPE_STYLES,
   DEFAULT_SERVER_STYLE,
@@ -124,6 +126,10 @@ interface SessionTranscoding {
   sourceAudioCodec?: string;
   speed?: number;
   transcodeHwRequested?: boolean;
+  hwDecode?: string;
+  hwEncode?: string;
+  hwFullPipeline?: boolean;
+  hwAccel?: string;
 }
 
 interface SessionWithServer {
@@ -232,7 +238,7 @@ const CRITERIA_OPTIONS: { key: keyof TranscodeCriteria; label: string; desc: str
   { key: "anyTranscoding", label: "Any Transcoding", desc: "Any stream transcoding video or audio" },
   { key: "videoTranscoding", label: "Video Transcoding", desc: "Stream has video transcoding" },
   { key: "audioTranscoding", label: "Audio Transcoding", desc: "Stream has audio transcoding" },
-  { key: "fourKTranscoding", label: "4K Transcoding", desc: "Stream is transcoding 4K content" },
+  { key: "fourKTranscoding", label: "4K Transcoding", desc: "Stream is transcoding the video of 4K content (audio-only transcodes are not matched)" },
   { key: "remoteTranscoding", label: "Remote Transcoding", desc: "Stream is transcoding and remote (WAN)" },
 ];
 
@@ -345,7 +351,11 @@ function transcodeSummary(t: SessionTranscoding): string {
     parts.push(t.sourceAudioCodec ? `audio ${t.sourceAudioCodec.toUpperCase()}` : "audio");
   }
   if (t.speed !== undefined) parts.push(`${t.speed.toFixed(1)}\u00d7`);
-  if (t.transcodeHwRequested !== undefined) parts.push(t.transcodeHwRequested ? "HW" : "SW");
+  // The encoder actually in use — transcodeHwRequested only records the
+  // request, and Plex falls back to software without saying so.
+  const encoder = hardwareEncoder(t);
+  if (encoder) parts.push(encoder.toUpperCase());
+  else if (t.videoDecision === "transcode") parts.push("SW");
   return parts.join(" \u00b7 ");
 }
 
@@ -831,6 +841,7 @@ export default function StreamManagerPage() {
   const [transcodeLoading, setTranscodeLoading] = useState(true);
   const [transcodeSaving, setTranscodeSaving] = useState(false);
   const [transcodeExcludedUsers, setTranscodeExcludedUsers] = useState<string[]>([]);
+  const [transcodeExemptHardware, setTranscodeExemptHardware] = useState(false);
 
   // Known users from media servers (for exclusion dropdowns)
   const [knownUsers, setKnownUsers] = useState<string[]>([]);
@@ -971,6 +982,7 @@ export default function StreamManagerPage() {
           }
         }
         setTranscodeExcludedUsers(data.excludedUsers ?? []);
+        setTranscodeExemptHardware(data.exemptHardware ?? false);
       }
     } catch {
       // Silent
@@ -1284,6 +1296,7 @@ export default function StreamManagerPage() {
     delay?: number;
     criteria?: TranscodeCriteria;
     excludedUsers?: string[];
+    exemptHardware?: boolean;
   }) => {
     const payload = {
       enabled: overrides.enabled ?? transcodeEnabled,
@@ -1291,6 +1304,7 @@ export default function StreamManagerPage() {
       delay: overrides.delay ?? transcodeDelay,
       criteria: overrides.criteria ?? transcodeCriteria,
       ...(overrides.excludedUsers !== undefined && { excludedUsers: overrides.excludedUsers }),
+      exemptHardware: overrides.exemptHardware ?? transcodeExemptHardware,
     };
     try {
       const res = await fetch("/api/tools/transcode-manager", {
@@ -1610,6 +1624,26 @@ export default function StreamManagerPage() {
                     />
                   </div>
                 ))}
+              </div>
+
+              {/* Hardware exemption */}
+              <div className="flex items-center justify-between gap-3 rounded-md bg-muted/50 px-3 py-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">Skip hardware transcodes</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Never terminate a stream the server is encoding on a GPU, whatever the criteria say.
+                    Hardware encoding spares the CPU but not the GPU &mdash; check the stream&apos;s speed
+                    (below 1.0&times; means it isn&apos;t keeping up).
+                  </p>
+                </div>
+                <Switch
+                  checked={transcodeExemptHardware}
+                  onCheckedChange={(checked) => {
+                    setTranscodeExemptHardware(checked);
+                    saveTranscodeManager({ exemptHardware: checked });
+                  }}
+                  className="shrink-0"
+                />
               </div>
 
               {/* Termination message */}
@@ -2179,14 +2213,26 @@ export default function StreamManagerPage() {
                           Audio: {sheetSession.transcoding.sourceAudioCodec.toUpperCase()} &rarr; {sheetSession.transcoding.audioDecision}
                         </Badge>
                       )}
-                      {sheetSession.transcoding.transcodeHwRequested !== undefined && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        HW Encode: {hardwareEncoder(sheetSession.transcoding)?.toUpperCase() ?? "No (CPU)"}
+                      </Badge>
+                      {hardwareDecoder(sheetSession.transcoding) && (
                         <Badge variant="secondary" className="text-[10px]">
-                          HW Accel: {sheetSession.transcoding.transcodeHwRequested ? "Yes" : "No"}
+                          HW Decode: {hardwareDecoder(sheetSession.transcoding)!.toUpperCase()}
                         </Badge>
                       )}
                       {sheetSession.transcoding.speed !== undefined && (
-                        <Badge variant="secondary" className="text-[10px]">
+                        <Badge
+                          variant="secondary"
+                          className={cn(
+                            "text-[10px]",
+                            // Below realtime the transcode is losing ground and
+                            // the viewer will buffer, hardware or not.
+                            sheetSession.transcoding.speed < 1 && "bg-amber/15 text-amber border-amber/30"
+                          )}
+                        >
                           Speed: {sheetSession.transcoding.speed.toFixed(1)}x
+                          {sheetSession.transcoding.speed < 1 && " \u2014 below realtime"}
                         </Badge>
                       )}
                       <Badge variant="secondary" className="text-[10px]">

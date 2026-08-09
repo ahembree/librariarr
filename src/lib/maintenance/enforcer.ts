@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
+import { isHardwareTranscode } from "@/lib/media-server/hardware-transcode";
 import { logger } from "@/lib/logger";
 import type { MediaSession } from "@/lib/media-server/types";
 
@@ -15,9 +16,26 @@ let prerollRunning = false;
 //   blackout              → "blackout:scheduleId:userId:serverId:sessionId"
 const pendingTerminations = new Map<string, number>();
 
-// For "block_new_only" blackout: tracks session IDs that existed when blackout started
-// Key: `${userId}-${scheduleId}`, Value: Set of session IDs
+// For "block_new_only" blackout: tracks session IDs that existed when the
+// blackout started. Keyed PER SERVER (`${userId}-${scheduleId}:${serverId}`)
+// because session IDs are only meaningful to the server that issued them —
+// a schedule-level key let whichever server answered first write the snapshot,
+// after which every other server's pre-existing sessions looked "new" and were
+// terminated on the very first tick.
 const knownBlackoutSessions = new Map<string, Set<string>>();
+
+/** Snapshot key for one server under one blackout schedule. */
+function blackoutSnapshotKey(blackoutKey: string, serverId: string): string {
+  return `${blackoutKey}:${serverId}`;
+}
+
+/** Drops every per-server snapshot belonging to a blackout schedule. */
+function clearBlackoutSnapshots(blackoutKey: string) {
+  const prefix = `${blackoutKey}:`;
+  for (const key of knownBlackoutSessions.keys()) {
+    if (key.startsWith(prefix)) knownBlackoutSessions.delete(key);
+  }
+}
 
 interface TranscodeManagerCriteria {
   anyTranscoding: boolean;
@@ -27,7 +45,8 @@ interface TranscodeManagerCriteria {
   remoteTranscoding: boolean;
 }
 
-function sessionMatchesCriteria(
+/** Exported for direct unit testing. */
+export function sessionMatchesCriteria(
   session: MediaSession,
   criteria: TranscodeManagerCriteria
 ): boolean {
@@ -35,19 +54,28 @@ function sessionMatchesCriteria(
   const isVideoTranscode = !!(t && t.videoDecision === "transcode");
   const isAudioTranscode = !!(t && t.audioDecision === "transcode");
   const isAnyTranscode = isVideoTranscode || isAudioTranscode;
+  // Source resolution of the file being played — both Plex's session `Media`
+  // element and Jellyfin/Emby's `NowPlayingItem` streams describe the original
+  // file, never the transcode target.
   const is4K = (session.mediaWidth ?? 0) >= 3840 || (session.mediaHeight ?? 0) >= 2160;
   const isRemote = !session.player.local;
 
   if (criteria.anyTranscoding && isAnyTranscode) return true;
   if (criteria.videoTranscoding && isVideoTranscode) return true;
   if (criteria.audioTranscoding && isAudioTranscode) return true;
-  if (criteria.fourKTranscoding && isAnyTranscode && is4K) return true;
+  // "4K Transcoding" targets the expensive case: 4K *video* being re-encoded.
+  // A 4K file whose audio alone is transcoded direct-streams the video and
+  // costs the server almost nothing, so it must not match here — it used to,
+  // which silently killed cheap streams. Users who do want those caught pick
+  // "Audio Transcoding" or "Any Transcoding".
+  if (criteria.fourKTranscoding && isVideoTranscode && is4K) return true;
   if (criteria.remoteTranscoding && isAnyTranscode && isRemote) return true;
 
   return false;
 }
 
-function isBlackoutActive(schedule: {
+/** Exported for direct unit testing. */
+export function isBlackoutActive(schedule: {
   scheduleType: string;
   startDate: Date | null;
   endDate: Date | null;
@@ -65,7 +93,6 @@ function isBlackoutActive(schedule: {
   if (schedule.scheduleType === "recurring") {
     const days = schedule.daysOfWeek as number[] | null;
     if (!days || !schedule.startTime || !schedule.endTime) return false;
-    if (!days.includes(now.getDay())) return false;
 
     const [startH, startM] = schedule.startTime.split(":").map(Number);
     const [endH, endM] = schedule.endTime.split(":").map(Number);
@@ -73,11 +100,22 @@ function isBlackoutActive(schedule: {
     const startMin = startH * 60 + startM;
     const endMin = endH * 60 + endM;
 
-    // Handle overnight spans (e.g., 22:00 to 06:00)
+    const today = now.getDay();
+
+    // Overnight spans (e.g. 22:00 to 06:00) run past midnight into the NEXT
+    // calendar day, so the selected day identifies when the window *starts*.
+    // Testing the day against `now` alone both truncated the window at
+    // midnight and made it spuriously active in the small hours of the
+    // start day itself.
     if (endMin <= startMin) {
-      return currentMin >= startMin || currentMin <= endMin;
+      const yesterday = (today + 6) % 7;
+      return (
+        (days.includes(today) && currentMin >= startMin) ||
+        (days.includes(yesterday) && currentMin <= endMin)
+      );
     }
-    return currentMin >= startMin && currentMin <= endMin;
+
+    return days.includes(today) && currentMin >= startMin && currentMin <= endMin;
   }
 
   return false;
@@ -257,6 +295,15 @@ export async function runEnforcerTick() {
       } else {
         const now = Date.now();
         const activeSessionKeys = new Set<string>();
+        // Servers whose session list we actually retrieved this tick. A server
+        // that was unreachable contributes no keys, so pruning purely on
+        // `activeSessionKeys` would forget its pending entries and restart
+        // every grace period from zero on the next successful poll.
+        const polledServerIds = new Set<string>();
+        const enforcedUserIds = new Set(allSettings.map((s) => s.userId));
+        const knownServerIds = new Set(
+          allSettings.flatMap((s) => s.user.mediaServers.map((server) => server.id))
+        );
 
         for (const settings of allSettings) {
           const maintenanceEnabled = settings.maintenanceMode;
@@ -266,6 +313,7 @@ export async function runEnforcerTick() {
           const transcodeEnabled = settings.transcodeManagerEnabled;
           const transcodeDelayMs = (settings.transcodeManagerDelay ?? 30) * 1000;
           const transcodeMsg = settings.transcodeManagerMessage || "This stream has been terminated.";
+          const exemptHardware = settings.transcodeManagerExemptHardware ?? false;
           const criteria = (settings.transcodeManagerCriteria as TranscodeManagerCriteria | null) ?? {
             anyTranscoding: false,
             videoTranscoding: false,
@@ -280,6 +328,7 @@ export async function runEnforcerTick() {
                 skipTlsVerify: server.tlsSkipVerify,
               });
               const sessions = await client.getSessions();
+              polledServerIds.add(server.id);
 
               for (const session of sessions) {
                 const sessionKey = `maint:${settings.userId}:${server.id}:${session.sessionId}`;
@@ -296,7 +345,13 @@ export async function runEnforcerTick() {
                   message = maintenanceMsg;
                 }
 
-                if (transcodeEnabled && !settings.transcodeManagerExcludedUsers.includes(session.username) && sessionMatchesCriteria(session, criteria)) {
+                // A hardware encode costs the CPU little, so the admin can opt
+                // to leave those alone. Note this says nothing about whether
+                // the transcode is keeping up — a saturated GPU still reports
+                // hardware acceleration while running below realtime.
+                const hardwareExempt = exemptHardware && isHardwareTranscode(session);
+
+                if (transcodeEnabled && !hardwareExempt && !settings.transcodeManagerExcludedUsers.includes(session.username) && sessionMatchesCriteria(session, criteria)) {
                   if (!shouldTerminate || transcodeDelayMs < delay) {
                     delay = transcodeDelayMs;
                     message = transcodeMsg;
@@ -347,9 +402,22 @@ export async function runEnforcerTick() {
         // exist. Only touch "maint:" keys — blackout entries are pruned in
         // their own loop below.
         for (const key of pendingTerminations.keys()) {
-          if (key.startsWith("maint:") && !activeSessionKeys.has(key)) {
+          if (!key.startsWith("maint:")) continue;
+          // "maint:<userId>:<serverId>:<sessionId>" — ids never contain ":".
+          const [, userId, serverId] = key.split(":");
+
+          // No longer enforced for this user, or the server was removed or
+          // disabled: the entry can never be matched again, so drop it.
+          if (!enforcedUserIds.has(userId) || !knownServerIds.has(serverId)) {
             pendingTerminations.delete(key);
+            continue;
           }
+
+          // Server exists but was unreachable this tick — say nothing about
+          // its sessions rather than resetting their grace periods.
+          if (!polledServerIds.has(serverId)) continue;
+
+          if (!activeSessionKeys.has(key)) pendingTerminations.delete(key);
         }
       }
 
@@ -359,7 +427,7 @@ export async function runEnforcerTick() {
         include: {
           user: {
             select: {
-              mediaServers: { where: { enabled: true }, select: { id: true, type: true, url: true, accessToken: true, tlsSkipVerify: true } },
+              mediaServers: { where: { enabled: true }, select: { id: true, type: true, name: true, url: true, accessToken: true, tlsSkipVerify: true } },
             },
           },
         },
@@ -369,6 +437,10 @@ export async function runEnforcerTick() {
       // Pending-termination keys for warn_then_terminate sessions observed this
       // tick, used to prune stale "blackout:" entries below.
       const activeBlackoutSessionKeys = new Set<string>();
+      // Schedules currently inside their window, and the "<scheduleId>:<serverId>"
+      // pairs we actually reached — same reasoning as polledServerIds above.
+      const activeBlackoutScheduleIds = new Set<string>();
+      const polledBlackoutServers = new Set<string>();
 
       for (const schedule of blackoutSchedules) {
         const blackoutKey = `${schedule.userId}-${schedule.id}`;
@@ -378,6 +450,7 @@ export async function runEnforcerTick() {
           const active = isBlackoutActive(schedule);
 
           if (active) {
+            activeBlackoutScheduleIds.add(schedule.id);
             const blackoutMsg = schedule.message || "Stream terminated due to scheduled blackout period.";
 
             await Promise.allSettled(schedule.user.mediaServers.map(async (server) => {
@@ -386,6 +459,7 @@ export async function runEnforcerTick() {
                   skipTlsVerify: server.tlsSkipVerify,
                 });
                 const sessions = await client.getSessions();
+                polledBlackoutServers.add(`${schedule.id}:${server.id}`);
 
                 const blackoutExcluded = schedule.excludedUsers ?? [];
 
@@ -442,17 +516,19 @@ export async function runEnforcerTick() {
                     }
                   }
                 } else if (schedule.action === "block_new_only") {
-                  if (!knownBlackoutSessions.has(blackoutKey)) {
-                    // First time seeing this active blackout — snapshot current sessions
+                  const snapshotKey = blackoutSnapshotKey(blackoutKey, server.id);
+                  if (!knownBlackoutSessions.has(snapshotKey)) {
+                    // First time seeing this active blackout on this server —
+                    // snapshot its current sessions
                     const currentSessionIds = new Set(sessions.map((s) => s.sessionId));
-                    knownBlackoutSessions.set(blackoutKey, currentSessionIds);
+                    knownBlackoutSessions.set(snapshotKey, currentSessionIds);
                     logger.info(
                       "Enforcer",
-                      `Blackout "${schedule.name}": started block_new_only, snapshotted ${currentSessionIds.size} existing sessions`
+                      `Blackout "${schedule.name}": started block_new_only on "${server.name}", snapshotted ${currentSessionIds.size} existing sessions`
                     );
                   } else {
                     // Blackout already active — terminate any sessions not in the known set
-                    const knownIds = knownBlackoutSessions.get(blackoutKey)!;
+                    const knownIds = knownBlackoutSessions.get(snapshotKey)!;
                     for (const session of sessions) {
                       if (blackoutExcluded.includes(session.username)) continue;
                       if (!knownIds.has(session.sessionId)) {
@@ -482,10 +558,9 @@ export async function runEnforcerTick() {
               }
             }));
           } else {
-            // Blackout not active — clean up known sessions if entry exists
-            if (knownBlackoutSessions.has(blackoutKey)) {
-              knownBlackoutSessions.delete(blackoutKey);
-            }
+            // Blackout not active — drop every server's snapshot so the next
+            // activation re-grandfathers whatever is playing then.
+            clearBlackoutSnapshots(blackoutKey);
           }
         } catch (error) {
           logger.error(
@@ -496,9 +571,11 @@ export async function runEnforcerTick() {
         }
       }
 
-      // Clean up knownBlackoutSessions entries for schedules that no longer exist
+      // Clean up snapshots for schedules (or servers) that no longer exist.
+      // Keys are `${blackoutKey}:${serverId}`, so compare on the prefix.
       for (const key of knownBlackoutSessions.keys()) {
-        if (!activeBlackoutKeys.has(key)) {
+        const blackoutKey = key.slice(0, key.lastIndexOf(":"));
+        if (!activeBlackoutKeys.has(blackoutKey)) {
           knownBlackoutSessions.delete(key);
         }
       }
@@ -506,9 +583,21 @@ export async function runEnforcerTick() {
       // Prune warn_then_terminate pending entries for sessions no longer seen
       // under an active blackout (ended session, inactive/deleted schedule).
       for (const key of pendingTerminations.keys()) {
-        if (key.startsWith("blackout:") && !activeBlackoutSessionKeys.has(key)) {
+        if (!key.startsWith("blackout:")) continue;
+        // "blackout:<scheduleId>:<userId>:<serverId>:<sessionId>".
+        const [, scheduleId, , serverId] = key.split(":");
+
+        // Blackout window closed, or the schedule was disabled or deleted.
+        if (!activeBlackoutScheduleIds.has(scheduleId)) {
           pendingTerminations.delete(key);
+          continue;
         }
+
+        // Server unreachable this tick — keep the entry so the warning period
+        // doesn't restart when it comes back.
+        if (!polledBlackoutServers.has(`${scheduleId}:${serverId}`)) continue;
+
+        if (!activeBlackoutSessionKeys.has(key)) pendingTerminations.delete(key);
       }
 
     } catch (error) {
