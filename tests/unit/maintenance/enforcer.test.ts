@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
-import { runEnforcerTick, _resetForTesting } from "@/lib/maintenance/enforcer";
+import { runEnforcerTick, sessionMatchesCriteria, _resetForTesting } from "@/lib/maintenance/enforcer";
+import type { MediaSession } from "@/lib/media-server/types";
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks — stable, no vi.resetModules / vi.doMock needed
@@ -249,5 +250,259 @@ describe("transcode manager criteria (via enforcer)", () => {
     await runEnforcerTick();
 
     expect(localTerminate).not.toHaveBeenCalled();
+  });
+
+  it("does NOT terminate a 4K audio-only transcode when only fourKTranscoding is set", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([
+      {
+        maintenanceMode: false,
+        maintenanceDelay: 30,
+        maintenanceMessage: "",
+        maintenanceExcludedUsers: [],
+        transcodeManagerEnabled: true,
+        transcodeManagerDelay: 0,
+        transcodeManagerMessage: "No 4K transcoding",
+        transcodeManagerCriteria: {
+          anyTranscoding: false,
+          videoTranscoding: false,
+          audioTranscoding: false,
+          fourKTranscoding: true,
+          remoteTranscoding: false,
+        },
+        transcodeManagerExcludedUsers: [],
+        userId: "user1",
+        user: {
+          mediaServers: [
+            { id: "s1", type: "PLEX", name: "Test", url: "http://plex:32400", accessToken: "tok", tlsSkipVerify: false },
+          ],
+        },
+      },
+    ] as never);
+
+    const localTerminate = vi.fn();
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn().mockResolvedValue([
+        {
+          sessionId: "sess-4k-audio-only",
+          username: "user",
+          title: "Movie",
+          mediaWidth: 3840,
+          mediaHeight: 2160,
+          player: { local: true },
+          session: { bandwidth: 1000, location: "lan" },
+          // Video direct-streams, only the audio track is re-encoded.
+          transcoding: { videoDecision: "copy", audioDecision: "transcode" },
+        },
+      ]),
+      terminateSession: localTerminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
+
+    await runEnforcerTick();
+
+    expect(localTerminate).not.toHaveBeenCalled();
+  });
+
+  it("terminates a 4K video transcode when fourKTranscoding is set", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([
+      {
+        maintenanceMode: false,
+        maintenanceDelay: 30,
+        maintenanceMessage: "",
+        maintenanceExcludedUsers: [],
+        transcodeManagerEnabled: true,
+        transcodeManagerDelay: 0,
+        transcodeManagerMessage: "No 4K transcoding",
+        transcodeManagerCriteria: {
+          anyTranscoding: false,
+          videoTranscoding: false,
+          audioTranscoding: false,
+          fourKTranscoding: true,
+          remoteTranscoding: false,
+        },
+        transcodeManagerExcludedUsers: [],
+        userId: "user1",
+        user: {
+          mediaServers: [
+            { id: "s1", type: "PLEX", name: "Test", url: "http://plex:32400", accessToken: "tok", tlsSkipVerify: false },
+          ],
+        },
+      },
+    ] as never);
+
+    const localTerminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn().mockResolvedValue([
+        {
+          sessionId: "sess-4k-video",
+          username: "user",
+          title: "Movie",
+          mediaWidth: 3840,
+          mediaHeight: 2160,
+          player: { local: true },
+          session: { bandwidth: 1000, location: "lan" },
+          transcoding: { videoDecision: "transcode", audioDecision: "transcode" },
+        },
+      ]),
+      terminateSession: localTerminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
+
+    await runEnforcerTick();
+
+    expect(localTerminate).toHaveBeenCalledWith("sess-4k-video", "No 4K transcoding");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sessionMatchesCriteria — direct unit coverage of the criteria matrix
+// ---------------------------------------------------------------------------
+
+describe("sessionMatchesCriteria", () => {
+  const NO_CRITERIA = {
+    anyTranscoding: false,
+    videoTranscoding: false,
+    audioTranscoding: false,
+    fourKTranscoding: false,
+    remoteTranscoding: false,
+  };
+
+  function makeSession(overrides: {
+    videoDecision?: string;
+    audioDecision?: string;
+    width?: number;
+    height?: number;
+    local?: boolean;
+  } = {}): MediaSession {
+    const { videoDecision, audioDecision, width, height, local = true } = overrides;
+    return {
+      sessionId: "s",
+      userId: "u",
+      username: "user",
+      userThumb: "",
+      title: "Movie",
+      type: "movie",
+      mediaWidth: width,
+      mediaHeight: height,
+      player: { product: "Plex", platform: "web", state: "playing", address: "1.2.3.4", local },
+      session: { bandwidth: 1000, location: local ? "lan" : "wan" },
+      ...(videoDecision || audioDecision
+        ? {
+            transcoding: {
+              videoDecision: videoDecision ?? "copy",
+              audioDecision: audioDecision ?? "copy",
+              throttled: false,
+            },
+          }
+        : {}),
+    } as MediaSession;
+  }
+
+  const audioOnly4K = makeSession({
+    videoDecision: "copy",
+    audioDecision: "transcode",
+    width: 3840,
+    height: 2160,
+  });
+  const video4K = makeSession({
+    videoDecision: "transcode",
+    audioDecision: "copy",
+    width: 3840,
+    height: 2160,
+  });
+  const video1080p = makeSession({
+    videoDecision: "transcode",
+    audioDecision: "copy",
+    width: 1920,
+    height: 1080,
+  });
+  const directPlay4K = makeSession({
+    videoDecision: "directplay",
+    audioDecision: "directplay",
+    width: 3840,
+    height: 2160,
+  });
+
+  describe("fourKTranscoding", () => {
+    const criteria = { ...NO_CRITERIA, fourKTranscoding: true };
+
+    it("does not match a 4K stream transcoding audio only", () => {
+      expect(sessionMatchesCriteria(audioOnly4K, criteria)).toBe(false);
+    });
+
+    it("matches a 4K stream transcoding video", () => {
+      expect(sessionMatchesCriteria(video4K, criteria)).toBe(true);
+    });
+
+    it("matches on height alone (e.g. 4096x2160 DCI or 3840x1600 scope)", () => {
+      const scope = makeSession({ videoDecision: "transcode", width: 3840, height: 1600 });
+      const dci = makeSession({ videoDecision: "transcode", width: 4096, height: 2160 });
+      expect(sessionMatchesCriteria(scope, criteria)).toBe(true);
+      expect(sessionMatchesCriteria(dci, criteria)).toBe(true);
+    });
+
+    it("does not match a sub-4K video transcode", () => {
+      expect(sessionMatchesCriteria(video1080p, criteria)).toBe(false);
+    });
+
+    it("does not match a 4K direct play", () => {
+      expect(sessionMatchesCriteria(directPlay4K, criteria)).toBe(false);
+    });
+
+    it("does not match when the server reports no resolution", () => {
+      const unknown = makeSession({ videoDecision: "transcode" });
+      expect(sessionMatchesCriteria(unknown, criteria)).toBe(false);
+    });
+  });
+
+  describe("other criteria still catch audio-only transcodes", () => {
+    it("audioTranscoding matches the 4K audio-only stream", () => {
+      expect(
+        sessionMatchesCriteria(audioOnly4K, { ...NO_CRITERIA, audioTranscoding: true })
+      ).toBe(true);
+    });
+
+    it("anyTranscoding matches the 4K audio-only stream", () => {
+      expect(
+        sessionMatchesCriteria(audioOnly4K, { ...NO_CRITERIA, anyTranscoding: true })
+      ).toBe(true);
+    });
+
+    it("videoTranscoding does not match the 4K audio-only stream", () => {
+      expect(
+        sessionMatchesCriteria(audioOnly4K, { ...NO_CRITERIA, videoTranscoding: true })
+      ).toBe(false);
+    });
+
+    it("remoteTranscoding matches any transcode from a remote player", () => {
+      const remoteAudioOnly = makeSession({ audioDecision: "transcode", local: false });
+      expect(
+        sessionMatchesCriteria(remoteAudioOnly, { ...NO_CRITERIA, remoteTranscoding: true })
+      ).toBe(true);
+    });
+
+    it("remoteTranscoding does not match a local transcode", () => {
+      expect(
+        sessionMatchesCriteria(video1080p, { ...NO_CRITERIA, remoteTranscoding: true })
+      ).toBe(false);
+    });
+  });
+
+  it("returns false when no criteria are enabled", () => {
+    expect(sessionMatchesCriteria(video4K, NO_CRITERIA)).toBe(false);
+  });
+
+  it("returns false for a session with no transcoding info at all", () => {
+    expect(
+      sessionMatchesCriteria(makeSession({ width: 3840, height: 2160 }), {
+        anyTranscoding: true,
+        videoTranscoding: true,
+        audioTranscoding: true,
+        fourKTranscoding: true,
+        remoteTranscoding: true,
+      })
+    ).toBe(false);
   });
 });

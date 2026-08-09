@@ -816,6 +816,13 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     const item = s.NowPlayingItem!;
     const playState = s.PlayState;
     const transcoding = s.TranscodingInfo;
+    // Source dimensions of the file being played (NOT TranscodingInfo's
+    // Width/Height, which is the transcode *output*). The transcode manager's
+    // "4K Transcoding" criterion reads these — without them every
+    // Jellyfin/Emby session looks sub-4K and the criterion never fires.
+    const sourceVideoStream = item.MediaSources?.[0]?.MediaStreams?.find(
+      (stream) => stream.Type === "Video",
+    );
 
     return {
       sessionId: s.Id,
@@ -836,6 +843,8 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
           : undefined,
       duration: ticksToMs(item.RunTimeTicks),
       viewOffset: ticksToMs(playState?.PositionTicks),
+      mediaWidth: sourceVideoStream?.Width,
+      mediaHeight: sourceVideoStream?.Height,
       player: {
         product: s.Client,
         platform: s.DeviceName,

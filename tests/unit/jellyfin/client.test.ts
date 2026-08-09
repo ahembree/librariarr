@@ -97,4 +97,72 @@ describe("JellyfinClient", () => {
     requestInterceptors[0]({ headers: {}, method: "get", url: "/Items" });
     expect(logger.debug).toHaveBeenCalledWith("Jellyfin", expect.stringContaining("GET /Items"));
   });
+
+  describe("getSessions", () => {
+    function makeClientWithSessions(sessions: unknown[]) {
+      const client = new JellyfinClient("http://jellyfin:8096", "jf-token");
+      const axiosClient = mockAxiosCreate.mock.results[0].value as { get: ReturnType<typeof vi.fn> };
+      axiosClient.get.mockResolvedValue({ data: sessions });
+      return client;
+    }
+
+    // The transcode manager's "4K Transcoding" criterion reads mediaWidth /
+    // mediaHeight; without them every Jellyfin session looks sub-4K.
+    it("reports the source video resolution of the playing item", async () => {
+      const client = makeClientWithSessions([
+        {
+          Id: "sess1",
+          UserId: "u1",
+          UserName: "bob",
+          Client: "Jellyfin Web",
+          DeviceName: "Chrome",
+          NowPlayingItem: {
+            Id: "item1",
+            Name: "Movie",
+            Type: "Movie",
+            MediaSources: [
+              {
+                Id: "src1",
+                Name: "src",
+                MediaStreams: [
+                  { Type: "Audio", Codec: "truehd", Channels: 8 },
+                  { Type: "Video", Codec: "hevc", Width: 3840, Height: 2160 },
+                ],
+              },
+            ],
+          },
+          PlayState: { IsPaused: false, CanSeek: true },
+          TranscodingInfo: { IsVideoDirect: true, IsAudioDirect: false },
+        },
+      ]);
+
+      const sessions = await client.getSessions();
+
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0].mediaWidth).toBe(3840);
+      expect(sessions[0].mediaHeight).toBe(2160);
+      // Video direct-streams, audio is re-encoded.
+      expect(sessions[0].transcoding?.videoDecision).toBe("copy");
+      expect(sessions[0].transcoding?.audioDecision).toBe("transcode");
+    });
+
+    it("leaves the resolution undefined when the item carries no video stream", async () => {
+      const client = makeClientWithSessions([
+        {
+          Id: "sess2",
+          UserId: "u1",
+          UserName: "bob",
+          Client: "Jellyfin Web",
+          DeviceName: "Chrome",
+          NowPlayingItem: { Id: "item2", Name: "Track", Type: "Audio" },
+          PlayState: { IsPaused: false, CanSeek: true },
+        },
+      ]);
+
+      const sessions = await client.getSessions();
+
+      expect(sessions[0].mediaWidth).toBeUndefined();
+      expect(sessions[0].mediaHeight).toBeUndefined();
+    });
+  });
 });

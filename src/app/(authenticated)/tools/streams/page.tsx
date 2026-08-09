@@ -232,7 +232,7 @@ const CRITERIA_OPTIONS: { key: keyof TranscodeCriteria; label: string; desc: str
   { key: "anyTranscoding", label: "Any Transcoding", desc: "Any stream transcoding video or audio" },
   { key: "videoTranscoding", label: "Video Transcoding", desc: "Stream has video transcoding" },
   { key: "audioTranscoding", label: "Audio Transcoding", desc: "Stream has audio transcoding" },
-  { key: "fourKTranscoding", label: "4K Transcoding", desc: "Stream is transcoding 4K content" },
+  { key: "fourKTranscoding", label: "4K Transcoding", desc: "Stream is transcoding the video of 4K content (audio-only transcodes are not matched)" },
   { key: "remoteTranscoding", label: "Remote Transcoding", desc: "Stream is transcoding and remote (WAN)" },
 ];
 

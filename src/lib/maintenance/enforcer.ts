@@ -27,7 +27,8 @@ interface TranscodeManagerCriteria {
   remoteTranscoding: boolean;
 }
 
-function sessionMatchesCriteria(
+/** Exported for direct unit testing. */
+export function sessionMatchesCriteria(
   session: MediaSession,
   criteria: TranscodeManagerCriteria
 ): boolean {
@@ -35,13 +36,21 @@ function sessionMatchesCriteria(
   const isVideoTranscode = !!(t && t.videoDecision === "transcode");
   const isAudioTranscode = !!(t && t.audioDecision === "transcode");
   const isAnyTranscode = isVideoTranscode || isAudioTranscode;
+  // Source resolution of the file being played — both Plex's session `Media`
+  // element and Jellyfin/Emby's `NowPlayingItem` streams describe the original
+  // file, never the transcode target.
   const is4K = (session.mediaWidth ?? 0) >= 3840 || (session.mediaHeight ?? 0) >= 2160;
   const isRemote = !session.player.local;
 
   if (criteria.anyTranscoding && isAnyTranscode) return true;
   if (criteria.videoTranscoding && isVideoTranscode) return true;
   if (criteria.audioTranscoding && isAudioTranscode) return true;
-  if (criteria.fourKTranscoding && isAnyTranscode && is4K) return true;
+  // "4K Transcoding" targets the expensive case: 4K *video* being re-encoded.
+  // A 4K file whose audio alone is transcoded direct-streams the video and
+  // costs the server almost nothing, so it must not match here — it used to,
+  // which silently killed cheap streams. Users who do want those caught pick
+  // "Audio Transcoding" or "Any Transcoding".
+  if (criteria.fourKTranscoding && isVideoTranscode && is4K) return true;
   if (criteria.remoteTranscoding && isAnyTranscode && isRemote) return true;
 
   return false;
