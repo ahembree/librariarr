@@ -99,6 +99,10 @@ The enforcer checks active streams every 30 seconds. Sessions matching any enabl
   Enforcement depends on what your media server reports about each stream. Some player apps may not accurately report their status.
 </Aside>
 
+<Aside>
+  On Jellyfin and Emby the custom message is pushed to the client as an on-screen notification just before playback stops — players that cannot display messages simply stop. Plex delivers the reason with the stop itself.
+</Aside>
+
 ## Blackout Schedules
 
 Schedule recurring or one-time maintenance windows when streaming is automatically paused.
@@ -112,6 +116,10 @@ Set repeating windows on specific days and times.
 - **Days of week**: Select one or more days
 - **Start/End time**: 24-hour format
 - **Example**: Monday, Wednesday, Friday — 2:00 AM to 4:00 AM
+
+<Aside>
+  **Overnight windows** are supported: if the end time is at or before the start time, the window runs past midnight into the next calendar day. The selected days are the days the window **starts** on — a Friday 22:00–06:00 blackout runs from Friday night through Saturday at 06:00, and does not touch Friday morning.
+</Aside>
 
 #### One-Time
 
@@ -136,9 +144,15 @@ During a blackout window:
 | **Warn Then Terminate** | Send a warning, then terminate after a configurable delay |
 | **Block New Only** | Allow existing sessions to continue but block new connections |
 
+<Aside>
+  **Block New Only** grandfathers whatever is playing on **each** connected server at the moment the window opens, so multi-server setups keep their in-flight streams. Because the snapshot is held in memory, restarting Librariarr mid-blackout re-grandfathers whatever is playing at that point.
+</Aside>
+
 ## Limitations
 
 - Stream data accuracy depends on the media server's API reporting
 - Maintenance mode and blackout enforcement have up to a 30-second delay between checks
 - Some player apps may not immediately respond to a stop request
 - Stream conversion detection relies on what your media server reports, which varies by player app
+- Blackout and recurring schedule times are evaluated in the server's local timezone (set `TZ` on the container to control it)
+- On Jellyfin and Emby, LAN vs WAN is inferred from the client's IP address (private, loopback, link-local and CGNAT/tailnet ranges count as local) because those servers report no explicit "local" flag. Plex reports it directly.

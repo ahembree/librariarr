@@ -146,6 +146,50 @@ describe("JellyfinClient", () => {
       expect(sessions[0].transcoding?.audioDecision).toBe("transcode");
     });
 
+    // Jellyfin has no `local` flag; RemoteEndPoint is populated for LAN
+    // clients too, so its mere presence must not mean "remote" — that marked
+    // every session WAN and made "Remote Transcoding" match all of them.
+    it("classifies a LAN client as local", async () => {
+      const client = makeClientWithSessions([
+        {
+          Id: "sess-lan",
+          UserId: "u1",
+          UserName: "bob",
+          Client: "Jellyfin Web",
+          DeviceName: "Chrome",
+          NowPlayingItem: { Id: "i", Name: "Movie", Type: "Movie" },
+          PlayState: { IsPaused: false, CanSeek: true },
+          RemoteEndPoint: "192.168.1.50:54321",
+        },
+      ]);
+
+      const sessions = await client.getSessions();
+
+      expect(sessions[0].player.local).toBe(true);
+      expect(sessions[0].player.address).toBe("192.168.1.50:54321");
+      expect(sessions[0].session.location).toBe("lan");
+    });
+
+    it("classifies a public client as remote", async () => {
+      const client = makeClientWithSessions([
+        {
+          Id: "sess-wan",
+          UserId: "u1",
+          UserName: "bob",
+          Client: "Jellyfin Web",
+          DeviceName: "Chrome",
+          NowPlayingItem: { Id: "i", Name: "Movie", Type: "Movie" },
+          PlayState: { IsPaused: false, CanSeek: true },
+          RemoteEndPoint: "203.0.113.9:44100",
+        },
+      ]);
+
+      const sessions = await client.getSessions();
+
+      expect(sessions[0].player.local).toBe(false);
+      expect(sessions[0].session.location).toBe("wan");
+    });
+
     it("leaves the resolution undefined when the item carries no video stream", async () => {
       const client = makeClientWithSessions([
         {
@@ -163,6 +207,52 @@ describe("JellyfinClient", () => {
 
       expect(sessions[0].mediaWidth).toBeUndefined();
       expect(sessions[0].mediaHeight).toBeUndefined();
+    });
+  });
+
+  describe("terminateSession", () => {
+    function axiosClient() {
+      new JellyfinClient("http://jellyfin:8096", "jf-token");
+      return mockAxiosCreate.mock.results[0].value as { post: ReturnType<typeof vi.fn> };
+    }
+
+    // Stopping playback carries no reason on Jellyfin/Emby, so the configured
+    // message has to be pushed separately or the user never sees it.
+    it("shows the reason to the client before stopping playback", async () => {
+      const post = axiosClient().post;
+      post.mockResolvedValue({ data: {} });
+      const client = new JellyfinClient("http://jellyfin:8096", "jf-token");
+
+      await client.terminateSession("sess1", "Server is in maintenance mode.");
+
+      expect(post).toHaveBeenNthCalledWith(1, "/Sessions/sess1/Message", {
+        Header: "Playback stopped",
+        Text: "Server is in maintenance mode.",
+        TimeoutMs: 15000,
+      });
+      expect(post).toHaveBeenNthCalledWith(2, "/Sessions/sess1/Playing/Stop");
+    });
+
+    it("still stops playback when the client cannot display a message", async () => {
+      const post = axiosClient().post;
+      post.mockRejectedValueOnce(new Error("client does not support messages"));
+      post.mockResolvedValue({ data: {} });
+      const client = new JellyfinClient("http://jellyfin:8096", "jf-token");
+
+      await client.terminateSession("sess1", "Bye");
+
+      expect(post).toHaveBeenLastCalledWith("/Sessions/sess1/Playing/Stop");
+    });
+
+    it("skips the message when no reason is given", async () => {
+      const post = axiosClient().post;
+      post.mockResolvedValue({ data: {} });
+      const client = new JellyfinClient("http://jellyfin:8096", "jf-token");
+
+      await client.terminateSession("sess1", "");
+
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(post).toHaveBeenCalledWith("/Sessions/sess1/Playing/Stop");
     });
   });
 });

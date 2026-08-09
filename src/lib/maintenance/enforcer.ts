@@ -15,9 +15,26 @@ let prerollRunning = false;
 //   blackout              → "blackout:scheduleId:userId:serverId:sessionId"
 const pendingTerminations = new Map<string, number>();
 
-// For "block_new_only" blackout: tracks session IDs that existed when blackout started
-// Key: `${userId}-${scheduleId}`, Value: Set of session IDs
+// For "block_new_only" blackout: tracks session IDs that existed when the
+// blackout started. Keyed PER SERVER (`${userId}-${scheduleId}:${serverId}`)
+// because session IDs are only meaningful to the server that issued them —
+// a schedule-level key let whichever server answered first write the snapshot,
+// after which every other server's pre-existing sessions looked "new" and were
+// terminated on the very first tick.
 const knownBlackoutSessions = new Map<string, Set<string>>();
+
+/** Snapshot key for one server under one blackout schedule. */
+function blackoutSnapshotKey(blackoutKey: string, serverId: string): string {
+  return `${blackoutKey}:${serverId}`;
+}
+
+/** Drops every per-server snapshot belonging to a blackout schedule. */
+function clearBlackoutSnapshots(blackoutKey: string) {
+  const prefix = `${blackoutKey}:`;
+  for (const key of knownBlackoutSessions.keys()) {
+    if (key.startsWith(prefix)) knownBlackoutSessions.delete(key);
+  }
+}
 
 interface TranscodeManagerCriteria {
   anyTranscoding: boolean;
@@ -56,7 +73,8 @@ export function sessionMatchesCriteria(
   return false;
 }
 
-function isBlackoutActive(schedule: {
+/** Exported for direct unit testing. */
+export function isBlackoutActive(schedule: {
   scheduleType: string;
   startDate: Date | null;
   endDate: Date | null;
@@ -74,7 +92,6 @@ function isBlackoutActive(schedule: {
   if (schedule.scheduleType === "recurring") {
     const days = schedule.daysOfWeek as number[] | null;
     if (!days || !schedule.startTime || !schedule.endTime) return false;
-    if (!days.includes(now.getDay())) return false;
 
     const [startH, startM] = schedule.startTime.split(":").map(Number);
     const [endH, endM] = schedule.endTime.split(":").map(Number);
@@ -82,11 +99,22 @@ function isBlackoutActive(schedule: {
     const startMin = startH * 60 + startM;
     const endMin = endH * 60 + endM;
 
-    // Handle overnight spans (e.g., 22:00 to 06:00)
+    const today = now.getDay();
+
+    // Overnight spans (e.g. 22:00 to 06:00) run past midnight into the NEXT
+    // calendar day, so the selected day identifies when the window *starts*.
+    // Testing the day against `now` alone both truncated the window at
+    // midnight and made it spuriously active in the small hours of the
+    // start day itself.
     if (endMin <= startMin) {
-      return currentMin >= startMin || currentMin <= endMin;
+      const yesterday = (today + 6) % 7;
+      return (
+        (days.includes(today) && currentMin >= startMin) ||
+        (days.includes(yesterday) && currentMin <= endMin)
+      );
     }
-    return currentMin >= startMin && currentMin <= endMin;
+
+    return days.includes(today) && currentMin >= startMin && currentMin <= endMin;
   }
 
   return false;
@@ -368,7 +396,7 @@ export async function runEnforcerTick() {
         include: {
           user: {
             select: {
-              mediaServers: { where: { enabled: true }, select: { id: true, type: true, url: true, accessToken: true, tlsSkipVerify: true } },
+              mediaServers: { where: { enabled: true }, select: { id: true, type: true, name: true, url: true, accessToken: true, tlsSkipVerify: true } },
             },
           },
         },
@@ -451,17 +479,19 @@ export async function runEnforcerTick() {
                     }
                   }
                 } else if (schedule.action === "block_new_only") {
-                  if (!knownBlackoutSessions.has(blackoutKey)) {
-                    // First time seeing this active blackout — snapshot current sessions
+                  const snapshotKey = blackoutSnapshotKey(blackoutKey, server.id);
+                  if (!knownBlackoutSessions.has(snapshotKey)) {
+                    // First time seeing this active blackout on this server —
+                    // snapshot its current sessions
                     const currentSessionIds = new Set(sessions.map((s) => s.sessionId));
-                    knownBlackoutSessions.set(blackoutKey, currentSessionIds);
+                    knownBlackoutSessions.set(snapshotKey, currentSessionIds);
                     logger.info(
                       "Enforcer",
-                      `Blackout "${schedule.name}": started block_new_only, snapshotted ${currentSessionIds.size} existing sessions`
+                      `Blackout "${schedule.name}": started block_new_only on "${server.name}", snapshotted ${currentSessionIds.size} existing sessions`
                     );
                   } else {
                     // Blackout already active — terminate any sessions not in the known set
-                    const knownIds = knownBlackoutSessions.get(blackoutKey)!;
+                    const knownIds = knownBlackoutSessions.get(snapshotKey)!;
                     for (const session of sessions) {
                       if (blackoutExcluded.includes(session.username)) continue;
                       if (!knownIds.has(session.sessionId)) {
@@ -491,10 +521,9 @@ export async function runEnforcerTick() {
               }
             }));
           } else {
-            // Blackout not active — clean up known sessions if entry exists
-            if (knownBlackoutSessions.has(blackoutKey)) {
-              knownBlackoutSessions.delete(blackoutKey);
-            }
+            // Blackout not active — drop every server's snapshot so the next
+            // activation re-grandfathers whatever is playing then.
+            clearBlackoutSnapshots(blackoutKey);
           }
         } catch (error) {
           logger.error(
@@ -505,9 +534,11 @@ export async function runEnforcerTick() {
         }
       }
 
-      // Clean up knownBlackoutSessions entries for schedules that no longer exist
+      // Clean up snapshots for schedules (or servers) that no longer exist.
+      // Keys are `${blackoutKey}:${serverId}`, so compare on the prefix.
       for (const key of knownBlackoutSessions.keys()) {
-        if (!activeBlackoutKeys.has(key)) {
+        const blackoutKey = key.slice(0, key.lastIndexOf(":"));
+        if (!activeBlackoutKeys.has(blackoutKey)) {
           knownBlackoutSessions.delete(key);
         }
       }

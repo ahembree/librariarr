@@ -1,7 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
-import { runEnforcerTick, sessionMatchesCriteria, _resetForTesting } from "@/lib/maintenance/enforcer";
+import {
+  runEnforcerTick,
+  sessionMatchesCriteria,
+  isBlackoutActive,
+  _resetForTesting,
+} from "@/lib/maintenance/enforcer";
 import type { MediaSession } from "@/lib/media-server/types";
 
 // ---------------------------------------------------------------------------
@@ -504,5 +509,220 @@ describe("sessionMatchesCriteria", () => {
         remoteTranscoding: true,
       })
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isBlackoutActive — recurring windows, including overnight spans
+// ---------------------------------------------------------------------------
+
+describe("isBlackoutActive (recurring)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Freezes local time and returns that moment's day-of-week. */
+  function freeze(date: Date): number {
+    vi.useFakeTimers();
+    vi.setSystemTime(date);
+    return date.getDay();
+  }
+
+  function recurring(days: number[], startTime: string, endTime: string) {
+    return {
+      scheduleType: "recurring",
+      startDate: null,
+      endDate: null,
+      daysOfWeek: days,
+      startTime,
+      endTime,
+    };
+  }
+
+  describe("same-day window (09:00 - 17:00)", () => {
+    // Anchor day; the schedule targets this weekday only.
+    const anchor = new Date(2026, 0, 5, 12, 0); // midday
+    const anchorDay = anchor.getDay();
+
+    it("is active inside the window", () => {
+      freeze(anchor);
+      expect(isBlackoutActive(recurring([anchorDay], "09:00", "17:00"))).toBe(true);
+    });
+
+    it("is inactive before the window", () => {
+      freeze(new Date(2026, 0, 5, 8, 0));
+      expect(isBlackoutActive(recurring([anchorDay], "09:00", "17:00"))).toBe(false);
+    });
+
+    it("is inactive after the window", () => {
+      freeze(new Date(2026, 0, 5, 18, 0));
+      expect(isBlackoutActive(recurring([anchorDay], "09:00", "17:00"))).toBe(false);
+    });
+
+    it("is inactive on a day that is not selected", () => {
+      freeze(new Date(2026, 0, 6, 12, 0));
+      expect(isBlackoutActive(recurring([anchorDay], "09:00", "17:00"))).toBe(false);
+    });
+  });
+
+  describe("overnight window (22:00 - 06:00) selected on one day", () => {
+    const startDay = new Date(2026, 0, 5, 23, 0).getDay();
+    const days = [startDay];
+
+    it("is active late on the selected day", () => {
+      freeze(new Date(2026, 0, 5, 23, 0));
+      expect(isBlackoutActive(recurring(days, "22:00", "06:00"))).toBe(true);
+    });
+
+    it("is active after midnight on the FOLLOWING day", () => {
+      // Regression: the day check used to be applied to `now`, so the window
+      // was truncated at midnight instead of running through to 06:00.
+      freeze(new Date(2026, 0, 6, 2, 0));
+      expect(isBlackoutActive(recurring(days, "22:00", "06:00"))).toBe(true);
+    });
+
+    it("is inactive in the small hours of the selected day itself", () => {
+      // Regression: 03:00 on the start day used to match `currentMin <= endMin`
+      // and fire the blackout ~19 hours early.
+      freeze(new Date(2026, 0, 5, 3, 0));
+      expect(isBlackoutActive(recurring(days, "22:00", "06:00"))).toBe(false);
+    });
+
+    it("is inactive once the following morning's window has passed", () => {
+      freeze(new Date(2026, 0, 6, 7, 0));
+      expect(isBlackoutActive(recurring(days, "22:00", "06:00"))).toBe(false);
+    });
+
+    it("is inactive during the selected day's working hours", () => {
+      freeze(new Date(2026, 0, 5, 12, 0));
+      expect(isBlackoutActive(recurring(days, "22:00", "06:00"))).toBe(false);
+    });
+
+    it("is inactive two days later", () => {
+      freeze(new Date(2026, 0, 7, 2, 0));
+      expect(isBlackoutActive(recurring(days, "22:00", "06:00"))).toBe(false);
+    });
+  });
+
+  it("wraps the week boundary (Saturday night into Sunday morning)", () => {
+    const saturday = new Date(2026, 0, 10, 23, 0);
+    expect(saturday.getDay()).toBe(6);
+    const days = [6];
+
+    freeze(saturday);
+    expect(isBlackoutActive(recurring(days, "22:00", "06:00"))).toBe(true);
+
+    freeze(new Date(2026, 0, 11, 2, 0)); // Sunday, getDay() === 0
+    expect(isBlackoutActive(recurring(days, "22:00", "06:00"))).toBe(true);
+  });
+
+  it("returns false when the schedule is incomplete", () => {
+    freeze(new Date(2026, 0, 5, 12, 0));
+    expect(isBlackoutActive(recurring([], "09:00", "17:00"))).toBe(false);
+    expect(
+      isBlackoutActive({ ...recurring([1], "09:00", "17:00"), daysOfWeek: null })
+    ).toBe(false);
+    expect(
+      isBlackoutActive({ ...recurring([1], "09:00", "17:00"), startTime: null })
+    ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Blackout: block_new_only must grandfather sessions on EVERY server
+// ---------------------------------------------------------------------------
+
+describe("blackout block_new_only", () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+  });
+
+  function mockTwoServerBlackout() {
+    vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([
+      {
+        id: "sched1",
+        userId: "user1",
+        name: "Nightly",
+        enabled: true,
+        action: "block_new_only",
+        message: "Blackout",
+        delay: 30,
+        excludedUsers: [],
+        scheduleType: "one_time",
+        startDate: new Date(Date.now() - 60_000),
+        endDate: new Date(Date.now() + 60_000),
+        daysOfWeek: null,
+        startTime: null,
+        endTime: null,
+        user: {
+          mediaServers: [
+            { id: "sA", type: "PLEX", name: "A", url: "http://a", accessToken: "t", tlsSkipVerify: false },
+            { id: "sB", type: "PLEX", name: "B", url: "http://b", accessToken: "t", tlsSkipVerify: false },
+          ],
+        },
+      },
+    ] as never);
+  }
+
+  /** Wires each server to report its own session list. */
+  function mockServers(sessionsByUrl: Record<string, string[]>, terminators: Record<string, ReturnType<typeof vi.fn>>) {
+    vi.mocked(createMediaServerClient).mockImplementation(((_type: unknown, url: string) => ({
+      getSessions: vi.fn().mockResolvedValue(
+        sessionsByUrl[url].map((sessionId) => ({
+          sessionId,
+          username: "bob",
+          title: "Movie",
+          player: { local: true },
+          session: { bandwidth: 1, location: "lan" },
+        }))
+      ),
+      terminateSession: terminators[url],
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    })) as never);
+  }
+
+  it("does not terminate pre-existing sessions on any server when the blackout starts", async () => {
+    mockTwoServerBlackout();
+    const terminateA = vi.fn().mockResolvedValue(undefined);
+    const terminateB = vi.fn().mockResolvedValue(undefined);
+    mockServers({ "http://a": ["a-existing"], "http://b": ["b-existing"] }, {
+      "http://a": terminateA,
+      "http://b": terminateB,
+    });
+
+    await runEnforcerTick();
+
+    // Regression: a schedule-level snapshot key meant whichever server
+    // answered first won, and the other server's live streams were killed.
+    expect(terminateA).not.toHaveBeenCalled();
+    expect(terminateB).not.toHaveBeenCalled();
+  });
+
+  it("terminates only sessions that appear after the blackout started, per server", async () => {
+    mockTwoServerBlackout();
+    const terminateA = vi.fn().mockResolvedValue(undefined);
+    const terminateB = vi.fn().mockResolvedValue(undefined);
+
+    // Tick 1: snapshot both servers.
+    mockServers({ "http://a": ["a-existing"], "http://b": ["b-existing"] }, {
+      "http://a": terminateA,
+      "http://b": terminateB,
+    });
+    await runEnforcerTick();
+
+    // Tick 2: one genuinely new session joins each server.
+    mockServers({ "http://a": ["a-existing", "a-new"], "http://b": ["b-existing", "b-new"] }, {
+      "http://a": terminateA,
+      "http://b": terminateB,
+    });
+    await runEnforcerTick();
+
+    expect(terminateA.mock.calls.map((c) => c[0])).toEqual(["a-new"]);
+    expect(terminateB.mock.calls.map((c) => c[0])).toEqual(["b-new"]);
   });
 });

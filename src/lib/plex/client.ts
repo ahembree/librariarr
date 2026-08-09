@@ -674,7 +674,12 @@ export class PlexClient implements MediaServerClient {
         const session = (item.Session as Record<string, unknown>) || {};
         const transcode = item.TranscodeSession as Record<string, unknown> | undefined;
         const media = (item.Media as Array<Record<string, unknown>>) || [];
-        const firstMedia = media[0] || {};
+        // A multi-version item (e.g. a movie with both a 1080p and a 4K copy)
+        // reports every version here; `selected` marks the one actually being
+        // played. Taking media[0] blindly reported the wrong resolution,
+        // codec, bitrate and file for those items — which in turn fed the
+        // transcode manager's 4K criterion the wrong resolution.
+        const firstMedia = media.find((m) => m.selected) ?? media[0] ?? {};
         const parts = (firstMedia.Part as Array<Record<string, unknown>>) || [];
         const firstPart = parts[0] || {};
         const genreArray = (item.Genre as Array<{ tag: string }>) || [];

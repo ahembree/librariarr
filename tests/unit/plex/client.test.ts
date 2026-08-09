@@ -542,6 +542,80 @@ describe("PlexClient", () => {
       expect(result[0].transcoding?.videoDecision).toBe("transcode");
       expect(result[0].transcoding?.throttled).toBe(true);
     });
+
+    // A multi-version item reports every version; `selected` marks the copy
+    // being played. Taking Media[0] blindly reported the wrong resolution and
+    // file, which in turn fed the transcode manager's 4K criterion bad data.
+    it("reads the selected media version, not the first one", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            Metadata: [
+              {
+                title: "Multi-version Movie",
+                type: "movie",
+                User: { id: "1", title: "Admin" },
+                Player: { product: "TV", platform: "Roku", state: "playing" },
+                Session: { id: "multi" },
+                Media: [
+                  {
+                    width: 1920,
+                    height: 1080,
+                    videoCodec: "h264",
+                    videoResolution: "1080",
+                    bitrate: 8000,
+                    Part: [{ file: "/movies/Movie (2020) - 1080p.mkv" }],
+                  },
+                  {
+                    selected: true,
+                    width: 3840,
+                    height: 2160,
+                    videoCodec: "hevc",
+                    videoResolution: "4k",
+                    bitrate: 60000,
+                    Part: [{ file: "/movies/Movie (2020) - 2160p.mkv" }],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      });
+
+      const result = await client.getSessions();
+
+      expect(result[0].mediaWidth).toBe(3840);
+      expect(result[0].mediaHeight).toBe(2160);
+      expect(result[0].videoCodec).toBe("hevc");
+      expect(result[0].videoResolution).toBe("4k");
+      expect(result[0].bitrate).toBe(60000);
+      // The Part must come from the selected version too.
+      expect(result[0].partFile).toBe("/movies/Movie (2020) - 2160p.mkv");
+    });
+
+    it("falls back to the first media version when none is marked selected", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            Metadata: [
+              {
+                title: "Single-version Movie",
+                type: "movie",
+                User: { id: "1", title: "Admin" },
+                Player: { product: "TV", platform: "Roku", state: "playing" },
+                Session: { id: "single" },
+                Media: [{ width: 1920, height: 1080, videoCodec: "h264", Part: [] }],
+              },
+            ],
+          },
+        },
+      });
+
+      const result = await client.getSessions();
+
+      expect(result[0].mediaWidth).toBe(1920);
+      expect(result[0].videoCodec).toBe("h264");
+    });
   });
 
   describe("terminateSession", () => {

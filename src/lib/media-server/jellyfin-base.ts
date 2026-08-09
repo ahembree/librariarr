@@ -29,6 +29,7 @@ import type {
   JellyfinItemsResponse,
 } from "@/lib/jellyfin/types";
 import { logger } from "@/lib/logger";
+import { isPrivateAddress } from "@/lib/media-server/local-address";
 import { normalizeResolutionFromDimensions } from "@/lib/resolution";
 
 // Fields to request from Jellyfin/Emby /Items endpoint (must be valid ItemFields enum values)
@@ -540,7 +541,26 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     }
   }
 
-  async terminateSession(sessionId: string): Promise<void> {
+  async terminateSession(sessionId: string, reason?: string): Promise<void> {
+    // Unlike Plex's terminate endpoint, stopping playback on Jellyfin/Emby
+    // carries no reason — the stream just dies. Push the configured message to
+    // the client first so the user sees why. Best-effort: a client that can't
+    // display messages must not prevent the termination itself. TimeoutMs
+    // outlives the stop so the message stays up after playback ends.
+    if (reason) {
+      try {
+        await this.client.post(`/Sessions/${sessionId}/Message`, {
+          Header: "Playback stopped",
+          Text: reason,
+          TimeoutMs: 15000,
+        });
+      } catch (error) {
+        logger.debug(this.logPrefix, "Could not send termination message", {
+          error: String(error),
+        });
+      }
+    }
+
     await this.client.post(`/Sessions/${sessionId}/Playing/Stop`);
   }
 
@@ -823,6 +843,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     const sourceVideoStream = item.MediaSources?.[0]?.MediaStreams?.find(
       (stream) => stream.Type === "Video",
     );
+    const isLocal = isPrivateAddress(s.RemoteEndPoint);
 
     return {
       sessionId: s.Id,
@@ -850,11 +871,15 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
         platform: s.DeviceName,
         state: playState?.IsPaused ? "paused" : "playing",
         address: s.RemoteEndPoint ?? "",
-        local: false,
+        // Jellyfin/Emby have no `local` flag, so infer it from the client's
+        // address. RemoteEndPoint is populated for LAN clients too, so its
+        // mere presence says nothing — testing for truthiness marked every
+        // session as WAN and made "Remote Transcoding" match all of them.
+        local: isLocal,
       },
       session: {
         bandwidth: 0,
-        location: s.RemoteEndPoint ? "wan" : "lan",
+        location: isLocal ? "lan" : "wan",
       },
       ...(transcoding && {
         transcoding: {
