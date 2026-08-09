@@ -190,6 +190,52 @@ describe("JellyfinClient", () => {
       expect(sessions[0].session.location).toBe("wan");
     });
 
+    it("captures the hardware acceleration type", async () => {
+      const client = makeClientWithSessions([
+        {
+          Id: "sess-hw",
+          UserId: "u1",
+          UserName: "bob",
+          Client: "Jellyfin Web",
+          DeviceName: "Chrome",
+          NowPlayingItem: { Id: "i", Name: "Movie", Type: "Movie" },
+          PlayState: { IsPaused: false, CanSeek: true },
+          TranscodingInfo: {
+            IsVideoDirect: false,
+            IsAudioDirect: true,
+            HardwareAccelerationType: "qsv",
+          },
+        },
+      ]);
+
+      const sessions = await client.getSessions();
+
+      expect(sessions[0].transcoding?.hwAccel).toBe("qsv");
+    });
+
+    it("treats 'none' hardware acceleration as software", async () => {
+      const client = makeClientWithSessions([
+        {
+          Id: "sess-sw",
+          UserId: "u1",
+          UserName: "bob",
+          Client: "Jellyfin Web",
+          DeviceName: "Chrome",
+          NowPlayingItem: { Id: "i", Name: "Movie", Type: "Movie" },
+          PlayState: { IsPaused: false, CanSeek: true },
+          TranscodingInfo: {
+            IsVideoDirect: false,
+            IsAudioDirect: true,
+            HardwareAccelerationType: "none",
+          },
+        },
+      ]);
+
+      const sessions = await client.getSessions();
+
+      expect(sessions[0].transcoding?.hwAccel).toBeUndefined();
+    });
+
     it("leaves the resolution undefined when the item carries no video stream", async () => {
       const client = makeClientWithSessions([
         {

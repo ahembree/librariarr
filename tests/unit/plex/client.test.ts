@@ -543,6 +543,74 @@ describe("PlexClient", () => {
       expect(result[0].transcoding?.throttled).toBe(true);
     });
 
+    it("captures the acceleration APIs actually doing the work", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            Metadata: [
+              {
+                title: "Movie",
+                type: "movie",
+                User: { id: "1", title: "Admin" },
+                Player: { product: "TV", platform: "Roku", state: "playing" },
+                Session: { id: "hw" },
+                TranscodeSession: {
+                  videoDecision: "transcode",
+                  audioDecision: "transcode",
+                  transcodeHwRequested: true,
+                  transcodeHwDecoding: "vaapi",
+                  transcodeHwEncoding: "vaapi",
+                  transcodeHwFullPipeline: true,
+                  speed: 0.8,
+                },
+                Media: [],
+              },
+            ],
+          },
+        },
+      });
+
+      const result = await client.getSessions();
+
+      expect(result[0].transcoding?.hwDecode).toBe("vaapi");
+      expect(result[0].transcoding?.hwEncode).toBe("vaapi");
+      expect(result[0].transcoding?.hwFullPipeline).toBe(true);
+      expect(result[0].transcoding?.speed).toBe(0.8);
+    });
+
+    // Plex sets transcodeHwRequested when it asks for hardware and then falls
+    // back to software without saying so, which is why the decode/encode
+    // fields are what the exemption reads.
+    it("leaves the acceleration APIs unset when Plex fell back to software", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            Metadata: [
+              {
+                title: "Movie",
+                type: "movie",
+                User: { id: "1", title: "Admin" },
+                Player: { product: "TV", platform: "Roku", state: "playing" },
+                Session: { id: "sw" },
+                TranscodeSession: {
+                  videoDecision: "transcode",
+                  audioDecision: "copy",
+                  transcodeHwRequested: true,
+                },
+                Media: [],
+              },
+            ],
+          },
+        },
+      });
+
+      const result = await client.getSessions();
+
+      expect(result[0].transcoding?.transcodeHwRequested).toBe(true);
+      expect(result[0].transcoding?.hwDecode).toBeUndefined();
+      expect(result[0].transcoding?.hwEncode).toBeUndefined();
+    });
+
     // A multi-version item reports every version; `selected` marks the copy
     // being played. Taking Media[0] blindly reported the wrong resolution and
     // file, which in turn fed the transcode manager's 4K criterion bad data.

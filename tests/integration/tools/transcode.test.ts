@@ -255,5 +255,67 @@ describe("Tools transcode manager endpoints", () => {
 
       expect(body.delay).toBe(5);
     });
+
+    it("defaults the hardware exemption to off", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const response = await callRoute(GET, { url: "/api/tools/transcode-manager" });
+      const body = await expectJson<{ exemptHardware: boolean }>(response, 200);
+
+      expect(body.exemptHardware).toBe(false);
+    });
+
+    it("persists the hardware exemption", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const put = await callRoute(PUT, {
+        url: "/api/tools/transcode-manager",
+        method: "PUT",
+        body: { enabled: true, message: "No transcoding", exemptHardware: true },
+      });
+      const putBody = await expectJson<{ exemptHardware: boolean }>(put, 200);
+      expect(putBody.exemptHardware).toBe(true);
+
+      const get = await callRoute(GET, { url: "/api/tools/transcode-manager" });
+      const getBody = await expectJson<{ exemptHardware: boolean }>(get, 200);
+      expect(getBody.exemptHardware).toBe(true);
+    });
+
+    it("leaves the hardware exemption untouched when the field is omitted", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      await callRoute(PUT, {
+        url: "/api/tools/transcode-manager",
+        method: "PUT",
+        body: { enabled: true, message: "No transcoding", exemptHardware: true },
+      });
+
+      // A partial update (e.g. toggling enabled) must not silently clear it.
+      await callRoute(PUT, {
+        url: "/api/tools/transcode-manager",
+        method: "PUT",
+        body: { enabled: false, message: "No transcoding" },
+      });
+
+      const get = await callRoute(GET, { url: "/api/tools/transcode-manager" });
+      const body = await expectJson<{ exemptHardware: boolean }>(get, 200);
+      expect(body.exemptHardware).toBe(true);
+    });
+
+    it("rejects a non-boolean hardware exemption", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const response = await callRoute(PUT, {
+        url: "/api/tools/transcode-manager",
+        method: "PUT",
+        body: { enabled: true, message: "x", exemptHardware: "yes" },
+      });
+
+      expect(response.status).toBe(400);
+    });
   });
 });

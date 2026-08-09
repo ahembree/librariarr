@@ -888,6 +888,12 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
           throttled: false,
           speed:
             transcoding.CompletionPercentage != null ? 1 : undefined,
+          // One pipeline-level value; "none" means the CPU is doing the work.
+          hwAccel:
+            transcoding.HardwareAccelerationType &&
+            transcoding.HardwareAccelerationType.toLowerCase() !== "none"
+              ? transcoding.HardwareAccelerationType.toLowerCase()
+              : undefined,
         },
       }),
     } satisfies MediaSession;

@@ -148,6 +148,12 @@ export interface JellyfinSession {
     Bitrate?: number;
     CompletionPercentage?: number;
     TranscodeReasons?: string[];
+    /**
+     * Acceleration API for the transcode as a whole — Jellyfin/Emby report no
+     * decode/encode split. Enum: none | amf | qsv | nvenc | v4l2m2m | vaapi |
+     * videotoolbox | rkmpp.
+     */
+    HardwareAccelerationType?: string;
   };
   RemoteEndPoint?: string;
 }

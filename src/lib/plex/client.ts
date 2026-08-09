@@ -745,6 +745,11 @@ export class PlexClient implements MediaServerClient {
               sourceAudioCodec: transcode.sourceAudioCodec ? String(transcode.sourceAudioCodec) : undefined,
               speed: transcode.speed as number | undefined,
               transcodeHwRequested: transcode.transcodeHwRequested != null ? !!transcode.transcodeHwRequested : undefined,
+              // What hardware is *actually* doing the work. transcodeHwRequested
+              // only records the request; Plex falls back to software silently.
+              hwDecode: transcode.transcodeHwDecoding ? String(transcode.transcodeHwDecoding) : undefined,
+              hwEncode: transcode.transcodeHwEncoding ? String(transcode.transcodeHwEncoding) : undefined,
+              hwFullPipeline: transcode.transcodeHwFullPipeline != null ? !!transcode.transcodeHwFullPipeline : undefined,
             },
           }),
         } satisfies PlexSession;

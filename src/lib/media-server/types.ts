@@ -276,7 +276,19 @@ export interface MediaSession {
     sourceVideoCodec?: string;
     sourceAudioCodec?: string;
     speed?: number;
+    /**
+     * Plex only, and only that hardware was *requested* — Plex falls back to
+     * software silently, so never treat this as proof of acceleration. Use
+     * hwDecode/hwEncode (or `isHardwareTranscode`) instead.
+     */
     transcodeHwRequested?: boolean;
+    /** Plex: acceleration API per half, e.g. "vaapi". Absent = software. */
+    hwDecode?: string;
+    hwEncode?: string;
+    /** Plex: decode and encode both on hardware. */
+    hwFullPipeline?: boolean;
+    /** Jellyfin/Emby: one pipeline-level API; they report no decode/encode split. */
+    hwAccel?: string;
   };
 }
 

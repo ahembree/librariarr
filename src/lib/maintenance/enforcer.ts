@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
+import { isHardwareTranscode } from "@/lib/media-server/hardware-transcode";
 import { logger } from "@/lib/logger";
 import type { MediaSession } from "@/lib/media-server/types";
 
@@ -312,6 +313,7 @@ export async function runEnforcerTick() {
           const transcodeEnabled = settings.transcodeManagerEnabled;
           const transcodeDelayMs = (settings.transcodeManagerDelay ?? 30) * 1000;
           const transcodeMsg = settings.transcodeManagerMessage || "This stream has been terminated.";
+          const exemptHardware = settings.transcodeManagerExemptHardware ?? false;
           const criteria = (settings.transcodeManagerCriteria as TranscodeManagerCriteria | null) ?? {
             anyTranscoding: false,
             videoTranscoding: false,
@@ -343,7 +345,13 @@ export async function runEnforcerTick() {
                   message = maintenanceMsg;
                 }
 
-                if (transcodeEnabled && !settings.transcodeManagerExcludedUsers.includes(session.username) && sessionMatchesCriteria(session, criteria)) {
+                // A hardware encode costs the CPU little, so the admin can opt
+                // to leave those alone. Note this says nothing about whether
+                // the transcode is keeping up — a saturated GPU still reports
+                // hardware acceleration while running below realtime.
+                const hardwareExempt = exemptHardware && isHardwareTranscode(session);
+
+                if (transcodeEnabled && !hardwareExempt && !settings.transcodeManagerExcludedUsers.includes(session.username) && sessionMatchesCriteria(session, criteria)) {
                   if (!shouldTerminate || transcodeDelayMs < delay) {
                     delay = transcodeDelayMs;
                     message = transcodeMsg;

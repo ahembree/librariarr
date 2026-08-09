@@ -848,3 +848,138 @@ describe("pending terminations vs. server availability", () => {
     expect(terminate).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Hardware-transcode exemption
+// ---------------------------------------------------------------------------
+
+describe("transcode manager hardware exemption", () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+  });
+
+  function transcodeSettings(exemptHardware: boolean) {
+    return [
+      {
+        maintenanceMode: false,
+        maintenanceDelay: 30,
+        maintenanceMessage: "",
+        maintenanceExcludedUsers: [],
+        transcodeManagerEnabled: true,
+        transcodeManagerDelay: 0,
+        transcodeManagerMessage: "No 4K transcoding",
+        transcodeManagerCriteria: {
+          anyTranscoding: false,
+          videoTranscoding: false,
+          audioTranscoding: false,
+          fourKTranscoding: true,
+          remoteTranscoding: false,
+        },
+        transcodeManagerExcludedUsers: [],
+        transcodeManagerExemptHardware: exemptHardware,
+        userId: "user1",
+        user: {
+          mediaServers: [
+            { id: "s1", type: "PLEX", name: "Test", url: "http://plex:32400", accessToken: "tok", tlsSkipVerify: false },
+          ],
+        },
+      },
+    ] as never;
+  }
+
+  function mockSession(transcoding: Record<string, unknown>) {
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn().mockResolvedValue([
+        {
+          sessionId: "sess-4k",
+          username: "user",
+          title: "Movie",
+          mediaWidth: 3840,
+          mediaHeight: 2160,
+          player: { local: true },
+          session: { bandwidth: 1000, location: "lan" },
+          transcoding,
+        },
+      ]),
+      terminateSession: terminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
+    return terminate;
+  }
+
+  it("spares a GPU-encoded 4K transcode when the exemption is on", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(transcodeSettings(true));
+    const terminate = mockSession({
+      videoDecision: "transcode",
+      audioDecision: "copy",
+      hwDecode: "vaapi",
+      hwEncode: "vaapi",
+    });
+
+    await runEnforcerTick();
+
+    expect(terminate).not.toHaveBeenCalled();
+  });
+
+  it("still terminates a GPU-encoded transcode when the exemption is off", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(transcodeSettings(false));
+    const terminate = mockSession({
+      videoDecision: "transcode",
+      audioDecision: "copy",
+      hwDecode: "vaapi",
+      hwEncode: "vaapi",
+    });
+
+    await runEnforcerTick();
+
+    expect(terminate).toHaveBeenCalledWith("sess-4k", "No 4K transcoding");
+  });
+
+  it("still terminates a CPU transcode when the exemption is on", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(transcodeSettings(true));
+    const terminate = mockSession({ videoDecision: "transcode", audioDecision: "copy" });
+
+    await runEnforcerTick();
+
+    expect(terminate).toHaveBeenCalledWith("sess-4k", "No 4K transcoding");
+  });
+
+  it("does not exempt a hardware decode paired with a software encode", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(transcodeSettings(true));
+    const terminate = mockSession({
+      videoDecision: "transcode",
+      audioDecision: "copy",
+      hwDecode: "vaapi",
+      hwEncode: "libx265",
+    });
+
+    await runEnforcerTick();
+
+    expect(terminate).toHaveBeenCalledWith("sess-4k", "No 4K transcoding");
+  });
+
+  it("exempts only the transcode manager — maintenance mode still terminates", async () => {
+    const settings = transcodeSettings(true) as unknown as Array<Record<string, unknown>>;
+    settings[0].maintenanceMode = true;
+    settings[0].maintenanceDelay = 0;
+    settings[0].maintenanceMessage = "Down for maintenance";
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(settings as never);
+
+    const terminate = mockSession({
+      videoDecision: "transcode",
+      audioDecision: "copy",
+      hwEncode: "vaapi",
+    });
+
+    await runEnforcerTick();
+
+    expect(terminate).toHaveBeenCalledWith("sess-4k", "Down for maintenance");
+  });
+});
