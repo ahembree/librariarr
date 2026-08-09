@@ -294,6 +294,15 @@ export async function runEnforcerTick() {
       } else {
         const now = Date.now();
         const activeSessionKeys = new Set<string>();
+        // Servers whose session list we actually retrieved this tick. A server
+        // that was unreachable contributes no keys, so pruning purely on
+        // `activeSessionKeys` would forget its pending entries and restart
+        // every grace period from zero on the next successful poll.
+        const polledServerIds = new Set<string>();
+        const enforcedUserIds = new Set(allSettings.map((s) => s.userId));
+        const knownServerIds = new Set(
+          allSettings.flatMap((s) => s.user.mediaServers.map((server) => server.id))
+        );
 
         for (const settings of allSettings) {
           const maintenanceEnabled = settings.maintenanceMode;
@@ -317,6 +326,7 @@ export async function runEnforcerTick() {
                 skipTlsVerify: server.tlsSkipVerify,
               });
               const sessions = await client.getSessions();
+              polledServerIds.add(server.id);
 
               for (const session of sessions) {
                 const sessionKey = `maint:${settings.userId}:${server.id}:${session.sessionId}`;
@@ -384,9 +394,22 @@ export async function runEnforcerTick() {
         // exist. Only touch "maint:" keys — blackout entries are pruned in
         // their own loop below.
         for (const key of pendingTerminations.keys()) {
-          if (key.startsWith("maint:") && !activeSessionKeys.has(key)) {
+          if (!key.startsWith("maint:")) continue;
+          // "maint:<userId>:<serverId>:<sessionId>" — ids never contain ":".
+          const [, userId, serverId] = key.split(":");
+
+          // No longer enforced for this user, or the server was removed or
+          // disabled: the entry can never be matched again, so drop it.
+          if (!enforcedUserIds.has(userId) || !knownServerIds.has(serverId)) {
             pendingTerminations.delete(key);
+            continue;
           }
+
+          // Server exists but was unreachable this tick — say nothing about
+          // its sessions rather than resetting their grace periods.
+          if (!polledServerIds.has(serverId)) continue;
+
+          if (!activeSessionKeys.has(key)) pendingTerminations.delete(key);
         }
       }
 
@@ -406,6 +429,10 @@ export async function runEnforcerTick() {
       // Pending-termination keys for warn_then_terminate sessions observed this
       // tick, used to prune stale "blackout:" entries below.
       const activeBlackoutSessionKeys = new Set<string>();
+      // Schedules currently inside their window, and the "<scheduleId>:<serverId>"
+      // pairs we actually reached — same reasoning as polledServerIds above.
+      const activeBlackoutScheduleIds = new Set<string>();
+      const polledBlackoutServers = new Set<string>();
 
       for (const schedule of blackoutSchedules) {
         const blackoutKey = `${schedule.userId}-${schedule.id}`;
@@ -415,6 +442,7 @@ export async function runEnforcerTick() {
           const active = isBlackoutActive(schedule);
 
           if (active) {
+            activeBlackoutScheduleIds.add(schedule.id);
             const blackoutMsg = schedule.message || "Stream terminated due to scheduled blackout period.";
 
             await Promise.allSettled(schedule.user.mediaServers.map(async (server) => {
@@ -423,6 +451,7 @@ export async function runEnforcerTick() {
                   skipTlsVerify: server.tlsSkipVerify,
                 });
                 const sessions = await client.getSessions();
+                polledBlackoutServers.add(`${schedule.id}:${server.id}`);
 
                 const blackoutExcluded = schedule.excludedUsers ?? [];
 
@@ -546,9 +575,21 @@ export async function runEnforcerTick() {
       // Prune warn_then_terminate pending entries for sessions no longer seen
       // under an active blackout (ended session, inactive/deleted schedule).
       for (const key of pendingTerminations.keys()) {
-        if (key.startsWith("blackout:") && !activeBlackoutSessionKeys.has(key)) {
+        if (!key.startsWith("blackout:")) continue;
+        // "blackout:<scheduleId>:<userId>:<serverId>:<sessionId>".
+        const [, scheduleId, , serverId] = key.split(":");
+
+        // Blackout window closed, or the schedule was disabled or deleted.
+        if (!activeBlackoutScheduleIds.has(scheduleId)) {
           pendingTerminations.delete(key);
+          continue;
         }
+
+        // Server unreachable this tick — keep the entry so the warning period
+        // doesn't restart when it comes back.
+        if (!polledBlackoutServers.has(`${scheduleId}:${serverId}`)) continue;
+
+        if (!activeBlackoutSessionKeys.has(key)) pendingTerminations.delete(key);
       }
 
     } catch (error) {

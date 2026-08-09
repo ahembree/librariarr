@@ -726,3 +726,125 @@ describe("blackout block_new_only", () => {
     expect(terminateB.mock.calls.map((c) => c[0])).toEqual(["b-new"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Pending-termination bookkeeping across unreachable servers
+// ---------------------------------------------------------------------------
+
+describe("pending terminations vs. server availability", () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Maintenance mode on, 60s grace period, with the given server list. */
+  function settingsWithServers(servers: Array<{ id: string; name: string; url: string }>) {
+    return [
+      {
+        maintenanceMode: true,
+        maintenanceDelay: 60,
+        maintenanceMessage: "Down for maintenance",
+        maintenanceExcludedUsers: [],
+        transcodeManagerEnabled: false,
+        transcodeManagerDelay: 30,
+        transcodeManagerMessage: "",
+        transcodeManagerCriteria: null,
+        transcodeManagerExcludedUsers: [],
+        userId: "user1",
+        user: {
+          mediaServers: servers.map((s) => ({
+            ...s,
+            type: "PLEX",
+            accessToken: "tok",
+            tlsSkipVerify: false,
+          })),
+        },
+      },
+    ] as never;
+  }
+
+  const SESSION = {
+    sessionId: "sess1",
+    username: "bob",
+    title: "Movie",
+    player: { local: true },
+    session: { bandwidth: 1000, location: "lan" },
+  };
+
+  it("does not restart the grace period when a server is briefly unreachable", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(
+      settingsWithServers([{ id: "s1", name: "Test", url: "http://plex:32400" }])
+    );
+
+    let reachable = true;
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockImplementation((() => ({
+      getSessions: vi.fn(() =>
+        reachable ? Promise.resolve([SESSION]) : Promise.reject(new Error("unreachable"))
+      ),
+      terminateSession: terminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    })) as never);
+
+    vi.useFakeTimers();
+
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 0, 0));
+    await runEnforcerTick(); // first seen — countdown starts
+    expect(terminate).not.toHaveBeenCalled();
+
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 0, 30));
+    reachable = false;
+    await runEnforcerTick(); // transient failure mid-countdown
+    expect(terminate).not.toHaveBeenCalled();
+
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 1, 1));
+    reachable = true;
+    await runEnforcerTick(); // 61s after first seen — must fire
+
+    // Regression: the failed tick used to prune the pending entry, so the
+    // 60s grace period restarted from scratch every time a server hiccuped.
+    expect(terminate).toHaveBeenCalledWith("sess1", "Down for maintenance");
+  });
+
+  it("drops the entry when the server is disabled, so re-enabling grants a fresh grace period", async () => {
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockImplementation((() => ({
+      getSessions: vi.fn().mockResolvedValue([SESSION]),
+      terminateSession: terminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    })) as never);
+
+    vi.useFakeTimers();
+
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(
+      settingsWithServers([{ id: "s1", name: "Test", url: "http://plex:32400" }])
+    );
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 0, 0));
+    await runEnforcerTick();
+
+    // Server disabled — it disappears from the settings' server list.
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(settingsWithServers([]));
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 0, 30));
+    await runEnforcerTick();
+
+    // Re-enabled well past the original delay: the countdown must start over
+    // rather than firing instantly off a stale timestamp.
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(
+      settingsWithServers([{ id: "s1", name: "Test", url: "http://plex:32400" }])
+    );
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 1, 1));
+    await runEnforcerTick();
+
+    expect(terminate).not.toHaveBeenCalled();
+  });
+});

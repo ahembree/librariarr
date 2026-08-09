@@ -42,43 +42,62 @@ async function fetchAllSessions(userId: string): Promise<SessionWithServer[]> {
         skipTlsVerify: server.tlsSkipVerify,
       });
       const sessions = await client.getSessions();
-      return sessions.map<SessionWithServer>((s) => {
-        const key = `${server.id}:${s.sessionId}`;
-        if (!sessionFirstSeen.has(key)) {
-          sessionFirstSeen.set(key, now);
-        }
-        return {
-          ...s,
-          serverId: server.id,
-          serverName: server.name,
-          serverType: server.type,
-          startedAt: sessionFirstSeen.get(key)!,
-        };
-      });
+      return {
+        serverId: server.id,
+        sessions: sessions.map<SessionWithServer>((s) => {
+          const key = `${server.id}:${s.sessionId}`;
+          if (!sessionFirstSeen.has(key)) {
+            sessionFirstSeen.set(key, now);
+          }
+          return {
+            ...s,
+            serverId: server.id,
+            serverName: server.name,
+            serverType: server.type,
+            startedAt: sessionFirstSeen.get(key)!,
+          };
+        }),
+      };
     }),
   );
 
   const allSessions: SessionWithServer[] = [];
+  // Servers we actually reached. One failed poll must not look like "every
+  // session on that server ended" — dropping their first-seen timestamps
+  // restarts the displayed stream duration from zero when the server returns.
+  const polledServerIds = new Set<string>();
   for (const result of results) {
-    if (result.status === "fulfilled") allSessions.push(...result.value);
+    if (result.status === "fulfilled") {
+      polledServerIds.add(result.value.serverId);
+      allSessions.push(...result.value.sessions);
+    }
   }
 
   // Prune entries for sessions that no longer exist
   const activeKeys = new Set(allSessions.map((s) => `${s.serverId}:${s.sessionId}`));
+  const knownServerIds = new Set(servers.map((s) => s.id));
   for (const key of sessionFirstSeen.keys()) {
-    if (!activeKeys.has(key)) {
+    const serverId = key.slice(0, key.indexOf(":"));
+    // Server removed or disabled — the entry can never be matched again.
+    if (!knownServerIds.has(serverId)) {
       sessionFirstSeen.delete(key);
+      continue;
     }
+    if (!polledServerIds.has(serverId)) continue;
+    if (!activeKeys.has(key)) sessionFirstSeen.delete(key);
   }
 
   return allSessions;
 }
 
+// Both transcode decisions are included: a paused stream has a frozen
+// viewOffset and unchanged state, so an audio-decision flip would otherwise
+// never reach the client.
 function sessionsFingerprint(sessions: SessionWithServer[]): string {
   return sessions
     .map(
       (s) =>
-        `${s.serverId}:${s.sessionId}:${s.player.state}:${s.viewOffset ?? 0}:${s.transcoding?.videoDecision ?? ""}:${s.transcoding?.speed ?? ""}`
+        `${s.serverId}:${s.sessionId}:${s.player.state}:${s.viewOffset ?? 0}:${s.transcoding?.videoDecision ?? ""}:${s.transcoding?.audioDecision ?? ""}:${s.transcoding?.speed ?? ""}`
     )
     .sort()
     .join("|");
