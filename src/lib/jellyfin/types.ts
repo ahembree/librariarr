@@ -56,6 +56,10 @@ export interface JellyfinItem {
     Played: boolean;
     LastPlayedDate?: string;
   };
+  // Video dimensions. Present on /Sessions' NowPlayingItem, where MediaSources
+  // and MediaStreams are deliberately stripped by the server.
+  Width?: number;
+  Height?: number;
   // Media streams
   MediaSources?: JellyfinMediaSource[];
   // Path

@@ -840,9 +840,17 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     // Width/Height, which is the transcode *output*). The transcode manager's
     // "4K Transcoding" criterion reads these — without them every
     // Jellyfin/Emby session looks sub-4K and the criterion never fires.
+    //
+    // Read them off the item itself: SessionManager builds NowPlayingItem with
+    // ItemFields.MediaSources and .MediaStreams explicitly removed, so the
+    // per-stream dimensions are never present here however the item looks
+    // elsewhere in the API. Width/Height survive that trim. The MediaSources
+    // path stays as a fallback for servers that do include it.
     const sourceVideoStream = item.MediaSources?.[0]?.MediaStreams?.find(
       (stream) => stream.Type === "Video",
     );
+    const mediaWidth = item.Width ?? sourceVideoStream?.Width;
+    const mediaHeight = item.Height ?? sourceVideoStream?.Height;
     const isLocal = isPrivateAddress(s.RemoteEndPoint);
 
     return {
@@ -864,8 +872,8 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
           : undefined,
       duration: ticksToMs(item.RunTimeTicks),
       viewOffset: ticksToMs(playState?.PositionTicks),
-      mediaWidth: sourceVideoStream?.Width,
-      mediaHeight: sourceVideoStream?.Height,
+      mediaWidth,
+      mediaHeight,
       player: {
         product: s.Client,
         platform: s.DeviceName,

@@ -106,12 +106,45 @@ describe("JellyfinClient", () => {
       return client;
     }
 
-    // The transcode manager's "4K Transcoding" criterion reads mediaWidth /
-    // mediaHeight; without them every Jellyfin session looks sub-4K.
-    it("reports the source video resolution of the playing item", async () => {
+    // The shape a real server returns: SessionManager strips MediaSources and
+    // MediaStreams from NowPlayingItem, leaving Width/Height as the only
+    // source dimensions available. Reading the stripped fields left every
+    // session looking sub-4K, so the "4K Transcoding" criterion never fired.
+    it("reports the source resolution from the item's own Width/Height", async () => {
       const client = makeClientWithSessions([
         {
           Id: "sess1",
+          UserId: "u1",
+          UserName: "bob",
+          Client: "Jellyfin Web",
+          DeviceName: "Chrome",
+          NowPlayingItem: {
+            Id: "item1",
+            Name: "Movie",
+            Type: "Movie",
+            Width: 3840,
+            Height: 2160,
+            // No MediaSources — the server does not send them here.
+          },
+          PlayState: { IsPaused: false, CanSeek: true },
+          TranscodingInfo: { IsVideoDirect: true, IsAudioDirect: false },
+        },
+      ]);
+
+      const sessions = await client.getSessions();
+
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0].mediaWidth).toBe(3840);
+      expect(sessions[0].mediaHeight).toBe(2160);
+      // Video direct-streams, audio is re-encoded.
+      expect(sessions[0].transcoding?.videoDecision).toBe("copy");
+      expect(sessions[0].transcoding?.audioDecision).toBe("transcode");
+    });
+
+    it("falls back to the media stream dimensions when a server does send them", async () => {
+      const client = makeClientWithSessions([
+        {
+          Id: "sess1b",
           UserId: "u1",
           UserName: "bob",
           Client: "Jellyfin Web",
@@ -132,18 +165,13 @@ describe("JellyfinClient", () => {
             ],
           },
           PlayState: { IsPaused: false, CanSeek: true },
-          TranscodingInfo: { IsVideoDirect: true, IsAudioDirect: false },
         },
       ]);
 
       const sessions = await client.getSessions();
 
-      expect(sessions).toHaveLength(1);
       expect(sessions[0].mediaWidth).toBe(3840);
       expect(sessions[0].mediaHeight).toBe(2160);
-      // Video direct-streams, audio is re-encoded.
-      expect(sessions[0].transcoding?.videoDecision).toBe("copy");
-      expect(sessions[0].transcoding?.audioDecision).toBe("transcode");
     });
 
     // Jellyfin has no `local` flag; RemoteEndPoint is populated for LAN
