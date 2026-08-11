@@ -19,6 +19,7 @@ vi.mock("@/lib/db", () => ({
     blackoutSchedule: { findMany: vi.fn() },
     prerollSchedule: { findMany: vi.fn() },
     user: { findUnique: vi.fn() },
+    mediaItem: { findMany: vi.fn() },
   },
 }));
 
@@ -43,6 +44,7 @@ describe("initializeMaintenanceEnforcer", () => {
     vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([]);
     vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
     vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
     vi.mocked(createMediaServerClient).mockReturnValue({
       getSessions: vi.fn().mockResolvedValue([]),
       terminateSession: vi.fn().mockResolvedValue(undefined),
@@ -157,6 +159,7 @@ describe("transcode manager criteria (via enforcer)", () => {
     vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([]);
     vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
     vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
   });
 
   it("terminates video transcoding session when videoTranscoding criteria is set", async () => {
@@ -639,6 +642,7 @@ describe("blackout block_new_only", () => {
     vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
     vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
     vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
   });
 
   function mockTwoServerBlackout() {
@@ -739,6 +743,7 @@ describe("pending terminations vs. server availability", () => {
     vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([]);
     vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
     vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -861,6 +866,7 @@ describe("transcode manager hardware exemption", () => {
     vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([]);
     vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
     vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
   });
 
   function transcodeSettings(exemptHardware: boolean) {
@@ -981,5 +987,160 @@ describe("transcode manager hardware exemption", () => {
     await runEnforcerTick();
 
     expect(terminate).toHaveBeenCalledWith("sess-4k", "Down for maintenance");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4K criterion uses the SOURCE resolution, not what the session reports
+// ---------------------------------------------------------------------------
+
+describe("4K criterion against a downscaled transcode", () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
+  });
+
+  function fourKSettings() {
+    return [
+      {
+        maintenanceMode: false,
+        maintenanceDelay: 30,
+        maintenanceMessage: "",
+        maintenanceExcludedUsers: [],
+        transcodeManagerEnabled: true,
+        transcodeManagerDelay: 0,
+        transcodeManagerMessage: "No 4K transcoding",
+        transcodeManagerCriteria: {
+          anyTranscoding: false,
+          videoTranscoding: false,
+          audioTranscoding: false,
+          fourKTranscoding: true,
+          remoteTranscoding: false,
+        },
+        transcodeManagerExcludedUsers: [],
+        transcodeManagerExemptHardware: false,
+        userId: "user1",
+        user: {
+          mediaServers: [
+            { id: "s1", type: "PLEX", name: "Test", url: "http://plex:32400", accessToken: "tok", tlsSkipVerify: false },
+          ],
+        },
+      },
+    ] as never;
+  }
+
+  /** A 4K HEVC source Plex is downscaling to SD — the session reports 568x320. */
+  function downscaledSession() {
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn().mockResolvedValue([
+        {
+          sessionId: "sess-downscale",
+          ratingKey: "12345",
+          username: "user",
+          title: "Movie",
+          mediaWidth: 568,
+          mediaHeight: 320,
+          player: { local: true },
+          session: { bandwidth: 1000, location: "lan" },
+          transcoding: { videoDecision: "transcode", audioDecision: "transcode" },
+        },
+      ]),
+      terminateSession: terminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
+    return terminate;
+  }
+
+  it("terminates when the synced item says the source is 4K", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(fourKSettings());
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([
+      { ratingKey: "12345", resolution: "4k" },
+    ] as never);
+    const terminate = downscaledSession();
+
+    await runEnforcerTick();
+
+    // Regression: the session reports the transcode's 568x320, so reading it
+    // alone made the criterion miss every downscaled 4K stream.
+    expect(terminate).toHaveBeenCalledWith("sess-downscale", "No 4K transcoding");
+  });
+
+  it("scopes the lookup to the session's own server", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(fourKSettings());
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
+    downscaledSession();
+
+    await runEnforcerTick();
+
+    expect(prisma.mediaItem.findMany).toHaveBeenCalledWith({
+      where: { ratingKey: { in: ["12345"] }, library: { mediaServerId: "s1" } },
+      select: { ratingKey: true, resolution: true },
+    });
+  });
+
+  it("does not terminate when the source is genuinely sub-4K", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(fourKSettings());
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([
+      { ratingKey: "12345", resolution: "1080" },
+    ] as never);
+    const terminate = downscaledSession();
+
+    await runEnforcerTick();
+
+    expect(terminate).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the session dimensions for an unsynced item", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(fourKSettings());
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
+
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn().mockResolvedValue([
+        {
+          sessionId: "sess-unsynced",
+          ratingKey: "999",
+          username: "user",
+          title: "Movie",
+          // Direct-playing 4K, so the session dimensions ARE the source.
+          mediaWidth: 3840,
+          mediaHeight: 2160,
+          player: { local: true },
+          session: { bandwidth: 1000, location: "lan" },
+          transcoding: { videoDecision: "transcode", audioDecision: "copy" },
+        },
+      ]),
+      terminateSession: terminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
+
+    await runEnforcerTick();
+
+    expect(terminate).toHaveBeenCalledWith("sess-unsynced", "No 4K transcoding");
+  });
+
+  it("skips the lookup entirely when the 4K criterion is off", async () => {
+    const settings = fourKSettings() as unknown as Array<Record<string, unknown>>;
+    settings[0].transcodeManagerCriteria = {
+      anyTranscoding: false,
+      videoTranscoding: true,
+      audioTranscoding: false,
+      fourKTranscoding: false,
+      remoteTranscoding: false,
+    };
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(settings as never);
+    downscaledSession();
+
+    await runEnforcerTick();
+
+    expect(prisma.mediaItem.findMany).not.toHaveBeenCalled();
   });
 });

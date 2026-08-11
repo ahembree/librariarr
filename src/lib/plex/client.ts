@@ -686,6 +686,7 @@ export class PlexClient implements MediaServerClient {
 
         return {
           sessionId: String(session.id ?? ""),
+          ratingKey: item.ratingKey ? String(item.ratingKey) : undefined,
           userId: String(user.id ?? ""),
           username: String(user.title ?? "Unknown"),
           userThumb: String(user.thumb ?? ""),

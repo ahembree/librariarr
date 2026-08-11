@@ -219,6 +219,12 @@ export interface MediaCollection {
 
 export interface MediaSession {
   sessionId: string;
+  /**
+   * The library item being played (Plex ratingKey / Jellyfin item id). Lets a
+   * session be matched back to its synced MediaItem — needed because Plex
+   * reports the *delivered stream* on a session, not the source file.
+   */
+  ratingKey?: string;
   userId: string;
   username: string;
   userThumb: string;

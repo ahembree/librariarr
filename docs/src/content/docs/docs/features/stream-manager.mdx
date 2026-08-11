@@ -76,8 +76,12 @@ Automatically terminate streams that match transcoding criteria.
 | **Any Transcoding** | Terminate sessions where video or audio is being transcoded |
 | **Video Transcoding** | Terminate sessions where video is being transcoded |
 | **Audio Transcoding** | Terminate sessions where audio is being transcoded |
-| **4K Transcoding** | Terminate sessions where the **video** of 4K content (source width ≥ 3840 or height ≥ 2160) is being transcoded |
+| **4K Transcoding** | Terminate sessions where the **video** of 4K content is being transcoded, including downscales to a lower resolution |
 | **Remote Transcoding** | Terminate remote (non-local) sessions that are transcoding |
+
+<Aside>
+  **"4K" means the source, not what is being sent.** Plex reports the *delivered* stream on a session, so a 4K movie transcoded down to SD shows up as SD. Librariarr resolves the true source resolution from the synced library item, which is why a downscaled 4K stream is still matched. If an item has not been synced yet, it falls back to the resolution the session reports.
+</Aside>
 
 <Aside>
   **4K Transcoding only matches video transcodes.** A 4K stream that is direct-playing or direct-streaming its video and transcoding only the audio (for example, downmixing TrueHD to stereo) costs the server almost nothing, so it is *not* matched. To catch those too, enable **Audio Transcoding** or **Any Transcoding** as well.

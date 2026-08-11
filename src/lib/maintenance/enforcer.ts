@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { isHardwareTranscode } from "@/lib/media-server/hardware-transcode";
+import { normalizeResolutionLabel } from "@/lib/resolution";
 import { logger } from "@/lib/logger";
 import type { MediaSession } from "@/lib/media-server/types";
 
@@ -48,16 +49,24 @@ interface TranscodeManagerCriteria {
 /** Exported for direct unit testing. */
 export function sessionMatchesCriteria(
   session: MediaSession,
-  criteria: TranscodeManagerCriteria
+  criteria: TranscodeManagerCriteria,
+  /** Source resolution from the synced library item, when it could be resolved. */
+  sourceResolution?: string
 ): boolean {
   const t = session.transcoding;
   const isVideoTranscode = !!(t && t.videoDecision === "transcode");
   const isAudioTranscode = !!(t && t.audioDecision === "transcode");
   const isAnyTranscode = isVideoTranscode || isAudioTranscode;
-  // Source resolution of the file being played — both Plex's session `Media`
-  // element and Jellyfin/Emby's `NowPlayingItem` streams describe the original
-  // file, never the transcode target.
-  const is4K = (session.mediaWidth ?? 0) >= 3840 || (session.mediaHeight ?? 0) >= 2160;
+  // Plex's session `Media` element describes the stream being DELIVERED, not
+  // the source file: a 4K movie transcoded down to SD reports 568x320 here, so
+  // reading the session alone made "4K Transcoding" miss every downscale — the
+  // exact case it exists to catch. Prefer the synced library item's resolution,
+  // which is the source. Jellyfin/Emby report the library item's own
+  // dimensions, so their session values are already the source and the
+  // fallback stays correct for them (and for anything not synced yet).
+  const is4K = sourceResolution
+    ? normalizeResolutionLabel(sourceResolution) === "4K"
+    : (session.mediaWidth ?? 0) >= 3840 || (session.mediaHeight ?? 0) >= 2160;
   const isRemote = !session.player.local;
 
   if (criteria.anyTranscoding && isAnyTranscode) return true;
@@ -330,6 +339,29 @@ export async function runEnforcerTick() {
               const sessions = await client.getSessions();
               polledServerIds.add(server.id);
 
+              // The 4K criterion needs the SOURCE resolution, which a Plex
+              // session doesn't carry (see sessionMatchesCriteria). Resolve it
+              // from the synced library items — one query per server per tick,
+              // rather than a metadata fetch per session.
+              const sourceResolutions = new Map<string, string>();
+              if (transcodeEnabled && criteria.fourKTranscoding) {
+                const ratingKeys = sessions
+                  .map((s) => s.ratingKey)
+                  .filter((key): key is string => !!key);
+                if (ratingKeys.length > 0) {
+                  const items = await prisma.mediaItem.findMany({
+                    where: {
+                      ratingKey: { in: ratingKeys },
+                      library: { mediaServerId: server.id },
+                    },
+                    select: { ratingKey: true, resolution: true },
+                  });
+                  for (const item of items) {
+                    if (item.resolution) sourceResolutions.set(item.ratingKey, item.resolution);
+                  }
+                }
+              }
+
               for (const session of sessions) {
                 const sessionKey = `maint:${settings.userId}:${server.id}:${session.sessionId}`;
                 activeSessionKeys.add(sessionKey);
@@ -351,7 +383,11 @@ export async function runEnforcerTick() {
                 // hardware acceleration while running below realtime.
                 const hardwareExempt = exemptHardware && isHardwareTranscode(session);
 
-                if (transcodeEnabled && !hardwareExempt && !settings.transcodeManagerExcludedUsers.includes(session.username) && sessionMatchesCriteria(session, criteria)) {
+                const sourceResolution = session.ratingKey
+                  ? sourceResolutions.get(session.ratingKey)
+                  : undefined;
+
+                if (transcodeEnabled && !hardwareExempt && !settings.transcodeManagerExcludedUsers.includes(session.username) && sessionMatchesCriteria(session, criteria, sourceResolution)) {
                   if (!shouldTerminate || transcodeDelayMs < delay) {
                     delay = transcodeDelayMs;
                     message = transcodeMsg;
