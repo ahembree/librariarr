@@ -508,10 +508,38 @@ describe("PlexClient", () => {
       expect(result[0].sessionId).toBe("abc");
     });
 
-    it("returns empty array on error", async () => {
-      mockAxiosInstance.get.mockRejectedValueOnce(new Error("fail"));
+    it("falls back to the item sessionKey when no Session element is present", async () => {
+      // Plex omits the Session element for some clients; without a fallback the
+      // sessionId was "" and multiple such sessions collided on one key.
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            Metadata: [
+              {
+                title: "No Session Elem",
+                type: "movie",
+                sessionKey: "sk-42",
+                ratingKey: "rk-7",
+                User: { id: "1", title: "Admin" },
+                Player: { product: "TV", platform: "Roku", state: "playing" },
+                Media: [{ id: "media-1", width: 3840, height: 2160, Part: [] }],
+              },
+            ],
+          },
+        },
+      });
       const result = await client.getSessions();
-      expect(result).toEqual([]);
+      expect(result[0].sessionId).toBe("sk-42");
+      expect(result[0].ratingKey).toBe("rk-7");
+      expect(result[0].mediaId).toBe("media-1");
+    });
+
+    it("throws on error so callers can distinguish unreachable from no sessions", async () => {
+      // Swallowing to [] made a hiccup look like "all streams ended", which
+      // reset grace timers and mass-terminated grandfathered block_new_only
+      // streams on recovery. Callers now treat a throw as "unreachable".
+      mockAxiosInstance.get.mockRejectedValueOnce(new Error("fail"));
+      await expect(client.getSessions()).rejects.toThrow("fail");
     });
 
     it("handles sessions with TranscodeSession", async () => {
@@ -683,6 +711,32 @@ describe("PlexClient", () => {
 
       expect(result[0].mediaWidth).toBe(1920);
       expect(result[0].videoCodec).toBe("h264");
+    });
+  });
+
+  describe("getItemMediaResolutions", () => {
+    it("maps each Media version's source resolution by id", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            Metadata: [
+              {
+                Media: [
+                  { id: 100, width: 3840, height: 2160 },
+                  { id: 200, width: 1920, height: 1080 },
+                  { id: 300, videoResolution: "720" },
+                ],
+              },
+            ],
+          },
+        },
+      });
+
+      const map = await client.getItemMediaResolutions("rk1");
+
+      expect(map.get("100")).toBe("4k");
+      expect(map.get("200")).toBe("1080");
+      expect(map.get("300")).toBe("720");
     });
   });
 

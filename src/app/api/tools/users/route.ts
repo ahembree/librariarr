@@ -43,10 +43,19 @@ export async function GET() {
         skipTlsVerify: server.tlsSkipVerify,
       });
 
-      // Get usernames from active sessions
-      const sessions = await client.getSessions();
-      for (const s of sessions) {
-        if (s.username) usernames.add(s.username);
+      if (client.listUsernames) {
+        // Jellyfin/Emby: enumerate ALL server users so offline users can be
+        // excluded, not just whoever is currently streaming.
+        for (const name of await client.listUsernames()) {
+          usernames.add(name);
+        }
+      } else {
+        // Plex: friends are already fetched above; the live sessions are a
+        // supplementary source (e.g. the managed/home users not in friends).
+        const sessions = await client.getSessions();
+        for (const s of sessions) {
+          if (s.username) usernames.add(s.username);
+        }
       }
     } catch {
       // Skip unreachable servers

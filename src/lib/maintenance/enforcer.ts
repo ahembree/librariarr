@@ -38,6 +38,19 @@ function clearBlackoutSnapshots(blackoutKey: string) {
   }
 }
 
+/**
+ * Grandfather identity for block_new_only. On Plex the sessionId is unique per
+ * playback, but on Jellyfin/Emby it is an MD5 of the DEVICE — stable across
+ * playbacks — so a device that was playing when the window opened would be
+ * grandfathered forever and could start unlimited new streams. Pairing the
+ * session with the item being played means a device that switches to a
+ * different title is no longer in the snapshot and gets blocked. (On Plex this
+ * is simply stricter and harmless, since the sessionId already differs.)
+ */
+function blockNewIdentity(session: MediaSession): string {
+  return `${session.sessionId}::${session.ratingKey ?? ""}`;
+}
+
 interface TranscodeManagerCriteria {
   anyTranscoding: boolean;
   videoTranscoding: boolean;
@@ -160,7 +173,8 @@ function isPrerollScheduleActive(schedule: {
   return isBlackoutActive(schedule);
 }
 
-async function processPrerollSchedules() {
+/** Exported for direct testing. */
+export async function processPrerollSchedules() {
   // Re-entrancy guard: a slow Plex call must not let one tick overlap the next.
   if (prerollRunning) return;
   prerollRunning = true;
@@ -206,27 +220,38 @@ async function processPrerollSchedules() {
 
       if (cached === desiredPath) continue; // No change needed
 
-      await Promise.allSettled(
+      const outcomes = await Promise.allSettled(
         servers.map(async (server) => {
-          try {
-            const client = createMediaServerClient(server.type, server.url, server.accessToken, {
-              skipTlsVerify: server.tlsSkipVerify,
-            });
+          const client = createMediaServerClient(server.type, server.url, server.accessToken, {
+            skipTlsVerify: server.tlsSkipVerify,
+          });
 
-            if (desiredPath) {
-              await client.setPrerollPath?.(desiredPath);
-              logger.info("Enforcer", `Preroll: set to "${desiredPath}" for schedule "${activeSchedule!.name}"`);
-            } else {
-              await client.clearPreroll?.();
-              logger.info("Enforcer", "Preroll: cleared (no active schedule)");
-            }
-          } catch (error) {
-            logger.error("Enforcer", "Preroll: could not update server", { error: String(error) });
+          if (desiredPath) {
+            await client.setPrerollPath?.(desiredPath);
+            logger.info("Enforcer", `Preroll: set to "${desiredPath}" for schedule "${activeSchedule!.name}"`);
+          } else {
+            await client.clearPreroll?.();
+            logger.info("Enforcer", "Preroll: cleared (no active schedule)");
           }
         }),
       );
 
-      lastPrerollPath.set(userId, desiredPath);
+      const anyFailed = outcomes.some((o) => o.status === "rejected");
+      for (const o of outcomes) {
+        if (o.status === "rejected") {
+          logger.error("Enforcer", "Preroll: could not update server", { error: String(o.reason) });
+        }
+      }
+
+      // Only record the path as applied when every server accepted it.
+      // Caching a path that no server actually took (all calls failed) would
+      // suppress retries for the rest of the schedule window, leaving the
+      // preroll unset until the desired path next changes. A partial failure
+      // stays uncached so the succeeded servers are harmlessly re-applied and
+      // the failed ones retried next tick.
+      if (!anyFailed) {
+        lastPrerollPath.set(userId, desiredPath);
+      }
     }
 
     // Clean up cache for users with no enabled schedules
@@ -344,6 +369,10 @@ export async function runEnforcerTick() {
               // from the synced library items — one query per server per tick,
               // rather than a metadata fetch per session.
               const sourceResolutions = new Map<string, string>();
+              // Per-version resolution cache for multi-version Plex items,
+              // populated lazily below (one metadata fetch per distinct
+              // ratingKey per tick).
+              const perVersionCache = new Map<string, Map<string, string>>();
               if (transcodeEnabled && criteria.fourKTranscoding) {
                 const ratingKeys = sessions
                   .map((s) => s.ratingKey)
@@ -363,6 +392,11 @@ export async function runEnforcerTick() {
               }
 
               for (const session of sessions) {
+                // A session with no id can't be tracked or terminated, and an
+                // empty id would collide multiple sessions onto one pending key
+                // and issue a futile terminate(""). Plex now falls back to the
+                // item sessionKey, so this is defensive.
+                if (!session.sessionId) continue;
                 const sessionKey = `maint:${settings.userId}:${server.id}:${session.sessionId}`;
                 activeSessionKeys.add(sessionKey);
 
@@ -383,9 +417,39 @@ export async function runEnforcerTick() {
                 // hardware acceleration while running below realtime.
                 const hardwareExempt = exemptHardware && isHardwareTranscode(session);
 
-                const sourceResolution = session.ratingKey
+                let sourceResolution = session.ratingKey
                   ? sourceResolutions.get(session.ratingKey)
                   : undefined;
+
+                // Multi-version Plex accuracy: the DB stores one resolution per
+                // item, but a Plex item can hold several versions at different
+                // resolutions. When we know the exact version being played,
+                // resolve ITS source resolution so we neither terminate the
+                // 1080p copy of a 4K title nor miss the 4K copy of an item
+                // synced as 1080p. Guarded and best-effort — any failure falls
+                // back to the item-level value (prior behavior).
+                if (
+                  transcodeEnabled &&
+                  criteria.fourKTranscoding &&
+                  session.ratingKey &&
+                  session.mediaId &&
+                  session.transcoding?.videoDecision === "transcode" &&
+                  client.getItemMediaResolutions
+                ) {
+                  try {
+                    let versions = perVersionCache.get(session.ratingKey);
+                    if (!versions) {
+                      versions = await client.getItemMediaResolutions(session.ratingKey);
+                      perVersionCache.set(session.ratingKey, versions);
+                    }
+                    const versionResolution = versions.get(session.mediaId);
+                    if (versionResolution) sourceResolution = versionResolution;
+                  } catch (error) {
+                    logger.debug("Enforcer", "Could not resolve per-version resolution", {
+                      error: String(error),
+                    });
+                  }
+                }
 
                 if (transcodeEnabled && !hardwareExempt && !settings.transcodeManagerExcludedUsers.includes(session.username) && sessionMatchesCriteria(session, criteria, sourceResolution)) {
                   if (!shouldTerminate || transcodeDelayMs < delay) {
@@ -395,7 +459,17 @@ export async function runEnforcerTick() {
                   shouldTerminate = true;
                 }
 
-                if (!shouldTerminate) continue;
+                if (!shouldTerminate) {
+                  // The session was seen but no longer matches (stopped
+                  // transcoding, user just excluded, settings changed). Drop any
+                  // pending entry so a later re-match starts a FRESH grace
+                  // period instead of firing instantly off a stale first-seen
+                  // timestamp. (The end-of-tick prune only removes sessions that
+                  // vanished entirely; a still-present non-matching session
+                  // would otherwise keep its stale timer.)
+                  pendingTerminations.delete(sessionKey);
+                  continue;
+                }
 
                 // Track first-seen time
                 if (!pendingTerminations.has(sessionKey)) {
@@ -531,6 +605,20 @@ export async function runEnforcerTick() {
                         "Enforcer",
                         `Blackout "${schedule.name}": session "${session.username}" (${session.title}) pending termination (delay: ${blackoutDelayMs / 1000}s)`
                       );
+                      // Deliver the actual warning where the server can show one
+                      // (Jellyfin/Emby). Without this, warn_then_terminate never
+                      // warned — the viewer's first and only signal was the
+                      // stream stopping. On Plex notifySession is undefined and
+                      // the grace delay is the only "warning" possible.
+                      if (client.notifySession) {
+                        client
+                          .notifySession(session.sessionId, blackoutMsg)
+                          .catch((error) =>
+                            logger.debug("Enforcer", `Blackout "${schedule.name}": could not send warning`, {
+                              error: String(error),
+                            })
+                          );
+                      }
                     }
 
                     const firstSeen = pendingTerminations.get(sessionKey)!;
@@ -555,8 +643,10 @@ export async function runEnforcerTick() {
                   const snapshotKey = blackoutSnapshotKey(blackoutKey, server.id);
                   if (!knownBlackoutSessions.has(snapshotKey)) {
                     // First time seeing this active blackout on this server —
-                    // snapshot its current sessions
-                    const currentSessionIds = new Set(sessions.map((s) => s.sessionId));
+                    // snapshot its current (session, item) identities. Only
+                    // reached after a successful getSessions(), so an
+                    // unreachable server never snapshots an empty set.
+                    const currentSessionIds = new Set(sessions.map(blockNewIdentity));
                     knownBlackoutSessions.set(snapshotKey, currentSessionIds);
                     logger.info(
                       "Enforcer",
@@ -567,7 +657,7 @@ export async function runEnforcerTick() {
                     const knownIds = knownBlackoutSessions.get(snapshotKey)!;
                     for (const session of sessions) {
                       if (blackoutExcluded.includes(session.username)) continue;
-                      if (!knownIds.has(session.sessionId)) {
+                      if (!knownIds.has(blockNewIdentity(session))) {
                         try {
                           await client.terminateSession(session.sessionId, blackoutMsg);
                           logger.info(

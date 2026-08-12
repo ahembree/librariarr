@@ -225,6 +225,13 @@ export interface MediaSession {
    * reports the *delivered stream* on a session, not the source file.
    */
   ratingKey?: string;
+  /**
+   * Plex only: the id of the specific Media version being played (a Plex item
+   * can hold several versions at different resolutions). Lets the 4K criterion
+   * resolve the exact version's source resolution rather than the single value
+   * stored for the whole item.
+   */
+  mediaId?: string;
   userId: string;
   username: string;
   userThumb: string;
@@ -293,8 +300,6 @@ export interface MediaSession {
     hwEncode?: string;
     /** Plex: decode and encode both on hardware. */
     hwFullPipeline?: boolean;
-    /** Jellyfin/Emby: one pipeline-level API; they report no decode/encode split. */
-    hwAccel?: string;
   };
 }
 

@@ -218,7 +218,10 @@ describe("JellyfinClient", () => {
       expect(sessions[0].session.location).toBe("wan");
     });
 
-    it("captures the hardware acceleration type", async () => {
+    // HardwareAccelerationType is the server's CONFIGURED accel (reported even
+    // when a job falls back to software), so it is not a per-job HW signal and
+    // is intentionally not captured. HW detection is Plex-only.
+    it("does not populate per-job HW fields from Jellyfin", async () => {
       const client = makeClientWithSessions([
         {
           Id: "sess-hw",
@@ -238,30 +241,54 @@ describe("JellyfinClient", () => {
 
       const sessions = await client.getSessions();
 
-      expect(sessions[0].transcoding?.hwAccel).toBe("qsv");
+      expect(sessions[0].transcoding?.hwEncode).toBeUndefined();
+      expect(sessions[0].transcoding?.hwDecode).toBeUndefined();
+      // No fabricated speed either — Jellyfin reports none.
+      expect(sessions[0].transcoding?.speed).toBeUndefined();
     });
 
-    it("treats 'none' hardware acceleration as software", async () => {
+    it("does not report an audio-only (music) transcode as a video transcode", async () => {
+      // Jellyfin sets IsVideoDirect=false for a music transcode (there is no
+      // video), which must NOT surface as videoDecision "transcode" or the
+      // "Video Transcoding" criterion would kill music streams.
       const client = makeClientWithSessions([
         {
-          Id: "sess-sw",
+          Id: "sess-music",
           UserId: "u1",
           UserName: "bob",
           Client: "Jellyfin Web",
           DeviceName: "Chrome",
-          NowPlayingItem: { Id: "i", Name: "Movie", Type: "Movie" },
+          NowPlayingItem: { Id: "trk", Name: "Song", Type: "Audio" },
           PlayState: { IsPaused: false, CanSeek: true },
-          TranscodingInfo: {
-            IsVideoDirect: false,
-            IsAudioDirect: true,
-            HardwareAccelerationType: "none",
-          },
+          TranscodingInfo: { IsVideoDirect: false, IsAudioDirect: false },
         },
       ]);
 
       const sessions = await client.getSessions();
 
-      expect(sessions[0].transcoding?.hwAccel).toBeUndefined();
+      expect(sessions[0].type).toBe("track");
+      expect(sessions[0].transcoding?.videoDecision).toBe("copy");
+      expect(sessions[0].transcoding?.audioDecision).toBe("transcode");
+    });
+
+    it("still reports a real video transcode as a video transcode", async () => {
+      const client = makeClientWithSessions([
+        {
+          Id: "sess-vid",
+          UserId: "u1",
+          UserName: "bob",
+          Client: "Jellyfin Web",
+          DeviceName: "Chrome",
+          NowPlayingItem: { Id: "m", Name: "Movie", Type: "Movie" },
+          PlayState: { IsPaused: false, CanSeek: true },
+          TranscodingInfo: { IsVideoDirect: false, IsAudioDirect: true },
+        },
+      ]);
+
+      const sessions = await client.getSessions();
+
+      expect(sessions[0].transcoding?.videoDecision).toBe("transcode");
+      expect(sessions[0].transcoding?.audioDecision).toBe("copy");
     });
 
     it("leaves the resolution undefined when the item carries no video stream", async () => {
@@ -327,6 +354,40 @@ describe("JellyfinClient", () => {
 
       expect(post).toHaveBeenCalledTimes(1);
       expect(post).toHaveBeenCalledWith("/Sessions/sess1/Playing/Stop");
+    });
+  });
+
+  describe("notifySession", () => {
+    it("posts a client message WITHOUT stopping playback", async () => {
+      new JellyfinClient("http://jellyfin:8096", "jf-token");
+      const post = (mockAxiosCreate.mock.results[0].value as { post: ReturnType<typeof vi.fn> }).post;
+      post.mockResolvedValue({ data: {} });
+      const client = new JellyfinClient("http://jellyfin:8096", "jf-token");
+
+      await client.notifySession("sess1", "Your stream will end soon");
+
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(post).toHaveBeenCalledWith("/Sessions/sess1/Message", {
+        Header: "Notice",
+        Text: "Your stream will end soon",
+        TimeoutMs: 60000,
+      });
+      // No Playing/Stop — this only warns.
+      expect(post).not.toHaveBeenCalledWith("/Sessions/sess1/Playing/Stop");
+    });
+  });
+
+  describe("listUsernames", () => {
+    it("returns non-empty names from /Users", async () => {
+      new JellyfinClient("http://jellyfin:8096", "jf-token");
+      const get = (mockAxiosCreate.mock.results[0].value as { get: ReturnType<typeof vi.fn> }).get;
+      get.mockResolvedValue({ data: [{ Name: "alice" }, { Name: "" }, { Name: "bob" }, {}] });
+      const client = new JellyfinClient("http://jellyfin:8096", "jf-token");
+
+      const names = await client.listUsernames();
+
+      expect(get).toHaveBeenCalledWith("/Users");
+      expect(names).toEqual(["alice", "bob"]);
     });
   });
 });

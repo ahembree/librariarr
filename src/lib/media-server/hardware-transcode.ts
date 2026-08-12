@@ -15,6 +15,14 @@ import type { MediaSession } from "@/lib/media-server/types";
  * software silently. The decode/encode API names are the reliable signal,
  * which is why Tautulli validates those against a known list rather than
  * trusting the request flag.
+ *
+ * Only Plex reports per-job acceleration (`transcodeHwDecoding`/`Encoding`).
+ * Jellyfin/Emby expose `HardwareAccelerationType`, but that is the server's
+ * CONFIGURED accel — reported on every transcode even when that specific job
+ * runs in software (config-level, not job-level) — so it cannot answer "is
+ * THIS stream hardware-accelerated" and is intentionally not consulted here.
+ * Hardware detection (and therefore the "Skip hardware transcodes" exemption)
+ * is Plex-only.
  */
 
 /** Acceleration APIs that can perform the encode half of a transcode. */
@@ -61,17 +69,23 @@ function accelApi(raw: string | undefined, known: Set<string>): string | undefin
 
 type Transcoding = NonNullable<MediaSession["transcoding"]>;
 
-/** The acceleration API doing the encode, or undefined when it's on the CPU. */
+/**
+ * The acceleration API doing the encode, or undefined when it's on the CPU or
+ * unknown. Plex-only: only `hwEncode` (Plex's `transcodeHwEncoding`) is a
+ * per-job signal; Jellyfin/Emby report no reliable per-job encoder.
+ */
 export function hardwareEncoder(t: Transcoding | undefined): string | undefined {
   if (!t) return undefined;
-  // Jellyfin/Emby report one pipeline-level value with no decode/encode split.
-  return accelApi(t.hwEncode, HW_ENCODERS) ?? accelApi(t.hwAccel, HW_ENCODERS);
+  return accelApi(t.hwEncode, HW_ENCODERS);
 }
 
-/** The acceleration API doing the decode, or undefined when it's on the CPU. */
+/**
+ * The acceleration API doing the decode, or undefined when it's on the CPU or
+ * unknown. Plex-only, for the same reason as {@link hardwareEncoder}.
+ */
 export function hardwareDecoder(t: Transcoding | undefined): string | undefined {
   if (!t) return undefined;
-  return accelApi(t.hwDecode, HW_DECODERS) ?? accelApi(t.hwAccel, HW_DECODERS);
+  return accelApi(t.hwDecode, HW_DECODERS);
 }
 
 /**

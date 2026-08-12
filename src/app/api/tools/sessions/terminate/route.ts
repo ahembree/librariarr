@@ -50,6 +50,9 @@ export async function POST(request: NextRequest) {
         const sessions = await client.getSessions();
         idsToTerminate = sessions.map((s) => s.sessionId);
       }
+      // Drop empty ids — terminating "" is a no-op that some servers answer
+      // 400 to, which would surface as a spurious error.
+      idsToTerminate = idsToTerminate.filter((id) => id);
 
       for (const sid of idsToTerminate) {
         try {

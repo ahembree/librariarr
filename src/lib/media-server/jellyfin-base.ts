@@ -534,11 +534,47 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
         .filter((s) => s.NowPlayingItem)
         .map((s) => this.normalizeSession(s));
     } catch (error) {
+      // Propagate rather than swallow to [] — see the note in PlexClient
+      // .getSessions. Callers treat a throw as "server unreachable this tick"
+      // and preserve their per-server state instead of resetting it.
       logger.debug(this.logPrefix, "Failed to fetch sessions", {
         error: String(error),
       });
-      return [];
+      throw error;
     }
+  }
+
+  /** Push an on-screen message to a client; best-effort. */
+  private async sendClientMessage(
+    sessionId: string,
+    header: string,
+    text: string,
+    timeoutMs: number,
+  ): Promise<void> {
+    await this.client.post(`/Sessions/${sessionId}/Message`, {
+      Header: header,
+      Text: text,
+      TimeoutMs: timeoutMs,
+    });
+  }
+
+  /** Warn a playing client without stopping it (for warn_then_terminate). */
+  async notifySession(sessionId: string, message: string): Promise<void> {
+    // Longer timeout than the termination toast: the warning should stay up
+    // through the grace period until the stream actually stops.
+    await this.sendClientMessage(sessionId, "Notice", message, 60000);
+  }
+
+  /**
+   * All usernames known to the server (Jellyfin/Emby `/Users`). Lets the
+   * excluded-users picker offer offline users, not just whoever happens to be
+   * streaming right now.
+   */
+  async listUsernames(): Promise<string[]> {
+    const res = await this.client.get<Array<{ Name?: string }>>("/Users");
+    return (res.data ?? [])
+      .map((u) => u.Name)
+      .filter((n): n is string => typeof n === "string" && n.length > 0);
   }
 
   async terminateSession(sessionId: string, reason?: string): Promise<void> {
@@ -549,11 +585,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     // outlives the stop so the message stays up after playback ends.
     if (reason) {
       try {
-        await this.client.post(`/Sessions/${sessionId}/Message`, {
-          Header: "Playback stopped",
-          Text: reason,
-          TimeoutMs: 15000,
-        });
+        await this.sendClientMessage(sessionId, "Playback stopped", reason, 15000);
       } catch (error) {
         logger.debug(this.logPrefix, "Could not send termination message", {
           error: String(error),
@@ -851,6 +883,9 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     );
     const mediaWidth = item.Width ?? sourceVideoStream?.Width;
     const mediaHeight = item.Height ?? sourceVideoStream?.Height;
+    // Music (item Type "Audio") has no video track, so a non-direct video
+    // decision from TranscodingInfo is meaningless for it.
+    const hasVideoContent = item.Type !== "Audio";
     const isLocal = isPrivateAddress(s.RemoteEndPoint);
 
     return {
@@ -892,17 +927,23 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       },
       ...(transcoding && {
         transcoding: {
-          videoDecision: transcoding.IsVideoDirect ? "copy" : "transcode",
+          // IsVideoDirect = IsCopyCodec(OutputVideoCodec), and for an
+          // audio-only job (music) OutputVideoCodec is null → IsVideoDirect is
+          // false. Mapping that straight to "transcode" reported every music
+          // transcode as a VIDEO transcode, so "Video Transcoding" terminated
+          // audio-only streams. There is no video to transcode when the item
+          // carries none, so force "copy" for audio items.
+          videoDecision:
+            !hasVideoContent || transcoding.IsVideoDirect ? "copy" : "transcode",
           audioDecision: transcoding.IsAudioDirect ? "copy" : "transcode",
           throttled: false,
-          speed:
-            transcoding.CompletionPercentage != null ? 1 : undefined,
-          // One pipeline-level value; "none" means the CPU is doing the work.
-          hwAccel:
-            transcoding.HardwareAccelerationType &&
-            transcoding.HardwareAccelerationType.toLowerCase() !== "none"
-              ? transcoding.HardwareAccelerationType.toLowerCase()
-              : undefined,
+          // Jellyfin/Emby report no transcode SPEED (CompletionPercentage is a
+          // progress %, not a rate), so leave it unset rather than fabricating
+          // "1.0x" — a made-up value the UI would show as if measured and that
+          // would defeat the below-realtime warning. HardwareAccelerationType
+          // is likewise omitted: it is the server's CONFIGURED accel, reported
+          // even when a job silently falls back to software, so it cannot prove
+          // a given stream is hardware-accelerated (see hardware-transcode.ts).
         },
       }),
     } satisfies MediaSession;

@@ -60,6 +60,14 @@ export interface MediaServerClient {
   // Sessions
   getSessions(): Promise<MediaSession[]>;
   terminateSession(sessionId: string, reason: string): Promise<void>;
+  /**
+   * Push an on-screen message to a playing client WITHOUT stopping it — used
+   * to warn a viewer before a delayed termination. Optional: only servers with
+   * a client-message API implement it (Jellyfin/Emby). Plex has no way to
+   * message a playing client short of terminating, so it leaves this undefined
+   * and the "warning" there is simply the grace delay before termination.
+   */
+  notifySession?(sessionId: string, message: string): Promise<void>;
 
   // Image proxying
   getImageUrl(path: string): string;
@@ -67,6 +75,14 @@ export interface MediaServerClient {
 
   // Optional: Plex-only methods
   getAccounts?(): Promise<Map<number, string>>;
+  /**
+   * Per-version source resolution (Media id → raw resolution string) for a
+   * multi-version item. Plex-only; lets the 4K criterion match the exact
+   * version being played.
+   */
+  getItemMediaResolutions?(ratingKey: string): Promise<Map<string, string>>;
+  /** List known usernames on the server (for the excluded-users picker). */
+  listUsernames?(): Promise<string[]>;
   getCollections?(sectionKey: string): Promise<MediaCollection[]>;
   createCollection?(
     sectionKey: string,

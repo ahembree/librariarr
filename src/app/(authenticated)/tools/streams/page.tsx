@@ -129,7 +129,6 @@ interface SessionTranscoding {
   hwDecode?: string;
   hwEncode?: string;
   hwFullPipeline?: boolean;
-  hwAccel?: string;
 }
 
 interface SessionWithServer {
@@ -353,9 +352,12 @@ function transcodeSummary(t: SessionTranscoding): string {
   if (t.speed !== undefined) parts.push(`${t.speed.toFixed(1)}\u00d7`);
   // The encoder actually in use — transcodeHwRequested only records the
   // request, and Plex falls back to software without saying so.
+  // Only label "SW" on a positive software signal: a Plex session (which sets
+  // transcodeHwRequested) transcoding video with no hardware encoder. On
+  // Jellyfin/Emby we can't tell HW from SW, so we say nothing.
   const encoder = hardwareEncoder(t);
   if (encoder) parts.push(encoder.toUpperCase());
-  else if (t.videoDecision === "transcode") parts.push("SW");
+  else if (t.videoDecision === "transcode" && t.transcodeHwRequested !== undefined) parts.push("SW");
   return parts.join(" \u00b7 ");
 }
 
@@ -399,10 +401,18 @@ function getStateConfig(state: string) {
 
 function getStreamDecision(transcoding?: SessionTranscoding): { label: string; direct: boolean } {
   if (!transcoding) return { label: "Direct Play", direct: true };
-  const isDirect = transcoding.videoDecision === "directplay" && transcoding.audioDecision === "directplay";
-  if (isDirect) return { label: "Direct Play", direct: true };
-  if (transcoding.videoDecision === "transcode") return { label: "Transcode", direct: false };
-  if (transcoding.videoDecision === "copy") return { label: "Direct Stream", direct: true };
+  // Any transcode — video OR audio — is a real transcode, not a direct stream.
+  // Treating an audio-only transcode (video copied, audio re-encoded) as
+  // "Direct Stream" contradicted the enforcer, which terminates it under the
+  // Audio/Any criteria, and mislabeled it with green direct-play styling.
+  if (transcoding.videoDecision === "transcode" || transcoding.audioDecision === "transcode") {
+    return { label: "Transcode", direct: false };
+  }
+  // Nothing is being re-encoded. A "copy" decision means remux/direct-stream
+  // (container change), everything else is direct play.
+  if (transcoding.videoDecision === "copy" || transcoding.audioDecision === "copy") {
+    return { label: "Direct Stream", direct: true };
+  }
   return { label: "Direct Play", direct: true };
 }
 
@@ -1195,12 +1205,18 @@ export default function StreamManagerPage() {
     const targetCount = getTargetSessions().length || (terminateTarget === "all" ? sessions.length : 0);
 
     try {
+      // The terminate endpoint returns 200 with { terminated, errors } even
+      // when individual terminations fail, so read the bodies rather than
+      // assuming success from a resolved fetch.
+      const requests: Array<Promise<Response>> = [];
       if (terminateTarget === "all") {
-        await fetch("/api/tools/sessions/terminate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ serverId: "all", message: selectedMessage }),
-        });
+        requests.push(
+          fetch("/api/tools/sessions/terminate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ serverId: "all", message: selectedMessage }),
+          })
+        );
       } else {
         // Group target sessions by serverId for efficient batch calls
         const targets = getTargetSessions();
@@ -1211,24 +1227,46 @@ export default function StreamManagerPage() {
           byServer.set(s.serverId, ids);
         }
 
-        await Promise.all(
-          Array.from(byServer.entries()).map(([serverId, sessionIds]) =>
+        for (const [serverId, sessionIds] of byServer) {
+          requests.push(
             fetch("/api/tools/sessions/terminate", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ serverId, sessionIds, message: selectedMessage }),
             })
-          )
-        );
+          );
+        }
+      }
+
+      const responses = await Promise.all(requests);
+      let terminated = 0;
+      const failures: string[] = [];
+      for (const res of responses) {
+        if (!res.ok) {
+          failures.push(`Request failed (${res.status})`);
+          continue;
+        }
+        const body = (await res.json().catch(() => null)) as
+          | { terminated?: number; errors?: string[] }
+          | null;
+        terminated += body?.terminated ?? 0;
+        if (body?.errors?.length) failures.push(...body.errors);
       }
 
       setSelectedKeys(new Set());
       await refreshSessions();
-      toast.success(
-        targetCount > 0
-          ? `Terminating ${targetCount} session${targetCount !== 1 ? "s" : ""}`
-          : "Sessions terminated",
-      );
+
+      if (failures.length > 0) {
+        toast.error(
+          terminated > 0
+            ? `Terminated ${terminated}, but ${failures.length} failed`
+            : `Couldn't terminate ${failures.length === 1 ? "the session" : "sessions"}`
+        );
+      } else {
+        toast.success(
+          `Terminated ${terminated || targetCount} session${(terminated || targetCount) !== 1 ? "s" : ""}`
+        );
+      }
     } catch {
       // SSE stream will pick up changes on next cycle
       toast.error("Couldn't terminate sessions");
@@ -1278,14 +1316,25 @@ export default function StreamManagerPage() {
     }
   };
 
+  // Persist a maintenance edit and, if the server rejects it, tell the user and
+  // resync the form from the server so the UI never silently diverges from what
+  // the enforcer will actually apply.
+  const persistMaintenance = async (overrides: Parameters<typeof saveMaintenance>[0]) => {
+    const ok = await saveMaintenance(overrides);
+    if (!ok) {
+      toast.error("Couldn't save maintenance settings");
+      await fetchMaintenance();
+    }
+  };
+
   const updateMaintenanceMessage = (message: string) => {
     setMaintenanceMessage(message);
-    if (maintenanceEnabled) void saveMaintenance({ message });
+    if (maintenanceEnabled) void persistMaintenance({ message });
   };
 
   const updateMaintenanceDelay = (delay: number) => {
     setMaintenanceDelay(delay);
-    if (maintenanceEnabled) void saveMaintenance({ delay });
+    if (maintenanceEnabled) void persistMaintenance({ delay });
   };
 
   // --- Transcode manager handlers ---
@@ -1334,20 +1383,29 @@ export default function StreamManagerPage() {
     }
   };
 
+  // As persistMaintenance, but for the transcode manager.
+  const persistTranscode = async (overrides: Parameters<typeof saveTranscodeManager>[0]) => {
+    const ok = await saveTranscodeManager(overrides);
+    if (!ok) {
+      toast.error("Couldn't save transcode settings");
+      await fetchTranscodeManager();
+    }
+  };
+
   const updateTranscodeMessage = (message: string) => {
     setTranscodeMessage(message);
-    if (transcodeEnabled) void saveTranscodeManager({ message });
+    if (transcodeEnabled) void persistTranscode({ message });
   };
 
   const updateTranscodeDelay = (delay: number) => {
     setTranscodeDelay(delay);
-    if (transcodeEnabled) void saveTranscodeManager({ delay });
+    if (transcodeEnabled) void persistTranscode({ delay });
   };
 
   const updateTranscodeCriteria = (key: keyof TranscodeCriteria, checked: boolean) => {
     const updated = { ...transcodeCriteria, [key]: checked };
     setTranscodeCriteria(updated);
-    if (transcodeEnabled) void saveTranscodeManager({ criteria: updated });
+    if (transcodeEnabled) void persistTranscode({ criteria: updated });
   };
 
   return (
@@ -1529,7 +1587,7 @@ export default function StreamManagerPage() {
                   checked={discordNotifyMaintenance}
                   onCheckedChange={(checked) => {
                     setDiscordNotifyMaintenance(checked);
-                    saveMaintenance({ discordNotifyMaintenance: checked });
+                    void persistMaintenance({ discordNotifyMaintenance: checked });
                   }}
                   disabled={maintenanceLoading}
                   className="shrink-0"
@@ -1541,7 +1599,7 @@ export default function StreamManagerPage() {
                 selected={maintenanceExcludedUsers}
                 onChange={(users) => {
                   setMaintenanceExcludedUsers(users);
-                  saveMaintenance({ excludedUsers: users });
+                  void persistMaintenance({ excludedUsers: users });
                 }}
                 knownUsers={knownUsers}
               />
@@ -1640,7 +1698,7 @@ export default function StreamManagerPage() {
                   checked={transcodeExemptHardware}
                   onCheckedChange={(checked) => {
                     setTranscodeExemptHardware(checked);
-                    saveTranscodeManager({ exemptHardware: checked });
+                    void persistTranscode({ exemptHardware: checked });
                   }}
                   className="shrink-0"
                 />
@@ -1663,7 +1721,7 @@ export default function StreamManagerPage() {
                 selected={transcodeExcludedUsers}
                 onChange={(users) => {
                   setTranscodeExcludedUsers(users);
-                  saveTranscodeManager({ excludedUsers: users });
+                  void persistTranscode({ excludedUsers: users });
                 }}
                 knownUsers={knownUsers}
               />
@@ -2213,9 +2271,15 @@ export default function StreamManagerPage() {
                           Audio: {sheetSession.transcoding.sourceAudioCodec.toUpperCase()} &rarr; {sheetSession.transcoding.audioDecision}
                         </Badge>
                       )}
-                      <Badge variant="secondary" className="text-[10px]">
-                        HW Encode: {hardwareEncoder(sheetSession.transcoding)?.toUpperCase() ?? "No (CPU)"}
-                      </Badge>
+                      {/* HW encode/decode are Plex-only reliable signals; when
+                          absent we cannot tell HW from CPU (Jellyfin/Emby report
+                          only their configured accel), so show nothing rather
+                          than a misleading "No (CPU)". */}
+                      {hardwareEncoder(sheetSession.transcoding) && (
+                        <Badge variant="secondary" className="text-[10px]">
+                          HW Encode: {hardwareEncoder(sheetSession.transcoding)!.toUpperCase()}
+                        </Badge>
+                      )}
                       {hardwareDecoder(sheetSession.transcoding) && (
                         <Badge variant="secondary" className="text-[10px]">
                           HW Decode: {hardwareDecoder(sheetSession.transcoding)!.toUpperCase()}

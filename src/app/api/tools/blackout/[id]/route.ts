@@ -3,7 +3,9 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { validateRequest, blackoutUpdateSchema } from "@/lib/validation";
 
-const TIME_REGEX = /^\d{2}:\d{2}$/;
+// HH:mm, 00:00–23:59. The looser \d{2}:\d{2} accepted e.g. "27:99", which
+// stored a schedule whose window never activates.
+const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export async function PUT(
   request: NextRequest,
@@ -29,7 +31,18 @@ export async function PUT(
   if (error) return error;
   const { name, scheduleType, startDate, endDate, daysOfWeek, startTime, endTime, action, message, delay, enabled, excludedUsers } = data;
 
-  // Validate based on scheduleType
+  // The type this update resolves against: either an explicit switch, or the
+  // schedule's current type for a partial edit.
+  const effectiveType = scheduleType ?? existing.scheduleType;
+
+  // Any provided time must be well-formed, whichever way the update is shaped.
+  for (const [label, value] of [["startTime", startTime], ["endTime", endTime]] as const) {
+    if (value != null && !TIME_REGEX.test(value)) {
+      return NextResponse.json({ error: `${label} must be in HH:mm format` }, { status: 400 });
+    }
+  }
+
+  // Validate based on scheduleType (full definition on a type set/switch)
   if (scheduleType === "one_time") {
     if (!startDate || !endDate) {
       return NextResponse.json({ error: "startDate and endDate are required for one_time schedules" }, { status: 400 });
@@ -51,17 +64,21 @@ export async function PUT(
     if (!startTime || !endTime) {
       return NextResponse.json({ error: "startTime and endTime are required for recurring schedules" }, { status: 400 });
     }
-    if (!TIME_REGEX.test(startTime) || !TIME_REGEX.test(endTime)) {
-      return NextResponse.json({ error: "startTime and endTime must be in HH:mm format" }, { status: 400 });
+  }
+
+  // A partial edit that changes daysOfWeek must not leave an empty set.
+  if (scheduleType === undefined && daysOfWeek !== undefined) {
+    if (!Array.isArray(daysOfWeek) || daysOfWeek.length === 0) {
+      return NextResponse.json({ error: "daysOfWeek must be a non-empty array" }, { status: 400 });
     }
   }
 
-  // Only rewrite scheduleType and its dependent date/time columns when the
-  // caller actually sends scheduleType. A partial update (e.g. the enabled
-  // toggle, which posts only { enabled }) must NOT clear the schedule's
-  // date/time definition — previously every column was written
-  // unconditionally, so toggling enabled set startDate/endDate/startTime/
-  // endTime to null and silently broke the schedule (isBlackoutActive → false).
+  // When scheduleType is sent, rewrite the whole date/time definition. When it
+  // is NOT sent, apply only the individually-provided fields against the
+  // existing type — so editing just the times of a recurring schedule persists
+  // (previously those fields were silently dropped), while a toggle-only body
+  // ({ enabled }) still changes nothing else. (A blanket unconditional rewrite
+  // was the original bug: it nulled the date/time columns on every partial PUT.)
   const scheduleTypeFields =
     scheduleType !== undefined
       ? {
@@ -72,7 +89,13 @@ export async function PUT(
           startTime: scheduleType === "recurring" ? startTime : null,
           endTime: scheduleType === "recurring" ? endTime : null,
         }
-      : {};
+      : {
+          ...(effectiveType === "one_time" && startDate !== undefined && startDate !== null && { startDate: new Date(startDate) }),
+          ...(effectiveType === "one_time" && endDate !== undefined && endDate !== null && { endDate: new Date(endDate) }),
+          ...(effectiveType === "recurring" && Array.isArray(daysOfWeek) && { daysOfWeek }),
+          ...(effectiveType === "recurring" && startTime !== undefined && startTime !== null && { startTime }),
+          ...(effectiveType === "recurring" && endTime !== undefined && endTime !== null && { endTime }),
+        };
 
   const schedule = await prisma.blackoutSchedule.update({
     where: { id },

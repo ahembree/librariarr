@@ -34,6 +34,16 @@ export async function PUT(request: NextRequest) {
   if (error) return error;
   const { enabled, message, delay, discordNotifyMaintenance, excludedUsers } = data;
 
+  // Capture the prior state so the Discord notification fires only on an
+  // actual enabled↔disabled transition. This route is also called for every
+  // message/delay/exclusion edit (the UI saves on each keystroke of the custom
+  // message while maintenance is on), and notifying on every PUT spammed the
+  // webhook with identical "maintenance enabled" embeds.
+  const prior = await prisma.appSettings.findUnique({
+    where: { userId: session.userId! },
+    select: { maintenanceMode: true },
+  });
+
   const settings = await prisma.appSettings.upsert({
     where: { userId: session.userId! },
     update: {
@@ -63,8 +73,11 @@ export async function PUT(request: NextRequest) {
     },
   });
 
-  // Send Discord notification if configured
-  if (settings.discordNotifyMaintenance && settings.discordWebhookUrl) {
+  // Send Discord notification only when maintenance actually toggled, and only
+  // if configured. A new row (prior === null) counts as a transition when
+  // enabled is true.
+  const stateChanged = (prior?.maintenanceMode ?? false) !== enabled;
+  if (stateChanged && settings.discordNotifyMaintenance && settings.discordWebhookUrl) {
     sendDiscordNotification(settings.discordWebhookUrl, {
       username: settings.discordWebhookUsername || "Librariarr",
       avatar_url: settings.discordWebhookAvatarUrl || undefined,
