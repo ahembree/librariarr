@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
+import { stampFirstSeen, pruneFirstSeen } from "@/lib/media-server/session-first-seen";
 import { realtimeBus } from "@/lib/media-server/realtime";
 import type { MediaSession } from "@/lib/media-server/types";
 import type { MediaServerType } from "@/generated/prisma/client";
@@ -24,10 +25,6 @@ const POLL_INTERVAL = 5000;
 const HEARTBEAT_INTERVAL = 30000;
 const MAX_STREAM_LIFETIME = 3600000; // 1 hour safety limit
 
-// Module-level: tracks when each session was first observed
-// Key: "serverId:sessionId" → timestamp in ms
-const sessionFirstSeen = new Map<string, number>();
-
 async function fetchAllSessions(userId: string): Promise<SessionWithServer[]> {
   const servers = await prisma.mediaServer.findMany({
     where: { userId, enabled: true },
@@ -44,19 +41,13 @@ async function fetchAllSessions(userId: string): Promise<SessionWithServer[]> {
       const sessions = await client.getSessions();
       return {
         serverId: server.id,
-        sessions: sessions.map<SessionWithServer>((s) => {
-          const key = `${server.id}:${s.sessionId}`;
-          if (!sessionFirstSeen.has(key)) {
-            sessionFirstSeen.set(key, now);
-          }
-          return {
-            ...s,
-            serverId: server.id,
-            serverName: server.name,
-            serverType: server.type,
-            startedAt: sessionFirstSeen.get(key)!,
-          };
-        }),
+        sessions: sessions.map<SessionWithServer>((s) => ({
+          ...s,
+          serverId: server.id,
+          serverName: server.name,
+          serverType: server.type,
+          startedAt: stampFirstSeen(server.id, s.sessionId, now),
+        })),
       };
     }),
   );
@@ -73,19 +64,9 @@ async function fetchAllSessions(userId: string): Promise<SessionWithServer[]> {
     }
   }
 
-  // Prune entries for sessions that no longer exist
   const activeKeys = new Set(allSessions.map((s) => `${s.serverId}:${s.sessionId}`));
   const knownServerIds = new Set(servers.map((s) => s.id));
-  for (const key of sessionFirstSeen.keys()) {
-    const serverId = key.slice(0, key.indexOf(":"));
-    // Server removed or disabled — the entry can never be matched again.
-    if (!knownServerIds.has(serverId)) {
-      sessionFirstSeen.delete(key);
-      continue;
-    }
-    if (!polledServerIds.has(serverId)) continue;
-    if (!activeKeys.has(key)) sessionFirstSeen.delete(key);
-  }
+  pruneFirstSeen(activeKeys, knownServerIds, polledServerIds);
 
   return allSessions;
 }

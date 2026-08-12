@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -19,6 +19,12 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+const sendDiscordNotification = vi.fn().mockResolvedValue(undefined);
+vi.mock("@/lib/discord/client", () => ({
+  sendDiscordNotification: (...args: unknown[]) => sendDiscordNotification(...args),
+  buildMaintenanceEmbed: vi.fn(() => ({})),
+}));
+
 // Import route handlers AFTER mocks
 import { GET, PUT } from "@/app/api/tools/maintenance/route";
 
@@ -31,6 +37,35 @@ describe("Tools maintenance endpoints", () => {
 
   afterAll(async () => {
     await disconnectTestDb();
+  });
+
+  describe("Discord maintenance notification", () => {
+    async function seedWebhook(userId: string) {
+      await getTestPrisma().appSettings.upsert({
+        where: { userId },
+        update: { discordWebhookUrl: "https://discord/webhook", discordNotifyMaintenance: true },
+        create: { userId, discordWebhookUrl: "https://discord/webhook", discordNotifyMaintenance: true },
+      });
+    }
+
+    it("fires only on an enabled<->disabled transition, not on every edit", async () => {
+      const user = await createTestUser();
+      await seedWebhook(user.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      // Enable -> transition -> 1 notification
+      await callRoute(PUT, { url: "/api/tools/maintenance", method: "PUT", body: { enabled: true, message: "Down" } });
+      expect(sendDiscordNotification).toHaveBeenCalledTimes(1);
+
+      // Edit the message while still enabled (what the UI does per keystroke) -> no notification
+      await callRoute(PUT, { url: "/api/tools/maintenance", method: "PUT", body: { enabled: true, message: "Down for a bit" } });
+      await callRoute(PUT, { url: "/api/tools/maintenance", method: "PUT", body: { enabled: true, message: "Down for a while" } });
+      expect(sendDiscordNotification).toHaveBeenCalledTimes(1);
+
+      // Disable -> transition -> 1 more
+      await callRoute(PUT, { url: "/api/tools/maintenance", method: "PUT", body: { enabled: false, message: "Down for a while" } });
+      expect(sendDiscordNotification).toHaveBeenCalledTimes(2);
+    });
   });
 
   // ----- GET /api/tools/maintenance -----

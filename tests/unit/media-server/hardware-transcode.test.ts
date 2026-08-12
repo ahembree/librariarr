@@ -48,10 +48,12 @@ describe("hardwareEncoder / hardwareDecoder", () => {
     expect(hardwareEncoder(transcoding({ hwEncode: "VAAPI" }))).toBe("vaapi");
   });
 
-  it("reads Jellyfin's single pipeline-level value for both halves", () => {
-    const t = transcoding({ hwAccel: "qsv" });
-    expect(hardwareEncoder(t)).toBe("qsv");
-    expect(hardwareDecoder(t)).toBe("qsv");
+  it("only trusts Plex's per-job fields (hwDecode/hwEncode)", () => {
+    // Jellyfin/Emby report a config-level HardwareAccelerationType that does not
+    // prove a given job used hardware, so it is not captured — detection is
+    // Plex-only. A session with no per-job fields reads as unknown/CPU.
+    expect(hardwareEncoder(transcoding())).toBeUndefined();
+    expect(hardwareDecoder(transcoding())).toBeUndefined();
   });
 
   it("treats a software encoder as no acceleration", () => {
@@ -77,9 +79,9 @@ describe("hardwareEncoder / hardwareDecoder", () => {
 });
 
 describe("isHardwareTranscode", () => {
-  it("is true when the encode runs on hardware", () => {
+  it("is true when the (Plex) encode runs on hardware", () => {
     expect(isHardwareTranscode(session(transcoding({ hwEncode: "vaapi" })))).toBe(true);
-    expect(isHardwareTranscode(session(transcoding({ hwAccel: "nvenc" })))).toBe(true);
+    expect(isHardwareTranscode(session(transcoding({ hwEncode: "hevc_nvenc" })))).toBe(true);
   });
 
   // The encode is the expensive half. A hardware decode feeding a software

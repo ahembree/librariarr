@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -22,11 +22,15 @@ vi.mock("@/lib/logger", () => ({
 
 // Mock the media server factory
 const mockGetSessions = vi.hoisted(() => vi.fn());
+const mockListUsernames = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/media-server/factory", () => ({
-  createMediaServerClient: vi.fn().mockImplementation(function () {
-    return {
-      getSessions: mockGetSessions,
-    };
+  createMediaServerClient: vi.fn().mockImplementation(function (type: string) {
+    // Only Jellyfin/Emby expose listUsernames; Plex leaves it undefined so the
+    // route falls back to live sessions (Plex friends are fetched separately).
+    if (type === "JELLYFIN" || type === "EMBY") {
+      return { getSessions: mockGetSessions, listUsernames: mockListUsernames };
+    }
+    return { getSessions: mockGetSessions };
   }),
 }));
 
@@ -45,6 +49,7 @@ describe("GET /api/tools/users", () => {
     clearMockSession();
     vi.clearAllMocks();
     mockGetSessions.mockResolvedValue([]);
+    mockListUsernames.mockResolvedValue([]);
     mockGetPlexFriends.mockResolvedValue([]);
   });
 
@@ -135,5 +140,31 @@ describe("GET /api/tools/users", () => {
 
     // Should still return the owner username
     expect(body.users).toContain("admin");
+  });
+  it("lists all Jellyfin users, not just those currently streaming", async () => {
+    const user = await createTestUser({ username: "admin" });
+    await getTestPrisma().mediaServer.create({
+      data: {
+        userId: user.id,
+        type: "JELLYFIN",
+        name: "JF",
+        url: "http://jf.test:8096",
+        accessToken: "jf-tok",
+        machineId: `jf-${Date.now()}`,
+        tlsSkipVerify: false,
+        enabled: true,
+      },
+    });
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    // No one is streaming, but the server knows about offline users.
+    mockGetSessions.mockResolvedValue([]);
+    mockListUsernames.mockResolvedValue(["alice", "bob"]);
+
+    const response = await callRoute(GET, { url: "/api/tools/users" });
+    const body = await expectJson<{ users: string[] }>(response, 200);
+
+    expect(mockListUsernames).toHaveBeenCalled();
+    expect(body.users).toEqual(expect.arrayContaining(["admin", "alice", "bob"]));
   });
 });

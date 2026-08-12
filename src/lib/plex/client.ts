@@ -17,6 +17,7 @@ import type {
 } from "./types";
 import type { MediaServerClient, LibraryItemType } from "@/lib/media-server/client";
 import { isMediaItem } from "@/lib/media-server/item-types";
+import { normalizeResolutionFromDimensions } from "@/lib/resolution";
 import { logger } from "@/lib/logger";
 
 export interface PlexClientOptions {
@@ -216,6 +217,30 @@ export class PlexClient implements MediaServerClient {
       `/library/metadata/${ratingKey}`
     );
     return response.data.MediaContainer.Metadata[0];
+  }
+
+  /**
+   * Per-version SOURCE resolution for an item, keyed by Media id. A Plex item
+   * can hold several versions (e.g. a 4K and a 1080p copy) at different
+   * resolutions; the synced MediaItem stores only one. Library metadata (unlike
+   * a session's Media element) reports each version's true file dimensions, so
+   * the transcode manager can match the exact version being played instead of
+   * terminating the 1080p copy of a 4K title (or missing the 4K copy of an item
+   * synced as 1080p). Returns raw resolution strings (e.g. "4k", "1080") to be
+   * normalized by the caller, matching how MediaItem.resolution is stored.
+   */
+  async getItemMediaResolutions(ratingKey: string): Promise<Map<string, string>> {
+    const meta = await this.getItemMetadata(ratingKey);
+    const medias = (meta as unknown as { Media?: Array<Record<string, unknown>> }).Media ?? [];
+    const map = new Map<string, string>();
+    for (const m of medias) {
+      if (m.id == null) continue;
+      const res =
+        normalizeResolutionFromDimensions(m.width as number | undefined, m.height as number | undefined) ??
+        (m.videoResolution ? String(m.videoResolution) : undefined);
+      if (res) map.set(String(m.id), res);
+    }
+    return map;
   }
 
   async getAccounts(): Promise<Map<number, string>> {
@@ -685,7 +710,9 @@ export class PlexClient implements MediaServerClient {
         const genreArray = (item.Genre as Array<{ tag: string }>) || [];
 
         return {
-          sessionId: String(session.id ?? ""),
+          sessionId: String(session.id ?? item.sessionKey ?? ""),
+          ratingKey: item.ratingKey ? String(item.ratingKey) : undefined,
+          mediaId: firstMedia.id != null ? String(firstMedia.id) : undefined,
           userId: String(user.id ?? ""),
           username: String(user.title ?? "Unknown"),
           userThumb: String(user.thumb ?? ""),
@@ -755,8 +782,14 @@ export class PlexClient implements MediaServerClient {
         } satisfies PlexSession;
       });
     } catch (error) {
+      // Propagate — callers distinguish "unreachable" from "no sessions":
+      // the enforcer preserves grace-timer/block_new_only snapshots for a
+      // server it couldn't reach, and the sessions route reports it as
+      // unreachable. Swallowing to [] made every hiccup look like "all
+      // streams ended", resetting timers and mass-terminating grandfathered
+      // block_new_only streams on recovery.
       logger.debug("Plex", "Failed to fetch sessions", { error: String(error) });
-      return [];
+      throw error;
     }
   }
 
