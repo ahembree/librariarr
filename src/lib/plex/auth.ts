@@ -81,9 +81,23 @@ export async function getPlexFriends(
         "X-Plex-Token": authToken,
       },
     });
-    // Response is an array of friend objects with username/title fields
-    return (response.data as { username?: string; title?: string }[])
-      .map((f) => f.username || f.title || "")
+    // Response is an array of friend objects. Prefer `friendlyName`: when a user
+    // sets a Plex "Full Name", that is the display title Plex reports for them in
+    // session data (`/status/sessions` -> User@title, which is what the stream
+    // manager's excluded-users list is matched against). `username`/`title` hold
+    // the login username instead, so returning those meant a friend with a
+    // friendly name set could never be excluded — the name in the picker never
+    // matched the name on their session. `friendlyName` is absent/empty when
+    // unset, so fall back to `title`/`username` (which Plex equates for accounts
+    // without a friendly name, and which is all a managed/home user has).
+    return (
+      response.data as {
+        username?: string;
+        title?: string;
+        friendlyName?: string;
+      }[]
+    )
+      .map((f) => f.friendlyName || f.title || f.username || "")
       .filter(Boolean);
   } catch {
     return [];

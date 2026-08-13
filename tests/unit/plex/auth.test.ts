@@ -199,20 +199,42 @@ describe("Plex Auth", () => {
   });
 
   describe("getPlexFriends", () => {
-    it("returns array of friend usernames", async () => {
+    it("returns array of friend names", async () => {
       mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
         plexClientId: "client-id",
       });
       mockAxiosGet.mockResolvedValueOnce({
         data: [
-          { username: "friend1", title: "Friend 1" },
+          // Regular account: Plex equates title with the login username.
+          { username: "friend1", title: "friend1" },
           { username: "friend2" },
+          // Managed/home user: no login username, only a title.
           { title: "friend3" },
         ],
       });
 
       const result = await getPlexFriends("auth-token");
       expect(result).toEqual(["friend1", "friend2", "friend3"]);
+    });
+
+    it("prefers the friendly name Plex reports on sessions over the login username", async () => {
+      // The excluded-users picker is matched against a session's User@title,
+      // which is the account's friendly ("Full Name") when one is set — not the
+      // login username. So a friend who set a friendly name must surface by that
+      // name here, or excluding them would never match their session.
+      mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
+        plexClientId: "client-id",
+      });
+      mockAxiosGet.mockResolvedValueOnce({
+        data: [
+          { username: "dad_login", title: "dad_login", friendlyName: "Dad" },
+          // No friendly name set -> falls back to the login username.
+          { username: "mom_login", title: "mom_login", friendlyName: "" },
+        ],
+      });
+
+      const result = await getPlexFriends("auth-token");
+      expect(result).toEqual(["Dad", "mom_login"]);
     });
 
     it("returns empty array on error", async () => {
