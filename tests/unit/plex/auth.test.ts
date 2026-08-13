@@ -199,25 +199,43 @@ describe("Plex Auth", () => {
   });
 
   describe("getPlexFriends", () => {
-    it("returns array of friend names", async () => {
+    it("unwraps the { users: [...] } response the v2 friends endpoint returns", async () => {
+      // Regression: the endpoint wraps the list in an object, so mapping over
+      // `response.data` directly threw and every Plex user got an empty friends
+      // list — the excluded-users picker only ever showed the owner and whoever
+      // was streaming. The array lives under `users`.
       mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
         plexClientId: "client-id",
       });
       mockAxiosGet.mockResolvedValueOnce({
-        data: [
-          // Regular account: Plex equates title with the login username.
-          { username: "friend1", title: "friend1" },
-          { username: "friend2" },
-          // Managed/home user: no login username, only a title.
-          { title: "friend3" },
-        ],
+        data: {
+          users: [
+            { username: "friend1", title: "friend1" },
+            { username: "friend2" },
+            // Managed/home user: no login username, only a title.
+            { title: "friend3" },
+          ],
+        },
       });
 
       const result = await getPlexFriends("auth-token");
       expect(result).toEqual(["friend1", "friend2", "friend3"]);
     });
 
-    it("prefers the friendly name Plex reports on sessions over the login username", async () => {
+    it("still accepts a bare-array response", async () => {
+      // Belt-and-suspenders: older/other deployments have returned a bare array.
+      mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
+        plexClientId: "client-id",
+      });
+      mockAxiosGet.mockResolvedValueOnce({
+        data: [{ username: "friend1", title: "friend1" }, { username: "friend2" }],
+      });
+
+      const result = await getPlexFriends("auth-token");
+      expect(result).toEqual(["friend1", "friend2"]);
+    });
+
+    it("prefers the display title Plex reports on sessions over the login username", async () => {
       // The excluded-users picker is matched against a session's User@title,
       // which is the account's friendly ("Full Name") when one is set — not the
       // login username. So a friend who set a friendly name must surface by that
@@ -226,11 +244,13 @@ describe("Plex Auth", () => {
         plexClientId: "client-id",
       });
       mockAxiosGet.mockResolvedValueOnce({
-        data: [
-          { username: "dad_login", title: "dad_login", friendlyName: "Dad" },
-          // No friendly name set -> falls back to the login username.
-          { username: "mom_login", title: "mom_login", friendlyName: "" },
-        ],
+        data: {
+          users: [
+            { username: "dad_login", title: "dad_login", friendlyName: "Dad" },
+            // No friendly name set -> falls back to the login username.
+            { username: "mom_login", title: "mom_login", friendlyName: "" },
+          ],
+        },
       });
 
       const result = await getPlexFriends("auth-token");
@@ -246,16 +266,24 @@ describe("Plex Auth", () => {
       expect(result).toEqual([]);
     });
 
+    it("returns empty array for an unexpected response shape", async () => {
+      // Neither a bare array nor `{ users: [...] }` — must not throw.
+      mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
+        plexClientId: "client-id",
+      });
+      mockAxiosGet.mockResolvedValueOnce({ data: { unexpected: true } });
+      const result = await getPlexFriends("auth-token");
+      expect(result).toEqual([]);
+    });
+
     it("filters out empty usernames", async () => {
       mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
         plexClientId: "client-id",
       });
       mockAxiosGet.mockResolvedValueOnce({
-        data: [
-          { username: "friend1" },
-          { username: "", title: "" },
-          {},
-        ],
+        data: {
+          users: [{ username: "friend1" }, { username: "", title: "" }, {}],
+        },
       });
       const result = await getPlexFriends("auth-token");
       expect(result).toEqual(["friend1"]);

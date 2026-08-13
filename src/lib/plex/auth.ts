@@ -71,6 +71,12 @@ export async function getPlexResources(
   return response.data;
 }
 
+interface PlexFriend {
+  username?: string;
+  title?: string;
+  friendlyName?: string;
+}
+
 export async function getPlexFriends(
   authToken: string
 ): Promise<string[]> {
@@ -81,22 +87,27 @@ export async function getPlexFriends(
         "X-Plex-Token": authToken,
       },
     });
-    // Response is an array of friend objects. Prefer `friendlyName`: when a user
-    // sets a Plex "Full Name", that is the display title Plex reports for them in
-    // session data (`/status/sessions` -> User@title, which is what the stream
-    // manager's excluded-users list is matched against). `username`/`title` hold
-    // the login username instead, so returning those meant a friend with a
-    // friendly name set could never be excluded — the name in the picker never
-    // matched the name on their session. `friendlyName` is absent/empty when
-    // unset, so fall back to `title`/`username` (which Plex equates for accounts
-    // without a friendly name, and which is all a managed/home user has).
-    return (
-      response.data as {
-        username?: string;
-        title?: string;
-        friendlyName?: string;
-      }[]
-    )
+
+    // The v2 friends endpoint wraps the list in an object: `{ users: [...] }`.
+    // The old code mapped over `response.data` directly, so `.map` threw (the
+    // payload is an object, not an array), the throw was swallowed by the catch
+    // below, and NO friends ever reached the excluded-users picker — it only
+    // ever listed the owner and whoever happened to be streaming at that moment.
+    // Unwrap `users`, and still accept a bare array in case a deployment or
+    // future revision returns one.
+    const data = response.data as { users?: PlexFriend[] } | PlexFriend[] | null;
+    const friends: PlexFriend[] = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.users)
+        ? data.users
+        : [];
+
+    // Prefer the display name. Plex reports a user's friendly/display title in
+    // session data (`/status/sessions` -> User@title), which is what the stream
+    // manager matches excluded users against — not the login `username`. Fall
+    // back through `title` to `username` (Plex equates the two for accounts with
+    // no friendly name, and `title` is all a managed/home user has).
+    return friends
       .map((f) => f.friendlyName || f.title || f.username || "")
       .filter(Boolean);
   } catch {
