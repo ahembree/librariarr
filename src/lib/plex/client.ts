@@ -258,6 +258,22 @@ export class PlexClient implements MediaServerClient {
     }
   }
 
+  /**
+   * Every account name the server knows about (`/accounts`) — i.e. every user
+   * who has streamed, not just whoever has a session open right now. This is
+   * what the excluded-users picker enumerates for Plex, the counterpart to
+   * Jellyfin/Emby's `/Users`. The plex.tv friends list only covers account-level
+   * "friends" (never Plex Home/managed users, and empty for many setups), so it
+   * can't be the source here. Account id 0 is Plex's "anonymous/local" pseudo
+   * account with a blank name — the empty-name filter drops it.
+   */
+  async listUsernames(): Promise<string[]> {
+    const accounts = await this.getAccounts();
+    return Array.from(accounts.values()).filter(
+      (name): name is string => typeof name === "string" && name.length > 0
+    );
+  }
+
   async getWatchHistory(
     ratingKey: string,
     itemDuration?: number
