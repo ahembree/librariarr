@@ -115,7 +115,13 @@ export async function GET(request: NextRequest) {
   const items = await prisma.mediaItem.findMany({
     where,
     ...(limit > 0 ? { skip, take: limit + 1 } : { skip }),
-    orderBy: { [sortBy]: sortOrder },
+    // `id` is the tiebreaker, not decoration: without a total order Postgres is
+    // free to return tied rows in any order, and the two passes of a progressive
+    // load are planned differently (bounded top-N heapsort vs full quicksort or
+    // external merge). The tie block straddling the page boundary then permutes
+    // between the passes, so the stitched list shows some rows twice and drops
+    // others entirely. Reproduced at 80 duplicated / 80 missing out of 20k rows.
+    orderBy: [{ [sortBy]: sortOrder }, { id: "asc" as const }],
     select: selectBase,
   });
 

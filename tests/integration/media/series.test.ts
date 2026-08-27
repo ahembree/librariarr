@@ -531,3 +531,39 @@ describe("/api/media/series progressive loading", () => {
     expect(body.items[0]).toHaveProperty("title");
   });
 });
+
+describe("/api/media/series total accounting", () => {
+  beforeEach(async () => {
+    await cleanDatabase();
+    clearMockSession();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+    for (let i = 1; i <= 5; i++) {
+      await createTestMediaItem(lib.id, { title: `Ep ${i}`, type: "SERIES", ratingKey: `rk-shape-${i}` });
+    }
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+  });
+
+  it("derives total without a COUNT(*) when returning everything after an offset", async () => {
+    // The count is a filtered scan of the largest table in the schema, and the
+    // progressive remainder pass (limit=0) does not need it: the total is
+    // exactly skip + items.length. The reported total must still be right.
+    const body = await expectJson<{ items: unknown[]; pagination: { total: number; pages: number } }>(
+      await callRoute(GET, { url: "/api/media/series", searchParams: { limit: "0", offset: "2" } }),
+      200,
+    );
+    expect(body.items).toHaveLength(3);
+    expect(body.pagination.total).toBe(5);
+    expect(body.pagination.pages).toBe(1);
+  });
+
+  it("still counts when a page size is set", async () => {
+    const body = await expectJson<{ pagination: { total: number; pages: number } }>(
+      await callRoute(GET, { url: "/api/media/series", searchParams: { limit: "2" } }),
+      200,
+    );
+    expect(body.pagination.total).toBe(5);
+    expect(body.pagination.pages).toBe(3);
+  });
+});

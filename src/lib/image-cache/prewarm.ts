@@ -19,9 +19,12 @@ import { CACHE_WIDTH_GRID, CACHE_WIDTH_GRID_WIDE } from "@/lib/image-url";
  *   lazy; they're one-per-page-view, not one-per-card.
  * - **Skips what's already cached**, so a re-run after an incremental sync
  *   costs a stat() per target rather than a refetch.
- * - **Capped per run** (see PREWARM_MAX_PER_RUN). A first run on a large library
- *   warms the cap and the next sync picks up where it left off, instead of
- *   holding a connection open against the media server for an hour.
+ * - **Capped per run** (see PREWARM_MAX_PER_RUN). The budget is spent on actual
+ *   fetches, never on list positions: an already-cached target costs a stat()
+ *   and no budget, so the next run skips everything previous runs warmed and
+ *   spends its whole budget on new artwork. Capping the *list* instead would
+ *   re-examine the same prefix every run and never reach the tail — the
+ *   deliberately-deferred episode stills would stay cold forever.
  * - **Ordered cheapest-value-first** — posters before episode stills — so when
  *   the cap does bite, it trims the artwork least likely to be on screen.
  */
@@ -31,9 +34,11 @@ import { CACHE_WIDTH_GRID, CACHE_WIDTH_GRID_WIDE } from "@/lib/image-url";
  *  background work and must not compete with live browsing. */
 const PREWARM_CONCURRENCY = 3;
 
-/** Upper bound on images warmed in a single run. Progress is monotonic across
- *  runs because already-cached targets are skipped, so a large library warms
- *  over several syncs rather than in one long burst. */
+/** Upper bound on media-server fetches in a single run — successes and failures
+ *  both spend it, since each one cost a round trip. Already-cached targets are
+ *  skipped without spending budget, which is what makes progress monotonic
+ *  across runs: a large library warms over several syncs rather than in one
+ *  long burst. */
 const PREWARM_MAX_PER_RUN = 5000;
 
 /** Consecutive failures after which the run gives up. A media server that has
@@ -48,7 +53,7 @@ export interface PrewarmResult {
   /** Already on disk — no media-server round trip. */
   alreadyCached: number;
   failed: number;
-  /** True when PREWARM_MAX_PER_RUN cut the run short. */
+  /** True when the per-run fetch budget cut the run short. */
   capped: boolean;
   /** True when the failure limit or an unreachable server aborted the run. */
   abandoned: boolean;
@@ -175,24 +180,33 @@ export async function prewarmServerArtwork(serverId: string): Promise<PrewarmRes
     return { ...empty, abandoned: true };
   }
 
-  const capped = targets.length > PREWARM_MAX_PER_RUN;
-  const batch = capped ? targets.slice(0, PREWARM_MAX_PER_RUN) : targets;
-
   const client = createMediaServerClient(server.type, server.url, server.accessToken, {
     skipTlsVerify: server.tlsSkipVerify,
   });
 
-  const result: PrewarmResult = { ...empty, considered: targets.length, capped };
+  const result: PrewarmResult = { ...empty, considered: targets.length };
   let consecutiveFailures = 0;
+  /** Media-server fetches spent this run — a budget, not a list position. */
+  let budgetSpent = 0;
   const started = Date.now();
 
-  await mapWithConcurrency(batch, PREWARM_CONCURRENCY, async (target) => {
-    if (result.abandoned) return;
+  await mapWithConcurrency(targets, PREWARM_CONCURRENCY, async (target) => {
+    // Once the budget is gone nothing further can be warmed, so stop rather
+    // than stat()-ing the whole tail for no reason.
+    if (result.abandoned || result.capped) return;
 
     if (await getCachedImageInfo(target.url, { maxWidth: target.width })) {
       result.alreadyCached++;
       return;
     }
+
+    // Reserve synchronously, before any await, so concurrent workers cannot
+    // collectively overshoot the budget.
+    if (budgetSpent >= PREWARM_MAX_PER_RUN) {
+      result.capped = true;
+      return;
+    }
+    budgetSpent++;
 
     try {
       await cacheImage(target.url, () => client.fetchImage(target.url), { maxWidth: target.width });
@@ -219,11 +233,12 @@ export async function prewarmServerArtwork(serverId: string): Promise<PrewarmRes
         `${result.failed > 0 ? `, ${result.failed} failed` : ""} in ${Math.round((Date.now() - started) / 1000)}s`,
     );
   }
-  if (capped) {
+  if (result.capped) {
     // Never let a truncated run read as "everything is warm".
     logger.info(
       "ImageCache",
-      `Artwork prewarm hit the per-run cap — warmed ${PREWARM_MAX_PER_RUN} of ${targets.length} targets; the rest follow on the next sync`,
+      `Artwork prewarm hit the per-run fetch budget after ${budgetSpent} fetches ` +
+        `(${result.warmed} warmed) across ${targets.length} targets; the rest follow on the next sync`,
     );
   }
   return result;

@@ -10,7 +10,7 @@ import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
 import { useChipColors } from "@/components/chip-color-provider";
 import { Music, Disc3, ListMusic, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
-import type { MediaItemWithRelations } from "@/lib/types";
+import type { MediaItemWithRelations, MediaListItem } from "@/lib/types";
 import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
@@ -33,7 +33,7 @@ export default function AllTracksPage() {
   const { getHex } = useChipColors();
   const { show, showServers, setVisible, prefs } = useCardDisplay("MUSIC_TRACKS");
   const { servers } = useServers();
-  const [items, setItems] = useState<MediaItemWithRelations[]>([]);
+  const [items, setItems] = useState<MediaListItem[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [sortBy, setSortBy] = useState("title");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
@@ -106,7 +106,7 @@ export default function AllTracksPage() {
       });
       // Paint the first screenful, then fill in the rest behind it — the whole
       // library in one response meant nothing rendered until all of it landed.
-      await fetchListProgressively<MediaItemWithRelations>(
+      await fetchListProgressively<MediaListItem>(
         "/api/media/music",
         params,
         (loaded, done) => {

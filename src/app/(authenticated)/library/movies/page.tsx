@@ -20,7 +20,7 @@ import { LibraryToolbar } from "@/components/library-toolbar";
 import { AlphabetFilter } from "@/components/alphabet-filter";
 import { useVirtualGridAlphabet } from "@/hooks/use-virtual-grid-alphabet";
 import { useTableAlphabet } from "@/hooks/use-table-alphabet";
-import type { MediaItemWithRelations } from "@/lib/types";
+import type { MediaItemWithRelations, MediaListItem } from "@/lib/types";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { SyncLibraryButton } from "@/components/sync-library-button";
@@ -51,7 +51,7 @@ const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar between poster and content
 
 export default function MoviesPage() {
   const router = useRouter();
-  const [items, setItems] = useState<MediaItemWithRelations[]>([]);
+  const [items, setItems] = useState<MediaListItem[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const { savedFilters, persistFilters } = useFilterPersistence("filters-/library/movies");
   const [sortBy, setSortBy] = useState("title");
@@ -211,7 +211,7 @@ export default function MoviesPage() {
 
       // Paint the first screenful, then fill in the rest behind it — the whole
       // library in one response meant nothing rendered until all of it landed.
-      await fetchListProgressively<MediaItemWithRelations>(
+      await fetchListProgressively<MediaListItem>(
         "/api/media/movies",
         params,
         (loaded, done) => {

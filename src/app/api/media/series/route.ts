@@ -119,18 +119,28 @@ export async function GET(request: NextRequest) {
     where.dedupCanonical = true;
   }
 
-  const [items, total] = await Promise.all([
-    prisma.mediaItem.findMany({
-      where,
-      ...(limit > 0 ? { skip, take: limit + 1 } : { skip }),
-      orderBy: { [sortBy]: sortOrder },
-      select: selectBase,
-    }),
-    prisma.mediaItem.count({ where }),
-  ]);
+  // `total` is part of this route's contract, but the COUNT(*) behind it is a
+  // filtered scan of the largest table in the schema. It is only *needed* when a
+  // page size is set (to derive `pages`); when the caller asked for everything
+  // after `skip`, the total is exactly `skip + items.length`. Deriving it there
+  // removes one of the two counts a progressive page load used to pay.
+  const items = await prisma.mediaItem.findMany({
+    where,
+    ...(limit > 0 ? { skip, take: limit + 1 } : { skip }),
+    // `id` is the tiebreaker, not decoration: without a total order Postgres is
+    // free to return tied rows in any order, and the two passes of a progressive
+    // load are planned differently (bounded top-N heapsort vs full quicksort or
+    // external merge). The tie block straddling the page boundary then permutes
+    // between the passes, so the stitched list shows some rows twice and drops
+    // others entirely. Reproduced at 80 duplicated / 80 missing out of 20k rows.
+    orderBy: [{ [sortBy]: sortOrder }, { id: "asc" as const }],
+    select: selectBase,
+  });
 
   const hasMore = limit > 0 && items.length > limit;
   if (hasMore) items.pop();
+
+  const total = limit > 0 ? await prisma.mediaItem.count({ where }) : skip + items.length;
 
   // For multi-server, attach server presence from all servers sharing dedupKey
   let serversByKey: Map<string, { serverId: string; serverName: string; serverType: string; mediaItemId: string }[]> | null = null;

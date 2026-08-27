@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -453,6 +453,49 @@ describe("GET /api/media/movies", () => {
       });
       const body = await expectJson<{ items: unknown[] }>(response, 200);
       expect(body.items).toHaveLength(5);
+    });
+  });
+
+  describe("stable ordering", () => {
+    // Needs real volume: the defect only appears once the two passes are planned
+    // differently (bounded top-N heapsort vs full quicksort), which a handful of
+    // rows never triggers. Verified to fail without the ORDER BY tiebreaker at
+    // exactly 80 duplicated / 80 missing rows.
+    const TIED_ROWS = 20000;
+
+    it("stitches a two-pass fetch over a tied sort with no duplicate or missing rows", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id);
+      // Raw insert: 20k rows through the factory would dominate the suite.
+      await getTestPrisma().$executeRawUnsafe(`
+        INSERT INTO "MediaItem" (id,"libraryId","ratingKey",title,"titleSort",year,type,"playCount","dedupCanonical","isWatchlisted","createdAt","updatedAt")
+        SELECT 'tie-'||lpad(i::text,6,'0'), '${lib.id}', 'rk-tie-'||i, 'Movie '||i, 'Movie '||i,
+               (i*7919) % 40, 'MOVIE', 0, true, false, NOW(), NOW()
+        FROM generate_series(1,${TIED_ROWS}) i`);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      // Exactly what fetchListProgressively issues.
+      const first = await expectJson<{ items: { id: string }[] }>(
+        await callRoute(GET, {
+          url: "/api/media/movies",
+          searchParams: { page: "1", limit: "100", sortBy: "year" },
+        }),
+        200,
+      );
+      const rest = await expectJson<{ items: { id: string }[] }>(
+        await callRoute(GET, {
+          url: "/api/media/movies",
+          searchParams: { limit: "0", offset: String(first.items.length), sortBy: "year" },
+        }),
+        200,
+      );
+
+      const ids = [...first.items, ...rest.items].map((i) => i.id);
+      expect(ids).toHaveLength(TIED_ROWS);
+      // Without a unique tiebreaker the tie block straddling the page boundary
+      // permutes between the passes: rows appear twice and others vanish.
+      expect(new Set(ids).size).toBe(TIED_ROWS);
     });
   });
 

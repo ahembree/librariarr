@@ -11,7 +11,7 @@ import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/medi
 import { Tv, Layers, List, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import Link from "next/link";
-import type { MediaItemWithRelations } from "@/lib/types";
+import type { MediaItemWithRelations, MediaListItem } from "@/lib/types";
 import { useCardSize, BREAKPOINTS, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
@@ -45,7 +45,7 @@ export default function AllEpisodesPage() {
   const { getHex } = useChipColors();
   const { show, showServers, setVisible, prefs } = useCardDisplay("SERIES_EPISODES");
   const { servers } = useServers();
-  const [items, setItems] = useState<MediaItemWithRelations[]>([]);
+  const [items, setItems] = useState<MediaListItem[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [sortBy, setSortBy] = useState("title");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
@@ -175,7 +175,7 @@ export default function AllEpisodesPage() {
       });
       // Paint the first screenful, then fill in the rest behind it — the whole
       // library in one response meant nothing rendered until all of it landed.
-      await fetchListProgressively<MediaItemWithRelations>(
+      await fetchListProgressively<MediaListItem>(
         "/api/media/series",
         params,
         (loaded, done) => {

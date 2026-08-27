@@ -223,4 +223,55 @@ describe("prewarmServerArtwork", () => {
     expect(result.capped).toBe(true);
     expect(result.warmed).toBe(5000);
   });
+
+  it("spends the per-run cap on fetches, so a capped library finishes over successive runs", async () => {
+    // Regression: the cap used to truncate the *target list* before the
+    // already-cached check, so every later run re-examined the same first 5000
+    // targets, found them all cached, warmed nothing, and the deliberately
+    // deferred tail (episode stills) stayed cold forever.
+    const urls = Array.from({ length: 5003 }, (_, i) => `/movie/${i}/thumb/1`);
+    stubQueries({ moviePosters: urls });
+
+    // Stand in for the disk: whatever a run warms is cached for the next run.
+    const onDisk = new Set<string>();
+    m.getCachedImageInfo.mockImplementation(async (url: string) =>
+      onDisk.has(url) ? { cacheKey: "k", filePath: "/x", size: 1, mtimeMs: 0 } : null,
+    );
+    m.cacheImage.mockImplementation(async (url: string) => {
+      onDisk.add(url);
+      return { data: Buffer.from("x"), contentType: "image/webp", cacheKey: "k" };
+    });
+
+    const first = await prewarmServerArtwork("srv-1");
+    expect(first.warmed).toBe(5000);
+    expect(first.capped).toBe(true);
+
+    const second = await prewarmServerArtwork("srv-1");
+    expect(second.warmed).toBe(3); // the remainder, not zero
+    expect(second.alreadyCached).toBe(5000);
+    expect(second.capped).toBe(false);
+
+    // Everything is warm, and a third run is a pure no-op.
+    expect(onDisk.size).toBe(5003);
+    const third = await prewarmServerArtwork("srv-1");
+    expect(third.warmed).toBe(0);
+    expect(third.alreadyCached).toBe(5003);
+  });
+
+  it("does not let already-cached targets consume the fetch budget", async () => {
+    // 5000 cached + 2 cold: the cold pair must still be warmed in one run.
+    const cached = Array.from({ length: 5000 }, (_, i) => `/cached/${i}/thumb/1`);
+    const cold = ["/cold/a/thumb/1", "/cold/b/thumb/1"];
+    stubQueries({ moviePosters: [...cached, ...cold] });
+    const cachedSet = new Set(cached);
+    m.getCachedImageInfo.mockImplementation(async (url: string) =>
+      cachedSet.has(url) ? { cacheKey: "k", filePath: "/x", size: 1, mtimeMs: 0 } : null,
+    );
+
+    const result = await prewarmServerArtwork("srv-1");
+
+    expect(result.alreadyCached).toBe(5000);
+    expect(result.warmed).toBe(2);
+    expect(result.capped).toBe(false);
+  });
 });

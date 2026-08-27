@@ -26,14 +26,23 @@ import {
 import { ChevronUp, ChevronDown, ChevronsUpDown, Columns3, ShieldOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
-import type { MediaItemWithRelations } from "@/lib/types";
+// The table renders list payloads, which carry no `summary` — see MediaListItem.
+import type { MediaListItem } from "@/lib/types";
 import { ServerChips } from "@/components/server-chips";
 import { useColumnResize } from "@/hooks/use-column-resize";
 import { formatFileSize, formatDuration, formatDate } from "@/lib/format";
 
-interface MediaTableProps {
-  items: MediaItemWithRelations[];
-  onItemClick: (item: MediaItemWithRelations) => void;
+/**
+ * Generic over the row type so callers keep whatever they actually have.
+ * `MediaListItem` is the floor — the table itself only ever reads list fields —
+ * while the lifecycle preview passes a richer row and still gets that richer
+ * type back in its callbacks. Pinning this to one concrete type would either
+ * hide the preview's extra fields or hand list pages a `summary` their endpoint
+ * never sent.
+ */
+interface MediaTableProps<T extends MediaListItem = MediaListItem> {
+  items: T[];
+  onItemClick: (item: T) => void;
   sortBy?: string;
   sortOrder?: "asc" | "desc";
   onSort?: (field: string) => void;
@@ -46,9 +55,9 @@ interface MediaTableProps {
   /** Hide the servers column (e.g. when only one server is connected) */
   hideServers?: boolean;
   /** Optional callback to add extra CSS classes to a row based on the item */
-  rowClassName?: (item: MediaItemWithRelations) => string | undefined;
+  rowClassName?: (item: T) => string | undefined;
   /** Optional render function for hover popover content on each row */
-  renderHoverContent?: (item: MediaItemWithRelations) => React.ReactNode;
+  renderHoverContent?: (item: T) => React.ReactNode;
 }
 
 // --- Column Definitions ---
@@ -62,7 +71,7 @@ interface ColumnDef {
   defaultWidth: number;
   sortable?: boolean;
   className?: string;
-  render: (item: MediaItemWithRelations) => React.ReactNode;
+  render: (item: MediaListItem) => React.ReactNode;
 }
 
 // Resolution and dynamic range colors now come from ChipColorProvider context
@@ -93,7 +102,7 @@ function formatChannels(ch: number | null): string {
   return CHANNEL_LABELS[ch] ?? `${ch}ch`;
 }
 
-function formatEpisodeLabel(item: MediaItemWithRelations, isMusic: boolean): string | null {
+function formatEpisodeLabel(item: MediaListItem, isMusic: boolean): string | null {
   if (!item.parentTitle) return null;
   if (isMusic) {
     return item.episodeNumber != null ? String(item.episodeNumber) : null;
@@ -415,7 +424,7 @@ const VIDEO_COLUMN_IDS = new Set([
   "aspectRatio",
 ]);
 
-export const MediaTable = memo(function MediaTable({ items, onItemClick, sortBy, sortOrder, onSort, mediaType, hideParentTitle, scrollToIndexRef, exceptedItemIds, hideServers, rowClassName, renderHoverContent }: MediaTableProps) {
+function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, sortOrder, onSort, mediaType, hideParentTitle, scrollToIndexRef, exceptedItemIds, hideServers, rowClassName, renderHoverContent }: MediaTableProps<T>) {
   const { getHex } = useChipColors();
   const allColumns = useMemo(() => buildColumns(getHex), [getHex]);
   const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(() => getDefaultVisibility(allColumns));
@@ -807,4 +816,8 @@ export const MediaTable = memo(function MediaTable({ items, onItemClick, sortBy,
       </div>
     </div>
   );
-});
+}
+
+// memo() erases the generic call signature, so restore it with a cast — the
+// runtime value is the memoised component either way.
+export const MediaTable = memo(MediaTableInner) as typeof MediaTableInner;
