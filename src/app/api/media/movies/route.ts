@@ -5,6 +5,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { applyCommonFilters, applyStartsWithFilter } from "@/lib/filters/build-where";
 import { applyStreamCountFilters } from "@/lib/filters/stream-count";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
+import { parseListPagination } from "@/lib/api/pagination";
 import { getServerPresenceByDedupKey } from "@/lib/dedup/server-presence";
 
 // Valid MediaItem scalar sort columns; anything else falls back to title.
@@ -31,11 +32,7 @@ export async function GET(request: NextRequest) {
   }
 
   const { searchParams } = new URL(request.url);
-  const page = Math.max(1, parseInt(searchParams.get("page") ?? "1") || 1);
-  const rawLimit = parseInt(searchParams.get("limit") ?? "50");
-  // 0 = "return all"; otherwise clamp to [1, 100]. A negative value previously
-  // produced a Prisma reverse-take and an always-true hasMore.
-  const limit = rawLimit === 0 ? 0 : Math.max(1, Math.min(Number.isNaN(rawLimit) ? 50 : rawLimit, 100));
+  const { page, limit, skip } = parseListPagination(searchParams);
   const search = searchParams.get("search");
   const rawSortBy = searchParams.get("sortBy") ?? "title";
   const sortBy = SORT_COLUMNS.has(rawSortBy) ? rawSortBy : "title";
@@ -93,7 +90,6 @@ export async function GET(request: NextRequest) {
     ratingImage: true,
     audienceRating: true,
     audienceRatingImage: true,
-    summary: true,
     genres: true,
     studio: true,
     dedupKey: true,
@@ -113,7 +109,7 @@ export async function GET(request: NextRequest) {
 
   const items = await prisma.mediaItem.findMany({
     where,
-    ...(limit > 0 ? { skip: (page - 1) * limit, take: limit + 1 } : {}),
+    ...(limit > 0 ? { skip, take: limit + 1 } : { skip }),
     orderBy:
       sortBy === "title"
         ? [{ titleSort: { sort: sortOrder, nulls: "last" } }, { title: sortOrder }]

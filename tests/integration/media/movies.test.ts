@@ -404,6 +404,81 @@ describe("GET /api/media/movies", () => {
       expect(body.pagination.limit).toBe(0);
       expect(body.pagination.hasMore).toBe(false);
     });
+
+    it("returns everything after an offset when limit=0", async () => {
+      // How the library views fetch the remainder after painting the first
+      // screenful — without it the only way to express this is a full refetch.
+      const response = await callRoute(GET, {
+        url: "/api/media/movies",
+        searchParams: { limit: "0", offset: "2" },
+      });
+      const body = await expectJson<{ items: { title: string }[] }>(response, 200);
+
+      expect(body.items.map((i) => i.title)).toEqual([
+        "Movie 03", "Movie 04", "Movie 05",
+      ]);
+    });
+
+    it("stitches an offset fetch onto a first page with no gap or overlap", async () => {
+      const first = await expectJson<{ items: { title: string }[] }>(
+        await callRoute(GET, { url: "/api/media/movies", searchParams: { page: "1", limit: "2" } }),
+        200,
+      );
+      const rest = await expectJson<{ items: { title: string }[] }>(
+        await callRoute(GET, {
+          url: "/api/media/movies",
+          searchParams: { limit: "0", offset: String(first.items.length) },
+        }),
+        200,
+      );
+
+      const stitched = [...first.items, ...rest.items].map((i) => i.title);
+      expect(stitched).toEqual(["Movie 01", "Movie 02", "Movie 03", "Movie 04", "Movie 05"]);
+      expect(new Set(stitched).size).toBe(5);
+    });
+
+    it("prefers an explicit offset over the page-derived skip", async () => {
+      const response = await callRoute(GET, {
+        url: "/api/media/movies",
+        searchParams: { page: "3", limit: "2", offset: "1" },
+      });
+      const body = await expectJson<{ items: { title: string }[] }>(response, 200);
+      expect(body.items.map((i) => i.title)).toEqual(["Movie 02", "Movie 03"]);
+    });
+
+    it("ignores a malformed offset", async () => {
+      const response = await callRoute(GET, {
+        url: "/api/media/movies",
+        searchParams: { limit: "0", offset: "abc" },
+      });
+      const body = await expectJson<{ items: unknown[] }>(response, 200);
+      expect(body.items).toHaveLength(5);
+    });
+  });
+
+  describe("payload shape", () => {
+    it("omits summary — the popover fetches it for the one hovered item", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id);
+      await createTestMediaItem(lib.id, {
+        type: "MOVIE",
+        title: "Summarised",
+        summary: "A paragraph of prose that would ride along on every single row.",
+      });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const body = await expectJson<{ items: Record<string, unknown>[] }>(
+        await callRoute(GET, { url: "/api/media/movies", searchParams: { limit: "0" } }),
+        200,
+      );
+
+      expect(body.items).toHaveLength(1);
+      expect(body.items[0]).not.toHaveProperty("summary");
+      // The fields the cards and table actually render still come through.
+      expect(body.items[0]).toHaveProperty("title", "Summarised");
+      expect(body.items[0]).toHaveProperty("resolution");
+    });
   });
 
   describe("startsWith filter", () => {

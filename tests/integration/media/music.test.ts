@@ -412,3 +412,57 @@ describe("Music endpoints", () => {
     });
   });
 });
+
+describe("/api/media/music progressive loading", () => {
+  beforeEach(async () => {
+    await cleanDatabase();
+    clearMockSession();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "MUSIC" });
+    for (let i = 1; i <= 5; i++) {
+      await createTestMediaItem(lib.id, {
+        title: `Item ${String(i).padStart(2, "0")}`,
+        type: "MUSIC",
+        ratingKey: `rk-off-${i}`,
+        summary: "Prose that would ride along on every row.",
+      });
+    }
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+  });
+
+  it("returns everything after an offset when limit=0", async () => {
+    const body = await expectJson<{ items: { title: string }[] }>(
+      await callRoute(GET, { url: "/api/media/music", searchParams: { limit: "0", offset: "2", sortBy: "title" } }),
+      200,
+    );
+    expect(body.items.map((i) => i.title)).toEqual(["Item 03", "Item 04", "Item 05"]);
+  });
+
+  it("stitches an offset fetch onto a first page with no gap or overlap", async () => {
+    const first = await expectJson<{ items: { title: string }[] }>(
+      await callRoute(GET, { url: "/api/media/music", searchParams: { page: "1", limit: "2", sortBy: "title" } }),
+      200,
+    );
+    const rest = await expectJson<{ items: { title: string }[] }>(
+      await callRoute(GET, {
+        url: "/api/media/music",
+        searchParams: { limit: "0", offset: String(first.items.length), sortBy: "title" },
+      }),
+      200,
+    );
+    const stitched = [...first.items, ...rest.items].map((i) => i.title);
+    expect(stitched).toEqual(["Item 01", "Item 02", "Item 03", "Item 04", "Item 05"]);
+    expect(new Set(stitched).size).toBe(5);
+  });
+
+  it("omits summary — the popover fetches it for the one hovered track", async () => {
+    const body = await expectJson<{ items: Record<string, unknown>[] }>(
+      await callRoute(GET, { url: "/api/media/music", searchParams: { limit: "0" } }),
+      200,
+    );
+    expect(body.items.length).toBeGreaterThan(0);
+    expect(body.items[0]).not.toHaveProperty("summary");
+    expect(body.items[0]).toHaveProperty("title");
+  });
+});

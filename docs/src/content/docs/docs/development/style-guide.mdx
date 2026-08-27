@@ -376,6 +376,7 @@ For grouped data sources (series shows, seasons, music artists, albums), metadat
 **Rules:**
 
 - **Table and card views within the same page must always pass identical fields** — no exceptions
+- `summary` may be passed **or** fetched: the large list endpoints (movies, all-episodes, all-tracks) leave it out of their payloads because it is a paragraph of prose per row that only this popover renders. Those pages pass `summaryUrl` instead and the popover fetches the summary for the one hovered item when it opens, caching it. Every other field still comes from the list, so the popover paints immediately either way
 - `imageAspect="square"` for music items; `"poster"` (default) for everything else
 - `audioCodecCounts` is music-only; `qualityCounts` is series-only
 - When an item can be either individual or grouped (e.g. query results), conditionally pass the appropriate fields based on whether it's grouped (e.g. `seasonCount`/`episodeCount` for grouped series, `duration`/`resolution` for individual items)

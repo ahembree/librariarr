@@ -138,7 +138,7 @@ Real-browser end-to-end tests live in `e2e/` (Playwright, **separate from Vitest
 
 - `src/components/ui/` — shadcn/ui primitives (do not edit directly)
 - Custom components: `authenticated-shell.tsx` (app shell with sidebar, mobile glass header + drawer, global maintenance banner), `sidebar.tsx`, `media-table.tsx`, `media-filters.tsx`, `media-detail-panel.tsx`, `rule-builder.tsx`, `quality-chart.tsx`, `theme-provider.tsx`, `dashboard/` (fixed dashboard zones: `status-strip.tsx`, `library-tiles.tsx`, `lifecycle-pipeline.tsx`; the customizable Insights grid below them still uses `dashboard-card-grid.tsx` + `card-registry.ts`)
-- Hover popovers (`MediaHoverPopover`) must always pass the same universal set of fields regardless of page or view type — documented in `docs/src/content/docs/docs/development/style-guide.mdx` under "Hover Popovers". Table and card views within the same page must always pass identical fields.
+- Hover popovers (`MediaHoverPopover`) must always pass the same universal set of fields regardless of page or view type — documented in `docs/src/content/docs/docs/development/style-guide.mdx` under "Hover Popovers". Table and card views within the same page must always pass identical fields. `summary` is the one field that may arrive asynchronously: where the list endpoint omits it, pass `summaryUrl` instead and the popover fetches it on open.
 - `src/hooks/` — Custom React hooks:
   - `useVirtualGridAlphabet` / `useTableAlphabet` — alphabet navigation for virtualized grid vs table views (not interchangeable); provide `scrollToLetter`, `activeLetter`, and `availableLetters`
   - `useScrollRestoration` — saves/restores scroll position via sessionStorage
@@ -193,12 +193,14 @@ return NextResponse.json({ server: sanitize(server) });
 
 Media list endpoints support pagination via query params:
 
-- Query params: `page` (1-based, default 1), `limit` (default 50, capped at 100-200; `0` = return all), `sortBy`, `sortOrder`
+- Query params: `page` (1-based, default 1), `limit` (default 50, capped at 100-200; `0` = return all), `offset`, `sortBy`, `sortOrder`
+- The flat list routes (`movies`, `series`, `music`) parse these through the shared `parseListPagination` in `src/lib/api/pagination.ts`, which returns `{ page, limit, skip }`. `offset`, when given, **overrides** the page-derived skip and applies even when `limit=0` — that combination ("everything after the first N") is what makes progressive loading possible; without it the only way to express it is to refetch the whole list
 - N+1 trick: fetch `limit + 1` items; if `items.length > limit`, pop last item and set `hasMore: true`
 - Response shape: `{ items: [...], pagination: { page, limit, hasMore } }`
 - `startsWith` param for server-side alphabet filtering (A-Z letters, or `#` for non-alpha titles)
+- List payloads deliberately **exclude `summary`** — it is a paragraph of prose per row and only the hover popover renders it, so `MediaHoverPopover` fetches it for the single hovered item via its `summaryUrl` prop (module-level cache, fetched on open because the popover only mounts when open). Everything else in the popover comes from data the list already carried, so it still paints instantly
 
-**Frontend loading strategy:** Main library views (movies, series grouped, music artists) fetch all items at once (`limit=0`) and rely on `@tanstack/react-virtual` for rendering performance. Alphabet navigation uses client-side `scrollToLetter` from the alphabet hooks. Sub-views (seasons, episodes, tracks) still use paginated loading with limit 50.
+**Frontend loading strategy:** Main library views render through `@tanstack/react-virtual`. The flat, DB-paginated views (movies, all-episodes, all-tracks) load in two passes via `fetchListProgressively` (`src/lib/media/progressive-load.ts`): a first screenful (`FIRST_CHUNK_SIZE`, 100) paints immediately, then `limit=0&offset=100` fills in the rest, so nothing is transferred twice. Consumers that need the complete list — the header item count and `useScrollRestoration` — gate on the page's `loadingRest` flag rather than `loading`, or a restore to a deep index would land in a list that doesn't reach it yet. The **grouped** views (series grouped, music artists, albums, all-seasons) deliberately stay single-request: they aggregate the whole library in memory before slicing, so a second pass would re-run that aggregation for no earlier paint. Alphabet navigation uses client-side `scrollToLetter` from the alphabet hooks; sub-views (seasons, album tracks) still use paginated loading with limit 50.
 
 ### Multi-Server Dedup
 
