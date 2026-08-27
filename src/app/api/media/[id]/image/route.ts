@@ -9,8 +9,8 @@ import {
   cacheImage,
   getCachedImageInfo,
   streamCachedImage,
-  CACHE_WIDTH_ART,
 } from "@/lib/image-cache/image-cache";
+import { CACHE_WIDTH_ART, parseImageWidth } from "@/lib/image-url";
 
 const IMAGE_META_TTL = 5 * 60 * 1000; // 5 minutes
 const IMAGE_FAIL_TTL = 60 * 1000; // negative cache for fetch failures
@@ -90,7 +90,12 @@ export async function GET(
     return NextResponse.json({ error: "No thumbnail" }, { status: 404 });
   }
 
-  const maxWidth = type === "art" ? CACHE_WIDTH_ART : undefined;
+  // Grid cards ask for a narrower variant than the 800px default so a library
+  // page isn't downloading poster bytes it can't display. `?w=` is allow-listed
+  // (parseImageWidth) — each accepted width is its own cached file, and an
+  // unbounded value would let a caller fill the cache with one-off sizes.
+  // `type=art` sizes itself; the caller's `w` doesn't apply to the hero.
+  const maxWidth = type === "art" ? CACHE_WIDTH_ART : parseImageWidth(searchParams.get("w")) ?? undefined;
 
   // Fast path: check if cached image exists and handle ETag/304
   const cached = await getCachedImageInfo(thumbPath, { maxWidth });

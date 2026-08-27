@@ -7,7 +7,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
+import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { Button } from "@/components/ui/button";
 import { Film, Calendar, Clock, HardDrive } from "lucide-react";
@@ -136,7 +136,7 @@ export default function MoviesPage() {
     count: rowCount,
     getScrollElement: () => scrollElementRef.current,
     estimateSize,
-    overscan: 10,
+    overscan: 3,
     scrollMargin,
   });
   // Re-measure when columns change
@@ -362,6 +362,7 @@ export default function MoviesPage() {
                         {rowItems.map((movie) => (
                           <MediaCard
                             key={movie.id}
+                            priority={virtualRow.index < PRIORITY_ROWS}
                             imageUrl={`/api/media/${movie.id}/image`}
                             title={movie.title}
                             fallbackIcon="movie"

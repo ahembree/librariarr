@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useChipColors } from "@/components/chip-color-provider";
 import { getChipBadgeStyle } from "@/lib/theme/chip-colors";
-import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
+import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { MediaFilters } from "@/components/media-filters";
 import { ColorChip } from "@/components/color-chip";
@@ -239,7 +239,7 @@ export default function AllSeasonsPage() {
     count: rowCount,
     getScrollElement: () => scrollElementRef.current,
     estimateSize,
-    overscan: 10,
+    overscan: 3,
     scrollMargin,
   });
 
@@ -396,6 +396,7 @@ export default function AllSeasonsPage() {
                         {rowItems.map((season) => (
                           <MediaCard
                             key={`${season.parentTitle}::${season.seasonNumber}`}
+                            priority={virtualRow.index < PRIORITY_ROWS}
                             imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
                             title={`${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`}
                             fallbackIcon="series"

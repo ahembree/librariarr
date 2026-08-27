@@ -6,7 +6,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { getChipBadgeStyle } from "@/lib/theme/chip-colors";
 import { useRouter } from "next/navigation";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
+import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { ColorChip } from "@/components/color-chip";
 import { useServers } from "@/hooks/use-servers";
@@ -312,7 +312,7 @@ export default function SeriesPage() {
     count: rowCount,
     getScrollElement: () => scrollElementRef.current,
     estimateSize,
-    overscan: 10,
+    overscan: 3,
     scrollMargin,
   });
   useEffect(() => {
@@ -487,6 +487,7 @@ export default function SeriesPage() {
                         {rowItems.map((s) => (
                           <MediaCard
                             key={s.parentTitle}
+                            priority={virtualRow.index < PRIORITY_ROWS}
                             imageUrl={`/api/media/${s.mediaItemId}/image?type=parent`}
                             title={s.parentTitle}
                             fallbackIcon="series"

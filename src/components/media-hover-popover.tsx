@@ -11,6 +11,7 @@ import { RatingChip } from "@/components/rating-chip";
 import { ServerChips } from "@/components/server-chips";
 import { FadeImage } from "@/components/ui/fade-image";
 import { ColorChip } from "@/components/color-chip";
+import { CACHE_WIDTH_GRID, withImageWidth } from "@/lib/image-url";
 
 export interface MediaHoverData {
   title: string;
@@ -137,7 +138,7 @@ export function MediaHoverPopover({ data, imageUrl, imageAspect = "poster" }: Me
       {showHero ? (
         <div className={`relative w-full bg-muted ${imageAspect === "square" ? "h-40" : "h-44"}`}>
           <FadeImage
-            src={imageUrl!}
+            src={withImageWidth(imageUrl!, CACHE_WIDTH_GRID)}
             alt=""
             loading="eager"
             decoding="async"

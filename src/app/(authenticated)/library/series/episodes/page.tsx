@@ -7,7 +7,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
+import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { Tv, Layers, List, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import Link from "next/link";
@@ -128,7 +128,7 @@ export default function AllEpisodesPage() {
     count: rowCount,
     getScrollElement: () => scrollElementRef.current,
     estimateSize,
-    overscan: 10,
+    overscan: 3,
     scrollMargin,
   });
 
@@ -292,6 +292,7 @@ export default function AllEpisodesPage() {
                         {rowItems.map((ep) => (
                           <MediaCard
                             key={ep.id}
+                            priority={virtualRow.index < PRIORITY_ROWS}
                             imageUrl={`/api/media/${ep.id}/image`}
                             title={ep.title}
                             aspectRatio="landscape"

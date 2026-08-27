@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Film, Tv, Music, Info } from "lucide-react";
 import { ServerChips } from "@/components/server-chips";
 import { FadeImage } from "@/components/ui/fade-image";
+import { CACHE_WIDTH_GRID, CACHE_WIDTH_GRID_WIDE, withImageWidth } from "@/lib/image-url";
 import {
   HoverCard,
   HoverCardTrigger,
@@ -33,6 +34,20 @@ export interface QualitySegment {
  *  Sized for the stacked icon-row metadata (up to three rows). */
 export const CARD_CONTENT_HEIGHT = 138;
 
+/** Artwork width to request per aspect ratio. A card never displays anything
+ *  near the proxy's 800px default, so asking for the right variant is the
+ *  single biggest cut to first-paint bytes on a library page. */
+const GRID_IMAGE_WIDTH = {
+  poster: CACHE_WIDTH_GRID,
+  square: CACHE_WIDTH_GRID,
+  landscape: CACHE_WIDTH_GRID_WIDE,
+} as const;
+
+/** Grid rows loaded eagerly at high fetch priority. Everything past this stays
+ *  lazy + low: the virtualizer mounts rows above and below the viewport, and
+ *  without the split the browser races the visible row against off-screen ones. */
+export const PRIORITY_ROWS = 2;
+
 export interface MediaCardProps {
   imageUrl: string;
   title: string;
@@ -46,6 +61,9 @@ export interface MediaCardProps {
   onInfo?: () => void;
   fallbackIcon?: FallbackIcon;
   hoverContent?: ReactNode;
+  /** Set on the first rows of a grid so the artwork the user is actually
+   *  looking at loads eagerly instead of queuing behind off-screen cards. */
+  priority?: boolean;
 }
 
 const FALLBACK_ICONS = {
@@ -67,6 +85,7 @@ export const MediaCard = memo(function MediaCard({
   onInfo,
   fallbackIcon = "movie",
   hoverContent,
+  priority = false,
 }: MediaCardProps) {
   const [imgError, setImgError] = useState(false);
   const FallbackComponent = FALLBACK_ICONS[fallbackIcon];
@@ -105,9 +124,10 @@ export const MediaCard = memo(function MediaCard({
           </div>
         ) : (
           <FadeImage
-            src={imageUrl}
+            src={withImageWidth(imageUrl, GRID_IMAGE_WIDTH[aspectRatio])}
             alt={title}
-            loading="lazy"
+            loading={priority ? "eager" : "lazy"}
+            fetchPriority={priority ? "high" : "low"}
             decoding="async"
             className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 ease-out group-hover:scale-105"
             onError={() => setImgError(true)}
