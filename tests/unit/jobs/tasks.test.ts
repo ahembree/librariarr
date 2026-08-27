@@ -13,6 +13,9 @@ const m = vi.hoisted(() => ({
   pruneBackups: vi.fn().mockResolvedValue(0),
   archiveLogs: vi.fn().mockResolvedValue(undefined),
   dispatchScheduledJobs: vi.fn().mockResolvedValue(undefined),
+  prewarmServerArtwork: vi.fn().mockResolvedValue({
+    considered: 0, warmed: 0, alreadyCached: 0, failed: 0, capped: false, abandoned: false,
+  }),
   syncJob: { findFirst: vi.fn() },
   appSettings: { findFirst: vi.fn() },
   lifecycleAction: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
@@ -21,7 +24,7 @@ const {
   syncMediaServer, syncWatchHistory, syncMediaServerItems, enqueueJob, invalidateMediaCaches,
   processLifecycleRules,
   executeLifecycleActions, createBackup,
-  getBackupPassphrase, pruneBackups, archiveLogs, dispatchScheduledJobs,
+  getBackupPassphrase, pruneBackups, archiveLogs, dispatchScheduledJobs, prewarmServerArtwork,
   syncJob, appSettings, lifecycleAction,
 } = m;
 
@@ -41,6 +44,7 @@ vi.mock("@/lib/backup/backup-service", () => ({
 }));
 vi.mock("@/lib/logs/archive", () => ({ archiveLogs: m.archiveLogs }));
 vi.mock("@/lib/jobs/dispatch", () => ({ dispatchScheduledJobs: m.dispatchScheduledJobs }));
+vi.mock("@/lib/image-cache/prewarm", () => ({ prewarmServerArtwork: m.prewarmServerArtwork }));
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -60,6 +64,7 @@ import {
   TASK_ARCHIVE_LOGS,
   TASK_CLEANUP_ACTIONS,
   TASK_PRUNE_IMAGE_CACHE,
+  TASK_PREFETCH_IMAGES,
 } from "@/lib/jobs/constants";
 
 // Minimal helpers object — tasks here don't use the helpers argument.
@@ -87,6 +92,7 @@ describe("taskList", () => {
         TASK_ARCHIVE_LOGS,
         TASK_CLEANUP_ACTIONS,
         TASK_PRUNE_IMAGE_CACHE,
+        TASK_PREFETCH_IMAGES,
       ].sort(),
     );
   });
@@ -154,6 +160,41 @@ describe("taskList", () => {
       helpers,
     );
     expect(syncMediaServer).not.toHaveBeenCalled();
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it("sync task enqueues an artwork prewarm off the serial queue", async () => {
+    await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1" },
+      helpers,
+    );
+    expect(enqueueJob).toHaveBeenCalledWith(
+      TASK_PREFETCH_IMAGES,
+      { serverId: "server-1" },
+      expect.objectContaining({ jobKey: "prefetch-images:server-1" }),
+    );
+    // No queueName — a slow prewarm must not block the next sync/lifecycle job.
+    const spec = enqueueJob.mock.calls.at(-1)?.[2] as { queueName?: string } | undefined;
+    expect(spec?.queueName).toBeUndefined();
+  });
+
+  it("sync task does not prewarm when the sync failed", async () => {
+    syncMediaServer.mockRejectedValue(new Error("server down"));
+    await expect(
+      (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
+        { serverId: "server-1" },
+        helpers,
+      ),
+    ).rejects.toThrow("server down");
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it("prefetch task delegates to the prewarmer", async () => {
+    await (taskList[TASK_PREFETCH_IMAGES] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1" },
+      helpers,
+    );
+    expect(prewarmServerArtwork).toHaveBeenCalledWith("server-1");
   });
 
   it("lifecycle tasks delegate to the processor with the userId", async () => {

@@ -20,6 +20,8 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Separator } from "@/components/ui/separator";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   ArrowUpCircle,
   CheckCircle2,
@@ -38,6 +40,9 @@ export interface SystemTabProps {
   imageCacheStats: ImageCacheStats | null;
   clearingImageCache: boolean;
   onClearImageCache: () => void;
+  prewarmArtwork: boolean;
+  savingPrewarm: boolean;
+  onSavePrewarmSetting: (value: boolean) => void;
   releaseNotes: ReleaseNote[];
   loadingChangelog: boolean;
 }
@@ -192,6 +197,9 @@ export function SystemTab({
   imageCacheStats,
   clearingImageCache,
   onClearImageCache,
+  prewarmArtwork,
+  savingPrewarm,
+  onSavePrewarmSetting,
   releaseNotes,
   loadingChangelog,
 }: SystemTabProps) {
@@ -281,6 +289,24 @@ export function SystemTab({
               )}
               Clear Image Cache
             </Button>
+          </div>
+
+          <Separator />
+
+          <div className="flex items-center justify-between gap-4">
+            <div className="space-y-0.5">
+              <Label>Prewarm artwork after sync</Label>
+              <p className="text-sm text-muted-foreground">
+                Fetch and resize library artwork in the background once a sync finishes, so the first
+                visit to a library page loads from disk instead of your media server. Turn off to let
+                artwork cache lazily as pages are viewed — lighter on the server, slower on first browse.
+              </p>
+            </div>
+            <Switch
+              checked={prewarmArtwork}
+              onCheckedChange={(checked) => onSavePrewarmSetting(checked)}
+              disabled={savingPrewarm}
+            />
           </div>
 
           <AlertDialog open={confirmClearCache} onOpenChange={setConfirmClearCache}>

@@ -7,6 +7,7 @@ import {
   CACHE_WIDTH_GRID_WIDE,
   REQUESTABLE_CACHE_WIDTHS,
   parseImageWidth,
+  resolveArtworkPath,
   withImageWidth,
 } from "@/lib/image-url";
 
@@ -85,5 +86,44 @@ describe("withImageWidth", () => {
   it("keeps grid widths below the default so cards fetch less", () => {
     expect(CACHE_WIDTH_GRID).toBeLessThan(CACHE_WIDTH_DEFAULT);
     expect(CACHE_WIDTH_GRID_WIDE).toBeLessThan(CACHE_WIDTH_DEFAULT);
+  });
+});
+
+describe("resolveArtworkPath", () => {
+  const item = {
+    thumbUrl: "/item/thumb",
+    artUrl: "/item/art",
+    parentThumbUrl: "/show/thumb",
+    seasonThumbUrl: "/season/thumb",
+  };
+
+  it("returns the item's own thumb by default", () => {
+    expect(resolveArtworkPath(item, null)).toBe("/item/thumb");
+    expect(resolveArtworkPath(item, "thumb")).toBe("/item/thumb");
+    expect(resolveArtworkPath(item, "anything-else")).toBe("/item/thumb");
+  });
+
+  it("resolves art and parent", () => {
+    expect(resolveArtworkPath(item, "art")).toBe("/item/art");
+    expect(resolveArtworkPath(item, "parent")).toBe("/show/thumb");
+  });
+
+  it("prefers the season poster, then the show, then the item", () => {
+    expect(resolveArtworkPath(item, "season")).toBe("/season/thumb");
+    expect(resolveArtworkPath({ ...item, seasonThumbUrl: null }, "season")).toBe("/show/thumb");
+    expect(resolveArtworkPath({ ...item, seasonThumbUrl: null, parentThumbUrl: null }, "season")).toBe(
+      "/item/thumb",
+    );
+  });
+
+  it("falls back to the item thumb when the show poster is missing", () => {
+    expect(resolveArtworkPath({ ...item, parentThumbUrl: null }, "parent")).toBe("/item/thumb");
+  });
+
+  it("returns null when nothing is available", () => {
+    const empty = { thumbUrl: null, artUrl: null, parentThumbUrl: null, seasonThumbUrl: null };
+    for (const type of [null, "art", "parent", "season"]) {
+      expect(resolveArtworkPath(empty, type)).toBeNull();
+    }
   });
 });

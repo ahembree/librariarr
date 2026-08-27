@@ -10,7 +10,7 @@ import {
   getCachedImageInfo,
   streamCachedImage,
 } from "@/lib/image-cache/image-cache";
-import { CACHE_WIDTH_ART, parseImageWidth } from "@/lib/image-url";
+import { CACHE_WIDTH_ART, parseImageWidth, resolveArtworkPath } from "@/lib/image-url";
 
 const IMAGE_META_TTL = 5 * 60 * 1000; // 5 minutes
 const IMAGE_FAIL_TTL = 60 * 1000; // negative cache for fetch failures
@@ -70,20 +70,16 @@ export async function GET(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Resolve thumb path based on type
+  // Resolve thumb path based on type. Everything but `role` goes through the
+  // shared resolver so the cache prewarmer warms the same artwork this route
+  // will look up.
   let thumbPath: string | null;
   if (type === "role") {
     const index = parseInt(searchParams.get("index") ?? "", 10);
     const roles = Array.isArray(item.roles) ? item.roles as Array<{ thumb?: string | null }> : [];
     thumbPath = (!isNaN(index) && index >= 0 && index < roles.length) ? roles[index]?.thumb ?? null : null;
-  } else if (type === "art") {
-    thumbPath = item.artUrl;
-  } else if (type === "parent") {
-    thumbPath = item.parentThumbUrl || item.thumbUrl;
-  } else if (type === "season") {
-    thumbPath = item.seasonThumbUrl || item.parentThumbUrl || item.thumbUrl;
   } else {
-    thumbPath = item.thumbUrl;
+    thumbPath = resolveArtworkPath(item, type);
   }
 
   if (!thumbPath) {

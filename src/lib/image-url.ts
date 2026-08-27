@@ -64,3 +64,28 @@ export function withImageWidth(url: string, width: number): string {
   if (/[?&]w=/.test(url)) return url;
   return `${url}${url.includes("?") ? "&" : "?"}w=${width}`;
 }
+
+/** The artwork fields the proxy can resolve a `?type=` against. */
+export interface ArtworkSource {
+  thumbUrl: string | null;
+  artUrl: string | null;
+  parentThumbUrl: string | null;
+  seasonThumbUrl: string | null;
+}
+
+/**
+ * Resolve the `?type=` query param to an artwork path, with the same fallback
+ * chain the library grids depend on: a season falls back to the show poster,
+ * a show falls back to the item's own thumb.
+ *
+ * Shared by the image proxy and the cache prewarmer — the prewarmer has to warm
+ * the exact key the proxy will later look up, so a second copy of this chain
+ * would silently warm the wrong artwork. `type=role` is not handled here: role
+ * thumbs are indexed out of the item's `roles` JSON, which is the route's job.
+ */
+export function resolveArtworkPath(item: ArtworkSource, type: string | null): string | null {
+  if (type === "art") return item.artUrl;
+  if (type === "parent") return item.parentThumbUrl || item.thumbUrl;
+  if (type === "season") return item.seasonThumbUrl || item.parentThumbUrl || item.thumbUrl;
+  return item.thumbUrl;
+}
