@@ -7,15 +7,16 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
+import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { Tv, Layers, List, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import Link from "next/link";
-import type { MediaItemWithRelations } from "@/lib/types";
+import type { MediaListItem } from "@/lib/types";
 import { useCardSize, BREAKPOINTS, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
 import { useRealtime } from "@/hooks/use-realtime";
+import { fetchListProgressively } from "@/lib/media/progressive-load";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
@@ -44,11 +45,14 @@ export default function AllEpisodesPage() {
   const { getHex } = useChipColors();
   const { show, showServers, setVisible, prefs } = useCardDisplay("SERIES_EPISODES");
   const { servers } = useServers();
-  const [items, setItems] = useState<MediaItemWithRelations[]>([]);
+  const [items, setItems] = useState<MediaListItem[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [sortBy, setSortBy] = useState("title");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [loading, setLoading] = useState(true);
+  // The first screenful arrives before the rest of the library; consumers that
+  // need the complete list (item count, scroll restoration) wait for this.
+  const [loadingRest, setLoadingRest] = useState(true);
   const [viewMode, setViewMode] = useState<"cards" | "table">("table");
   const [, startTransition] = useTransition();
   const { size, setSize, columns: actualColumns } = useCardSize();
@@ -70,7 +74,7 @@ export default function AllEpisodesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size, actualColumns]); // actualColumns changes on resize, so we recompute
 
-  const { markChildNavigation } = useScrollRestoration("/library/series/episodes", !loading && items.length > 0, undefined, undefined, {
+  const { markChildNavigation } = useScrollRestoration("/library/series/episodes", !loadingRest && items.length > 0, undefined, undefined, {
     getFirstVisibleIndex: () => {
       if (!gridContainerRef.current) return -1;
       const main = document.querySelector<HTMLElement>("main");
@@ -128,7 +132,7 @@ export default function AllEpisodesPage() {
     count: rowCount,
     getScrollElement: () => scrollElementRef.current,
     estimateSize,
-    overscan: 10,
+    overscan: 3,
     scrollMargin,
   });
 
@@ -162,24 +166,33 @@ export default function AllEpisodesPage() {
   const fetchEpisodes = useCallback(async () => {
     const token = ++reqToken.current;
     setLoading(true);
+    setLoadingRest(true);
     try {
       const params = new URLSearchParams({
-        limit: "0",
         sortBy,
         sortOrder,
         ...filters,
       });
-
-      const response = await fetch(`/api/media/series?${params}`);
-      const data = await response.json();
-      if (token !== reqToken.current) return;
-      startTransition(() => {
-        setItems(data.items || []);
-        setLoading(false);
-      });
+      // Paint the first screenful, then fill in the rest behind it — the whole
+      // library in one response meant nothing rendered until all of it landed.
+      await fetchListProgressively<MediaListItem>(
+        "/api/media/series",
+        params,
+        (loaded, done) => {
+          if (token !== reqToken.current) return;
+          startTransition(() => {
+            setItems(loaded);
+            setLoading(false);
+            if (done) setLoadingRest(false);
+          });
+        },
+      );
     } catch (error) {
       console.error("Failed to fetch episodes:", error);
-      if (token === reqToken.current) setLoading(false);
+      if (token === reqToken.current) {
+        setLoading(false);
+        setLoadingRest(false);
+      }
     }
   }, [filters, sortBy, sortOrder]);
 
@@ -231,11 +244,11 @@ export default function AllEpisodesPage() {
               mediaType="SERIES"
               renderHoverContent={(item) => (
                 <MediaHoverPopover
+                  summaryUrl={`/api/media/${item.id}`}
                   imageUrl={`/api/media/${item.id}/image?type=parent`}
                   data={{
                     title: item.title,
                     year: item.year,
-                    summary: item.summary,
                     contentRating: item.contentRating,
                     rating: item.rating,
                     audienceRating: item.audienceRating,
@@ -292,6 +305,7 @@ export default function AllEpisodesPage() {
                         {rowItems.map((ep) => (
                           <MediaCard
                             key={ep.id}
+                            priority={virtualRow.index < PRIORITY_ROWS}
                             imageUrl={`/api/media/${ep.id}/image`}
                             title={ep.title}
                             aspectRatio="landscape"
@@ -300,10 +314,10 @@ export default function AllEpisodesPage() {
                             onClick={markChildNavigation}
                             hoverContent={
                               <MediaHoverPopover
+                                summaryUrl={`/api/media/${ep.id}`}
                                 data={{
                                   title: ep.title,
                                   year: ep.year,
-                                  summary: ep.summary,
                                   contentRating: ep.contentRating,
                                   rating: ep.rating,
                                   audienceRating: ep.audienceRating,

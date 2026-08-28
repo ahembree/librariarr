@@ -477,3 +477,93 @@ describe("Series endpoints", () => {
     });
   });
 });
+
+describe("/api/media/series progressive loading", () => {
+  beforeEach(async () => {
+    await cleanDatabase();
+    clearMockSession();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+    for (let i = 1; i <= 5; i++) {
+      await createTestMediaItem(lib.id, {
+        title: `Item ${String(i).padStart(2, "0")}`,
+        type: "SERIES",
+        ratingKey: `rk-off-${i}`,
+        summary: "Prose that would ride along on every row.",
+      });
+    }
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+  });
+
+  it("returns everything after an offset when limit=0", async () => {
+    const body = await expectJson<{ items: { title: string }[] }>(
+      await callRoute(GET, { url: "/api/media/series", searchParams: { limit: "0", offset: "2", sortBy: "title" } }),
+      200,
+    );
+    expect(body.items.map((i) => i.title)).toEqual(["Item 03", "Item 04", "Item 05"]);
+  });
+
+  it("stitches an offset fetch onto a first page with no gap or overlap", async () => {
+    const first = await expectJson<{ items: { title: string }[] }>(
+      await callRoute(GET, { url: "/api/media/series", searchParams: { page: "1", limit: "2", sortBy: "title" } }),
+      200,
+    );
+    const rest = await expectJson<{ items: { title: string }[] }>(
+      await callRoute(GET, {
+        url: "/api/media/series",
+        searchParams: { limit: "0", offset: String(first.items.length), sortBy: "title" },
+      }),
+      200,
+    );
+    const stitched = [...first.items, ...rest.items].map((i) => i.title);
+    expect(stitched).toEqual(["Item 01", "Item 02", "Item 03", "Item 04", "Item 05"]);
+    expect(new Set(stitched).size).toBe(5);
+  });
+
+  it("omits summary — the popover fetches it for the one hovered episode", async () => {
+    const body = await expectJson<{ items: Record<string, unknown>[] }>(
+      await callRoute(GET, { url: "/api/media/series", searchParams: { limit: "0" } }),
+      200,
+    );
+    expect(body.items.length).toBeGreaterThan(0);
+    expect(body.items[0]).not.toHaveProperty("summary");
+    expect(body.items[0]).toHaveProperty("title");
+  });
+});
+
+describe("/api/media/series total accounting", () => {
+  beforeEach(async () => {
+    await cleanDatabase();
+    clearMockSession();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+    for (let i = 1; i <= 5; i++) {
+      await createTestMediaItem(lib.id, { title: `Ep ${i}`, type: "SERIES", ratingKey: `rk-shape-${i}` });
+    }
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+  });
+
+  it("derives total without a COUNT(*) when returning everything after an offset", async () => {
+    // The count is a filtered scan of the largest table in the schema, and the
+    // progressive remainder pass (limit=0) does not need it: the total is
+    // exactly skip + items.length. The reported total must still be right.
+    const body = await expectJson<{ items: unknown[]; pagination: { total: number; pages: number } }>(
+      await callRoute(GET, { url: "/api/media/series", searchParams: { limit: "0", offset: "2" } }),
+      200,
+    );
+    expect(body.items).toHaveLength(3);
+    expect(body.pagination.total).toBe(5);
+    expect(body.pagination.pages).toBe(1);
+  });
+
+  it("still counts when a page size is set", async () => {
+    const body = await expectJson<{ pagination: { total: number; pages: number } }>(
+      await callRoute(GET, { url: "/api/media/series", searchParams: { limit: "2" } }),
+      200,
+    );
+    expect(body.pagination.total).toBe(5);
+    expect(body.pagination.pages).toBe(3);
+  });
+});

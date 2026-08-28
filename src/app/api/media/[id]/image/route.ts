@@ -9,8 +9,13 @@ import {
   cacheImage,
   getCachedImageInfo,
   streamCachedImage,
-  CACHE_WIDTH_ART,
 } from "@/lib/image-cache/image-cache";
+import {
+  CACHE_WIDTH_ART,
+  CACHE_WIDTH_DEFAULT,
+  parseImageWidth,
+  resolveArtworkPath,
+} from "@/lib/image-url";
 
 const IMAGE_META_TTL = 5 * 60 * 1000; // 5 minutes
 const IMAGE_FAIL_TTL = 60 * 1000; // negative cache for fetch failures
@@ -70,27 +75,27 @@ export async function GET(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Resolve thumb path based on type
+  // Resolve thumb path based on type. Everything but `role` goes through the
+  // shared resolver.
   let thumbPath: string | null;
   if (type === "role") {
     const index = parseInt(searchParams.get("index") ?? "", 10);
     const roles = Array.isArray(item.roles) ? item.roles as Array<{ thumb?: string | null }> : [];
     thumbPath = (!isNaN(index) && index >= 0 && index < roles.length) ? roles[index]?.thumb ?? null : null;
-  } else if (type === "art") {
-    thumbPath = item.artUrl;
-  } else if (type === "parent") {
-    thumbPath = item.parentThumbUrl || item.thumbUrl;
-  } else if (type === "season") {
-    thumbPath = item.seasonThumbUrl || item.parentThumbUrl || item.thumbUrl;
   } else {
-    thumbPath = item.thumbUrl;
+    thumbPath = resolveArtworkPath(item, type);
   }
 
   if (!thumbPath) {
     return NextResponse.json({ error: "No thumbnail" }, { status: 404 });
   }
 
-  const maxWidth = type === "art" ? CACHE_WIDTH_ART : undefined;
+  // Grid cards ask for a narrower variant than the 800px default so a library
+  // page isn't downloading poster bytes it can't display. `?w=` is allow-listed
+  // (parseImageWidth) — each accepted width is its own cached file, and an
+  // unbounded value would let a caller fill the cache with one-off sizes.
+  // `type=art` sizes itself; the caller's `w` doesn't apply to the hero.
+  const maxWidth = type === "art" ? CACHE_WIDTH_ART : parseImageWidth(searchParams.get("w")) ?? undefined;
 
   // Fast path: check if cached image exists and handle ETag/304
   const cached = await getCachedImageInfo(thumbPath, { maxWidth });
@@ -139,9 +144,12 @@ export async function GET(
   });
 
   try {
+    // The width we hand the media server is the width we are about to store, so
+    // it can resize before sending instead of shipping the full-size original.
+    const effectiveWidth = maxWidth ?? CACHE_WIDTH_DEFAULT;
     const result = await cacheImage(
       thumbPath,
-      () => client.fetchImage(thumbPath),
+      () => client.fetchImage(thumbPath, { width: effectiveWidth }),
       maxWidth ? { maxWidth } : undefined,
     );
     const etag = `"${result.cacheKey}"`;
