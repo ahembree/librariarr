@@ -248,6 +248,34 @@ describe("PlexClient", () => {
     });
   });
 
+  describe("listUsernames", () => {
+    it("returns every account name the server knows, not just active streamers", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            Account: [
+              // id 0 is Plex's anonymous/local pseudo-account (blank name).
+              { id: 0, name: "" },
+              { id: 1, name: "Admin" },
+              { id: 2, name: "User1" },
+              { id: 3, name: "User2" },
+            ],
+          },
+        },
+      });
+      const result = await client.listUsernames();
+      // The blank anonymous account is dropped; everyone else is listed even
+      // though none of them are currently streaming.
+      expect(result).toEqual(["Admin", "User1", "User2"]);
+    });
+
+    it("returns empty array on error", async () => {
+      mockAxiosInstance.get.mockRejectedValueOnce(new Error("fail"));
+      const result = await client.listUsernames();
+      expect(result).toEqual([]);
+    });
+  });
+
   describe("getWatchHistory", () => {
     it("returns watch history with usernames", async () => {
       mockAxiosInstance.get
