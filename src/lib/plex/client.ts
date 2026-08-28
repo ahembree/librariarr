@@ -17,6 +17,7 @@ import type {
 } from "./types";
 import type { MediaServerClient, LibraryItemType } from "@/lib/media-server/client";
 import { isMediaItem } from "@/lib/media-server/item-types";
+import { normalizeResolutionFromDimensions } from "@/lib/resolution";
 import { logger } from "@/lib/logger";
 
 export interface PlexClientOptions {
@@ -218,6 +219,30 @@ export class PlexClient implements MediaServerClient {
     return response.data.MediaContainer.Metadata[0];
   }
 
+  /**
+   * Per-version SOURCE resolution for an item, keyed by Media id. A Plex item
+   * can hold several versions (e.g. a 4K and a 1080p copy) at different
+   * resolutions; the synced MediaItem stores only one. Library metadata (unlike
+   * a session's Media element) reports each version's true file dimensions, so
+   * the transcode manager can match the exact version being played instead of
+   * terminating the 1080p copy of a 4K title (or missing the 4K copy of an item
+   * synced as 1080p). Returns raw resolution strings (e.g. "4k", "1080") to be
+   * normalized by the caller, matching how MediaItem.resolution is stored.
+   */
+  async getItemMediaResolutions(ratingKey: string): Promise<Map<string, string>> {
+    const meta = await this.getItemMetadata(ratingKey);
+    const medias = (meta as unknown as { Media?: Array<Record<string, unknown>> }).Media ?? [];
+    const map = new Map<string, string>();
+    for (const m of medias) {
+      if (m.id == null) continue;
+      const res =
+        normalizeResolutionFromDimensions(m.width as number | undefined, m.height as number | undefined) ??
+        (m.videoResolution ? String(m.videoResolution) : undefined);
+      if (res) map.set(String(m.id), res);
+    }
+    return map;
+  }
+
   async getAccounts(): Promise<Map<number, string>> {
     try {
       const response = await this.client.get("/accounts");
@@ -231,6 +256,22 @@ export class PlexClient implements MediaServerClient {
     } catch {
       return new Map();
     }
+  }
+
+  /**
+   * Every account name the server knows about (`/accounts`) — i.e. every user
+   * who has streamed, not just whoever has a session open right now. This is
+   * what the excluded-users picker enumerates for Plex, the counterpart to
+   * Jellyfin/Emby's `/Users`. The plex.tv friends list only covers account-level
+   * "friends" (never Plex Home/managed users, and empty for many setups), so it
+   * can't be the source here. Account id 0 is Plex's "anonymous/local" pseudo
+   * account with a blank name — the empty-name filter drops it.
+   */
+  async listUsernames(): Promise<string[]> {
+    const accounts = await this.getAccounts();
+    return Array.from(accounts.values()).filter(
+      (name): name is string => typeof name === "string" && name.length > 0
+    );
   }
 
   async getWatchHistory(
@@ -674,13 +715,20 @@ export class PlexClient implements MediaServerClient {
         const session = (item.Session as Record<string, unknown>) || {};
         const transcode = item.TranscodeSession as Record<string, unknown> | undefined;
         const media = (item.Media as Array<Record<string, unknown>>) || [];
-        const firstMedia = media[0] || {};
+        // A multi-version item (e.g. a movie with both a 1080p and a 4K copy)
+        // reports every version here; `selected` marks the one actually being
+        // played. Taking media[0] blindly reported the wrong resolution,
+        // codec, bitrate and file for those items — which in turn fed the
+        // transcode manager's 4K criterion the wrong resolution.
+        const firstMedia = media.find((m) => m.selected) ?? media[0] ?? {};
         const parts = (firstMedia.Part as Array<Record<string, unknown>>) || [];
         const firstPart = parts[0] || {};
         const genreArray = (item.Genre as Array<{ tag: string }>) || [];
 
         return {
-          sessionId: String(session.id ?? ""),
+          sessionId: String(session.id ?? item.sessionKey ?? ""),
+          ratingKey: item.ratingKey ? String(item.ratingKey) : undefined,
+          mediaId: firstMedia.id != null ? String(firstMedia.id) : undefined,
           userId: String(user.id ?? ""),
           username: String(user.title ?? "Unknown"),
           userThumb: String(user.thumb ?? ""),
@@ -740,13 +788,24 @@ export class PlexClient implements MediaServerClient {
               sourceAudioCodec: transcode.sourceAudioCodec ? String(transcode.sourceAudioCodec) : undefined,
               speed: transcode.speed as number | undefined,
               transcodeHwRequested: transcode.transcodeHwRequested != null ? !!transcode.transcodeHwRequested : undefined,
+              // What hardware is *actually* doing the work. transcodeHwRequested
+              // only records the request; Plex falls back to software silently.
+              hwDecode: transcode.transcodeHwDecoding ? String(transcode.transcodeHwDecoding) : undefined,
+              hwEncode: transcode.transcodeHwEncoding ? String(transcode.transcodeHwEncoding) : undefined,
+              hwFullPipeline: transcode.transcodeHwFullPipeline != null ? !!transcode.transcodeHwFullPipeline : undefined,
             },
           }),
         } satisfies PlexSession;
       });
     } catch (error) {
+      // Propagate — callers distinguish "unreachable" from "no sessions":
+      // the enforcer preserves grace-timer/block_new_only snapshots for a
+      // server it couldn't reach, and the sessions route reports it as
+      // unreachable. Swallowing to [] made every hiccup look like "all
+      // streams ended", resetting timers and mass-terminating grandfathered
+      // block_new_only streams on recovery.
       logger.debug("Plex", "Failed to fetch sessions", { error: String(error) });
-      return [];
+      throw error;
     }
   }
 
@@ -760,7 +819,49 @@ export class PlexClient implements MediaServerClient {
     return `${this.baseURL}${path}?X-Plex-Token=${this.token}`;
   }
 
-  async fetchImage(path: string): Promise<{ data: Buffer; contentType: string }> {
+  async fetchImage(
+    path: string,
+    options?: { width?: number },
+  ): Promise<{ data: Buffer; contentType: string }> {
+    const width = options?.width;
+    if (width && width > 0) {
+      // Plex's photo transcoder resizes server-side (and caches the result), so
+      // a grid-sized poster arrives as tens of KB instead of the multi-megabyte
+      // original — both the transfer and the local decode shrink by an order of
+      // magnitude, which is most of the cost of warming a cold library.
+      //
+      // A square box with minSize=1 ("scale to fill, overflowing one dimension")
+      // guarantees at least `width` on both axes whatever the source aspect
+      // ratio, so the local resize never has to upscale. upscale=0 leaves a
+      // source smaller than the box untouched rather than blowing it up.
+      const params = new URLSearchParams({
+        url: path,
+        width: String(width),
+        height: String(width),
+        minSize: "1",
+        upscale: "0",
+      });
+      try {
+        const response = await this.client.get(`/photo/:/transcode?${params.toString()}`, {
+          responseType: "arraybuffer",
+          timeout: 15000,
+        });
+        const contentType = response.headers["content-type"];
+        const isImage = typeof contentType !== "string" || contentType.startsWith("image/");
+        // A transcoder that answers with an error page or an empty body must not
+        // poison the cache — fall through to the original instead.
+        if (isImage && response.data?.byteLength > 0) {
+          return {
+            data: Buffer.from(response.data),
+            contentType: typeof contentType === "string" ? contentType : "image/jpeg",
+          };
+        }
+      } catch {
+        // Transcoder unavailable or refused (older PMS, disabled transcoder) —
+        // fall back to the original path below.
+      }
+    }
+
     const response = await this.client.get(path, {
       responseType: "arraybuffer",
       timeout: 15000,

@@ -451,13 +451,16 @@ describe("Unknown operator, type mismatch, or malformed value must not match the
     }]);
   });
 
-  it("arrTag isNull with negate=true does not flip to match-all", () => {
-    // arrTag is `string[]` and is never null, so isNull is meaningless.
-    // The arr-tag handler doesn't implement isNull → default returns false,
-    // bypassing the negate flip that would otherwise sweep the library.
-    function makeArrMeta(): ArrMetadata {
+  it("arrTag isNull with negate=true flips a real result, never a vacuous default", () => {
+    // arrTag is `string[]` and never null, so isNull asks about LIST
+    // emptiness: an item in Arr carrying no tags. NOT(isNull) is therefore
+    // exactly isNotNull ("has at least one tag") — it flips a real evaluation,
+    // not the always-false `default` the handler used to fall through to.
+    // The sweep hazard that guarded is instead closed by the !meta guard: an
+    // item absent from Arr stays unmatched under either polarity.
+    function makeArrMeta(tags: string[]): ArrMetadata {
       return {
-        arrId: 0, tags: ["Default"], qualityProfile: "HD-1080p", monitored: false,
+        arrId: 0, tags, qualityProfile: "HD-1080p", monitored: false,
         rating: null, tmdbRating: null, rtCriticRating: null,
         dateAdded: null, path: null, sizeOnDisk: null, originalLanguage: null,
         releaseDate: null, inCinemasDate: null, runtime: null,
@@ -467,14 +470,36 @@ describe("Unknown operator, type mismatch, or malformed value must not match the
         monitoredSeasonCount: null, monitoredEpisodeCount: null,
       };
     }
-    const arrData: ArrDataMap = { "1": makeArrMeta(), "2": makeArrMeta() };
-    const groups: LifecycleRuleGroup[] = [{
+    // m1 is tagged, m2 is untagged.
+    const arrData: ArrDataMap = { "1": makeArrMeta(["Default"]), "2": makeArrMeta([]) };
+    const negated: LifecycleRuleGroup[] = [{
       id: "g", condition: "AND",
       rules: [{ id: "r", field: "arrTag", operator: "isNull", value: "", negate: true, condition: "AND" }],
       groups: [],
     }];
-    for (const item of items) {
-      expect(evaluateAllRulesInMemory(groups, item, arrData[item.externalIds[0].externalId])).toBe(false);
+    const results = items.map((item) =>
+      evaluateAllRulesInMemory(negated, item, arrData[item.externalIds[0].externalId]),
+    );
+    expect(results).toEqual([true, false]);
+  });
+
+  it("arrTag isNull / isNotNull never match an item that is absent from Arr", () => {
+    // The real sweep hazard: absent Arr metadata must never be read as
+    // "no tags", under either operator or either polarity.
+    for (const operator of ["isNull", "isNotNull"]) {
+      for (const negate of [false, true]) {
+        const groups: LifecycleRuleGroup[] = [{
+          id: "g", condition: "AND",
+          rules: [{ id: "r", field: "arrTag", operator, value: "", negate, condition: "AND" }],
+          groups: [],
+        }];
+        for (const item of items) {
+          expect(
+            evaluateAllRulesInMemory(groups, item, undefined),
+            `arrTag ${operator} negate=${negate} must not match an item missing from Arr`,
+          ).toBe(false);
+        }
+      }
     }
   });
 
@@ -506,5 +531,54 @@ describe("Unknown operator, type mismatch, or malformed value must not match the
     expect(evaluateAllRulesInMemory(nullEndedRule, seriesItem, makeArrMeta(true))).toBe(false);
     // Item with ended=false: isNull is false.
     expect(evaluateAllRulesInMemory(nullEndedRule, seriesItem, makeArrMeta(false))).toBe(false);
+  });
+});
+
+// ─── Defense 6: valueless operators must not sweep via a vacuous comparison ──
+
+describe("hasExternalId Is Empty must not match the whole library", () => {
+  // The regression this guards: isNull/isNotNull were aliased onto
+  // notEquals/equals against the rule's value — but the builder CLEARS the
+  // value when a valueless operator is selected, so the comparison became
+  // `source === ""`. No external-id row ever has an empty source, so
+  // "Has External ID Is Empty" was true for every item in the library, and
+  // "Is Not Empty" for none. Phase 1 emitted the mirror-image vacuous clause
+  // (`{ externalIds: { none: { source: "" } } }`), so both phases agreed and
+  // no phase-disagreement detector caught the sweep. On a destructive rule
+  // set that armed an action on the entire library.
+  const items = [
+    { id: "m1", title: "Has ids", externalIds: [{ source: "TMDB", externalId: "1" }] },
+    { id: "m2", title: "Has ids too", externalIds: [{ source: "TVDB", externalId: "2" }] },
+    { id: "m3", title: "No ids", externalIds: [] },
+  ];
+
+  const group = (operator: string, value: string, negate?: boolean): LifecycleRuleGroup[] => [{
+    id: "g", condition: "AND",
+    rules: [{ id: "r", field: "hasExternalId", operator, value, ...(negate ? { negate } : {}), condition: "AND" }],
+    groups: [],
+  }];
+
+  const matchedIds = (rules: LifecycleRuleGroup[]) =>
+    items.filter((i) => evaluateAllRulesInMemory(rules, i)).map((i) => i.id);
+
+  it("isNull with the cleared value matches only the item that has no ids", () => {
+    expect(matchedIds(group("isNull", ""))).toEqual(["m3"]);
+  });
+
+  it("isNotNull with the cleared value matches only items that have ids", () => {
+    expect(matchedIds(group("isNotNull", ""))).toEqual(["m1", "m2"]);
+  });
+
+  it("neither operator matches the whole library under negate", () => {
+    expect(matchedIds(group("isNull", "", true))).toEqual(["m1", "m2"]);
+    expect(matchedIds(group("isNotNull", "", true))).toEqual(["m3"]);
+  });
+
+  it("a leftover source value cannot revert it to the vacuous per-source read", () => {
+    // A saved rule may still carry a value (import / API). Whatever it is,
+    // the operator stays list-emptiness — never "matches everything".
+    for (const leftover of ["", "TMDB", "TVDB", "NOT_A_SOURCE"]) {
+      expect(matchedIds(group("isNull", leftover)), `isNull value=${leftover}`).toEqual(["m3"]);
+    }
   });
 });

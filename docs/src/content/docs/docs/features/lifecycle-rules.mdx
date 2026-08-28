@@ -58,6 +58,18 @@ Over 50 fields are available for rule conditions.
 | `genre` | Genre(s) | equals, contains |
 | `country` | Country of origin — multi-select (movies only) | equals, contains, notContains |
 | `duration` | Duration in minutes | greaterThan, lessThan, etc. |
+| `hasExternalId` | Which external-id sources the item carries (TMDB, TVDB, IMDB, MUSICBRAINZ) — multi-select | equals, notEquals, contains, notContains, matchesWildcard, isNull, isNotNull |
+
+:::note[`hasExternalId`: per-source vs. "any at all"]
+The value-taking operators ask a **per-source** question — `equals TMDB`
+matches items that carry a TMDB id, `contains TMDB|IMDB` matches items with
+either.
+
+*Is Empty* / *Is Not Empty* take no value, so they ask about the id **list**
+instead: *Is Empty* matches items with **no external ids at all**, *Is Not
+Empty* matches items with at least one. Use `notEquals` / `notContains` when
+you mean "has no TMDB id specifically".
+:::
 
 ### Video Fields
 
@@ -172,6 +184,33 @@ Seerr fields are only available on **movie and series** rule sets. Seerr doesn't
 | `before` | date | Before a specific date |
 | `after` | date | After a specific date |
 | `inLastDays` | date | Within the last N days |
+| `notInLastDays` | date | More than N days ago |
+| `between` | number, date | Within an inclusive range |
+| `isNull` | text, number, date | *Is Empty* — the item has no value for this field (takes no value of its own) |
+| `isNotNull` | text, number, date | *Is Not Empty* — the item has some value for this field (takes no value of its own) |
+
+### What "Is Empty" means per field
+
+*Is Empty* / *Is Not Empty* take no value; what counts as "empty" depends on the
+field's shape:
+
+| Field shape | Examples | *Is Empty* matches |
+|-------------|----------|--------------------|
+| Nullable column | `studio`, `rating`, `lastPlayedAt`, `arrQualityName`, `arrEnded` | The value is missing |
+| List | `genre`, `labels`, `country`, `arrTag`, `seerrRequestedBy` | The list has no entries — e.g. an item that is in *arr but carries no tags |
+| Always-present text | `title`, `arrQualityProfile` | The value is the empty string |
+
+Fields whose value is always present and has no meaningful "empty" reading —
+`foundInArr`, `arrMonitored`, `seerrRequested`, `seerrRequestCount`,
+`playCount`, `isWatchlisted` — don't offer the two operators at all, because
+*Is Not Empty* on them would just match everything.
+
+:::note[List fields and missing *arr data]
+`arrTag Is Empty` finds items that **are** in the linked *arr instance but carry
+no tags. An item that isn't in *arr at all does not match it — absent *arr data
+is never read as "no tags" (see [Missing *arr data is fail-closed](#external--arr-fields)
+above). Use `foundInArr` for that question instead.
+:::
 
 ## Building Rules
 

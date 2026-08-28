@@ -20,7 +20,7 @@ import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
-import type { MediaItemWithRelations } from "@/lib/types";
+import type { MediaItemWithRelations, MediaListItem } from "@/lib/types";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
 import { IntegrationsSection } from "@/components/integrations-section";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
@@ -39,7 +39,7 @@ export default function SeasonDetailPage() {
   const { size, setSize, landscapeGridStyle } = useCardSize();
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
-  const [episodes, setEpisodes] = useState<MediaItemWithRelations[]>([]);
+  const [episodes, setEpisodes] = useState<MediaListItem[]>([]);
   const [loading, setLoading] = useState(true);
   // Token guards against a stale slow response landing after a quick id change.
   const reqToken = useRef(0);
@@ -113,8 +113,8 @@ export default function SeasonDetailPage() {
 
   const sortedEpisodes = useMemo(() => {
     const sorted = [...episodes].sort((a, b) => {
-      const aVal = a[sortBy as keyof MediaItemWithRelations];
-      const bVal = b[sortBy as keyof MediaItemWithRelations];
+      const aVal = a[sortBy as keyof MediaListItem];
+      const bVal = b[sortBy as keyof MediaListItem];
       if (aVal == null && bVal == null) return 0;
       if (aVal == null) return 1;
       if (bVal == null) return -1;
@@ -250,11 +250,11 @@ export default function SeasonDetailPage() {
               hideParentTitle
               renderHoverContent={(ep) => (
                 <MediaHoverPopover
+                  summaryUrl={`/api/media/${ep.id}`}
                   imageUrl={`/api/media/${ep.id}/image?type=parent`}
                   data={{
                     title: ep.title,
                     year: ep.year,
-                    summary: ep.summary,
                     contentRating: ep.contentRating,
                     rating: ep.rating,
                     audienceRating: ep.audienceRating,
@@ -289,10 +289,10 @@ export default function SeasonDetailPage() {
                   href={`/library/series/episode/${ep.id}`}
                   hoverContent={
                     <MediaHoverPopover
+                      summaryUrl={`/api/media/${ep.id}`}
                       data={{
                         title: ep.title,
                         year: ep.year,
-                        summary: ep.summary,
                         contentRating: ep.contentRating,
                         rating: ep.rating,
                         audienceRating: ep.audienceRating,

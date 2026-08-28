@@ -391,6 +391,52 @@ describe("PUT /api/tools/blackout/[id]", () => {
     expect(body.schedule.daysOfWeek).toEqual([1, 3, 5]);
   });
 
+  it("applies a partial time edit against the existing recurring type", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+
+    const createRes = await createRecurringSchedule();
+    const { schedule: created } = await createRes.json();
+
+    // Edit only the times — no scheduleType resent (what the UI does when you
+    // tweak a time field). Previously these were silently dropped.
+    const res = await callRouteWithParams(
+      PUT,
+      { id: created.id },
+      { method: "PUT", body: { startTime: "22:00", endTime: "23:30" } }
+    );
+    const body = await expectJson<{
+      schedule: { startTime: string | null; endTime: string | null; daysOfWeek: number[] | null };
+    }>(res);
+    expect(body.schedule.startTime).toBe("22:00");
+    expect(body.schedule.endTime).toBe("23:30");
+    // Days untouched.
+    expect(body.schedule.daysOfWeek).toEqual([1, 3, 5]);
+  });
+
+  it("rejects an out-of-range time on a partial edit", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+
+    const createRes = await createRecurringSchedule();
+    const { schedule: created } = await createRes.json();
+
+    const res = await callRouteWithParams(
+      PUT,
+      { id: created.id },
+      { method: "PUT", body: { startTime: "27:00" } }
+    );
+    await expectJson(res, 400);
+  });
+
+  it("rejects an out-of-range time on create", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+
+    const res = await createRecurringSchedule({ startTime: "24:00", endTime: "25:61" });
+    await expectJson(res, 400);
+  });
+
   it("cannot update another user's schedule", async () => {
     const user1 = await createTestUser({ plexId: "plex-owner" });
     const user2 = await createTestUser({ plexId: "plex-other" });

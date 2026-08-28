@@ -135,4 +135,128 @@ describe("GET /api/tools/sessions/stream", () => {
 
     await reader.cancel();
   });
+
+  it("keeps a session's start time when a server poll fails and recovers", async () => {
+    const user = await createTestUser();
+    await createTestServer(user.id);
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    // Fail exactly one poll. Flipping a flag on a timer races the route's own
+    // DB round-trip, so arm it by call instead.
+    let failNextPoll = false;
+    const getSessions = vi.fn(() => {
+      if (failNextPoll) {
+        failNextPoll = false;
+        return Promise.reject(new Error("server unreachable"));
+      }
+      return Promise.resolve([
+        {
+          sessionId: "flaky-1",
+          player: { state: "playing", local: true },
+          session: { bandwidth: 0, location: "lan" },
+        },
+      ]);
+    });
+    vi.mocked(createMediaServerClient).mockImplementation(function () {
+      return { getSessions } as never;
+    });
+
+    const response = await callRoute(GET, { url: "/api/tools/sessions/stream" });
+    const reader = response.body!.getReader();
+
+    /** All `event: sessions` payloads seen so far. */
+    const framesFor = (text: string) =>
+      text
+        .split("\n\n")
+        .filter((f) => f.startsWith("event: sessions"))
+        .map(
+          (f) =>
+            JSON.parse(f.slice(f.indexOf("data: ") + 6)) as {
+              sessions: Array<{ sessionId: string; startedAt: number }>;
+            }
+        );
+
+    let text = new TextDecoder().decode((await reader.read()).value);
+    const initial = framesFor(text)[0].sessions.find((s) => s.sessionId === "flaky-1");
+    expect(initial?.startedAt).toBeGreaterThan(0);
+
+    // The server drops out for one poll, then comes back.
+    failNextPoll = true;
+    realtimeBus.emit({ kind: "session-changed", serverId: "x", serverType: "PLEX", at: Date.now() });
+    await new Promise((r) => setTimeout(r, 20));
+    // Second event lands inside the realtime throttle, so this poll is the
+    // trailing one ~2s later — by then the server is answering again.
+    realtimeBus.emit({ kind: "session-changed", serverId: "x", serverType: "PLEX", at: Date.now() });
+
+    let recovered: { sessionId: string; startedAt: number } | undefined;
+    for (let i = 0; i < 8; i++) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += new TextDecoder().decode(value);
+      const withSession = framesFor(text).filter((f) =>
+        f.sessions.some((s) => s.sessionId === "flaky-1")
+      );
+      if (withSession.length > 1) {
+        recovered = withSession[withSession.length - 1].sessions.find(
+          (s) => s.sessionId === "flaky-1"
+        );
+        break;
+      }
+    }
+
+    // Regression: the failed poll used to prune sessionFirstSeen, so the
+    // stream's displayed duration restarted from zero once the server
+    // answered again.
+    expect(recovered).toBeDefined();
+    expect(recovered!.startedAt).toBe(initial!.startedAt);
+
+    await reader.cancel();
+  });
+
+  it("pushes an update when only the audio transcode decision changes", async () => {
+    const user = await createTestUser();
+    await createTestServer(user.id);
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    // Paused, so neither player state nor viewOffset moves — the audio
+    // decision is the only thing that changes.
+    let audioDecision = "transcode";
+    const getSessions = vi.fn(() =>
+      Promise.resolve([
+        {
+          sessionId: "audio-1",
+          player: { state: "paused", local: true },
+          session: { bandwidth: 0, location: "lan" },
+          viewOffset: 12345,
+          transcoding: { videoDecision: "copy", audioDecision },
+        },
+      ])
+    );
+    vi.mocked(createMediaServerClient).mockImplementation(function () {
+      return { getSessions } as never;
+    });
+
+    const response = await callRoute(GET, { url: "/api/tools/sessions/stream" });
+    const reader = response.body!.getReader();
+
+    const first = new TextDecoder().decode((await reader.read()).value);
+    expect(first).toContain('"audioDecision":"transcode"');
+
+    // The client renegotiates to direct audio; nothing else about the session
+    // changes. Regression: audioDecision was absent from the change
+    // fingerprint, so this update never reached the browser.
+    audioDecision = "copy";
+    realtimeBus.emit({ kind: "session-changed", serverId: "x", serverType: "PLEX", at: Date.now() });
+
+    let text = "";
+    for (let i = 0; i < 4; i++) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += new TextDecoder().decode(value);
+      if (text.includes('"audioDecision":"copy"')) break;
+    }
+    expect(text).toContain('"audioDecision":"copy"');
+
+    await reader.cancel();
+  });
 });
