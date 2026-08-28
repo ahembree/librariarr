@@ -17,6 +17,7 @@ import {
   DURATION_MS_PER_MIN,
   wildcardToRegex,
   matchArrayField,
+  matchExternalIdField,
 } from "@/lib/conditions";
 import {
   isUnconfiguredContainsRule,
@@ -1078,39 +1079,13 @@ function evaluateRuleAgainstItem(
     return negate ? !result : result;
   }
 
-  // Has External ID
+  // Has External ID — via the shared `matchExternalIdField` so this and the
+  // query engine can't drift (they previously carried identical inline copies,
+  // which is how the isNull/isNotNull sweep existed in both).
   if (field === "hasExternalId") {
-    const externalIds = (item.externalIds as Array<{ source: string }>) ?? [];
-    const strValue = String(value);
-    const sources = strValue.split("|").map((v) => v.trim()).filter(Boolean);
-    let result: boolean;
-    switch (operator) {
-      case "equals":
-      case "isNotNull":
-        result = externalIds.some((e) => e.source === strValue);
-        break;
-      case "notEquals":
-      case "isNull":
-        result = !externalIds.some((e) => e.source === strValue);
-        break;
-      case "contains":
-        result = externalIds.some((e) => sources.includes(e.source));
-        break;
-      case "notContains":
-        result = !externalIds.some((e) => sources.includes(e.source));
-        break;
-      case "matchesWildcard": {
-        const re = wildcardToRegex(strValue.toLowerCase());
-        result = externalIds.some((e) => re.test(e.source.toLowerCase()));
-        break;
-      }
-      case "notMatchesWildcard": {
-        const re = wildcardToRegex(strValue.toLowerCase());
-        result = !externalIds.some((e) => re.test(e.source.toLowerCase()));
-        break;
-      }
-      default: return false;
-    }
+    const result = matchExternalIdField(item.externalIds, operator, String(value));
+    // Unknown operator (null) → match nothing, bypassing negate (never fail open).
+    if (result === null) return false;
     return negate ? !result : result;
   }
 

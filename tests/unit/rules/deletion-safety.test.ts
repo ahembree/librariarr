@@ -533,3 +533,52 @@ describe("Unknown operator, type mismatch, or malformed value must not match the
     expect(evaluateAllRulesInMemory(nullEndedRule, seriesItem, makeArrMeta(false))).toBe(false);
   });
 });
+
+// ─── Defense 6: valueless operators must not sweep via a vacuous comparison ──
+
+describe("hasExternalId Is Empty must not match the whole library", () => {
+  // The regression this guards: isNull/isNotNull were aliased onto
+  // notEquals/equals against the rule's value — but the builder CLEARS the
+  // value when a valueless operator is selected, so the comparison became
+  // `source === ""`. No external-id row ever has an empty source, so
+  // "Has External ID Is Empty" was true for every item in the library, and
+  // "Is Not Empty" for none. Phase 1 emitted the mirror-image vacuous clause
+  // (`{ externalIds: { none: { source: "" } } }`), so both phases agreed and
+  // no phase-disagreement detector caught the sweep. On a destructive rule
+  // set that armed an action on the entire library.
+  const items = [
+    { id: "m1", title: "Has ids", externalIds: [{ source: "TMDB", externalId: "1" }] },
+    { id: "m2", title: "Has ids too", externalIds: [{ source: "TVDB", externalId: "2" }] },
+    { id: "m3", title: "No ids", externalIds: [] },
+  ];
+
+  const group = (operator: string, value: string, negate?: boolean): LifecycleRuleGroup[] => [{
+    id: "g", condition: "AND",
+    rules: [{ id: "r", field: "hasExternalId", operator, value, ...(negate ? { negate } : {}), condition: "AND" }],
+    groups: [],
+  }];
+
+  const matchedIds = (rules: LifecycleRuleGroup[]) =>
+    items.filter((i) => evaluateAllRulesInMemory(rules, i)).map((i) => i.id);
+
+  it("isNull with the cleared value matches only the item that has no ids", () => {
+    expect(matchedIds(group("isNull", ""))).toEqual(["m3"]);
+  });
+
+  it("isNotNull with the cleared value matches only items that have ids", () => {
+    expect(matchedIds(group("isNotNull", ""))).toEqual(["m1", "m2"]);
+  });
+
+  it("neither operator matches the whole library under negate", () => {
+    expect(matchedIds(group("isNull", "", true))).toEqual(["m1", "m2"]);
+    expect(matchedIds(group("isNotNull", "", true))).toEqual(["m3"]);
+  });
+
+  it("a leftover source value cannot revert it to the vacuous per-source read", () => {
+    // A saved rule may still carry a value (import / API). Whatever it is,
+    // the operator stays list-emptiness — never "matches everything".
+    for (const leftover of ["", "TMDB", "TVDB", "NOT_A_SOURCE"]) {
+      expect(matchedIds(group("isNull", leftover)), `isNull value=${leftover}`).toEqual(["m3"]);
+    }
+  });
+});

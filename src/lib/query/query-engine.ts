@@ -22,6 +22,7 @@ import {
   DURATION_MS_PER_MIN,
   wildcardToRegex,
   matchArrayField,
+  matchExternalIdField,
   aggregateEpisodesIntoSeries,
   serializeSeriesAggregateForEval,
   type AggregableEpisode,
@@ -986,46 +987,18 @@ function evaluateArrayFieldInMemory(
   return negate ? !result : result;
 }
 
-/** Evaluate an external ID presence rule in memory */
+/** Evaluate an external ID presence rule in memory, via the shared
+ *  `matchExternalIdField` — the single source of truth both engines use so
+ *  their results (and the isNull/isNotNull semantics) can't drift. */
 function evaluateExternalIdInMemory(
   operator: string,
   value: string,
   negate: boolean | undefined,
   item: Record<string, unknown>,
 ): boolean {
-  const extIds = (item.externalIds ?? []) as Array<{ source: string }>;
-  const sources = value.split("|").map((v) => v.trim()).filter(Boolean);
-  let result: boolean;
-  switch (operator) {
-    case "equals":
-    case "isNotNull":
-      result = extIds.some(e => e.source === value);
-      break;
-    case "notEquals":
-    case "isNull":
-      result = !extIds.some(e => e.source === value);
-      break;
-    case "contains":
-      result = extIds.some(e => sources.includes(e.source));
-      break;
-    case "notContains":
-      result = !extIds.some(e => sources.includes(e.source));
-      break;
-    case "matchesWildcard": {
-      const re = wildcardToRegex(value.toLowerCase());
-      result = extIds.some(e => re.test(e.source.toLowerCase()));
-      break;
-    }
-    case "notMatchesWildcard": {
-      const re = wildcardToRegex(value.toLowerCase());
-      result = !extIds.some(e => re.test(e.source.toLowerCase()));
-      break;
-    }
-    default:
-      // Unknown operator → match nothing (bypass negate), never the
-      // fail-open `true` this previously returned.
-      return false;
-  }
+  const result = matchExternalIdField(item.externalIds, operator, value);
+  // Unknown operator (null) → match nothing, bypassing negate (never fail open).
+  if (result === null) return false;
   return negate ? !result : result;
 }
 

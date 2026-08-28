@@ -992,20 +992,46 @@ describe("hasExternalId field", () => {
     expect(result.get("3")!.length).toBeGreaterThan(0);
   });
 
-  it("isNotNull is an alias for equals (has the specified source)", () => {
-    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "hasExternalId", operator: "isNotNull", value: "TMDB" })])];
+  // isNull / isNotNull are VALUELESS operators — the builder clears the value
+  // when one is selected — so they ask about the id LIST, not about a source.
+  // They were previously aliased onto notEquals/equals, which compared against
+  // the cleared value: `isNull` became "no row has source ''", true for EVERY
+  // item, so "Has External ID Is Empty" matched the whole library. The old
+  // tests only ever passed value:"TMDB" — a state the builder cannot produce —
+  // so they passed while the reachable state was broken.
+
+  it("isNotNull matches items that have any external id", () => {
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "hasExternalId", operator: "isNotNull", value: "" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0); // has TMDB
-    expect(result.get("2")).toHaveLength(0); // no TMDB
-    expect(result.get("3")).toHaveLength(0); // empty
+    expect(result.get("1")!.length).toBeGreaterThan(0); // TMDB + IMDB
+    expect(result.get("2")!.length).toBeGreaterThan(0); // TVDB
+    expect(result.get("3")).toHaveLength(0); // none
   });
 
-  it("isNull is an alias for notEquals (does not have the specified source)", () => {
+  it("isNull matches only the item with no external ids", () => {
+    const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "hasExternalId", operator: "isNull", value: "" })])];
+    const result = matched(items, rules);
+    expect(result.get("1")).toHaveLength(0);
+    expect(result.get("2")).toHaveLength(0);
+    expect(result.get("3")!.length).toBeGreaterThan(0);
+  });
+
+  it("isNull ignores any leftover source value (list-emptiness, not per-source)", () => {
+    // A saved rule can still carry a value (import/API). It must not revert to
+    // the per-source reading — equals/notEquals/contains express that.
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "hasExternalId", operator: "isNull", value: "TMDB" })])];
     const result = matched(items, rules);
-    expect(result.get("1")).toHaveLength(0); // has TMDB
-    expect(result.get("2")!.length).toBeGreaterThan(0); // no TMDB
-    expect(result.get("3")!.length).toBeGreaterThan(0); // empty
+    expect(result.get("1")).toHaveLength(0); // has ids
+    expect(result.get("2")).toHaveLength(0); // has ids (no TMDB, but not empty)
+    expect(result.get("3")!.length).toBeGreaterThan(0); // genuinely empty
+  });
+
+  it("negate inverts both, and they stay each other's complement", () => {
+    const negIsNull: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "hasExternalId", operator: "isNull", value: "", negate: true })])];
+    const result = matched(items, negIsNull);
+    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("3")).toHaveLength(0);
   });
 });
 
