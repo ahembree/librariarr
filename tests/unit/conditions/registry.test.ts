@@ -283,10 +283,52 @@ describe("isOperatorVisible (UI operator filter)", () => {
     }
   });
 
+  it("hides isNull / isNotNull on always-present Phase-2 fields", () => {
+    // foundInArr is a presence check; arrMonitored / seerrRequested /
+    // seerrRequestCount are non-nullable in ArrMetadata / SeerrMetadata;
+    // serverCount / hasPendingAction are always populated by the cross-system
+    // enrichment. The engine evaluates them to the trivial UNSATISFIABLE /
+    // MATCH_ALL result, so offering the operators would only build a
+    // "matches everything" clause — dangerous on a destructive rule set.
+    for (const field of [
+      "foundInArr",
+      "arrMonitored",
+      "seerrRequested",
+      "seerrRequestCount",
+      "serverCount",
+      "hasPendingAction",
+    ]) {
+      expect(isOperatorVisible("isNull", field), `${field} should hide isNull`).toBe(false);
+      expect(isOperatorVisible("isNotNull", field), `${field} should hide isNotNull`).toBe(false);
+    }
+  });
+
+  it("keeps isNull / isNotNull on list-shaped and nullable Arr/Seerr fields", () => {
+    // arrTag / seerrRequestedBy: "is empty" = carries no tags / no requesters.
+    // arrQualityProfile: non-nullable text, empty-string semantics (like title).
+    // arrQualityCutoffMet / arrEnded / arrHasUnaired: nullable booleans where
+    // "Arr didn't report a value" is a real question.
+    for (const field of [
+      "arrTag",
+      "seerrRequestedBy",
+      "matchedByRuleSet",
+      "arrQualityProfile",
+      "arrQualityCutoffMet",
+      "arrEnded",
+      "arrHasUnaired",
+    ]) {
+      expect(isOperatorVisible("isNull", field), `${field} should keep isNull`).toBe(true);
+      expect(isOperatorVisible("isNotNull", field), `${field} should keep isNotNull`).toBe(true);
+    }
+  });
+
   it("keeps positive operators on non-nullable fields (the fix only targets isNull/isNotNull)", () => {
     expect(isOperatorVisible("equals", "playCount")).toBe(true);
     expect(isOperatorVisible("greaterThan", "playCount")).toBe(true);
     expect(isOperatorVisible("notEquals", "playCount")).toBe(true);
+    expect(isOperatorVisible("equals", "arrMonitored")).toBe(true);
+    expect(isOperatorVisible("equals", "foundInArr")).toBe(true);
+    expect(isOperatorVisible("greaterThan", "seerrRequestCount")).toBe(true);
   });
 
   it("returns false for unknown fields", () => {

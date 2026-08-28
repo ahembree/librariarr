@@ -20,7 +20,7 @@ import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
-import type { MediaItemWithRelations } from "@/lib/types";
+import type { MediaItemWithRelations, MediaListItem } from "@/lib/types";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 
@@ -36,7 +36,7 @@ export default function AlbumDetailPage() {
   const { size, setSize, gridStyle } = useCardSize();
   const [item, setItem] = useState<(MediaItemWithRelations & { albumTitle?: string | null }) | null>(null);
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
-  const [tracks, setTracks] = useState<MediaItemWithRelations[]>([]);
+  const [tracks, setTracks] = useState<MediaListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, handleViewModeChange] = useLocalStorage<"cards" | "table">(
     "album-detail-view-mode",
@@ -112,8 +112,8 @@ export default function AlbumDetailPage() {
 
   const sortedTracks = useMemo(() => {
     const sorted = [...tracks].sort((a, b) => {
-      const aVal = a[sortBy as keyof MediaItemWithRelations];
-      const bVal = b[sortBy as keyof MediaItemWithRelations];
+      const aVal = a[sortBy as keyof MediaListItem];
+      const bVal = b[sortBy as keyof MediaListItem];
       if (aVal == null && bVal == null) return 0;
       if (aVal == null) return 1;
       if (bVal == null) return -1;
@@ -247,12 +247,12 @@ export default function AlbumDetailPage() {
               hideParentTitle
               renderHoverContent={(track) => (
                 <MediaHoverPopover
+                  summaryUrl={`/api/media/${track.id}`}
                   imageUrl={`/api/media/${track.id}/image`}
                   imageAspect="square"
                   data={{
                     title: track.title,
                     year: track.year,
-                    summary: track.summary,
                     contentRating: track.contentRating,
                     rating: track.rating,
                     audienceRating: track.audienceRating,
@@ -286,10 +286,10 @@ export default function AlbumDetailPage() {
                   href={`/library/music/track/${t.id}`}
                   hoverContent={
                     <MediaHoverPopover
+                      summaryUrl={`/api/media/${t.id}`}
                       data={{
                         title: t.title,
                         year: t.year,
-                        summary: t.summary,
                         contentRating: t.contentRating,
                         rating: t.rating,
                         audienceRating: t.audienceRating,

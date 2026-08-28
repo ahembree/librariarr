@@ -7,7 +7,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { AUDIO_CODEC_ORDER, getChipBadgeStyle } from "@/lib/theme/chip-colors";
 import Link from "next/link";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
+import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { ColorChip } from "@/components/color-chip";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { Button } from "@/components/ui/button";
@@ -271,7 +271,7 @@ export default function MusicPage() {
     count: rowCount,
     getScrollElement: () => scrollElementRef.current,
     estimateSize,
-    overscan: 10,
+    overscan: 3,
     scrollMargin,
   });
   useEffect(() => {
@@ -447,6 +447,7 @@ export default function MusicPage() {
                         {rowItems.map((a) => (
                           <MediaCard
                             key={a.parentTitle}
+                            priority={virtualRow.index < PRIORITY_ROWS}
                             imageUrl={`/api/media/${a.mediaItemId}/image?type=parent`}
                             title={a.parentTitle}
                             aspectRatio="square"

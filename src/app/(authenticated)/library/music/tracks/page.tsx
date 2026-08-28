@@ -6,15 +6,16 @@ import Link from "next/link";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
+import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { useChipColors } from "@/components/chip-color-provider";
 import { Music, Disc3, ListMusic, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
-import type { MediaItemWithRelations } from "@/lib/types";
+import type { MediaListItem } from "@/lib/types";
 import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
 import { useRealtime } from "@/hooks/use-realtime";
+import { fetchListProgressively } from "@/lib/media/progressive-load";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
@@ -32,11 +33,14 @@ export default function AllTracksPage() {
   const { getHex } = useChipColors();
   const { show, showServers, setVisible, prefs } = useCardDisplay("MUSIC_TRACKS");
   const { servers } = useServers();
-  const [items, setItems] = useState<MediaItemWithRelations[]>([]);
+  const [items, setItems] = useState<MediaListItem[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [sortBy, setSortBy] = useState("title");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [loading, setLoading] = useState(true);
+  // The first screenful arrives before the rest of the library; consumers that
+  // need the complete list (item count, scroll restoration) wait for this.
+  const [loadingRest, setLoadingRest] = useState(true);
   const [viewMode, setViewMode] = useState<"cards" | "table">("table");
   const [, startTransition] = useTransition();
   const { size, setSize, columns: actualColumns } = useCardSize();
@@ -45,7 +49,7 @@ export default function AllTracksPage() {
   const scrollElementRef = useRef<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
 
-  const { markChildNavigation } = useScrollRestoration("/library/music/tracks", !loading && items.length > 0, undefined, undefined, {
+  const { markChildNavigation } = useScrollRestoration("/library/music/tracks", !loadingRest && items.length > 0, undefined, undefined, {
     getFirstVisibleIndex: () => {
       if (!gridContainerRef.current) return -1;
       const main = document.querySelector<HTMLElement>("main");
@@ -93,23 +97,33 @@ export default function AllTracksPage() {
   const fetchTracks = useCallback(async () => {
     const token = ++reqToken.current;
     setLoading(true);
+    setLoadingRest(true);
     try {
       const params = new URLSearchParams({
-        limit: "0",
         sortBy,
         sortOrder,
         ...filters,
       });
-      const response = await fetch(`/api/media/music?${params}`);
-      const data = await response.json();
-      if (token !== reqToken.current) return;
-      startTransition(() => {
-        setItems(data.items || []);
-      });
+      // Paint the first screenful, then fill in the rest behind it — the whole
+      // library in one response meant nothing rendered until all of it landed.
+      await fetchListProgressively<MediaListItem>(
+        "/api/media/music",
+        params,
+        (loaded, done) => {
+          if (token !== reqToken.current) return;
+          startTransition(() => {
+            setItems(loaded);
+            setLoading(false);
+            if (done) setLoadingRest(false);
+          });
+        },
+      );
     } catch (error) {
       console.error("Failed to fetch tracks:", error);
-    } finally {
-      if (token === reqToken.current) setLoading(false);
+      if (token === reqToken.current) {
+        setLoading(false);
+        setLoadingRest(false);
+      }
     }
   }, [sortBy, sortOrder, filters]);
 
@@ -212,12 +226,12 @@ export default function AllTracksPage() {
           mediaType="MUSIC"
           renderHoverContent={(item) => (
             <MediaHoverPopover
+              summaryUrl={`/api/media/${item.id}`}
               imageUrl={`/api/media/${item.id}/image`}
               imageAspect="square"
               data={{
                 title: item.title,
                 year: item.year,
-                summary: item.summary,
                 contentRating: item.contentRating,
                 rating: item.rating,
                 audienceRating: item.audienceRating,
@@ -263,6 +277,7 @@ export default function AllTracksPage() {
                     {rowItems.map((track) => (
                       <MediaCard
                         key={track.id}
+                        priority={virtualRow.index < PRIORITY_ROWS}
                         imageUrl={`/api/media/${track.id}/image`}
                         title={track.title}
                         aspectRatio="square"
@@ -276,10 +291,10 @@ export default function AllTracksPage() {
                         }
                         hoverContent={
                           <MediaHoverPopover
+                            summaryUrl={`/api/media/${track.id}`}
                             data={{
                               title: track.title,
                               year: track.year,
-                              summary: track.summary,
                               contentRating: track.contentRating,
                               rating: track.rating,
                               audienceRating: track.audienceRating,
