@@ -283,13 +283,21 @@ describe("isOperatorVisible (UI operator filter)", () => {
     }
   });
 
-  it("hides isNull / isNotNull on always-present Arr/Seerr fields", () => {
+  it("hides isNull / isNotNull on always-present Phase-2 fields", () => {
     // foundInArr is a presence check; arrMonitored / seerrRequested /
-    // seerrRequestCount are non-nullable in ArrMetadata / SeerrMetadata. The
-    // engine evaluates them to the trivial UNSATISFIABLE / MATCH_ALL result,
-    // so offering the operators would only build an "every item in Arr"
-    // clause — dangerous on a destructive rule set.
-    for (const field of ["foundInArr", "arrMonitored", "seerrRequested", "seerrRequestCount"]) {
+    // seerrRequestCount are non-nullable in ArrMetadata / SeerrMetadata;
+    // serverCount / hasPendingAction are always populated by the cross-system
+    // enrichment. The engine evaluates them to the trivial UNSATISFIABLE /
+    // MATCH_ALL result, so offering the operators would only build a
+    // "matches everything" clause — dangerous on a destructive rule set.
+    for (const field of [
+      "foundInArr",
+      "arrMonitored",
+      "seerrRequested",
+      "seerrRequestCount",
+      "serverCount",
+      "hasPendingAction",
+    ]) {
       expect(isOperatorVisible("isNull", field), `${field} should hide isNull`).toBe(false);
       expect(isOperatorVisible("isNotNull", field), `${field} should hide isNotNull`).toBe(false);
     }
@@ -303,6 +311,7 @@ describe("isOperatorVisible (UI operator filter)", () => {
     for (const field of [
       "arrTag",
       "seerrRequestedBy",
+      "matchedByRuleSet",
       "arrQualityProfile",
       "arrQualityCutoffMet",
       "arrEnded",

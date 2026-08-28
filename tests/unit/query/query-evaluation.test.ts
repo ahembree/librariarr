@@ -505,3 +505,39 @@ describe("evaluateAllQueryRulesInMemory — isNull / isNotNull on Arr and Seerr 
     expect(evaluateAllQueryRulesInMemory(grp(isNull), item, makeArrMeta(), undefined)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Cross-system fields are enriched before Phase 2, so `hasPendingAction` is
+// always present. Its valueless operators previously fell into
+// `default: return false` and matched nothing in either polarity, while the
+// builder still offered them — the same class as the Arr/Seerr gap above.
+// ---------------------------------------------------------------------------
+
+describe("evaluateAllQueryRulesInMemory — hasPendingAction isNull / isNotNull", () => {
+  const grp = (rule: QueryRule): QueryGroup[] => [
+    { id: "g1", condition: "AND", rules: [rule], groups: [] },
+  ];
+
+  it("isNotNull matches every enriched item, isNull matches none", () => {
+    const isNull = makeRule({ field: "hasPendingAction", operator: "isNull", value: "" });
+    const isNotNull = makeRule({ field: "hasPendingAction", operator: "isNotNull", value: "" });
+    for (const item of [{ id: "1", hasPendingAction: true }, { id: "2", hasPendingAction: false }]) {
+      expect(evaluateAllQueryRulesInMemory(grp(isNotNull), item, undefined, undefined)).toBe(true);
+      expect(evaluateAllQueryRulesInMemory(grp(isNull), item, undefined, undefined)).toBe(false);
+    }
+  });
+
+  it("negate inverts them consistently", () => {
+    const item = { id: "1", hasPendingAction: true };
+    expect(evaluateAllQueryRulesInMemory(grp(makeRule({ field: "hasPendingAction", operator: "isNull", value: "", negate: true })), item, undefined, undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(grp(makeRule({ field: "hasPendingAction", operator: "isNotNull", value: "", negate: true })), item, undefined, undefined)).toBe(false);
+  });
+
+  it("equals / notEquals still discriminate on the actual value", () => {
+    const pending = { id: "1", hasPendingAction: true };
+    const notPending = { id: "2", hasPendingAction: false };
+    const eqTrue = makeRule({ field: "hasPendingAction", operator: "equals", value: "true" });
+    expect(evaluateAllQueryRulesInMemory(grp(eqTrue), pending, undefined, undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(grp(eqTrue), notPending, undefined, undefined)).toBe(false);
+  });
+});

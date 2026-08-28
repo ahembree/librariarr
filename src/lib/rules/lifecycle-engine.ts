@@ -1243,6 +1243,14 @@ function evaluateRuleAgainstItem(
     }
     if (field === "hasPendingAction") {
       const hasPending = !!item.hasPendingAction;
+      // Always-present boolean (coalesced from the enrichment), so isNull
+      // matches nothing and isNotNull matches everything — the same trivial
+      // pair serverCount uses just above, and what Phase 1 builds for a
+      // non-nullable column. Without these the valueless operators fell into
+      // `default: return false` and matched nothing in either polarity, even
+      // though the builder offered them. The builder now hides both here.
+      if (operator === "isNull") return negate ? true : false;
+      if (operator === "isNotNull") return negate ? false : true;
       const boolVal = String(value).toLowerCase() === "true";
       let result: boolean;
       switch (operator) {
