@@ -109,6 +109,23 @@ describe("prewarmServerArtwork", () => {
     expect(widths.get("/ep/1/thumb/1")).toBe(CACHE_WIDTH_GRID_WIDE);
   });
 
+  it("asks the media server to resize to the width it will store", async () => {
+    // Without this the server ships the full-resolution original and the whole
+    // saving evaporates — the local resize happens either way, so nothing else
+    // in the test suite would notice.
+    stubQueries({ moviePosters: ["/movie/a/thumb/1"], episodeStills: ["/ep/1/thumb/1"] });
+
+    await prewarmServerArtwork("srv-1");
+
+    for (const call of m.cacheImage.mock.calls) {
+      const [url, fetchFn, opts] = call as [string, () => Promise<unknown>, { maxWidth: number }];
+      await fetchFn();
+      expect(m.fetchImage).toHaveBeenCalledWith(url, { width: opts.maxWidth });
+    }
+    expect(m.fetchImage).toHaveBeenCalledWith("/movie/a/thumb/1", { width: CACHE_WIDTH_GRID });
+    expect(m.fetchImage).toHaveBeenCalledWith("/ep/1/thumb/1", { width: CACHE_WIDTH_GRID_WIDE });
+  });
+
   it("never warms the detail (800px) or hero (1920px) variants", async () => {
     stubQueries({ moviePosters: ["/movie/a/thumb/1"], episodeStills: ["/ep/1/thumb/1"] });
     await prewarmServerArtwork("srv-1");

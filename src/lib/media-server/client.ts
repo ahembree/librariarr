@@ -71,7 +71,14 @@ export interface MediaServerClient {
 
   // Image proxying
   getImageUrl(path: string): string;
-  fetchImage(path: string): Promise<{ data: Buffer; contentType: string }>;
+  /**
+   * Fetch artwork. `width` is a hint that the caller only needs the image at
+   * that width — implementations that can have the media server resize before
+   * sending should do so, since the alternative is transferring and decoding a
+   * multi-megabyte original to produce a thumbnail. Honouring it is optional;
+   * the result is resized locally regardless.
+   */
+  fetchImage(path: string, options?: { width?: number }): Promise<{ data: Buffer; contentType: string }>;
 
   // Optional: Plex-only methods
   getAccounts?(): Promise<Map<number, string>>;

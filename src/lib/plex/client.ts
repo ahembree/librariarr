@@ -803,7 +803,49 @@ export class PlexClient implements MediaServerClient {
     return `${this.baseURL}${path}?X-Plex-Token=${this.token}`;
   }
 
-  async fetchImage(path: string): Promise<{ data: Buffer; contentType: string }> {
+  async fetchImage(
+    path: string,
+    options?: { width?: number },
+  ): Promise<{ data: Buffer; contentType: string }> {
+    const width = options?.width;
+    if (width && width > 0) {
+      // Plex's photo transcoder resizes server-side (and caches the result), so
+      // a grid-sized poster arrives as tens of KB instead of the multi-megabyte
+      // original — both the transfer and the local decode shrink by an order of
+      // magnitude, which is most of the cost of warming a cold library.
+      //
+      // A square box with minSize=1 ("scale to fill, overflowing one dimension")
+      // guarantees at least `width` on both axes whatever the source aspect
+      // ratio, so the local resize never has to upscale. upscale=0 leaves a
+      // source smaller than the box untouched rather than blowing it up.
+      const params = new URLSearchParams({
+        url: path,
+        width: String(width),
+        height: String(width),
+        minSize: "1",
+        upscale: "0",
+      });
+      try {
+        const response = await this.client.get(`/photo/:/transcode?${params.toString()}`, {
+          responseType: "arraybuffer",
+          timeout: 15000,
+        });
+        const contentType = response.headers["content-type"];
+        const isImage = typeof contentType !== "string" || contentType.startsWith("image/");
+        // A transcoder that answers with an error page or an empty body must not
+        // poison the cache — fall through to the original instead.
+        if (isImage && response.data?.byteLength > 0) {
+          return {
+            data: Buffer.from(response.data),
+            contentType: typeof contentType === "string" ? contentType : "image/jpeg",
+          };
+        }
+      } catch {
+        // Transcoder unavailable or refused (older PMS, disabled transcoder) —
+        // fall back to the original path below.
+      }
+    }
+
     const response = await this.client.get(path, {
       responseType: "arraybuffer",
       timeout: 15000,

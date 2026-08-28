@@ -760,14 +760,81 @@ describe("PlexClient", () => {
   });
 
   describe("fetchImage", () => {
+    const imageResponse = (over: Record<string, unknown> = {}) => ({
+      data: Buffer.from("image-data"),
+      headers: { "content-type": "image/png" },
+      ...over,
+    });
+
     it("returns buffer and content type", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: Buffer.from("image-data"),
-        headers: { "content-type": "image/png" },
-      });
+      mockAxiosInstance.get.mockResolvedValueOnce(imageResponse());
       const result = await client.fetchImage("/library/metadata/123/thumb");
       expect(result.contentType).toBe("image/png");
       expect(result.data).toBeInstanceOf(Buffer);
+    });
+
+    it("fetches the original path when no width is requested", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce(imageResponse());
+      await client.fetchImage("/library/metadata/123/thumb");
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith(
+        "/library/metadata/123/thumb",
+        expect.objectContaining({ responseType: "arraybuffer" }),
+      );
+    });
+
+    it("asks the photo transcoder to resize when a width is requested", async () => {
+      // Server-side resize is the whole point: a grid-sized poster arrives as
+      // tens of KB instead of the multi-megabyte original.
+      mockAxiosInstance.get.mockResolvedValueOnce(imageResponse());
+      await client.fetchImage("/library/metadata/123/thumb", { width: 400 });
+
+      const url = mockAxiosInstance.get.mock.calls[0][0] as string;
+      expect(url.startsWith("/photo/:/transcode?")).toBe(true);
+      const params = new URLSearchParams(url.split("?")[1]);
+      expect(params.get("url")).toBe("/library/metadata/123/thumb");
+      expect(params.get("width")).toBe("400");
+      // Square box + minSize=1 ("fill the box") guarantees at least `width` on
+      // both axes for any source aspect ratio, so the local resize never
+      // upscales; upscale=0 leaves a smaller source alone.
+      expect(params.get("height")).toBe("400");
+      expect(params.get("minSize")).toBe("1");
+      expect(params.get("upscale")).toBe("0");
+    });
+
+    it("falls back to the original when the transcoder errors", async () => {
+      // Older PMS builds, or a disabled transcoder, must not break artwork.
+      mockAxiosInstance.get
+        .mockRejectedValueOnce(new Error("404"))
+        .mockResolvedValueOnce(imageResponse());
+
+      const result = await client.fetchImage("/library/metadata/123/thumb", { width: 400 });
+
+      expect(result.data).toBeInstanceOf(Buffer);
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
+      expect(mockAxiosInstance.get.mock.calls[1][0]).toBe("/library/metadata/123/thumb");
+    });
+
+    it("falls back when the transcoder answers with a non-image body", async () => {
+      // An HTML error page must not be cached as artwork.
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(imageResponse({ headers: { "content-type": "text/html" } }))
+        .mockResolvedValueOnce(imageResponse());
+
+      const result = await client.fetchImage("/library/metadata/123/thumb", { width: 400 });
+
+      expect(result.contentType).toBe("image/png");
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
+    });
+
+    it("falls back when the transcoder answers with an empty body", async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(imageResponse({ data: Buffer.alloc(0) }))
+        .mockResolvedValueOnce(imageResponse());
+
+      await client.fetchImage("/library/metadata/123/thumb", { width: 400 });
+
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
+      expect(mockAxiosInstance.get.mock.calls[1][0]).toBe("/library/metadata/123/thumb");
     });
   });
 

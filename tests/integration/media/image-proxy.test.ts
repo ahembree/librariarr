@@ -148,7 +148,24 @@ describe("GET /api/media/[id]/image", () => {
 
     it("requests the artwork from the media server once per uncached width", async () => {
       await etagFor({ w: String(CACHE_WIDTH_GRID) });
-      expect(mockFetchImage).toHaveBeenCalledWith(THUMB);
+      expect(mockFetchImage).toHaveBeenCalledWith(THUMB, expect.anything());
+    });
+
+    it("tells the media server which width to resize to", async () => {
+      // The server-side resize is where the bytes are saved; the local resize
+      // would still produce a correct image without it, so only this asserts it.
+      await etagFor({ w: String(CACHE_WIDTH_GRID) });
+      expect(mockFetchImage).toHaveBeenCalledWith(THUMB, { width: CACHE_WIDTH_GRID });
+    });
+
+    it("asks for the default width when the caller does not specify one", async () => {
+      await etagFor();
+      expect(mockFetchImage).toHaveBeenCalledWith(THUMB, { width: CACHE_WIDTH_DEFAULT });
+    });
+
+    it("asks for the hero width for type=art", async () => {
+      await etagFor({ type: "art" });
+      expect(mockFetchImage).toHaveBeenCalledWith(ART, { width: CACHE_WIDTH_ART });
     });
   });
 });

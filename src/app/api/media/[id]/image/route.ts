@@ -10,7 +10,12 @@ import {
   getCachedImageInfo,
   streamCachedImage,
 } from "@/lib/image-cache/image-cache";
-import { CACHE_WIDTH_ART, parseImageWidth, resolveArtworkPath } from "@/lib/image-url";
+import {
+  CACHE_WIDTH_ART,
+  CACHE_WIDTH_DEFAULT,
+  parseImageWidth,
+  resolveArtworkPath,
+} from "@/lib/image-url";
 
 const IMAGE_META_TTL = 5 * 60 * 1000; // 5 minutes
 const IMAGE_FAIL_TTL = 60 * 1000; // negative cache for fetch failures
@@ -140,9 +145,12 @@ export async function GET(
   });
 
   try {
+    // The width we hand the media server is the width we are about to store, so
+    // it can resize before sending instead of shipping the full-size original.
+    const effectiveWidth = maxWidth ?? CACHE_WIDTH_DEFAULT;
     const result = await cacheImage(
       thumbPath,
-      () => client.fetchImage(thumbPath),
+      () => client.fetchImage(thumbPath, { width: effectiveWidth }),
       maxWidth ? { maxWidth } : undefined,
     );
     const etag = `"${result.cacheKey}"`;

@@ -13,6 +13,11 @@ const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 // Disable Sharp's internal operation cache for memory safety in long-running processes
 sharp.cache(false);
+// libvips defaults its thread pool to the core count, so a background prewarm
+// walk at concurrency 3 could otherwise occupy every core of a small NAS and
+// starve live browsing. Inputs are server-resized now (see fetchImage), so a
+// single thread per encode is plenty.
+sharp.concurrency(1);
 
 // In-flight request deduplication: cacheKey -> Promise<Buffer>
 const inFlight = new Map<string, Promise<Buffer>>();

@@ -209,7 +209,11 @@ export async function prewarmServerArtwork(serverId: string): Promise<PrewarmRes
     budgetSpent++;
 
     try {
-      await cacheImage(target.url, () => client.fetchImage(target.url), { maxWidth: target.width });
+      await cacheImage(
+        target.url,
+        () => client.fetchImage(target.url, { width: target.width }),
+        { maxWidth: target.width },
+      );
       result.warmed++;
       consecutiveFailures = 0;
     } catch (error) {
