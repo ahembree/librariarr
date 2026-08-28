@@ -346,8 +346,14 @@ export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined):
   // foundInArr must be checked before the !meta guard since it explicitly
   // tests for the presence/absence of Arr metadata
   if (rule.field === "foundInArr") {
-    const boolVal = String(rule.value).toLowerCase() === "true";
     const found = meta !== undefined;
+    // isNull / isNotNull carry no value, so they must be read as presence
+    // checks on the Arr record itself rather than falling into the
+    // equals/notEquals path below — there an empty value coerces to
+    // `boolVal = false`, which made BOTH operators mean "not found in Arr".
+    if (rule.operator === "isNull") return rule.negate ? found : !found;
+    if (rule.operator === "isNotNull") return rule.negate ? !found : found;
+    const boolVal = String(rule.value).toLowerCase() === "true";
     const result = rule.operator === "notEquals" ? found !== boolVal : found === boolVal;
     return rule.negate ? !result : result;
   }
@@ -365,6 +371,15 @@ export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined):
   // isNull/isNotNull (handled before each guard) intentionally match on null.
   switch (field) {
     case "arrTag": {
+      // Tags are a list that is always present (never null), so "is empty" /
+      // "is not empty" ask about LIST emptiness — an item that is in Arr but
+      // carries no tags. Same semantics as the shared JSON-array evaluator
+      // (`matchArrayField`) applies to genre/labels/country. Handled before
+      // the operator switch: falling through to its `default` returned false
+      // for BOTH operators, so neither "Tag Is Empty" nor "Tag Is Not Empty"
+      // could ever match anything.
+      if (operator === "isNull") { result = meta.tags.length === 0; break; }
+      if (operator === "isNotNull") { result = meta.tags.length > 0; break; }
       const strVal = String(value).toLowerCase();
       switch (operator) {
         case "equals":
@@ -400,6 +415,14 @@ export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined):
       break;
     }
     case "arrQualityProfile": {
+      // Non-nullable text: "no value" is the empty string, matching how the
+      // engine treats non-nullable String columns (see field-metadata.ts).
+      // Handled before the operator switch, whose `default` returned false
+      // for both operators. The Arr mappers fall back to "Unknown", so in
+      // practice isNull matches nothing and isNotNull matches every item
+      // that resolved to an Arr record.
+      if (operator === "isNull") { result = meta.qualityProfile === ""; break; }
+      if (operator === "isNotNull") { result = meta.qualityProfile !== ""; break; }
       const strVal = String(value).toLowerCase();
       const profile = meta.qualityProfile.toLowerCase();
       switch (operator) {
@@ -437,6 +460,14 @@ export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined):
       break;
     }
     case "arrMonitored": {
+      // Non-nullable boolean: the value is always present on a resolved Arr
+      // record, so isNull matches nothing and isNotNull matches every such
+      // item — mirroring the UNSATISFIABLE / MATCH_ALL shapes Phase 1 builds
+      // for non-nullable columns. Stated explicitly instead of falling into
+      // `default: return false`, which made the two operators disagree under
+      // negate. The builder hides both for this field (isOperatorVisible).
+      if (operator === "isNull") { result = false; break; }
+      if (operator === "isNotNull") { result = true; break; }
       const boolVal = String(value).toLowerCase() === "true";
       switch (operator) {
         case "equals":
@@ -742,6 +773,14 @@ export function evaluateSeerrRule(rule: Condition, meta: SeerrMetadata | undefin
 
   switch (field) {
     case "seerrRequested": {
+      // Non-nullable boolean (missing metadata falls back to `defaultMeta`,
+      // which still sets it), so isNull matches nothing and isNotNull matches
+      // everything — the UNSATISFIABLE / MATCH_ALL pair Phase 1 builds for
+      // non-nullable columns. Explicit rather than falling into
+      // `default: return false`, which made both operators match nothing.
+      // The builder hides both for this field (isOperatorVisible).
+      if (operator === "isNull") { result = false; break; }
+      if (operator === "isNotNull") { result = true; break; }
       const boolVal = String(value).toLowerCase() === "true";
       switch (operator) {
         case "equals":
@@ -756,6 +795,10 @@ export function evaluateSeerrRule(rule: Condition, meta: SeerrMetadata | undefin
       break;
     }
     case "seerrRequestCount": {
+      // Non-nullable number (0 when never requested) — same trivial
+      // isNull / isNotNull pair as seerrRequested above.
+      if (operator === "isNull") { result = false; break; }
+      if (operator === "isNotNull") { result = true; break; }
       const numVal = Number(value);
       switch (operator) {
         case "equals":
@@ -845,6 +888,12 @@ export function evaluateSeerrRule(rule: Condition, meta: SeerrMetadata | undefin
       break;
     }
     case "seerrRequestedBy": {
+      // Requesters are an always-present list, so "is empty" / "is not empty"
+      // ask about LIST emptiness (no requester recorded), matching arrTag and
+      // the shared JSON-array evaluator. Handled before the operator switch,
+      // whose `default` returned false for both operators.
+      if (operator === "isNull") { result = m.requestedBy.length === 0; break; }
+      if (operator === "isNotNull") { result = m.requestedBy.length > 0; break; }
       const strVal = String(value).toLowerCase();
       switch (operator) {
         case "equals":
@@ -1194,6 +1243,14 @@ function evaluateRuleAgainstItem(
     }
     if (field === "hasPendingAction") {
       const hasPending = !!item.hasPendingAction;
+      // Always-present boolean (coalesced from the enrichment), so isNull
+      // matches nothing and isNotNull matches everything — the same trivial
+      // pair serverCount uses just above, and what Phase 1 builds for a
+      // non-nullable column. Without these the valueless operators fell into
+      // `default: return false` and matched nothing in either polarity, even
+      // though the builder offered them. The builder now hides both here.
+      if (operator === "isNull") return negate ? true : false;
+      if (operator === "isNotNull") return negate ? false : true;
       const boolVal = String(value).toLowerCase() === "true";
       let result: boolean;
       switch (operator) {

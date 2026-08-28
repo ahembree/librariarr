@@ -451,13 +451,16 @@ describe("Unknown operator, type mismatch, or malformed value must not match the
     }]);
   });
 
-  it("arrTag isNull with negate=true does not flip to match-all", () => {
-    // arrTag is `string[]` and is never null, so isNull is meaningless.
-    // The arr-tag handler doesn't implement isNull → default returns false,
-    // bypassing the negate flip that would otherwise sweep the library.
-    function makeArrMeta(): ArrMetadata {
+  it("arrTag isNull with negate=true flips a real result, never a vacuous default", () => {
+    // arrTag is `string[]` and never null, so isNull asks about LIST
+    // emptiness: an item in Arr carrying no tags. NOT(isNull) is therefore
+    // exactly isNotNull ("has at least one tag") — it flips a real evaluation,
+    // not the always-false `default` the handler used to fall through to.
+    // The sweep hazard that guarded is instead closed by the !meta guard: an
+    // item absent from Arr stays unmatched under either polarity.
+    function makeArrMeta(tags: string[]): ArrMetadata {
       return {
-        arrId: 0, tags: ["Default"], qualityProfile: "HD-1080p", monitored: false,
+        arrId: 0, tags, qualityProfile: "HD-1080p", monitored: false,
         rating: null, tmdbRating: null, rtCriticRating: null,
         dateAdded: null, path: null, sizeOnDisk: null, originalLanguage: null,
         releaseDate: null, inCinemasDate: null, runtime: null,
@@ -467,14 +470,36 @@ describe("Unknown operator, type mismatch, or malformed value must not match the
         monitoredSeasonCount: null, monitoredEpisodeCount: null,
       };
     }
-    const arrData: ArrDataMap = { "1": makeArrMeta(), "2": makeArrMeta() };
-    const groups: LifecycleRuleGroup[] = [{
+    // m1 is tagged, m2 is untagged.
+    const arrData: ArrDataMap = { "1": makeArrMeta(["Default"]), "2": makeArrMeta([]) };
+    const negated: LifecycleRuleGroup[] = [{
       id: "g", condition: "AND",
       rules: [{ id: "r", field: "arrTag", operator: "isNull", value: "", negate: true, condition: "AND" }],
       groups: [],
     }];
-    for (const item of items) {
-      expect(evaluateAllRulesInMemory(groups, item, arrData[item.externalIds[0].externalId])).toBe(false);
+    const results = items.map((item) =>
+      evaluateAllRulesInMemory(negated, item, arrData[item.externalIds[0].externalId]),
+    );
+    expect(results).toEqual([true, false]);
+  });
+
+  it("arrTag isNull / isNotNull never match an item that is absent from Arr", () => {
+    // The real sweep hazard: absent Arr metadata must never be read as
+    // "no tags", under either operator or either polarity.
+    for (const operator of ["isNull", "isNotNull"]) {
+      for (const negate of [false, true]) {
+        const groups: LifecycleRuleGroup[] = [{
+          id: "g", condition: "AND",
+          rules: [{ id: "r", field: "arrTag", operator, value: "", negate, condition: "AND" }],
+          groups: [],
+        }];
+        for (const item of items) {
+          expect(
+            evaluateAllRulesInMemory(groups, item, undefined),
+            `arrTag ${operator} negate=${negate} must not match an item missing from Arr`,
+          ).toBe(false);
+        }
+      }
     }
   });
 
