@@ -248,6 +248,34 @@ describe("PlexClient", () => {
     });
   });
 
+  describe("listUsernames", () => {
+    it("returns every account name the server knows, not just active streamers", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            Account: [
+              // id 0 is Plex's anonymous/local pseudo-account (blank name).
+              { id: 0, name: "" },
+              { id: 1, name: "Admin" },
+              { id: 2, name: "User1" },
+              { id: 3, name: "User2" },
+            ],
+          },
+        },
+      });
+      const result = await client.listUsernames();
+      // The blank anonymous account is dropped; everyone else is listed even
+      // though none of them are currently streaming.
+      expect(result).toEqual(["Admin", "User1", "User2"]);
+    });
+
+    it("returns empty array on error", async () => {
+      mockAxiosInstance.get.mockRejectedValueOnce(new Error("fail"));
+      const result = await client.listUsernames();
+      expect(result).toEqual([]);
+    });
+  });
+
   describe("getWatchHistory", () => {
     it("returns watch history with usernames", async () => {
       mockAxiosInstance.get
@@ -508,10 +536,38 @@ describe("PlexClient", () => {
       expect(result[0].sessionId).toBe("abc");
     });
 
-    it("returns empty array on error", async () => {
-      mockAxiosInstance.get.mockRejectedValueOnce(new Error("fail"));
+    it("falls back to the item sessionKey when no Session element is present", async () => {
+      // Plex omits the Session element for some clients; without a fallback the
+      // sessionId was "" and multiple such sessions collided on one key.
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            Metadata: [
+              {
+                title: "No Session Elem",
+                type: "movie",
+                sessionKey: "sk-42",
+                ratingKey: "rk-7",
+                User: { id: "1", title: "Admin" },
+                Player: { product: "TV", platform: "Roku", state: "playing" },
+                Media: [{ id: "media-1", width: 3840, height: 2160, Part: [] }],
+              },
+            ],
+          },
+        },
+      });
       const result = await client.getSessions();
-      expect(result).toEqual([]);
+      expect(result[0].sessionId).toBe("sk-42");
+      expect(result[0].ratingKey).toBe("rk-7");
+      expect(result[0].mediaId).toBe("media-1");
+    });
+
+    it("throws on error so callers can distinguish unreachable from no sessions", async () => {
+      // Swallowing to [] made a hiccup look like "all streams ended", which
+      // reset grace timers and mass-terminated grandfathered block_new_only
+      // streams on recovery. Callers now treat a throw as "unreachable".
+      mockAxiosInstance.get.mockRejectedValueOnce(new Error("fail"));
+      await expect(client.getSessions()).rejects.toThrow("fail");
     });
 
     it("handles sessions with TranscodeSession", async () => {
@@ -542,6 +598,174 @@ describe("PlexClient", () => {
       expect(result[0].transcoding?.videoDecision).toBe("transcode");
       expect(result[0].transcoding?.throttled).toBe(true);
     });
+
+    it("captures the acceleration APIs actually doing the work", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            Metadata: [
+              {
+                title: "Movie",
+                type: "movie",
+                User: { id: "1", title: "Admin" },
+                Player: { product: "TV", platform: "Roku", state: "playing" },
+                Session: { id: "hw" },
+                TranscodeSession: {
+                  videoDecision: "transcode",
+                  audioDecision: "transcode",
+                  transcodeHwRequested: true,
+                  transcodeHwDecoding: "vaapi",
+                  transcodeHwEncoding: "vaapi",
+                  transcodeHwFullPipeline: true,
+                  speed: 0.8,
+                },
+                Media: [],
+              },
+            ],
+          },
+        },
+      });
+
+      const result = await client.getSessions();
+
+      expect(result[0].transcoding?.hwDecode).toBe("vaapi");
+      expect(result[0].transcoding?.hwEncode).toBe("vaapi");
+      expect(result[0].transcoding?.hwFullPipeline).toBe(true);
+      expect(result[0].transcoding?.speed).toBe(0.8);
+    });
+
+    // Plex sets transcodeHwRequested when it asks for hardware and then falls
+    // back to software without saying so, which is why the decode/encode
+    // fields are what the exemption reads.
+    it("leaves the acceleration APIs unset when Plex fell back to software", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            Metadata: [
+              {
+                title: "Movie",
+                type: "movie",
+                User: { id: "1", title: "Admin" },
+                Player: { product: "TV", platform: "Roku", state: "playing" },
+                Session: { id: "sw" },
+                TranscodeSession: {
+                  videoDecision: "transcode",
+                  audioDecision: "copy",
+                  transcodeHwRequested: true,
+                },
+                Media: [],
+              },
+            ],
+          },
+        },
+      });
+
+      const result = await client.getSessions();
+
+      expect(result[0].transcoding?.transcodeHwRequested).toBe(true);
+      expect(result[0].transcoding?.hwDecode).toBeUndefined();
+      expect(result[0].transcoding?.hwEncode).toBeUndefined();
+    });
+
+    // A multi-version item reports every version; `selected` marks the copy
+    // being played. Taking Media[0] blindly reported the wrong resolution and
+    // file, which in turn fed the transcode manager's 4K criterion bad data.
+    it("reads the selected media version, not the first one", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            Metadata: [
+              {
+                title: "Multi-version Movie",
+                type: "movie",
+                User: { id: "1", title: "Admin" },
+                Player: { product: "TV", platform: "Roku", state: "playing" },
+                Session: { id: "multi" },
+                Media: [
+                  {
+                    width: 1920,
+                    height: 1080,
+                    videoCodec: "h264",
+                    videoResolution: "1080",
+                    bitrate: 8000,
+                    Part: [{ file: "/movies/Movie (2020) - 1080p.mkv" }],
+                  },
+                  {
+                    selected: true,
+                    width: 3840,
+                    height: 2160,
+                    videoCodec: "hevc",
+                    videoResolution: "4k",
+                    bitrate: 60000,
+                    Part: [{ file: "/movies/Movie (2020) - 2160p.mkv" }],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      });
+
+      const result = await client.getSessions();
+
+      expect(result[0].mediaWidth).toBe(3840);
+      expect(result[0].mediaHeight).toBe(2160);
+      expect(result[0].videoCodec).toBe("hevc");
+      expect(result[0].videoResolution).toBe("4k");
+      expect(result[0].bitrate).toBe(60000);
+      // The Part must come from the selected version too.
+      expect(result[0].partFile).toBe("/movies/Movie (2020) - 2160p.mkv");
+    });
+
+    it("falls back to the first media version when none is marked selected", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            Metadata: [
+              {
+                title: "Single-version Movie",
+                type: "movie",
+                User: { id: "1", title: "Admin" },
+                Player: { product: "TV", platform: "Roku", state: "playing" },
+                Session: { id: "single" },
+                Media: [{ width: 1920, height: 1080, videoCodec: "h264", Part: [] }],
+              },
+            ],
+          },
+        },
+      });
+
+      const result = await client.getSessions();
+
+      expect(result[0].mediaWidth).toBe(1920);
+      expect(result[0].videoCodec).toBe("h264");
+    });
+  });
+
+  describe("getItemMediaResolutions", () => {
+    it("maps each Media version's source resolution by id", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            Metadata: [
+              {
+                Media: [
+                  { id: 100, width: 3840, height: 2160 },
+                  { id: 200, width: 1920, height: 1080 },
+                  { id: 300, videoResolution: "720" },
+                ],
+              },
+            ],
+          },
+        },
+      });
+
+      const map = await client.getItemMediaResolutions("rk1");
+
+      expect(map.get("100")).toBe("4k");
+      expect(map.get("200")).toBe("1080");
+      expect(map.get("300")).toBe("720");
+    });
   });
 
   describe("terminateSession", () => {
@@ -564,14 +788,81 @@ describe("PlexClient", () => {
   });
 
   describe("fetchImage", () => {
+    const imageResponse = (over: Record<string, unknown> = {}) => ({
+      data: Buffer.from("image-data"),
+      headers: { "content-type": "image/png" },
+      ...over,
+    });
+
     it("returns buffer and content type", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: Buffer.from("image-data"),
-        headers: { "content-type": "image/png" },
-      });
+      mockAxiosInstance.get.mockResolvedValueOnce(imageResponse());
       const result = await client.fetchImage("/library/metadata/123/thumb");
       expect(result.contentType).toBe("image/png");
       expect(result.data).toBeInstanceOf(Buffer);
+    });
+
+    it("fetches the original path when no width is requested", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce(imageResponse());
+      await client.fetchImage("/library/metadata/123/thumb");
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith(
+        "/library/metadata/123/thumb",
+        expect.objectContaining({ responseType: "arraybuffer" }),
+      );
+    });
+
+    it("asks the photo transcoder to resize when a width is requested", async () => {
+      // Server-side resize is the whole point: a grid-sized poster arrives as
+      // tens of KB instead of the multi-megabyte original.
+      mockAxiosInstance.get.mockResolvedValueOnce(imageResponse());
+      await client.fetchImage("/library/metadata/123/thumb", { width: 400 });
+
+      const url = mockAxiosInstance.get.mock.calls[0][0] as string;
+      expect(url.startsWith("/photo/:/transcode?")).toBe(true);
+      const params = new URLSearchParams(url.split("?")[1]);
+      expect(params.get("url")).toBe("/library/metadata/123/thumb");
+      expect(params.get("width")).toBe("400");
+      // Square box + minSize=1 ("fill the box") guarantees at least `width` on
+      // both axes for any source aspect ratio, so the local resize never
+      // upscales; upscale=0 leaves a smaller source alone.
+      expect(params.get("height")).toBe("400");
+      expect(params.get("minSize")).toBe("1");
+      expect(params.get("upscale")).toBe("0");
+    });
+
+    it("falls back to the original when the transcoder errors", async () => {
+      // Older PMS builds, or a disabled transcoder, must not break artwork.
+      mockAxiosInstance.get
+        .mockRejectedValueOnce(new Error("404"))
+        .mockResolvedValueOnce(imageResponse());
+
+      const result = await client.fetchImage("/library/metadata/123/thumb", { width: 400 });
+
+      expect(result.data).toBeInstanceOf(Buffer);
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
+      expect(mockAxiosInstance.get.mock.calls[1][0]).toBe("/library/metadata/123/thumb");
+    });
+
+    it("falls back when the transcoder answers with a non-image body", async () => {
+      // An HTML error page must not be cached as artwork.
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(imageResponse({ headers: { "content-type": "text/html" } }))
+        .mockResolvedValueOnce(imageResponse());
+
+      const result = await client.fetchImage("/library/metadata/123/thumb", { width: 400 });
+
+      expect(result.contentType).toBe("image/png");
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
+    });
+
+    it("falls back when the transcoder answers with an empty body", async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(imageResponse({ data: Buffer.alloc(0) }))
+        .mockResolvedValueOnce(imageResponse());
+
+      await client.fetchImage("/library/metadata/123/thumb", { width: 400 });
+
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
+      expect(mockAxiosInstance.get.mock.calls[1][0]).toBe("/library/metadata/123/thumb");
     });
   });
 

@@ -1,7 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
-import { runEnforcerTick, _resetForTesting } from "@/lib/maintenance/enforcer";
+import {
+  runEnforcerTick,
+  sessionMatchesCriteria,
+  isBlackoutActive,
+  _resetForTesting,
+} from "@/lib/maintenance/enforcer";
+import type { MediaSession } from "@/lib/media-server/types";
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks — stable, no vi.resetModules / vi.doMock needed
@@ -13,6 +19,7 @@ vi.mock("@/lib/db", () => ({
     blackoutSchedule: { findMany: vi.fn() },
     prerollSchedule: { findMany: vi.fn() },
     user: { findUnique: vi.fn() },
+    mediaItem: { findMany: vi.fn() },
   },
 }));
 
@@ -37,6 +44,7 @@ describe("initializeMaintenanceEnforcer", () => {
     vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([]);
     vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
     vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
     vi.mocked(createMediaServerClient).mockReturnValue({
       getSessions: vi.fn().mockResolvedValue([]),
       terminateSession: vi.fn().mockResolvedValue(undefined),
@@ -151,6 +159,7 @@ describe("transcode manager criteria (via enforcer)", () => {
     vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([]);
     vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
     vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
   });
 
   it("terminates video transcoding session when videoTranscoding criteria is set", async () => {
@@ -249,5 +258,1240 @@ describe("transcode manager criteria (via enforcer)", () => {
     await runEnforcerTick();
 
     expect(localTerminate).not.toHaveBeenCalled();
+  });
+
+  it("does NOT terminate a 4K audio-only transcode when only fourKTranscoding is set", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([
+      {
+        maintenanceMode: false,
+        maintenanceDelay: 30,
+        maintenanceMessage: "",
+        maintenanceExcludedUsers: [],
+        transcodeManagerEnabled: true,
+        transcodeManagerDelay: 0,
+        transcodeManagerMessage: "No 4K transcoding",
+        transcodeManagerCriteria: {
+          anyTranscoding: false,
+          videoTranscoding: false,
+          audioTranscoding: false,
+          fourKTranscoding: true,
+          remoteTranscoding: false,
+        },
+        transcodeManagerExcludedUsers: [],
+        userId: "user1",
+        user: {
+          mediaServers: [
+            { id: "s1", type: "PLEX", name: "Test", url: "http://plex:32400", accessToken: "tok", tlsSkipVerify: false },
+          ],
+        },
+      },
+    ] as never);
+
+    const localTerminate = vi.fn();
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn().mockResolvedValue([
+        {
+          sessionId: "sess-4k-audio-only",
+          username: "user",
+          title: "Movie",
+          mediaWidth: 3840,
+          mediaHeight: 2160,
+          player: { local: true },
+          session: { bandwidth: 1000, location: "lan" },
+          // Video direct-streams, only the audio track is re-encoded.
+          transcoding: { videoDecision: "copy", audioDecision: "transcode" },
+        },
+      ]),
+      terminateSession: localTerminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
+
+    await runEnforcerTick();
+
+    expect(localTerminate).not.toHaveBeenCalled();
+  });
+
+  it("terminates a 4K video transcode when fourKTranscoding is set", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([
+      {
+        maintenanceMode: false,
+        maintenanceDelay: 30,
+        maintenanceMessage: "",
+        maintenanceExcludedUsers: [],
+        transcodeManagerEnabled: true,
+        transcodeManagerDelay: 0,
+        transcodeManagerMessage: "No 4K transcoding",
+        transcodeManagerCriteria: {
+          anyTranscoding: false,
+          videoTranscoding: false,
+          audioTranscoding: false,
+          fourKTranscoding: true,
+          remoteTranscoding: false,
+        },
+        transcodeManagerExcludedUsers: [],
+        userId: "user1",
+        user: {
+          mediaServers: [
+            { id: "s1", type: "PLEX", name: "Test", url: "http://plex:32400", accessToken: "tok", tlsSkipVerify: false },
+          ],
+        },
+      },
+    ] as never);
+
+    const localTerminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn().mockResolvedValue([
+        {
+          sessionId: "sess-4k-video",
+          username: "user",
+          title: "Movie",
+          mediaWidth: 3840,
+          mediaHeight: 2160,
+          player: { local: true },
+          session: { bandwidth: 1000, location: "lan" },
+          transcoding: { videoDecision: "transcode", audioDecision: "transcode" },
+        },
+      ]),
+      terminateSession: localTerminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
+
+    await runEnforcerTick();
+
+    expect(localTerminate).toHaveBeenCalledWith("sess-4k-video", "No 4K transcoding");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sessionMatchesCriteria — direct unit coverage of the criteria matrix
+// ---------------------------------------------------------------------------
+
+describe("sessionMatchesCriteria", () => {
+  const NO_CRITERIA = {
+    anyTranscoding: false,
+    videoTranscoding: false,
+    audioTranscoding: false,
+    fourKTranscoding: false,
+    remoteTranscoding: false,
+  };
+
+  function makeSession(overrides: {
+    videoDecision?: string;
+    audioDecision?: string;
+    width?: number;
+    height?: number;
+    local?: boolean;
+  } = {}): MediaSession {
+    const { videoDecision, audioDecision, width, height, local = true } = overrides;
+    return {
+      sessionId: "s",
+      userId: "u",
+      username: "user",
+      userThumb: "",
+      title: "Movie",
+      type: "movie",
+      mediaWidth: width,
+      mediaHeight: height,
+      player: { product: "Plex", platform: "web", state: "playing", address: "1.2.3.4", local },
+      session: { bandwidth: 1000, location: local ? "lan" : "wan" },
+      ...(videoDecision || audioDecision
+        ? {
+            transcoding: {
+              videoDecision: videoDecision ?? "copy",
+              audioDecision: audioDecision ?? "copy",
+              throttled: false,
+            },
+          }
+        : {}),
+    } as MediaSession;
+  }
+
+  const audioOnly4K = makeSession({
+    videoDecision: "copy",
+    audioDecision: "transcode",
+    width: 3840,
+    height: 2160,
+  });
+  const video4K = makeSession({
+    videoDecision: "transcode",
+    audioDecision: "copy",
+    width: 3840,
+    height: 2160,
+  });
+  const video1080p = makeSession({
+    videoDecision: "transcode",
+    audioDecision: "copy",
+    width: 1920,
+    height: 1080,
+  });
+  const directPlay4K = makeSession({
+    videoDecision: "directplay",
+    audioDecision: "directplay",
+    width: 3840,
+    height: 2160,
+  });
+
+  describe("fourKTranscoding", () => {
+    const criteria = { ...NO_CRITERIA, fourKTranscoding: true };
+
+    it("does not match a 4K stream transcoding audio only", () => {
+      expect(sessionMatchesCriteria(audioOnly4K, criteria)).toBe(false);
+    });
+
+    it("matches a 4K stream transcoding video", () => {
+      expect(sessionMatchesCriteria(video4K, criteria)).toBe(true);
+    });
+
+    it("matches on height alone (e.g. 4096x2160 DCI or 3840x1600 scope)", () => {
+      const scope = makeSession({ videoDecision: "transcode", width: 3840, height: 1600 });
+      const dci = makeSession({ videoDecision: "transcode", width: 4096, height: 2160 });
+      expect(sessionMatchesCriteria(scope, criteria)).toBe(true);
+      expect(sessionMatchesCriteria(dci, criteria)).toBe(true);
+    });
+
+    it("does not match a sub-4K video transcode", () => {
+      expect(sessionMatchesCriteria(video1080p, criteria)).toBe(false);
+    });
+
+    it("does not match a 4K direct play", () => {
+      expect(sessionMatchesCriteria(directPlay4K, criteria)).toBe(false);
+    });
+
+    it("does not match when the server reports no resolution", () => {
+      const unknown = makeSession({ videoDecision: "transcode" });
+      expect(sessionMatchesCriteria(unknown, criteria)).toBe(false);
+    });
+  });
+
+  describe("other criteria still catch audio-only transcodes", () => {
+    it("audioTranscoding matches the 4K audio-only stream", () => {
+      expect(
+        sessionMatchesCriteria(audioOnly4K, { ...NO_CRITERIA, audioTranscoding: true })
+      ).toBe(true);
+    });
+
+    it("anyTranscoding matches the 4K audio-only stream", () => {
+      expect(
+        sessionMatchesCriteria(audioOnly4K, { ...NO_CRITERIA, anyTranscoding: true })
+      ).toBe(true);
+    });
+
+    it("videoTranscoding does not match the 4K audio-only stream", () => {
+      expect(
+        sessionMatchesCriteria(audioOnly4K, { ...NO_CRITERIA, videoTranscoding: true })
+      ).toBe(false);
+    });
+
+    it("remoteTranscoding matches any transcode from a remote player", () => {
+      const remoteAudioOnly = makeSession({ audioDecision: "transcode", local: false });
+      expect(
+        sessionMatchesCriteria(remoteAudioOnly, { ...NO_CRITERIA, remoteTranscoding: true })
+      ).toBe(true);
+    });
+
+    it("remoteTranscoding does not match a local transcode", () => {
+      expect(
+        sessionMatchesCriteria(video1080p, { ...NO_CRITERIA, remoteTranscoding: true })
+      ).toBe(false);
+    });
+  });
+
+  it("returns false when no criteria are enabled", () => {
+    expect(sessionMatchesCriteria(video4K, NO_CRITERIA)).toBe(false);
+  });
+
+  it("returns false for a session with no transcoding info at all", () => {
+    expect(
+      sessionMatchesCriteria(makeSession({ width: 3840, height: 2160 }), {
+        anyTranscoding: true,
+        videoTranscoding: true,
+        audioTranscoding: true,
+        fourKTranscoding: true,
+        remoteTranscoding: true,
+      })
+    ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isBlackoutActive — recurring windows, including overnight spans
+// ---------------------------------------------------------------------------
+
+describe("isBlackoutActive (recurring)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Freezes local time and returns that moment's day-of-week. */
+  function freeze(date: Date): number {
+    vi.useFakeTimers();
+    vi.setSystemTime(date);
+    return date.getDay();
+  }
+
+  function recurring(days: number[], startTime: string, endTime: string) {
+    return {
+      scheduleType: "recurring",
+      startDate: null,
+      endDate: null,
+      daysOfWeek: days,
+      startTime,
+      endTime,
+    };
+  }
+
+  describe("same-day window (09:00 - 17:00)", () => {
+    // Anchor day; the schedule targets this weekday only.
+    const anchor = new Date(2026, 0, 5, 12, 0); // midday
+    const anchorDay = anchor.getDay();
+
+    it("is active inside the window", () => {
+      freeze(anchor);
+      expect(isBlackoutActive(recurring([anchorDay], "09:00", "17:00"))).toBe(true);
+    });
+
+    it("is inactive before the window", () => {
+      freeze(new Date(2026, 0, 5, 8, 0));
+      expect(isBlackoutActive(recurring([anchorDay], "09:00", "17:00"))).toBe(false);
+    });
+
+    it("is inactive after the window", () => {
+      freeze(new Date(2026, 0, 5, 18, 0));
+      expect(isBlackoutActive(recurring([anchorDay], "09:00", "17:00"))).toBe(false);
+    });
+
+    it("is inactive on a day that is not selected", () => {
+      freeze(new Date(2026, 0, 6, 12, 0));
+      expect(isBlackoutActive(recurring([anchorDay], "09:00", "17:00"))).toBe(false);
+    });
+  });
+
+  describe("overnight window (22:00 - 06:00) selected on one day", () => {
+    const startDay = new Date(2026, 0, 5, 23, 0).getDay();
+    const days = [startDay];
+
+    it("is active late on the selected day", () => {
+      freeze(new Date(2026, 0, 5, 23, 0));
+      expect(isBlackoutActive(recurring(days, "22:00", "06:00"))).toBe(true);
+    });
+
+    it("is active after midnight on the FOLLOWING day", () => {
+      // Regression: the day check used to be applied to `now`, so the window
+      // was truncated at midnight instead of running through to 06:00.
+      freeze(new Date(2026, 0, 6, 2, 0));
+      expect(isBlackoutActive(recurring(days, "22:00", "06:00"))).toBe(true);
+    });
+
+    it("is inactive in the small hours of the selected day itself", () => {
+      // Regression: 03:00 on the start day used to match `currentMin <= endMin`
+      // and fire the blackout ~19 hours early.
+      freeze(new Date(2026, 0, 5, 3, 0));
+      expect(isBlackoutActive(recurring(days, "22:00", "06:00"))).toBe(false);
+    });
+
+    it("is inactive once the following morning's window has passed", () => {
+      freeze(new Date(2026, 0, 6, 7, 0));
+      expect(isBlackoutActive(recurring(days, "22:00", "06:00"))).toBe(false);
+    });
+
+    it("is inactive during the selected day's working hours", () => {
+      freeze(new Date(2026, 0, 5, 12, 0));
+      expect(isBlackoutActive(recurring(days, "22:00", "06:00"))).toBe(false);
+    });
+
+    it("is inactive two days later", () => {
+      freeze(new Date(2026, 0, 7, 2, 0));
+      expect(isBlackoutActive(recurring(days, "22:00", "06:00"))).toBe(false);
+    });
+  });
+
+  it("wraps the week boundary (Saturday night into Sunday morning)", () => {
+    const saturday = new Date(2026, 0, 10, 23, 0);
+    expect(saturday.getDay()).toBe(6);
+    const days = [6];
+
+    freeze(saturday);
+    expect(isBlackoutActive(recurring(days, "22:00", "06:00"))).toBe(true);
+
+    freeze(new Date(2026, 0, 11, 2, 0)); // Sunday, getDay() === 0
+    expect(isBlackoutActive(recurring(days, "22:00", "06:00"))).toBe(true);
+  });
+
+  it("returns false when the schedule is incomplete", () => {
+    freeze(new Date(2026, 0, 5, 12, 0));
+    expect(isBlackoutActive(recurring([], "09:00", "17:00"))).toBe(false);
+    expect(
+      isBlackoutActive({ ...recurring([1], "09:00", "17:00"), daysOfWeek: null })
+    ).toBe(false);
+    expect(
+      isBlackoutActive({ ...recurring([1], "09:00", "17:00"), startTime: null })
+    ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Blackout: block_new_only must grandfather sessions on EVERY server
+// ---------------------------------------------------------------------------
+
+describe("blackout block_new_only", () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
+  });
+
+  function mockTwoServerBlackout() {
+    vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([
+      {
+        id: "sched1",
+        userId: "user1",
+        name: "Nightly",
+        enabled: true,
+        action: "block_new_only",
+        message: "Blackout",
+        delay: 30,
+        excludedUsers: [],
+        scheduleType: "one_time",
+        startDate: new Date(Date.now() - 60_000),
+        endDate: new Date(Date.now() + 60_000),
+        daysOfWeek: null,
+        startTime: null,
+        endTime: null,
+        user: {
+          mediaServers: [
+            { id: "sA", type: "PLEX", name: "A", url: "http://a", accessToken: "t", tlsSkipVerify: false },
+            { id: "sB", type: "PLEX", name: "B", url: "http://b", accessToken: "t", tlsSkipVerify: false },
+          ],
+        },
+      },
+    ] as never);
+  }
+
+  /** Wires each server to report its own session list. */
+  function mockServers(sessionsByUrl: Record<string, string[]>, terminators: Record<string, ReturnType<typeof vi.fn>>) {
+    vi.mocked(createMediaServerClient).mockImplementation(((_type: unknown, url: string) => ({
+      getSessions: vi.fn().mockResolvedValue(
+        sessionsByUrl[url].map((sessionId) => ({
+          sessionId,
+          username: "bob",
+          title: "Movie",
+          player: { local: true },
+          session: { bandwidth: 1, location: "lan" },
+        }))
+      ),
+      terminateSession: terminators[url],
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    })) as never);
+  }
+
+  it("does not terminate pre-existing sessions on any server when the blackout starts", async () => {
+    mockTwoServerBlackout();
+    const terminateA = vi.fn().mockResolvedValue(undefined);
+    const terminateB = vi.fn().mockResolvedValue(undefined);
+    mockServers({ "http://a": ["a-existing"], "http://b": ["b-existing"] }, {
+      "http://a": terminateA,
+      "http://b": terminateB,
+    });
+
+    await runEnforcerTick();
+
+    // Regression: a schedule-level snapshot key meant whichever server
+    // answered first won, and the other server's live streams were killed.
+    expect(terminateA).not.toHaveBeenCalled();
+    expect(terminateB).not.toHaveBeenCalled();
+  });
+
+  it("terminates only sessions that appear after the blackout started, per server", async () => {
+    mockTwoServerBlackout();
+    const terminateA = vi.fn().mockResolvedValue(undefined);
+    const terminateB = vi.fn().mockResolvedValue(undefined);
+
+    // Tick 1: snapshot both servers.
+    mockServers({ "http://a": ["a-existing"], "http://b": ["b-existing"] }, {
+      "http://a": terminateA,
+      "http://b": terminateB,
+    });
+    await runEnforcerTick();
+
+    // Tick 2: one genuinely new session joins each server.
+    mockServers({ "http://a": ["a-existing", "a-new"], "http://b": ["b-existing", "b-new"] }, {
+      "http://a": terminateA,
+      "http://b": terminateB,
+    });
+    await runEnforcerTick();
+
+    expect(terminateA.mock.calls.map((c) => c[0])).toEqual(["a-new"]);
+    expect(terminateB.mock.calls.map((c) => c[0])).toEqual(["b-new"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pending-termination bookkeeping across unreachable servers
+// ---------------------------------------------------------------------------
+
+describe("pending terminations vs. server availability", () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Maintenance mode on, 60s grace period, with the given server list. */
+  function settingsWithServers(servers: Array<{ id: string; name: string; url: string }>) {
+    return [
+      {
+        maintenanceMode: true,
+        maintenanceDelay: 60,
+        maintenanceMessage: "Down for maintenance",
+        maintenanceExcludedUsers: [],
+        transcodeManagerEnabled: false,
+        transcodeManagerDelay: 30,
+        transcodeManagerMessage: "",
+        transcodeManagerCriteria: null,
+        transcodeManagerExcludedUsers: [],
+        userId: "user1",
+        user: {
+          mediaServers: servers.map((s) => ({
+            ...s,
+            type: "PLEX",
+            accessToken: "tok",
+            tlsSkipVerify: false,
+          })),
+        },
+      },
+    ] as never;
+  }
+
+  const SESSION = {
+    sessionId: "sess1",
+    username: "bob",
+    title: "Movie",
+    player: { local: true },
+    session: { bandwidth: 1000, location: "lan" },
+  };
+
+  it("does not restart the grace period when a server is briefly unreachable", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(
+      settingsWithServers([{ id: "s1", name: "Test", url: "http://plex:32400" }])
+    );
+
+    let reachable = true;
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockImplementation((() => ({
+      getSessions: vi.fn(() =>
+        reachable ? Promise.resolve([SESSION]) : Promise.reject(new Error("unreachable"))
+      ),
+      terminateSession: terminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    })) as never);
+
+    vi.useFakeTimers();
+
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 0, 0));
+    await runEnforcerTick(); // first seen — countdown starts
+    expect(terminate).not.toHaveBeenCalled();
+
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 0, 30));
+    reachable = false;
+    await runEnforcerTick(); // transient failure mid-countdown
+    expect(terminate).not.toHaveBeenCalled();
+
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 1, 1));
+    reachable = true;
+    await runEnforcerTick(); // 61s after first seen — must fire
+
+    // Regression: the failed tick used to prune the pending entry, so the
+    // 60s grace period restarted from scratch every time a server hiccuped.
+    expect(terminate).toHaveBeenCalledWith("sess1", "Down for maintenance");
+  });
+
+  it("drops the entry when the server is disabled, so re-enabling grants a fresh grace period", async () => {
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockImplementation((() => ({
+      getSessions: vi.fn().mockResolvedValue([SESSION]),
+      terminateSession: terminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    })) as never);
+
+    vi.useFakeTimers();
+
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(
+      settingsWithServers([{ id: "s1", name: "Test", url: "http://plex:32400" }])
+    );
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 0, 0));
+    await runEnforcerTick();
+
+    // Server disabled — it disappears from the settings' server list.
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(settingsWithServers([]));
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 0, 30));
+    await runEnforcerTick();
+
+    // Re-enabled well past the original delay: the countdown must start over
+    // rather than firing instantly off a stale timestamp.
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(
+      settingsWithServers([{ id: "s1", name: "Test", url: "http://plex:32400" }])
+    );
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 1, 1));
+    await runEnforcerTick();
+
+    expect(terminate).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Hardware-transcode exemption
+// ---------------------------------------------------------------------------
+
+describe("transcode manager hardware exemption", () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
+  });
+
+  function transcodeSettings(exemptHardware: boolean) {
+    return [
+      {
+        maintenanceMode: false,
+        maintenanceDelay: 30,
+        maintenanceMessage: "",
+        maintenanceExcludedUsers: [],
+        transcodeManagerEnabled: true,
+        transcodeManagerDelay: 0,
+        transcodeManagerMessage: "No 4K transcoding",
+        transcodeManagerCriteria: {
+          anyTranscoding: false,
+          videoTranscoding: false,
+          audioTranscoding: false,
+          fourKTranscoding: true,
+          remoteTranscoding: false,
+        },
+        transcodeManagerExcludedUsers: [],
+        transcodeManagerExemptHardware: exemptHardware,
+        userId: "user1",
+        user: {
+          mediaServers: [
+            { id: "s1", type: "PLEX", name: "Test", url: "http://plex:32400", accessToken: "tok", tlsSkipVerify: false },
+          ],
+        },
+      },
+    ] as never;
+  }
+
+  function mockSession(transcoding: Record<string, unknown>) {
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn().mockResolvedValue([
+        {
+          sessionId: "sess-4k",
+          username: "user",
+          title: "Movie",
+          mediaWidth: 3840,
+          mediaHeight: 2160,
+          player: { local: true },
+          session: { bandwidth: 1000, location: "lan" },
+          transcoding,
+        },
+      ]),
+      terminateSession: terminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
+    return terminate;
+  }
+
+  it("spares a GPU-encoded 4K transcode when the exemption is on", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(transcodeSettings(true));
+    const terminate = mockSession({
+      videoDecision: "transcode",
+      audioDecision: "copy",
+      hwDecode: "vaapi",
+      hwEncode: "vaapi",
+    });
+
+    await runEnforcerTick();
+
+    expect(terminate).not.toHaveBeenCalled();
+  });
+
+  it("still terminates a GPU-encoded transcode when the exemption is off", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(transcodeSettings(false));
+    const terminate = mockSession({
+      videoDecision: "transcode",
+      audioDecision: "copy",
+      hwDecode: "vaapi",
+      hwEncode: "vaapi",
+    });
+
+    await runEnforcerTick();
+
+    expect(terminate).toHaveBeenCalledWith("sess-4k", "No 4K transcoding");
+  });
+
+  it("still terminates a CPU transcode when the exemption is on", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(transcodeSettings(true));
+    const terminate = mockSession({ videoDecision: "transcode", audioDecision: "copy" });
+
+    await runEnforcerTick();
+
+    expect(terminate).toHaveBeenCalledWith("sess-4k", "No 4K transcoding");
+  });
+
+  it("does not exempt a hardware decode paired with a software encode", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(transcodeSettings(true));
+    const terminate = mockSession({
+      videoDecision: "transcode",
+      audioDecision: "copy",
+      hwDecode: "vaapi",
+      hwEncode: "libx265",
+    });
+
+    await runEnforcerTick();
+
+    expect(terminate).toHaveBeenCalledWith("sess-4k", "No 4K transcoding");
+  });
+
+  it("exempts only the transcode manager — maintenance mode still terminates", async () => {
+    const settings = transcodeSettings(true) as unknown as Array<Record<string, unknown>>;
+    settings[0].maintenanceMode = true;
+    settings[0].maintenanceDelay = 0;
+    settings[0].maintenanceMessage = "Down for maintenance";
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(settings as never);
+
+    const terminate = mockSession({
+      videoDecision: "transcode",
+      audioDecision: "copy",
+      hwEncode: "vaapi",
+    });
+
+    await runEnforcerTick();
+
+    expect(terminate).toHaveBeenCalledWith("sess-4k", "Down for maintenance");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4K criterion uses the SOURCE resolution, not what the session reports
+// ---------------------------------------------------------------------------
+
+describe("4K criterion against a downscaled transcode", () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
+  });
+
+  function fourKSettings() {
+    return [
+      {
+        maintenanceMode: false,
+        maintenanceDelay: 30,
+        maintenanceMessage: "",
+        maintenanceExcludedUsers: [],
+        transcodeManagerEnabled: true,
+        transcodeManagerDelay: 0,
+        transcodeManagerMessage: "No 4K transcoding",
+        transcodeManagerCriteria: {
+          anyTranscoding: false,
+          videoTranscoding: false,
+          audioTranscoding: false,
+          fourKTranscoding: true,
+          remoteTranscoding: false,
+        },
+        transcodeManagerExcludedUsers: [],
+        transcodeManagerExemptHardware: false,
+        userId: "user1",
+        user: {
+          mediaServers: [
+            { id: "s1", type: "PLEX", name: "Test", url: "http://plex:32400", accessToken: "tok", tlsSkipVerify: false },
+          ],
+        },
+      },
+    ] as never;
+  }
+
+  /** A 4K HEVC source Plex is downscaling to SD — the session reports 568x320. */
+  function downscaledSession() {
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn().mockResolvedValue([
+        {
+          sessionId: "sess-downscale",
+          ratingKey: "12345",
+          username: "user",
+          title: "Movie",
+          mediaWidth: 568,
+          mediaHeight: 320,
+          player: { local: true },
+          session: { bandwidth: 1000, location: "lan" },
+          transcoding: { videoDecision: "transcode", audioDecision: "transcode" },
+        },
+      ]),
+      terminateSession: terminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
+    return terminate;
+  }
+
+  it("terminates when the synced item says the source is 4K", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(fourKSettings());
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([
+      { ratingKey: "12345", resolution: "4k" },
+    ] as never);
+    const terminate = downscaledSession();
+
+    await runEnforcerTick();
+
+    // Regression: the session reports the transcode's 568x320, so reading it
+    // alone made the criterion miss every downscaled 4K stream.
+    expect(terminate).toHaveBeenCalledWith("sess-downscale", "No 4K transcoding");
+  });
+
+  it("scopes the lookup to the session's own server", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(fourKSettings());
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
+    downscaledSession();
+
+    await runEnforcerTick();
+
+    expect(prisma.mediaItem.findMany).toHaveBeenCalledWith({
+      where: { ratingKey: { in: ["12345"] }, library: { mediaServerId: "s1" } },
+      select: { ratingKey: true, resolution: true },
+    });
+  });
+
+  it("does not terminate when the source is genuinely sub-4K", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(fourKSettings());
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([
+      { ratingKey: "12345", resolution: "1080" },
+    ] as never);
+    const terminate = downscaledSession();
+
+    await runEnforcerTick();
+
+    expect(terminate).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the session dimensions for an unsynced item", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(fourKSettings());
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
+
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn().mockResolvedValue([
+        {
+          sessionId: "sess-unsynced",
+          ratingKey: "999",
+          username: "user",
+          title: "Movie",
+          // Direct-playing 4K, so the session dimensions ARE the source.
+          mediaWidth: 3840,
+          mediaHeight: 2160,
+          player: { local: true },
+          session: { bandwidth: 1000, location: "lan" },
+          transcoding: { videoDecision: "transcode", audioDecision: "copy" },
+        },
+      ]),
+      terminateSession: terminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
+
+    await runEnforcerTick();
+
+    expect(terminate).toHaveBeenCalledWith("sess-unsynced", "No 4K transcoding");
+  });
+
+  it("skips the lookup entirely when the 4K criterion is off", async () => {
+    const settings = fourKSettings() as unknown as Array<Record<string, unknown>>;
+    settings[0].transcodeManagerCriteria = {
+      anyTranscoding: false,
+      videoTranscoding: true,
+      audioTranscoding: false,
+      fourKTranscoding: false,
+      remoteTranscoding: false,
+    };
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(settings as never);
+    downscaledSession();
+
+    await runEnforcerTick();
+
+    expect(prisma.mediaItem.findMany).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bug-hunt fixes: audio-only, block_new_only device identity, stale timers,
+// multi-version 4K, unreachable-server snapshots, warn message, preroll cache
+// ---------------------------------------------------------------------------
+
+import { processPrerollSchedules } from "@/lib/maintenance/enforcer";
+
+function transcodeOnlySettings(criteria: Record<string, boolean>, overrides: Record<string, unknown> = {}) {
+  return [
+    {
+      maintenanceMode: false,
+      maintenanceDelay: 30,
+      maintenanceMessage: "",
+      maintenanceExcludedUsers: [],
+      transcodeManagerEnabled: true,
+      transcodeManagerDelay: 0,
+      transcodeManagerMessage: "Stop",
+      transcodeManagerCriteria: criteria,
+      transcodeManagerExcludedUsers: [],
+      transcodeManagerExemptHardware: false,
+      userId: "user1",
+      user: {
+        mediaServers: [
+          { id: "s1", type: "PLEX", name: "Test", url: "http://plex:32400", accessToken: "tok", tlsSkipVerify: false },
+        ],
+      },
+      ...overrides,
+    },
+  ] as never;
+}
+
+describe("enforcer: stale grace timer on re-match", () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("restarts the grace period when a session stops matching and later re-matches", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(
+      transcodeOnlySettings(
+        { anyTranscoding: false, videoTranscoding: true, audioTranscoding: false, fourKTranscoding: false, remoteTranscoding: false },
+        { transcodeManagerDelay: 60 }
+      )
+    );
+
+    let transcoding = true;
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn(() =>
+        Promise.resolve([
+          {
+            sessionId: "sess1",
+            username: "bob",
+            title: "Movie",
+            player: { local: true },
+            session: { bandwidth: 1, location: "lan" },
+            transcoding: transcoding
+              ? { videoDecision: "transcode", audioDecision: "copy" }
+              : { videoDecision: "copy", audioDecision: "copy" },
+          },
+        ])
+      ),
+      terminateSession: terminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 0, 0));
+    await runEnforcerTick(); // matches — grace starts
+
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 0, 30));
+    transcoding = false; // stops matching (direct stream) — pending entry must drop
+    await runEnforcerTick();
+
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 1, 1)); // 61s after FIRST seen
+    transcoding = true; // matches again
+    await runEnforcerTick();
+    expect(terminate).not.toHaveBeenCalled(); // fresh grace, not instant
+
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 2, 2)); // 61s after the re-match
+    await runEnforcerTick();
+    expect(terminate).toHaveBeenCalledWith("sess1", "Stop");
+  });
+});
+
+describe("enforcer: block_new_only device & unreachable", () => {
+  const NOW = Date.now();
+  function blackout(action: string) {
+    return [
+      {
+        id: "sched1",
+        userId: "user1",
+        name: "BO",
+        enabled: true,
+        action,
+        message: "Blackout",
+        delay: 0,
+        excludedUsers: [],
+        scheduleType: "one_time",
+        startDate: new Date(NOW - 60_000),
+        endDate: new Date(NOW + 60_000),
+        daysOfWeek: null,
+        startTime: null,
+        endTime: null,
+        user: {
+          mediaServers: [
+            { id: "s1", type: "JELLYFIN", name: "JF", url: "http://jf", accessToken: "t", tlsSkipVerify: false },
+          ],
+        },
+      },
+    ] as never;
+  }
+
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
+  });
+
+  it("terminates a grandfathered device that switches to a new item", async () => {
+    vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue(blackout("block_new_only"));
+    // Jellyfin session id is device-stable; only the item (ratingKey) changes.
+    let ratingKey = "itemA";
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn(() =>
+        Promise.resolve([
+          {
+            sessionId: "device-1",
+            ratingKey,
+            username: "bob",
+            title: "Playing",
+            player: { local: false },
+            session: { bandwidth: 0, location: "wan" },
+          },
+        ])
+      ),
+      terminateSession: terminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
+
+    await runEnforcerTick(); // snapshot device-1::itemA
+    expect(terminate).not.toHaveBeenCalled();
+
+    ratingKey = "itemB"; // same device, new playback
+    await runEnforcerTick();
+    expect(terminate).toHaveBeenCalledWith("device-1", "Blackout");
+  });
+
+  it("does not snapshot an empty set when the server is unreachable at window open", async () => {
+    vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue(blackout("block_new_only"));
+    let reachable = false;
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn(() =>
+        reachable
+          ? Promise.resolve([
+              { sessionId: "pre-existing", ratingKey: "x", username: "bob", title: "T", player: { local: false }, session: { bandwidth: 0, location: "wan" } },
+            ])
+          : Promise.reject(new Error("unreachable"))
+      ),
+      terminateSession: terminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
+
+    await runEnforcerTick(); // server down — must NOT snapshot an empty set
+    reachable = true;
+    await runEnforcerTick(); // now reachable — snapshot the pre-existing stream
+    await runEnforcerTick(); // and it must remain grandfathered
+
+    // Regression: an empty snapshot taken while down would terminate the
+    // pre-existing stream as "new" the moment the server returned.
+    expect(terminate).not.toHaveBeenCalled();
+  });
+});
+
+describe("enforcer: multi-version 4K resolution", () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
+  });
+
+  function fourKSession(getItemMediaResolutions?: ReturnType<typeof vi.fn>) {
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn().mockResolvedValue([
+        {
+          sessionId: "sess1",
+          ratingKey: "rk1",
+          mediaId: "media-1080",
+          username: "bob",
+          title: "Movie",
+          mediaWidth: 568,
+          mediaHeight: 320,
+          player: { local: true },
+          session: { bandwidth: 1, location: "lan" },
+          transcoding: { videoDecision: "transcode", audioDecision: "copy" },
+        },
+      ]),
+      terminateSession: terminate,
+      getItemMediaResolutions,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
+    return terminate;
+  }
+
+  it("does not terminate when the played version is 1080p despite the item being synced as 4K", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(
+      transcodeOnlySettings({ anyTranscoding: false, videoTranscoding: false, audioTranscoding: false, fourKTranscoding: true, remoteTranscoding: false })
+    );
+    // DB (item-level) says 4k, but the SELECTED version is 1080p.
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([{ ratingKey: "rk1", resolution: "4k" }] as never);
+    const perVersion = vi.fn().mockResolvedValue(new Map([["media-1080", "1080"], ["media-4k", "4k"]]));
+    const terminate = fourKSession(perVersion);
+
+    await runEnforcerTick();
+
+    expect(perVersion).toHaveBeenCalledWith("rk1");
+    expect(terminate).not.toHaveBeenCalled();
+  });
+
+  it("terminates when the played version is 4K despite the item being synced as 1080p", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(
+      transcodeOnlySettings({ anyTranscoding: false, videoTranscoding: false, audioTranscoding: false, fourKTranscoding: true, remoteTranscoding: false })
+    );
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([{ ratingKey: "rk1", resolution: "1080" }] as never);
+    const perVersion = vi.fn().mockResolvedValue(new Map([["media-1080", "4k"]]));
+    const terminate = fourKSession(perVersion);
+
+    await runEnforcerTick();
+
+    expect(terminate).toHaveBeenCalledWith("sess1", "Stop");
+  });
+
+  it("falls back to the item-level resolution when the per-version lookup fails", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue(
+      transcodeOnlySettings({ anyTranscoding: false, videoTranscoding: false, audioTranscoding: false, fourKTranscoding: true, remoteTranscoding: false })
+    );
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([{ ratingKey: "rk1", resolution: "4k" }] as never);
+    const perVersion = vi.fn().mockRejectedValue(new Error("boom"));
+    const terminate = fourKSession(perVersion);
+
+    await runEnforcerTick();
+
+    // Best-effort: on failure we use the synced 4k value and still terminate.
+    expect(terminate).toHaveBeenCalledWith("sess1", "Stop");
+  });
+});
+
+describe("enforcer: warn_then_terminate sends a warning", () => {
+  const NOW = Date.now();
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
+  });
+
+  it("calls notifySession at warn time when the server supports it", async () => {
+    vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([
+      {
+        id: "sched1", userId: "user1", name: "BO", enabled: true,
+        action: "warn_then_terminate", message: "Ending soon", delay: 300,
+        excludedUsers: [], scheduleType: "one_time",
+        startDate: new Date(NOW - 60_000), endDate: new Date(NOW + 60_000),
+        daysOfWeek: null, startTime: null, endTime: null,
+        user: { mediaServers: [{ id: "s1", type: "JELLYFIN", name: "JF", url: "http://jf", accessToken: "t", tlsSkipVerify: false }] },
+      },
+    ] as never);
+
+    const notify = vi.fn().mockResolvedValue(undefined);
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      getSessions: vi.fn().mockResolvedValue([
+        { sessionId: "sess1", username: "bob", title: "T", player: { local: false }, session: { bandwidth: 0, location: "wan" } },
+      ]),
+      notifySession: notify,
+      terminateSession: terminate,
+      setPrerollPath: vi.fn(),
+      clearPreroll: vi.fn(),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
+
+    await runEnforcerTick();
+
+    expect(notify).toHaveBeenCalledWith("sess1", "Ending soon");
+    expect(terminate).not.toHaveBeenCalled(); // 300s delay not elapsed
+  });
+});
+
+describe("preroll cache resilience", () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([]);
+  });
+
+  it("retries next tick when every server failed to apply the preroll", async () => {
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([
+      {
+        id: "p1", userId: "user1", name: "Xmas", enabled: true, priority: 1,
+        prerollPath: "/x.mp4", scheduleType: "seasonal",
+        startDate: new Date(2020, 0, 1), endDate: new Date(2030, 11, 31),
+        daysOfWeek: null, startTime: null, endTime: null,
+        user: { id: "user1", mediaServers: [{ id: "s1", type: "PLEX", url: "http://plex", accessToken: "t", tlsSkipVerify: false }] },
+      },
+    ] as never);
+
+    let failing = true;
+    const setPreroll = vi.fn(() => (failing ? Promise.reject(new Error("down")) : Promise.resolve()));
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      setPrerollPath: setPreroll,
+      clearPreroll: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ReturnType<typeof createMediaServerClient>);
+
+    await processPrerollSchedules();
+    expect(setPreroll).toHaveBeenCalledTimes(1); // attempted, failed → not cached
+
+    // Regression: caching the path after a total failure suppressed this retry.
+    failing = false;
+    await processPrerollSchedules();
+    expect(setPreroll).toHaveBeenCalledTimes(2); // retried and succeeded
+
+    // Now cached — no third attempt.
+    await processPrerollSchedules();
+    expect(setPreroll).toHaveBeenCalledTimes(2);
   });
 });

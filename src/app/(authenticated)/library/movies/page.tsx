@@ -7,7 +7,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
+import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { Button } from "@/components/ui/button";
 import { Film, Calendar, Clock, HardDrive } from "lucide-react";
@@ -20,13 +20,14 @@ import { LibraryToolbar } from "@/components/library-toolbar";
 import { AlphabetFilter } from "@/components/alphabet-filter";
 import { useVirtualGridAlphabet } from "@/hooks/use-virtual-grid-alphabet";
 import { useTableAlphabet } from "@/hooks/use-table-alphabet";
-import type { MediaItemWithRelations } from "@/lib/types";
+import type { MediaListItem } from "@/lib/types";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { SyncLibraryButton } from "@/components/sync-library-button";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useFilterPersistence } from "@/hooks/use-filter-persistence";
 import { useRealtime } from "@/hooks/use-realtime";
+import { fetchListProgressively } from "@/lib/media/progressive-load";
 
 const SORT_OPTIONS = [
   { value: "title", label: "Name" },
@@ -50,12 +51,15 @@ const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar between poster and content
 
 export default function MoviesPage() {
   const router = useRouter();
-  const [items, setItems] = useState<MediaItemWithRelations[]>([]);
+  const [items, setItems] = useState<MediaListItem[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const { savedFilters, persistFilters } = useFilterPersistence("filters-/library/movies");
   const [sortBy, setSortBy] = useState("title");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [loading, setLoading] = useState(true);
+  // The first screenful arrives before the rest of the library; consumers that
+  // need the complete list (item count, scroll restoration) wait for this.
+  const [loadingRest, setLoadingRest] = useState(true);
   const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
   const { size, setSize, columns: actualColumns } = useCardSize();
   const [, startTransition] = useTransition();
@@ -65,7 +69,7 @@ export default function MoviesPage() {
 
   const gridContainerRef = useRef<HTMLDivElement>(null);
 
-  const { markChildNavigation } = useScrollRestoration("/library/movies", !loading && items.length > 0, undefined, undefined, {
+  const { markChildNavigation } = useScrollRestoration("/library/movies", !loadingRest && items.length > 0, undefined, undefined, {
     getFirstVisibleIndex: () => {
       if (!gridContainerRef.current) return -1;
       const main = document.querySelector<HTMLElement>("main");
@@ -136,7 +140,7 @@ export default function MoviesPage() {
     count: rowCount,
     getScrollElement: () => scrollElementRef.current,
     estimateSize,
-    overscan: 10,
+    overscan: 3,
     scrollMargin,
   });
   // Re-measure when columns change
@@ -194,9 +198,9 @@ export default function MoviesPage() {
   const fetchMovies = useCallback(async () => {
     const token = ++reqToken.current;
     setLoading(true);
+    setLoadingRest(true);
     try {
       const params = new URLSearchParams({
-        limit: "0",
         sortBy,
         sortOrder,
         ...filters,
@@ -205,16 +209,26 @@ export default function MoviesPage() {
         params.set("serverId", selectedServerId);
       }
 
-      const response = await fetch(`/api/media/movies?${params}`);
-      const data = await response.json();
-      if (token !== reqToken.current) return;
-      startTransition(() => {
-        setItems(data.items || []);
-        setLoading(false);
-      });
+      // Paint the first screenful, then fill in the rest behind it — the whole
+      // library in one response meant nothing rendered until all of it landed.
+      await fetchListProgressively<MediaListItem>(
+        "/api/media/movies",
+        params,
+        (loaded, done) => {
+          if (token !== reqToken.current) return;
+          startTransition(() => {
+            setItems(loaded);
+            setLoading(false);
+            if (done) setLoadingRest(false);
+          });
+        },
+      );
     } catch (error) {
       console.error("Failed to fetch movies:", error);
-      if (token === reqToken.current) setLoading(false);
+      if (token === reqToken.current) {
+        setLoading(false);
+        setLoadingRest(false);
+      }
     }
   }, [filters, sortBy, sortOrder, selectedServerId]);
 
@@ -241,7 +255,7 @@ export default function MoviesPage() {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Movies</h1>
-            {!loading && items.length > 0 && (
+            {!loadingRest && items.length > 0 && (
               <span className="font-mono text-xs text-faint">
                 {items.length.toLocaleString()} {items.length === 1 ? "movie" : "movies"}
               </span>
@@ -301,11 +315,11 @@ export default function MoviesPage() {
               hideServers={servers.length <= 1}
               renderHoverContent={(movie) => (
                 <MediaHoverPopover
+                  summaryUrl={`/api/media/${movie.id}`}
                   imageUrl={`/api/media/${movie.id}/image`}
                   data={{
                     title: movie.title,
                     year: movie.year,
-                    summary: movie.summary,
                     contentRating: movie.contentRating,
                     rating: movie.rating,
                     audienceRating: movie.audienceRating,
@@ -362,6 +376,7 @@ export default function MoviesPage() {
                         {rowItems.map((movie) => (
                           <MediaCard
                             key={movie.id}
+                            priority={virtualRow.index < PRIORITY_ROWS}
                             imageUrl={`/api/media/${movie.id}/image`}
                             title={movie.title}
                             fallbackIcon="movie"
@@ -392,10 +407,10 @@ export default function MoviesPage() {
                             servers={showServers && servers.length > 1 ? movie.servers : undefined}
                             hoverContent={
                               <MediaHoverPopover
+                                summaryUrl={`/api/media/${movie.id}`}
                                 data={{
                                   title: movie.title,
                                   year: movie.year,
-                                  summary: movie.summary,
                                   contentRating: movie.contentRating,
                                   rating: movie.rating,
                                   audienceRating: movie.audienceRating,

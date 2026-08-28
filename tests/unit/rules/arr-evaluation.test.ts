@@ -1204,3 +1204,99 @@ describe("Arr null field is fail-closed across operators and negate", () => {
     noMatch(makeRule({ field: "arrQualityName", operator: "isNull", value: "", negate: true }));
   });
 });
+
+// ===========================================================================
+// Valueless operators (isNull / isNotNull) on ALWAYS-PRESENT Arr fields
+//
+// `tags`, `qualityProfile` and `monitored` are non-nullable in ArrMetadata, so
+// they never reach the per-field null guards above. They used to fall through
+// their operator switch's `default: return false`, which made BOTH "Is Empty"
+// and "Is Not Empty" match nothing — a rule the builder happily offers but
+// that could never return a result. Each now has explicit semantics.
+// ===========================================================================
+
+describe("arrTag isNull / isNotNull (list emptiness)", () => {
+  const untagged: ArrDataMap = { [tmdbId]: makeArrMeta({ tags: [] }) };
+  const tagged: ArrDataMap = { [tmdbId]: makeArrMeta({ tags: ["Keep"] }) };
+
+  const count = (rule: LifecycleRule, data: ArrDataMap) =>
+    (matched(movieItems, [makeGroup([rule])], "MOVIE", data).get("m1") ?? []).length;
+
+  it("isNull matches an item in Arr that carries no tags", () => {
+    expect(count(makeRule({ field: "arrTag", operator: "isNull", value: "" }), untagged)).toBeGreaterThan(0);
+  });
+
+  it("isNull does not match a tagged item", () => {
+    expect(count(makeRule({ field: "arrTag", operator: "isNull", value: "" }), tagged)).toBe(0);
+  });
+
+  it("isNotNull matches a tagged item", () => {
+    expect(count(makeRule({ field: "arrTag", operator: "isNotNull", value: "" }), tagged)).toBeGreaterThan(0);
+  });
+
+  it("isNotNull does not match an untagged item", () => {
+    expect(count(makeRule({ field: "arrTag", operator: "isNotNull", value: "" }), untagged)).toBe(0);
+  });
+
+  it("negate inverts both operators (they stay each other's complement)", () => {
+    expect(count(makeRule({ field: "arrTag", operator: "isNull", value: "", negate: true }), tagged)).toBeGreaterThan(0);
+    expect(count(makeRule({ field: "arrTag", operator: "isNull", value: "", negate: true }), untagged)).toBe(0);
+    expect(count(makeRule({ field: "arrTag", operator: "isNotNull", value: "", negate: true }), untagged)).toBeGreaterThan(0);
+  });
+
+  it("stays fail-closed for an item that is not in Arr at all", () => {
+    // Absent Arr metadata is never evidence of "no tags" — use foundInArr for
+    // that question. Matches the convention every other Arr field follows.
+    expect(count(makeRule({ field: "arrTag", operator: "isNull", value: "" }), {})).toBe(0);
+    expect(count(makeRule({ field: "arrTag", operator: "isNotNull", value: "" }), {})).toBe(0);
+    expect(count(makeRule({ field: "arrTag", operator: "isNull", value: "", negate: true }), {})).toBe(0);
+  });
+});
+
+describe("arrQualityProfile / arrMonitored isNull / isNotNull (always present)", () => {
+  const data: ArrDataMap = { [tmdbId]: makeArrMeta({ qualityProfile: "Ultra-HD", monitored: true }) };
+  const blankProfile: ArrDataMap = { [tmdbId]: makeArrMeta({ qualityProfile: "" }) };
+
+  const count = (rule: LifecycleRule, d: ArrDataMap) =>
+    (matched(movieItems, [makeGroup([rule])], "MOVIE", d).get("m1") ?? []).length;
+
+  it("arrQualityProfile uses empty-string semantics, like other non-nullable text", () => {
+    expect(count(makeRule({ field: "arrQualityProfile", operator: "isNotNull", value: "" }), data)).toBeGreaterThan(0);
+    expect(count(makeRule({ field: "arrQualityProfile", operator: "isNull", value: "" }), data)).toBe(0);
+    expect(count(makeRule({ field: "arrQualityProfile", operator: "isNull", value: "" }), blankProfile)).toBeGreaterThan(0);
+  });
+
+  it("arrMonitored is non-nullable: isNull matches nothing, isNotNull matches every item in Arr", () => {
+    expect(count(makeRule({ field: "arrMonitored", operator: "isNull", value: "" }), data)).toBe(0);
+    expect(count(makeRule({ field: "arrMonitored", operator: "isNotNull", value: "" }), data)).toBeGreaterThan(0);
+  });
+
+  it("both stay fail-closed for an item that is not in Arr", () => {
+    expect(count(makeRule({ field: "arrQualityProfile", operator: "isNotNull", value: "" }), {})).toBe(0);
+    expect(count(makeRule({ field: "arrMonitored", operator: "isNotNull", value: "" }), {})).toBe(0);
+  });
+});
+
+describe("foundInArr isNull / isNotNull (presence check)", () => {
+  const inArr: ArrDataMap = { [tmdbId]: makeArrMeta() };
+
+  const count = (rule: LifecycleRule, d: ArrDataMap) =>
+    (matched(movieItems, [makeGroup([rule])], "MOVIE", d).get("m1") ?? []).length;
+
+  // The valueless operators carry no value, so the equals/notEquals path
+  // coerced them to `boolVal = false` and BOTH read as "not found in Arr".
+  it("isNotNull means found in Arr", () => {
+    expect(count(makeRule({ field: "foundInArr", operator: "isNotNull", value: "" }), inArr)).toBeGreaterThan(0);
+    expect(count(makeRule({ field: "foundInArr", operator: "isNotNull", value: "" }), {})).toBe(0);
+  });
+
+  it("isNull means absent from Arr", () => {
+    expect(count(makeRule({ field: "foundInArr", operator: "isNull", value: "" }), {})).toBeGreaterThan(0);
+    expect(count(makeRule({ field: "foundInArr", operator: "isNull", value: "" }), inArr)).toBe(0);
+  });
+
+  it("negate inverts them", () => {
+    expect(count(makeRule({ field: "foundInArr", operator: "isNull", value: "", negate: true }), inArr)).toBeGreaterThan(0);
+    expect(count(makeRule({ field: "foundInArr", operator: "isNotNull", value: "", negate: true }), {})).toBeGreaterThan(0);
+  });
+});

@@ -110,3 +110,15 @@ export interface MediaItemWithRelations {
   }>;
   matchedBy?: string | null;
 }
+
+/**
+ * A row as returned by the flat list endpoints (`/api/media/movies`,
+ * `/api/media/series`, `/api/media/music`).
+ *
+ * Those endpoints deliberately omit `summary` — it is a paragraph of prose per
+ * row that only the hover popover renders, so it is fetched for the single
+ * hovered item via `MediaHoverPopover`'s `summaryUrl`. Typing list state with
+ * this instead of `MediaItemWithRelations` makes reading a summary the endpoint
+ * never sent a compile error rather than a silently blank popover.
+ */
+export type MediaListItem = Omit<MediaItemWithRelations, "summary">;

@@ -219,6 +219,19 @@ export interface MediaCollection {
 
 export interface MediaSession {
   sessionId: string;
+  /**
+   * The library item being played (Plex ratingKey / Jellyfin item id). Lets a
+   * session be matched back to its synced MediaItem — needed because Plex
+   * reports the *delivered stream* on a session, not the source file.
+   */
+  ratingKey?: string;
+  /**
+   * Plex only: the id of the specific Media version being played (a Plex item
+   * can hold several versions at different resolutions). Lets the 4K criterion
+   * resolve the exact version's source resolution rather than the single value
+   * stored for the whole item.
+   */
+  mediaId?: string;
   userId: string;
   username: string;
   userThumb: string;
@@ -276,7 +289,17 @@ export interface MediaSession {
     sourceVideoCodec?: string;
     sourceAudioCodec?: string;
     speed?: number;
+    /**
+     * Plex only, and only that hardware was *requested* — Plex falls back to
+     * software silently, so never treat this as proof of acceleration. Use
+     * hwDecode/hwEncode (or `isHardwareTranscode`) instead.
+     */
     transcodeHwRequested?: boolean;
+    /** Plex: acceleration API per half, e.g. "vaapi". Absent = software. */
+    hwDecode?: string;
+    hwEncode?: string;
+    /** Plex: decode and encode both on hardware. */
+    hwFullPipeline?: boolean;
   };
 }
 

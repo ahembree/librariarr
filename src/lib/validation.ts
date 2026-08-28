@@ -218,6 +218,7 @@ export const transcodeManagerSchema = z.object({
   delay: z.number().int().min(0).max(3600).optional(),
   criteria: z.record(z.string(), z.boolean()).optional(),
   excludedUsers: z.array(z.string()).optional(),
+  exemptHardware: z.boolean().optional(),
 });
 
 export const terminateSessionSchema = z.object({

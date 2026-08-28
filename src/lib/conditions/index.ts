@@ -49,3 +49,4 @@ export * from "./series-aggregates";
 export * from "./library-type-guard";
 export * from "./negation";
 export * from "./array-field-eval";
+export * from "./external-id-eval";

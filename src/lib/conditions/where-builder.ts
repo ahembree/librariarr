@@ -526,9 +526,17 @@ export const textGenericHandler: FieldHandler = (operator, value, field, negate)
 
 /**
  * hasExternalId presence check via the `externalIds` relation. The "value"
- * is the source name (TMDB, TVDB, IMDB, MUSICBRAINZ); isNotNull is an alias
- * for equals (has a row for that source) and isNull is an alias for
- * notEquals (no row for that source).
+ * is the source name (TMDB, TVDB, IMDB, MUSICBRAINZ) for the per-source
+ * operators (equals/contains/wildcard and their negations).
+ *
+ * isNull / isNotNull are VALUELESS — the builder clears the value when one is
+ * selected — so they ask about the id LIST instead: "no external ids at all"
+ * / "at least one", matching every other list-shaped field. They used to be
+ * aliased onto notEquals/equals, which compared against the cleared value and
+ * emitted `{ none: { source: "" } }` — true for every row, so "Is Empty"
+ * matched the whole library. Phase 2 built the same vacuous comparison, so
+ * the phases agreed and nothing detected the sweep. Keep this in step with
+ * `matchExternalIdField` in ./external-id-eval.
  */
 /** External-id sources written by sync — the finite domain hasExternalId
  *  wildcards match against (both phases use the same list). */
@@ -542,12 +550,17 @@ const hasExternalIdHandler: FieldHandler = (operator, value, _field, negate) => 
   const sources = String(value).split("|").map((v) => v.trim()).filter(Boolean);
   let clause: Prisma.MediaItemWhereInput;
   switch (operator) {
-    case "equals":
+    // List-emptiness: `some: {}` / `none: {}` place no constraint on source.
     case "isNotNull":
+      clause = { externalIds: { some: {} } };
+      break;
+    case "isNull":
+      clause = { externalIds: { none: {} } };
+      break;
+    case "equals":
       clause = { externalIds: { some: { source: String(value) } } };
       break;
     case "notEquals":
-    case "isNull":
       clause = { externalIds: { none: { source: String(value) } } };
       break;
     case "contains":

@@ -25,6 +25,7 @@ export async function GET() {
       transcodeManagerDelay: true,
       transcodeManagerCriteria: true,
       transcodeManagerExcludedUsers: true,
+      transcodeManagerExemptHardware: true,
     },
   });
 
@@ -34,6 +35,7 @@ export async function GET() {
     delay: settings?.transcodeManagerDelay ?? 30,
     criteria: (settings?.transcodeManagerCriteria as Record<string, boolean> | null) ?? DEFAULT_CRITERIA,
     excludedUsers: settings?.transcodeManagerExcludedUsers ?? [],
+    exemptHardware: settings?.transcodeManagerExemptHardware ?? false,
   });
 }
 
@@ -45,7 +47,7 @@ export async function PUT(request: NextRequest) {
 
   const { data, error } = await validateRequest(request, transcodeManagerSchema);
   if (error) return error;
-  const { enabled, message, delay, criteria, excludedUsers } = data;
+  const { enabled, message, delay, criteria, excludedUsers, exemptHardware } = data;
 
   const settings = await prisma.appSettings.upsert({
     where: { userId: session.userId! },
@@ -55,6 +57,7 @@ export async function PUT(request: NextRequest) {
       ...(delay !== undefined && { transcodeManagerDelay: delay }),
       ...(criteria !== undefined && { transcodeManagerCriteria: criteria }),
       ...(excludedUsers !== undefined && { transcodeManagerExcludedUsers: excludedUsers }),
+      ...(exemptHardware !== undefined && { transcodeManagerExemptHardware: exemptHardware }),
     },
     create: {
       userId: session.userId!,
@@ -63,6 +66,7 @@ export async function PUT(request: NextRequest) {
       transcodeManagerDelay: delay ?? 30,
       transcodeManagerCriteria: criteria ?? DEFAULT_CRITERIA,
       ...(excludedUsers !== undefined && { transcodeManagerExcludedUsers: excludedUsers }),
+      ...(exemptHardware !== undefined && { transcodeManagerExemptHardware: exemptHardware }),
     },
     select: {
       transcodeManagerEnabled: true,
@@ -70,6 +74,7 @@ export async function PUT(request: NextRequest) {
       transcodeManagerDelay: true,
       transcodeManagerCriteria: true,
       transcodeManagerExcludedUsers: true,
+      transcodeManagerExemptHardware: true,
     },
   });
 
@@ -79,5 +84,6 @@ export async function PUT(request: NextRequest) {
     delay: settings.transcodeManagerDelay,
     criteria: settings.transcodeManagerCriteria ?? DEFAULT_CRITERIA,
     excludedUsers: settings.transcodeManagerExcludedUsers,
+    exemptHardware: settings.transcodeManagerExemptHardware,
   });
 }

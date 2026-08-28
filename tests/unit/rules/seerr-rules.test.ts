@@ -678,3 +678,56 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
     });
   });
 });
+
+// ===========================================================================
+// Valueless operators (isNull / isNotNull) on always-present Seerr fields
+//
+// `requested`, `requestCount` and `requestedBy` are non-nullable in
+// SeerrMetadata (and the evaluator substitutes a default record when an item
+// has no Seerr data at all), so they never reach a null guard. They used to
+// fall through their operator switch's `default: return false`, which made
+// BOTH "Is Empty" and "Is Not Empty" match nothing.
+// ===========================================================================
+
+describe("Seerr isNull / isNotNull on always-present fields", () => {
+  const count = (
+    field: string,
+    operator: string,
+    meta: Partial<SeerrMetadata>,
+    negate?: boolean,
+  ) => {
+    const rules: LifecycleRule[] = [
+      { id: "r1", field, operator, value: "", condition: "AND", ...(negate ? { negate } : {}) },
+    ];
+    const result = getMatchedCriteriaForItems(
+      [makeItem("item1", "123")],
+      rules,
+      "MOVIE",
+      undefined,
+      makeSeerrData("123", meta),
+    );
+    return (result.get("item1") ?? []).length;
+  };
+
+  it("seerrRequestedBy isNull matches an item with no recorded requester", () => {
+    expect(count("seerrRequestedBy", "isNull", { requestedBy: [] })).toBeGreaterThan(0);
+    expect(count("seerrRequestedBy", "isNull", { requestedBy: ["alice"] })).toBe(0);
+  });
+
+  it("seerrRequestedBy isNotNull matches an item that has a requester", () => {
+    expect(count("seerrRequestedBy", "isNotNull", { requestedBy: ["alice"] })).toBeGreaterThan(0);
+    expect(count("seerrRequestedBy", "isNotNull", { requestedBy: [] })).toBe(0);
+  });
+
+  it("seerrRequestedBy negate inverts both operators", () => {
+    expect(count("seerrRequestedBy", "isNull", { requestedBy: ["alice"] }, true)).toBeGreaterThan(0);
+    expect(count("seerrRequestedBy", "isNotNull", { requestedBy: [] }, true)).toBeGreaterThan(0);
+  });
+
+  it("seerrRequested / seerrRequestCount are non-nullable: isNull matches nothing, isNotNull matches all", () => {
+    expect(count("seerrRequested", "isNull", {})).toBe(0);
+    expect(count("seerrRequested", "isNotNull", {})).toBeGreaterThan(0);
+    expect(count("seerrRequestCount", "isNull", { requestCount: 0 })).toBe(0);
+    expect(count("seerrRequestCount", "isNotNull", { requestCount: 0 })).toBeGreaterThan(0);
+  });
+});

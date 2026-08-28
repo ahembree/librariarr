@@ -68,6 +68,9 @@ model AppSettings {
   transcodeManagerMessage      String    @default("")
   transcodeManagerDelay        Int       @default(30)
   transcodeManagerCriteria     Json?
+  // Skip streams the server reports as hardware-accelerated (GPU encode), which
+  // cost the CPU little. Off by default so existing criteria keep their meaning.
+  transcodeManagerExemptHardware Boolean @default(false)
   // Discord notifications
   discordWebhookUrl            String?
   discordWebhookUsername       String?

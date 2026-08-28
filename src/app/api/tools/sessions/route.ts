@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
+import { stampFirstSeen } from "@/lib/media-server/session-first-seen";
 import type { MediaSession } from "@/lib/media-server/types";
 import type { MediaServerType } from "@/generated/prisma/client";
 
@@ -43,7 +44,9 @@ export async function GET() {
         serverId: server.id,
         serverName: server.name,
         serverType: server.type,
-        startedAt: now,
+        // Share the SSE stream's first-seen timing so a manual refresh here
+        // doesn't reset the displayed stream durations.
+        startedAt: stampFirstSeen(server.id, s.sessionId, now),
       }));
     }),
   );
