@@ -58,6 +58,18 @@ Over 50 fields are available for rule conditions.
 | `genre` | Genre(s) | equals, contains |
 | `country` | Country of origin — multi-select (movies only) | equals, contains, notContains |
 | `duration` | Duration in minutes | greaterThan, lessThan, etc. |
+| `hasExternalId` | Which external-id sources the item carries (TMDB, TVDB, IMDB, MUSICBRAINZ) — multi-select | equals, notEquals, contains, notContains, matchesWildcard, isNull, isNotNull |
+
+:::note[`hasExternalId`: per-source vs. "any at all"]
+The value-taking operators ask a **per-source** question — `equals TMDB`
+matches items that carry a TMDB id, `contains TMDB|IMDB` matches items with
+either.
+
+*Is Empty* / *Is Not Empty* take no value, so they ask about the id **list**
+instead: *Is Empty* matches items with **no external ids at all**, *Is Not
+Empty* matches items with at least one. Use `notEquals` / `notContains` when
+you mean "has no TMDB id specifically".
+:::
 
 ### Video Fields
 
