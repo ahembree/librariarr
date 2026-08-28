@@ -110,6 +110,31 @@ export function isOperatorApplicable(operator: string, field: string): boolean {
 }
 
 /**
+ * External (Arr/Seerr) fields whose Phase-2 metadata value is always present
+ * on a resolved record and has no meaningful "empty" reading: `foundInArr` is
+ * a presence check, and `arrMonitored` / `seerrRequested` / `seerrRequestCount`
+ * are non-nullable in `ArrMetadata` / `SeerrMetadata`. The engine evaluates
+ * isNull / isNotNull on them to the trivial UNSATISFIABLE / MATCH_ALL result
+ * (so saved rules stay well-defined), but offering the operators in the
+ * builder would only produce a useless — and, on a destructive rule set,
+ * dangerous — "matches every item in Arr" clause. This is the external-field
+ * counterpart to isNonNullableNonTextField below.
+ *
+ * The nullable Arr booleans (`arrQualityCutoffMet`, `arrEnded`,
+ * `arrHasUnaired`) are deliberately NOT here — "Arr didn't report a value"
+ * is a real question for them. Neither are the list-shaped fields (`arrTag`,
+ * `seerrRequestedBy`), where "is empty" means "carries no tags / no
+ * requesters", nor `arrQualityProfile`, which follows the non-nullable-String
+ * empty-string convention.
+ */
+const ALWAYS_PRESENT_EXTERNAL_FIELDS = new Set([
+  "foundInArr",
+  "arrMonitored",
+  "seerrRequested",
+  "seerrRequestCount",
+]);
+
+/**
  * UI-level operator filter. Defers to isOperatorApplicable for type checking,
  * then hides isNull / isNotNull when the field is non-nullable AND not a String
  * — for those columns the engine correctly returns UNSATISFIABLE/MATCH_ALL,
@@ -124,7 +149,10 @@ export function isOperatorApplicable(operator: string, field: string): boolean {
  */
 export function isOperatorVisible(operator: string, field: string): boolean {
   if (!isOperatorApplicable(operator, field)) return false;
-  if ((operator === "isNull" || operator === "isNotNull") && isNonNullableNonTextField(field)) {
+  if (
+    (operator === "isNull" || operator === "isNotNull") &&
+    (isNonNullableNonTextField(field) || ALWAYS_PRESENT_EXTERNAL_FIELDS.has(field))
+  ) {
     return false;
   }
   return true;

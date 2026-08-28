@@ -451,3 +451,57 @@ describe("evaluateAllQueryRulesInMemory — series-aggregate comparisons (F3)", 
     expect(evaluateAllQueryRulesInMemory(grp({ field: "seriesLastPlayedAt", operator: "notInLastDays", value: "365" }), { id: "2", seriesLastPlayedAt: recent }, undefined, undefined)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Valueless operators on always-present Arr/Seerr fields
+//
+// The query builder and the lifecycle engine share one Phase-2 evaluator, so
+// these assert the query side of the same fix: "Tag Is Empty" / "Is Not Empty"
+// used to return nothing at all because the operators fell through the arrTag
+// operator switch's `default: return false`.
+// ---------------------------------------------------------------------------
+
+describe("evaluateAllQueryRulesInMemory — isNull / isNotNull on Arr and Seerr fields", () => {
+  const grp = (rule: QueryRule): QueryGroup[] => [
+    { id: "g1", condition: "AND", rules: [rule], groups: [] },
+  ];
+  const item = { id: "1" };
+
+  it("arrTag isNull selects items in Arr with no tags", () => {
+    const rule = makeRule({ field: "arrTag", operator: "isNull", value: "" });
+    expect(evaluateAllQueryRulesInMemory(grp(rule), item, makeArrMeta({ tags: [] }), undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(grp(rule), item, makeArrMeta({ tags: ["4K"] }), undefined)).toBe(false);
+    // Not in Arr at all → fail-closed, same as every other Arr field.
+    expect(evaluateAllQueryRulesInMemory(grp(rule), item, undefined, undefined)).toBe(false);
+  });
+
+  it("arrTag isNotNull selects tagged items", () => {
+    const rule = makeRule({ field: "arrTag", operator: "isNotNull", value: "" });
+    expect(evaluateAllQueryRulesInMemory(grp(rule), item, makeArrMeta({ tags: ["4K"] }), undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(grp(rule), item, makeArrMeta({ tags: [] }), undefined)).toBe(false);
+    expect(evaluateAllQueryRulesInMemory(grp(rule), item, undefined, undefined)).toBe(false);
+  });
+
+  it("seerrRequestedBy isNull / isNotNull select on requester-list emptiness", () => {
+    const isNull = makeRule({ field: "seerrRequestedBy", operator: "isNull", value: "" });
+    const isNotNull = makeRule({ field: "seerrRequestedBy", operator: "isNotNull", value: "" });
+    expect(evaluateAllQueryRulesInMemory(grp(isNull), item, undefined, makeSeerrMeta({ requestedBy: [] }))).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(grp(isNull), item, undefined, makeSeerrMeta({ requestedBy: ["bob"] }))).toBe(false);
+    expect(evaluateAllQueryRulesInMemory(grp(isNotNull), item, undefined, makeSeerrMeta({ requestedBy: ["bob"] }))).toBe(true);
+  });
+
+  it("arrQualityProfile isNotNull selects items that resolved a profile", () => {
+    const rule = makeRule({ field: "arrQualityProfile", operator: "isNotNull", value: "" });
+    expect(evaluateAllQueryRulesInMemory(grp(rule), item, makeArrMeta({ qualityProfile: "Ultra-HD" }), undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(grp(rule), item, makeArrMeta({ qualityProfile: "" }), undefined)).toBe(false);
+  });
+
+  it("foundInArr isNotNull / isNull read as presence, not as `equals false`", () => {
+    const isNotNull = makeRule({ field: "foundInArr", operator: "isNotNull", value: "" });
+    const isNull = makeRule({ field: "foundInArr", operator: "isNull", value: "" });
+    expect(evaluateAllQueryRulesInMemory(grp(isNotNull), item, makeArrMeta(), undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(grp(isNotNull), item, undefined, undefined)).toBe(false);
+    expect(evaluateAllQueryRulesInMemory(grp(isNull), item, undefined, undefined)).toBe(true);
+    expect(evaluateAllQueryRulesInMemory(grp(isNull), item, makeArrMeta(), undefined)).toBe(false);
+  });
+});
