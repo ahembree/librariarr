@@ -24,13 +24,11 @@ vi.mock("@/lib/logger", () => ({
 const mockGetSessions = vi.hoisted(() => vi.fn());
 const mockListUsernames = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/media-server/factory", () => ({
-  createMediaServerClient: vi.fn().mockImplementation(function (type: string) {
-    // Only Jellyfin/Emby expose listUsernames; Plex leaves it undefined so the
-    // route falls back to live sessions (Plex friends are fetched separately).
-    if (type === "JELLYFIN" || type === "EMBY") {
-      return { getSessions: mockGetSessions, listUsernames: mockListUsernames };
-    }
-    return { getSessions: mockGetSessions };
+  createMediaServerClient: vi.fn().mockImplementation(function () {
+    // Every server type enumerates all known users via listUsernames
+    // (Jellyfin/Emby: /Users, Plex: /accounts), and the route also reads live
+    // sessions on top. Plex friends are fetched separately (getPlexFriends).
+    return { getSessions: mockGetSessions, listUsernames: mockListUsernames };
   }),
 }));
 
@@ -166,5 +164,48 @@ describe("GET /api/tools/users", () => {
 
     expect(mockListUsernames).toHaveBeenCalled();
     expect(body.users).toEqual(expect.arrayContaining(["admin", "alice", "bob"]));
+  });
+
+  it("lists all Plex accounts, not just those currently streaming", async () => {
+    // Regression: the picker used to show only the owner + whoever was
+    // streaming, because Plex had no enumerate-all-users path. It now lists the
+    // server's /accounts (every account that has streamed) via listUsernames.
+    const user = await createTestUser({ username: "admin", plexToken: "plex-tok" });
+    await createTestServer(user.id); // PLEX by default
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    // Two past streamers the server knows about; only one is live right now.
+    mockListUsernames.mockResolvedValue(["past_viewer", "another_viewer"]);
+    mockGetSessions.mockResolvedValue([
+      {
+        sessionId: "s1",
+        userId: "u9",
+        username: "live_viewer",
+        title: "Movie",
+        type: "movie",
+        player: {
+          product: "Plex",
+          platform: "Chrome",
+          state: "playing",
+          address: "10.0.0.1",
+          local: true,
+        },
+        session: { bandwidth: 1, location: "lan" },
+      },
+    ]);
+
+    const response = await callRoute(GET, { url: "/api/tools/users" });
+    const body = await expectJson<{ users: string[] }>(response, 200);
+
+    expect(mockListUsernames).toHaveBeenCalled();
+    // Offline past streamers AND the live one are all offered for exclusion.
+    expect(body.users).toEqual(
+      expect.arrayContaining([
+        "admin",
+        "past_viewer",
+        "another_viewer",
+        "live_viewer",
+      ])
+    );
   });
 });
