@@ -9,7 +9,6 @@ import { processLifecycleRules, executeLifecycleActions } from "@/lib/lifecycle/
 import { createBackup, getBackupPassphrase, pruneBackups } from "@/lib/backup/backup-service";
 import { archiveLogs } from "@/lib/logs/archive";
 import { pruneImageCache } from "@/lib/image-cache/image-cache";
-import { prewarmServerArtwork } from "@/lib/image-cache/prewarm";
 import { dispatchScheduledJobs } from "@/lib/jobs/dispatch";
 import { enqueueJob } from "@/lib/jobs/client";
 import {
@@ -23,12 +22,10 @@ import {
   TASK_ARCHIVE_LOGS,
   TASK_CLEANUP_ACTIONS,
   TASK_PRUNE_IMAGE_CACHE,
-  TASK_PREFETCH_IMAGES,
   MAIN_QUEUE,
   type SyncServerPayload,
   type SyncWatchHistoryPayload,
   type SyncIncrementalPayload,
-  type PrefetchImagesPayload,
   type UserPayload,
 } from "@/lib/jobs/constants";
 
@@ -96,19 +93,6 @@ const syncServer: Task = async (payload) => {
   }
 
   await syncMediaServer(serverId, libraryKey, skipWatchHistory ? { skipWatchHistory: true } : undefined);
-
-  // Warm the grid artwork the freshly-synced items will render with. Enqueued
-  // rather than awaited, and with no queueName, so it runs alongside MAIN_QUEUE
-  // work instead of delaying the next sync/lifecycle job. Only reached when the
-  // sync succeeded — syncMediaServer throws on failure. Not enqueued from the
-  // incremental sync: that fires on every realtime library event, and a full
-  // artwork scan per event would be far more work than the handful of new items
-  // justify. They warm on the next full sync, and stay lazy until then.
-  await enqueueJob(
-    TASK_PREFETCH_IMAGES,
-    { serverId },
-    { jobKey: `prefetch-images:${serverId}`, maxAttempts: 1 },
-  );
 };
 
 const syncWatchHistoryTask: Task = async (payload) => {
@@ -172,11 +156,6 @@ const pruneImageCacheTask: Task = async () => {
   await pruneImageCache();
 };
 
-const prefetchImagesTask: Task = async (payload) => {
-  const { serverId } = payload as PrefetchImagesPayload;
-  await prewarmServerArtwork(serverId);
-};
-
 /** Complete Graphile Worker task list, keyed by task identifier. */
 export const taskList: TaskList = {
   [TASK_DISPATCH]: dispatch,
@@ -189,5 +168,4 @@ export const taskList: TaskList = {
   [TASK_ARCHIVE_LOGS]: archiveLogsTask,
   [TASK_CLEANUP_ACTIONS]: cleanupActionsTask,
   [TASK_PRUNE_IMAGE_CACHE]: pruneImageCacheTask,
-  [TASK_PREFETCH_IMAGES]: prefetchImagesTask,
 };

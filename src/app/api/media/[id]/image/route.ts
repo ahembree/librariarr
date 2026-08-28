@@ -76,8 +76,7 @@ export async function GET(
   }
 
   // Resolve thumb path based on type. Everything but `role` goes through the
-  // shared resolver so the cache prewarmer warms the same artwork this route
-  // will look up.
+  // shared resolver.
   let thumbPath: string | null;
   if (type === "role") {
     const index = parseInt(searchParams.get("index") ?? "", 10);

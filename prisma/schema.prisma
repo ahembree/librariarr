@@ -116,10 +116,6 @@ model AppSettings {
   // incremental library + watch-history sync). Master switch — off closes all
   // server WebSockets and falls back to scheduled polling only.
   realtimeSync                  Boolean   @default(true)
-  // Warm the grid-size artwork cache after a sync so the first browse of a cold
-  // library is a disk read instead of a media-server round trip + transcode per
-  // card. Off leaves artwork to the lazy path in /api/media/[id]/image.
-  prewarmArtwork                Boolean   @default(true)
   // Retention
   actionHistoryRetentionDays    Int       @default(30)
   // Deletion stats

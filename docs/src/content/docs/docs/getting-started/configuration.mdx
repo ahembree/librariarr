@@ -238,22 +238,11 @@ Displays changelog entries fetched from GitHub Releases, including:
 
 - Shows the number of cached images and total size
 - **Clear Image Cache** button to reclaim disk space
-- **Prewarm artwork after sync** (default: on) — after a server sync finishes,
-  Librariarr fetches and resizes the artwork the library grids will ask for, in
-  the background, so the first visit to a library page loads from disk instead of
-  your media server. Turn it off to let artwork cache lazily as pages are viewed:
-  lighter on the media server, but the first browse of a cold library is slower.
-
-  The prewarm only fetches the card-sized variants the grids display, skips
-  artwork that is already cached, runs at low concurrency off the main job queue,
-  and is capped per run — a very large library warms across several syncs rather
-  than in one long burst.
-
-  Artwork is resized by your media server before it is sent (Plex's photo
-  transcoder, Jellyfin/Emby's `maxWidth`), so warming a poster transfers tens of
-  kilobytes rather than the full-resolution original. If your server's transcoder
-  is unavailable, Librariarr falls back to fetching the original and resizing it
-  locally.
+- Artwork is resized by your media server before it is sent (Plex's photo
+  transcoder, Jellyfin/Emby's `maxWidth`), so a poster transfers tens of kilobytes
+  rather than the full-resolution original, and it is cached on first view. If your
+  server's transcoder is unavailable, Librariarr falls back to fetching the
+  original and resizing it locally.
 
 ## Next Steps
 

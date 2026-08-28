@@ -165,10 +165,6 @@ export const realtimeSettingsSchema = z.object({
   realtimeSync: z.boolean(),
 });
 
-export const imageCacheSettingsSchema = z.object({
-  prewarmArtwork: z.boolean(),
-});
-
 export const titlePreferenceSchema = z.object({
   serverId: z.string().nullable().optional(),
   field: z.enum(["title", "artwork"]),

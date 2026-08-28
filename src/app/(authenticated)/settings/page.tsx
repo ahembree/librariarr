@@ -257,8 +257,6 @@ export default function SettingsPage() {
   // Image cache
   const [imageCacheStats, setImageCacheStats] = useState<ImageCacheStats | null>(null);
   const [clearingImageCache, setClearingImageCache] = useState(false);
-  const [prewarmArtwork, setPrewarmArtwork] = useState(true);
-  const [savingPrewarm, setSavingPrewarm] = useState(false);
 
   // Changelog
   const [releaseNotes, setReleaseNotes] = useState<ReleaseNote[]>([]);
@@ -526,8 +524,7 @@ export default function SettingsPage() {
     try {
       const response = await fetch("/api/settings/image-cache");
       const data = await response.json();
-      setImageCacheStats({ fileCount: data.fileCount, totalSize: data.totalSize });
-      setPrewarmArtwork(data.prewarmArtwork ?? true);
+      setImageCacheStats(data);
     } catch (error) {
       console.error("Failed to fetch image cache stats:", error);
     }
@@ -1391,27 +1388,6 @@ export default function SettingsPage() {
       toast.error("Failed to save real-time sync setting");
     } finally {
       setSavingRealtime(false);
-    }
-  };
-
-  const savePrewarmSetting = async (value: boolean) => {
-    setSavingPrewarm(true);
-    try {
-      const res = await fetch("/api/settings/image-cache", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prewarmArtwork: value }),
-      });
-      if (!res.ok) {
-        toast.error("Failed to save artwork prewarm setting");
-        return;
-      }
-      setPrewarmArtwork(value);
-      toast.success(value ? "Artwork prewarm enabled" : "Artwork prewarm disabled");
-    } catch {
-      toast.error("Failed to save artwork prewarm setting");
-    } finally {
-      setSavingPrewarm(false);
     }
   };
 
@@ -2715,9 +2691,6 @@ export default function SettingsPage() {
             imageCacheStats={imageCacheStats}
             clearingImageCache={clearingImageCache}
             onClearImageCache={handleClearImageCache}
-            prewarmArtwork={prewarmArtwork}
-            savingPrewarm={savingPrewarm}
-            onSavePrewarmSetting={savePrewarmSetting}
             releaseNotes={releaseNotes}
             loadingChangelog={loadingChangelog}
           />

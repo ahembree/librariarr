@@ -45,14 +45,6 @@ export const TASK_CLEANUP_ACTIONS = "cleanup-old-actions";
 export const TASK_PRUNE_IMAGE_CACHE = "prune-image-cache";
 
 /**
- * Warm the grid-size artwork cache for a server after a successful sync, so the
- * first browse of a cold library doesn't pay a media-server round trip plus a
- * transcode per visible card. Deliberately kept off {@link MAIN_QUEUE}: it is
- * slow, entirely best-effort, and must not hold up sync/lifecycle/backup.
- */
-export const TASK_PREFETCH_IMAGES = "prefetch-images";
-
-/**
  * Serial queue for the heavy domain jobs (sync, lifecycle, backup).
  *
  * Jobs sharing a queue name run strictly one-at-a-time, mirroring the original
@@ -81,11 +73,6 @@ export interface SyncIncrementalPayload {
   changedIds: string[];
   /** ratingKeys known to be removed — deleted directly, no fetch. */
   removedIds: string[];
-}
-
-/** Payload for {@link TASK_PREFETCH_IMAGES}. */
-export interface PrefetchImagesPayload {
-  serverId: string;
 }
 
 /** Payload for lifecycle detection/execution tasks. */

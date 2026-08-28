@@ -78,9 +78,7 @@ export interface ArtworkSource {
  * chain the library grids depend on: a season falls back to the show poster,
  * a show falls back to the item's own thumb.
  *
- * Shared by the image proxy and the cache prewarmer — the prewarmer has to warm
- * the exact key the proxy will later look up, so a second copy of this chain
- * would silently warm the wrong artwork. `type=role` is not handled here: role
+ * `type=role` is not handled here: role
  * thumbs are indexed out of the item's `roles` JSON, which is the route's job.
  */
 export function resolveArtworkPath(item: ArtworkSource, type: string | null): string | null {
