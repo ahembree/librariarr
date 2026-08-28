@@ -5,6 +5,7 @@ import type { LucideIcon } from "lucide-react";
 import { Film, Tv, Music, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FadeImage } from "@/components/ui/fade-image";
+import { CACHE_WIDTH_GRID, withImageWidth } from "@/lib/image-url";
 import { InsightCard, InsightEmpty } from "@/components/dashboard/insight-card";
 import { LazyMediaHoverPopover } from "@/components/lazy-media-hover-popover";
 import type { MediaHoverData } from "@/components/media-hover-popover";
@@ -68,7 +69,7 @@ function Thumb({
     >
       {src && !err ? (
         <FadeImage
-          src={src}
+          src={withImageWidth(src, CACHE_WIDTH_GRID)}
           alt=""
           loading="lazy"
           decoding="async"

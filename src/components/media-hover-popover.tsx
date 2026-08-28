@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   formatDuration,
   formatFileSize,
@@ -11,6 +11,7 @@ import { RatingChip } from "@/components/rating-chip";
 import { ServerChips } from "@/components/server-chips";
 import { FadeImage } from "@/components/ui/fade-image";
 import { ColorChip } from "@/components/color-chip";
+import { CACHE_WIDTH_GRID, withImageWidth } from "@/lib/image-url";
 
 export interface MediaHoverData {
   title: string;
@@ -60,6 +61,14 @@ function DataCell({ label, value }: { label: string; value: string }) {
   );
 }
 
+/**
+ * Summaries fetched on hover, keyed by fetch URL. Module-level so re-hovering a
+ * card (or hovering the same title in table and card view) is instant and costs
+ * no second request. `null` records "asked, nothing there" so a missing summary
+ * isn't re-requested on every hover.
+ */
+const summaryCache = new Map<string, string | null>();
+
 interface MediaHoverPopoverProps {
   data: MediaHoverData;
   /** Show artwork as a hero header (used where artwork isn't already visible) */
@@ -67,11 +76,52 @@ interface MediaHoverPopoverProps {
   /** Aspect hint for the artwork. Accepted for the universal caller contract;
    *  the hero crops both poster and square art to a fixed-height banner. */
   imageAspect?: "poster" | "square";
+  /**
+   * Where to fetch the summary from when `data.summary` is absent.
+   *
+   * A summary is a paragraph of prose per row and the popover is the only thing
+   * that renders it, so the big list endpoints leave it out and it is fetched
+   * for the one item actually hovered. Everything else in the popover comes
+   * from data the list already had, so the card paints immediately either way.
+   */
+  summaryUrl?: string;
 }
 
-export function MediaHoverPopover({ data, imageUrl, imageAspect = "poster" }: MediaHoverPopoverProps) {
+export function MediaHoverPopover({
+  data,
+  imageUrl,
+  imageAspect = "poster",
+  summaryUrl,
+}: MediaHoverPopoverProps) {
   const [imgError, setImgError] = useState(false);
   const { getBadgeStyle } = useChipColors();
+
+  // The popover only mounts when it opens, so this effect is the "on hover"
+  // trigger — no fetch happens for cards the user never hovers.
+  const needsSummary = !data.summary && Boolean(summaryUrl);
+  const [fetchedSummary, setFetchedSummary] = useState<string | null>(() =>
+    summaryUrl ? summaryCache.get(summaryUrl) ?? null : null,
+  );
+
+  useEffect(() => {
+    if (!needsSummary || !summaryUrl || summaryCache.has(summaryUrl)) return;
+    let cancelled = false;
+    fetch(summaryUrl)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json: { item?: { summary?: string | null } } | null) => {
+        const summary = json?.item?.summary ?? null;
+        summaryCache.set(summaryUrl, summary);
+        if (!cancelled) setFetchedSummary(summary);
+      })
+      .catch(() => {
+        // Best-effort enrichment — the rest of the popover is already rendered.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [needsSummary, summaryUrl]);
+
+  const summary = data.summary ?? fetchedSummary;
 
   const resLabel =
     data.resolution ? normalizeResolutionLabel(data.resolution) : null;
@@ -137,7 +187,7 @@ export function MediaHoverPopover({ data, imageUrl, imageAspect = "poster" }: Me
       {showHero ? (
         <div className={`relative w-full bg-muted ${imageAspect === "square" ? "h-40" : "h-44"}`}>
           <FadeImage
-            src={imageUrl!}
+            src={withImageWidth(imageUrl!, CACHE_WIDTH_GRID)}
             alt=""
             loading="eager"
             decoding="async"
@@ -191,9 +241,9 @@ export function MediaHoverPopover({ data, imageUrl, imageAspect = "poster" }: Me
         )}
 
         {/* Summary */}
-        {data.summary && (
+        {summary && (
           <p className="text-xs leading-relaxed text-muted-foreground/80 line-clamp-3">
-            {data.summary}
+            {summary}
           </p>
         )}
 

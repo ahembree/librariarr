@@ -98,6 +98,44 @@ describe("JellyfinClient", () => {
     expect(logger.debug).toHaveBeenCalledWith("Jellyfin", expect.stringContaining("GET /Items"));
   });
 
+  describe("fetchImage", () => {
+    function newClient() {
+      const client = new JellyfinClient("http://jellyfin:8096", "jf-token");
+      const axiosClient = mockAxiosCreate.mock.results[0].value as { get: ReturnType<typeof vi.fn> };
+      axiosClient.get.mockResolvedValue({
+        data: Buffer.from("image-data"),
+        headers: { "content-type": "image/jpeg" },
+      });
+      return { client, axiosClient };
+    }
+
+    it("requests the bare image path when no width is given", async () => {
+      const { client, axiosClient } = newClient();
+      await client.fetchImage("/Items/abc/Images/Primary");
+      expect(axiosClient.get.mock.calls[0][0]).toBe("/Items/abc/Images/Primary");
+    });
+
+    it("asks the server to resize when a width is given", async () => {
+      // maxWidth only ever shrinks, so a source narrower than the hint comes
+      // back untouched — exactly what the local withoutEnlargement resize wants.
+      const { client, axiosClient } = newClient();
+      await client.fetchImage("/Items/abc/Images/Primary", { width: 400 });
+      expect(axiosClient.get.mock.calls[0][0]).toBe("/Items/abc/Images/Primary?maxWidth=400");
+    });
+
+    it("appends to a path that already carries a query string", async () => {
+      const { client, axiosClient } = newClient();
+      await client.fetchImage("/Items/abc/Images/Primary?tag=xyz", { width: 640 });
+      expect(axiosClient.get.mock.calls[0][0]).toBe("/Items/abc/Images/Primary?tag=xyz&maxWidth=640");
+    });
+
+    it("still normalises a bare item id into an image path", async () => {
+      const { client, axiosClient } = newClient();
+      await client.fetchImage("abc", { width: 400 });
+      expect(axiosClient.get.mock.calls[0][0]).toBe("/Items/abc/Images/Primary?maxWidth=400");
+    });
+  });
+
   describe("getSessions", () => {
     function makeClientWithSessions(sessions: unknown[]) {
       const client = new JellyfinClient("http://jellyfin:8096", "jf-token");

@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { Prisma } from "@/generated/prisma/client";
 import { logger } from "@/lib/logger";
 import fs from "fs/promises";
 import path from "path";
@@ -471,19 +472,55 @@ const LEGACY_FIELD_RENAMES: Record<string, Record<string, string>> = {
 // means only a value that is ENTIRELY a timestamp is converted.
 const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})?$/;
 
+/**
+ * Field names the CURRENT schema has for a table, from Prisma's generated
+ * per-model scalar-field enums. Generated, so it cannot drift from the schema.
+ */
+function knownFieldsFor(table: string): Set<string> | null {
+  const cached = knownFieldCache.get(table);
+  if (cached !== undefined) return cached;
+  const enumName = `${table.charAt(0).toUpperCase()}${table.slice(1)}ScalarFieldEnum`;
+  const fieldEnum = (Prisma as unknown as Record<string, Record<string, string> | undefined>)[enumName];
+  const fields = fieldEnum ? new Set(Object.keys(fieldEnum)) : null;
+  knownFieldCache.set(table, fields);
+  return fields;
+}
+const knownFieldCache = new Map<string, Set<string> | null>();
+
+/** Columns already reported as dropped, so one restore logs each table once. */
+const droppedFieldsReported = new Set<string>();
+
 // Deserialize date strings back to Date objects for Prisma, and migrate any
 // legacy field names so older backups still restore cleanly.
 function deserializeRow(row: Record<string, unknown>, table?: string): Record<string, unknown> {
   const renames = table ? LEGACY_FIELD_RENAMES[table] : undefined;
+  // Drop columns the current schema no longer has. Prisma validates createMany
+  // arguments client-side, so a single unknown key rejects the whole batch and
+  // aborts the restore — a backup taken before a column was dropped would be
+  // permanently unrestorable. Renames above handle fields that moved; this
+  // handles fields that went away entirely.
+  const known = table ? knownFieldsFor(table) : null;
   const result: Record<string, unknown> = {};
+  const dropped: string[] = [];
   for (const [key, value] of Object.entries(row)) {
     const mappedKey = renames?.[key] ?? key;
+    if (known && !known.has(mappedKey)) {
+      dropped.push(mappedKey);
+      continue;
+    }
     // Only coerce when the ENTIRE string is a valid ISO timestamp.
     if (typeof value === "string" && ISO_DATETIME.test(value) && !Number.isNaN(Date.parse(value))) {
       result[mappedKey] = new Date(value);
     } else {
       result[mappedKey] = value;
     }
+  }
+  if (dropped.length > 0 && table && !droppedFieldsReported.has(table)) {
+    droppedFieldsReported.add(table);
+    logger.info(
+      "Backup",
+      `Restore: ignoring ${dropped.length} column(s) on "${table}" that this schema no longer has: ${dropped.join(", ")}`,
+    );
   }
   return result;
 }

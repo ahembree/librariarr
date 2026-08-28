@@ -13,6 +13,11 @@
 import { PrismaClient } from "../src/generated/prisma/client.js";
 import type { InputJsonValue } from "../src/generated/prisma/internal/prismaNamespace.js";
 import { PrismaPg } from "@prisma/adapter-pg";
+import {
+  CACHE_WIDTH_DEFAULT,
+  CACHE_WIDTH_GRID,
+  CACHE_WIDTH_GRID_WIDE,
+} from "../src/lib/image-url";
 import bcrypt from "bcryptjs";
 import { createHash } from "crypto";
 import fs from "fs/promises";
@@ -115,9 +120,15 @@ function normalizeCacheUrl(url: string): string {
   return url.replace(/^(\/library\/metadata\/\d+\/(?:thumb|art))\/\d+$/, "$1");
 }
 
-function computeCacheKey(thumbPath: string): string {
+function computeCacheKey(thumbPath: string, width: number): string {
   const normalized = normalizeCacheUrl(thumbPath);
-  return createHash("sha256").update(normalized).digest("hex");
+  // Non-default widths get an `@<width>` suffix — see computeCacheKey in
+  // src/lib/image-cache/image-cache.ts. Without the suffix the seed only ever
+  // wrote the 800px key, so every grid card (which asks for 400 or 640) missed
+  // the cache and hit the placeholder media server that does not exist.
+  return createHash("sha256")
+    .update(width === CACHE_WIDTH_DEFAULT ? normalized : `${normalized}@${width}`)
+    .digest("hex");
 }
 
 function getCachePath(cacheKey: string): string {
@@ -165,19 +176,27 @@ async function generatePlaceholderImage(
     .toBuffer();
 }
 
+/**
+ * Widths a seeded card actually requests. Grids ask for CACHE_WIDTH_GRID (or
+ * CACHE_WIDTH_GRID_WIDE for landscape stills) and detail views for the default,
+ * so the seed has to write every variant or the dev UI shows broken artwork
+ * against a media server that isn't real.
+ */
+const SEED_CACHE_WIDTHS = [CACHE_WIDTH_GRID, CACHE_WIDTH_GRID_WIDE, CACHE_WIDTH_DEFAULT];
+
 async function writePlaceholderImage(
   thumbUrl: string,
   title: string,
   type: "movie" | "series" | "music",
 ): Promise<void> {
-  const cacheKey = computeCacheKey(thumbUrl);
-  const cachePath = getCachePath(cacheKey);
+  const aspect = type === "music" ? 1 : 1.5;
 
-  const [width, height] = type === "music" ? [400, 400] : [400, 600];
-
-  const imageBuffer = await generatePlaceholderImage(title, width, height);
-  await fs.mkdir(path.dirname(cachePath), { recursive: true });
-  await fs.writeFile(cachePath, imageBuffer);
+  for (const width of SEED_CACHE_WIDTHS) {
+    const cachePath = getCachePath(computeCacheKey(thumbUrl, width));
+    const imageBuffer = await generatePlaceholderImage(title, width, Math.round(width * aspect));
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    await fs.writeFile(cachePath, imageBuffer);
+  }
 }
 
 // ---------------------------------------------------------------------------

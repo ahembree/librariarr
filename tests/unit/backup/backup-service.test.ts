@@ -206,6 +206,49 @@ describe("restoreBackup", () => {
     vi.clearAllMocks();
   });
 
+  it("drops columns the current schema no longer has", async () => {
+    // Migration 0010 dropped six collection* columns from RuleSet. Prisma
+    // validates createMany arguments client-side, so a single unknown key
+    // rejects the whole batch and aborts the restore — without this filter a
+    // config backup taken before that released migration is permanently
+    // unrestorable.
+    const backupData = {
+      metadata: { version: 1, appVersion: "1.0.0", createdAt: new Date().toISOString(), tables: { ruleSet: 1 } },
+      data: {
+        ruleSet: [{
+          id: "rs1", userId: "u1", name: "Old rule", type: "MOVIE", rules: {},
+          collectionEnabled: true, collectionName: "Leaving Soon", collectionSort: "ACTION_DATE",
+        }],
+      },
+    };
+    mockFs.readFile.mockResolvedValue(gzipSync(Buffer.from(JSON.stringify(backupData))));
+
+    await restoreBackup("librariarr-backup-2024-01-01T00-00-00.json.gz");
+
+    const call = mockPrismaModels.ruleSet.createMany.mock.calls.at(-1);
+    expect(call).toBeDefined();
+    const row = call![0].data[0];
+    expect(row).not.toHaveProperty("collectionEnabled");
+    expect(row).not.toHaveProperty("collectionName");
+    expect(row).not.toHaveProperty("collectionSort");
+    // Fields the schema still has must survive untouched.
+    expect(row).toMatchObject({ id: "rs1", userId: "u1", name: "Old rule" });
+  });
+
+  it("keeps every column the current schema still has", async () => {
+    const backupData = {
+      metadata: { version: 1, appVersion: "1.0.0", createdAt: new Date().toISOString(), tables: { user: 1 } },
+      data: { user: [{ id: "u1", username: "admin", createdAt: "2024-01-01T00:00:00.000Z" }] },
+    };
+    mockFs.readFile.mockResolvedValue(gzipSync(Buffer.from(JSON.stringify(backupData))));
+
+    await restoreBackup("librariarr-backup-2024-01-01T00-00-00.json.gz");
+
+    const row = mockPrismaModels.user.createMany.mock.calls.at(-1)![0].data[0];
+    expect(row).toMatchObject({ id: "u1", username: "admin" });
+    expect(row.createdAt).toBeInstanceOf(Date);
+  });
+
   it("rejects invalid filenames", async () => {
     await expect(restoreBackup("../etc/passwd")).rejects.toThrow("Invalid backup filename");
     await expect(restoreBackup("evil; rm -rf /")).rejects.toThrow("Invalid backup filename");

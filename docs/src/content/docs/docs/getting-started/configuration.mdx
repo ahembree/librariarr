@@ -238,6 +238,11 @@ Displays changelog entries fetched from GitHub Releases, including:
 
 - Shows the number of cached images and total size
 - **Clear Image Cache** button to reclaim disk space
+- Artwork is resized by your media server before it is sent (Plex's photo
+  transcoder, Jellyfin/Emby's `maxWidth`), so a poster transfers tens of kilobytes
+  rather than the full-resolution original, and it is cached on first view. If your
+  server's transcoder is unavailable, Librariarr falls back to fetching the
+  original and resizing it locally.
 
 ## Next Steps
 

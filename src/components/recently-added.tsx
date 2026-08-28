@@ -17,6 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FadeImage } from "@/components/ui/fade-image";
+import { CACHE_WIDTH_GRID, withImageWidth } from "@/lib/image-url";
 import { Clock, Film, Tv, Music, ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatRelativeDate } from "@/lib/format";
@@ -108,7 +109,7 @@ function ShelfTile({
           </div>
         ) : (
           <FadeImage
-            src={`/api/media/${item.id}/image${item.type === "SERIES" ? "?type=parent" : ""}`}
+            src={withImageWidth(`/api/media/${item.id}/image${item.type === "SERIES" ? "?type=parent" : ""}`, CACHE_WIDTH_GRID)}
             alt=""
             loading="lazy"
             decoding="async"

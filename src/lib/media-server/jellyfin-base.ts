@@ -605,10 +605,20 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     return `${this.baseURL}/Items/${path}/Images/Primary?api_key=${this.token}`;
   }
 
-  async fetchImage(path: string): Promise<{ data: Buffer; contentType: string }> {
+  async fetchImage(
+    path: string,
+    options?: { width?: number },
+  ): Promise<{ data: Buffer; contentType: string }> {
     // Use the internal axios client (fixed baseURL + auth headers) to avoid SSRF.
     // Only accept relative paths starting with "/".
-    const relativePath = path.startsWith("/") ? path : `/Items/${path}/Images/Primary`;
+    const base = path.startsWith("/") ? path : `/Items/${path}/Images/Primary`;
+    // Jellyfin/Emby resize server-side when asked, so request the size we are
+    // actually going to store rather than pulling the full-resolution original.
+    // `maxWidth` only ever shrinks — a source narrower than the hint comes back
+    // untouched, which is what the local `withoutEnlargement` resize expects.
+    const width = options?.width;
+    const relativePath =
+      width && width > 0 ? `${base}${base.includes("?") ? "&" : "?"}maxWidth=${width}` : base;
     const response = await this.client.get(relativePath, {
       responseType: "arraybuffer",
       timeout: 15000,

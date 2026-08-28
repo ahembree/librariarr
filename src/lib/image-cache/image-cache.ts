@@ -4,16 +4,19 @@ import path from "path";
 import { createHash } from "crypto";
 import sharp from "sharp";
 import { logger } from "@/lib/logger";
+import { ALL_CACHE_WIDTHS, CACHE_WIDTH_DEFAULT } from "@/lib/image-url";
 
 const IMAGE_CACHE_DIR = process.env.IMAGE_CACHE_DIR || "/config/cache/images";
 const STATS_FILE = path.join(IMAGE_CACHE_DIR, "_stats.json");
-const CACHE_WIDTH_DEFAULT = 800;
-export const CACHE_WIDTH_ART = 1920;
 const CACHE_QUALITY = 80;
 const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 // Disable Sharp's internal operation cache for memory safety in long-running processes
 sharp.cache(false);
+// libvips defaults its thread pool to the core count, so a burst of concurrent
+// cache misses could otherwise occupy every core of a small NAS and starve live
+// browsing. Inputs are server-resized (see fetchImage), so one thread is plenty.
+sharp.concurrency(1);
 
 // In-flight request deduplication: cacheKey -> Promise<Buffer>
 const inFlight = new Map<string, Promise<Buffer>>();
@@ -277,18 +280,25 @@ export async function cacheImage(
 export async function invalidateCachedUrls(urls: (string | null | undefined)[]): Promise<void> {
   for (const url of urls) {
     if (!url) continue;
-    const cacheKey = getCacheKey(normalizeCacheUrl(url));
-    const cachePath = getCachePath(cacheKey);
-    try {
-      const fileStat = await fs.stat(cachePath);
-      await fs.unlink(cachePath);
-      const fileSize = fileStat.size;
-      updateStats((s) => {
-        s.fileCount--;
-        s.totalSize -= fileSize;
-      });
-    } catch {
-      // File doesn't exist, that's fine
+    // Every width variant of this artwork has to go, not just the default one.
+    // Callers invalidate when an item's artwork URL changed or the item was
+    // deleted; leaving the 400/640/1920 variants behind would orphan up to
+    // three files per item on disk and skew the cache-stats counters, and the
+    // grid would keep serving the old artwork from its own width until the TTL
+    // expired even though the default-width file was purged.
+    for (const width of ALL_CACHE_WIDTHS) {
+      const cachePath = getCachePath(computeCacheKey(url, width));
+      try {
+        const fileStat = await fs.stat(cachePath);
+        await fs.unlink(cachePath);
+        const fileSize = fileStat.size;
+        updateStats((s) => {
+          s.fileCount--;
+          s.totalSize -= fileSize;
+        });
+      } catch {
+        // File doesn't exist, that's fine
+      }
     }
   }
 }

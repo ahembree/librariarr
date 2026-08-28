@@ -66,7 +66,7 @@ import { useIntegrationsHealth, deriveIntegrationsStatus, arrTypeForMediaType, t
 import { hasArrRules, hasSeerrRules, type QueryGroup, type QueryDefinition } from "@/lib/query/types";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
-import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
+import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { CardSizeControl } from "@/components/card-size-control";
@@ -1251,7 +1251,7 @@ export default function QueryPage() {
     count: rowCount,
     getScrollElement: () => scrollElementRef.current,
     estimateSize,
-    overscan: 10,
+    overscan: 3,
     scrollMargin,
   });
 
@@ -1814,6 +1814,7 @@ export default function QueryPage() {
                                 />
                               </div>
                             <MediaCard
+                              priority={virtualRow.index < PRIORITY_ROWS}
                               imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" || item.parentTitle ? "?type=parent" : ""}`}
                               title={item.title}
                               fallbackIcon={FALLBACK_ICONS[item.type] ?? "movie"}
