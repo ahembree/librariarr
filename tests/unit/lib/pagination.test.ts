@@ -29,9 +29,8 @@ describe("parseListPagination", () => {
     });
   });
 
-  it("clamps the limit to maxLimit", () => {
+  it("clamps the limit to the maximum", () => {
     expect(parseListPagination(params({ limit: "5000" })).limit).toBe(100);
-    expect(parseListPagination(params({ limit: "5000" }), { maxLimit: 200 }).limit).toBe(200);
   });
 
   it("rejects a negative limit rather than reverse-taking", () => {

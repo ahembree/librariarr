@@ -78,8 +78,8 @@ export interface ArtworkSource {
  * chain the library grids depend on: a season falls back to the show poster,
  * a show falls back to the item's own thumb.
  *
- * `type=role` is not handled here: role
- * thumbs are indexed out of the item's `roles` JSON, which is the route's job.
+ * `type=role` is not handled here: role thumbs are indexed out of the item's
+ * `roles` JSON, which is the route's job.
  */
 export function resolveArtworkPath(item: ArtworkSource, type: string | null): string | null {
   if (type === "art") return item.artUrl;

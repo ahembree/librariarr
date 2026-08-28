@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { rm } from "node:fs/promises";
+import { rm, readdir } from "node:fs/promises";
+import sharp from "sharp";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
@@ -61,9 +62,19 @@ describe("GET /api/media/[id]/image", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
+    // Now that the cache is genuinely written, it survives between tests and
+    // the shared THUMB would be served from disk — start every test cold.
+    await rm(cacheDir, { recursive: true, force: true });
     mockFetchImage.mockReset();
+    // A REAL image: with unparseable bytes sharp throws, cacheImage returns via
+    // its SharpFailedError path and never writes to disk, so nothing here would
+    // actually exercise the cache.
     mockFetchImage.mockResolvedValue({
-      data: Buffer.from("fake-image-data"),
+      data: await sharp({
+        create: { width: 64, height: 96, channels: 3, background: "#123456" },
+      })
+        .jpeg()
+        .toBuffer(),
       contentType: "image/jpeg",
     });
     const user = await createTestUser();
@@ -147,8 +158,37 @@ describe("GET /api/media/[id]/image", () => {
     });
 
     it("requests the artwork from the media server once per uncached width", async () => {
-      await etagFor({ w: String(CACHE_WIDTH_GRID) });
-      expect(mockFetchImage).toHaveBeenCalledWith(THUMB, expect.anything());
+      const item = await createTestMediaItem(libraryId, { thumbUrl: THUMB });
+      const params = { w: String(CACHE_WIDTH_GRID) };
+
+      const first = await callRouteWithParams(GET, { id: item.id }, { searchParams: params });
+      expect(first.status).toBe(200);
+      expect(mockFetchImage).toHaveBeenCalledTimes(1);
+
+      // Second request for the same (thumb, width) must be served from disk.
+      const second = await callRouteWithParams(GET, { id: item.id }, { searchParams: params });
+      expect(second.status).toBe(200);
+      expect(mockFetchImage).toHaveBeenCalledTimes(1);
+    });
+
+    it("actually writes the resized variant to the cache directory", async () => {
+      // Guards the whole suite: if the fetch mock stops returning a decodable
+      // image, cacheImage silently stops writing and every assertion above
+      // starts passing through the failure path instead.
+      const item = await createTestMediaItem(libraryId, { thumbUrl: THUMB });
+      await callRouteWithParams(GET, { id: item.id }, { searchParams: { w: String(CACHE_WIDTH_GRID) } });
+
+      const shards = await readdir(cacheDir).catch(() => []);
+      expect(shards.length).toBeGreaterThan(0);
+    });
+
+    it("caches each width as a separate file, so a second width still fetches", async () => {
+      const item = await createTestMediaItem(libraryId, { thumbUrl: THUMB });
+      await callRouteWithParams(GET, { id: item.id }, { searchParams: { w: String(CACHE_WIDTH_GRID) } });
+      expect(mockFetchImage).toHaveBeenCalledTimes(1);
+
+      await callRouteWithParams(GET, { id: item.id }, { searchParams: { w: String(CACHE_WIDTH_GRID_WIDE) } });
+      expect(mockFetchImage).toHaveBeenCalledTimes(2);
     });
 
     it("tells the media server which width to resize to", async () => {

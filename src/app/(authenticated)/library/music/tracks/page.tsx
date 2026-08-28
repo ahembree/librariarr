@@ -6,11 +6,11 @@ import Link from "next/link";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
+import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { useChipColors } from "@/components/chip-color-provider";
 import { Music, Disc3, ListMusic, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
-import type { MediaItemWithRelations, MediaListItem } from "@/lib/types";
+import type { MediaListItem } from "@/lib/types";
 import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
@@ -277,6 +277,7 @@ export default function AllTracksPage() {
                     {rowItems.map((track) => (
                       <MediaCard
                         key={track.id}
+                        priority={virtualRow.index < PRIORITY_ROWS}
                         imageUrl={`/api/media/${track.id}/image`}
                         title={track.title}
                         aspectRatio="square"

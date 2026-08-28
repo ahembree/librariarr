@@ -20,7 +20,7 @@ import { LibraryToolbar } from "@/components/library-toolbar";
 import { AlphabetFilter } from "@/components/alphabet-filter";
 import { useVirtualGridAlphabet } from "@/hooks/use-virtual-grid-alphabet";
 import { useTableAlphabet } from "@/hooks/use-table-alphabet";
-import type { MediaItemWithRelations, MediaListItem } from "@/lib/types";
+import type { MediaListItem } from "@/lib/types";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
 import { SyncLibraryButton } from "@/components/sync-library-button";

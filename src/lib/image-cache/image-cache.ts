@@ -281,10 +281,11 @@ export async function invalidateCachedUrls(urls: (string | null | undefined)[]):
   for (const url of urls) {
     if (!url) continue;
     // Every width variant of this artwork has to go, not just the default one.
-    // The cache key is derived from the *normalized* URL, so when Plex swaps
-    // the artwork behind `/library/metadata/123/thumb` the new image reuses the
-    // same key — a 400px or 1920px file left behind would keep serving the old
-    // artwork until the TTL expired.
+    // Callers invalidate when an item's artwork URL changed or the item was
+    // deleted; leaving the 400/640/1920 variants behind would orphan up to
+    // three files per item on disk and skew the cache-stats counters, and the
+    // grid would keep serving the old artwork from its own width until the TTL
+    // expired even though the default-width file was purged.
     for (const width of ALL_CACHE_WIDTHS) {
       const cachePath = getCachePath(computeCacheKey(url, width));
       try {

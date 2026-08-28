@@ -87,7 +87,7 @@ describe("taskList", () => {
         TASK_ARCHIVE_LOGS,
         TASK_CLEANUP_ACTIONS,
         TASK_PRUNE_IMAGE_CACHE,
-            ].sort(),
+      ].sort(),
     );
   });
 

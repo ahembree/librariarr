@@ -11,7 +11,7 @@ import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/medi
 import { Tv, Layers, List, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import Link from "next/link";
-import type { MediaItemWithRelations, MediaListItem } from "@/lib/types";
+import type { MediaListItem } from "@/lib/types";
 import { useCardSize, BREAKPOINTS, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";

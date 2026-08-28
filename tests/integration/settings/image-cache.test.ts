@@ -52,7 +52,6 @@ describe("GET /api/settings/image-cache", () => {
     expect(body.totalSize).toBe(1048576);
     expect(mockGetImageCacheStats).toHaveBeenCalledOnce();
   });
-
 });
 
 describe("DELETE /api/settings/image-cache", () => {
