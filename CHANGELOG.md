@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.29.0](https://github.com/ahembree/librariarr/compare/v0.28.0...v0.29.0) (2026-08-29)
+
+
+### Features
+
+* add read-only AI analysis assistant for the media library ([#320](https://github.com/ahembree/librariarr/issues/320)) ([e7c212f](https://github.com/ahembree/librariarr/commit/e7c212fc0d9b8b50426a1d86d5df7325702d07c1))
+* add real-time WebSocket sync for Plex, Jellyfin, and Emby ([#306](https://github.com/ahembree/librariarr/issues/306)) ([966e142](https://github.com/ahembree/librariarr/commit/966e142e9169d60ca5cf7d8cd4301d652fc67b9f))
+* **realtime:** incremental library sync (apply only changed items) ([#308](https://github.com/ahembree/librariarr/issues/308)) ([3caa22a](https://github.com/ahembree/librariarr/commit/3caa22af7e963294bbba3ec8675cb9a18afd5f10))
+
+
+### Bug Fixes
+
+* **rules:** make "Is Empty" work on Arr tags and other always-present fields ([#359](https://github.com/ahembree/librariarr/issues/359)) ([bf63a78](https://github.com/ahembree/librariarr/commit/bf63a78102a4c565683fc3641f7e3ac3e4354a00))
+* **rules:** stop "Has External ID Is Empty" matching the whole library ([#361](https://github.com/ahembree/librariarr/issues/361)) ([ee6d290](https://github.com/ahembree/librariarr/commit/ee6d2905b9bc5bc818813bfae295b566202f4d87))
+* **sync:** stop syncing collections into media libraries ([#333](https://github.com/ahembree/librariarr/issues/333)) ([6f6069f](https://github.com/ahembree/librariarr/commit/6f6069fb56394127388254a8152ea3f49d211f4a))
+* **tools:** 4K transcode criterion no longer kills audio-only transcodes ([#355](https://github.com/ahembree/librariarr/issues/355)) ([cebbb24](https://github.com/ahembree/librariarr/commit/cebbb24e22ba6b04de2c8670fad2aa759a3a2fe4))
+* **tools:** correct stream transcode manager across Plex/Jellyfin/Emby ([#356](https://github.com/ahembree/librariarr/issues/356)) ([efa3949](https://github.com/ahembree/librariarr/commit/efa39494884ba61dc633f1cc4290a8c8a011fad1))
+* **tools:** list all Plex accounts in the excluded-users picker ([#358](https://github.com/ahembree/librariarr/issues/358)) ([9a5ac77](https://github.com/ahembree/librariarr/commit/9a5ac77f740d765cc92441ca218a669d058e78f4))
+* **tools:** populate Plex excluded-users picker from the friends list ([#357](https://github.com/ahembree/librariarr/issues/357)) ([cb7b433](https://github.com/ahembree/librariarr/commit/cb7b43397580c05c743e21ee7a38eac722a86bb2))
+
+
+### Performance Improvements
+
+* **library:** card-sized artwork, server-side resize and progressive list loading ([#360](https://github.com/ahembree/librariarr/issues/360)) ([8aebae1](https://github.com/ahembree/librariarr/commit/8aebae17968742977bae2be1307158da5c17d699))
+
 ## [0.28.0](https://github.com/ahembree/librariarr/compare/v0.27.0...v0.28.0) (2026-07-15)
 
 
