@@ -24,11 +24,20 @@ import { eventBus } from "@/lib/events/event-bus";
  *
  * It deliberately does NOT run the server-wide play-count / watch-history scans
  * or stale-item detection — those belong to the full sync, which remains the
- * periodic reconciliation backstop. Play state is instead read back from the
- * **stored** `WatchHistory` rows (see `loadWatchCountsFromHistory`): the item
- * metadata this path fetches carries only the admin account's `viewCount` /
- * `lastViewedAt`, so writing it unguarded would *erase* plays by every other
- * user on the server until the next full sync.
+ * periodic reconciliation backstop.
+ *
+ * **The upsert overwrites every column it writes**, so any column whose
+ * authoritative source this path lacks has to be handled explicitly or it is
+ * silently destroyed until the next full sync:
+ *
+ * - Play state (`playCount` / `lastPlayedAt`) — read back from the **stored**
+ *   `WatchHistory` rows (`loadWatchCountsFromHistory`), because the item
+ *   metadata carries only the admin account's `viewCount`/`lastViewedAt`.
+ * - `isWatchlisted` — carried forward from the stored row on Plex, whose
+ *   watchlist lives behind an account-level plex.tv API this path never calls.
+ * - Series-level external ids — a failed show-metadata fetch returns
+ *   `"fell-back"` rather than letting `processBatch` read the gap as "this show
+ *   has no ids" and clear them.
  */
 export interface IncrementalSyncResult {
   status: "done" | "fell-back" | "skipped";
@@ -63,6 +72,7 @@ interface ItemRow {
   thumbUrl: string | null;
   parentThumbUrl: string | null;
   seasonThumbUrl: string | null;
+  isWatchlisted: boolean;
 }
 
 function isNotFound(error: unknown): boolean {
@@ -106,7 +116,7 @@ export async function syncMediaServerItems(
   const allIds = [...new Set([...changedIds, ...removedIds])];
   const existingRows = allIds.length > 0
     ? await prisma.$queryRawUnsafe<ItemRow[]>(
-        `SELECT mi."id", mi."ratingKey", mi."libraryId", mi."thumbUrl", mi."parentThumbUrl", mi."seasonThumbUrl"
+        `SELECT mi."id", mi."ratingKey", mi."libraryId", mi."thumbUrl", mi."parentThumbUrl", mi."seasonThumbUrl", mi."isWatchlisted"
            FROM "MediaItem" mi JOIN "Library" l ON mi."libraryId"=l."id"
           WHERE l."mediaServerId"=$1 AND mi."ratingKey" = ANY($2)`,
         serverId, allIds,
@@ -177,6 +187,24 @@ export async function syncMediaServerItems(
     groups.set(libraryId, bucket);
   }
 
+  // Plex reports watchlist membership only through the account-level plex.tv
+  // watchlist API (`getWatchlistGuids`), which the full sync calls and this path
+  // deliberately does not — one library change must not trigger a plex.tv round
+  // trip. Plex item metadata carries no watchlist flag at all, so writing it
+  // unguarded silently un-watchlists every Plex item this sync touches (and the
+  // "Is Watchlisted" rule/query criterion with it). Carry the stored flag
+  // forward; the full sync stays the reconciliation point for watchlist adds
+  // and removals. Jellyfin/Emby need no carry-forward — their `isWatchlisted`
+  // comes from the item's own `IsFavorite`, which this path does fetch, so
+  // overriding it here would instead make un-favouriting take until a full sync.
+  if (server.type === "PLEX") {
+    for (const item of fetched) {
+      if (existingByRatingKey.get(item.ratingKey)?.isWatchlisted) {
+        item.isWatchlisted = true;
+      }
+    }
+  }
+
   // Play state for the items we're about to write, taken from the stored
   // watch history (all users) rather than the fetched metadata (admin account
   // only). `buildItemData` maxes the two, so this keeps a play by another
@@ -187,6 +215,42 @@ export async function syncMediaServerItems(
     serverId,
     fetched.map((it) => it.ratingKey),
   );
+
+  // Episodes need series-level GUIDs/genres/summary — fetch the shows they
+  // reference so Arr/Seerr correlation uses series ids, not episode ids. Done
+  // for every SERIES group up front, before any write: a failure here has to
+  // abort the whole run (see below), and dedeuping across groups also avoids
+  // re-fetching a show that two libraries both carry.
+  const showGuidsMap = new Map<string, Array<{ id: string }>>();
+  const showGenreMap = new Map<string, string[]>();
+  const showSummaryMap = new Map<string, string>();
+  const seriesIds = [
+    ...new Set(
+      [...groups]
+        .filter(([libraryId]) => libById.get(libraryId)!.type === "SERIES")
+        .flatMap(([, items]) => items.map((it) => it.grandparentRatingKey))
+        .filter((x): x is string => !!x),
+    ),
+  ];
+  for (const seriesId of seriesIds) {
+    try {
+      const show = await client.getItemMetadata(seriesId);
+      if (show?.Guid) showGuidsMap.set(seriesId, show.Guid);
+      if (show?.Genre) showGenreMap.set(seriesId, show.Genre.map((g) => g.tag));
+      if (show?.summary) showSummaryMap.set(seriesId, show.summary);
+    } catch (error) {
+      // NOT best-effort. `processBatch` reads an absent entry in `showGuidsMap`
+      // as "this show has no series-level ids" and deliberately **clears** the
+      // episode's external ids rather than falling back to its episode-level
+      // guid (which would resolve the wrong Sonarr series). A transient fetch
+      // failure is indistinguishable from that, so continuing would wipe the
+      // TVDB id the series' whole Arr/Seerr correlation hangs on — making
+      // `foundInArr` vacuously false for every Arr criterion until the next full
+      // sync. Same rule as the item fetch above: never let a transient error
+      // stand in for absent data; reconcile via full sync.
+      return fellBack(`show metadata fetch failed for ${seriesId}: ${String(error)}`);
+    }
+  }
 
   // Upsert each library group via the shared batch processor.
   let upserted = 0;
@@ -203,31 +267,18 @@ export async function syncMediaServerItems(
         ]),
     );
 
-    // Episodes need series-level GUIDs/genres/summary — fetch the shows they
-    // reference so Arr/Seerr correlation uses series ids, not episode ids.
-    let showGuidsMap: Map<string, Array<{ id: string }>> | undefined;
-    let showGenreMap: Map<string, string[]> | undefined;
-    let showSummaryMap: Map<string, string> | undefined;
-    if (lib.type === "SERIES") {
-      const seriesIds = [...new Set(items.map((it) => it.grandparentRatingKey).filter((x): x is string => !!x))];
-      if (seriesIds.length > 0) {
-        showGuidsMap = new Map();
-        showGenreMap = new Map();
-        showSummaryMap = new Map();
-        for (const seriesId of seriesIds) {
-          try {
-            const show = await client.getItemMetadata(seriesId);
-            if (show?.Guid) showGuidsMap.set(seriesId, show.Guid);
-            if (show?.Genre) showGenreMap.set(seriesId, show.Genre.map((g) => g.tag));
-            if (show?.summary) showSummaryMap.set(seriesId, show.summary);
-          } catch {
-            // Best-effort; the episode keeps its own guids as a fallback.
-          }
-        }
-      }
-    }
+    // Only SERIES groups consult the show maps; passing them for a MOVIE/MUSIC
+    // group would be harmless but misleading, and `processBatch` treats a
+    // *defined* map as authoritative.
+    const isSeries = lib.type === "SERIES";
 
-    await processBatch(items, libraryId, lib.type, watchCounts, existingThumbUrls, showGenreMap, showGuidsMap, undefined, showSummaryMap);
+    await processBatch(
+      items, libraryId, lib.type, watchCounts, existingThumbUrls,
+      isSeries ? showGenreMap : undefined,
+      isSeries ? showGuidsMap : undefined,
+      undefined,
+      isSeries ? showSummaryMap : undefined,
+    );
     upserted += items.length;
   }
 
@@ -235,7 +286,7 @@ export async function syncMediaServerItems(
   let deleted = 0;
   if (toDelete.size > 0) {
     const rows = await prisma.$queryRawUnsafe<ItemRow[]>(
-      `SELECT mi."id", mi."ratingKey", mi."libraryId", mi."thumbUrl", mi."parentThumbUrl", mi."seasonThumbUrl"
+      `SELECT mi."id", mi."ratingKey", mi."libraryId", mi."thumbUrl", mi."parentThumbUrl", mi."seasonThumbUrl", mi."isWatchlisted"
          FROM "MediaItem" mi JOIN "Library" l ON mi."libraryId"=l."id"
         WHERE l."mediaServerId"=$1 AND mi."ratingKey" = ANY($2)`,
       serverId, [...toDelete],
