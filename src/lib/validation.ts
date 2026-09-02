@@ -863,3 +863,68 @@ export const aiChatSchema = z.object({
     .min(1, "At least one message is required")
     .max(40, "Conversation is too long"),
 });
+
+// ─── API key schemas ───
+
+/** Permission tiers an API key can carry. Mirrors the ApiKeyScope enum. */
+export const API_KEY_SCOPES = ["READ_ONLY", "READ_WRITE"] as const;
+
+/**
+ * Optional ISO-8601 expiry. Accepts a datetime string or explicit null
+ * ("never expires"); the route rejects a timestamp in the past, which is a
+ * value check rather than a shape check and so lives there.
+ */
+const apiKeyExpiresAtSchema = z
+  .union([z.iso.datetime({ offset: true }), z.iso.datetime(), z.null()])
+  .optional();
+
+/** Mint a new API key. The raw secret is returned once and never again. */
+export const apiKeyCreateSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, "Name is required")
+    .max(80, "Name must be 80 characters or fewer"),
+  scope: z.enum(API_KEY_SCOPES).default("READ_ONLY"),
+  expiresAt: apiKeyExpiresAtSchema,
+});
+
+/**
+ * Update an existing key. Only the label, the expiry and the revoked flag are
+ * mutable — deliberately no `scope`, because silently widening a live key's
+ * permissions is exactly the change an admin would want to make explicitly by
+ * revoking it and issuing a new one. `revoked` is one-way: a revoked key can
+ * never be reactivated (its holder may already have leaked it).
+ */
+export const apiKeyUpdateSchema = z
+  .object({
+    name: z
+      .string()
+      .trim()
+      .min(1, "Name is required")
+      .max(80, "Name must be 80 characters or fewer")
+      .optional(),
+    expiresAt: apiKeyExpiresAtSchema,
+    revoked: z.literal(true).optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, {
+    message: "Provide at least one field to update",
+  });
+
+// ─── /api/v1 request schemas ───
+
+/** Trigger a sync over the public API. Omitting serverId syncs every enabled server. */
+export const v1SyncTriggerSchema = z.object({
+  serverId: z.string().min(1).optional(),
+});
+
+/** Kick off a lifecycle run over the public API. */
+export const v1LifecycleRunSchema = z.object({
+  mode: z.enum(["detection", "execution"]),
+});
+
+/** Add a lifecycle exception (protect an item from destructive actions). */
+export const v1ExceptionCreateSchema = z.object({
+  mediaItemId: z.string().min(1, "mediaItemId is required"),
+  reason: z.string().trim().max(500).optional(),
+});

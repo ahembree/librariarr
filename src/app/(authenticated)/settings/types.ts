@@ -129,6 +129,23 @@ export interface BackupEntry {
   configOnly?: boolean;
 }
 
+/**
+ * An API key as the management API returns it. Never carries the secret — the
+ * raw key exists only in the create response, and `prefix` is the non-secret
+ * label the list uses to tell two keys apart.
+ */
+export interface ApiKeySummary {
+  id: string;
+  name: string;
+  prefix: string;
+  scope: "READ_ONLY" | "READ_WRITE";
+  status: "active" | "revoked" | "expired";
+  expiresAt: string | null;
+  revokedAt: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
+
 // ─── Constants ───
 
 export const SCHEDULE_OPTIONS = [

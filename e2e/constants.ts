@@ -78,5 +78,6 @@ export const SETTINGS_TABS: { tab: RegExp; heading: RegExp }[] = [
   { tab: /^Integrations$/i, heading: /^Integrations$/i },
   { tab: /^Notifications$/i, heading: /^Notifications$/i },
   { tab: /^Authentication$/i, heading: /^Authentication$/i },
+  { tab: /^API$/i, heading: /^API Access$/i },
   { tab: /^System$/i, heading: /^System$/i },
 ];

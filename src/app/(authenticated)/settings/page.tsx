@@ -18,6 +18,7 @@ import {
   Monitor,
   Bell,
   Lock,
+  KeyRound,
   Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -33,6 +34,8 @@ import { NotificationsTab } from "./tabs/notifications-tab";
 import { AuthenticationTab } from "./tabs/authentication-tab";
 import type { CredentialsForm, PromptForm } from "./tabs/authentication-tab";
 import { SystemTab } from "./tabs/system-tab";
+import { ApiTab } from "./tabs/api-tab";
+import type { ApiKeyCreateForm, ApiKeyExpiryPreset } from "./tabs/api-tab";
 import { AiTab } from "./tabs/ai-tab";
 import type { AiProvider } from "./tabs/ai-tab";
 
@@ -49,12 +52,13 @@ import type {
   TestResult,
   BackupEntry,
   ReleaseNote,
+  ApiKeySummary,
 } from "./types";
 import { PRESET_VALUES } from "./types";
 
 // ─── Tab navigation ───
 
-type SettingsTab = "general" | "scheduling" | "servers" | "integrations" | "notifications" | "authentication" | "ai" | "system";
+type SettingsTab = "general" | "scheduling" | "servers" | "integrations" | "notifications" | "authentication" | "api" | "ai" | "system";
 
 const SETTINGS_TABS: { value: SettingsTab; label: string; icon: typeof SettingsIcon }[] = [
   { value: "general", label: "General", icon: SettingsIcon },
@@ -63,6 +67,7 @@ const SETTINGS_TABS: { value: SettingsTab; label: string; icon: typeof SettingsI
   { value: "integrations", label: "Integrations", icon: Puzzle },
   { value: "notifications", label: "Notifications", icon: Bell },
   { value: "authentication", label: "Authentication", icon: Lock },
+  { value: "api", label: "API", icon: KeyRound },
   { value: "ai", label: "AI", icon: Sparkles },
   { value: "system", label: "System", icon: Monitor },
 ];
@@ -74,6 +79,16 @@ function getInitialSettingsTab(): SettingsTab {
   const hash = window.location.hash.slice(1);
   return VALID_SETTINGS_TABS.has(hash) ? (hash as SettingsTab) : "general";
 }
+
+/** Days each API-key expiry preset maps to. `null` is "never expires". */
+const API_KEY_EXPIRY_DAYS: Record<ApiKeyExpiryPreset, number | null> = {
+  never: null,
+  "30d": 30,
+  "90d": 90,
+  "1y": 365,
+};
+
+const EMPTY_API_KEY_FORM: ApiKeyCreateForm = { name: "", scope: "READ_ONLY", expiry: "never" };
 
 // ─── Tab navigation helpers ───
 
@@ -355,6 +370,20 @@ export default function SettingsPage() {
   const [aiSaving, setAiSaving] = useState(false);
   const [aiTesting, setAiTesting] = useState(false);
   const [aiTestResult, setAiTestResult] = useState<TestResult | null>(null);
+
+  // API key management
+  const [apiKeys, setApiKeys] = useState<ApiKeySummary[]>([]);
+  const [apiKeysLoading, setApiKeysLoading] = useState(true);
+  const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false);
+  const [apiKeyForm, setApiKeyForm] = useState<ApiKeyCreateForm>(EMPTY_API_KEY_FORM);
+  const [creatingApiKey, setCreatingApiKey] = useState(false);
+  // The raw secret from the last create. Held only until the reveal is dismissed.
+  const [revealedApiKey, setRevealedApiKey] = useState<string | null>(null);
+  const [copiedSnippet, setCopiedSnippet] = useState<string | null>(null);
+  const [revokeApiKeyTarget, setRevokeApiKeyTarget] = useState<ApiKeySummary | null>(null);
+  const [deleteApiKeyTarget, setDeleteApiKeyTarget] = useState<ApiKeySummary | null>(null);
+  const [revokingApiKeyId, setRevokingApiKeyId] = useState<string | null>(null);
+  const [deletingApiKeyId, setDeletingApiKeyId] = useState<string | null>(null);
 
   // Sonarr edit state
   const [editingSonarrId, setEditingSonarrId] = useState<string | null>(null);
@@ -681,6 +710,18 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const fetchApiKeys = useCallback(async () => {
+    try {
+      const response = await fetch("/api/settings/api-keys");
+      const data = await response.json();
+      setApiKeys(data.keys ?? []);
+    } catch (error) {
+      console.error("Failed to fetch API keys:", error);
+    } finally {
+      setApiKeysLoading(false);
+    }
+  }, []);
+
   // ─── Initial data loading ───
 
   useEffect(() => {
@@ -702,6 +743,7 @@ export default function SettingsPage() {
         fetchScheduleInfo(),
         fetchDiscordSettings(),
         fetchAiSettings(),
+        fetchApiKeys(),
         fetchDedupSetting(),
         fetchRealtimeSetting(),
         fetchImageCacheStats(),
@@ -713,7 +755,7 @@ export default function SettingsPage() {
     fetch("/api/settings/auth").then((r) => r.json()).then(setAuthInfo).catch(() => {});
     // Fetch display preferences separately (non-blocking)
     fetch("/api/settings/title-preference").then((r) => r.ok ? r.json() : null).then((data) => { if (data) { setPreferredTitleServerId(data.preferredTitleServerId ?? null); setPreferredArtworkServerId(data.preferredArtworkServerId ?? null); } }).catch(() => {});
-  }, [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchDedupSetting, fetchRealtimeSetting, fetchImageCacheStats, fetchChangelog]);
+  }, [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchApiKeys, fetchDedupSetting, fetchRealtimeSetting, fetchImageCacheStats, fetchChangelog]);
 
   // Poll server data during active sync for real-time progress bar
   const hasActiveSync = servers.some(
@@ -2105,6 +2147,100 @@ export default function SettingsPage() {
     }
   };
 
+  // ─── API key handlers ───
+
+  const handleCreateApiKey = async () => {
+    const days = API_KEY_EXPIRY_DAYS[apiKeyForm.expiry];
+    setCreatingApiKey(true);
+    try {
+      const res = await fetch("/api/settings/api-keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: apiKeyForm.name.trim(),
+          scope: apiKeyForm.scope,
+          expiresAt: days === null ? null : new Date(Date.now() + days * 86_400_000).toISOString(),
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const detail = data?.details?.[0]?.message ?? data?.error;
+        toast.error("Failed to create API key", { description: detail });
+        return;
+      }
+      setApiKeyDialogOpen(false);
+      setApiKeyForm(EMPTY_API_KEY_FORM);
+      // Show the secret before refreshing — the reveal is the only chance to copy it.
+      setRevealedApiKey(data.secret);
+      await fetchApiKeys();
+      toast.success("API key created");
+    } catch (error) {
+      console.error("Failed to create API key:", error);
+      toast.error("Failed to create API key");
+    } finally {
+      setCreatingApiKey(false);
+    }
+  };
+
+  const handleRevokeApiKey = async () => {
+    const target = revokeApiKeyTarget;
+    if (!target) return;
+    setRevokingApiKeyId(target.id);
+    try {
+      const res = await fetch(`/api/settings/api-keys/${target.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ revoked: true }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        toast.error("Failed to revoke API key", { description: data?.error });
+        return;
+      }
+      setApiKeys((keys) => keys.map((k) => (k.id === target.id ? data.key : k)));
+      setRevokeApiKeyTarget(null);
+      toast.success("API key revoked", { description: `${target.name} can no longer authenticate.` });
+    } catch (error) {
+      console.error("Failed to revoke API key:", error);
+      toast.error("Failed to revoke API key");
+    } finally {
+      setRevokingApiKeyId(null);
+    }
+  };
+
+  const handleDeleteApiKey = async () => {
+    const target = deleteApiKeyTarget;
+    if (!target) return;
+    setDeletingApiKeyId(target.id);
+    try {
+      const res = await fetch(`/api/settings/api-keys/${target.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        toast.error("Failed to delete API key", { description: data?.error });
+        return;
+      }
+      setApiKeys((keys) => keys.filter((k) => k.id !== target.id));
+      setDeleteApiKeyTarget(null);
+      toast.success("API key deleted");
+    } catch (error) {
+      console.error("Failed to delete API key:", error);
+      toast.error("Failed to delete API key");
+    } finally {
+      setDeletingApiKeyId(null);
+    }
+  };
+
+  const handleCopySnippet = async (id: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedSnippet(id);
+      // Only clear our own tick — a copy of another snippet meanwhile owns it now.
+      setTimeout(() => setCopiedSnippet((current) => (current === id ? null : current)), 2000);
+    } catch {
+      toast.error("Copy failed", { description: "Select the text and copy it manually." });
+    }
+  };
+
   // ─── Authentication handlers ───
 
   const handlePlexLink = () => plexOAuth.startAuth();
@@ -2662,6 +2798,31 @@ export default function SettingsPage() {
             onChangeCredentials={handleChangeCredentials}
             onPlexLink={handlePlexLink}
             onCreateCredentialsAndEnable={handleCreateCredentialsAndEnable}
+          />
+        </TabsContent>
+
+        <TabsContent value="api" id="settings-panel-api" aria-labelledby="settings-tab-api">
+          <ApiTab
+            apiKeys={apiKeys}
+            apiKeysLoading={apiKeysLoading}
+            apiKeyDialogOpen={apiKeyDialogOpen}
+            apiKeyForm={apiKeyForm}
+            creatingApiKey={creatingApiKey}
+            onApiKeyDialogOpenChange={setApiKeyDialogOpen}
+            onApiKeyFormChange={(patch) => setApiKeyForm((f) => ({ ...f, ...patch }))}
+            onCreateApiKey={handleCreateApiKey}
+            revealedApiKey={revealedApiKey}
+            onDismissRevealedApiKey={() => setRevealedApiKey(null)}
+            copiedSnippet={copiedSnippet}
+            onCopySnippet={handleCopySnippet}
+            revokeApiKeyTarget={revokeApiKeyTarget}
+            deleteApiKeyTarget={deleteApiKeyTarget}
+            revokingApiKeyId={revokingApiKeyId}
+            deletingApiKeyId={deletingApiKeyId}
+            onRevokeApiKeyTargetChange={setRevokeApiKeyTarget}
+            onDeleteApiKeyTargetChange={setDeleteApiKeyTarget}
+            onRevokeApiKey={handleRevokeApiKey}
+            onDeleteApiKey={handleDeleteApiKey}
           />
         </TabsContent>
 

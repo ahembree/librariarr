@@ -36,6 +36,7 @@ export async function cleanDatabase() {
   await prisma.savedQuery.deleteMany();
   await prisma.seerrInstance.deleteMany();
   await prisma.appSettings.deleteMany();
+  await prisma.apiKey.deleteMany();
   await prisma.mediaServer.deleteMany();
   await prisma.user.deleteMany();
 }

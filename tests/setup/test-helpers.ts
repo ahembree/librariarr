@@ -142,6 +142,41 @@ export async function createTestUser(
   });
 }
 
+/**
+ * Create an API key row and return it together with the raw secret.
+ *
+ * The raw key never exists in the database (only its SHA-256 digest), so tests
+ * that need to authenticate a /api/v1 request must mint it through here and
+ * keep the returned `raw` value to put in the `X-Api-Key` header.
+ */
+export async function createTestApiKey(
+  userId: string,
+  overrides?: Partial<{
+    name: string;
+    scope: "READ_ONLY" | "READ_WRITE";
+    expiresAt: Date | null;
+    revokedAt: Date | null;
+    lastUsedAt: Date | null;
+  }>
+) {
+  const prisma = getTestPrisma();
+  const { generateApiKey } = await import("@/lib/auth/api-key");
+  const generated = generateApiKey();
+  const apiKey = await prisma.apiKey.create({
+    data: {
+      userId,
+      name: overrides?.name ?? `key-${unique()}`,
+      keyHash: generated.keyHash,
+      prefix: generated.prefix,
+      scope: overrides?.scope ?? "READ_ONLY",
+      expiresAt: overrides?.expiresAt ?? null,
+      revokedAt: overrides?.revokedAt ?? null,
+      lastUsedAt: overrides?.lastUsedAt ?? null,
+    },
+  });
+  return { apiKey, raw: generated.raw };
+}
+
 export async function createTestServer(
   userId: string,
   overrides?: Partial<{

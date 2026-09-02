@@ -1,0 +1,245 @@
+---
+title: API Access
+description: Read your library and trigger work from other applications using an API key — scopes, authentication headers, pagination, rate limits, and the full /api/v1 endpoint reference.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+Librariarr exposes a stable, versioned HTTP API at `/api/v1` so other applications can read your library and trigger work without a browser session. Scripts, dashboards, home-automation flows, uptime monitors, and notification bots all authenticate with an **API key** instead of logging in.
+
+This is a separate surface from the endpoints the web UI uses. The UI stays session-authenticated; `/api/v1` is key-authenticated, versioned, and the only part of Librariarr intended for outside callers.
+
+<Aside type="caution">
+  **The key is shown once.** Librariarr stores only a SHA-256 digest of your key, never the key itself — so it genuinely cannot show it to you again, and a database dump contains no usable credential. Copy it when it's displayed. If you lose it, revoke the key and create a new one; there is no recovery.
+</Aside>
+
+## Creating a key
+
+<Steps>
+
+1. Open **Settings → API**.
+
+2. Click **Create API key**.
+
+3. Give it a **name** — a label for you, unique per key. Name it after the thing that will use it (`homepage-dashboard`, `nightly-report-script`) so you can tell later which key belongs to what.
+
+4. Choose a **scope**: **Read only** or **Read & write**. See [Scopes](#scopes) below. Default to read-only unless the integration actually needs to trigger a sync or write lifecycle data.
+
+5. Optionally set an **expiration date**. Leave it blank for a key that never expires.
+
+6. Click **Create**, then **copy the key that is displayed**. This is the only time you will see it.
+
+</Steps>
+
+Every key looks like `lbr_` followed by a long random string. The `lbr_` prefix makes a leaked key easy to spot in logs and for secret scanners to detect.
+
+After the reveal, the list shows only a short non-secret prefix (for example `lbr_a1b2c3d4`) so you can tell two keys apart without either being recoverable.
+
+## Authenticating
+
+Send the key in a request header. Two forms are accepted — use whichever your client makes easier:
+
+```bash
+# X-Api-Key header
+curl -H "X-Api-Key: lbr_your_key_here" \
+  https://librariarr.example.com/api/v1/me
+
+# Authorization: Bearer
+curl -H "Authorization: Bearer lbr_your_key_here" \
+  https://librariarr.example.com/api/v1/me
+```
+
+If both are present, `X-Api-Key` wins.
+
+<Aside type="danger">
+  **A key in the query string is not supported.** There is deliberately no `?api_key=` parameter. URLs are written to reverse-proxy and web-server access logs, saved in browser history, and leaked to third parties through the `Referer` header — accepting a key there would quietly undo the point of sending it in a header. Requests without a valid header are rejected with `401`, whatever the query string says.
+</Aside>
+
+A quick end-to-end check that a key works:
+
+```bash
+curl -s -H "X-Api-Key: lbr_your_key_here" \
+  https://librariarr.example.com/api/v1/me
+```
+
+## Scopes
+
+A key carries exactly one scope, chosen at creation.
+
+| Scope | Reaches |
+|-------|---------|
+| **READ\_ONLY** | Every `GET` endpoint — servers, libraries, media, stats, lifecycle rules/matches/actions/exceptions, sync status, system info. |
+| **READ\_WRITE** | Everything a read-only key reaches, **plus** the write endpoints: trigger a sync, run lifecycle detection or execution, and create or delete lifecycle exceptions. |
+
+A read-only key that calls a write endpoint gets `403` with a clear message. It is not a silent no-op.
+
+A key's scope **cannot be changed after creation**. Widening a live key's permissions is exactly the kind of change that should be deliberate, so to move an integration from read-only to read-write you revoke the old key and issue a new one.
+
+There is no "admin" scope, and no API key can manage API keys. Key creation, revocation, and deletion happen only in the UI under an authenticated session — so a leaked key can never mint itself a replacement or hide its own tracks.
+
+## Expiration and revocation
+
+- **Expiration** is optional. A key with an expiry stops working the moment it passes; requests then return `401`.
+- **Revoke** disables a key immediately — the next request with it returns `401`. Use this the instant a key might be exposed.
+- **Revocation is one-way.** A revoked key can never be reactivated; its holder may already have leaked it. The record is kept (name, prefix, last-used time) so the audit trail survives.
+- **Delete** erases the record entirely. Do this for a key you no longer want listed at all; use **revoke** when you want the history.
+
+Editing a key lets you change its **name** and its **expiry**, and revoke it. Nothing else about a key is mutable.
+
+## Last used
+
+The key list shows a **Last used** time for each key, so you can spot an integration that has stopped calling — or a key nothing uses any more and can be deleted.
+
+The timestamp is updated **at most once per minute per key**. An integration polling every few seconds would otherwise turn every request into a database write, and minute granularity answers the question just as well.
+
+## Rate limiting
+
+Each key is allowed **120 requests per minute**. The budget is per key, not per IP address, so several integrations behind the same router never eat into each other's allowance.
+
+Exceeding it returns `429` with a `Retry-After` header giving the number of seconds to wait:
+
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: 34
+
+{"error":"Rate limit exceeded. Slow down and try again shortly."}
+```
+
+Honor `Retry-After` rather than retrying immediately. If you are regularly hitting the limit, page through lists with a larger `limit` instead of making more requests, and poll on an interval rather than in a loop.
+
+## Health check
+
+```bash
+curl https://librariarr.example.com/api/v1/health
+```
+
+`GET /api/v1/health` is the **only** endpoint that needs no API key. That exemption exists so uptime monitors (Uptime Kuma, Gatus, a Docker health check, a status page) can probe Librariarr without being handed a credential.
+
+It returns `200` when the app is up and its database is reachable, and `503` when the database is unreachable — so the check fails on a genuinely broken instance rather than reporting green because the web process is still answering.
+
+## Endpoint reference
+
+All paths are relative to your Librariarr base URL. Every endpoint except `/api/v1/health` requires a key.
+
+| Method | Path | Scope | Description |
+|--------|------|-------|-------------|
+| `GET` | `/api/v1/health` | *none* | Liveness probe; `503` if the database is unreachable. |
+| `GET` | `/api/v1/me` | READ\_ONLY | Details of the key making the request — name, scope, expiry. Useful to verify a key works. |
+| `GET` | `/api/v1/servers` | READ\_ONLY | Connected media servers. Tokens are masked. |
+| `GET` | `/api/v1/libraries` | READ\_ONLY | Libraries across your servers, with type and item counts. |
+| `GET` | `/api/v1/library/movies` | READ\_ONLY | Paginated movies. |
+| `GET` | `/api/v1/library/series` | READ\_ONLY | Paginated series. |
+| `GET` | `/api/v1/library/episodes` | READ\_ONLY | Paginated episodes. |
+| `GET` | `/api/v1/library/music` | READ\_ONLY | Paginated tracks. |
+| `GET` | `/api/v1/library/items/{id}` | READ\_ONLY | One media item in full detail, including streams and external IDs. |
+| `GET` | `/api/v1/library/search` | READ\_ONLY | Title search across the library. |
+| `GET` | `/api/v1/stats` | READ\_ONLY | Library totals — item counts, storage, quality breakdown. |
+| `GET` | `/api/v1/lifecycle/rules` | READ\_ONLY | Lifecycle rule sets and their configuration. |
+| `GET` | `/api/v1/lifecycle/matches` | READ\_ONLY | Items currently matching a lifecycle rule. |
+| `GET` | `/api/v1/lifecycle/actions` | READ\_ONLY | Scheduled, completed, and failed lifecycle actions. |
+| `GET` | `/api/v1/lifecycle/exceptions` | READ\_ONLY | Items protected from lifecycle actions. |
+| `GET` | `/api/v1/sync/status` | READ\_ONLY | Current and recent sync jobs per server. |
+| `GET` | `/api/v1/system/info` | READ\_ONLY | Version, database, and counts — the same figures as **Settings → System**. |
+| `POST` | `/api/v1/sync` | READ\_WRITE | Queue a library sync. Body: `{ "serverId": "..." }`, or omit it to sync every enabled server. |
+| `POST` | `/api/v1/lifecycle/run` | READ\_WRITE | Queue a lifecycle run. Body: `{ "mode": "detection" }` or `{ "mode": "execution" }`. |
+| `POST` | `/api/v1/lifecycle/exceptions` | READ\_WRITE | Protect an item. Body: `{ "mediaItemId": "...", "reason": "optional" }`. |
+| `DELETE` | `/api/v1/lifecycle/exceptions/{id}` | READ\_WRITE | Remove a protection. |
+
+Every endpoint is scoped to the account that owns the key — a key can only ever see that account's servers, libraries, and media.
+
+### Examples
+
+```bash
+# The 25 largest movies
+curl -H "X-Api-Key: $LBR_KEY" \
+  "https://librariarr.example.com/api/v1/library/movies?limit=25&sortBy=fileSize&sortOrder=desc"
+
+# Trigger a sync of one server (requires READ_WRITE)
+curl -X POST -H "X-Api-Key: $LBR_KEY" -H "Content-Type: application/json" \
+  -d '{"serverId":"clx123abc"}' \
+  https://librariarr.example.com/api/v1/sync
+
+# Run lifecycle detection (requires READ_WRITE)
+curl -X POST -H "X-Api-Key: $LBR_KEY" -H "Content-Type: application/json" \
+  -d '{"mode":"detection"}' \
+  https://librariarr.example.com/api/v1/lifecycle/run
+```
+
+<Aside type="note">
+  `fileSize` is returned as a **string**, not a number. File sizes exceed what JSON numbers represent exactly, so they are serialized as decimal strings of bytes — parse them as big integers, not floats.
+</Aside>
+
+## Scoping to one server
+
+Most read endpoints accept `?serverId=` to narrow results to a single media server. Two behaviours are worth knowing before you build against them, because they are inherited from how the app itself scopes queries:
+
+- **An unknown or unowned `serverId` is not uniformly an error.** `/api/v1/stats` returns `404 Server not found`, while the media list endpoints and `/api/v1/libraries` return `200` with an empty `items` array. A typo in a `serverId` therefore looks like "this server has nothing in it" on the list endpoints — check the id against `/api/v1/servers` rather than inferring it from an empty page.
+- **Disabled servers are listed but not queryable.** `/api/v1/servers` and `/api/v1/libraries` include servers whose `enabled` is `false`, along with their `itemCount`, so you can see what exists. The media endpoints only ever read from *enabled* servers, so `?serverId=<a disabled server>` returns an empty list even though the server reports items. Read the `enabled` flag from `/api/v1/servers` if this distinction matters to you.
+
+When you omit `serverId` and more than one server is connected, results are de-duplicated: an item present on several servers appears once, as the preferred copy.
+
+## Pagination
+
+Every list endpoint is paginated with two query parameters:
+
+| Parameter | Default | Notes |
+|-----------|---------|-------|
+| `page` | `1` | 1-based page number. |
+| `limit` | `50` | Items per page. Maximum **200**; larger values are clamped down. |
+
+Responses use one envelope:
+
+```json
+{
+  "items": [ ... ],
+  "pagination": { "page": 1, "limit": 50, "hasMore": true }
+}
+```
+
+Keep requesting the next page while `hasMore` is `true`. There is no total count — computing one on every request costs a second full scan of the table, and `hasMore` is what a paging loop actually needs.
+
+<Aside type="note">
+  Unlike the internal endpoints the web UI uses, **`/api/v1` has no `limit=0` "give me everything" mode**. The UI needs it for progressive loading inside a page it controls; for an external caller, materializing an entire library in one response is a memory hazard on the server and almost always a mistake. External callers page.
+</Aside>
+
+Where a list endpoint supports sorting, results are ordered by your chosen field and then by a unique tiebreaker, so an item can never appear on two pages or be skipped between them.
+
+## Series and episodes
+
+Episodes are stored as individual items carrying the show name in `parentTitle`, so a "series" only exists as an aggregate. `/api/v1/library/series` builds that aggregate and folds shows whose titles differ only by casing or surrounding whitespace — which happens when two servers spell the same show differently — into one row.
+
+The `title` it returns is therefore a display name, not an exact key. `/api/v1/library/episodes?series=` resolves the name you pass back to every stored spelling in the same class, so feeding a `title` straight from `/api/v1/library/series` into it returns the whole show, and the episode count matches. Casing and surrounding whitespace in the value you send do not matter.
+
+## Errors
+
+Errors always return a JSON body with an `error` string, plus a `details` array when a request body fails validation:
+
+```json
+{
+  "error": "Validation failed",
+  "details": ["mode: Invalid option: expected one of \"detection\"|\"execution\""]
+}
+```
+
+Each entry in `details` is a string of the form `<field>: <what was wrong>`.
+
+| Status | Meaning |
+|--------|---------|
+| `400` | Malformed JSON, or a request body that failed validation (`details` lists the offending fields). |
+| `401` | No key, an unknown key, or a key that has been revoked or has expired. |
+| `403` | Valid key, but read-only, on a write endpoint. |
+| `404` | No such endpoint, or no such record **for this account** — a resource belonging to nothing you own reads as missing. |
+| `409` | The record already exists — creating a lifecycle exception for an item that already has one. A sync that is already running is **not** a `409`: it returns `200` with that server marked `"skipped"`. |
+| `429` | Rate limit exceeded. Wait for `Retry-After` seconds. |
+| `500` | Unexpected server error. Details go to **System Logs**, not to the response. |
+
+A `401` never distinguishes "no such key" from "malformed key" — telling a caller which one would confirm whether a guessed key exists. Rejections *are* recorded in **System Logs** (with the reason and the path, never the presented key), so a misconfigured integration is diagnosable from inside the app.
+
+## Security practices
+
+- **One key per integration.** Give every consumer its own named key so you can revoke one without breaking the rest, and so **Last used** tells you which one has gone quiet.
+- **Prefer read-only.** Most integrations — dashboards, reports, notifiers — only read. A read-only key that leaks cannot delete media, trigger destructive lifecycle actions, or change anything.
+- **Set an expiry**, especially for a key handed to a script you'll run for a while and forget. An expired key fails closed.
+- **Treat a key like a password.** Put it in an environment variable or a secrets store, not in a committed config file, a shared dashboard URL, or a screenshot.
+- **Revoke on any suspicion.** Revocation is instant and free; rotating a key costs a minute.
+- **Serve the API over HTTPS.** A key in a header on a plaintext connection is a key in the clear. See [Security Hardening](/docs/advanced/security-hardening/) for reverse-proxy guidance.

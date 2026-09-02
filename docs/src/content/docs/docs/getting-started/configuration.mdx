@@ -215,6 +215,16 @@ Configure in **Settings → AI**. Connect a provider to ask questions about your
 - **API key**: Optional (local models often need none); stored on your server and masked in responses
 - **Model**: The model identifier your provider expects (must support tool / function calling)
 
+## API Access
+
+Configure in **Settings → API**. Create API keys so other applications can read your library and trigger work through `/api/v1` without a browser session. See the [API Access](/docs/features/api/) guide for full details.
+
+- **Name**: A label per key, so one integration can be revoked without affecting the rest
+- **Scope**: `Read only` (default) or `Read & write` (may trigger syncs and write lifecycle data)
+- **Expiration**: Optional; leave blank for a key that never expires
+
+There is **no environment variable** for API access — it is on by default and keys are created entirely in the UI. The key itself is displayed once at creation and never again, because only a SHA-256 digest of it is stored.
+
 ## System
 
 The **Settings → System** tab displays system information and release notes.

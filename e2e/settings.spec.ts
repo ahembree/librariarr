@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { SETTINGS_TABS } from "./constants";
 
 /**
- * Settings is a single page with seven role="tab" sections. Each tab must be
+ * Settings is a single page of role="tab" sections (SETTINGS_TABS). Each tab must be
  * reachable and render its panel; a saved appearance change must round-trip;
  * and the key empty-state controls for an unconfigured install must be present.
  */

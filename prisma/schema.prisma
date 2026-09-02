@@ -37,6 +37,7 @@ model User {
   prerollSchedules   PrerollSchedule[]
   savedQueries       SavedQuery[]
   trashManagedResources TrashManagedResource[]
+  apiKeys            ApiKey[]
 
   // SSO subjects are only unique per-issuer. Two users can have sub "abc" if
   // they came from different IdPs. This composite key prevents the cross-IdP
@@ -715,4 +716,51 @@ model TrashManagedResource {
   @@index([userId])
   @@index([sonarrInstanceId])
   @@index([radarrInstanceId])
+}
+
+/// Permission level granted to an API key. READ_ONLY keys are rejected by every
+/// mutating /api/v1 endpoint; READ_WRITE keys may also trigger syncs and write
+/// lifecycle data. There is deliberately no "admin" tier — API keys can never
+/// manage other API keys, so a leaked key can't mint itself a replacement.
+enum ApiKeyScope {
+  READ_ONLY
+  READ_WRITE
+}
+
+/// An API key for external integrations against /api/v1.
+///
+/// The raw secret is shown exactly once, at creation, and is NEVER stored:
+/// only its SHA-256 digest is persisted. Lookup is by digest (indexed, so
+/// authentication is a single equality probe rather than a scan-and-compare),
+/// which also means a database dump yields no usable credentials. SHA-256
+/// rather than bcrypt/argon2 is deliberate and safe here: the secret is 256
+/// bits of CSPRNG output, not a human-chosen password, so there is no
+/// dictionary to grind and the per-request cost of a slow KDF would buy
+/// nothing. `prefix` stores the non-secret leading characters so the UI can
+/// tell two keys apart after the one-time reveal.
+model ApiKey {
+  id         String      @id @default(cuid())
+  userId     String
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Human-assigned label, unique per user so two integrations can't share a name.
+  name       String
+  /// SHA-256 (hex) of the raw key. Unique — the index it creates is the auth lookup path.
+  keyHash    String      @unique
+  /// Non-secret display prefix, e.g. "lbr_a1b2c3d4". Safe to show anywhere.
+  prefix     String
+  scope      ApiKeyScope @default(READ_ONLY)
+  /// Null means the key never expires.
+  expiresAt  DateTime?
+  /// Set when the key is revoked. Revocation is a soft delete so the audit
+  /// trail (name, prefix, lastUsedAt) survives; DELETE removes the row outright.
+  revokedAt  DateTime?
+  /// Last successful authentication. Written at most once per key per minute
+  /// (see API_KEY_TOUCH_INTERVAL_MS) so a busy integration can't turn every
+  /// request into a database write.
+  lastUsedAt DateTime?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  @@unique([userId, name])
+  @@index([userId])
 }

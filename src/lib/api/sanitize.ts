@@ -10,6 +10,11 @@ const SENSITIVE_FIELDS = new Set([
   "backupEncryptionPassword",
   "oidcClientSecret",
   "aiApiKey",
+  // API-key digests. The management routes select explicit fields and never
+  // include this, but sanitize() is the backstop for anything that passes a
+  // raw ApiKey row through — a digest is not a usable credential, yet there is
+  // no reason to hand one out either.
+  "keyHash",
 ]);
 
 export const MASKED_VALUE = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";

@@ -104,11 +104,14 @@ Real-browser end-to-end tests live in `e2e/` (Playwright, **separate from Vitest
   - `api/tools/blackout/` — Blackout schedule CRUD (one-time and recurring)
   - `api/tools/preroll/` — Preroll presets, schedules, path validation
   - `api/tools/trash/` — TRaSH Guide Sync: `instances` (Sonarr/Radarr picker), `catalog` (guide fetch + naming variants + custom-format list), `profiles` (the instance's quality profiles + current CF scores, plus `instanceFormatNames` — every CF name present in the app, so the UI can flag an assigned format that isn't in the app yet), `status` (per-item cross-reference), `assignments` (the consent gate — opt resources into management), `sync` (dry-run/diff or apply, writes only managed resources). Resource types: `CUSTOM_FORMAT`, `QUALITY_PROFILE`, `QUALITY_DEFINITION`, `NAMING`, and `PROFILE_CF` (overlay guide custom-format scores onto any quality profile — keyed by profile name, non-destructive to the rest of the profile)
+  - `api/v1/` — the **public, key-authenticated** API for external integrations, versioned separately from the internal session-authenticated routes so the two auth paths can never be confused (a read-only key must not be able to reach an internal mutation route). Reads: `me`, `servers`, `libraries`, `library/{movies,series,episodes,music,search}`, `library/items/[id]`, `stats`, `lifecycle/{rules,matches,actions,exceptions}`, `sync/status`, `system/info`. Writes (`READ_WRITE` only): `POST sync`, `POST lifecycle/run`, `POST lifecycle/exceptions`, `DELETE lifecycle/exceptions/[id]`. `GET /api/v1/health` is the **sole** endpoint exempt from key auth — it exists so an uptime monitor can probe the app without holding a credential, and returns 503 when the DB is unreachable so it fails on a genuinely broken instance. Keys themselves are managed by the session-authenticated `api/settings/api-keys` routes; no API key can mint or revoke a key
 
 ### Key Libraries
 
 - `src/lib/db.ts` — Prisma singleton (import as `@/lib/db`, NOT `@/lib/prisma`)
 - `src/lib/auth/session.ts` — iron-session encrypted cookies (30-day expiry)
+- `src/lib/auth/api-key.ts` — API-key auth for `/api/v1`. Keys are `lbr_` + 32 CSPRNG bytes (base64url); only the **SHA-256 digest** is persisted, so a DB dump yields no usable credential and the raw secret is unrecoverable after the one-time reveal. Lookup is by digest on the unique index — one equality probe, never load-all-and-compare — then re-verified with `digestsMatch` (constant-time). SHA-256 rather than a slow KDF is deliberate: 256 bits of random has no dictionary to grind, so bcrypt would only tax every legitimate request. `authenticateApiKey` checks presented → known → not revoked → not expired (a rejection never distinguishes "unknown" from "malformed", which would confirm a guess); `requireScope` is the write gate; `apiKeyStatus`/`serializeApiKey` shape rows for the UI (`keyHash` is dropped, not masked). `lastUsedAt` is refreshed **fire-and-forget and throttled to once per key per minute** (`API_KEY_TOUCH_INTERVAL_MS`, in-process map — one app process, so no coordination) or a per-second poller would turn every request into a row update; a failed touch must never fail an authenticated request. Call `forgetApiKeyTouch(id)` on revoke/delete so the map doesn't retain dead ids
+- `src/lib/api/v1.ts` — the v1 contract. `withApiKey(handler, { scope })` is the **single** point where key auth, scope enforcement and rate limiting live for the whole public surface — a v1 route never calls `getSession()` and never re-checks auth, so the posture is one function rather than 20 copies of an `if` that can drift. It also awaits Next's dynamic `params` Promise (handed over as a plain object on the context) and catches thrown handler errors into a 500 so no stack trace escapes. Rate limiting buckets on `api-key:<id>`, not IP — the key is the identity, and integrations behind one NAT must not share a budget. `parseV1Pagination` is deliberately stricter than the internal `api/pagination.ts`: **no `limit=0`** (the UI needs "everything" for progressive loading; an external caller materializing the whole library is a memory hazard), clamped to `V1_MAX_LIMIT` 200. `v1Error`/`v1List` give the surface one error body and one paginated envelope
 - `src/lib/validation.ts` — Zod schemas + `validateRequest` helper for all API mutation routes (see API Validation below)
 - `src/lib/cache/memory-cache.ts` — In-process `MemoryCache` class with `appCache` singleton (see In-Memory Cache below)
 - `src/lib/dedup/` — Multi-server dedup: `resolveServerFilter`, `server-presence` helpers (see Multi-Server Dedup below)
@@ -183,11 +186,21 @@ import { sanitize } from "@/lib/api/sanitize";
 return NextResponse.json({ server: sanitize(server) });
 ```
 
-- Recursively masks `accessToken`, `apiKey`, `plexToken`, `passwordHash`, `backupEncryptionPassword`, `oidcClientSecret`, `aiApiKey` fields with `"••••••••"` (exported as `MASKED_VALUE`)
+- Recursively masks `accessToken`, `apiKey`, `plexToken`, `passwordHash`, `backupEncryptionPassword`, `oidcClientSecret`, `aiApiKey`, `keyHash` fields with `"••••••••"` (exported as `MASKED_VALUE`)
 - Error responses use `sanitizeErrorDetail()` to strip internal file paths and private IPs
 - Integration edit flows use server-side `[id]/test-connection` endpoints (POST to `/api/integrations/{type}/{id}/test-connection`) instead of sending stored API keys to the frontend
 - Auth endpoints (login, Plex init/callback) are rate-limited via `authRateLimiter` — check before processing, return 429 with `Retry-After` header
 - Media queries must verify ownership: use `findFirst` with `library: { mediaServer: { userId: session.userId } }` instead of bare `findUnique({ where: { id } })`
+
+### API Keys and the public API
+
+`/api/v1` is the only surface external callers touch, and its rules are non-negotiable:
+
+- **Every v1 route goes through `withApiKey`** from `src/lib/api/v1.ts` — never `getSession()`, and never a hand-rolled auth check. The handler receives an already-authenticated `V1Context` (`{ apiKey, userId, params }`); re-checking auth inside a handler is how the two surfaces drift apart. `GET /api/v1/health` is the one deliberate exception and is a plain handler, because an uptime monitor must not need a credential
+- **Write routes pass `{ scope: "READ_WRITE" }`.** That option is the *only* thing standing between a read-only key and a mutation, so an endpoint that writes and forgets it is silently open to every key. Read routes omit it and accept either scope
+- **The raw secret exists exactly once**, in the `POST /api/settings/api-keys` response. It is never stored, never re-derivable from the row, and must never be logged, echoed by a GET, or returned from any other route — only the SHA-256 digest and the non-secret `prefix` persist. Losing it means minting a new key
+- `keyHash` is in `SENSITIVE_FIELDS` (see API Response Security) as a backstop for any route that passes a raw `ApiKey` row through; the management routes select explicit fields and use `serializeApiKey`, which drops the digest entirely
+- Scope is **immutable after creation** (`apiKeyUpdateSchema` has no `scope`) and revocation is **one-way** — silently widening or resurrecting a live key is a change an admin should make by issuing a new one. Log rejections with the reason and path, never the presented key
 
 ### API Pagination
 
@@ -401,6 +414,7 @@ Documentation files to be aware of:
 | Notifications | `features/notifications.mdx` |
 | Stream manager & maintenance | `features/stream-manager.mdx` |
 | AI Analysis | `features/ai-analysis.mdx` |
+| Public API & API keys | `features/api.mdx` |
 | Real-time media-server sync | `features/real-time-sync.mdx` |
 | Preroll manager | `features/preroll-manager.mdx` |
 | TRaSH Guide Sync | `features/trash-guide-sync.mdx` |

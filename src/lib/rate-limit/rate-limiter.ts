@@ -47,6 +47,13 @@ export class RateLimiter {
 // 10 attempts per 15-minute window
 export const authRateLimiter = new RateLimiter(10, 15 * 60 * 1000);
 
+// External integrations hitting /api/v1. Bucketed per API key (not per IP) —
+// the key is the identity there, and several integrations behind one NAT must
+// not share a budget. Generous enough for polling dashboards, tight enough that
+// a leaked key can't be used to scrape the whole library at line rate:
+// 120 requests per minute.
+export const apiKeyRateLimiter = new RateLimiter(120, 60 * 1000);
+
 // AI chat/test is interactive — a user asks many questions in a session, so the
 // tight auth limit is wrong here. Still bounded so a runaway client (or a leaked
 // session) can't hammer a paid LLM endpoint: 30 requests per 5-minute window.
@@ -56,6 +63,7 @@ export const aiRateLimiter = new RateLimiter(30, 5 * 60 * 1000);
 setInterval(() => {
   authRateLimiter.cleanup();
   aiRateLimiter.cleanup();
+  apiKeyRateLimiter.cleanup();
 }, 5 * 60 * 1000).unref();
 
 /**
