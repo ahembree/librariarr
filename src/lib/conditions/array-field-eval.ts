@@ -20,16 +20,19 @@ import { wildcardToRegex } from "./wildcard";
  * rule matched different items in each engine — this shared implementation
  * removes that drift.
  *
- * (The Phase 1 SQL `array_contains` is case-sensitive and Prisma cannot express
- * it otherwise, so in `needsInMemoryEval` pre-filter mode it is only a true
- * superset of this post-filter for consistently-cased data — which is what
- * Plex/Jellyfin emit. That residual is pre-existing and identical across both
- * engines; fixing it would mean routing these fields fully through Phase 2 like
- * `resolution`, at a performance cost.)
+ * This is the ONLY evaluation of these fields. Prisma's `array_contains` is
+ * case-sensitive with no insensitive form, so Phase 1 disagreed with everything
+ * above for any value whose case differed from the stored tag — and
+ * `notContains` / `notEquals` disagreed by matching EVERY row in SQL. So
+ * `genreLabelsHandler` now returns `{}` for all operators and
+ * `hasArrayFieldRules` forces this phase in both engines, exactly as
+ * `resolution` is handled and for the same reason.
  *
  * A null / undefined / non-array value normalizes to "no assignments" (`[]`),
- * matching Phase 1's `Prisma.DbNull` semantics — and never throwing on
- * aggregated-series items, which omit the column entirely.
+ * so `isNull` is true for a NULL column AND for a stored empty array — never
+ * throwing on aggregated-series items, which omit the column entirely. Phase 1
+ * could only ask about `Prisma.DbNull` and so read a stored `[]` as "not
+ * empty"; routing the field here settles that too.
  *
  * `contains` / `notContains` treat a pipe-separated value as multi-select list
  * membership ("any selected value is present"), matching the enumerable dropdown.

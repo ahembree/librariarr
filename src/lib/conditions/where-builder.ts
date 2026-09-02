@@ -387,59 +387,33 @@ const resolutionHandler: FieldHandler = () => {
   // the in-memory phase; the prefilter treats this {} as EXTERNAL.
   return {};
 };
-const genreLabelsHandler: FieldHandler = (operator, value, field, negate) => {
-  const column = field === "labels" ? "labels" : field === "country" ? "countries" : "genres";
-  const strValue = String(value);
-  const parts = (operator === "contains" || operator === "notContains")
-    ? strValue.split("|").filter(Boolean)
-    : [strValue];
-  const matchValues = parts.length > 0 ? parts : [strValue];
-  let clause: Prisma.MediaItemWhereInput;
-  switch (operator) {
-    case "equals": {
-      const positive: Prisma.MediaItemWhereInput = { [column]: { array_contains: strValue } };
-      // On negate, a NULL JSON array must match (Phase 2 includes it) — union
-      // Prisma.DbNull, the array-column analogue of applyNegateNullable.
-      return negate
-        ? { OR: [{ [column]: { equals: Prisma.DbNull } }, { NOT: positive }] }
-        : positive;
-    }
-    case "contains": {
-      const positive: Prisma.MediaItemWhereInput = matchValues.length === 1
-        ? { [column]: { array_contains: matchValues[0] } }
-        : { OR: matchValues.map((v) => ({ [column]: { array_contains: v } })) };
-      return negate
-        ? { OR: [{ [column]: { equals: Prisma.DbNull } }, { NOT: positive }] }
-        : positive;
-    }
-    case "notEquals":
-      // JSON column NULL needs Prisma.DbNull, not SQL null. The withNullSafety
-      // helper uses `{ [col]: null }` which targets SQL NULL — for JSON arrays
-      // we inline the Prisma.DbNull form directly.
-      clause = {
-        OR: [
-          { [column]: { equals: Prisma.DbNull } },
-          { NOT: { [column]: { array_contains: strValue } } },
-        ],
-      };
-      break;
-    case "notContains": {
-      const notClause: Prisma.MediaItemWhereInput = matchValues.length === 1
-        ? { NOT: { [column]: { array_contains: matchValues[0] } } }
-        : { AND: matchValues.map((v) => ({ NOT: { [column]: { array_contains: v } } })) };
-      clause = { OR: [{ [column]: { equals: Prisma.DbNull } }, notClause] };
-      break;
-    }
-    case "isNull":
-      clause = { [column]: { equals: Prisma.DbNull } };
-      break;
-    case "isNotNull":
-      clause = { NOT: { [column]: { equals: Prisma.DbNull } } };
-      break;
-    default:
-      return {};
-  }
-  return applyNegate(clause, negate);
+const genreLabelsHandler: FieldHandler = () => {
+  // `genre`, `labels` and `country` are JSONB arrays, and Phase 2's
+  // `matchArrayField` compares them case-INsensitively — the deliberate,
+  // regression-tested behavior, matching how every scalar text field compares
+  // (`mode: "insensitive"` in Phase 1, lowercased in Phase 2).
+  //
+  // Prisma's `array_contains` is the only array predicate available here and it
+  // is case-SENSITIVE, with no insensitive form: matching `["Action"]` against
+  // "action" needs `EXISTS (SELECT 1 FROM jsonb_array_elements_text(genres) e
+  // WHERE lower(e) = lower($1))`, which a typed `MediaItemWhereInput` cannot
+  // express. So the two phases disagreed on any value whose case differed from
+  // the stored tag — and `notContains` / `notEquals` disagreed by matching
+  // EVERYTHING in SQL while matching almost nothing in memory. That is not
+  // hypothetical: `/api/media/distinct-values` builds the enumerable dropdown
+  // with a case-sensitive `SELECT DISTINCT`, so a multi-server library lists
+  // "Sci-Fi" and "sci-fi" as separate options and picking either one silently
+  // missed the other server's copies in the SQL-only path.
+  //
+  // Route every operator through the in-memory phase instead, exactly like
+  // `resolutionHandler` above and for the same reason (SQL cannot express the
+  // normalization). `hasArrayFieldRules` forces Phase 2 in both engines; the
+  // pre-filter treats this {} as EXTERNAL, so it stays a superset. Routing the
+  // whole field — rather than just the value comparisons — also settles
+  // isNull/isNotNull, where Phase 1 tested only `Prisma.DbNull` and so read a
+  // stored empty array `[]` as "not empty" while `matchArrayField` reads it as
+  // empty.
+  return {};
 };
 
 /**
@@ -611,48 +585,56 @@ const streamRelationHandler: FieldHandler = (operator, value, field, negate) => 
     ? { language: { not: null, notIn: ["", "unknown"], mode: "insensitive" as const } }
     : {};
   // Phase 2 refuses to match an item that has no KNOWN language of this type
-  // under ANY operator: "Unknown" != "English" must not read as true (see the
-  // "unknown language filtering" tests). The positive operators get that for
-  // free — nothing to equal. The NEGATED ones do not: a bare
-  // `NOT { streams: { some: … } }` is satisfied by a row with no such stream at
-  // all, or only an Unknown one, so Phase 1 admitted items Phase 2 rejects.
-  // Because Phase 2 only runs when something else in the rule set demands it
-  // (a wildcard, an Arr field, …), the same `subtitleLanguage notEquals
-  // English` rule matched a DIFFERENT set depending on an unrelated rule beside
-  // it — on a DELETE rule set, a different set of files. ANDing "has a known
-  // language of this type" onto the negated operators restores agreement.
+  // under ANY of the four value-comparison operators: "Unknown" != "English"
+  // must not read as true (see the "unknown language filtering" tests), and it
+  // bypasses `negate` there rather than flipping to true. The positive
+  // operators get that for free in SQL — nothing to equal. Every other shape
+  // does not: a bare `NOT { streams: { some: … } }` is satisfied by a row with
+  // no such stream at all, or only an Unknown one, so Phase 1 admitted items
+  // Phase 2 rejects. Because Phase 2 only runs when something else in the rule
+  // set demands it (a wildcard, an Arr field, …), the same rule matched a
+  // DIFFERENT set depending on an unrelated rule beside it — on a DELETE rule
+  // set, a different set of files.
+  //
+  // So the guard is applied ONCE, to the finished clause, AFTER `negate`:
+  // `hasKnownLanguage AND (predicate, possibly negated)` is exactly Phase 2's
+  // "no known language → false, negate not applied". ANDing it into the
+  // individual `notEquals`/`notContains` branches instead left the `negate:
+  // true` forms of all four operators failing open — `NOT (audioLanguage
+  // equals German)` matched every item with no audio track, and a group-level
+  // NOT produces exactly that via pushDownGroupNegation.
+  //
+  // isNull / isNotNull are excluded: they ARE the has-a-known-value question,
+  // and they already agree with Phase 2 in both negate directions.
   // Codec fields carry no placeholder set, so they keep the plain semantics
   // ("no audio stream" genuinely has no codec equal to X).
-  const requiresKnownLang: Prisma.MediaItemWhereInput[] = isLangField
-    ? [{ streams: { some: { streamType, ...knownLangFilter } } }]
-    : [];
+  const requiresKnownLang: Prisma.MediaItemWhereInput | null = isLangField
+    ? { streams: { some: { streamType, ...knownLangFilter } } }
+    : null;
+  const withKnownLangGuard = (c: Prisma.MediaItemWhereInput): Prisma.MediaItemWhereInput =>
+    requiresKnownLang ? { AND: [requiresKnownLang, c] } : c;
+
   let clause: Prisma.MediaItemWhereInput;
   switch (operator) {
     case "equals":
       clause = { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: escapeLike(String(value)), mode: "insensitive" } } } };
-      break;
+      return withKnownLangGuard(applyNegate(clause, negate));
     case "notEquals":
-      clause = { AND: [
-        ...requiresKnownLang,
-        { NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: escapeLike(String(value)), mode: "insensitive" } } } } },
-      ] };
-      break;
+      clause = { NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: escapeLike(String(value)), mode: "insensitive" } } } } };
+      return withKnownLangGuard(applyNegate(clause, negate));
     case "contains": {
       // Stream language/codec fields are enumerable — `contains` is multi-select
       // list membership, not substring search.
       const parts = String(value).split("|").filter(Boolean);
       const matchValues = parts.length > 0 ? parts : [String(value)];
       clause = { OR: matchValues.map((v) => ({ streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: escapeLike(v), mode: "insensitive" as const } } } })) };
-      break;
+      return withKnownLangGuard(applyNegate(clause, negate));
     }
     case "notContains": {
       const parts = String(value).split("|").filter(Boolean);
       const matchValues = parts.length > 0 ? parts : [String(value)];
-      clause = { AND: [
-        ...requiresKnownLang,
-        ...matchValues.map((v) => ({ NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: escapeLike(v), mode: "insensitive" as const } } } } })),
-      ] };
-      break;
+      clause = { AND: matchValues.map((v) => ({ NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: escapeLike(v), mode: "insensitive" as const } } } } })) };
+      return withKnownLangGuard(applyNegate(clause, negate));
     }
     case "isNull": {
       // "Is Empty" — no stream of this type has a known value
@@ -760,10 +742,15 @@ export const STREAM_COUNT_FIELDS = new Set(["audioStreamCount", "subtitleStreamC
  * field classifiers (`isExternalField`/`isExternalQueryField`,
  * `isCrossSystemField`/`isCrossSystemQueryField`) resolve to the same sets.
  *
- * Fields handled only in Phase 2 (external Arr/Seerr, cross-system,
- * series-aggregate, stream-count) return `{}` (no constraint); a misplaced
- * stream-query field returns `UNSATISFIABLE_WHERE` rather than dropping the
- * constraint and matching the whole library.
+ * Fields handled only in Phase 2 return `{}` (no constraint): external
+ * Arr/Seerr, cross-system, series-aggregate and stream-count here, plus
+ * `resolution` and the JSON-array fields (`genre`/`labels`/`country`) via their
+ * handlers — SQL cannot express those two families' normalization. Every one of
+ * them has a detector (`hasArrRules`, `hasResolutionRules`,
+ * `hasArrayFieldRules`, …) that forces Phase 2 in both engines; a `{}` with no
+ * detector behind it is a fail-open. A misplaced stream-query field returns
+ * `UNSATISFIABLE_WHERE` rather than dropping the constraint and matching the
+ * whole library.
  */
 export function ruleToWhere(rule: Condition): Prisma.MediaItemWhereInput {
   const { field, operator, value, negate } = rule;

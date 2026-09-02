@@ -87,6 +87,17 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
 
   const validRules = [{ field: "playCount", operator: "equals", value: 0 }];
 
+  const activeGroup = validRules;
+
+  /** A user + server + library + rule set of the given type. */
+  async function seedSeriesFixture(type: "SERIES" | "MOVIE" = "SERIES") {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type });
+    const ruleSet = await createTestRuleSet(user.id, { name: "Shape test", type });
+    return { user, server, library, ruleSet };
+  }
+
   it("returns 401 when not authenticated", async () => {
     const response = await callRouteWithParams(
       POST,
@@ -345,6 +356,111 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
     expect(body.added[0].id).toBe(addedItem.id);
     expect(body.removed[0].id).toBe(removedItem.id);
     expect(body.retained[0].id).toBe(keptItem.id);
+  });
+
+  it("returns removed SERIES rows in series shape, not the representative episode", async () => {
+    // A series-scoped match: detection stored the AGGREGATE in itemData
+    // (title = show, parentTitle = null, memberIds = every episode), while the
+    // MediaItem row behind it is the representative EPISODE.
+    const { user, server, library, ruleSet } = await seedSeriesFixture();
+    const prisma = getTestPrisma();
+    const ep1 = await createTestMediaItem(library.id, {
+      ratingKey: "s1e1", type: "SERIES", title: "Pilot",
+      parentTitle: "The Show", seasonNumber: 1, episodeNumber: 1,
+      fileSize: BigInt(1_000_000_000), playCount: 2,
+    });
+    const ep2 = await createTestMediaItem(library.id, {
+      ratingKey: "s1e2", type: "SERIES", title: "Second Episode",
+      parentTitle: "The Show", seasonNumber: 1, episodeNumber: 2,
+      fileSize: BigInt(3_000_000_000), playCount: 1,
+    });
+    await createTestRuleMatch(ruleSet.id, ep1.id, {
+      id: ep1.id, title: "The Show", parentTitle: null,
+      matchedEpisodes: 2, memberIds: [ep1.id, ep2.id],
+      fileSize: "4000000000",
+    });
+
+    // New evaluation matches nothing → the series is removed.
+    mockEvaluateSeriesScope.mockResolvedValueOnce([]);
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const response = await callRouteWithParams(POST, { id: ruleSet.id }, {
+      method: "POST",
+      body: { rules: activeGroup, type: "SERIES", seriesScope: true, serverIds: [server.id] },
+    });
+    const body = await expectJson<{
+      removed: Array<{ title: string; parentTitle: string | null }>;
+      removedItems: Array<Record<string, unknown>>;
+    }>(response, 200);
+
+    expect(body.removed).toHaveLength(1);
+    expect(body.removedItems).toHaveLength(1);
+    const row = body.removedItems[0];
+
+    // The table picks its title format off `matchedEpisodes`: without it the row
+    // falls into the per-episode branch and renders "The Show — Pilot".
+    expect(row.matchedEpisodes).toBe(2);
+    expect(row.parentTitle ?? row.title).toBe("The Show");
+    expect(row.title).not.toBe("Pilot");
+    // …and the size shown is the series total, not the one episode's.
+    expect(String(row.fileSize)).toBe("4000000000");
+    await prisma.ruleMatch.deleteMany({ where: { ruleSetId: ruleSet.id } });
+  });
+
+  it("returns removed SERIES rows in series shape when the rule set has no active rules", async () => {
+    const { user, server, library, ruleSet } = await seedSeriesFixture();
+    const ep1 = await createTestMediaItem(library.id, {
+      ratingKey: "n1e1", type: "SERIES", title: "Pilot",
+      parentTitle: "Another Show", seasonNumber: 1, episodeNumber: 1,
+      fileSize: BigInt(1_000_000_000),
+    });
+    const ep2 = await createTestMediaItem(library.id, {
+      ratingKey: "n1e2", type: "SERIES", title: "Second Episode",
+      parentTitle: "Another Show", seasonNumber: 1, episodeNumber: 2,
+      fileSize: BigInt(2_000_000_000),
+    });
+    await createTestRuleMatch(ruleSet.id, ep1.id, {
+      id: ep1.id, title: "Another Show", parentTitle: null,
+      matchedEpisodes: 2, memberIds: [ep1.id, ep2.id],
+    });
+
+    mockHasAnyActiveRules.mockReturnValueOnce(false);
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const response = await callRouteWithParams(POST, { id: ruleSet.id }, {
+      method: "POST",
+      body: { rules: activeGroup, type: "SERIES", seriesScope: true, serverIds: [server.id] },
+    });
+    const body = await expectJson<{ removedItems: Array<Record<string, unknown>> }>(response, 200);
+
+    expect(body.removedItems).toHaveLength(1);
+    expect(body.removedItems[0].matchedEpisodes).toBe(2);
+    expect(body.removedItems[0].parentTitle ?? body.removedItems[0].title).toBe("Another Show");
+    expect(String(body.removedItems[0].fileSize)).toBe("3000000000");
+  });
+
+  it("leaves MOVIE rows untouched — they have no group to aggregate", async () => {
+    const { user, server, library, ruleSet } = await seedSeriesFixture("MOVIE");
+    const movie = await createTestMediaItem(library.id, {
+      ratingKey: "m1", type: "MOVIE", title: "A Movie", fileSize: BigInt(5_000_000_000),
+    });
+    await createTestRuleMatch(ruleSet.id, movie.id, {
+      id: movie.id, title: "A Movie", parentTitle: null,
+    });
+
+    mockEvaluateRules.mockResolvedValueOnce([]);
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const response = await callRouteWithParams(POST, { id: ruleSet.id }, {
+      method: "POST",
+      body: { rules: activeGroup, type: "MOVIE", seriesScope: false, serverIds: [server.id] },
+    });
+    const body = await expectJson<{ removedItems: Array<Record<string, unknown>> }>(response, 200);
+
+    expect(body.removedItems).toHaveLength(1);
+    expect(body.removedItems[0].title).toBe("A Movie");
+    expect(body.removedItems[0].matchedEpisodes).toBeUndefined();
+    expect(String(body.removedItems[0].fileSize)).toBe("5000000000");
   });
 
   it("excludes items with lifecycle exceptions", async () => {

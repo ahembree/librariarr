@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import type { LifecycleRule, LifecycleRuleGroup, LifecycleRuleCondition, StreamQueryField } from "./types";
 import {
-  isArrField, isSeerrField, isExternalField, isStreamField, isSeriesAggregateField,
+  isArrField, isSeerrField, isExternalField, isStreamField, isSeriesAggregateField, isArrayField,
   isCrossSystemField,
   isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
@@ -226,6 +226,24 @@ function hasResolutionRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): bool
     return false;
   }
   return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "resolution");
+}
+
+/** JSON-array rules (`genre`, `labels`, `country`) always evaluate in-memory:
+ *  `matchArrayField` is case-insensitive and reads a stored `[]` as empty,
+ *  neither of which Prisma's case-sensitive `array_contains` / `DbNull`
+ *  filters can express — see genreLabelsHandler. Membership comes from the
+ *  shared `isArrayField` so this can't drift from the query engine's gate. */
+function hasArrayFieldRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+  if (rules.length === 0) return false;
+  if (isRuleGroups(rules)) {
+    for (const group of rules) {
+      if (group.enabled === false) continue;
+      if (group.rules.some((r) => r.enabled !== false && isArrayField(r.field))) return true;
+      if (hasArrayFieldRules(group.groups ?? [])) return true;
+    }
+    return false;
+  }
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isArrayField(r.field));
 }
 
 /** Check if any rule references a series-aggregate field (episodeCount,
@@ -2457,7 +2475,7 @@ export async function evaluateLifecycleRules(
   // re-eval, otherwise an aggregate conjunct AND-ed with a DB-expressible rule
   // is silently dropped. (Aggregate evaluation itself happens at the series
   // level — see detect-matches routing to evaluateSeriesScope.)
-  const needsInMemoryEval = hasWildcardRules(rules) || hasStreamCountRules(rules) || hasStreamQueryInMemoryRules(rules) || hasCrossSystem || hasResolutionRules(rules) || hasSeriesAggregateRules(rules);
+  const needsInMemoryEval = hasWildcardRules(rules) || hasStreamCountRules(rules) || hasStreamQueryInMemoryRules(rules) || hasCrossSystem || hasResolutionRules(rules) || hasArrayFieldRules(rules) || hasSeriesAggregateRules(rules);
   const needsFullReeval = needsInMemoryEval || !!hasExternal;
 
   let andConditions: Prisma.MediaItemWhereInput[];

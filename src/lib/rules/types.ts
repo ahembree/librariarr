@@ -19,6 +19,7 @@ import {
   isExternalField as _isExternalField,
   isCrossSystemField as _isCrossSystemField,
   isSeriesAggregateField as _isSeriesAggregateField,
+  isArrayField as _isArrayField,
   type Condition,
   type ConditionGroup,
   type ConditionField,
@@ -74,3 +75,4 @@ export const isStreamField = _isStreamField;
 export const isExternalField = _isExternalField;
 export const isCrossSystemField = _isCrossSystemField;
 export const isSeriesAggregateField = _isSeriesAggregateField;
+export const isArrayField = _isArrayField;

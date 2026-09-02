@@ -174,6 +174,11 @@ Seerr fields work on **movie and series** rule sets only; Seerr doesn't manage m
 | `lessThan` | number | Less than value |
 | `lessThanOrEqual` | number | Less than or equal |
 | `contains` | text | For free-text fields (e.g. title, path): substring match (case-insensitive). For enumerable fields (e.g. quality profile, tag, codec) the operator presents a multi-select and matches if the item's value equals any selected value (list membership, not substring). |
+
+All text comparisons are case-insensitive, including genres, labels and
+countries. Servers do not agree on casing — one may report `Sci-Fi` where
+another reports `sci-fi`, and the dropdown lists both — so a rule written
+against either spelling matches copies on every server.
 | `notContains` | text | Inverse of `contains` — same free-text vs enumerable distinction. |
 | `matchesWildcard` | text | Wildcard match (`*` = any characters, `?` = single character) |
 | `notMatchesWildcard` | text | Does not match wildcard pattern |
@@ -216,7 +221,9 @@ An item with no **known** language for a track type — no track at all, or only
 tracks the server reports as `Unknown` — matches **no** language rule, positive
 or negative. `Subtitle Language Is Not English` finds items that *have* a
 subtitle track in another language; for items with no subtitles at all, use
-`Subtitle Language Is Empty`.
+`Subtitle Language Is Empty`. Wrapping the rule (or its group) in **NOT** does
+not change this: `NOT (Audio Language Is English)` still skips items with no
+audio track, rather than sweeping them in.
 
 Track **codec** fields have no such placeholder, so they read plainly: an item
 with no audio track does match `Stream Audio Codec Is Not AAC`.
