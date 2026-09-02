@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { logger } from "@/lib/logger";
+import { reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
 import type { MediaServerType } from "@/generated/prisma/client";
 
 // 500 rows × 8 params = 4000 bind params per INSERT — well under Postgres's
@@ -173,6 +174,23 @@ export async function syncWatchHistory(
       `(${dedupedEntries.length - insertedCount} unmatched, ` +
       `${entries.length - dedupedEntries.length} duplicates removed)`
   );
+
+  // Push the freshly stored history into `MediaItem.playCount`/`lastPlayedAt`.
+  // Those columns are what the rule and query engines read (`lastPlayedAt`, and
+  // the `seriesLastPlayedAt` aggregate rolled up from it), but the item sync
+  // derives them from account-scoped server metadata — so a play by any other
+  // user on the server landed in `WatchHistory` and nowhere else. Non-fatal:
+  // the history rows are already committed, so a failure here is corrected by
+  // the next sync rather than being worth failing the whole run over.
+  try {
+    await reconcileWatchStateFromHistory(serverId);
+  } catch (error) {
+    logger.warn(
+      "WatchHistory",
+      `Failed to reconcile play state from watch history for "${server.name}"`,
+      { error: String(error) }
+    );
+  }
 
   return { count: insertedCount };
 }

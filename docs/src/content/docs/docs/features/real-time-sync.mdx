@@ -18,6 +18,8 @@ This runs alongside — not instead of — the [scheduled sync](/docs/getting-st
 | New / removed / updated media | Appears on the next scheduled sync | Syncs just the changed/removed items seconds after the server's scan settles |
 | Watch state (played / unplayed, last watched) | Refreshed on the next full sync | Refreshed shortly after a play finishes |
 
+Watch state is refreshed from the media server's **server-wide** history, covering plays by every user on the server rather than just the account Librariarr connects with. Each refresh also reconciles the per-item **Play Count** and **Last Played** values that rules, queries and the **Series Last Played** aggregate read, so a play by anyone in the household is reflected everywhere — not only on the [History page](/docs/features/library/). Reconciliation only ever moves a play count up or a play date forward, so a server that prunes its own history can't make an item look less recently watched than Librariarr already knows it to be.
+
 Real-time library changes carry the specific items that changed, so Librariarr fetches and updates **only those items** (and deletes the removed ones) instead of re-scanning the whole server. It falls back to a full sync when a change is too large (100+ items at once), can't be mapped to a library, or a full sync is already running — and the scheduled full sync remains the periodic reconciliation backstop. Either way the normal in-app "sync completed" refresh applies, so updated listings surface automatically.
 
 Only changes that are actually library media are applied. Two kinds are skipped:

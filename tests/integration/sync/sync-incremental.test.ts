@@ -73,6 +73,53 @@ describe("syncMediaServerItems", () => {
     expect(item?.title).toBe("Brand New");
   });
 
+  it("keeps play state from stored watch history instead of admin-only metadata", async () => {
+    const { server, library } = await seed();
+    const prisma = getTestPrisma();
+    // The item sync had already recorded a play by another household member.
+    const item = await createTestMediaItem(library.id, {
+      ratingKey: "m-played",
+      playCount: 3,
+      lastPlayedAt: new Date("2025-07-01T00:00:00Z"),
+    });
+    await prisma.watchHistory.createMany({
+      data: [
+        { mediaItemId: item.id, mediaServerId: server.id, serverUsername: "roommate", watchedAt: new Date("2025-07-01T00:00:00Z") },
+        { mediaItemId: item.id, mediaServerId: server.id, serverUsername: "admin", watchedAt: new Date("2023-01-01T00:00:00Z") },
+        { mediaItemId: item.id, mediaServerId: server.id, serverUsername: "kid", watchedAt: new Date("2024-01-01T00:00:00Z") },
+      ],
+    });
+
+    // Plex/Jellyfin only report the ADMIN account's view state on an item
+    // fetch — here, one play two years ago.
+    mockGetItemMetadata.mockResolvedValue(
+      movieMeta("m-played", { viewCount: 1, lastViewedAt: Math.floor(Date.UTC(2023, 0, 1) / 1000) }),
+    );
+
+    const result = await syncMediaServerItems(server.id, ["m-played"], []);
+    expect(result.status).toBe("done");
+
+    const after = await prisma.mediaItem.findFirstOrThrow({ where: { ratingKey: "m-played" } });
+    // Writing the metadata unguarded would reset this to 2023 and playCount to
+    // 1, making `lastPlayedAt` (and the `seriesLastPlayedAt` aggregate built
+    // from it) contradict the History page until the next full sync.
+    expect(after.lastPlayedAt?.toISOString()).toBe("2025-07-01T00:00:00.000Z");
+    expect(after.playCount).toBe(3);
+  });
+
+  it("still writes metadata play state for an item with no stored history", async () => {
+    const { server } = await seed();
+    mockGetItemMetadata.mockResolvedValue(
+      movieMeta("m-new", { viewCount: 2, lastViewedAt: Math.floor(Date.UTC(2026, 0, 15) / 1000) }),
+    );
+
+    await syncMediaServerItems(server.id, ["m-new"], []);
+
+    const after = await getTestPrisma().mediaItem.findFirstOrThrow({ where: { ratingKey: "m-new" } });
+    expect(after.playCount).toBe(2);
+    expect(after.lastPlayedAt?.toISOString()).toBe("2026-01-15T00:00:00.000Z");
+  });
+
   it("deletes items reported as removed", async () => {
     const { library } = await seed();
     await createTestMediaItem(library.id, { ratingKey: "m2", title: "Old" });

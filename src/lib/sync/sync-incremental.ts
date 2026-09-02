@@ -5,6 +5,7 @@ import type { MediaMetadataItem } from "@/lib/media-server/types";
 import { isMediaItem, isItemForLibraryType } from "@/lib/media-server/item-types";
 import type { MediaServerType } from "@/generated/prisma/client";
 import { processBatch } from "@/lib/sync/sync-server";
+import { loadWatchCountsFromHistory } from "@/lib/sync/watch-reconcile";
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { invalidateCachedUrls } from "@/lib/image-cache/image-cache";
@@ -23,8 +24,11 @@ import { eventBus } from "@/lib/events/event-bus";
  *
  * It deliberately does NOT run the server-wide play-count / watch-history scans
  * or stale-item detection — those belong to the full sync, which remains the
- * periodic reconciliation backstop. Play counts fall back to each item's own
- * `viewCount` (empty watch-count map), which the next full sync reconciles.
+ * periodic reconciliation backstop. Play state is instead read back from the
+ * **stored** `WatchHistory` rows (see `loadWatchCountsFromHistory`): the item
+ * metadata this path fetches carries only the admin account's `viewCount` /
+ * `lastViewedAt`, so writing it unguarded would *erase* plays by every other
+ * user on the server until the next full sync.
  */
 export interface IncrementalSyncResult {
   status: "done" | "fell-back" | "skipped";
@@ -173,6 +177,17 @@ export async function syncMediaServerItems(
     groups.set(libraryId, bucket);
   }
 
+  // Play state for the items we're about to write, taken from the stored
+  // watch history (all users) rather than the fetched metadata (admin account
+  // only). `buildItemData` maxes the two, so this keeps a play by another
+  // household member from being overwritten with the admin's older view —
+  // which is what made `lastPlayedAt`, and the `seriesLastPlayedAt` aggregate
+  // built from it, disagree with the History page.
+  const watchCounts = await loadWatchCountsFromHistory(
+    serverId,
+    fetched.map((it) => it.ratingKey),
+  );
+
   // Upsert each library group via the shared batch processor.
   let upserted = 0;
   for (const [libraryId, items] of groups) {
@@ -212,7 +227,7 @@ export async function syncMediaServerItems(
       }
     }
 
-    await processBatch(items, libraryId, lib.type, new Map(), existingThumbUrls, showGenreMap, showGuidsMap, undefined, showSummaryMap);
+    await processBatch(items, libraryId, lib.type, watchCounts, existingThumbUrls, showGenreMap, showGuidsMap, undefined, showSummaryMap);
     upserted += items.length;
   }
 
