@@ -27,7 +27,7 @@ const { mockEnqueueJob } = vi.hoisted(() => ({
 vi.mock("@/lib/jobs/client", () => ({ enqueueJob: mockEnqueueJob }));
 
 import { POST } from "@/app/api/sync/by-type/route";
-import { TASK_SYNC_SERVER, MAIN_QUEUE } from "@/lib/jobs/constants";
+import { TASK_SYNC_SERVER, TASK_SYNC_WATCH_HISTORY, MAIN_QUEUE } from "@/lib/jobs/constants";
 
 describe("POST /api/sync/by-type", () => {
   beforeEach(async () => {
@@ -67,12 +67,52 @@ describe("POST /api/sync/by-type", () => {
     const body = await expectJson<{ message: string; syncedCount: number; skippedCount: number }>(response, 200);
 
     expect(body.syncedCount).toBe(1);
-    expect(mockEnqueueJob).toHaveBeenCalledTimes(1);
     expect(mockEnqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_SERVER,
       { serverId: server.id, libraryKey: movies.key, skipWatchHistory: true },
       expect.objectContaining({ jobKey: `sync:${server.id}:${movies.key}`, queueName: MAIN_QUEUE }),
     );
+  });
+
+  it("queues a watch-history refresh after the library jobs of each server", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const a = await createTestLibrary(server.id, { key: "m1", type: "MOVIE" });
+    const b = await createTestLibrary(server.id, { key: "m2", type: "MOVIE" });
+
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    await callRoute(POST, {
+      url: "/api/sync/by-type",
+      method: "POST",
+      body: { libraryType: "MOVIE" },
+    });
+
+    // The library jobs skip the server-wide watch-history scan, so without this
+    // follow-up they leave playCount/lastPlayedAt at the *owner's* values —
+    // the admin token's own views on Plex, nothing at all on Jellyfin/Emby.
+    expect(mockEnqueueJob).toHaveBeenCalledWith(
+      TASK_SYNC_WATCH_HISTORY,
+      { serverId: server.id },
+      expect.objectContaining({ jobKey: `watch-history:${server.id}`, queueName: MAIN_QUEUE }),
+    );
+
+    // Exactly one refresh per server, not one per library.
+    const tasks = mockEnqueueJob.mock.calls.map((call) => call[0]);
+    expect(tasks.filter((t) => t === TASK_SYNC_WATCH_HISTORY)).toHaveLength(1);
+    expect(tasks.filter((t) => t === TASK_SYNC_SERVER)).toHaveLength(2);
+
+    // MAIN_QUEUE runs in enqueue order, so the refresh must be queued *after*
+    // both library jobs — otherwise syncWatchHistoryTask's "a full sync is
+    // already running" guard swallows it and nothing reconciles.
+    const libraryKeys = [a.key, b.key];
+    const lastLibraryJob = Math.max(
+      ...mockEnqueueJob.mock.calls
+        .map((call, i) => ({ call, i }))
+        .filter(({ call }) => libraryKeys.includes((call[1] as { libraryKey?: string }).libraryKey ?? ""))
+        .map(({ i }) => i),
+    );
+    expect(tasks.indexOf(TASK_SYNC_WATCH_HISTORY)).toBeGreaterThan(lastLibraryJob);
   });
 
   it("skips servers that already have a running sync", async () => {
@@ -93,6 +133,7 @@ describe("POST /api/sync/by-type", () => {
 
     expect(body.syncedCount).toBe(0);
     expect(body.skippedCount).toBe(1);
+    // Neither the library jobs nor the watch-history refresh.
     expect(mockEnqueueJob).not.toHaveBeenCalled();
   });
 

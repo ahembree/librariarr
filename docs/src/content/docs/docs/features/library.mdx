@@ -177,9 +177,13 @@ Each sync fully refreshes watch history for that server — existing records are
 
 ### Play Count vs. Watch History
 
-The **Play Count** and **Last Played** fields shown on media items in the library views are separate from the Watch History table:
+The **Play Count** and **Last Played** fields shown on media items in the library views are built from two sources:
 
-- **Play Count / Last Played** on media items — synced from the media server's native item metadata during library sync. For Plex, this reflects the account's global watch history across all servers, so a brand-new Plex server may show play counts from plays that occurred on a different server under the same Plex account.
+- **The server's native item metadata**, read during library sync. This is scoped to the account Librariarr connects with — on Plex it is that account's own views across every server it has access to, so a brand-new Plex server may show play counts from plays that happened elsewhere under the same account.
+- **The Watch History table**, which covers plays by *every* user on the server. After each watch-history sync, these plays are rolled back into Play Count and Last Played.
+
+The two are combined by taking the higher play count and the more recent date, so a play by anyone in your household is reflected — never overwritten by the connected account's older view. This matters for lifecycle rules: criteria such as **Last Played** and **Series Last Played** read these fields, so a series someone else is actively watching will not look untouched.
+
 - **Watch History** records — individual play events fetched from the server's session history. Only includes plays that actually occurred on that specific server.
 
 ### Columns

@@ -75,6 +75,11 @@ vi.mock("@/lib/sync/sync-watch-history", () => ({
   syncWatchHistory: vi.fn().mockResolvedValue({ count: 0 }),
 }));
 
+vi.mock("@/lib/sync/watch-reconcile", () => ({
+  reconcileWatchStateFromHistory: vi.fn().mockResolvedValue(0),
+  loadWatchCountsFromHistory: vi.fn().mockResolvedValue(new Map()),
+}));
+
 vi.mock("@/lib/http-retry", () => ({
   configureRetry: vi.fn(),
 }));
@@ -247,6 +252,41 @@ describe("syncMediaServer", () => {
     mockClient.testConnection.mockResolvedValue({ ok: true, serverName: "Test Plex" });
     mockClient.getLibraries.mockResolvedValue([]);
     mockClient.getWatchCounts.mockResolvedValue(new Map());
+  });
+
+  it("syncs watch history (which reconciles play state) by default", async () => {
+    const { syncWatchHistory } = await import("@/lib/sync/sync-watch-history");
+    const { reconcileWatchStateFromHistory } = await import("@/lib/sync/watch-reconcile");
+
+    await syncMediaServer("server-1");
+
+    expect(syncWatchHistory).toHaveBeenCalledWith("server-1");
+    // syncWatchHistory reconciles internally, so the sync must not do it twice.
+    expect(reconcileWatchStateFromHistory).not.toHaveBeenCalled();
+  });
+
+  it("reconciles play state from stored history when the watch-history scan is skipped", async () => {
+    const { syncWatchHistory } = await import("@/lib/sync/sync-watch-history");
+    const { reconcileWatchStateFromHistory } = await import("@/lib/sync/watch-reconcile");
+
+    await syncMediaServer("server-1", undefined, { skipWatchHistory: true });
+
+    expect(syncWatchHistory).not.toHaveBeenCalled();
+    // The item upserts wrote account-scoped playCount/lastPlayedAt (the admin's
+    // own views on Plex, nothing at all on Jellyfin/Emby). Without this the
+    // per-library fan-out from /api/sync/by-type would leave every item it
+    // touched reporting the owner's last play instead of the household's.
+    expect(reconcileWatchStateFromHistory).toHaveBeenCalledWith("server-1");
+  });
+
+  it("does not fail the sync when reconciling stored play state throws", async () => {
+    const { reconcileWatchStateFromHistory } = await import("@/lib/sync/watch-reconcile");
+    vi.mocked(reconcileWatchStateFromHistory).mockRejectedValueOnce(new Error("db down"));
+
+    await syncMediaServer("server-1", undefined, { skipWatchHistory: true });
+
+    const completedCalls = findDbCalls('UPDATE "SyncJob"', "COMPLETED");
+    expect(completedCalls.length).toBeGreaterThan(0);
   });
 
   it("creates a sync job and acquires semaphore", async () => {

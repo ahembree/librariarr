@@ -17,6 +17,7 @@ import { normalizeResolutionFromDimensions } from "@/lib/resolution";
 import { eventBus } from "@/lib/events/event-bus";
 import { acquireSyncSlot, releaseSyncSlot } from "@/lib/sync/sync-semaphore";
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
+import { reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
 
 // --- Filename-based detection using Trash-Guides naming conventions ---
 // These regex patterns are derived from Trash-Guides custom format definitions:
@@ -1139,6 +1140,25 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
         // Non-fatal: don't fail the entire sync if watch history fails
         logger.error("Sync", "Watch history sync failed", { error: String(whError) });
         completedOps.push(`Watch history: failed (${formatDuration(Date.now() - whStart)})`);
+      }
+    } else {
+      // The item upserts above wrote `playCount`/`lastPlayedAt` from
+      // *account-scoped* metadata — the admin token's own views on Plex, and
+      // nothing at all on Jellyfin/Emby, whose `getWatchCounts()` returns an
+      // empty map by design. `syncWatchHistory` normally repairs that at the
+      // end of a sync, so a run that skips it (the per-library fan-out from
+      // /api/sync/by-type, which defers one server-wide scan to a follow-up
+      // job) would otherwise leave every item it touched reporting the owner's
+      // last play instead of the household's. Reconciling from the *stored*
+      // history needs no server round-trip and is monotonic, so it can only
+      // restore play state the upsert just overwrote, never lower it.
+      try {
+        await reconcileWatchStateFromHistory(serverId);
+      } catch (reconcileError) {
+        // Non-fatal: the next watch-history sync reconciles again.
+        logger.warn("Sync", "Failed to reconcile play state from stored watch history", {
+          error: String(reconcileError),
+        });
       }
     }
     logHeapAndCollect("after watch history sync");
