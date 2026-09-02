@@ -8,6 +8,7 @@ import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { validateRequest, ruleDiffSchema } from "@/lib/validation";
+import { loadGroupMemberStats, aggregateGroupMembers, memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 
 interface DiffItem {
   id: string;
@@ -20,6 +21,42 @@ function serializeItem(item: Record<string, unknown>): Record<string, unknown> {
   return JSON.parse(JSON.stringify(item, (_, v) =>
     typeof v === "bigint" ? v.toString() : v,
   ));
+}
+
+/**
+ * Removed rows are fetched by `MediaItem.id`, which for a SERIES or MUSIC match
+ * is the representative EPISODE — its own title, its own single file size. The
+ * added and retained rows beside them in the same preview table are series
+ * AGGREGATES, so without this the two render differently ("The Show — Pilot"
+ * against "The Show") and a removed series reports one episode's size.
+ *
+ * Detection already stored the group in `RuleMatch.itemData`, so take the
+ * display identity from there and recompute the totals from the members'
+ * current rows. A movie (no member ids) is returned untouched.
+ */
+async function applyGroupShape(
+  rows: Record<string, unknown>[],
+  itemDataById: Map<string, Record<string, unknown>>,
+): Promise<Record<string, unknown>[]> {
+  const memberStats = await loadGroupMemberStats(
+    rows.flatMap((row) => memberIdsFromItemData(itemDataById.get(row.id as string))),
+  );
+  return rows.map((row) => {
+    const itemData = itemDataById.get(row.id as string);
+    const totals = aggregateGroupMembers(memberIdsFromItemData(itemData), memberStats);
+    if (!totals) return row;
+    return {
+      ...row,
+      // Identity comes from the stored aggregate so the row reads as the show
+      // both in the table and in the detail panel opened from it.
+      title: (itemData?.title as string | undefined) ?? row.title,
+      parentTitle: (itemData?.parentTitle as string | null | undefined) ?? null,
+      fileSize: totals.fileSize > BigInt(0) ? totals.fileSize.toString() : row.fileSize,
+      playCount: totals.playCount,
+      lastPlayedAt: totals.lastPlayedAt?.toISOString() ?? row.lastPlayedAt,
+      matchedEpisodes: totals.matchedEpisodes,
+    };
+  });
 }
 
 export async function POST(
@@ -72,12 +109,15 @@ export async function POST(
       include: { library: { include: { mediaServer: { select: { id: true, name: true, type: true } } } }, streams: true, externalIds: true },
     });
     // No active rules → no criteria to evaluate; include empty matchedCriteria/actualValues
-    const enrichedRemovedItems = removedItems.map((item) => {
-      const serialized = serializeItem(item as unknown as Record<string, unknown>);
-      serialized.matchedCriteria = [];
-      serialized.actualValues = {};
-      return serialized;
-    });
+    const enrichedRemovedItems = await applyGroupShape(
+      removedItems.map((item) => {
+        const serialized = serializeItem(item as unknown as Record<string, unknown>);
+        serialized.matchedCriteria = [];
+        serialized.actualValues = {};
+        return serialized;
+      }),
+      existingById,
+    );
     return NextResponse.json({
       added: [],
       removed,
@@ -195,13 +235,16 @@ export async function POST(
     const removedRecords = fullRemovedItems.map((item) => item as unknown as Record<string, unknown>);
     const removedCriteriaMap = getMatchedCriteriaForItems(removedRecords, typedRules, type, arrData, seerrData);
     const removedActualMap = getActualValuesForAllRules(removedRecords, typedRules, type, arrData, seerrData);
-    removedItems = fullRemovedItems.map((item) => {
-      const serialized = serializeItem(item as unknown as Record<string, unknown>);
-      serialized.matchedCriteria = removedCriteriaMap.get(item.id) ?? [];
-      const itemActualValues = removedActualMap.get(item.id);
-      serialized.actualValues = itemActualValues ? Object.fromEntries(itemActualValues) : {};
-      return serialized;
-    });
+    removedItems = await applyGroupShape(
+      fullRemovedItems.map((item) => {
+        const serialized = serializeItem(item as unknown as Record<string, unknown>);
+        serialized.matchedCriteria = removedCriteriaMap.get(item.id) ?? [];
+        const itemActualValues = removedActualMap.get(item.id);
+        serialized.actualValues = itemActualValues ? Object.fromEntries(itemActualValues) : {};
+        return serialized;
+      }),
+      existingById,
+    );
   }
 
   return NextResponse.json({
