@@ -15,13 +15,21 @@ import { prisma } from "@/lib/db";
  */
 export const DELETE = withApiKey(
   async (_request, { userId, params }) => {
+    // Prisma drops an `undefined` filter rather than matching nothing, which on
+    // a deleteMany would widen this into "delete every exception this user
+    // has". Next always supplies the segment, so this is unreachable today —
+    // but the failure mode is silent mass deletion, which is not a thing to
+    // leave resting on a routing guarantee.
+    const id = params.id;
+    if (!id) return v1Error("Exception not found", 404);
+
     const { count } = await prisma.lifecycleException.deleteMany({
-      where: { id: params.id, userId },
+      where: { id, userId },
     });
 
     if (count === 0) return v1Error("Exception not found", 404);
 
-    return NextResponse.json({ success: true, id: params.id });
+    return NextResponse.json({ success: true, id });
   },
   { scope: "READ_WRITE" },
 );

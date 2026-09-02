@@ -36,6 +36,26 @@ export class RateLimiter {
     return { limited: false, remaining: this.maxAttempts - entry.count };
   }
 
+  /**
+   * Report whether a key is already over budget, WITHOUT consuming any.
+   *
+   * `check()` both counts and decides, which is wrong when the decision has to
+   * come first: a caller that must reject an over-budget request before doing
+   * expensive work (a database read, a log write) would otherwise have to spend
+   * that work to find out. Mirrors `check()`'s threshold exactly — `check()`
+   * rejects once a recorded count exceeds `maxAttempts`, so a stored count that
+   * has already reached it means the next attempt is refused.
+   */
+  peek(key: string): { limited: boolean; retryAfterMs?: number } {
+    const entry = this.store.get(key);
+    const now = Date.now();
+    if (!entry || now >= entry.resetAt) return { limited: false };
+    if (entry.count >= this.maxAttempts) {
+      return { limited: true, retryAfterMs: entry.resetAt - now };
+    }
+    return { limited: false };
+  }
+
   cleanup() {
     const now = Date.now();
     for (const [key, entry] of this.store) {
@@ -54,6 +74,22 @@ export const authRateLimiter = new RateLimiter(10, 15 * 60 * 1000);
 // 120 requests per minute.
 export const apiKeyRateLimiter = new RateLimiter(120, 60 * 1000);
 
+/**
+ * Rejected /api/v1 authentication attempts, bucketed per client IP.
+ *
+ * The per-key limiter below cannot cover these: a request that fails to
+ * authenticate has no key to bucket by. Without this, an unauthenticated
+ * caller could hammer the API indefinitely — and because a rejection is logged
+ * at WARN, and `logger` persists WARN to the `LogEntry` table, every one of
+ * those requests would also become a durable database write. Capping failures
+ * bounds both the traffic and the log growth.
+ *
+ * Deliberately more forgiving than `authRateLimiter` (10/15min): an integration
+ * restarting with a stale key should get a clear 401 a few times rather than an
+ * opaque 429 on its second attempt. A key that authenticates never touches this.
+ */
+export const apiKeyFailureLimiter = new RateLimiter(20, 5 * 60 * 1000);
+
 // AI chat/test is interactive — a user asks many questions in a session, so the
 // tight auth limit is wrong here. Still bounded so a runaway client (or a leaked
 // session) can't hammer a paid LLM endpoint: 30 requests per 5-minute window.
@@ -64,6 +100,7 @@ setInterval(() => {
   authRateLimiter.cleanup();
   aiRateLimiter.cleanup();
   apiKeyRateLimiter.cleanup();
+  apiKeyFailureLimiter.cleanup();
 }, 5 * 60 * 1000).unref();
 
 /**

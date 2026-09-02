@@ -8,14 +8,32 @@ import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
  */
 export async function validateRequest<T extends z.ZodType>(
   request: Request,
-  schema: T
+  schema: T,
+  options?: {
+    /**
+     * Treat a completely absent body as `{}` instead of a 400.
+     *
+     * Off by default so existing routes keep rejecting a missing body. Turn it
+     * on where every field is optional: `POST /api/v1/sync` with no body means
+     * "sync everything", and `curl -X POST` sends no body at all, so rejecting
+     * it would fail the most obvious way to call the endpoint. A body that is
+     * present but malformed is still a 400 either way.
+     */
+    allowEmptyBody?: boolean;
+  }
 ): Promise<
   | { data: z.infer<T>; error?: never }
   | { data?: never; error: NextResponse }
 > {
   let body: unknown;
   try {
-    body = await request.json();
+    const raw = await request.text();
+    if (raw.trim() === "") {
+      if (!options?.allowEmptyBody) throw new Error("empty body");
+      body = {};
+    } else {
+      body = JSON.parse(raw);
+    }
   } catch {
     return {
       error: NextResponse.json(

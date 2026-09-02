@@ -48,6 +48,8 @@ export const GET = withApiKey(async (request, { userId }) => {
   });
 
   interface SeriesAccumulator {
+    /** The normalized fold key. Unique per show, so it breaks collation ties. */
+    key: string;
     title: string;
     episodeCount: number;
     seasons: Set<number>;
@@ -66,7 +68,7 @@ export const GET = withApiKey(async (request, { userId }) => {
     const key = title.toLowerCase().trim();
     let series = byTitle.get(key);
     if (!series) {
-      series = { title, episodeCount: 0, seasons: new Set(), totalSize: BigInt(0), year: null };
+      series = { key, title, episodeCount: 0, seasons: new Set(), totalSize: BigInt(0), year: null };
       byTitle.set(key, series);
     }
 
@@ -81,7 +83,14 @@ export const GET = withApiKey(async (request, { userId }) => {
   }
 
   const sorted = Array.from(byTitle.values())
-    .sort((a, b) => a.title.localeCompare(b.title))
+    // `localeCompare` returns 0 for titles that are distinct rows but collate
+    // equal (case, accents, punctuation), and Array.prototype.sort gives no
+    // guarantee about how it breaks such ties between calls. Two requests for
+    // adjacent pages could then order the tied block differently and the
+    // stitched list would repeat one show while dropping another — the same
+    // hazard the DB-backed routes avoid with an `id` tiebreaker. The fold key
+    // is unique per show, so comparing it second makes the order total.
+    .sort((a, b) => a.title.localeCompare(b.title) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
     .slice(pagination.skip, pagination.skip + pagination.limit + 1);
 
   const hasMore = sorted.length > pagination.limit;

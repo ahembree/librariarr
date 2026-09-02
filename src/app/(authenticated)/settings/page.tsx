@@ -2164,7 +2164,11 @@ export default function SettingsPage() {
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        const detail = data?.details?.[0]?.message ?? data?.error;
+        // `validateRequest` returns `details` as pre-formatted strings
+        // ("name: Name is required"), not objects — reading `.message` off one
+        // yields undefined and the toast loses the only useful part.
+        const detail =
+          typeof data?.details?.[0] === "string" ? data.details[0] : data?.error;
         toast.error("Failed to create API key", { description: detail });
         return;
       }

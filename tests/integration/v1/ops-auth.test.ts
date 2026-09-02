@@ -180,11 +180,25 @@ function call(route: OpsRoute, seed: Seed, extra: Partial<V1CallOptions> = {}) {
   return callV1(route.handler, { ...route.request(seed), ...extra });
 }
 
+import { apiKeyFailureLimiter, apiKeyRateLimiter } from "@/lib/rate-limit/rate-limiter";
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function resetV1RateLimiters() {
+  (apiKeyFailureLimiter as any).store.clear();
+  (apiKeyRateLimiter as any).store.clear();
+}
+
 beforeEach(async () => {
   await cleanDatabase();
   clearMockSession();
   vi.clearAllMocks();
   mockEnqueueJob.mockResolvedValue(true);
+  // Every test request presents the same (absent) client IP, so the per-IP
+  // failure budget that guards the real API accumulates across the whole file
+  // and would start answering 429 to cases that assert 401. Production callers
+  // are spread over real addresses and a working key never spends this budget;
+  // resetting per test keeps each case measuring only its own request.
+  resetV1RateLimiters();
 });
 
 afterAll(async () => {

@@ -17,7 +17,11 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import type { ApiKey, ApiKeyScope } from "@/generated/prisma/client";
 import { authenticateApiKey, requireScope } from "@/lib/auth/api-key";
-import { apiKeyRateLimiter } from "@/lib/rate-limit/rate-limiter";
+import {
+  apiKeyRateLimiter,
+  apiKeyFailureLimiter,
+  getClientIp,
+} from "@/lib/rate-limit/rate-limiter";
 import { apiLogger } from "@/lib/logger";
 
 /** Everything a v1 handler is handed after authentication succeeds. */
@@ -51,6 +55,16 @@ export function v1Error(error: string, status: number, details?: unknown) {
   );
 }
 
+function tooManyRequests(retryAfterMs: number | undefined) {
+  return NextResponse.json(
+    { error: "Rate limit exceeded. Slow down and try again shortly." },
+    {
+      status: 429,
+      headers: { "Retry-After": String(Math.ceil((retryAfterMs ?? 0) / 1000)) },
+    },
+  );
+}
+
 /**
  * Wrap a v1 route handler with API-key authentication, scope enforcement and
  * per-key rate limiting.
@@ -70,42 +84,64 @@ export function withApiKey(handler: V1Handler, options: WithApiKeyOptions = {}) 
     request: NextRequest,
     routeContext?: { params?: Promise<Record<string, string>> },
   ): Promise<Response> {
-    const auth = await authenticateApiKey(request);
-    if (!auth.ok) {
-      // Log rejections (never the presented key) so an admin can see a
-      // misconfigured integration in the system log instead of guessing.
-      apiLogger.warn("api-v1", `API key rejected (${auth.reason})`, {
-        path: new URL(request.url).pathname,
-        reason: auth.reason,
-      });
-      return v1Error(auth.error, auth.status);
-    }
+    const path = new URL(request.url).pathname;
 
-    const scopeError = requireScope(auth.apiKey, needed);
-    if (scopeError && !scopeError.ok) {
-      apiLogger.warn("api-v1", "API key lacks write scope", {
-        path: new URL(request.url).pathname,
-        keyName: auth.apiKey.name,
-      });
-      return v1Error(scopeError.error, scopeError.status);
-    }
-
-    // Bucket by key id, not by IP: the key is the identity here, and several
-    // integrations behind one NAT must not share a budget.
-    const limit = apiKeyRateLimiter.check(`api-key:${auth.apiKey.id}`);
-    if (limit.limited) {
-      return NextResponse.json(
-        { error: "Rate limit exceeded. Slow down and try again shortly." },
-        {
-          status: 429,
-          headers: { "Retry-After": String(Math.ceil((limit.retryAfterMs ?? 0) / 1000)) },
-        },
-      );
-    }
-
-    const params = routeContext?.params ? await routeContext.params : {};
-
+    // Everything below — including authentication itself — runs inside the
+    // try: `authenticateApiKey` queries the database, and so does the rejection
+    // log. A Postgres outage during either would otherwise escape the wrapper
+    // as an unhandled rejection and let the framework render its own error page
+    // to an external caller.
     try {
+      // Authenticate FIRST, and gate only on the failure path.
+      //
+      // The tempting shortcut is to refuse an over-budget IP before the key
+      // lookup, so a flood costs no database work at all. It is wrong: the
+      // budget is per IP, a valid key presents from an IP like anything else,
+      // and behind a shared address — or with TRUST_PROXY_HEADERS=false, where
+      // every client falls into one "unknown" bucket — that gate answers 429 to
+      // a legitimate integration because someone else was guessing keys. A
+      // working integration must never be collateral damage, so the budget only
+      // ever sees requests that already failed to authenticate. The residual
+      // cost of a flood is one indexed point lookup per request, which is
+      // bounded work; the unbounded thing was the LogEntry row, and that is
+      // what the budget below actually caps.
+      const auth = await authenticateApiKey(request);
+      if (!auth.ok) {
+        const failureBucket = `api-key-fail:${getClientIp(request)}`;
+        const failures = apiKeyFailureLimiter.check(failureBucket);
+        if (failures.limited) {
+          // Over budget: answer 429 and, importantly, skip the log write.
+          // `logger` persists WARN to the LogEntry table, so without this an
+          // anonymous caller could grow the database one row per request.
+          return tooManyRequests(failures.retryAfterMs);
+        }
+        // The presented key is never logged — only why it was refused.
+        apiLogger.warn("api-v1", `API key rejected (${auth.reason})`, {
+          path,
+          reason: auth.reason,
+        });
+        return v1Error(auth.error, auth.status);
+      }
+
+      // Bucket by key id, not by IP: the key is the identity here, and several
+      // integrations behind one NAT must not share a budget. Spent BEFORE the
+      // scope test, so a read-only key pointed at a write endpoint burns its
+      // budget like any other request instead of collecting unlimited free
+      // 403s — each of which also costs a log write.
+      const limit = apiKeyRateLimiter.check(`api-key:${auth.apiKey.id}`);
+      if (limit.limited) return tooManyRequests(limit.retryAfterMs);
+
+      const scopeError = requireScope(auth.apiKey, needed);
+      if (scopeError && !scopeError.ok) {
+        apiLogger.warn("api-v1", "API key lacks write scope", {
+          path,
+          keyName: auth.apiKey.name,
+        });
+        return v1Error(scopeError.error, scopeError.status);
+      }
+
+      const params = routeContext?.params ? await routeContext.params : {};
+
       return await handler(request, {
         apiKey: auth.apiKey,
         userId: auth.apiKey.userId,
@@ -114,7 +150,7 @@ export function withApiKey(handler: V1Handler, options: WithApiKeyOptions = {}) 
     } catch (err) {
       // A thrown handler must not leak a stack trace to an external caller.
       apiLogger.error("api-v1", "Unhandled error in v1 route", {
-        path: new URL(request.url).pathname,
+        path,
         error: err instanceof Error ? err.message : String(err),
       });
       return v1Error("Internal server error", 500);

@@ -12,7 +12,7 @@ const { mockPrismaModels, TABLE_NAMES, mockFs } = vi.hoisted(() => {
     "sonarrInstance", "radarrInstance", "lidarrInstance", "seerrInstance",
     "ruleSet", "ruleMatch", "lifecycleAction", "lifecycleException",
     "watchHistory", "blackoutSchedule", "prerollPreset",
-    "prerollSchedule", "savedQuery", "logEntry",
+    "prerollSchedule", "savedQuery", "logEntry", "apiKey",
   ];
 
   const mockPrismaModels: Record<string, { findMany: ReturnType<typeof import("vitest")["vi"]["fn"]>; createMany: ReturnType<typeof import("vitest")["vi"]["fn"]> }> = {};
@@ -626,5 +626,66 @@ describe("getBackupPassphrase", () => {
 
     const result = await getBackupPassphrase();
     expect(result).toBeUndefined();
+  });
+});
+
+describe("API keys survive a backup round-trip", () => {
+  // Restore truncates User with CASCADE, which takes ApiKey with it. If the
+  // table is not in TABLE_ORDER the keys are destroyed and never written back,
+  // so every integration silently stops authenticating after a restore — with
+  // no error anywhere to explain why.
+  it("exports the ApiKey table in a config-only backup", async () => {
+    mockPrismaModels.apiKey.findMany.mockResolvedValue([
+      {
+        id: "k1",
+        userId: "u1",
+        name: "automation",
+        keyHash: "a".repeat(64),
+        prefix: "lbr_abcd1234",
+        scope: "READ_WRITE",
+      },
+    ]);
+
+    await createBackup(undefined, true);
+
+    expect(mockPrismaModels.apiKey.findMany).toHaveBeenCalled();
+
+    const buffer = mockFs.writeFile.mock.calls[0][1] as Buffer;
+    const payload = JSON.parse(gunzipSync(buffer).toString("utf-8"));
+    expect(payload.data.apiKey).toHaveLength(1);
+    expect(payload.data.apiKey[0].name).toBe("automation");
+    // The digest is what makes the key work again after a restore, so it has
+    // to ride along — a key whose hash is lost can never authenticate.
+    expect(payload.data.apiKey[0].keyHash).toBe("a".repeat(64));
+  });
+
+  it("restores the ApiKey rows it exported", async () => {
+    const backupData = {
+      metadata: {
+        version: 1,
+        appVersion: "1.0.0",
+        createdAt: new Date().toISOString(),
+        tables: { apiKey: 1 },
+      },
+      data: {
+        apiKey: [
+          {
+            id: "k1",
+            userId: "u1",
+            name: "automation",
+            keyHash: "b".repeat(64),
+            prefix: "lbr_abcd1234",
+            scope: "READ_ONLY",
+          },
+        ],
+      },
+    };
+    mockFs.readFile.mockResolvedValue(gzipSync(Buffer.from(JSON.stringify(backupData))));
+
+    await restoreBackup("librariarr-backup-2024-01-01T00-00-00.json.gz");
+
+    const row = mockPrismaModels.apiKey.createMany.mock.calls.at(-1)![0].data[0];
+    expect(row).toMatchObject({ id: "k1", name: "automation", scope: "READ_ONLY" });
+    expect(row.keyHash).toBe("b".repeat(64));
   });
 });

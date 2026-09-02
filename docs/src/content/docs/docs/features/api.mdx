@@ -107,6 +107,14 @@ Retry-After: 34
 
 Honor `Retry-After` rather than retrying immediately. If you are regularly hitting the limit, page through lists with a larger `limit` instead of making more requests, and poll on an interval rather than in a loop.
 
+**Failed authentication is limited separately.** A request that does not authenticate has no key to bucket by, so rejections are counted per client IP address instead — **20 failures per 5 minutes**. Past that, further *failing* requests from that address get `429` instead of `401` until the window resets, and stop being recorded in System Logs, so an anonymous caller cannot grow the log table by retrying.
+
+This budget only ever counts requests that already failed to authenticate. A request carrying a valid key is never measured against it, so a burst of bad keys from the same address — a neighbour on the same NAT, or anyone at all when `TRUST_PROXY_HEADERS=false` puts every caller in one bucket — cannot lock your working integration out. An integration restarting with a stale key still gets a clear `401` several times before it starts seeing `429`.
+
+<Aside type="note">
+  That per-IP budget reads the `X-Forwarded-For` / `X-Real-IP` headers, which only a trusted reverse proxy should be able to set. If Librariarr is exposed directly to the internet with no proxy in front of it, set `TRUST_PROXY_HEADERS=false` so those headers are ignored — otherwise a caller can rotate them to get a fresh budget. See [Configuration](/docs/getting-started/configuration/).
+</Aside>
+
 ## Health check
 
 ```bash
@@ -140,7 +148,7 @@ All paths are relative to your Librariarr base URL. Every endpoint except `/api/
 | `GET` | `/api/v1/lifecycle/exceptions` | READ\_ONLY | Items protected from lifecycle actions. |
 | `GET` | `/api/v1/sync/status` | READ\_ONLY | Current and recent sync jobs per server. |
 | `GET` | `/api/v1/system/info` | READ\_ONLY | Version, database, and counts — the same figures as **Settings → System**. |
-| `POST` | `/api/v1/sync` | READ\_WRITE | Queue a library sync. Body: `{ "serverId": "..." }`, or omit it to sync every enabled server. |
+| `POST` | `/api/v1/sync` | READ\_WRITE | Queue a library sync. Body: `{ "serverId": "..." }`, or send no body at all to sync every enabled server. |
 | `POST` | `/api/v1/lifecycle/run` | READ\_WRITE | Queue a lifecycle run. Body: `{ "mode": "detection" }` or `{ "mode": "execution" }`. |
 | `POST` | `/api/v1/lifecycle/exceptions` | READ\_WRITE | Protect an item. Body: `{ "mediaItemId": "...", "reason": "optional" }`. |
 | `DELETE` | `/api/v1/lifecycle/exceptions/{id}` | READ\_WRITE | Remove a protection. |

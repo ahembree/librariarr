@@ -21,7 +21,9 @@ import { apiLogger } from "@/lib/logger";
  */
 export const POST = withApiKey(
   async (request, { userId, apiKey }) => {
-    const { data, error } = await validateRequest(request, v1SyncTriggerSchema);
+    const { data, error } = await validateRequest(request, v1SyncTriggerSchema, {
+      allowEmptyBody: true,
+    });
     if (error) return error;
 
     const { serverId } = data;

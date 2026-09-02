@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { withApiKey } from "@/lib/api/v1";
 import { prisma } from "@/lib/db";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { sanitize } from "@/lib/api/sanitize";
 
 /**
@@ -81,7 +82,17 @@ export const GET = withApiKey(async (_request, { userId }) => {
             totalItems: current.totalItems,
           }
         : null,
-      lastSync: lastFinished[index],
+      lastSync: lastFinished[index]
+        ? {
+            ...lastFinished[index],
+            // The sync engine writes this column verbatim from whatever the
+            // media server or the HTTP client threw, so it routinely carries a
+            // LAN address, a hostname or an internal path. Fine in System Logs;
+            // not something to hand an external caller, who would learn the
+            // shape of the network from a failed sync.
+            error: sanitizeErrorDetail(lastFinished[index].error ?? undefined) ?? null,
+          }
+        : null,
     };
   });
 

@@ -93,6 +93,10 @@ const TABLE_ORDER = [
   "systemConfig",
   "user",
   "appSettings",
+  // Restore truncates User with CASCADE, which takes ApiKey with it. Without a
+  // row here the keys would be destroyed and never restored, silently breaking
+  // every integration after a restore.
+  "apiKey",
   "mediaServer",
   "library",
   "mediaItem",
@@ -430,6 +434,7 @@ function tableToDbName(table: string): string {
     systemConfig: "SystemConfig",
     user: "User",
     appSettings: "AppSettings",
+    apiKey: "ApiKey",
     mediaServer: "MediaServer",
     library: "Library",
     mediaItem: "MediaItem",

@@ -13,6 +13,13 @@ import { sanitize } from "@/lib/api/sanitize";
 export const GET = withApiKey(async (_request, { userId, params }) => {
   const item = await prisma.mediaItem.findFirst({
     where: { id: params.id, library: { mediaServer: { userId } } },
+    // `omit` rather than `select` so a column added to MediaItem later shows up
+    // here automatically — this is the "everything about one item" endpoint and
+    // an allow-list would silently go stale. `filePath` is the absolute path of
+    // the file on the media-server host: useful to the app, but infrastructure
+    // detail an external integration has no use for and a stolen key should not
+    // be able to map out.
+    omit: { filePath: true },
     include: {
       streams: { orderBy: [{ streamType: "asc" }, { index: "asc" }, { id: "asc" }] },
       externalIds: { select: { source: true, externalId: true } },
