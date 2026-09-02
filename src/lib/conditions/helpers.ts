@@ -332,6 +332,22 @@ export function hasResolutionRules(groups: ConditionGroup[]): boolean {
   return anyRuleMatches(groups, (f) => f === "resolution");
 }
 
+/** The JSONB-array fields. Kept as one shared set so both engines' Phase-2
+ *  detectors and the WHERE handler agree on the membership. */
+export const ARRAY_FIELDS = new Set([GENRE_FIELD, LABELS_FIELD, COUNTRY_FIELD]);
+
+export function isArrayField(field: string): boolean {
+  return ARRAY_FIELDS.has(field);
+}
+
+/** JSON-array rules (`genre`, `labels`, `country`) are evaluated in-memory in
+ *  both engines: `matchArrayField` compares case-insensitively and treats a
+ *  stored `[]` as empty, neither of which Prisma's case-sensitive
+ *  `array_contains` / `DbNull` filters can express — see genreLabelsHandler. */
+export function hasArrayFieldRules(groups: ConditionGroup[]): boolean {
+  return anyRuleMatches(groups, isArrayField);
+}
+
 /** Stream-count rules are evaluated in-memory (counts over the streams
  *  relation can't honor OR position or group negation as a hoisted SQL
  *  filter). */

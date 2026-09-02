@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { QueryRule, QueryGroup, QueryDefinition, LifecycleRuleCondition } from "./types";
-import { GENRE_FIELD, LABELS_FIELD, COUNTRY_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules, hasStreamCountRules } from "./types";
+import { GENRE_FIELD, LABELS_FIELD, COUNTRY_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules, hasArrayFieldRules, hasStreamCountRules } from "./types";
 import {
   isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
@@ -402,7 +402,7 @@ export async function executeQuery(
   const willEvaluate = willFetchArr || willFetchSeerr || hasWildcardRules(groups) ||
     hasStreamQueryInMemoryRules(groups) || hasCrossSystemRules(groups) || hasArrRules(groups) ||
     hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) ||
-    hasStreamCountRules(groups);
+    hasArrayFieldRules(groups) || hasStreamCountRules(groups);
   const phases: ProgressPhase[] = [
     { key: "servers", label: "Resolving servers" },
     ...(willFetchArr ? [{ key: "arr", label: "Fetching Arr metadata" }] : []),
@@ -452,7 +452,7 @@ export async function executeQuery(
 
   // Determine if we need unified in-memory evaluation
   const hasCrossSystem = hasCrossSystemRules(groups);
-  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasStreamCountRules(groups);
+  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasArrayFieldRules(groups) || hasStreamCountRules(groups);
 
   // Build base WHERE (includes type filter + conditions). Built AFTER the
   // in-memory decision so pre-filter (superset) composition applies when
@@ -773,7 +773,7 @@ async function executeUngrouped(
 ): Promise<QueryResult> {
   // When any in-memory evaluation is needed (external rules, wildcards, stream query computed fields), fetch all items
   const hasCrossSystem = hasCrossSystemRules(groups);
-  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasStreamCountRules(groups);
+  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasArrayFieldRules(groups) || hasStreamCountRules(groups);
   const useInMemoryPagination = needsFullInMemoryEval;
   const selectToUse = needsFullInMemoryEval
     ? buildItemSelectFull({ includeWatchHistory: hasWatchedByUserRules(groups) })

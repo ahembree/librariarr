@@ -105,12 +105,25 @@ export async function syncWatchHistory(
   // Dedupe entries in memory before inserting. There is no DB unique constraint
   // on WatchHistory (intentional), so identical play events from the source
   // (same item, user, and watchedAt) would otherwise become duplicate rows.
+  //
+  // Only TIMESTAMPED entries are deduped. An entry with no `watchedAt` is not a
+  // repeat of another one — it is how a server that reports a play COUNT
+  // without per-play timestamps represents one of those plays. Jellyfin and
+  // Emby do exactly that: `getDetailedWatchHistory` emits `UserData.PlayCount`
+  // entries per item/user and only the first carries `LastPlayedDate`, so a
+  // key of `ratingKey|username|(watchedAt ?? "")` collapsed all the undated
+  // ones into a single row and an item played five times stored two — capping
+  // `playCount` at 2 per user everywhere it is read (the Play Count column,
+  // the hover card, and `playCount` lifecycle rules), while the per-item
+  // history panel, which queries the server live, still showed five.
   const seen = new Set<string>();
   const dedupedEntries: typeof entries = [];
   for (const entry of entries) {
-    const key = `${entry.ratingKey}|${entry.username}|${entry.watchedAt ?? ""}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (entry.watchedAt) {
+      const key = `${entry.ratingKey}|${entry.username}|${entry.watchedAt}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
     dedupedEntries.push(entry);
   }
 

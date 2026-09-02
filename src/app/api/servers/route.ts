@@ -6,6 +6,7 @@ import type { MediaServerType } from "@/generated/prisma/client";
 import { validateRequest, serverAddSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { eventBus } from "@/lib/events/event-bus";
+import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 
 export async function GET() {
   const session = await getSession();
@@ -66,6 +67,10 @@ export async function POST(request: NextRequest) {
         where: { id: existing.id },
         data: { name, url, accessToken, tlsSkipVerify: !!tlsSkipVerify },
       });
+      // `resolveServerFilter` caches the server name/type map, so a rename or
+      // re-point has to drop it (the /[id] routes already do this on their own
+      // mutations).
+      invalidateMediaCaches();
       // Reconcile the realtime WebSocket (url/token may have changed).
       eventBus.emit({ type: "server:changed", userId: session.userId!, meta: { serverId: server.id } });
       return NextResponse.json({ server: sanitize(server), updated: true }, { status: 200 });
@@ -83,6 +88,11 @@ export async function POST(request: NextRequest) {
       tlsSkipVerify: !!tlsSkipVerify,
     },
   });
+
+  // A second server flips `resolveServerFilter`'s `isSingleServer`, which
+  // decides whether media listings filter to `dedupCanonical`. The cached
+  // pre-add answer would otherwise stand until its TTL expired.
+  invalidateMediaCaches();
 
   // Open a realtime WebSocket for the newly-added server.
   eventBus.emit({ type: "server:changed", userId: session.userId!, meta: { serverId: server.id } });

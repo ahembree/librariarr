@@ -25,6 +25,13 @@ vi.mock("@/lib/logger", () => ({
 const mockTestConnection = vi.fn();
 const mockGetLibraries = vi.fn();
 
+const { mockInvalidateMediaCaches } = vi.hoisted(() => ({
+  mockInvalidateMediaCaches: vi.fn(),
+}));
+vi.mock("@/lib/cache/invalidate", () => ({
+  invalidateMediaCaches: mockInvalidateMediaCaches,
+}));
+
 vi.mock("@/lib/plex/client", () => ({
   PlexClient: vi.fn().mockImplementation(function () {
     return {
@@ -226,6 +233,37 @@ describe("Server CRUD endpoints", () => {
       expect(body.server.id).toBe(existing.id);
       expect(body.server.name).toBe("Updated Name");
       expect(body.server.url).toBe("http://new:32400");
+    });
+
+    it("invalidates media caches when a server is created", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, plexToken: "token", isLoggedIn: true });
+
+      await callRoute(POST, {
+        url: "/api/servers",
+        method: "POST",
+        body: { name: "Second", url: "http://plex2:32400", accessToken: "tok", machineId: "m2" },
+      });
+
+      // resolveServerFilter caches `isSingleServer`, which decides whether the
+      // media listings filter to dedupCanonical. Adding a server flips it, and
+      // without this the pre-add answer stood until the cache TTL expired.
+      expect(mockInvalidateMediaCaches).toHaveBeenCalled();
+    });
+
+    it("invalidates media caches when an existing server is re-pointed", async () => {
+      const user = await createTestUser();
+      await createTestServer(user.id, { machineId: "same-machine", name: "Old name" });
+      setMockSession({ userId: user.id, plexToken: "token", isLoggedIn: true });
+
+      await callRoute(POST, {
+        url: "/api/servers",
+        method: "POST",
+        body: { name: "New name", url: "http://moved:32400", accessToken: "tok", machineId: "same-machine" },
+      });
+
+      // The cached server-filter result carries the server's name.
+      expect(mockInvalidateMediaCaches).toHaveBeenCalled();
     });
   });
 

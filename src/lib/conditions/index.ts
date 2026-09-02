@@ -23,6 +23,8 @@
  *        - cross-system fields (serverCount/matchedByRuleSet/hasPendingAction)
  *        - stream-relation fields (audioLanguage/...) with wildcard ops
  *        - stream-query fields (sq*)
+ *        - `resolution`         → caught by `hasResolutionRules`
+ *        - JSON-array fields    → caught by `hasArrayFieldRules`
  *
  *   2. If neither is true, the engine's safety net at the bottom of
  *      `evaluateLifecycleRules` (look for "Safety net: if all rules produced empty

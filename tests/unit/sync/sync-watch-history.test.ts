@@ -234,6 +234,63 @@ describe("syncWatchHistory", () => {
     expect(insertCalls.length).toBe(0);
   });
 
+  it("keeps every undated play a count-only server reports", async () => {
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{
+      id: "server-1",
+      name: "Test Jellyfin",
+      url: "http://jellyfin:8096",
+      accessToken: "token",
+      type: "JELLYFIN",
+      tlsSkipVerify: false,
+      enabled: true,
+    }]);
+
+    // Exactly what JellyfinBase.getDetailedWatchHistory emits for PlayCount=5:
+    // one entry per play, only the first carrying LastPlayedDate. Keying the
+    // dedupe on `watchedAt ?? ""` collapsed the four undated ones into one and
+    // stored 2 rows, capping playCount at 2 per user for every Jellyfin/Emby
+    // item — while the per-item history panel, which asks the server directly,
+    // still reported 5.
+    mockClient.getDetailedWatchHistory.mockResolvedValueOnce(
+      Array.from({ length: 5 }, (_, i) => ({
+        ratingKey: "100",
+        username: "bob",
+        watchedAt: i === 0 ? "2025-07-01T00:00:00Z" : null,
+        deviceName: null,
+        platform: null,
+      })),
+    );
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: "item-1", ratingKey: "100" }]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT
+
+    await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 5 });
+  });
+
+  it("still collapses genuinely duplicated timestamped plays", async () => {
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{
+      id: "server-1",
+      name: "Test Server",
+      url: "http://plex:32400",
+      accessToken: "token",
+      type: "PLEX",
+      tlsSkipVerify: false,
+      enabled: true,
+    }]);
+
+    // Same item, user AND instant — one play reported twice by the source.
+    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
+      { ratingKey: "100", username: "bob", watchedAt: "2025-07-01T00:00:00Z", deviceName: null, platform: null },
+      { ratingKey: "100", username: "bob", watchedAt: "2025-07-01T00:00:00Z", deviceName: null, platform: null },
+      { ratingKey: "100", username: "bob", watchedAt: "2025-07-02T00:00:00Z", deviceName: null, platform: null },
+    ]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: "item-1", ratingKey: "100" }]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT
+
+    await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 2 });
+  });
+
   it("reconciles MediaItem play state from the history it just stored", async () => {
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{
       id: "server-1",
