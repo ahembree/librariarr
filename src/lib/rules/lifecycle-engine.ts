@@ -18,6 +18,7 @@ import {
   wildcardToRegex,
   matchArrayField,
   matchExternalIdField,
+  matchNameListField,
 } from "@/lib/conditions";
 import {
   isUnconfiguredContainsRule,
@@ -372,47 +373,13 @@ export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined):
   // isNull/isNotNull (handled before each guard) intentionally match on null.
   switch (field) {
     case "arrTag": {
-      // Tags are a list that is always present (never null), so "is empty" /
-      // "is not empty" ask about LIST emptiness — an item that is in Arr but
-      // carries no tags. Same semantics as the shared JSON-array evaluator
-      // (`matchArrayField`) applies to genre/labels/country. Handled before
-      // the operator switch: falling through to its `default` returned false
-      // for BOTH operators, so neither "Tag Is Empty" nor "Tag Is Not Empty"
-      // could ever match anything.
-      if (operator === "isNull") { result = meta.tags.length === 0; break; }
-      if (operator === "isNotNull") { result = meta.tags.length > 0; break; }
-      const strVal = String(value).toLowerCase();
-      switch (operator) {
-        case "equals":
-          result = meta.tags.some((t) => t.toLowerCase() === strVal);
-          break;
-        case "notEquals":
-          result = !meta.tags.some((t) => t.toLowerCase() === strVal);
-          break;
-        case "contains": {
-          // Enumerable multi-select — exact list membership against tag set.
-          const values = strVal.split("|").filter(Boolean);
-          result = values.some((v) => meta.tags.some((t) => t.toLowerCase() === v));
-          break;
-        }
-        case "notContains": {
-          const values = strVal.split("|").filter(Boolean);
-          result = !values.some((v) => meta.tags.some((t) => t.toLowerCase() === v));
-          break;
-        }
-        case "matchesWildcard": {
-          const re = wildcardToRegex(strVal);
-          result = meta.tags.some((t) => re.test(t));
-          break;
-        }
-        case "notMatchesWildcard": {
-          const re = wildcardToRegex(strVal);
-          result = !meta.tags.some((t) => re.test(t));
-          break;
-        }
-        default:
-          return false;
-      }
+      // Tags are an always-present list — see `matchNameListField` for the
+      // operator semantics shared with seerrRequestedBy / watchedByUser /
+      // matchedByRuleSet (list-emptiness isNull, multi-select contains,
+      // case-insensitive wildcards).
+      const tagResult = matchNameListField(meta.tags, operator, value);
+      if (tagResult === null) return false; // unknown operator: bypass negate
+      result = tagResult;
       break;
     }
     case "arrQualityProfile": {
@@ -889,38 +856,14 @@ export function evaluateSeerrRule(rule: Condition, meta: SeerrMetadata | undefin
       break;
     }
     case "seerrRequestedBy": {
-      // Requesters are an always-present list, so "is empty" / "is not empty"
-      // ask about LIST emptiness (no requester recorded), matching arrTag and
-      // the shared JSON-array evaluator. Handled before the operator switch,
-      // whose `default` returned false for both operators.
-      if (operator === "isNull") { result = m.requestedBy.length === 0; break; }
-      if (operator === "isNotNull") { result = m.requestedBy.length > 0; break; }
-      const strVal = String(value).toLowerCase();
-      switch (operator) {
-        case "equals":
-          result = m.requestedBy.some((u) => u.toLowerCase() === strVal);
-          break;
-        case "notEquals":
-          result = !m.requestedBy.some((u) => u.toLowerCase() === strVal);
-          break;
-        case "contains": {
-          // Enumerable multi-select — exact list membership against requester usernames.
-          const values = strVal.split("|").filter(Boolean);
-          result = values.some((v) =>
-            m.requestedBy.some((u) => u.toLowerCase() === v)
-          );
-          break;
-        }
-        case "notContains": {
-          const values = strVal.split("|").filter(Boolean);
-          result = !values.some((v) =>
-            m.requestedBy.some((u) => u.toLowerCase() === v)
-          );
-          break;
-        }
-        default:
-          return false;
-      }
+      // Requesters are an always-present list — same shared semantics as
+      // arrTag / watchedByUser / matchedByRuleSet. This branch previously had
+      // no wildcard cases and fell through to `default`, so a "Requested By
+      // matches …" rule (an operator the builder offers on every text field)
+      // silently matched nothing in both directions.
+      const requesterResult = matchNameListField(m.requestedBy, operator, value);
+      if (requesterResult === null) return false; // unknown operator: bypass negate
+      result = requesterResult;
       break;
     }
     default:
@@ -1003,7 +946,13 @@ function evaluateRuleAgainstItem(
       return negate ? !result : result;
     }
 
-    // If all language streams were filtered out, the item has no known language — don't match
+    // An item with NO KNOWN language of this type must not match a language
+    // rule under ANY operator — "Unknown" != "English" must not read as true
+    // (see the "unknown language filtering" tests). Bypasses `negate`, like
+    // every other dead-rule guard. Phase 1 enforces the same thing by ANDing a
+    // "has a known language" conjunct onto the negated operators; without it
+    // the two phases disagreed and the same rule matched a different set
+    // depending on whether something else in the rule set forced Phase 2.
     if (isLangField && streamValues.length === 0) return false;
 
     const strValue = String(value).toLowerCase();
@@ -1115,56 +1064,22 @@ function evaluateRuleAgainstItem(
   // Either source produces the same `users` list, so the operator branches
   // are identical to the seerrRequestedBy handler above.
   if (field === "watchedByUser") {
+    // `watchedByUsers` is the aggregated (series/artist) shape; individual
+    // items carry the raw `watchHistory` rows instead. Operator semantics are
+    // shared with arrTag / seerrRequestedBy / matchedByRuleSet.
     const aggregated = Array.isArray(item.watchedByUsers)
-      ? (item.watchedByUsers as string[]).map((u) => u.toLowerCase())
+      ? (item.watchedByUsers as string[])
       : null;
     const users = aggregated ?? (
       Array.isArray(item.watchHistory)
         ? (item.watchHistory as Array<{ serverUsername: string | null }>)
-            .map((h) => (h.serverUsername ?? "").toLowerCase())
+            .map((h) => h.serverUsername ?? "")
             .filter(Boolean)
         : []
     );
-    const strVal = String(value).toLowerCase();
-    let result: boolean;
-    switch (operator) {
-      case "equals":
-        result = users.some((u) => u === strVal);
-        break;
-      case "notEquals":
-        result = !users.some((u) => u === strVal);
-        break;
-      case "contains": {
-        // Enumerable multi-select — exact list membership against usernames.
-        const values = strVal.split("|").filter(Boolean);
-        result = values.some((v) => users.some((u) => u === v));
-        break;
-      }
-      case "notContains": {
-        const values = strVal.split("|").filter(Boolean);
-        result = !values.some((v) => users.some((u) => u === v));
-        break;
-      }
-      case "matchesWildcard": {
-        const re = wildcardToRegex(strVal);
-        result = users.some((u) => re.test(u));
-        break;
-      }
-      case "notMatchesWildcard": {
-        const re = wildcardToRegex(strVal);
-        result = !users.some((u) => re.test(u));
-        break;
-      }
-      case "isNull":
-        result = users.length === 0;
-        break;
-      case "isNotNull":
-        result = users.length > 0;
-        break;
-      default:
-        return false;
-    }
-    return negate ? !result : result;
+    const userResult = matchNameListField(users, operator, value);
+    if (userResult === null) return false; // unknown operator: bypass negate
+    return negate ? !userResult : userResult;
   }
 
   // Cross-system fields — enriched by fetchCrossSystemData before Phase 2
@@ -1192,29 +1107,14 @@ function evaluateRuleAgainstItem(
       return negate ? !result : result;
     }
     if (field === "matchedByRuleSet") {
-      const matchedSets = (item.matchedRuleSets as string[]) ?? [];
-      const matchedLower = matchedSets.map((s) => s.toLowerCase());
-      const strValue = String(value).toLowerCase();
-      let result: boolean;
-      switch (operator) {
-        case "equals": result = matchedLower.includes(strValue); break;
-        case "notEquals": result = !matchedLower.includes(strValue); break;
-        case "contains": {
-          // Enumerable multi-select — exact list membership against rule-set names.
-          const values = strValue.split("|").filter(Boolean);
-          result = values.some((v) => matchedLower.includes(v));
-          break;
-        }
-        case "notContains": {
-          const values = strValue.split("|").filter(Boolean);
-          result = !values.some((v) => matchedLower.includes(v));
-          break;
-        }
-        case "isNull": result = matchedSets.length === 0; break;
-        case "isNotNull": result = matchedSets.length > 0; break;
-        default: return false;
-      }
-      return negate ? !result : result;
+      // Rule-set names are an always-present list — same shared semantics as
+      // arrTag / seerrRequestedBy / watchedByUser. This branch previously had
+      // no wildcard cases (and was duplicated byte-for-byte in the query
+      // engine), so a "Matched By Rule Set matches …" rule silently matched
+      // nothing in both directions.
+      const setResult = matchNameListField(item.matchedRuleSets, operator, value);
+      if (setResult === null) return false; // unknown operator: bypass negate
+      return negate ? !setResult : setResult;
     }
     if (field === "hasPendingAction") {
       const hasPending = !!item.hasPendingAction;

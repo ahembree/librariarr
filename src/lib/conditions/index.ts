@@ -50,3 +50,4 @@ export * from "./library-type-guard";
 export * from "./negation";
 export * from "./array-field-eval";
 export * from "./external-id-eval";
+export * from "./name-list-eval";

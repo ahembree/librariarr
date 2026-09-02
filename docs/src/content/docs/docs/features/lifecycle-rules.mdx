@@ -197,7 +197,7 @@ field's shape:
 | Field shape | Examples | *Is Empty* matches |
 |-------------|----------|--------------------|
 | Nullable column | `studio`, `rating`, `lastPlayedAt`, `arrQualityName`, `arrEnded` | The value is missing |
-| List | `genre`, `labels`, `country`, `arrTag`, `seerrRequestedBy` | The list has no entries — e.g. an item that is in *arr but carries no tags |
+| List | `genre`, `labels`, `country`, `arrTag`, `seerrRequestedBy`, `watchedByUser`, `matchedByRuleSet` | The list has no entries — e.g. an item that is in *arr but carries no tags |
 | Always-present text | `title`, `arrQualityProfile` | The value is the empty string |
 
 Fields whose value is always present and has no meaningful "empty" reading —
@@ -205,11 +205,35 @@ Fields whose value is always present and has no meaningful "empty" reading —
 `playCount`, `isWatchlisted` — don't offer the two operators at all, because
 *Is Not Empty* on them would just match everything.
 
+:::note[Every operator works on a list field]
+The list fields — `genre`, `labels`, `country`, `arrTag`, `seerrRequestedBy`,
+`watchedByUser`, `matchedByRuleSet` — all accept the same operators, and all
+compare case-insensitively. *Equals* and *Contains* ask about **membership**
+(*Contains* is the multi-select "any of these"), not substring: `Tag Contains
+"kee"` does not match the tag `Keep`; `Tag Matches Wildcard "kee*"` does.
+
+Until v0.29, `Matched By Rule Set` and `Requested By` quietly ignored the two
+wildcard operators — a rule using one matched nothing at all, in either
+direction. If you wrote such a rule and it never matched, it works now.
+:::
+
 :::note[List fields and missing *arr data]
 `arrTag Is Empty` finds items that **are** in the linked *arr instance but carry
 no tags. An item that isn't in *arr at all does not match it — absent *arr data
 is never read as "no tags" (see [Missing *arr data is fail-closed](#external--arr-fields)
 above). Use `foundInArr` for that question instead.
+:::
+
+:::note[Audio and subtitle language are fail-closed]
+An item with no **known** language for a track type — no track at all, or only
+tracks the server reports as `Unknown` — matches **no** language rule, positive
+or negative. `Subtitle Language Is Not English` finds items that *have* a
+subtitle track in some other language; it does not find items with no subtitles.
+Use `Subtitle Language Is Empty` for that. (Otherwise `Unknown ≠ English` would
+read as true and sweep in every unlabelled item.)
+
+Track **codec** fields carry no such placeholder, so they keep the plain
+reading: an item with no audio track does match `Stream Audio Codec Is Not AAC`.
 :::
 
 ## Building Rules

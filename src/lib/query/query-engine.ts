@@ -23,6 +23,7 @@ import {
   wildcardToRegex,
   matchArrayField,
   matchExternalIdField,
+  matchNameListField,
   aggregateEpisodesIntoSeries,
   serializeSeriesAggregateForEval,
   type AggregableEpisode,
@@ -904,6 +905,18 @@ function evaluateStreamRuleInMemory(
     ? typeStreams.filter(s => isKnownValue(s[columnName]))
     : typeStreams.filter(s => s[columnName] !== null);
 
+  // An item with NO KNOWN language of this type must not match a language rule
+  // under ANY operator — "Unknown" != "English" must not read as true. The
+  // lifecycle engine has enforced this all along (its "unknown language
+  // filtering" tests pin it) and Phase 1 now does too; without it here, the two
+  // engines disagreed on every negated language operator, so converting a query
+  // into a lifecycle rule silently changed which items it covered.
+  // isNull / isNotNull are the questions ABOUT emptiness, so they run below.
+  if (isLangField && knownStreams.length === 0
+      && operator !== "isNull" && operator !== "isNotNull") {
+    return false; // bypasses negate, like every other dead-rule guard
+  }
+
   let result: boolean;
   switch (operator) {
     case "equals":
@@ -1058,29 +1071,14 @@ function evaluateQueryRuleInMemory(
       return negate ? !result : result;
     }
     if (field === "matchedByRuleSet") {
-      const matchedSets = (item.matchedRuleSets as string[]) ?? [];
-      const matchedLower = matchedSets.map((s) => s.toLowerCase());
-      const strValue = String(value).toLowerCase();
-      let result: boolean;
-      switch (operator) {
-        case "equals": result = matchedLower.includes(strValue); break;
-        case "notEquals": result = !matchedLower.includes(strValue); break;
-        case "contains": {
-          // Enumerable multi-select — exact list membership against rule-set names.
-          const values = strValue.split("|").filter(Boolean);
-          result = values.some((v) => matchedLower.includes(v));
-          break;
-        }
-        case "notContains": {
-          const values = strValue.split("|").filter(Boolean);
-          result = !values.some((v) => matchedLower.includes(v));
-          break;
-        }
-        case "isNull": result = matchedSets.length === 0; break;
-        case "isNotNull": result = matchedSets.length > 0; break;
-        default: return false;
-      }
-      return negate ? !result : result;
+      // Rule-set names are an always-present list — same shared semantics as
+      // arrTag / seerrRequestedBy / watchedByUser. This branch previously had
+      // no wildcard cases (and was duplicated byte-for-byte in the query
+      // engine), so a "Matched By Rule Set matches …" rule silently matched
+      // nothing in both directions.
+      const setResult = matchNameListField(item.matchedRuleSets, operator, value);
+      if (setResult === null) return false; // unknown operator: bypass negate
+      return negate ? !setResult : setResult;
     }
     if (field === "hasPendingAction") {
       const hasPending = !!item.hasPendingAction;
@@ -1179,56 +1177,22 @@ function evaluateQueryRuleInMemory(
 
   // Watched By User — series aggregates flatten episode history into
   // `watchedByUsers: string[]`; individual items expose `watchHistory` directly.
+  // Operator semantics are shared with arrTag / seerrRequestedBy /
+  // matchedByRuleSet via `matchNameListField`.
   if (field === "watchedByUser") {
     const aggregated = Array.isArray(item.watchedByUsers)
-      ? (item.watchedByUsers as string[]).map((u) => u.toLowerCase())
+      ? (item.watchedByUsers as string[])
       : null;
     const users = aggregated ?? (
       Array.isArray(item.watchHistory)
         ? (item.watchHistory as Array<{ serverUsername: string | null }>)
-            .map((h) => (h.serverUsername ?? "").toLowerCase())
+            .map((h) => h.serverUsername ?? "")
             .filter(Boolean)
         : []
     );
-    const strVal = String(value).toLowerCase();
-    let result: boolean;
-    switch (operator) {
-      case "equals":
-        result = users.some((u) => u === strVal);
-        break;
-      case "notEquals":
-        result = !users.some((u) => u === strVal);
-        break;
-      case "contains": {
-        const values = strVal.split("|").filter(Boolean);
-        result = values.some((v) => users.some((u) => u === v));
-        break;
-      }
-      case "notContains": {
-        const values = strVal.split("|").filter(Boolean);
-        result = !values.some((v) => users.some((u) => u === v));
-        break;
-      }
-      case "matchesWildcard": {
-        const re = wildcardToRegex(strVal);
-        result = users.some((u) => re.test(u));
-        break;
-      }
-      case "notMatchesWildcard": {
-        const re = wildcardToRegex(strVal);
-        result = !users.some((u) => re.test(u));
-        break;
-      }
-      case "isNull":
-        result = users.length === 0;
-        break;
-      case "isNotNull":
-        result = users.length > 0;
-        break;
-      default:
-        return false;
-    }
-    return negate ? !result : result;
+    const userResult = matchNameListField(users, operator, value);
+    if (userResult === null) return false; // unknown operator: bypass negate
+    return negate ? !userResult : userResult;
   }
 
   // Date fields
