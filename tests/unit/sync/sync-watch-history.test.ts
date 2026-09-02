@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const { mockPrisma, mockClient } = vi.hoisted(() => {
+const { mockPrisma, mockClient, mockReconcile } = vi.hoisted(() => {
   // The DELETE + INSERTs run inside prisma.$transaction(cb) via tx.$executeRawUnsafe.
   // Route the tx's raw methods to the same fn the tests assert against so the
   // existing call-inspection (DELETE/INSERT string filters) keeps working.
@@ -15,6 +15,7 @@ const { mockPrisma, mockClient } = vi.hoisted(() => {
     mockClient: {
       getDetailedWatchHistory: vi.fn(),
     },
+    mockReconcile: vi.fn(async () => 0),
   };
 });
 
@@ -34,11 +35,16 @@ vi.mock("@/lib/http-retry", () => ({
   configureRetry: vi.fn(),
 }));
 
+vi.mock("@/lib/sync/watch-reconcile", () => ({
+  reconcileWatchStateFromHistory: mockReconcile,
+}));
+
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 
 describe("syncWatchHistory", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReconcile.mockResolvedValue(0);
   });
 
   it("throws when server not found", async () => {
@@ -226,5 +232,54 @@ describe("syncWatchHistory", () => {
     const insertCalls = mockPrisma.$queryRawUnsafe.mock.calls
       .filter((args) => (args[0] as string).includes('INSERT INTO "WatchHistory"'));
     expect(insertCalls.length).toBe(0);
+  });
+
+  it("reconciles MediaItem play state from the history it just stored", async () => {
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{
+      id: "server-1",
+      name: "Test Server",
+      url: "http://plex:32400",
+      accessToken: "token",
+      type: "PLEX",
+      tlsSkipVerify: false,
+      enabled: true,
+    }]);
+
+    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
+      { ratingKey: "100", username: "Roommate", watchedAt: "2025-07-01T00:00:00Z", deviceName: null, platform: null },
+    ]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: "item-1", ratingKey: "100" }]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT
+
+    await syncWatchHistory("server-1");
+
+    // Without this, a play by any non-admin user reaches WatchHistory and
+    // nothing else — leaving `lastPlayedAt` (and the `seriesLastPlayedAt`
+    // aggregate) reporting the admin's own, far older view.
+    expect(mockReconcile).toHaveBeenCalledWith("server-1");
+  });
+
+  it("does not fail the sync when reconciliation throws", async () => {
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{
+      id: "server-1",
+      name: "Test Server",
+      url: "http://plex:32400",
+      accessToken: "token",
+      type: "PLEX",
+      tlsSkipVerify: false,
+      enabled: true,
+    }]);
+
+    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
+      { ratingKey: "100", username: "Admin", watchedAt: "2025-07-01T00:00:00Z", deviceName: null, platform: null },
+    ]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: "item-1", ratingKey: "100" }]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT
+    mockReconcile.mockRejectedValueOnce(new Error("deadlock detected"));
+
+    // The history rows are already committed — the count still reflects them.
+    await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 1 });
   });
 });

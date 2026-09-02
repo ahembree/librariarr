@@ -610,13 +610,32 @@ const streamRelationHandler: FieldHandler = (operator, value, field, negate) => 
   const knownLangFilter = isLangField
     ? { language: { not: null, notIn: ["", "unknown"], mode: "insensitive" as const } }
     : {};
+  // Phase 2 refuses to match an item that has no KNOWN language of this type
+  // under ANY operator: "Unknown" != "English" must not read as true (see the
+  // "unknown language filtering" tests). The positive operators get that for
+  // free — nothing to equal. The NEGATED ones do not: a bare
+  // `NOT { streams: { some: … } }` is satisfied by a row with no such stream at
+  // all, or only an Unknown one, so Phase 1 admitted items Phase 2 rejects.
+  // Because Phase 2 only runs when something else in the rule set demands it
+  // (a wildcard, an Arr field, …), the same `subtitleLanguage notEquals
+  // English` rule matched a DIFFERENT set depending on an unrelated rule beside
+  // it — on a DELETE rule set, a different set of files. ANDing "has a known
+  // language of this type" onto the negated operators restores agreement.
+  // Codec fields carry no placeholder set, so they keep the plain semantics
+  // ("no audio stream" genuinely has no codec equal to X).
+  const requiresKnownLang: Prisma.MediaItemWhereInput[] = isLangField
+    ? [{ streams: { some: { streamType, ...knownLangFilter } } }]
+    : [];
   let clause: Prisma.MediaItemWhereInput;
   switch (operator) {
     case "equals":
       clause = { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: escapeLike(String(value)), mode: "insensitive" } } } };
       break;
     case "notEquals":
-      clause = { NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: escapeLike(String(value)), mode: "insensitive" } } } } };
+      clause = { AND: [
+        ...requiresKnownLang,
+        { NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: escapeLike(String(value)), mode: "insensitive" } } } } },
+      ] };
       break;
     case "contains": {
       // Stream language/codec fields are enumerable — `contains` is multi-select
@@ -629,7 +648,10 @@ const streamRelationHandler: FieldHandler = (operator, value, field, negate) => 
     case "notContains": {
       const parts = String(value).split("|").filter(Boolean);
       const matchValues = parts.length > 0 ? parts : [String(value)];
-      clause = { AND: matchValues.map((v) => ({ NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: escapeLike(v), mode: "insensitive" as const } } } } })) };
+      clause = { AND: [
+        ...requiresKnownLang,
+        ...matchValues.map((v) => ({ NOT: { streams: { some: { streamType, ...knownLangFilter, [streamField]: { equals: escapeLike(v), mode: "insensitive" as const } } } } })),
+      ] };
       break;
     }
     case "isNull": {

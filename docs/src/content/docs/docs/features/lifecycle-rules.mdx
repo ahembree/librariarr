@@ -61,14 +61,10 @@ Over 50 fields are available for rule conditions.
 | `hasExternalId` | Which external-id sources the item carries (TMDB, TVDB, IMDB, MUSICBRAINZ) — multi-select | equals, notEquals, contains, notContains, matchesWildcard, isNull, isNotNull |
 
 :::note[`hasExternalId`: per-source vs. "any at all"]
-The value-taking operators ask a **per-source** question — `equals TMDB`
-matches items that carry a TMDB id, `contains TMDB|IMDB` matches items with
-either.
-
-*Is Empty* / *Is Not Empty* take no value, so they ask about the id **list**
-instead: *Is Empty* matches items with **no external ids at all**, *Is Not
-Empty* matches items with at least one. Use `notEquals` / `notContains` when
-you mean "has no TMDB id specifically".
+Operators that take a value ask a **per-source** question: `equals TMDB` matches
+items carrying a TMDB id. *Is Empty* / *Is Not Empty* take no value, so they ask
+about the whole list — *Is Empty* means "no external ids at all". For "has no
+TMDB id specifically", use `notEquals TMDB`.
 :::
 
 ### Video Fields
@@ -145,7 +141,7 @@ If an item isn't in the linked *arr instance, or a specific field has no value (
 :::
 
 :::caution[*arr criteria need at least one enabled instance]
-A rule set that uses *arr fields is **skipped entirely** by detection (with a warning in System Logs) while no enabled instance of the matching *arr family exists — for example if you disable or delete your only Radarr instance. Without this, `foundInArr = false` would be true for **every item in your library** the moment the instance disappears, and a destructive action would be queued for all of it. Previews of such a rule set return an error instead of a misleading whole-library match list. Re-enable (or re-add) the instance and the rule set resumes on the next detection run.
+If you disable or delete your only Radarr, Sonarr, or Lidarr instance, rule sets using that family's fields are **skipped entirely** by detection, with a warning in System Logs, and previews return an error. This is deliberate: without an instance to check against, `foundInArr = false` would be true for your whole library. Re-add the instance and the rule set resumes on the next detection run.
 :::
 
 ### Seerr Fields
@@ -162,9 +158,9 @@ These fields require a configured [Seerr](/docs/integrations/seerr/) integration
 | `seerrDeclineDate` | When declined |
 
 :::caution[Seerr criteria need a connected Seerr instance]
-If a rule set uses Seerr fields but no Seerr instance is connected — for example after **importing** a rule set — the rule builder shows a **"Seerr instance required"** warning and disables Preview, Test Media, and Save until you connect Overseerr or Jellyseerr in Settings → Integrations. Detection also skips such a rule set entirely (with a warning in System Logs) while no enabled Seerr instance exists — otherwise `seerrRequested = false` would be vacuously true for every item in your library.
+With no Seerr instance connected — after **importing** a rule set, say — the rule builder shows a **"Seerr instance required"** warning and disables Preview, Test Media, and Save until you connect one under Settings → Integrations. Detection skips such rule sets too, for the same reason as *arr fields above.
 
-Seerr fields are only available on **movie and series** rule sets. Seerr doesn't manage music requests, so music rule sets reject Seerr criteria at save time. A legacy music rule set that already carries Seerr criteria (saved before this gate existed) is permanently unevaluable: detection skips it **and disarms it** — its stale matches are cleared and any pending actions are cancelled, and the action executor refuses its actions as a backstop.
+Seerr fields work on **movie and series** rule sets only; Seerr doesn't manage music requests, so music rule sets reject them at save time. A music rule set that somehow already carries Seerr criteria is disarmed — its matches are cleared and its pending actions cancelled.
 :::
 
 ## Operators
@@ -197,7 +193,7 @@ field's shape:
 | Field shape | Examples | *Is Empty* matches |
 |-------------|----------|--------------------|
 | Nullable column | `studio`, `rating`, `lastPlayedAt`, `arrQualityName`, `arrEnded` | The value is missing |
-| List | `genre`, `labels`, `country`, `arrTag`, `seerrRequestedBy` | The list has no entries — e.g. an item that is in *arr but carries no tags |
+| List | `genre`, `labels`, `country`, `arrTag`, `seerrRequestedBy`, `watchedByUser`, `matchedByRuleSet` | The list has no entries — e.g. an item that is in *arr but carries no tags |
 | Always-present text | `title`, `arrQualityProfile` | The value is the empty string |
 
 Fields whose value is always present and has no meaningful "empty" reading —
@@ -205,11 +201,25 @@ Fields whose value is always present and has no meaningful "empty" reading —
 `playCount`, `isWatchlisted` — don't offer the two operators at all, because
 *Is Not Empty* on them would just match everything.
 
-:::note[List fields and missing *arr data]
-`arrTag Is Empty` finds items that **are** in the linked *arr instance but carry
-no tags. An item that isn't in *arr at all does not match it — absent *arr data
-is never read as "no tags" (see [Missing *arr data is fail-closed](#external--arr-fields)
-above). Use `foundInArr` for that question instead.
+:::note[List fields ask about membership]
+On a list field, every operator compares case-insensitively, and *Equals* /
+*Contains* ask whether a value is **in** the list — not whether it appears
+inside one: `Tag Contains "kee"` does not match the tag `Keep`, but
+`Tag Matches Wildcard "kee*"` does.
+
+`arrTag Is Empty` means "in *arr, but carries no tags". An item that isn't in
+*arr at all doesn't match it — use `foundInArr` for that question.
+:::
+
+:::note[Audio and subtitle language are fail-closed]
+An item with no **known** language for a track type — no track at all, or only
+tracks the server reports as `Unknown` — matches **no** language rule, positive
+or negative. `Subtitle Language Is Not English` finds items that *have* a
+subtitle track in another language; for items with no subtitles at all, use
+`Subtitle Language Is Empty`.
+
+Track **codec** fields have no such placeholder, so they read plainly: an item
+with no audio track does match `Stream Audio Codec Is Not AAC`.
 :::
 
 ## Building Rules
@@ -265,25 +275,25 @@ After conversion, you're redirected to the new rule set's editor so you can pick
 
 ### Unsaved query drafts
 
-While you build a query, it's automatically kept for the current browser tab, so if you navigate away and come back the in-progress query is still there — no need to rebuild it. This is separate from **Save** (which stores a named query in the database): the draft lives only in your browser, isn't shared between tabs, and is cleared when you close the tab. When a draft is restored you'll see a short notice with **Discard** (start fresh) and a dismiss option. Use **New** at any time to clear the builder and the draft.
+An in-progress query is kept for the current browser tab, so navigating away and back doesn't lose it. This is separate from **Save**, which stores a named query — the draft lives only in that tab and is cleared when you close it. **Discard** appears when a draft is restored; **New** clears the builder at any time.
 
 ### Running Actions Directly from the Query Page
 
 For one-off cleanups you don't want to schedule, you can run a lifecycle action on query results **without** creating a rule set:
 
 1. Pick the Arr instance(s) for the media types you want to act on in the query toolbar (Radarr for movies, Sonarr for series, Lidarr for music).
-2. Run the query, then tick the checkbox on each result you want to act on (in table or card view). A select-all checkbox is available in the table header, and a **Select all / Deselect all** toggle sits above the results in card view. While a query runs, a progress bar above the results tracks each phase (resolving servers, fetching *arr/Seerr metadata, querying the library, evaluating rules) instead of a bare spinner.
-3. In the **Actions** bar above the results — always visible but disabled until you select at least one item — choose an action (e.g. *Delete from Radarr*, *Unmonitor & Delete Files*, *Change Quality Profile*), set any action-specific options (the target quality profile and **Search for upgrade** for a profile change, import exclusion / **Search after** for deletions), optionally add/remove Arr tags, then **Run action** and confirm. While the action runs, a progress bar below the Actions bar tracks its phases — validating the selection, then running the action item-by-item — and the bar fills as each item completes. The **validating** phase narrates what it's doing on its sub-line (re-running your query to confirm the selection still matches, resolving series episodes, checking the exception list, then loading the items), forwarding the re-query's own progress so a slow re-check on a large library isn't opaque. A sub-line shows the live **per-item count** (e.g. `3 / 12`) alongside the item currently being processed and the step in flight, so multi-step actions are visible: tag changes are applied first, then the main action (a quality-profile change, deletion, etc.), and the follow-up search when **Search after** is enabled. A large batch shows real progress instead of a bare spinner.
+2. Run the query, then tick the results you want to act on. Table and card views both offer a select-all control.
+3. In the **Actions** bar above the results, choose an action (e.g. *Delete from Radarr*, *Unmonitor & Delete Files*, *Change Quality Profile*), set any options it offers (target quality profile, import exclusion, **Search after**), optionally add or remove *arr tags, then **Run action** and confirm.
 
-The result count line above the results also reports the **total file size of all results**, so you can see how much disk a query covers at a glance. Once you select items, the **Actions** bar shows the **combined size of the current selection** next to the selected count — handy for gauging how much space a cleanup will reclaim before you run it.
+A progress bar tracks both the query and the action while they run. The result count line reports the **total file size of all results**, and the Actions bar shows the **combined size of your selection** — handy for gauging how much space a cleanup will reclaim before you run it.
 
 Notes:
 
 - **Runs immediately** — there is no delay, unlike scheduled rule actions.
-- **Any selection size — run in batches of 1,000** — you can select as many items as you like. The server processes at most 1,000 items per request (a safety bound: each item drives its own *arr API calls), so a larger selection is automatically split into sequential batches of up to 1,000. Only the items of the action's own media type are batched (the rest are skipped anyway), and a series' episodes are always kept in the same batch. When the run needs more than one batch, the Actions bar shows the count (e.g. *· 3 batches*), the confirmation dialog spells it out, and the progress bar labels each pass (*Batch 2/3 · Running action*). Each batch's completed actions are recorded before the next starts, so if a run stops part-way nothing already done is lost — just re-run to finish the rest. If a whole batch fails (for example the *arr instance is down), the run stops early instead of retrying every remaining batch. One exception: a **whole-series** action (e.g. *Delete from Sonarr*) on more than 1,000 episodes of a *single* show while viewing individual episodes is refused — switch to the grouped series view, which acts on the whole show in one unit.
+- **Any selection size** — larger selections are split automatically into sequential batches of up to 1,000 items, and the Actions bar and confirmation dialog tell you how many. Each batch is recorded before the next starts, so a run that stops part-way loses nothing — re-run to finish the rest. (One exception: a whole-series action on more than 1,000 episodes of a *single* show is refused while you're viewing individual episodes — switch to the grouped series view, which acts on the show in one unit.)
 - **One Arr family per run** — an action applies only to selected results of its media type (e.g. *Delete from Radarr* acts on selected movies); selected items of other types are skipped and reported in the result toast.
 - Before acting, the query is re-run so only items that still match are affected, and items on the [Lifecycle Exceptions](/docs/features/deletion-safety/) list are skipped automatically.
-- Actions are refused outright when the query's Arr or Seerr criteria can't actually be evaluated — no Arr server selected (or the selected one no longer exists) for the action's media type, no enabled Seerr instance selected, or Seerr criteria driving a music action. Without real external data, negative rules like *Found In Arr = false* would match your entire library, so the run is blocked with an explanatory error instead.
+- Actions are refused when the query's *arr or Seerr criteria can't actually be evaluated — no *arr server selected for the action's media type, no enabled Seerr instance, or Seerr criteria on a music action. Without that data a rule like *Found In Arr = false* would match your entire library, so the run is blocked with an explanatory error.
 - Every run is recorded in the **Actions** history (and deletion stats) labelled *Ad-hoc query action*, so there's a full audit trail even though no rule set exists.
 
 ## Previewing Matches
@@ -422,6 +432,12 @@ For **Series** rule sets, the **Series Scope** toggle controls the unit of evalu
 Some fields are **series-aggregate** fields — `availableEpisodeCount`, `watchedEpisodeCount`, `watchedEpisodePercentage`, `lastEpisodeAiredAt`, `lastEpisodeAddedAt`, `latestEpisodeViewDate`, and `seriesLastPlayedAt` (**Series Last Played**). These describe the show as a whole and can only be computed across every episode, so a rule that references one is always evaluated at the series level — even with Series Scope off.
 
 **Series Last Played** is the most recent play date across *all* episodes (the max of every episode's last-played date). Use it to find shows nobody has touched in a while — e.g. *Series Last Played is not in the last 365 days* matches only series where **every** episode was last played over a year ago. This differs from the per-episode **Last Played** field (which would match a series as long as it has *any* old episode, even if another episode was watched yesterday) and from **Latest Episode View Date** (the play date of the *newest* episode by number — "did they watch the latest episode?").
+
+:::note[Plays by other users count too]
+**Play Count**, **Last Played** and **Series Last Played** reflect plays by **every** user on your media server, not just the account Librariarr signs in as. They're kept in step with the same watch history the [History page](/docs/features/library/) shows, so if a rule ever disagrees with History for a title, run a sync.
+
+**Is Watchlisted** is different: a Plex watchlist belongs to *your* Plex account, and Librariarr reads it during a full sync — so watchlist changes appear on the next full sync rather than instantly.
+:::
 
 When Series Scope is **off** and your rule mixes an aggregate field with a per-episode field (for example, *available episode count ≥ 20 **and** resolution = 4K*), the show first has to qualify on the aggregate, and then a member-scoped file delete acts only on the episodes that individually satisfy the per-episode conditions (here, just the 4K episodes) — not every episode of the series. With Series Scope **on**, the same rule deletes the whole series.
 
