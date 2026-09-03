@@ -21,12 +21,14 @@ Browse all movies with poster artwork, metadata, and quality information.
 
 ### Series
 
-Series are grouped by show title. Drill down into:
+Series are grouped by show identity, not just by title. Drill down into:
 
 - **Seasons** — View seasons within a series with episode counts
 - **Episodes** — Individual episodes with per-episode metadata and quality info
 
 Each of these pages also carries a [watch history section](#watch-history-on-series-pages) listing the individual plays for whatever you are looking at.
+
+Two different shows that happen to share a title — *The Office* (UK) and *The Office* (US), or the 1978 and 2004 *Battlestar Galactica* — appear as **separate rows**, each with its own seasons, episodes, and watch history. Shows are matched by their series-level TVDB id (TMDB as a fallback, and the show title only when neither id is present), so the same show that exists on more than one server still shows up as a **single** merged row.
 
 ### Music
 
@@ -168,7 +170,7 @@ The series, season, and episode detail pages each show their own watch history s
 
 Each row also names the device or platform where available, and links back to the episode that was played. Series and season pages load 25 plays at a time, with a **Load more** button for the rest.
 
-When a title exists on more than one server, plays from *every* server are listed and each row is tagged with its server name. A play is a real event on the copy that was actually played, so nothing is hidden by [deduplication](#multi-server-deduplication). The series is matched the same way the library groups shows — ignoring capitalisation and surrounding spaces — so a server that spells the title differently still contributes its plays.
+When a show exists on more than one server, plays from *every* server are listed and each row is tagged with its server name. A play is a real event on the copy that was actually played, so nothing is hidden by [deduplication](#multi-server-deduplication). The series is matched the same way the library groups shows — by series identity (its TVDB/TMDB id, falling back to the title) — so a server that spells the title differently still contributes its plays, and two different shows that share a title never blend their history.
 
 These sections read the same stored watch history as the main history page, so they fill in after a watch-history sync (see below). The same [per-server limits](#data-sources-by-server-type) apply: on Jellyfin and Emby only the most recent play of an item carries a timestamp, so repeat plays are listed as **Unknown date** and sorted to the bottom.
 

@@ -198,7 +198,7 @@ describe("getServerPresenceByGroup", () => {
     expect(result.size).toBe(0);
   });
 
-  it("groups by normalized parentTitle", async () => {
+  it("groups SERIES by seriesKey (title fallback), keyed by that key", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id, { name: "Plex 1" });
     const lib = await createTestLibrary(server.id, { type: "SERIES" });
@@ -227,8 +227,8 @@ describe("getServerPresenceByGroup", () => {
 
     const result = await getServerPresenceByGroup("SERIES", [server.id]);
     expect(result.size).toBe(2);
-    expect(result.has("breaking bad")).toBe(true);
-    expect(result.has("the wire")).toBe(true);
+    expect(result.has("title:breaking bad")).toBe(true);
+    expect(result.has("title:the wire")).toBe(true);
   });
 
   it("shows multiple servers for same group", async () => {
@@ -257,7 +257,7 @@ describe("getServerPresenceByGroup", () => {
       server1.id,
       server2.id,
     ]);
-    const servers = result.get("breaking bad")!;
+    const servers = result.get("title:breaking bad")!;
     expect(servers).toHaveLength(2);
     expect(servers.map((s) => s.serverName)).toContain("Alpha Server");
     expect(servers.map((s) => s.serverName)).toContain("Beta Server");
@@ -289,7 +289,7 @@ describe("getServerPresenceByGroup", () => {
       server1.id,
       server2.id,
     ]);
-    const servers = result.get("the wire")!;
+    const servers = result.get("title:the wire")!;
     expect(servers[0].serverName).toBe("Alpha Server");
     expect(servers[1].serverName).toBe("Zulu Server");
   });
@@ -319,8 +319,8 @@ describe("getServerPresenceByGroup", () => {
     // Only pass server1's id
     const result = await getServerPresenceByGroup("SERIES", [server1.id]);
     expect(result.size).toBe(1);
-    expect(result.has("show a")).toBe(true);
-    expect(result.has("show b")).toBe(false);
+    expect(result.has("title:show a")).toBe(true);
+    expect(result.has("title:show b")).toBe(false);
   });
 
   it("works with MUSIC type grouping by artist", async () => {
@@ -344,5 +344,51 @@ describe("getServerPresenceByGroup", () => {
     const servers = result.get("the beatles")!;
     expect(servers).toHaveLength(1);
     expect(servers[0].serverName).toBe("Music Server");
+  });
+
+  it("separates two same-titled shows with different seriesKeys", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { name: "Plex" });
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+
+    // Two genuinely different shows that share a title, keyed by distinct TVDB ids.
+    await createTestMediaItem(lib.id, {
+      title: "Downsize", type: "SERIES", parentTitle: "The Office",
+      seriesKey: "tvdb:78107", seasonNumber: 1, episodeNumber: 1,
+    });
+    await createTestMediaItem(lib.id, {
+      title: "Pilot", type: "SERIES", parentTitle: "The Office",
+      seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 1,
+    });
+
+    const result = await getServerPresenceByGroup("SERIES", [server.id]);
+    // Two distinct groups even though the title is identical.
+    expect(result.size).toBe(2);
+    expect(result.has("tvdb:78107")).toBe(true);
+    expect(result.has("tvdb:73244")).toBe(true);
+    expect(result.has("title:the office")).toBe(false);
+  });
+
+  it("merges the same show across servers via a shared seriesKey", async () => {
+    const user = await createTestUser();
+    const server1 = await createTestServer(user.id, { name: "Alpha" });
+    const server2 = await createTestServer(user.id, { name: "Beta" });
+    const lib1 = await createTestLibrary(server1.id, { type: "SERIES" });
+    const lib2 = await createTestLibrary(server2.id, { type: "SERIES" });
+
+    // Same show, different title spelling on each server, but a shared TVDB id.
+    await createTestMediaItem(lib1.id, {
+      title: "33", type: "SERIES", parentTitle: "Battlestar Galactica",
+      seriesKey: "tvdb:73545", seasonNumber: 1, episodeNumber: 1,
+    });
+    await createTestMediaItem(lib2.id, {
+      title: "33", type: "SERIES", parentTitle: "battlestar galactica ",
+      seriesKey: "tvdb:73545", seasonNumber: 1, episodeNumber: 1,
+    });
+
+    const result = await getServerPresenceByGroup("SERIES", [server1.id, server2.id]);
+    expect(result.size).toBe(1);
+    const servers = result.get("tvdb:73545")!;
+    expect(servers.map((s) => s.serverName).sort()).toEqual(["Alpha", "Beta"]);
   });
 });

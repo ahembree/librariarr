@@ -32,6 +32,19 @@ import { evaluateSeriesScope } from "@/lib/rules/lifecycle-engine";
 // availableEpisodeCount (aggregate, forces the series path) AND year=2020
 // (per-episode). The aggregate evaluates `year` against the representative
 // episode, so the series matches when the representative is 2020.
+// availableEpisodeCount > 2 — a pure series-aggregate rule, evaluated per
+// aggregated series. Used to prove two same-titled shows are aggregated apart.
+const episodeCountRule: LifecycleRuleGroup[] = [
+  {
+    id: "gc",
+    condition: "AND",
+    rules: [
+      { id: "rc", field: "availableEpisodeCount", operator: "greaterThan", value: "2", condition: "AND" },
+    ],
+    groups: [],
+  },
+];
+
 const mixedRule: LifecycleRuleGroup[] = [
   {
     id: "g1",
@@ -92,5 +105,36 @@ describe("evaluateSeriesScope — member restriction for seriesScope=false + agg
     expect(matched).toHaveLength(1);
     const members = (matched[0] as unknown as { memberIds: string[] }).memberIds;
     expect(new Set(members)).toEqual(new Set(allIds));
+  });
+
+  it("aggregates two same-titled shows separately by seriesKey", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+
+    // Both shows are "Threshold" in one library; only seriesKey differs. The
+    // small show has 2 episodes, the big show has 3. `availableEpisodeCount > 2`
+    // must match ONLY the big show — proof they aren't blended into one series.
+    for (let e = 1; e <= 2; e++) {
+      await createTestMediaItem(library.id, {
+        type: "SERIES", title: `Small S1E${e}`, parentTitle: "Threshold",
+        seriesKey: "tvdb:11111", seasonNumber: 1, episodeNumber: e,
+      });
+    }
+    const bigIds: string[] = [];
+    for (let e = 1; e <= 3; e++) {
+      const ep = await createTestMediaItem(library.id, {
+        type: "SERIES", title: `Big S1E${e}`, parentTitle: "Threshold",
+        seriesKey: "tvdb:22222", seasonNumber: 1, episodeNumber: e,
+      });
+      bigIds.push(ep.id);
+    }
+
+    const matched = await evaluateSeriesScope(episodeCountRule, [server.id], undefined, undefined, false);
+
+    // Only the 3-episode show matches; a blended 5-episode aggregate would be wrong.
+    expect(matched).toHaveLength(1);
+    const members = (matched[0] as unknown as { memberIds: string[] }).memberIds;
+    expect(new Set(members)).toEqual(new Set(bigIds));
   });
 });

@@ -566,4 +566,32 @@ describe("/api/media/series total accounting", () => {
     expect(body.pagination.total).toBe(5);
     expect(body.pagination.pages).toBe(3);
   });
+
+  it("filters by seriesKey, keeping same-titled shows apart", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+
+    await createTestMediaItem(lib.id, {
+      title: "Downsize", type: "SERIES", parentTitle: "The Office",
+      seriesKey: "tvdb:78107", seasonNumber: 1, episodeNumber: 1,
+    });
+    await createTestMediaItem(lib.id, {
+      title: "Pilot", type: "SERIES", parentTitle: "The Office",
+      seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 1,
+    });
+
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const body = await expectJson<{ items: { title: string }[] }>(
+      await callRoute(GET, {
+        url: "/api/media/series",
+        searchParams: { seriesKey: "tvdb:73244", seasonNumber: "1" },
+      }),
+      200,
+    );
+    // Only the US show's episode, not the UK show's identically-titled season 1.
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].title).toBe("Pilot");
+  });
 });

@@ -108,7 +108,7 @@ async function queryJsonUnnest(
   assertAllowedColumn(dbField, ALLOWED_MEDIA_ITEM_COLUMNS);
   return prisma.$queryRaw<BreakdownRow[]>`
     SELECT g.val AS "value", mi.type::text AS "type",
-      COUNT(DISTINCT COALESCE(mi."parentTitle", mi.id))::int AS "_count"
+      COUNT(DISTINCT COALESCE(CASE WHEN mi.type = 'SERIES' THEN mi."seriesKey" END, mi."parentTitle", mi.id))::int AS "_count"
     FROM "MediaItem" mi
     JOIN "Library" l ON mi."libraryId" = l.id
     CROSS JOIN LATERAL jsonb_array_elements_text(mi.${Prisma.raw(`"${dbField}"`)}) AS g(val)

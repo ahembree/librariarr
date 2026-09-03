@@ -100,6 +100,7 @@ interface QueryResultItem {
   id: string;
   title: string;
   parentTitle: string | null;
+  seriesKey: string | null;
   year: number | null;
   type: string;
   seasonNumber: number | null;
@@ -913,7 +914,9 @@ export default function QueryPage() {
         const perShow = new Map<string, number>();
         for (const it of selectedItems) {
           if (it.type !== "SERIES") continue;
-          const key = (it.parentTitle ?? it.title ?? "").trim().toLowerCase();
+          // Series identity (falls back to title) so two same-titled shows are
+          // counted separately — mirrors the server's grouping.
+          const key = it.seriesKey ?? `title:${(it.parentTitle ?? it.title ?? "").trim().toLowerCase()}`;
           perShow.set(key, (perShow.get(key) ?? 0) + 1);
         }
         if ([...perShow.values()].some((n) => n > MAX_QUERY_ACTION_ITEMS)) {

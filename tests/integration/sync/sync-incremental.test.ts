@@ -181,6 +181,78 @@ describe("syncMediaServerItems", () => {
     expect(ids.map((i) => `${i.source}:${i.externalId}`)).toEqual(["TVDB:12345"]);
   });
 
+  it("writes seriesKey from the show-level TVDB id for an episode", async () => {
+    const { user } = await seed();
+    const prisma = getTestPrisma();
+    const server = await prisma.mediaServer.findFirstOrThrow({ where: { userId: user.id } });
+    const seriesLib = await createTestLibrary(server.id, { key: "2", type: "SERIES" });
+
+    mockGetItemMetadata.mockImplementation(async (ratingKey: string) => {
+      if (ratingKey === "show-bcs") {
+        // Show-level metadata carries the SERIES-level TVDB id.
+        return {
+          ratingKey: "show-bcs", key: "/library/metadata/show-bcs", type: "show",
+          title: "Better Call Saul", librarySectionID: 2,
+          Guid: [{ id: "tvdb://273181" }, { id: "tmdb://60059" }],
+        };
+      }
+      return {
+        ratingKey: "ep-bcs", key: "/library/metadata/ep-bcs", type: "episode",
+        title: "Uno", grandparentTitle: "Better Call Saul", grandparentRatingKey: "show-bcs",
+        parentIndex: 1, index: 1, librarySectionID: 2,
+        Guid: [{ id: "tvdb://5051111" }], // EPISODE-level id — must NOT become the seriesKey
+      };
+    });
+
+    const result = await syncMediaServerItems(server.id, ["ep-bcs"], []);
+    expect(result.status).toBe("done");
+
+    const ep = await prisma.mediaItem.findFirstOrThrow({
+      where: { libraryId: seriesLib.id, ratingKey: "ep-bcs" },
+    });
+    // seriesKey uses the SHOW-level TVDB id (273181), never the episode's own id.
+    expect(ep.seriesKey).toBe("tvdb:273181");
+  });
+
+  it("falls seriesKey back to the title when the show has no series-level ids", async () => {
+    // Regression: for an UNMATCHED show (show metadata carries no Guid), the
+    // episode's OWN Guid is episode-level. seriesKey must NOT use it — that id is
+    // per-episode and would fragment the show into one "series" per episode and
+    // disagree with the persisted external ids / migration backfill (both of
+    // which drop episode-level ids for series). It must fall back to the title.
+    const { user } = await seed();
+    const prisma = getTestPrisma();
+    const server = await prisma.mediaServer.findFirstOrThrow({ where: { userId: user.id } });
+    const seriesLib = await createTestLibrary(server.id, { key: "2", type: "SERIES" });
+
+    mockGetItemMetadata.mockImplementation(async (ratingKey: string) => {
+      if (ratingKey === "show-unmatched") {
+        // Unmatched show: real metadata, but NO Guid (no series-level id).
+        return {
+          ratingKey: "show-unmatched", key: "/library/metadata/show-unmatched", type: "show",
+          title: "Home Movies 1998", librarySectionID: 2,
+        };
+      }
+      return {
+        ratingKey: "ep-hm", key: "/library/metadata/ep-hm", type: "episode",
+        title: "Birthday", grandparentTitle: "Home Movies 1998", grandparentRatingKey: "show-unmatched",
+        parentIndex: 1, index: 1, librarySectionID: 2,
+        Guid: [{ id: "tvdb://909090" }], // EPISODE-level id — must NOT become the seriesKey
+      };
+    });
+
+    const result = await syncMediaServerItems(server.id, ["ep-hm"], []);
+    expect(result.status).toBe("done");
+
+    const ep = await prisma.mediaItem.findFirstOrThrow({
+      where: { libraryId: seriesLib.id, ratingKey: "ep-hm" },
+    });
+    expect(ep.seriesKey).toBe("title:home movies 1998");
+    // And no episode-level external id was persisted either (mirrors the key).
+    const ids = await prisma.mediaItemExternalId.findMany({ where: { mediaItemId: ep.id } });
+    expect(ids).toHaveLength(0);
+  });
+
   it("still writes metadata play state for an item with no stored history", async () => {
     const { server } = await seed();
     mockGetItemMetadata.mockResolvedValue(

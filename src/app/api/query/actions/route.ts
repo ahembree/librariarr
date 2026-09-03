@@ -210,7 +210,7 @@ export async function POST(request: NextRequest) {
       // batch's deleted items) — so memoize it per client `runId` and reuse it
       // across batches. Keyed by run id (unique per run) so there's no cross-run
       // staleness; without a run id (a single request) it just computes.
-      type LiveItem = { id: string; type: string; parentTitle: string | null; title: string | null };
+      type LiveItem = { id: string; type: string; parentTitle: string | null; title: string | null; seriesKey: string | null };
       const RUN_LIVE_TTL_MS = 10 * 60 * 1000;
       const toLiveItems = (items: Array<Record<string, unknown>>): LiveItem[] =>
         items.map((it) => ({
@@ -218,6 +218,7 @@ export async function POST(request: NextRequest) {
           type: String(it.type),
           parentTitle: (it.parentTitle ?? null) as string | null,
           title: (it.title ?? null) as string | null,
+          seriesKey: (it.seriesKey ?? null) as string | null,
         }));
       const liveMatch = (variant: string, compute: () => Promise<LiveItem[]>): Promise<LiveItem[]> =>
         runId
@@ -250,11 +251,14 @@ export async function POST(request: NextRequest) {
       const isMemberScoped = actionHonorsMemberIds(actionType);
       const isWholeRecordDestructive = isWholeRecordDestructiveAction(actionType);
 
-      // Group by the SAME key the query engine uses for grouped shows
-      // (LOWER(TRIM(parentTitle))). Using a looser key (e.g. normalizeTitle)
-      // would collapse distinct shows like "The Office (US)" / "The Office (UK)"
-      // and act on the wrong episodes.
+      // Group a show's episodes by the SAME series identity the query engine
+      // groups on: seriesKey when the row carries one, else the legacy
+      // LOWER(TRIM(parentTitle)) fallback. Keying on the title alone would
+      // collapse two genuinely different shows that share a title (The Office
+      // US / UK) and act on the wrong episodes.
       const showKey = (s: unknown) => String(s ?? "").trim().toLowerCase();
+      const seriesGroupKey = (it: { seriesKey?: string | null; parentTitle?: string | null; title?: string | null }) =>
+        it.seriesKey ?? showKey(it.parentTitle ?? it.title);
 
       // Resolve SERIES episode-level member IDs and the units the action runs on.
       const episodeIdMap = new Map<string, string[]>();
@@ -281,7 +285,7 @@ export async function POST(request: NextRequest) {
             // mirrors the grouped path and the scheduler (processor.ts).
             const matchedByShow = new Map<string, string[]>();
             for (const it of liveOfType) {
-              const key = showKey(it.parentTitle ?? it.title);
+              const key = seriesGroupKey(it);
               const arr = matchedByShow.get(key) ?? [];
               arr.push(it.id);
               matchedByShow.set(key, arr);
@@ -290,7 +294,7 @@ export async function POST(request: NextRequest) {
             actionUnitIds = [];
             for (const id of validIds) {
               const item = liveOfType.find((it) => String(it.id) === id);
-              const key = showKey(item?.parentTitle ?? item?.title);
+              const key = item ? seriesGroupKey(item) : showKey(null);
               if (seenShows.has(key)) continue; // one representative per show
               seenShows.add(key);
               actionUnitIds.push(id);
@@ -315,16 +319,17 @@ export async function POST(request: NextRequest) {
           });
           const groups = new Map<string, string[]>();
           for (const ep of episodeItems) {
-            const key = showKey(ep.parentTitle);
+            const key = seriesGroupKey(ep);
             const arr = groups.get(key) ?? [];
             arr.push(ep.id);
             groups.set(key, arr);
           }
           for (const id of validIds) {
-            // For grouped shows the representative row carries the show name in
-            // `title` (MIN(parentTitle)); episodes carry it in `parentTitle`.
+            // Both the grouped representative row and the episode rows carry
+            // `seriesKey`, so identity lines up without relying on where the
+            // show name happens to live (title vs parentTitle).
             const item = liveOfType.find((it) => String(it.id) === id);
-            const key = showKey(item?.title ?? item?.parentTitle);
+            const key = item ? seriesGroupKey(item) : showKey(null);
             const members = groups.get(key);
             if (members && members.length > 0) episodeIdMap.set(id, members);
           }

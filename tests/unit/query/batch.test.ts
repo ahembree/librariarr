@@ -120,4 +120,32 @@ describe("buildActionBatches", () => {
     expect(() => buildActionBatches(movies(5), "MOVIE", -1)).toThrow();
     expect(() => buildActionBatches(movies(5), "MOVIE", 1.5)).toThrow();
   });
+
+  it("groups a show's episodes by seriesKey, splitting two same-titled shows", () => {
+    // Both shows are "The Office"; only seriesKey distinguishes them. Each must
+    // be its own group so a whole-record action isn't collapsed across them.
+    const items: BatchableItem[] = [
+      { id: "uk1", type: "SERIES", parentTitle: "The Office", seriesKey: "tvdb:78107" },
+      { id: "us1", type: "SERIES", parentTitle: "The Office", seriesKey: "tvdb:73244" },
+      { id: "us2", type: "SERIES", parentTitle: "The Office", seriesKey: "tvdb:73244" },
+    ];
+    // Batch size 1 forces one batch per group, so the group count is observable.
+    const batches = buildActionBatches(items, "SERIES", 1);
+    // Two shows → two groups (the US show's two episodes share a group and are
+    // hard-split only by the size-1 cap, but never mixed with the UK show).
+    const batchOf = (id: string) => batches.findIndex((b) => b.includes(id));
+    expect(batchOf("uk1")).not.toBe(batchOf("us1"));
+    expect(batchOf("uk1")).not.toBe(batchOf("us2"));
+  });
+
+  it("keeps a single show's episodes in one group when seriesKey is shared", () => {
+    const items: BatchableItem[] = [
+      { id: "e1", type: "SERIES", parentTitle: "The Office", seriesKey: "tvdb:73244" },
+      { id: "e2", type: "SERIES", parentTitle: "The Office", seriesKey: "tvdb:73244" },
+    ];
+    // A generous size keeps the whole group together in one batch.
+    const batches = buildActionBatches(items, "SERIES", 1000);
+    expect(batches).toHaveLength(1);
+    expect(batches[0].sort()).toEqual(["e1", "e2"]);
+  });
 });

@@ -1,3 +1,5 @@
+import { resolveSeriesKey } from "@/lib/media/series-key";
+
 /**
  * Shared series-aggregate computation. Both the rule engine and the query
  * engine need to roll up episode rows into one aggregate-per-series record
@@ -9,6 +11,15 @@
 export interface AggregableEpisode {
   id: string;
   parentTitle: string | null;
+  /**
+   * Series identity (see src/lib/media/series-key.ts). Present on rows selected
+   * with the `seriesKey` column; when absent it is recomputed from
+   * `parentTitle` + `externalIds`. Two same-titled shows with different TVDB
+   * ids get different keys, so they aggregate separately.
+   */
+  seriesKey?: string | null;
+  /** Series-level external ids, used only to recompute seriesKey when unset. */
+  externalIds?: ReadonlyArray<{ source: string; externalId: string }> | null;
   libraryId: string;
   playCount: number;
   fileSize: bigint | null;
@@ -54,7 +65,12 @@ export function aggregateEpisodesIntoSeries<E extends AggregableEpisode>(
 
   const seriesMap = new Map<string, E[]>();
   for (const ep of episodes) {
-    const key = `${ep.libraryId}::${ep.parentTitle ?? ep.libraryId}`;
+    // Per-library series identity. Keeping the libraryId prefix means the same
+    // show on two servers stays as two aggregates (each with its own episode
+    // count) that the multi-server caller collapses by Arr id — merging them
+    // here would double-count episodes. Within a library, keying on seriesKey
+    // (not the ambiguous parentTitle) splits two same-titled shows.
+    const key = `${ep.libraryId}::${resolveSeriesKey(ep) ?? ep.libraryId}`;
     const group = seriesMap.get(key);
     if (group) {
       group.push(ep);
