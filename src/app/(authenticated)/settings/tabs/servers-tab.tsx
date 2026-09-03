@@ -33,6 +33,16 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Server,
   RefreshCw,
   Loader2,
@@ -50,9 +60,19 @@ import {
   Film,
   Tv,
   Music,
+  History,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { MediaServer, PlexServer, PlexConnection, AuthInfo, TestResult } from "../types";
+import type {
+  MediaServer,
+  PlexServer,
+  PlexConnection,
+  AuthInfo,
+  TestResult,
+  TracearrInstance,
+  TracearrServerListState,
+  TracearrServerStatus,
+} from "../types";
 
 // ─── Local helpers ───
 
@@ -224,6 +244,178 @@ export interface ServerTestResult {
   error?: string;
 }
 
+/**
+ * Pending change to a server's watch-history source. Confirmed before it is
+ * written because switching sources clears the server's stored `WatchHistory`
+ * — the two sources disagree on event identity, so they cannot be interleaved.
+ */
+export interface WatchHistorySourceDialogState {
+  open: boolean;
+  serverId: string;
+  serverName: string;
+  /** null reverts the server to its own (native) history. */
+  tracearrServerId: string | null;
+  /** Plain-text name of the picked source, for the confirmation copy. */
+  sourceLabel: string;
+}
+
+// ─── Watch history source ───
+
+/** Radix rejects "" as a value, so Native needs a sentinel. */
+const NATIVE_WATCH_SOURCE = "native";
+
+const NATIVE_WATCH_SOURCE_LABEL = "Native (server history)";
+
+/** One Tracearr server, flattened across every enabled instance. */
+interface WatchSourceOption {
+  instanceId: string;
+  instanceName: string;
+  server: TracearrServerStatus;
+}
+
+function watchSourceLabel(option: WatchSourceOption): string {
+  return `${option.server.name} (${option.server.type}) on ${option.instanceName}`;
+}
+
+/**
+ * Per-server picker for where watch history comes from: the media server's own
+ * history, or one of the servers a Tracearr instance monitors.
+ *
+ * Renders nothing when there is no enabled Tracearr instance — the dropdown
+ * would offer a single option — but stays visible for an already-linked server
+ * even then, so a link made before the instance was disabled can still be
+ * undone.
+ */
+function WatchHistorySourceSelect({
+  server,
+  instances,
+  serverLists,
+  saving,
+  onSelect,
+}: {
+  server: MediaServer;
+  instances: TracearrInstance[];
+  serverLists: Record<string, TracearrServerListState>;
+  saving: boolean;
+  onSelect: (tracearrServerId: string | null, sourceLabel: string) => void;
+}) {
+  const linkedId = server.tracearrServerId ?? null;
+  const enabledInstances = instances.filter((i) => i.enabled);
+  if (enabledInstances.length === 0 && !linkedId) return null;
+
+  const lists = enabledInstances.map((instance) => ({ instance, state: serverLists[instance.id] }));
+  // A list that hasn't been requested yet (undefined) is still loading as far
+  // as the dropdown is concerned — offering options before every instance has
+  // answered would hide servers that are about to appear.
+  const loading = lists.some(({ state }) => !state || state.loading);
+  const errors = lists
+    .filter(({ state }) => state?.error)
+    .map(({ instance, state }) => `${instance.name}: ${state!.error}`);
+
+  const options: WatchSourceOption[] = lists.flatMap(({ instance, state }) =>
+    (state?.servers ?? []).map((s) => ({
+      instanceId: instance.id,
+      instanceName: instance.name,
+      server: s,
+    })),
+  );
+  const linked = linkedId ? options.find((o) => o.server.id === linkedId) ?? null : null;
+
+  // With nothing to pick, a Select is dead UI — except when the server is
+  // already linked, where "back to Native" is itself a real choice (and the
+  // only escape hatch when the instance is unreachable).
+  const hasChoices = options.length > 0 || !!linkedId;
+  const value = linked ? linked.server.id : linkedId ?? NATIVE_WATCH_SOURCE;
+
+  return (
+    <div className="mb-4">
+      <div className="mb-2 flex items-center gap-2">
+        <h4 className="text-sm font-medium">Watch history source</h4>
+        {(loading || saving) && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+      </div>
+      <Select
+        value={value}
+        disabled={loading || saving || !hasChoices}
+        onValueChange={(next) => {
+          if (next === value) return;
+          if (next === NATIVE_WATCH_SOURCE) {
+            onSelect(null, NATIVE_WATCH_SOURCE_LABEL);
+            return;
+          }
+          const picked = options.find((o) => o.server.id === next);
+          onSelect(next, picked ? watchSourceLabel(picked) : next);
+        }}
+      >
+        <SelectTrigger className="w-full sm:w-[420px]">
+          <SelectValue placeholder={NATIVE_WATCH_SOURCE_LABEL} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NATIVE_WATCH_SOURCE}>{NATIVE_WATCH_SOURCE_LABEL}</SelectItem>
+          {/* The stored mapping is a bare Tracearr server id, so the id is the
+              option value and the owning instance is only a group label. */}
+          {lists.map(({ instance, state }) => {
+            const servers = state?.servers ?? [];
+            if (servers.length === 0) return null;
+            return (
+              <React.Fragment key={instance.id}>
+                <SelectSeparator />
+                <SelectGroup>
+                  <SelectLabel>{instance.name}</SelectLabel>
+                  {servers.map((s) => (
+                    <SelectItem key={`${instance.id}:${s.id}`} value={s.id}>
+                      <span className="truncate">{s.name}</span>
+                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {s.type}
+                      </span>
+                      {!s.online && <span className="text-xs text-amber-400">offline</span>}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </React.Fragment>
+            );
+          })}
+          {/* A link whose server isn't in any list (instance disabled, offline,
+              or the server removed from Tracearr) still needs an item, or the
+              trigger falls back to the placeholder and reads as Native. */}
+          {linkedId && !linked && (
+            <>
+              <SelectSeparator />
+              <SelectItem value={linkedId}>
+                <span className="truncate">Linked Tracearr server</span>
+                {!loading && <span className="text-xs text-amber-400">unavailable</span>}
+              </SelectItem>
+            </>
+          )}
+        </SelectContent>
+      </Select>
+      {errors.length > 0 ? (
+        // Shown instead of silently offering a short list: "we couldn't ask
+        // Tracearr" must not look like "Tracearr monitors nothing".
+        <div className="mt-1.5 space-y-0.5">
+          {errors.map((message) => (
+            <p key={message} className="flex items-start gap-1.5 text-xs text-destructive">
+              <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+              <span>Couldn&apos;t load Tracearr servers — {message}</span>
+            </p>
+          ))}
+        </div>
+      ) : !loading && options.length === 0 ? (
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          Tracearr isn&apos;t monitoring any servers yet.
+        </p>
+      ) : (
+        <p className="mt-1.5 flex items-start gap-1.5 text-xs text-muted-foreground">
+          <History className="mt-0.5 h-3 w-3 shrink-0" />
+          <span>
+            Linking a Tracearr server replaces this server&apos;s own play history with Tracearr&apos;s
+            per-play events (completion, device, transcode decision).
+          </span>
+        </p>
+      )}
+    </div>
+  );
+}
+
 export interface ServersTabProps {
   // Server data
   servers: MediaServer[];
@@ -273,6 +465,13 @@ export interface ServersTabProps {
   removeServerDialog: RemoveServerDialogState | null;
   removingServer: boolean;
 
+  // Watch history source (Tracearr mapping) state
+  tracearrInstances: TracearrInstance[];
+  /** Keyed by Tracearr instance id; absent until that instance's list is requested. */
+  tracearrServerLists: Record<string, TracearrServerListState>;
+  watchHistorySourceDialog: WatchHistorySourceDialogState | null;
+  savingWatchHistorySource: string | null;
+
   // ─── Setters ───
   setAddServerDialog: React.Dispatch<React.SetStateAction<AddServerDialogState | null>>;
   setAddServerForm: React.Dispatch<React.SetStateAction<AddServerFormState>>;
@@ -290,6 +489,7 @@ export interface ServersTabProps {
   setPurgeDialog: (value: PurgeDialogState | null) => void;
   setSyncPrompt: (value: SyncPromptState | null) => void;
   setRemoveServerDialog: (value: RemoveServerDialogState | null) => void;
+  setWatchHistorySourceDialog: (value: WatchHistorySourceDialogState | null) => void;
 
   // ─── Handlers ───
   onSyncServer: (serverId: string, libraryKey?: string) => void;
@@ -305,6 +505,7 @@ export interface ServersTabProps {
   onAddJellyfinEmbyServer: () => void;
   onConfirmAddServerLibraries: () => void;
   onToggleServerEnabled: (serverId: string, enabled: boolean) => void;
+  onConfirmWatchHistorySource: () => void;
 }
 
 // ─── Component ───
@@ -338,6 +539,10 @@ export function ServersTab({
   syncPrompt,
   removeServerDialog,
   removingServer,
+  tracearrInstances,
+  tracearrServerLists,
+  watchHistorySourceDialog,
+  savingWatchHistorySource,
   setAddServerDialog,
   setAddServerForm,
   setAddServerError,
@@ -354,6 +559,7 @@ export function ServersTab({
   setPurgeDialog,
   setSyncPrompt,
   setRemoveServerDialog,
+  setWatchHistorySourceDialog,
   onSyncServer,
   onSyncAllServers,
   onTestServerConnection,
@@ -367,6 +573,7 @@ export function ServersTab({
   onAddJellyfinEmbyServer,
   onConfirmAddServerLibraries,
   onToggleServerEnabled,
+  onConfirmWatchHistorySource,
 }: ServersTabProps) {
   const getPlexConnectionsForServer = (server: MediaServer): PlexConnection[] => {
     if (!server.machineId) return [];
@@ -696,6 +903,19 @@ export function ServersTab({
                         )}
                       </div>
                     )}
+                    <WatchHistorySourceSelect
+                      server={server}
+                      instances={tracearrInstances}
+                      serverLists={tracearrServerLists}
+                      saving={savingWatchHistorySource === server.id}
+                      onSelect={(tracearrServerId, sourceLabel) => setWatchHistorySourceDialog({
+                        open: true,
+                        serverId: server.id,
+                        serverName: server.name,
+                        tracearrServerId,
+                        sourceLabel,
+                      })}
+                    />
                     <div className="mb-4">
                       <div className="flex items-center justify-between mb-2">
                         <h4 className="text-sm font-medium">Libraries</h4>
@@ -1070,6 +1290,41 @@ export function ServersTab({
                 <Trash2 className="mr-2 h-4 w-4" />
               )}
               Delete Data
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Watch history source change confirmation */}
+      <AlertDialog
+        open={!!watchHistorySourceDialog?.open}
+        onOpenChange={(open) => { if (!open) setWatchHistorySourceDialog(null); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Change watch history source for {watchHistorySourceDialog?.serverName}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              History will come from{" "}
+              <span className="text-foreground">{watchHistorySourceDialog?.sourceLabel}</span>.
+              Switching sources clears this server&apos;s stored watch history — the next sync
+              repopulates it from the new source. Play counts and last-played dates will look empty
+              until then, which affects any lifecycle rule that reads them.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={!!savingWatchHistorySource}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={onConfirmWatchHistorySource}
+              disabled={!!savingWatchHistorySource}
+            >
+              {savingWatchHistorySource ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <History className="mr-2 h-4 w-4" />
+              )}
+              Change Source
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

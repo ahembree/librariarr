@@ -172,7 +172,7 @@ Every row names the episode that was played; on the series and season pages that
 
 When a show exists on more than one server, plays from *every* server are listed and each row is tagged with its server name. A play is a real event on the copy that was actually played, so nothing is hidden by [deduplication](#multi-server-deduplication). The series is matched the same way the library groups shows — by series identity (its TVDB/TMDB id, falling back to the title) — so a server that spells the title differently still contributes its plays, and two different shows that share a title never blend their history.
 
-These sections read the same stored watch history as the main history page, so they fill in after a watch-history sync (see below). The same [per-server limits](#data-sources-by-server-type) apply: on Jellyfin and Emby only the most recent play of an item carries a timestamp, so repeat plays are listed as **Unknown date** and sorted to the bottom.
+These sections read the same stored watch history as the main history page, so they fill in after a watch-history sync (see below). The same [per-server limits](#data-sources-by-server-type) apply: on Jellyfin and Emby only the most recent play of an item carries a timestamp, so repeat plays are listed as **Unknown date** and sorted to the bottom. A server whose [watch-history source](#watch-history-sources) is Tracearr has no such limit, and its rows additionally show how far through the play got, which player was used, and whether it was transcoded.
 
 ### Syncing Watch History
 
@@ -181,9 +181,23 @@ Watch history data is synced from your media servers in two ways:
 - **Automatic** — During each scheduled library sync, detailed play events are fetched and stored
 - **On-demand** — Click the **Refresh** button on the history page to sync immediately
 
-Each sync fully refreshes watch history for that server — existing records are replaced with the latest data from the server.
+### Watch History Sources
+
+Every server reads its plays from one of two sources, chosen per server under **Settings → Media Servers → Watch history source**:
+
+| Aspect | Native server history (default) | [Tracearr](/docs/integrations/tracearr/) |
+|-|-|-|
+| Where plays come from | The server's own history API | A Tracearr instance monitoring that server |
+| Per-play timestamps | Plex only — Jellyfin and Emby report the most recent play of an item and nothing before it | Every play, on all three server types |
+| Sync behaviour | Full refresh — existing records are replaced with the server's current data on every sync | Incremental — new and changed plays are appended, resuming from a watermark |
+| Extra detail per play | Device and platform (Plex only) | Completion %, direct play vs. transcode, player, product, resolution, bitrate, source and stream codecs, subtitle decision |
+| Partial plays | Not reported at all | Stored and shown, flagged as unwatched |
+
+The native source needs no setup and is what a server uses until you map it. Using Tracearr instead needs a [Tracearr instance](/docs/integrations/tracearr/) and the per-server source switch; switching in either direction clears that server's stored history once — the two sources produce incompatible rows — and the next sync repopulates it.
 
 ### Data Sources by Server Type
+
+What the **native** source can report differs by server type:
 
 | Data | Plex | Jellyfin | Emby |
 |-|-|-|-|
@@ -194,7 +208,7 @@ Each sync fully refreshes watch history for that server — existing records are
 | Play count (per item) | Yes | Yes | Yes |
 
 <Aside type="note">
-  Plex provides the most detailed watch history, with individual timestamps and device information for each play event. Jellyfin and Emby only report which items have been played and the last played date — individual play timestamps beyond the first are not available.
+  Of the three, Plex provides the most detailed native watch history, with individual timestamps and device information for each play event. Jellyfin and Emby only report which items have been played and the last played date — individual play timestamps beyond the first are not available. [Tracearr](/docs/integrations/tracearr/) removes this difference: it records plays itself as they happen, so a Jellyfin or Emby server linked to it gets full per-play history too.
 </Aside>
 
 ### Play Count vs. Watch History
@@ -208,6 +222,8 @@ The two are combined by taking the higher play count and the more recent date, s
 
 - **Watch History** records — individual play events fetched from the server's session history. Only includes plays that actually occurred on that specific server.
 
+**Partial plays do not count.** A server's native history has no notion of one, but [Tracearr](/docs/integrations/tracearr/) reports how far through each play got and marks it watched only once it crosses its completion threshold (85% by default). Plays short of that are stored and listed in the watch-history views, but they are excluded from Play Count and never advance Last Played — someone sampling four minutes of a film is not a viewing, and because both fields only ever move forward, letting one through would mark the item recently watched for good and quietly disarm every rule that reads it. An item with plays in its history but a Play Count of zero was started and never finished.
+
 ### Columns
 
 The history table supports column visibility controls with columns grouped into categories:
@@ -220,6 +236,9 @@ The history table supports column visibility controls with columns grouped into 
 | Audio | Audio Codec |
 | File | Duration, Size |
 | Device | Device Name, Platform (Plex only) |
+| Stream | Transcode, Completion, Player, Stream Resolution |
+
+The **Stream** columns default to **hidden**. They are only populated for a server whose [watch-history source](#watch-history-sources) is Tracearr, so on a native-history setup they would be an empty block of columns — turn them on from the column controls once a server is linked. **Stream Resolution** is what was actually delivered to the client and is a separate column from **Resolution**, which is the file's own; the two disagree on any transcoded play.
 
 ### Filters
 

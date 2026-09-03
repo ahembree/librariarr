@@ -24,6 +24,13 @@ export interface MediaServer {
   machineId: string | null;
   tlsSkipVerify: boolean;
   enabled: boolean;
+  /**
+   * Tracearr `server_id` this server's watch history is pulled from, or null
+   * for the server's own (native) history. Only the id is stored — which
+   * Tracearr instance owns it is resolved by looking the id up in the enabled
+   * instances' server lists.
+   */
+  tracearrServerId: string | null;
   createdAt: string;
   libraries: {
     id: string;
@@ -57,6 +64,47 @@ export interface ArrInstance {
 }
 
 export type SeerrInstance = ArrInstance;
+
+/**
+ * A configured Tracearr connection. `apiKey` always arrives masked
+ * (`MASKED_VALUE` from `sanitize()`); the edit form echoes it back untouched
+ * and `tracearrInstanceUpdateSchema` maps the mask to "keep the stored key".
+ */
+export interface TracearrInstance {
+  id: string;
+  name: string;
+  url: string;
+  apiKey: string;
+  enabled: boolean;
+  createdAt: string;
+}
+
+/**
+ * One media server a Tracearr instance monitors, from
+ * `GET /api/integrations/tracearr/[id]/servers`. Mirrors `TracearrServerStatus`
+ * in `src/lib/tracearr/tracearr-client.ts` — declared locally because this file
+ * is the settings surface's own vocabulary (like `MediaServer` above, which
+ * mirrors the Prisma model rather than importing it).
+ */
+export interface TracearrServerStatus {
+  id: string;
+  name: string;
+  type: "plex" | "jellyfin" | "emby";
+  online: boolean;
+  activeStreams: number;
+}
+
+/**
+ * Per-instance fetch state for the server list behind the watch-history-source
+ * dropdown. `error` is kept distinct from an empty `servers` array on purpose:
+ * "we couldn't ask Tracearr" and "Tracearr monitors nothing" must not render
+ * the same way, or a transient failure looks like a configuration fact.
+ */
+export interface TracearrServerListState {
+  loading: boolean;
+  error: string | null;
+  servers: TracearrServerStatus[];
+}
 
 // ─── Schedule types ───
 
@@ -118,6 +166,8 @@ export interface TestResult {
   error?: string;
   appName?: string;
   version?: string;
+  /** Tracearr only: how many media servers the instance monitors. */
+  serverCount?: number;
 }
 
 export interface BackupEntry {

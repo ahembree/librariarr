@@ -51,6 +51,25 @@ interface WatchHistoryItem {
   watchedAt: string | null;
   deviceName: string | null;
   platform: string | null;
+  // Provenance + stream facts. Only a Tracearr-sourced play carries these — a
+  // media server's own history API reports that something was played, not how
+  // completely or through which transcode — so every one is null on a NATIVE
+  // row and the columns rendering them default to hidden.
+  source: string;
+  watched: boolean | null;
+  percentComplete: number | null;
+  isTranscode: boolean | null;
+  videoDecision: string | null;
+  audioDecision: string | null;
+  player: string | null;
+  product: string | null;
+  /** The resolution actually delivered, which a transcode drops below the file's. */
+  resolution: string | null;
+  bitrate: number | null;
+  segmentCount: number | null;
+  durationMs: number | null;
+  totalDurationMs: number | null;
+  progressMs: number | null;
   mediaItem: {
     id: string;
     title: string;
@@ -100,6 +119,13 @@ const COLUMN_TO_SORT_FIELD: Record<string, string> = {
   deviceName: "deviceName",
   platform: "platform",
   server: "serverUsername",
+  // Tracearr stream facts. `streamResolution` maps to its own API sort key
+  // rather than reusing `resolution`, which sorts the FILE's resolution on the
+  // MediaItem — the two disagree on any transcoded play.
+  transcode: "isTranscode",
+  completion: "percentComplete",
+  player: "player",
+  streamResolution: "streamResolution",
 };
 
 const VISIBLE_KEY = "history-visible-columns";
@@ -122,6 +148,57 @@ function formatResolution(res: string | null) {
   if (!res) return "";
   const label = normalizeResolutionLabel(res);
   return label === "Other" ? res : label;
+}
+
+/**
+ * Three-way stream decision, mirroring the Stream Manager's `getStreamDecision`
+ * (`/tools/streams`) so the same play reads the same in both places: any
+ * re-encode is a Transcode, a container-only "copy" is a Direct Stream, and
+ * everything else is Direct Play. Tracearr's `is_transcode` already covers an
+ * audio-only re-encode, which must not be shown with the greener Direct Stream
+ * styling. Returns null for a NATIVE row, which records no decision at all.
+ */
+function getStreamDecision(item: WatchHistoryItem): { label: string; direct: boolean } | null {
+  if (item.isTranscode == null) return null;
+  if (item.isTranscode) return { label: "Transcode", direct: false };
+  if (item.videoDecision === "copy" || item.audioDecision === "copy") {
+    return { label: "Direct Stream", direct: true };
+  }
+  return { label: "Direct Play", direct: true };
+}
+
+/**
+ * Tooltip for the transcode chip: the per-track decisions behind the label plus
+ * the delivered bitrate, so a "Transcode" chip can say what was re-encoded.
+ */
+function getStreamDecisionTitle(item: WatchHistoryItem): string | undefined {
+  const parts: string[] = [];
+  if (item.videoDecision) parts.push(`video: ${item.videoDecision}`);
+  if (item.audioDecision) parts.push(`audio: ${item.audioDecision}`);
+  if (item.bitrate != null) parts.push(`${item.bitrate.toLocaleString()} kbps`);
+  return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
+/** Tracearr's `percentComplete` (0-100, one decimal) as a whole percentage. */
+function formatCompletion(pct: number | null): string {
+  if (pct == null) return "-";
+  return `${Math.round(pct)}%`;
+}
+
+/**
+ * Tooltip for the completion cell: how far into the runtime the play reached,
+ * plus the resume-chain length when Tracearr folded more than one session into
+ * it (segmentCount is the only field that reveals a resumed play).
+ */
+function getCompletionTitle(item: WatchHistoryItem): string | undefined {
+  const parts: string[] = [];
+  if (item.progressMs != null && item.totalDurationMs != null) {
+    parts.push(`${formatDuration(item.progressMs)} of ${formatDuration(item.totalDurationMs)}`);
+  }
+  if (item.segmentCount != null && item.segmentCount > 1) {
+    parts.push(`${item.segmentCount} sessions`);
+  }
+  return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 
 function formatWatchedAt(dateStr: string | null): string {
@@ -179,6 +256,10 @@ const COLUMN_GROUPS: Record<string, string> = {
   audio: "Audio",
   file: "File",
   device: "Device",
+  // Stream facts only a Tracearr-linked server records. Kept as its own group
+  // so "Resolution" (the file) and "Stream Resolution" (what was delivered)
+  // can't be mistaken for each other in the visibility menu.
+  stream: "Stream",
 };
 
 // ── Component ────────────────────────────────────────────────────
@@ -390,6 +471,83 @@ export default function HistoryPage() {
       className: "text-muted-foreground",
       accessor: (item) => item.platform ?? "-",
       sortValue: (item) => item.platform,
+    },
+    // ── Tracearr stream facts ────────────────────────────────────
+    // All default-hidden: they are null for a NATIVE row, so the table a user
+    // without a Tracearr-linked server sees is unchanged.
+    {
+      id: "transcode",
+      header: "Transcode",
+      defaultWidth: 110,
+      group: "stream",
+      defaultVisible: false,
+      accessor: (item) => {
+        const decision = getStreamDecision(item);
+        if (!decision) return "-";
+        return (
+          <ColorChip
+            title={getStreamDecisionTitle(item)}
+            className={
+              decision.direct
+                ? "bg-green-dim text-green border-green/25"
+                : "bg-amber-dim text-amber border-amber/25"
+            }
+          >
+            {decision.label}
+          </ColorChip>
+        );
+      },
+      // Sorting is server-side (see COLUMN_TO_SORT_FIELD → isTranscode);
+      // sortValue only has to exist for DataTable to make the header sortable.
+      sortValue: (item) => (item.isTranscode == null ? null : item.isTranscode ? 1 : 0),
+    },
+    {
+      id: "completion",
+      header: "Completion",
+      defaultWidth: 100,
+      group: "stream",
+      defaultVisible: false,
+      className: "text-right text-muted-foreground tabular-nums",
+      headerClassName: "text-right",
+      accessor: (item) => (
+        <span title={getCompletionTitle(item)}>{formatCompletion(item.percentComplete)}</span>
+      ),
+      sortValue: (item) => item.percentComplete,
+    },
+    {
+      id: "player",
+      header: "Player",
+      defaultWidth: 120,
+      group: "stream",
+      defaultVisible: false,
+      className: "text-muted-foreground",
+      // `product` is the client app ("Plex for Apple TV") and `player` the
+      // player/device name; the product rides along in the tooltip rather than
+      // costing a second column.
+      accessor: (item) => (
+        <span className="truncate" title={item.product ?? undefined}>
+          {item.player ?? "-"}
+        </span>
+      ),
+      sortValue: (item) => item.player,
+    },
+    {
+      id: "streamResolution",
+      header: "Stream Resolution",
+      defaultWidth: 130,
+      group: "stream",
+      defaultVisible: false,
+      accessor: (item) => {
+        const res = item.resolution;
+        if (!res) return "-";
+        const label = formatResolution(res);
+        return (
+          <ColorChip style={getBadgeStyle("resolution", label)}>
+            {label}
+          </ColorChip>
+        );
+      },
+      sortValue: (item) => item.resolution,
     },
     {
       id: "server",

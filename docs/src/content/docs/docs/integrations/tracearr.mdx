@@ -1,0 +1,118 @@
+---
+title: Tracearr
+description: Link Tracearr as a watch-history source for per-play completion, transcode decisions, and stream quality.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+[Tracearr](https://github.com/connorgallopo/tracearr) is a self-hosted playback monitor for Plex, Jellyfin, and Emby. It sits alongside your servers, records every play as it happens, and exposes the result through a read-only API.
+
+Librariarr can use Tracearr as the **watch-history source** for a media server instead of that server's own history API. You would do this because the servers' own history endpoints are thin: they tell you *that* something was played, and not much more. Tracearr records the whole play.
+
+| Detail | Native server history | Tracearr |
+|-|-|-|
+| Per-play timestamp | Plex only (Jellyfin/Emby: most recent play only) | Yes, every play |
+| Completion percentage | No | Yes (`percent_complete`, one decimal) |
+| Partial / abandoned plays | Not reported | Yes, flagged as unwatched |
+| Direct play vs. transcode | No | Yes, per video and audio stream |
+| Player and product | Device name only, Plex only | Player, product, device, platform |
+| Stream quality | No | Resolution, bitrate, source and stream codecs, subtitle decision |
+| Resumed plays | Counted as separate plays or not at all | Folded into one play with a segment count |
+
+<Aside type="note">
+  Tracearr is a *history source*, not a media server. You still connect Plex, Jellyfin, or Emby to Librariarr as usual — Tracearr only replaces where the plays for that server are read from.
+</Aside>
+
+## Prerequisites
+
+- **Tracearr 2.0.0 or newer.** Librariarr uses Tracearr's v2 API, which older builds don't serve.
+- Tracearr must already be monitoring the same media server you want to link. A server Tracearr has never seen has no history to import.
+- Librariarr needs network access to Tracearr's URL. A private address is fine — the URL is only ever read server-side.
+
+## Setup
+
+<Steps>
+
+1. In Tracearr, go to **Settings → General** and generate a **public API key**. Keys look like `trr_pub_a1b2c3…`. Copy it — Tracearr won't show it again.
+2. In Librariarr, go to **Settings → Integrations**
+3. Under the **Tracearr** section, click **Add Tracearr Instance**
+4. Enter:
+   - **Name**: A label (e.g., "Tracearr")
+   - **URL**: Tracearr base URL (e.g., `http://192.168.1.100:3000`). If Tracearr sits under a sub-path on a reverse proxy, include it (e.g., `https://media.example.com/tracearr`)
+   - **API Key**: The `trr_pub_…` key from step 1
+5. Click **Save**. The connection is tested before the instance is saved, so a bad URL or key fails here with the reason rather than being stored and silently doing nothing. Editing a saved instance gets a **Test Connection** button of its own.
+
+</Steps>
+
+### Mapping a media server
+
+Adding the instance on its own changes nothing. Tracearr aggregates several media servers behind one API, so you tell Librariarr **which Tracearr server corresponds to which of your servers**:
+
+<Steps>
+
+1. Go to **Settings → Media Servers** and expand the media server you want to switch
+2. Set **Watch history source** to the matching Tracearr server. The dropdown is populated live from Tracearr and groups its servers under the instance they came from, naming each by server name and type — so a Plex server appears as Plex.
+3. Confirm the change in the dialog
+
+</Steps>
+
+Leave the source on **the server's own history** (the default) for any server you don't want imported. The choice is per server, so one Plex server can run on Tracearr while a second stays native. The dropdown only appears once at least one enabled Tracearr instance exists.
+
+<Aside type="caution">
+  Changing a server's watch-history source — in either direction — **clears that server's stored watch history once**. The two sources produce incompatible rows (a native row is one played item, a Tracearr row is one play with completion and stream detail), so they cannot be mixed in the same table. The next watch-history sync repopulates it. Play Count and Last Played are *not* walked back: those fields are monotonic (see [Play Count vs. Watch History](/docs/features/library/#play-count-vs-watch-history)), so switching sources never makes an item look less recently watched than it already did.
+</Aside>
+
+## How the sync works
+
+The import runs as part of the normal [watch-history sync](/docs/features/library/#syncing-watch-history) — the scheduled one, the **Refresh** button on the History page, and the refresh a [real-time](/docs/features/real-time-sync/) play event triggers. Per server, Librariarr picks one path: a Tracearr mapping plus an enabled Tracearr instance uses the Tracearr import; anything else uses the unchanged native path.
+
+**Two API versions, on purpose.** Play events come from Tracearr's **v2** API (`/api/v2/public/history`) because v1's history records carry no media identifier at all — only title strings — and cannot be joined to a library item without guessing. Connectivity and the server list come from `/api/v1/public/health`, which is the only place the Tracearr server IDs the mapping needs are enumerated; v2 has no health route.
+
+**The import is incremental and append-only.** The first sync pulls that server's full history once, which on a busy instance can take a few minutes. Every run after that resumes from a stored watermark with a **1-hour overlap**, so a play that landed while the previous run was mid-page isn't skipped. If a play was still in progress at the watermark, the window reaches further back to pick up its finished form, bounded to **7 days** so the window can never grow without limit.
+
+**A Tracearr history record is an aggregate over a resume chain, not a fixed event.** Pausing a movie on Sunday and finishing it on Monday is *one* record, whose completion percentage, stop time, state, and segment count all move when you resume. So Librariarr **updates** the stored row when it sees the same play again rather than ignoring the repeat — plays are keyed on Tracearr's stable chain ID, which is what makes the import safe to overlap.
+
+<Aside type="caution" title="Tracearr-side deletions do not propagate">
+  Because the import only ever appends and updates, a play you delete in Tracearr stays in Librariarr. The only thing that clears imported plays is clearing that server's history, which happens when you change its watch-history source.
+</Aside>
+
+### How plays are matched to your library
+
+A Tracearr play is joined to a library item by:
+
+1. **Rating key** — the server's own item ID, which Tracearr records. This is the normal path and matches exactly.
+2. **Provider ID**, in TVDB → TMDB → IMDB order, when the rating key doesn't resolve (a re-added item, a rebuilt library). For episodes the provider ID identifies the show, so the season **and** episode number must match as well.
+
+**A play that cannot be matched unambiguously is skipped, not guessed.** Lifecycle rules read this data and delete files with it, so a play attributed to the wrong item is worse than a play that's missing. Skipped plays are counted in the sync's log entry.
+
+### Partial plays
+
+Tracearr marks a play as **watched** once it crosses its own completion threshold — 85% by default, configurable per media type in Tracearr's settings. Anything short of that is a partial play: someone sampled ten minutes of a film and stopped.
+
+Partial plays **are** imported and **are** shown in the watch-history views, with their completion percentage. They deliberately **do not** count toward an item's **Play Count** and **do not** advance its **Last Played** date. A 4%-watched abandoned play is not a viewing, and because Play Count and Last Played are monotonic, letting one through would permanently mark the item as recently watched and quietly disarm every rule that depends on it.
+
+<Aside type="tip">
+  This makes "requested, sampled, abandoned" visible for the first time. An item with plays in its history but a Play Count of zero was started and never finished — a good candidate for a lifecycle rule.
+</Aside>
+
+## Where the extra detail shows up
+
+- **Series, season, and episode pages** — the [watch history section](/docs/features/library/#watch-history-on-series-pages) on each of these shows completion, player, and whether the play was transcoded, alongside the user and timestamp it already showed.
+- **The History page** — a **Stream** column group appears in the column picker with **Transcode**, **Completion**, **Player**, and **Stream Resolution**. All four default to **hidden**, since they are empty for any server still on its native history; turn them on from the column controls. **Stream Resolution** is what was delivered to the client, which a transcode drops below the file's own **Resolution** — that's why it is a separate column rather than reusing the existing one.
+
+Everything else — filters, the detail side panel, lifecycle criteria such as **Last Played** and **Series Last Played** — behaves exactly as before. Tracearr changes where plays come from and how much each one records, not what the rest of the app does with them.
+
+## Troubleshooting
+
+| Symptom | Cause |
+|-|-|
+| **Test Connection fails with 401** | The API key is wrong, expired, or was regenerated in Tracearr. Generate a fresh key in **Settings → General** and paste it again — the field shows a mask (`••••••••`) for the saved key, and saving without changing it keeps the stored key. |
+| **Test Connection fails with a network error** | Librariarr can't reach the URL. Check the port, and include the sub-path if Tracearr is proxied under one. |
+| **The Watch history source dropdown is empty** | The instance is disabled, or Tracearr monitors no servers yet. The list comes straight from Tracearr's health response. |
+| **A server's history is empty after a sync** | That server has no Tracearr mapping and is still on its native history, or it's mapped to the wrong Tracearr server. Both look identical in the UI — check the mapping against the server names Tracearr reports. |
+| **Some plays are missing** | They couldn't be matched to a library item and were skipped. The import's entry in [System Logs](/docs/features/system-logs/) breaks the count down per server into **unresolved** (no candidate — the item isn't in that server's library, usually because it was removed, or was re-added with a new rating key and has no provider ID to fall back on), **ambiguous** (several candidates, none preferable) and **unsupported type** (a live-TV, photo, or trailer play, which is not a library item at all). A full library sync refreshes rating keys, and the next watch-history sync picks up the unresolved plays. |
+| **An item shows plays but a Play Count of zero** | Working as intended — every imported play is a partial that never crossed Tracearr's completion threshold. |
+
+<Aside>
+  Librariarr only ever reads from Tracearr. It never writes history, terminates streams, or changes settings there.
+</Aside>

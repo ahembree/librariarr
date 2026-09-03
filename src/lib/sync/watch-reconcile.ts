@@ -30,6 +30,31 @@ import { logger } from "@/lib/logger";
  * already applies. A media server that prunes its history can therefore never
  * make an item look *less* recently watched than we know it to be — the safe
  * direction for an engine that deletes files.
+ *
+ * ## Two provenances, one rule: only completed plays count
+ *
+ * `WatchHistory` rows now arrive from two sources (`WatchHistory.source`):
+ *
+ *  - `NATIVE` — the media server's own history (`getDetailedWatchHistory()`).
+ *    Every server only reports plays it considers finished, so a native row IS
+ *    a play; its `watched` column is null because there is nothing to qualify.
+ *  - `TRACEARR` — Tracearr's `/api/v2/public/history`. A Tracearr record is an
+ *    **aggregate over a resume chain**, not a finished-play event: it exists
+ *    from the moment playback starts, and `watched` only flips true once the
+ *    chain crosses Tracearr's per-media-type completion threshold. A row can
+ *    therefore describe a 4%-watched abandoned play, or a stream still running
+ *    right now.
+ *
+ * So both aggregates below count only rows where `watched IS DISTINCT FROM
+ * false` — i.e. `watched = true` (a completed Tracearr play) or `watched IS
+ * NULL` (a native row, unchanged behaviour). Counting a `watched = false` row
+ * would be wrong in two compounding ways: it inflates `playCount`, and —
+ * because these writes are monotonic `GREATEST` — a single abandoned play
+ * would pin `lastPlayedAt` to "just now" **permanently**, with no later sync
+ * able to walk it back. Those are the two columns `seriesLastPlayedAt`,
+ * `watchedEpisodeCount` and `watchedEpisodePercentage` are derived from, so
+ * the failure mode is not a cosmetic one: it silently disarms (or arms) rules
+ * that delete files.
  */
 
 export interface WatchCountEntry {
@@ -51,6 +76,13 @@ export async function loadWatchCountsFromHistory(
   const counts = new Map<string, WatchCountEntry>();
   if (ratingKeys.length === 0) return counts;
 
+  // `wh."watched" IS DISTINCT FROM false` — the completed-plays-only predicate
+  // documented in the file header, and the reason this function matters as much
+  // as `reconcileWatchStateFromHistory`: the map it returns is fed straight into
+  // `buildItemData`, which maxes it into the very same `playCount` /
+  // `lastPlayedAt` columns. Fixing only the reconcile would leave the next
+  // incremental sync re-inflating both from partial Tracearr rows. Keep the two
+  // predicates in lockstep.
   const rows = await prisma.$queryRawUnsafe<
     Array<{ ratingKey: string; plays: bigint | number; lastWatched: Date | null }>
   >(
@@ -59,7 +91,9 @@ export async function loadWatchCountsFromHistory(
             MAX(wh."watchedAt") AS "lastWatched"
        FROM "WatchHistory" wh
        JOIN "MediaItem" mi ON mi."id" = wh."mediaItemId"
-      WHERE wh."mediaServerId"=$1 AND mi."ratingKey" = ANY($2)
+      WHERE wh."mediaServerId"=$1
+        AND wh."watched" IS DISTINCT FROM false
+        AND mi."ratingKey" = ANY($2)
       GROUP BY mi."ratingKey"`,
     serverId,
     ratingKeys,
@@ -90,6 +124,15 @@ export async function loadWatchCountsFromHistory(
 export async function reconcileWatchStateFromHistory(
   serverId: string,
 ): Promise<number> {
+  // `"watched" IS DISTINCT FROM false` restricts the aggregate to plays that
+  // actually happened: `true` (a Tracearr chain past its completion threshold)
+  // or `NULL` (a native row — the server only reports finished plays, so those
+  // count exactly as they always did). A Tracearr row for a 4%-watched
+  // abandoned play, or for a stream that is playing right now, is stored and
+  // shown on the History page but must not reach these columns — the writes
+  // below are monotonic `GREATEST`, so one such row would pin `lastPlayedAt`
+  // to "just now" forever. Mirrors the predicate in
+  // `loadWatchCountsFromHistory`; change both or neither.
   const updated = await prisma.$executeRawUnsafe(
     `UPDATE "MediaItem" mi
         SET "playCount" = GREATEST(mi."playCount", hist."plays"),
@@ -100,6 +143,7 @@ export async function reconcileWatchStateFromHistory(
                 MAX("watchedAt") AS "lastWatched"
            FROM "WatchHistory"
           WHERE "mediaServerId"=$1
+            AND "watched" IS DISTINCT FROM false
           GROUP BY "mediaItemId"
        ) hist
       WHERE mi."id" = hist."mediaItemId"

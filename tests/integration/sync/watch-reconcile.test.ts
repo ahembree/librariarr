@@ -44,6 +44,39 @@ async function addPlay(
   });
 }
 
+let tracearrEventSeq = 0;
+
+/**
+ * A Tracearr-sourced play. `watched` is the field under test: false means the
+ * chain never crossed Tracearr's completion threshold (an abandoned or
+ * still-running play), which must be stored but must not count. `sourceEventId`
+ * is unique per row because `WatchHistory` carries `@@unique([mediaServerId,
+ * sourceEventId])`.
+ */
+async function addTracearrPlay(
+  mediaItemId: string,
+  mediaServerId: string,
+  username: string,
+  watchedAt: Date | null,
+  watched: boolean,
+  percentComplete?: number,
+) {
+  await prisma.watchHistory.create({
+    data: {
+      mediaItemId,
+      mediaServerId,
+      serverUsername: username,
+      watchedAt,
+      source: "TRACEARR",
+      sourceEventId: `tracearr-event-${++tracearrEventSeq}`,
+      watched,
+      percentComplete: percentComplete ?? (watched ? 97.5 : 4.2),
+      state: watched ? "stopped" : "playing",
+      segmentCount: 1,
+    },
+  });
+}
+
 async function setup() {
   const user = await createTestUser();
   const server = await createTestServer(user.id, { name: "Plex" });
@@ -193,6 +226,34 @@ describe("watch-reconcile", () => {
       );
     });
 
+    it("excludes partial Tracearr plays from the count and the max watchedAt", async () => {
+      const { server, library } = await setup();
+      const item = await createTestMediaItem(library.id, { ratingKey: "rk-mixed" });
+      const completed = daysAgo(20);
+      await addPlay(item.id, server.id, "admin", daysAgo(400));
+      await addTracearrPlay(item.id, server.id, "roommate", completed, true);
+      // Newer than the completed play, so a regression would show up in both
+      // the count AND lastWatchedAt.
+      await addTracearrPlay(item.id, server.id, "kid", daysAgo(1), false);
+
+      const counts = await loadWatchCountsFromHistory(server.id, ["rk-mixed"]);
+
+      expect(counts.get("rk-mixed")).toEqual({
+        count: 2,
+        lastWatchedAt: Math.floor(completed.getTime() / 1000),
+      });
+    });
+
+    it("omits a ratingKey whose only plays are partial Tracearr rows", async () => {
+      const { server, library } = await setup();
+      const item = await createTestMediaItem(library.id, { ratingKey: "rk-partial" });
+      await addTracearrPlay(item.id, server.id, "kid", daysAgo(1), false);
+
+      // No qualifying row means no GROUP BY group at all — the incremental sync
+      // then leaves buildItemData's metadata-derived value alone.
+      expect(await loadWatchCountsFromHistory(server.id, ["rk-partial"])).toEqual(new Map());
+    });
+
     it("does not leak another server's plays for the same ratingKey", async () => {
       const { user, server, library } = await setup();
       const otherServer = await createTestServer(user.id, { name: "Other" });
@@ -208,6 +269,108 @@ describe("watch-reconcile", () => {
       expect(counts.get("shared-rk")?.count).toBe(1);
       expect(counts.get("shared-rk")?.lastWatchedAt).toBe(
         Math.floor(daysAgo(100).getTime() / 1000),
+      );
+    });
+  });
+
+  // The correctness lynchpin of the Tracearr integration. A Tracearr history
+  // record is an aggregate over a resume chain, so it exists from the moment
+  // playback starts: `watched = false` means "not (yet) a play". Both aggregates
+  // must count only `watched IS DISTINCT FROM false`, or a 4%-watched abandoned
+  // play inflates playCount and — because the writes are monotonic GREATEST —
+  // pins lastPlayedAt to "just now" permanently.
+  describe("watched semantics (native vs Tracearr partial plays)", () => {
+    it("counts a native row (watched null) and sets lastPlayedAt, exactly as before", async () => {
+      const { server, library } = await setup();
+      const item = await createTestMediaItem(library.id, { playCount: 0 });
+      await addPlay(item.id, server.id, "roommate", daysAgo(9));
+
+      expect(await reconcileWatchStateFromHistory(server.id)).toBe(1);
+
+      const after = await prisma.mediaItem.findUniqueOrThrow({ where: { id: item.id } });
+      expect(after.playCount).toBe(1);
+      expect(after.lastPlayedAt?.getTime()).toBe(daysAgo(9).getTime());
+    });
+
+    it("counts a Tracearr row with watched=true", async () => {
+      const { server, library } = await setup();
+      const item = await createTestMediaItem(library.id, { playCount: 0 });
+      await addTracearrPlay(item.id, server.id, "roommate", daysAgo(9), true);
+
+      expect(await reconcileWatchStateFromHistory(server.id)).toBe(1);
+
+      const after = await prisma.mediaItem.findUniqueOrThrow({ where: { id: item.id } });
+      expect(after.playCount).toBe(1);
+      expect(after.lastPlayedAt?.getTime()).toBe(daysAgo(9).getTime());
+    });
+
+    it("stores a Tracearr row with watched=false but never counts it or advances lastPlayedAt", async () => {
+      const { server, library } = await setup();
+      const item = await createTestMediaItem(library.id, { playCount: 0 });
+      const completed = daysAgo(30);
+      await addTracearrPlay(item.id, server.id, "roommate", completed, true);
+      // Deliberately NEWER than the completed play: if the predicate regressed,
+      // lastPlayedAt would visibly jump to yesterday.
+      await addTracearrPlay(item.id, server.id, "kid", daysAgo(1), false, 4);
+
+      await reconcileWatchStateFromHistory(server.id);
+
+      // The partial play is still persisted — the History page shows it.
+      expect(await prisma.watchHistory.count({ where: { mediaItemId: item.id } })).toBe(2);
+      const stored = await prisma.watchHistory.findFirstOrThrow({
+        where: { mediaItemId: item.id, watched: false },
+      });
+      expect(stored.source).toBe("TRACEARR");
+      expect(stored.percentComplete).toBe(4);
+
+      const after = await prisma.mediaItem.findUniqueOrThrow({ where: { id: item.id } });
+      expect(after.playCount).toBe(1);
+      expect(after.lastPlayedAt?.getTime()).toBe(completed.getTime());
+    });
+
+    it("leaves an item untouched when every Tracearr row is a partial play", async () => {
+      const { server, library } = await setup();
+      const item = await createTestMediaItem(library.id, { playCount: 0 });
+      await addTracearrPlay(item.id, server.id, "kid", daysAgo(1), false);
+      await addTracearrPlay(item.id, server.id, "kid", daysAgo(2), false);
+
+      // Nothing qualifies, so the subquery yields no group and no row is updated.
+      expect(await reconcileWatchStateFromHistory(server.id)).toBe(0);
+
+      const after = await prisma.mediaItem.findUniqueOrThrow({ where: { id: item.id } });
+      expect(after.playCount).toBe(0);
+      expect(after.lastPlayedAt).toBeNull();
+    });
+
+    it("counts a mix of 2 native + 1 completed + 3 partial Tracearr plays as 3, through both helpers", async () => {
+      const { server, library } = await setup();
+      const item = await createTestMediaItem(library.id, {
+        ratingKey: "rk-provenance-mix",
+        playCount: 0,
+      });
+      const newestCompleted = daysAgo(15);
+      await addPlay(item.id, server.id, "admin", daysAgo(90));
+      await addPlay(item.id, server.id, "roommate", daysAgo(45));
+      await addTracearrPlay(item.id, server.id, "kid", newestCompleted, true);
+      await addTracearrPlay(item.id, server.id, "kid", daysAgo(3), false);
+      await addTracearrPlay(item.id, server.id, "guest", daysAgo(2), false);
+      await addTracearrPlay(item.id, server.id, "guest", daysAgo(1), false);
+
+      await reconcileWatchStateFromHistory(server.id);
+
+      const after = await prisma.mediaItem.findUniqueOrThrow({ where: { id: item.id } });
+      expect(after.playCount).toBe(3);
+      expect(after.lastPlayedAt?.getTime()).toBe(newestCompleted.getTime());
+
+      // The incremental sync's path over the same rows must agree — it feeds
+      // buildItemData, which maxes into these very columns.
+      expect(await loadWatchCountsFromHistory(server.id, ["rk-provenance-mix"])).toEqual(
+        new Map([
+          [
+            "rk-provenance-mix",
+            { count: 3, lastWatchedAt: Math.floor(newestCompleted.getTime() / 1000) },
+          ],
+        ]),
       );
     });
   });

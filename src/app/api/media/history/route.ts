@@ -163,7 +163,9 @@ export async function GET(request: NextRequest) {
 
   const whereClause = conditions.join(" AND ");
 
-  // Build ORDER BY — always sort server-side for paginated results
+  // Build ORDER BY — always sort server-side for paginated results.
+  // This is a strict whitelist: `sortBy` is interpolated into the SQL, so an
+  // unknown value must fall back to the default rather than reach the query.
   const SORT_MAP: Record<string, string> = {
     watchedAt: 'wh."watchedAt"',
     serverUsername: 'wh."serverUsername"',
@@ -175,9 +177,26 @@ export async function GET(request: NextRequest) {
     resolution: 'mi."resolution"',
     duration: 'mi."duration"',
     fileSize: 'mi."fileSize"',
+    // Tracearr-sourced play columns. `streamResolution` is deliberately a
+    // separate key from `resolution`: the latter is the FILE's resolution on
+    // the MediaItem, this one is the resolution actually delivered to the
+    // client, and a transcoded 4K file streamed at 1080p differs on the two.
+    percentComplete: 'wh."percentComplete"',
+    isTranscode: 'wh."isTranscode"',
+    player: 'wh."player"',
+    streamResolution: 'wh."resolution"',
   };
   const orderCol = SORT_MAP[sortBy] ?? 'wh."watchedAt"';
   const orderDir = sortOrder === "asc" ? "ASC" : "DESC";
+  // The ORDER BY below appends wh."id" as a unique tiebreaker so the sort is a
+  // total order. Without one Postgres may return tied rows in any order, and a
+  // bounded page (top-N heapsort) is planned differently from its neighbour, so
+  // the tie block straddling the page boundary permutes between requests — a
+  // paged-through list then shows some plays twice and silently drops others.
+  // The Tracearr sorts above make that near-certain rather than unlikely:
+  // `isTranscode` has two distinct values and `percentComplete`/`player`/
+  // `resolution` are NULL on every NATIVE row, so one tie block can cover the
+  // whole table.
 
   // Cached filter dropdown values — only change when watch history syncs
   const filterCacheKey = `watch-history-filters:${session.userId}`;
@@ -225,6 +244,24 @@ export async function GET(request: NextRequest) {
     watchedAt: Date | null;
     deviceName: string | null;
     platform: string | null;
+    // Provenance + the Tracearr-only playback columns. Every one of these is
+    // null on a NATIVE row (the media servers' own history APIs report a play
+    // event, not a completion percentage or a transcode decision), so the
+    // table renders them as optional, default-hidden columns.
+    source: string;
+    watched: boolean | null;
+    percentComplete: number | null;
+    isTranscode: boolean | null;
+    videoDecision: string | null;
+    audioDecision: string | null;
+    player: string | null;
+    product: string | null;
+    wh_resolution: string | null;
+    bitrate: number | null;
+    segmentCount: number | null;
+    durationMs: number | null;
+    totalDurationMs: number | null;
+    progressMs: number | null;
     mi_id: string;
     mi_title: string;
     mi_titleSort: string | null;
@@ -258,6 +295,10 @@ export async function GET(request: NextRequest) {
   }>>(
     `SELECT
       wh."id", wh."serverUsername", wh."watchedAt", wh."deviceName", wh."platform",
+      wh."source", wh."watched", wh."percentComplete", wh."isTranscode",
+      wh."videoDecision", wh."audioDecision", wh."player", wh."product",
+      wh."resolution" AS "wh_resolution", wh."bitrate", wh."segmentCount",
+      wh."durationMs", wh."totalDurationMs", wh."progressMs",
       mi."id" AS "mi_id", mi."title" AS "mi_title", mi."titleSort" AS "mi_titleSort",
       mi."parentTitle" AS "mi_parentTitle", mi."seasonNumber" AS "mi_seasonNumber",
       mi."episodeNumber" AS "mi_episodeNumber", mi."year" AS "mi_year",
@@ -274,7 +315,7 @@ export async function GET(request: NextRequest) {
       mi."genres" AS "mi_genres",
       ms."id" AS "ms_id", ms."name" AS "ms_name", ms."type" AS "ms_type"
     ${fromClause}
-    ORDER BY ${orderCol} ${orderDir} NULLS LAST
+    ORDER BY ${orderCol} ${orderDir} NULLS LAST, wh."id" ASC
     LIMIT ${limit + 1} OFFSET ${(page - 1) * limit}`,
     ...params,
   );
@@ -291,6 +332,22 @@ export async function GET(request: NextRequest) {
     watchedAt: r.watchedAt?.toISOString() ?? null,
     deviceName: r.deviceName,
     platform: r.platform,
+    source: r.source,
+    watched: r.watched,
+    percentComplete: r.percentComplete,
+    isTranscode: r.isTranscode,
+    videoDecision: r.videoDecision,
+    audioDecision: r.audioDecision,
+    player: r.player,
+    product: r.product,
+    // The resolution the client was actually served, which differs from
+    // mediaItem.resolution (the file) whenever the stream was transcoded down.
+    resolution: r.wh_resolution,
+    bitrate: r.bitrate,
+    segmentCount: r.segmentCount,
+    durationMs: r.durationMs,
+    totalDurationMs: r.totalDurationMs,
+    progressMs: r.progressMs,
     mediaItem: {
       id: r.mi_id,
       title: r.mi_title,

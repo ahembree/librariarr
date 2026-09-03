@@ -31,7 +31,15 @@ export async function PUT(
   const { data, error } = await validateRequest(request, serverEditSchema);
   if (error) return error;
 
-  const { url, externalUrl, tlsSkipVerify, accessToken, enabled, deleteData } = data;
+  const { url, externalUrl, tlsSkipVerify, accessToken, enabled, deleteData, tracearrServerId } =
+    data;
+
+  // Did this server's watch-history source actually change? `undefined` means
+  // the client never sent the field at all (leave the mapping alone), so only a
+  // value that was sent AND differs from what is stored counts — re-saving the
+  // same mapping must not trigger the wipe below.
+  const tracearrMappingChanged =
+    tracearrServerId !== undefined && tracearrServerId !== server.tracearrServerId;
 
   // Test connection if URL or access token changed (skip if just toggling enabled)
   if ((url || accessToken) && enabled !== false) {
@@ -57,8 +65,45 @@ export async function PUT(
       ...(tlsSkipVerify !== undefined && { tlsSkipVerify }),
       ...(accessToken !== undefined && accessToken !== "" && { accessToken }),
       ...(enabled !== undefined && { enabled }),
+      // `!== undefined`, never a truthy check: `null` is the meaningful
+      // "unlink, go back to native history" value, and a truthy check would
+      // make unlinking impossible to express.
+      ...(tracearrServerId !== undefined && { tracearrServerId }),
     },
   });
+
+  // A source switch (native <-> Tracearr, or one Tracearr server to another)
+  // invalidates every WatchHistory row already stored for this server, because
+  // the two sources have incompatible row models: the native sync is a
+  // full-replace that leaves all of the rich Tracearr columns null, while the
+  // Tracearr sync is an incremental append keyed on `sourceEventId`. Neither
+  // path ever revisits the other's rows — the append model never wipes, and the
+  // native full-replace only deletes rows on a *successful* fetch — so without
+  // this one-shot delete the server would keep a permanent stratum of stale
+  // rows from its previous source. The next sync repopulates from the new one.
+  // Placed after the update so a failed write can't destroy history.
+  if (tracearrMappingChanged) {
+    const wiped = await prisma.watchHistory.deleteMany({
+      where: { mediaServerId: server.id },
+    });
+
+    // Every watch-history-derived cache (`watch-history-filters:` among them)
+    // now describes rows that no longer exist.
+    invalidateMediaCaches();
+
+    // Not a bug that the denormalized `MediaItem.playCount`/`lastPlayedAt` are
+    // left standing: both watch-reconcile helpers are monotonic
+    // (GREATEST/Math.max) by design, so nothing can make an item look *less*
+    // recently watched — the safe direction for an engine that deletes files.
+    // The next sync's reconcile re-establishes them from the new source's rows.
+
+    apiLogger.info(
+      "Auth",
+      `Watch-history source for media server "${server.name}" changed ` +
+        `(${server.tracearrServerId ?? "native"} -> ${tracearrServerId ?? "native"}); ` +
+        `cleared ${wiped.count} stored watch-history rows`
+    );
+  }
 
   // Purge media data when disabling with deleteData
   if (enabled === false && deleteData) {

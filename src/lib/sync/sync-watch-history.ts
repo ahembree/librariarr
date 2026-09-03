@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { logger } from "@/lib/logger";
 import { reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
+import { syncTracearrHistory } from "@/lib/sync/sync-tracearr-history";
 import type { MediaServerType } from "@/generated/prisma/client";
 
 // 500 rows × 8 params = 4000 bind params per INSERT — well under Postgres's
@@ -28,9 +29,11 @@ export async function syncWatchHistory(
       type: string;
       tlsSkipVerify: boolean;
       enabled: boolean;
+      userId: string;
+      tracearrServerId: string | null;
     }[]
   >(
-    `SELECT "id","name","url","accessToken","type","tlsSkipVerify","enabled" FROM "MediaServer" WHERE "id"=$1`,
+    `SELECT "id","name","url","accessToken","type","tlsSkipVerify","enabled","userId","tracearrServerId" FROM "MediaServer" WHERE "id"=$1`,
     serverId
   );
 
@@ -46,6 +49,44 @@ export async function syncWatchHistory(
     );
     return { count: 0 };
   }
+
+  // Watch history has two possible provenances per server, and they are
+  // mutually exclusive: mapping this server to a Tracearr `server_id` replaces
+  // the native full-replace below with an incremental, append/upsert import
+  // from Tracearr's durable log (`sync-tracearr-history.ts`). Running both
+  // would be actively destructive — the native path DELETEs every row for the
+  // server before re-inserting, so it would wipe the imported Tracearr rows on
+  // each run and then the importer's watermark would re-pull them.
+  //
+  // The mapping alone is not enough: an admin can map a server and later
+  // disable (or delete) the instance, and an import with no credentials would
+  // silently store nothing. Fall back to native in that case rather than
+  // leaving the server with no history at all.
+  if (server.tracearrServerId) {
+    const instance = await prisma.tracearrInstance.findFirst({
+      where: { userId: server.userId, enabled: true },
+      select: { id: true },
+    });
+
+    if (instance) {
+      logger.info(
+        "WatchHistory",
+        `Using Tracearr as the watch-history source for "${server.name}"`
+      );
+      return syncTracearrHistory(serverId);
+    }
+
+    logger.warn(
+      "WatchHistory",
+      `"${server.name}" is mapped to a Tracearr server but no enabled Tracearr ` +
+        `instance is configured — falling back to the server's own watch history`
+    );
+  }
+
+  logger.debug(
+    "WatchHistory",
+    `Using native watch history for "${server.name}"`
+  );
 
   const client = createMediaServerClient(
     server.type as MediaServerType,

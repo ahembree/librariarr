@@ -401,6 +401,22 @@ export async function createTestSeerrInstance(
   });
 }
 
+export async function createTestTracearrInstance(
+  userId: string,
+  overrides?: Partial<{ name: string; url: string; apiKey: string; enabled: boolean }>
+) {
+  const prisma = getTestPrisma();
+  return prisma.tracearrInstance.create({
+    data: {
+      userId,
+      name: overrides?.name ?? "Test Tracearr",
+      url: overrides?.url ?? "http://tracearr.test:3000",
+      apiKey: overrides?.apiKey ?? "trr_pub_test-key",
+      enabled: overrides?.enabled ?? true,
+    },
+  });
+}
+
 export async function createTestExternalId(
   mediaItemId: string,
   source: string,
