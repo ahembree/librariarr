@@ -36,6 +36,7 @@ export async function GET(
     },
     select: {
       parentTitle: true,
+      seriesKey: true,
       grandparentRatingKey: true,
     },
   });
@@ -49,13 +50,19 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const cacheKey = `group-summary:${session.userId}:${type}:${repItem.parentTitle.toLowerCase().trim()}`;
+  // SERIES groups by identity (`seriesKey`) so two same-titled shows don't blend;
+  // MUSIC groups by the artist name (`parentTitle`) as before.
+  const groupKey = type === "SERIES" ? repItem.seriesKey : null;
+  const cacheDiscriminator =
+    groupKey ?? repItem.parentTitle.toLowerCase().trim();
+  const cacheKey = `group-summary:${session.userId}:${type}:${cacheDiscriminator}`;
   const result = await appCache.getOrSet(
     cacheKey,
     () =>
       computeGroupSummary(
         type,
         repItem.parentTitle!,
+        groupKey,
         sf.serverIds,
         sf.isSingleServer,
       ),
@@ -68,16 +75,19 @@ export async function GET(
 async function computeGroupSummary(
   type: GroupType,
   parentTitle: string,
+  seriesKey: string | null,
   serverIds: string[],
   isSingleServer: boolean,
 ) {
   // Fetch all sibling items in this group across the user's servers.
   // For multi-server, restrict to canonical copies to avoid double-counting
-  // episodes/size/playCount across duplicate items.
+  // episodes/size/playCount across duplicate items. SERIES matches by identity
+  // (`seriesKey`) when the representative has one; MUSIC (and a keyless legacy
+  // SERIES row) matches by the artist/series title.
   const items = await prisma.mediaItem.findMany({
     where: {
       type,
-      parentTitle,
+      ...(seriesKey ? { seriesKey } : { parentTitle }),
       library: { mediaServerId: { in: serverIds } },
       ...(isSingleServer ? {} : { dedupCanonical: true }),
     },
@@ -110,10 +120,11 @@ async function computeGroupSummary(
     },
   });
 
-  // Server presence — uses normalized parentTitle keying like other grouped routes
+  // Server presence — keyed the same way getServerPresenceByGroup groups:
+  // seriesKey for SERIES, normalized parentTitle for MUSIC.
   const presenceMap = await getServerPresenceByGroup(type, serverIds);
   const servers =
-    presenceMap.get(parentTitle.toLowerCase().trim()) ?? [];
+    presenceMap.get(seriesKey ?? parentTitle.toLowerCase().trim()) ?? [];
 
   // Pick first non-null descriptive metadata (parent-level fields tend to repeat across siblings)
   let summary: string | null = null;

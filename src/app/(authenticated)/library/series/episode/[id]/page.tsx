@@ -150,6 +150,7 @@ export default function EpisodeDetailPage() {
 
       {item.parentTitle && item.seasonNumber != null && item.episodeNumber != null && (
         <SeriesWatchHistory
+          seriesKey={item.seriesKey}
           parentTitle={item.parentTitle}
           seasonNumber={item.seasonNumber}
           episodeNumber={item.episodeNumber}

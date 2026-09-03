@@ -85,6 +85,7 @@ const ITEM_SELECT = {
   id: true,
   title: true,
   parentTitle: true,
+  seriesKey: true,
   year: true,
   type: true,
   seasonNumber: true,
@@ -245,6 +246,7 @@ function sortCombinedResults(
 }
 
 interface SeriesGroupRow {
+  group_key: string;
   title: string;
   id: string;
   matchedEpisodes: number;
@@ -284,7 +286,7 @@ async function groupSeriesEpisodes(
     const seriesWhere: Prisma.MediaItemWhereInput = {
       ...where,
       type: "SERIES",
-      parentTitle: { not: null },
+      seriesKey: { not: null },
     };
 
     const matchingIds = await prisma.mediaItem.findMany({
@@ -301,6 +303,7 @@ async function groupSeriesEpisodes(
   // Step 2: Group by parentTitle via raw SQL
   const rows = await prisma.$queryRaw<SeriesGroupRow[]>`
     SELECT
+      mi."seriesKey" as group_key,
       MIN(mi."parentTitle") as title,
       (array_agg(mi.id ORDER BY mi."seasonNumber" NULLS LAST, mi."episodeNumber" NULLS LAST))[1] as id,
       COUNT(*)::int as "matchedEpisodes",
@@ -328,14 +331,18 @@ async function groupSeriesEpisodes(
     JOIN "Library" l ON mi."libraryId" = l.id
     JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
     WHERE mi.id = ANY(${ids})
-      AND mi."parentTitle" IS NOT NULL
-    GROUP BY LOWER(TRIM(mi."parentTitle"))
+      AND mi."seriesKey" IS NOT NULL
+    GROUP BY mi."seriesKey"
   `;
 
   return rows.map((r) => ({
     id: r.id,
     title: r.title,
     parentTitle: null,
+    // The group's series identity — carried so downstream consumers (the
+    // ad-hoc query-actions route) group a show's episodes by identity, not by
+    // the ambiguous title, and so two same-titled shows stay distinct.
+    seriesKey: r.group_key,
     year: r.year,
     type: "SERIES",
     seasonNumber: null,

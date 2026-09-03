@@ -72,9 +72,13 @@ export default function SeriesDetailPage() {
           ["Episode", "ratingKey"],
         ]));
 
-        const parentTitle = itemData.item.parentTitle || itemData.item.title;
+        // Prefer the series identity key (disambiguates two same-titled shows);
+        // fall back to the title for a legacy row without a seriesKey.
+        const seriesParam = itemData.item.seriesKey
+          ? `seriesKey=${encodeURIComponent(itemData.item.seriesKey)}`
+          : `parentTitle=${encodeURIComponent(itemData.item.parentTitle || itemData.item.title)}`;
         const seasonsRes = await fetch(
-          `/api/media/series/seasons?parentTitle=${encodeURIComponent(parentTitle)}`
+          `/api/media/series/seasons?${seriesParam}`
         );
         const seasonsData = await seasonsRes.json();
         if (token !== reqToken.current) return;
@@ -295,7 +299,7 @@ export default function SeriesDetailPage() {
         </section>
       )}
 
-      <SeriesWatchHistory parentTitle={seriesTitle} refreshKey={syncTick} />
+      <SeriesWatchHistory seriesKey={item.seriesKey} parentTitle={seriesTitle} refreshKey={syncTick} />
 
       <Separator className="mt-6" />
     </MediaDetailHero>

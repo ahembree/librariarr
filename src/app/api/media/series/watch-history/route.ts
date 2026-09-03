@@ -38,9 +38,12 @@ export async function GET(request: NextRequest) {
   }
 
   const { searchParams } = new URL(request.url);
+  // `seriesKey` (series identity) is preferred; `parentTitle` is still accepted
+  // for backward compatibility but is ambiguous across same-titled shows.
+  const seriesKey = searchParams.get("seriesKey");
   const parentTitle = searchParams.get("parentTitle");
-  if (!parentTitle) {
-    return NextResponse.json({ error: "parentTitle is required" }, { status: 400 });
+  if (!seriesKey && !parentTitle) {
+    return NextResponse.json({ error: "seriesKey or parentTitle is required" }, { status: 400 });
   }
 
   const serverId = searchParams.get("serverId");
@@ -63,13 +66,15 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "episodeNumber must be a number" }, { status: 400 });
   }
 
-  // Resolve the episodes in scope FIRST, keyed the same way the series listing
-  // groups shows: `LOWER(TRIM(parentTitle))` (see /api/media/series/grouped).
-  // Matching `parentTitle` exactly instead looks right on one server and
-  // silently loses plays on a second: the library merges "Test Kingdom" and
-  // "test kingdom " into one show, so a household member watching on the
-  // server with the other spelling disappears from the show's history — the
-  // very cross-server plays this route keeps by not applying dedup.
+  // Resolve the episodes in scope FIRST, keyed by series identity (`seriesKey`
+  // — the same key /api/media/series/grouped groups shows on). This keeps the
+  // two properties that matter here: two different shows sharing a title stay
+  // separate (distinct seriesKey), and the SAME show on two servers still
+  // merges — its episodes share a TVDB-derived seriesKey, so a household member
+  // watching on either server contributes to the show's history. That
+  // cross-server merge is exactly what this route must preserve (it doesn't
+  // apply dedup). The legacy `parentTitle` param falls back to the old
+  // case/space-insensitive title match.
   //
   // Filtering by the resolved ids also lets the history query use
   // WatchHistory(mediaItemId) instead of joining and filtering MediaItem.
@@ -80,8 +85,11 @@ export async function GET(request: NextRequest) {
     JOIN "MediaServer" ms ON ms."id" = l."mediaServerId"
     WHERE ms."userId" = ${session.userId!}
       AND mi."type" = 'SERIES'::"LibraryType"
-      AND mi."parentTitle" IS NOT NULL
-      AND LOWER(TRIM(mi."parentTitle")) = LOWER(TRIM(${parentTitle}))
+      AND (
+        (${seriesKey}::text IS NOT NULL AND mi."seriesKey" = ${seriesKey}::text)
+        OR (${seriesKey}::text IS NULL AND mi."parentTitle" IS NOT NULL
+            AND LOWER(TRIM(mi."parentTitle")) = LOWER(TRIM(${parentTitle}::text)))
+      )
       AND (${seasonNumber}::int IS NULL OR mi."seasonNumber" = ${seasonNumber}::int)
       AND (${episodeNumber}::int IS NULL OR mi."episodeNumber" = ${episodeNumber}::int)
   `;

@@ -97,8 +97,13 @@ export default function SeasonDetailPage() {
         const seasonNumber = itemData.item.seasonNumber ?? 0;
         if (!parentTitle) return;
 
+        // Scope episodes by series identity when available so a season of one
+        // show never pulls in a same-titled show's episodes.
+        const seriesParam = itemData.item.seriesKey
+          ? `seriesKey=${encodeURIComponent(itemData.item.seriesKey)}`
+          : `parentTitle=${encodeURIComponent(parentTitle)}`;
         const episodesRes = await fetch(
-          `/api/media/series?parentTitle=${encodeURIComponent(parentTitle)}&seasonNumber=${seasonNumber}&sortBy=episodeNumber&sortOrder=asc&limit=0`
+          `/api/media/series?${seriesParam}&seasonNumber=${seasonNumber}&sortBy=episodeNumber&sortOrder=asc&limit=0`
         );
         const episodesData = await episodesRes.json();
         if (token !== reqToken.current) return;
@@ -346,6 +351,7 @@ export default function SeasonDetailPage() {
 
       {item.parentTitle && (
         <SeriesWatchHistory
+          seriesKey={item.seriesKey}
           parentTitle={item.parentTitle}
           seasonNumber={seasonNumber}
           heading={`${seasonLabel} Watch History`}

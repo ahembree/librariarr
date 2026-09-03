@@ -6,12 +6,14 @@ import { applyStartsWithFilter } from "@/lib/filters/build-where";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import type { ServerPresence } from "@/lib/dedup/deduplicate";
 import { getServerPresenceByGroup } from "@/lib/dedup/server-presence";
+import { resolveSeriesKey } from "@/lib/media/series-key";
 
 function getResolutionLabel(resolution: string | null): string {
   return normalizeResolutionLabel(resolution);
 }
 
 interface SeriesGroupRow {
+  group_key: string;
   parentTitle: string;
   mediaItemId: string;
   episodeCount: number;
@@ -242,7 +244,7 @@ export async function GET(request: NextRequest) {
       prisma.$queryRawUnsafe<SeriesGroupRow[]>(
         `WITH items AS (
           SELECT
-            LOWER(TRIM(mi."parentTitle")) as group_key,
+            mi."seriesKey" as group_key,
             mi."parentTitle",
             mi.id,
             mi."thumbUrl",
@@ -270,7 +272,7 @@ export async function GET(request: NextRequest) {
           FROM "MediaItem" mi
           JOIN "Library" l ON mi."libraryId" = l.id
           WHERE mi.type = 'SERIES'::"LibraryType"
-            AND mi."parentTitle" IS NOT NULL
+            AND mi."seriesKey" IS NOT NULL
             AND mi."dedupCanonical" = true
             AND l."mediaServerId" = ANY($1::text[])
             ${extraFilters}
@@ -332,6 +334,7 @@ export async function GET(request: NextRequest) {
 
     let seriesList = groups.map((g) => ({
       parentTitle: g.parentTitle,
+      seriesKey: g.group_key,
       mediaItemId: g.mediaItemId,
       episodeCount: g.episodeCount,
       seasonCount: g.seasonCount,
@@ -344,7 +347,7 @@ export async function GET(request: NextRequest) {
       isWatchlisted: g.isWatchlisted,
       qualityCounts: (g.qualityCounts ?? {}) as Record<string, number>,
       thumbUrl: g.thumbUrl,
-      servers: groupServerPresence.get(g.parentTitle.toLowerCase().trim()) ?? [],
+      servers: groupServerPresence.get(g.group_key) ?? [],
       summary: g.summary,
       genres: g.genres as string[] | null,
       studio: g.studio,
@@ -392,6 +395,7 @@ export async function GET(request: NextRequest) {
     select: {
       id: true,
       parentTitle: true,
+      seriesKey: true,
       thumbUrl: true,
       parentThumbUrl: true,
       seasonNumber: true,
@@ -425,6 +429,7 @@ export async function GET(request: NextRequest) {
     string,
     {
       parentTitle: string;
+      seriesKey: string;
       mediaItemId: string;
       thumbUrl: string | null;
       episodeCount: number;
@@ -451,11 +456,16 @@ export async function GET(request: NextRequest) {
 
   for (const item of items) {
     const title = item.parentTitle!;
-    const normalizedKey = title.toLowerCase().trim();
-    let group = groupMap.get(normalizedKey);
+    // Group by series identity, not the ambiguous title: two same-titled shows
+    // with different TVDB ids stay separate; the same show on one server is one
+    // group. Rows with no key (blank title, no ids) are skipped like before.
+    const groupKey = resolveSeriesKey(item);
+    if (!groupKey) continue;
+    let group = groupMap.get(groupKey);
     if (!group) {
       group = {
         parentTitle: title,
+        seriesKey: groupKey,
         mediaItemId: item.id,
         thumbUrl: item.thumbUrl,
         episodeCount: 0,
@@ -478,7 +488,7 @@ export async function GET(request: NextRequest) {
         audienceRatingImage: null,
         year: null,
       };
-      groupMap.set(normalizedKey, group);
+      groupMap.set(groupKey, group);
     }
 
     const ms = item.library.mediaServer!;
@@ -536,6 +546,7 @@ export async function GET(request: NextRequest) {
 
   let seriesList = Array.from(groupMap.values()).map((g) => ({
     parentTitle: g.parentTitle,
+    seriesKey: g.seriesKey,
     mediaItemId: g.mediaItemId,
     episodeCount: g.episodeCount,
     seasonCount: g.seasonNumbers.size,

@@ -59,6 +59,9 @@ export interface MediaItemWithRelations {
   fileSize: string | null; // BigInt serialized as string
   filePath: string | null;
   duration: number | null;
+  // Series identity (see src/lib/media/series-key.ts) — set for SERIES rows,
+  // null for movies/tracks. The stable key every series-level grouping uses.
+  seriesKey?: string | null;
   // Playback
   playCount: number;
   lastPlayedAt: string | null;

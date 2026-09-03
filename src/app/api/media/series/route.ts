@@ -36,6 +36,9 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const { page, limit, skip } = parseListPagination(searchParams);
   const search = searchParams.get("search");
+  // `seriesKey` (series identity) is preferred; `parentTitle` stays as a
+  // backward-compatible fallback (ambiguous across same-titled shows).
+  const seriesKey = searchParams.get("seriesKey");
   const parentTitle = searchParams.get("parentTitle");
   const seasonNumber = searchParams.get("seasonNumber");
   const rawSortBy = searchParams.get("sortBy") ?? "title";
@@ -53,7 +56,8 @@ export async function GET(request: NextRequest) {
     type: "SERIES",
   };
 
-  if (parentTitle) where.parentTitle = parentTitle;
+  if (seriesKey) where.seriesKey = seriesKey;
+  else if (parentTitle) where.parentTitle = parentTitle;
   if (seasonNumber) {
     const n = parseInt(seasonNumber);
     if (Number.isNaN(n)) {

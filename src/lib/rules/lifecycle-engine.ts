@@ -30,6 +30,7 @@ import type { Condition } from "@/lib/conditions/types";
 import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
 import { Prisma } from "@/generated/prisma/client";
+import { resolveSeriesKey } from "@/lib/media/series-key";
 
 const STREAM_LANG_CODEC_FIELDS = new Set(["audioLanguage", "subtitleLanguage", "streamAudioCodec"]);
 const STREAM_LANGUAGE_FIELDS = new Set(["audioLanguage", "subtitleLanguage"]);
@@ -2062,10 +2063,14 @@ export async function evaluateSeriesScope(
     },
   });
 
-  // Group episodes by series (parentTitle + libraryId)
+  // Group episodes by series identity within a library (libraryId + seriesKey).
+  // Keying on seriesKey (not the ambiguous parentTitle) splits two same-titled
+  // shows with different TVDB ids; keeping the libraryId prefix leaves the same
+  // show on two servers as two aggregates that detect-matches collapses by Arr
+  // id (merging here would double-count episodes).
   const seriesMap = new Map<string, typeof allEpisodes>();
   for (const ep of allEpisodes) {
-    const key = `${ep.libraryId}::${ep.parentTitle ?? ep.libraryId}`;
+    const key = `${ep.libraryId}::${resolveSeriesKey(ep) ?? ep.libraryId}`;
     const group = seriesMap.get(key);
     if (group) {
       group.push(ep);
@@ -2583,12 +2588,13 @@ export async function evaluateLifecycleRules(
  * `matchedEpisodes` count.
  */
 export function groupSeriesResults<
-  T extends { id: string; title: string; parentTitle: string | null; libraryId: string; playCount: number; fileSize: string | null; lastPlayedAt?: string | Date | null; seasonNumber?: number | null; episodeNumber?: number | null }
+  T extends { id: string; title: string; parentTitle: string | null; seriesKey?: string | null; externalIds?: ReadonlyArray<{ source: string; externalId: string }> | null; libraryId: string; playCount: number; fileSize: string | null; lastPlayedAt?: string | Date | null; seasonNumber?: number | null; episodeNumber?: number | null }
 >(items: T[]): (T & { matchedEpisodes: number; memberIds: string[] })[] {
   const groups = new Map<string, { representative: T; count: number; totalPlays: number; totalSize: bigint; latestPlayed: Date | null; memberIds: string[] }>();
 
   for (const item of items) {
-    const key = `${item.libraryId}::${item.parentTitle ?? item.libraryId}`;
+    // Series identity per library — same rationale as evaluateSeriesScope.
+    const key = `${item.libraryId}::${resolveSeriesKey(item) ?? item.libraryId}`;
     const existing = groups.get(key);
     const playedDate = item.lastPlayedAt ? new Date(item.lastPlayedAt) : null;
     const size = item.fileSize ? BigInt(item.fileSize) : BigInt(0);

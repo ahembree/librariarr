@@ -322,6 +322,12 @@ model MediaItem {
   // Dedup
   dedupKey         String?
   dedupCanonical   Boolean               @default(true)
+  // Series identity (see src/lib/media/series-key.ts). Set by the sync for
+  // SERIES episodes only: "tvdb:<id>" / "tmdb:<id>" from the show-level
+  // external ids, else "title:<lower(trim(parentTitle))>". Every series-level
+  // grouping (library, rule engines, watch history) keys on this, never on the
+  // ambiguous parentTitle. Null for movies and tracks.
+  seriesKey        String?
   isWatchlisted    Boolean               @default(false)
   streams          MediaStream[]
   externalIds      MediaItemExternalId[]
@@ -337,6 +343,7 @@ model MediaItem {
   @@index([type, title])
   @@index([dedupKey])
   @@index([type, dedupCanonical, title])
+  @@index([type, seriesKey])
   @@index([resolution])
   @@index([playCount])
   @@index([lastPlayedAt])

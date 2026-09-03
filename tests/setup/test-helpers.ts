@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { expect } from "vitest";
 import { getTestPrisma } from "./test-db";
+import { computeSeriesKey } from "@/lib/media/series-key";
 
 // ---- Route Handler Invocation ----
 
@@ -208,6 +209,7 @@ export async function createTestMediaItem(
     lastPlayedAt: Date;
     addedAt: Date;
     parentTitle: string;
+    seriesKey: string | null;
     albumTitle: string;
     seasonNumber: number;
     episodeNumber: number;
@@ -241,6 +243,16 @@ export async function createTestMediaItem(
       lastPlayedAt: overrides?.lastPlayedAt,
       addedAt: overrides?.addedAt ?? new Date(),
       parentTitle: overrides?.parentTitle,
+      // Mirror the sync: SERIES rows carry a seriesKey (see src/lib/media/series-key.ts).
+      // Defaults to the title-based key so tests group like production; pass an
+      // explicit `seriesKey` to simulate tvdb/tmdb-keyed identity (e.g. two
+      // same-titled shows with different ids).
+      seriesKey:
+        overrides?.seriesKey !== undefined
+          ? overrides.seriesKey
+          : (overrides?.type ?? "MOVIE") === "SERIES"
+            ? computeSeriesKey({ parentTitle: overrides?.parentTitle ?? null })
+            : null,
       albumTitle: overrides?.albumTitle,
       seasonNumber: overrides?.seasonNumber,
       episodeNumber: overrides?.episodeNumber,

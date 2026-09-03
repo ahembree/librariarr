@@ -15,11 +15,16 @@ export async function GET(request: NextRequest) {
   }
 
   const { searchParams } = new URL(request.url);
+  // Series identity is `seriesKey` (see src/lib/media/series-key.ts); the legacy
+  // `parentTitle` param is still accepted so old links keep working, but it is
+  // ambiguous (two shows can share a title), so `seriesKey` wins when both are
+  // present.
+  const seriesKey = searchParams.get("seriesKey");
   const parentTitle = searchParams.get("parentTitle");
   const serverId = searchParams.get("serverId");
 
-  if (!parentTitle) {
-    return NextResponse.json({ error: "parentTitle is required" }, { status: 400 });
+  if (!seriesKey && !parentTitle) {
+    return NextResponse.json({ error: "seriesKey or parentTitle is required" }, { status: 400 });
   }
 
   const sf = await resolveServerFilter(session.userId!, serverId, "SERIES");
@@ -30,7 +35,7 @@ export async function GET(request: NextRequest) {
   const items = await prisma.mediaItem.findMany({
     where: {
       type: "SERIES",
-      parentTitle,
+      ...(seriesKey ? { seriesKey } : { parentTitle: parentTitle! }),
       library: { mediaServerId: { in: sf.serverIds } },
       ...(!sf.isSingleServer && { dedupCanonical: true }),
     },

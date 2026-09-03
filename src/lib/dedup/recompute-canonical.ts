@@ -10,6 +10,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { withDeadlockRetry } from "@/lib/db-retry";
 import { computeDedupKey } from "./compute-dedup-key";
+import { seriesKeySqlExpression } from "@/lib/media/series-key";
 
 /**
  * Recompute canonical flags for all items belonging to a user.
@@ -189,11 +190,51 @@ export async function backfillDedupKeys(userId?: string): Promise<number> {
 }
 
 /**
+ * Backfill `seriesKey` for SERIES rows that don't have one yet (synced before
+ * the column existed, or a restore of a pre-0015 backup). Set-based and keyed
+ * off the persisted show-level external ids via the shared SQL expression, so
+ * it produces exactly what the sync's `buildRowParams` writes for new rows.
+ * Movies/tracks are left NULL. Returns the number of rows updated.
+ */
+export async function backfillSeriesKeys(userId?: string): Promise<number> {
+  const expr = seriesKeySqlExpression("mi");
+  const ownership = userId
+    ? `AND mi."libraryId" IN (
+         SELECT l.id FROM "Library" l
+         JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
+         WHERE ms."userId" = $1
+       )`
+    : "";
+  const sql = `
+    UPDATE "MediaItem" mi
+    SET "seriesKey" = ${expr}
+    WHERE mi."type" = 'SERIES'::"LibraryType"
+      AND mi."seriesKey" IS NULL
+      ${ownership}
+  `;
+  return userId
+    ? prisma.$executeRawUnsafe(sql, userId)
+    : prisma.$executeRawUnsafe(sql);
+}
+
+/**
  * Check on startup if any items need dedupKey backfill.
  * Runs in the background — does not block server startup.
  */
 export async function runBackfillIfNeeded(): Promise<void> {
   try {
+    // seriesKey backfill is independent of dedupKey (SERIES rows only) and
+    // cheap when there's nothing to do, so check it on its own.
+    const [{ count: seriesKeyMissing }] = await prisma.$queryRaw<[{ count: number }]>`
+      SELECT COUNT(*)::int AS count FROM "MediaItem"
+      WHERE "type" = 'SERIES'::"LibraryType" AND "seriesKey" IS NULL LIMIT 1
+    `;
+    if (seriesKeyMissing > 0) {
+      logger.info("Sync", `Backfilling seriesKey for ${seriesKeyMissing} SERIES item(s)...`);
+      const updatedSeriesKeys = await backfillSeriesKeys();
+      logger.info("Sync", `Backfilled ${updatedSeriesKeys} seriesKey(s)`);
+    }
+
     const [{ count }] = await prisma.$queryRaw<[{ count: number }]>`
       SELECT COUNT(*)::int AS count FROM "MediaItem" WHERE "dedupKey" IS NULL LIMIT 1
     `;

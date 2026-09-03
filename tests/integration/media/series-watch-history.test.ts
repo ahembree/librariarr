@@ -129,7 +129,7 @@ describe("GET /api/media/series/watch-history", () => {
       await callRoute(GET, { url: "/api/media/series/watch-history" }),
       400,
     );
-    expect(body.error).toBe("parentTitle is required");
+    expect(body.error).toBe("seriesKey or parentTitle is required");
   });
 
   it("returns 400 for a non-numeric seasonNumber", async () => {
@@ -480,5 +480,55 @@ describe("GET /api/media/series/watch-history", () => {
     expect(data.items).toEqual([]);
     expect(data.pagination.totalCount).toBe(0);
     expect(data.pagination.hasMore).toBe(false);
+  });
+
+  it("scopes by seriesKey so two same-titled shows keep separate history", async () => {
+    // Two "The Office" shows with different TVDB-derived seriesKeys.
+    const uk = await createTestMediaItem(libraryId, {
+      type: "SERIES", title: "Downsize", parentTitle: "The Office",
+      seriesKey: "tvdb:78107", seasonNumber: 1, episodeNumber: 1,
+    });
+    const us = await createTestMediaItem(libraryId, {
+      type: "SERIES", title: "Pilot", parentTitle: "The Office",
+      seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 1,
+    });
+    await addWatch(uk.id, { serverUsername: "brit" });
+    await addWatch(us.id, { serverUsername: "yank" });
+
+    const data = await expectJson<HistoryResponse>(
+      await callRoute(GET, {
+        url: "/api/media/series/watch-history",
+        searchParams: { seriesKey: "tvdb:73244" },
+      }),
+    );
+    // Only the US show's play — the identically-titled UK show is not blended in.
+    expect(data.pagination.totalCount).toBe(1);
+    expect(data.items[0].serverUsername).toBe("yank");
+  });
+
+  it("merges the same show across servers by seriesKey (keeps cross-server plays)", async () => {
+    const server2 = await createTestServer(userId, { name: "Second" });
+    const library2 = await createTestLibrary(server2.id, { type: "SERIES" });
+    // Same show, different spelling per server, shared TVDB-derived seriesKey.
+    const plexCopy = await createTestMediaItem(libraryId, {
+      type: "SERIES", title: "33", parentTitle: "Battlestar Galactica",
+      seriesKey: "tvdb:73545", seasonNumber: 1, episodeNumber: 1,
+    });
+    const jellyfinCopy = await createTestMediaItem(library2.id, {
+      type: "SERIES", title: "33", parentTitle: "battlestar galactica ",
+      seriesKey: "tvdb:73545", seasonNumber: 1, episodeNumber: 1,
+    });
+    await addWatch(plexCopy.id, { serverUsername: "alice" });
+    await addWatch(jellyfinCopy.id, { mediaServerId: server2.id, serverUsername: "dave" });
+
+    const data = await expectJson<HistoryResponse>(
+      await callRoute(GET, {
+        url: "/api/media/series/watch-history",
+        searchParams: { seriesKey: "tvdb:73545" },
+      }),
+    );
+    // Both servers' plays are returned (dedup is deliberately not applied).
+    expect(data.pagination.totalCount).toBe(2);
+    expect(data.items.map((i) => i.serverUsername).sort()).toEqual(["alice", "dave"]);
   });
 });

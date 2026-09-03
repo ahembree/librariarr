@@ -10,6 +10,7 @@ import v8 from "v8";
 import { randomUUID } from "crypto";
 import { invalidateCachedUrls, normalizeCacheUrl } from "@/lib/image-cache/image-cache";
 import { computeDedupKey } from "@/lib/dedup/compute-dedup-key";
+import { computeSeriesKey } from "@/lib/media/series-key";
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
 import { withDeadlockRetry } from "@/lib/db-retry";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
@@ -253,7 +254,7 @@ const MEDIA_ITEM_COLUMNS = [
   "container", "dynamicRange", "optimizedForStreaming",
   "fileSize", "filePath", "duration",
   "playCount", "lastPlayedAt", "addedAt", "serverUpdatedAt",
-  "dedupKey", "isWatchlisted",
+  "dedupKey", "seriesKey", "isWatchlisted",
   "titleSort", "ratingCount", "ratingImage", "audienceRatingImage",
   "absoluteIndex", "chapterSource", "labels", "videoRangeType",
   "createdAt", "updatedAt",
@@ -261,12 +262,18 @@ const MEDIA_ITEM_COLUMNS = [
 
 const COLS_PER_ROW = MEDIA_ITEM_COLUMNS.length;
 
-// Indices of columns needing explicit SQL type casts
-const COLUMN_CASTS: Record<number, string> = {
-  5: '::"LibraryType"',
-  27: "::jsonb", 28: "::jsonb", 29: "::jsonb", 30: "::jsonb", 31: "::jsonb",
-  53: "::bigint",
-  68: "::jsonb",
+// Columns needing an explicit SQL type cast on their placeholder. Keyed by
+// column NAME (not positional index) so inserting a column into
+// MEDIA_ITEM_COLUMNS can't silently shift a cast onto the wrong parameter.
+const COLUMN_CASTS: Record<string, string> = {
+  type: '::"LibraryType"',
+  genres: "::jsonb",
+  directors: "::jsonb",
+  writers: "::jsonb",
+  roles: "::jsonb",
+  countries: "::jsonb",
+  fileSize: "::bigint",
+  labels: "::jsonb",
 };
 
 // JSON columns use COALESCE on update to preserve existing values when the
@@ -282,7 +289,7 @@ function buildUpsertSql(rowCount: number): string {
   for (let r = 0; r < rowCount; r++) {
     const ps: string[] = [];
     for (let c = 0; c < COLS_PER_ROW; c++) {
-      ps.push(`$${r * COLS_PER_ROW + c + 1}${COLUMN_CASTS[c] ?? ""}`);
+      ps.push(`$${r * COLS_PER_ROW + c + 1}${COLUMN_CASTS[MEDIA_ITEM_COLUMNS[c]] ?? ""}`);
     }
     rows.push(`(${ps.join(",")})`);
   }
@@ -339,6 +346,15 @@ function buildRowParams(
     episodeNumber: d.episodeNumber,
     externalIds,
   });
+
+  // Series identity — SERIES episodes only. `externalIds` here already holds the
+  // SHOW-level Guids (resolved via showGuidsMap above), which is exactly what
+  // computeSeriesKey wants; movies/tracks get null. Mirrors migration 0015's
+  // backfill, which reads the same show-level ids from MediaItemExternalId.
+  const seriesKey =
+    libraryType === "SERIES"
+      ? computeSeriesKey({ parentTitle: d.parentTitle, externalIds })
+      : null;
 
   // Determine watchlist status: Jellyfin/Emby set d.isWatchlisted directly;
   // for Plex, cross-reference the item's external GUIDs with the watchlist set
@@ -415,6 +431,7 @@ function buildRowParams(
     d.addedAt ?? null,
     item.updatedAt ? new Date(item.updatedAt * 1000) : null,
     dedupKey,
+    seriesKey,
     isWatchlisted,
     d.titleSort ?? d.title,
     d.ratingCount ?? null,

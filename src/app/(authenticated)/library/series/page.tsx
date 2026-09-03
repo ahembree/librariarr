@@ -34,6 +34,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 
 interface GroupedSeries {
   parentTitle: string;
+  seriesKey: string | null;
   mediaItemId: string;
   episodeCount: number;
   seasonCount: number;
@@ -421,7 +422,7 @@ export default function SeriesPage() {
             <DataTable<GroupedSeries>
               columns={seriesTableColumns(getHex)}
               data={filteredSeries}
-              keyExtractor={(s) => s.parentTitle}
+              keyExtractor={(s) => s.seriesKey ?? s.parentTitle}
               defaultSortId="parentTitle"
               resizeStorageKey="dt-widths-series"
               onRowClick={(s) => { markChildNavigation(); router.push(`/library/series/show/${s.mediaItemId}`); }}
@@ -486,7 +487,7 @@ export default function SeriesPage() {
                       >
                         {rowItems.map((s) => (
                           <MediaCard
-                            key={s.parentTitle}
+                            key={s.seriesKey ?? s.parentTitle}
                             priority={virtualRow.index < PRIORITY_ROWS}
                             imageUrl={`/api/media/${s.mediaItemId}/image?type=parent`}
                             title={s.parentTitle}

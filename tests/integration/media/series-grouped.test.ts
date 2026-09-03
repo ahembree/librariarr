@@ -792,4 +792,84 @@ describe("GET /api/media/series/grouped", () => {
       expect(body.series[0].servers[0].serverName).toBe("Home Plex");
     });
   });
+
+  // ─── Series identity (seriesKey) ───
+
+  describe("series identity", () => {
+    it("splits two same-titled shows with different seriesKeys into two rows", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id, { type: "SERIES" });
+
+      // The Office (UK) — 1 episode.
+      await createTestMediaItem(lib.id, {
+        title: "Downsize", type: "SERIES", parentTitle: "The Office",
+        seriesKey: "tvdb:78107", seasonNumber: 1, episodeNumber: 1,
+      });
+      // The Office (US) — 2 episodes across 2 seasons.
+      await createTestMediaItem(lib.id, {
+        title: "Pilot", type: "SERIES", parentTitle: "The Office",
+        seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 1,
+      });
+      await createTestMediaItem(lib.id, {
+        title: "Finale", type: "SERIES", parentTitle: "The Office",
+        seriesKey: "tvdb:73244", seasonNumber: 9, episodeNumber: 23,
+      });
+
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const body = await expectJson<{
+        series: { parentTitle: string; seriesKey: string; episodeCount: number; seasonCount: number }[];
+      }>(await callRoute(GET, { url: "/api/media/series/grouped", searchParams: { limit: "0" } }), 200);
+
+      // Two rows despite the shared title.
+      expect(body.series).toHaveLength(2);
+      const byKey = new Map(body.series.map((s) => [s.seriesKey, s]));
+      expect(byKey.get("tvdb:78107")!.episodeCount).toBe(1);
+      expect(byKey.get("tvdb:78107")!.seasonCount).toBe(1);
+      expect(byKey.get("tvdb:73244")!.episodeCount).toBe(2);
+      expect(byKey.get("tvdb:73244")!.seasonCount).toBe(2);
+      // Both still display "The Office".
+      expect(body.series.every((s) => s.parentTitle === "The Office")).toBe(true);
+    });
+
+    it("keeps the same show on two servers as one row (cross-server merge)", async () => {
+      const user = await createTestUser();
+      const server1 = await createTestServer(user.id, { name: "Plex" });
+      const server2 = await createTestServer(user.id, { name: "Jellyfin" });
+      const lib1 = await createTestLibrary(server1.id, { type: "SERIES" });
+      const lib2 = await createTestLibrary(server2.id, { type: "SERIES" });
+
+      // Same episode of the same show on both servers, different title spelling,
+      // shared TVDB-derived seriesKey and dedupKey.
+      await createTestMediaItem(lib1.id, {
+        title: "33", type: "SERIES", parentTitle: "Battlestar Galactica",
+        seriesKey: "tvdb:73545", seasonNumber: 1, episodeNumber: 1,
+      });
+      await createTestMediaItem(lib2.id, {
+        title: "33", type: "SERIES", parentTitle: "battlestar galactica ",
+        seriesKey: "tvdb:73545", seasonNumber: 1, episodeNumber: 1,
+      });
+      // Multi-server listings show only canonical copies; mark one canonical and
+      // the other not, as recomputeCanonical would (shared dedupKey).
+      const prisma = (await import("../../setup/test-db")).getTestPrisma();
+      await prisma.mediaItem.updateMany({ data: { dedupKey: "series:tvdb:73545:s1e1" } });
+      const rows = await prisma.mediaItem.findMany({ orderBy: { id: "asc" } });
+      await prisma.mediaItem.update({ where: { id: rows[0].id }, data: { dedupCanonical: true } });
+      await prisma.mediaItem.update({ where: { id: rows[1].id }, data: { dedupCanonical: false } });
+
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const body = await expectJson<{
+        series: { seriesKey: string; episodeCount: number; servers: { serverName: string }[] }[];
+      }>(await callRoute(GET, { url: "/api/media/series/grouped", searchParams: { limit: "0" } }), 200);
+
+      // One merged row (not two), counting the single canonical episode, with
+      // both servers listed in its presence.
+      expect(body.series).toHaveLength(1);
+      expect(body.series[0].seriesKey).toBe("tvdb:73545");
+      expect(body.series[0].episodeCount).toBe(1);
+      expect(body.series[0].servers.map((s) => s.serverName).sort()).toEqual(["Jellyfin", "Plex"]);
+    });
+  });
 });

@@ -32,8 +32,14 @@ interface WatchHistoryResponse {
 }
 
 interface SeriesWatchHistoryProps {
-  /** Series name — the `parentTitle` every episode row carries. */
-  parentTitle: string;
+  /**
+   * Series identity (see src/lib/media/series-key.ts) — the preferred way to
+   * scope the history, so two same-titled shows don't blend. Falls back to
+   * `parentTitle` when absent (legacy callers). At least one is required.
+   */
+  seriesKey?: string | null;
+  /** Series name — the `parentTitle` every episode row carries. Fallback identifier. */
+  parentTitle?: string | null;
   /** Restrict to one season. Omit for the whole series. */
   seasonNumber?: number | null;
   /** Restrict to one episode (with `seasonNumber`). Omit for all episodes. */
@@ -88,6 +94,7 @@ function formatWatchedAt(dateStr: string | null): string {
  * per-play timestamps, so it can't stand in for this.
  */
 export function SeriesWatchHistory({
+  seriesKey,
   parentTitle,
   seasonNumber,
   episodeNumber,
@@ -110,10 +117,11 @@ export function SeriesWatchHistory({
     async (page: number, token: number) => {
       try {
         const params = new URLSearchParams({
-          parentTitle,
           page: String(page),
           limit: String(PAGE_SIZE),
         });
+        if (seriesKey) params.set("seriesKey", seriesKey);
+        else if (parentTitle) params.set("parentTitle", parentTitle);
         if (seasonNumber != null) params.set("seasonNumber", String(seasonNumber));
         if (episodeNumber != null) params.set("episodeNumber", String(episodeNumber));
         if (serverId) params.set("serverId", serverId);
@@ -134,14 +142,14 @@ export function SeriesWatchHistory({
         setLoadingMore(false);
       }
     },
-    [parentTitle, seasonNumber, episodeNumber, serverId],
+    [seriesKey, parentTitle, seasonNumber, episodeNumber, serverId],
   );
 
   // Reset to the loading state when the scope changes, so a new series/season
   // never shows the previous one's plays while its own request is in flight.
   // (set-state-during-render is React 19's idiom for "reset state on prop change" —
   // https://react.dev/learn/you-might-not-need-an-effect#adjusting-state-when-a-prop-changes)
-  const scopeKey = `${parentTitle}|${seasonNumber ?? ""}|${episodeNumber ?? ""}|${serverId ?? ""}`;
+  const scopeKey = `${seriesKey ?? parentTitle ?? ""}|${seasonNumber ?? ""}|${episodeNumber ?? ""}|${serverId ?? ""}`;
   const [prevScopeKey, setPrevScopeKey] = useState(scopeKey);
   if (prevScopeKey !== scopeKey) {
     setPrevScopeKey(scopeKey);
