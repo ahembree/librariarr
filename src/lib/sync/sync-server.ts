@@ -347,14 +347,33 @@ function buildRowParams(
     externalIds,
   });
 
-  // Series identity — SERIES episodes only. `externalIds` here already holds the
-  // SHOW-level Guids (resolved via showGuidsMap above), which is exactly what
-  // computeSeriesKey wants; movies/tracks get null. Mirrors migration 0015's
-  // backfill, which reads the same show-level ids from MediaItemExternalId.
-  const seriesKey =
-    libraryType === "SERIES"
-      ? computeSeriesKey({ parentTitle: d.parentTitle, externalIds })
-      : null;
+  // Series identity — SERIES episodes only. It must key on SHOW-level ids, so it
+  // resolves Guids the SAME way the external-id persistence loop (and migration
+  // 0015) does: show-level Guids when available, else NONE (→ title fallback) —
+  // never the episode's own Guid. The `externalIds` above deliberately keeps the
+  // episode-level Guid for an unmatched show (correct for dedupKey), but an
+  // episode-level id is per-episode and would fragment the show into one
+  // "series" per episode and disagree with the persisted/backfilled key.
+  let seriesKey: string | null = null;
+  if (libraryType === "SERIES") {
+    let showLevelGuids = item.Guid;
+    if (showGuidsMap) {
+      const showGuids = showGuidsMap.get(item.grandparentRatingKey ?? "");
+      if (showGuids && showGuids.length > 0) {
+        showLevelGuids = showGuids;
+      } else if (item.grandparentRatingKey) {
+        showLevelGuids = undefined;
+      }
+    }
+    const seriesExternalIds: { source: string; id: string }[] = [];
+    if (showLevelGuids) {
+      for (const guid of showLevelGuids) {
+        const match = guid.id.match(/^(\w+):\/\/(.+)$/);
+        if (match) seriesExternalIds.push({ source: match[1].toUpperCase(), id: match[2] });
+      }
+    }
+    seriesKey = computeSeriesKey({ parentTitle: d.parentTitle, externalIds: seriesExternalIds });
+  }
 
   // Determine watchlist status: Jellyfin/Emby set d.isWatchlisted directly;
   // for Plex, cross-reference the item's external GUIDs with the watchlist set
