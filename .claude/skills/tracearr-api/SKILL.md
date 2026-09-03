@@ -1,32 +1,32 @@
 ---
 name: tracearr-api
-description: Reference for the Tracearr public REST API (self-hosted Plex/Jellyfin/Emby playback monitoring, a Tautulli alternative covering all three server types). Use when adding, debugging, or extending Tracearr API calls (watch history, active streams, users, libraries, response schemas).
+description: Reference for the Tracearr public REST API (self-hosted Plex/Jellyfin/Emby playback monitoring). Use when adding, debugging, or extending Tracearr API calls (watch history, active streams, users, libraries, response schemas).
 ---
 
 # Tracearr API
 
-Tracearr monitors Plex, Jellyfin **and** Emby from one instance, so unlike Tautulli (Plex-only) it can serve watch history for every server type. The public API is read-only apart from one stream-termination endpoint.
+Tracearr monitors Plex, Jellyfin and Emby from one instance and exposes a read-only public REST API (plus one stream-termination endpoint).
 
-**Primary source — the OpenAPI spec the instance serves itself.** `GET /api/v2/public/docs` returns raw OpenAPI JSON, but it sits behind auth, so it cannot be fetched anonymously:
+**Source of truth — the route code in the repo.** Tracearr publishes no separate, anonymously fetchable spec file: the OpenAPI document is served only by a running instance, behind auth (`GET /api/v2/public/docs`, bearer token). So read the route definitions straight from the public source, which needs no auth and is the authoritative schema:
+
+- v2 route + schema definitions (field shapes, response envelopes): `apps/server/src/routes/publicV2.openapi.ts`
+- v2 handlers (query params, filters, cursor internals): `apps/server/src/routes/publicV2/{history,media,users,streams,libraries}.ts`
+- v1 definitions (legacy — see the media-identifier note): `apps/server/src/routes/public.openapi.ts`
+
+Fetch with the raw prefix `https://raw.githubusercontent.com/connorgallopo/Tracearr/main/` + the path, e.g.
 
 ```
-curl -s -H "Authorization: Bearer $TRACEARR_TOKEN" https://<host>/api/v2/public/docs | jq '.paths | keys'
+curl -sL https://raw.githubusercontent.com/connorgallopo/Tracearr/main/apps/server/src/routes/publicV2.openapi.ts
 ```
 
-**Fallback with no instance or token** — the route schemas in the repo. These are TypeScript, not a fetchable spec, so read them rather than piping them through `jq`:
-
-- v2 schemas: https://raw.githubusercontent.com/connorgallopo/Tracearr/main/apps/server/src/routes/publicV2.openapi.ts
-- v1 schemas: https://raw.githubusercontent.com/connorgallopo/Tracearr/main/apps/server/src/routes/public.openapi.ts
-- v2 handlers: `apps/server/src/routes/publicV2/{history,media,users,streams,libraries}.ts` under the same raw prefix
-
-Published docs are at https://docs.tracearr.com/api when reachable from your network.
+These are TypeScript Fastify route schemas, not a JSON/YAML spec — read them, don't `jq` them. Swap `main` for a release tag to match a specific Tracearr version. If you have a running instance and a token, `GET /api/v2/public/docs` returns the live OpenAPI JSON for exactly that build.
 
 ## Auth, paths, limits
 
 - `Authorization: Bearer trr_pub_<base64url>` — the key is generated in Tracearr's Settings → API
 - Two live versions: `/api/v1/public/*` and `/api/v2/public/*`. An instance may sit under a base path (`/tracearr/api/v2/...`), so never hardcode the root
-- Rate limited per key on a 1-minute window with the max resolved from Tracearr's DB per request — handle 429 and back off
-- Fastify backend, so failures come back as real HTTP status codes (not Tautulli's `result: "error"` inside a 200)
+- Rate limited per key on a 1-minute window (the max is resolved from Tracearr's DB per request) — handle 429 and back off
+- Fastify backend, so failures come back as real HTTP status codes
 
 ## Use v2 for anything that joins to a MediaItem
 
@@ -38,11 +38,3 @@ For this repo: `rating_key` is the join key for `MediaItem.ratingKey` (the map `
 - **v2 history filters server-side:** `user_id`, `server_id`, `media_id`, `rating_key`, `imdb_id`, `tmdb_id`, `tvdb_id`, `media_type` (`movie|episode|track|live|photo|unknown`), `watched`, `since`, `until`
 - `since`/`until` are what make incremental sync viable — page from a stored watermark instead of re-pulling the whole history
 - v2 also has per-item routes: `/media/{ref}`, `/media/{ref}/children`, `/media/{ref}/stats`, `/media/{ref}/watchers`, `/media/{ref}/history`, plus `/users/{id}/history`, `/recently-added` and `/libraries`
-
-## Recipes against the instance spec
-
-Set `T="Authorization: Bearer $TRACEARR_TOKEN"` and `U=https://<host>/api/v2/public/docs`:
-
-- Inspect one endpoint: `curl -s -H "$T" $U | jq '.paths."/api/v2/public/history"'`
-- Look up a schema: `curl -s -H "$T" $U | jq '.components.schemas.HistoryRecord'`
-- List every query param for a route: `curl -s -H "$T" $U | jq '.paths."/api/v2/public/history".get.parameters[].name'`
