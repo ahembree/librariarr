@@ -313,6 +313,76 @@ describe("GET /api/media/series/watch-history", () => {
     expect(data.items.map((i) => i.server.name).sort()).toEqual(["Second", "Test Server"]);
   });
 
+  it("includes every server user's plays, not just the connected account's", async () => {
+    // WatchHistory is populated from the server-WIDE, per-user
+    // getDetailedWatchHistory(), and nothing here filters on serverUsername —
+    // session.userId is the Librariarr admin who owns the server record, not a
+    // media-server account. A household member's plays must show up.
+    const episode = await makeEpisode(1, 1, "Slumber Party Panic");
+    for (const who of ["alice", "bob", "carol", "dave"]) {
+      await addWatch(episode, { serverUsername: who });
+    }
+
+    const data = await expectJson<HistoryResponse>(
+      await callRoute(GET, {
+        url: "/api/media/series/watch-history",
+        searchParams: { parentTitle: "Adventure Time" },
+      }),
+    );
+
+    expect(data.pagination.totalCount).toBe(4);
+    expect([...new Set(data.items.map((i) => i.serverUsername))].sort()).toEqual([
+      "alice",
+      "bob",
+      "carol",
+      "dave",
+    ]);
+  });
+
+  it("matches the series the way the library groups it — case- and whitespace-insensitively", async () => {
+    // /api/media/series/grouped keys shows on LOWER(TRIM(parentTitle)), so two
+    // servers spelling a show differently are ONE show in the UI. Matching
+    // parentTitle exactly looked right on one server and silently dropped the
+    // other server's plays — exactly the cross-server plays this route keeps by
+    // not applying dedup.
+    const server2 = await createTestServer(userId, { name: "Second" });
+    const library2 = await createTestLibrary(server2.id, { type: "SERIES" });
+    const plexCopy = await makeEpisode(1, 1, "Slumber Party Panic", "Adventure Time");
+    const jellyfinCopy = await makeEpisode(1, 1, "Slumber Party Panic", "adventure time ", library2.id);
+    await addWatch(plexCopy, { serverUsername: "alice" });
+    await addWatch(jellyfinCopy, { mediaServerId: server2.id, serverUsername: "dave" });
+
+    for (const spelling of ["Adventure Time", "adventure time ", "ADVENTURE TIME"]) {
+      const data = await expectJson<HistoryResponse>(
+        await callRoute(GET, {
+          url: "/api/media/series/watch-history",
+          searchParams: { parentTitle: spelling },
+        }),
+      );
+      expect(data.pagination.totalCount).toBe(2);
+      expect(data.items.map((i) => i.serverUsername).sort()).toEqual(["alice", "dave"]);
+    }
+  });
+
+  it("does not treat a wildcard character in the title as a pattern", async () => {
+    // Case-insensitive matching via ILIKE would make "100% Wolf" match every
+    // show starting with "100"; the normalized equality comparison must not.
+    const wolf = await makeEpisode(1, 1, "Pilot", "100% Wolf");
+    const decoy = await makeEpisode(1, 1, "Pilot", "100 Foot Wave");
+    await addWatch(wolf, { serverUsername: "alice" });
+    await addWatch(decoy, { serverUsername: "bob" });
+
+    const data = await expectJson<HistoryResponse>(
+      await callRoute(GET, {
+        url: "/api/media/series/watch-history",
+        searchParams: { parentTitle: "100% Wolf" },
+      }),
+    );
+
+    expect(data.pagination.totalCount).toBe(1);
+    expect(data.items[0].serverUsername).toBe("alice");
+  });
+
   it("filters to one server when serverId is given", async () => {
     const server2 = await createTestServer(userId, { name: "Second" });
     const library2 = await createTestLibrary(server2.id, { type: "SERIES" });

@@ -22,7 +22,6 @@ interface WatchHistoryRow {
     parentTitle: string | null;
     seasonNumber: number | null;
     episodeNumber: number | null;
-    duration: number | null;
   };
   server: { id: string; name: string; type: string };
 }
@@ -215,11 +214,14 @@ export function SeriesWatchHistory({
               const label = episodeLabel(row);
               const device = row.deviceName || row.platform;
               return (
+                // Stacks below `sm`: the metadata block can't shrink (chips and
+                // the timestamp don't wrap), so side-by-side on a phone squeezed
+                // the title to a single clipped character and overlapped it.
                 <li
                   key={row.id}
-                  className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg bg-muted/50 px-3 py-2 text-sm transition-colors hover:bg-muted/70"
+                  className="flex flex-col gap-1 rounded-lg bg-muted/50 px-3 py-2 text-sm transition-colors hover:bg-muted/70 sm:flex-row sm:items-center sm:justify-between sm:gap-3"
                 >
-                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2 sm:flex-1">
                     {!hideEpisode && label && (
                       <ColorChip className="border-border font-mono text-muted-foreground">
                         {label}
@@ -237,13 +239,13 @@ export function SeriesWatchHistory({
                       </Link>
                     )}
                   </div>
-                  <div className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground sm:shrink-0 sm:flex-nowrap">
                     <span className="flex items-center gap-1">
                       <User className="h-3 w-3" />
                       <span className="font-medium text-foreground/80">{row.serverUsername}</span>
                     </span>
                     {device && (
-                      <span className="hidden items-center gap-1 sm:flex" title={device}>
+                      <span className="flex items-center gap-1" title={device}>
                         <Monitor className="h-3 w-3" />
                         <span className="max-w-[10rem] truncate">{device}</span>
                       </span>

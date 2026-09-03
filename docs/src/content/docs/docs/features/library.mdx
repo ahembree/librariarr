@@ -164,9 +164,13 @@ The series, season, and episode detail pages each show their own watch history s
 | **Season** | The same, narrowed to episodes in that season |
 | **Episode** | Recent plays of that one episode, with the user and the date and time |
 
-Each row also names the device or platform where available, and links back to the episode that was played. Series and season pages load 25 plays at a time, with a **Load more** button for the rest. When a title exists on more than one server, plays from *every* server are listed — a play is a real event on the copy that was actually played, so nothing is hidden by [deduplication](#multi-server-deduplication) — and each row is tagged with its server name.
+**Every user on the server is included** — not just the account Librariarr connects with. Plays are read from the server's full, per-user history, so anyone in your household who watched an episode appears by name.
 
-These sections read the same stored watch history as the main history page, so they fill in after a watch-history sync (see below).
+Each row also names the device or platform where available, and links back to the episode that was played. Series and season pages load 25 plays at a time, with a **Load more** button for the rest.
+
+When a title exists on more than one server, plays from *every* server are listed and each row is tagged with its server name. A play is a real event on the copy that was actually played, so nothing is hidden by [deduplication](#multi-server-deduplication). The series is matched the same way the library groups shows — ignoring capitalisation and surrounding spaces — so a server that spells the title differently still contributes its plays.
+
+These sections read the same stored watch history as the main history page, so they fill in after a watch-history sync (see below). The same [per-server limits](#data-sources-by-server-type) apply: on Jellyfin and Emby only the most recent play of an item carries a timestamp, so repeat plays are listed as **Unknown date** and sorted to the bottom.
 
 ### Syncing Watch History
 
