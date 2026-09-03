@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams, useSearchParams } from "next/navigation";
+import { useRealtime } from "@/hooks/use-realtime";
 import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MediaDetailHero } from "@/components/media-detail-hero";
@@ -27,6 +28,11 @@ export default function EpisodeDetailPage() {
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
   const [loading, setLoading] = useState(true);
+  // The watch-history card below reads the *stored* WatchHistory table, so —
+  // unlike the live per-user card it replaced — it only changes when a sync
+  // lands. Refetch on `sync:completed`, as the show and season pages do.
+  const [syncTick, setSyncTick] = useState(0);
+  useRealtime("sync:completed", () => setSyncTick((t) => t + 1));
   // Token guards against a stale slow response landing after a quick id change.
   const reqToken = useRef(0);
   const searchParams = useSearchParams();
@@ -63,7 +69,7 @@ export default function EpisodeDetailPage() {
       }
     }
     fetchItem();
-  }, [id]);
+  }, [id, syncTick]);
 
   if (loading) {
     return (
@@ -146,18 +152,25 @@ export default function EpisodeDetailPage() {
       useParentArt
       playServers={playServers}
     >
-      <MediaDetailContent item={item} />
-
-      {item.parentTitle && item.seasonNumber != null && item.episodeNumber != null && (
-        <SeriesWatchHistory
-          seriesKey={item.seriesKey}
-          parentTitle={item.parentTitle}
-          seasonNumber={item.seasonNumber}
-          episodeNumber={item.episodeNumber}
-          heading="Recent Plays"
-          hideEpisode
-        />
-      )}
+      <MediaDetailContent
+        item={item}
+        // The per-play list *is* this episode's Watch History card. It replaces
+        // the per-user aggregate card (which reads the same plays live from the
+        // server, minus the timestamps), so the page shows the data once.
+        historySection={
+          item.parentTitle && item.seasonNumber != null && item.episodeNumber != null ? (
+            <SeriesWatchHistory
+              variant="card"
+              seriesKey={item.seriesKey}
+              parentTitle={item.parentTitle}
+              seasonNumber={item.seasonNumber}
+              episodeNumber={item.episodeNumber}
+              currentEpisode
+              refreshKey={syncTick}
+            />
+          ) : undefined
+        }
+      />
     </MediaDetailHero>
   );
 }
