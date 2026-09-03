@@ -186,7 +186,16 @@ export async function GET(request: NextRequest) {
     player: 'wh."player"',
     streamResolution: 'wh."resolution"',
   };
-  const orderCol = SORT_MAP[sortBy] ?? 'wh."watchedAt"';
+  // `Object.hasOwn`, not a bare lookup: `SORT_MAP["constructor"]` resolves up
+  // the prototype chain to a function, which is truthy, so `?? default` would
+  // not catch it and the function's source text would be interpolated into the
+  // ORDER BY. Not exploitable (the attacker controls no part of that text, and
+  // Postgres just rejects it) but it turns a bogus `sortBy` into a 500 instead
+  // of the documented fallback. Now that the map is user-extensible via the new
+  // Tracearr columns, pin the lookup to own properties.
+  const orderCol = Object.hasOwn(SORT_MAP, sortBy)
+    ? SORT_MAP[sortBy]
+    : 'wh."watchedAt"';
   const orderDir = sortOrder === "asc" ? "ASC" : "DESC";
   // The ORDER BY below appends wh."id" as a unique tiebreaker so the sort is a
   // total order. Without one Postgres may return tied rows in any order, and a

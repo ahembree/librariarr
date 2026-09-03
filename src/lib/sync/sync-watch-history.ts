@@ -59,28 +59,45 @@ export async function syncWatchHistory(
   // each run and then the importer's watermark would re-pull them.
   //
   // The mapping alone is not enough: an admin can map a server and later
-  // disable (or delete) the instance, and an import with no credentials would
-  // silently store nothing. Fall back to native in that case rather than
-  // leaving the server with no history at all.
+  // disable (or delete) the instance. When that happens we must SKIP, not fall
+  // back to the native path, because falling back is doubly destructive:
+  //
+  //  1. The native full-replace below DELETEs every row for the server —
+  //     including the imported Tracearr rows — so a temporarily disabled
+  //     instance would silently destroy the richer history it was mapped for.
+  //  2. Worse, it is not self-correcting. Once those rows are gone the
+  //     importer's watermark (MAX(watchedAt) WHERE source='TRACEARR') is null
+  //     again, so re-enabling the instance triggers a full re-pull that APPENDS
+  //     every play back alongside the NATIVE rows the fallback just wrote. The
+  //     same play then exists twice, `reconcileWatchStateFromHistory` counts
+  //     both, and `MediaItem.playCount` — which is monotonic and drives
+  //     destructive lifecycle rules — is permanently doubled.
+  //
+  // Leaving the existing rows untouched is strictly better than either: the
+  // history simply stops advancing until the admin re-enables the instance or
+  // clears the mapping (which wipes the rows deliberately, via the server PUT).
   if (server.tracearrServerId) {
     const instance = await prisma.tracearrInstance.findFirst({
       where: { userId: server.userId, enabled: true },
       select: { id: true },
     });
 
-    if (instance) {
-      logger.info(
+    if (!instance) {
+      logger.warn(
         "WatchHistory",
-        `Using Tracearr as the watch-history source for "${server.name}"`
+        `"${server.name}" is mapped to a Tracearr server but no enabled Tracearr ` +
+          `instance is configured — skipping this sync and leaving the stored ` +
+          `history intact. Re-enable the instance, or clear the server's ` +
+          `watch-history source to go back to the server's own history.`
       );
-      return syncTracearrHistory(serverId);
+      return { count: 0 };
     }
 
-    logger.warn(
+    logger.info(
       "WatchHistory",
-      `"${server.name}" is mapped to a Tracearr server but no enabled Tracearr ` +
-        `instance is configured — falling back to the server's own watch history`
+      `Using Tracearr as the watch-history source for "${server.name}"`
     );
+    return syncTracearrHistory(serverId);
   }
 
   logger.debug(

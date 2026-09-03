@@ -154,6 +154,97 @@ const MUTABLE_COLUMNS = [
 ] as const satisfies readonly InsertColumn[];
 
 /**
+ * Columns whose re-delivered value may be *smaller* than the one we already
+ * stored, and which must therefore only ever move forward.
+ *
+ * The spec is explicit that `since` scopes the aggregation as well as the
+ * selection: "the window also scopes the aggregation: duration_ms,
+ * segment_count and percent_complete cover only in-window segments", and
+ * `duration_ms` is "watch time summed across all **in-window** segments".
+ *
+ * So a chain that *started* before the window but has one segment inside it
+ * comes back describing only that segment. A film watched end-to-end on Monday
+ * and dipped into again on Thursday is re-delivered on Thursday as
+ * `percent_complete ≈ 12, duration_ms ≈ 5min, segment_count 1` — and a blind
+ * `= EXCLUDED` would overwrite the stored 100% with it. `watched` follows the
+ * same truncated completion, so the row would flip back to `false` and
+ * `watch-reconcile.ts` would stop counting a play that really happened.
+ *
+ * `OPEN_CHAIN_LOOKBACK_MS` guarantees this eventually happens to any long-lived
+ * chain, so `GREATEST` here is not belt-and-braces — it is the correctness
+ * boundary. It is also the same monotonic rule the reconcile already applies to
+ * `playCount`/`lastPlayedAt`: never let a narrower view of history make an item
+ * look less watched than we already know it to be.
+ *
+ * (`GREATEST` ignores NULLs in Postgres, so a null in either side keeps the
+ * other value rather than erasing it.)
+ */
+const MONOTONIC_COLUMNS = new Set<InsertColumn>([
+  "percentComplete",
+  "progressMs",
+  "durationMs",
+  "segmentCount",
+  "stoppedAt",
+]);
+
+/**
+ * Columns describing the most recent segment. A truncated window still reports
+ * these honestly, but it can report them as NULL where we already hold a real
+ * value (a page that only saw a segment with no stream detail), so prefer the
+ * new value and fall back to the stored one rather than erasing it.
+ */
+const PREFER_NEW_NON_NULL_COLUMNS = new Set<InsertColumn>([
+  "serverUsername",
+  "deviceName",
+  "platform",
+  "state",
+  "totalDurationMs",
+  "player",
+  "product",
+  "videoDecision",
+  "audioDecision",
+  "bitrate",
+  "resolution",
+  "sourceVideoCodec",
+  "sourceAudioCodec",
+  "streamVideoCodec",
+  "streamAudioCodec",
+  "transcodeInfo",
+  "subtitleInfo",
+  "streamQuality",
+]);
+
+/** How one column is merged when a chain is re-delivered. See the sets above. */
+function upsertAssignment(column: InsertColumn): string {
+  const col = `"${column}"`;
+  const stored = `"WatchHistory".${col}`;
+  const incoming = `EXCLUDED.${col}`;
+
+  if (MONOTONIC_COLUMNS.has(column)) {
+    return `${col} = GREATEST(${stored}, ${incoming})`;
+  }
+  // `watched` is a latch: a play that once crossed the completion threshold
+  // stays watched even if a later, window-truncated view of the same chain
+  // reports a partial figure. Written as an explicit IS TRUE test so a NULL on
+  // either side reads as "not watched" rather than poisoning the OR.
+  if (column === "watched") {
+    return `${col} = (${stored} IS TRUE OR ${incoming} IS TRUE)`;
+  }
+  // `isTranscode` is a latch for the same reason: any segment of the play that
+  // transcoded makes the play a transcode, and a later direct-play segment must
+  // not erase that.
+  if (column === "isTranscode") {
+    return `${col} = (${stored} IS TRUE OR ${incoming} IS TRUE)`;
+  }
+  if (PREFER_NEW_NON_NULL_COLUMNS.has(column)) {
+    return `${col} = COALESCE(${incoming}, ${stored})`;
+  }
+  // `mediaItemId` — the join result, non-null by construction and re-resolved
+  // every run, so the newest resolution wins outright.
+  return `${col} = ${incoming}`;
+}
+
+/**
  * **ON CONFLICT DO UPDATE, never DO NOTHING.**
  *
  * The API spec defines a `HistoryRecord` as an aggregate over a resume chain
@@ -170,7 +261,7 @@ const MUTABLE_COLUMNS = [
  * would treat a fully-watched film as untouched.
  */
 const WATCH_HISTORY_UPSERT_SUFFIX = `ON CONFLICT ("mediaServerId","sourceEventId") DO UPDATE SET ${MUTABLE_COLUMNS.map(
-  (column) => `"${column}" = EXCLUDED."${column}"`,
+  upsertAssignment,
 ).join(",")}`;
 
 const INSERT_COLUMN_LIST = INSERT_COLUMNS.map((column) => `"${column}"`).join(
@@ -220,6 +311,7 @@ interface ImportCounters {
 export function resolveSince(
   maxWatchedAt: Date | null,
   oldestOpenChain: Date | null,
+  now: number = Date.now(),
 ): Date | undefined {
   // First run: no Tracearr rows at all for this server, so pull the whole
   // history once. Tracearr keeps it durably; we only do this once per server.
@@ -236,7 +328,16 @@ export function resolveSince(
 
   // ...but never further than the lookback floor, or one abandoned play pins
   // the watermark and every sync becomes a full re-pull.
-  return new Date(Math.max(sinceMs, maxMs - OPEN_CHAIN_LOOKBACK_MS));
+  sinceMs = Math.max(sinceMs, maxMs - OPEN_CHAIN_LOOKBACK_MS);
+
+  // Never ask for a window that starts in the future. `watchedAt` comes from
+  // Tracearr's `started_at`, so a clock skewed ahead on the Tracearr host (or
+  // one bogus record) puts `maxWatchedAt` past now — and since the watermark is
+  // derived from the rows we store, a future `since` would match nothing, store
+  // nothing, and leave the watermark exactly where it was. That is a permanent
+  // stall, not a transient one, so clamp instead: re-fetching a little extra is
+  // free (the upsert dedups), whereas importing nothing forever is not.
+  return new Date(Math.min(sinceMs, now));
 }
 
 export async function syncTracearrHistory(
@@ -278,21 +379,13 @@ export async function syncTracearrHistory(
     return { count: 0 };
   }
 
-  // One instance per install in practice; `createdAt asc` makes the choice
-  // deterministic if an admin ever configures a second one.
-  const instance = await prisma.tracearrInstance.findFirst({
-    where: { userId: server.userId, enabled: true },
-    orderBy: { createdAt: "asc" },
-    select: { id: true, name: true, url: true, apiKey: true },
-  });
+  const instance = await resolveInstanceForServer(
+    server.userId,
+    tracearrServerId,
+    server.name,
+  );
 
-  if (!instance) {
-    logger.warn(
-      "WatchHistory",
-      `Tracearr history sync skipped for "${server.name}" — no enabled Tracearr instance configured`,
-    );
-    return { count: 0 };
-  }
+  if (!instance) return { count: 0 };
 
   const since = await resolveSinceForServer(serverId);
   const client = new TracearrClient(instance.url, instance.apiKey);
@@ -416,6 +509,36 @@ export async function syncTracearrHistory(
   const total = counters.inserted + counters.updated;
 
   if (total > 0) {
+    // A server's history is single-source by construction, and this is where
+    // that invariant is enforced rather than merely assumed.
+    //
+    // The server PUT already wipes a server's rows when the mapping changes, so
+    // in the normal flow there is nothing here to delete. This exists for the
+    // paths that bypass it — a mapping written directly, a restored backup, or
+    // a fallback that ran before this branch was tightened — because a leftover
+    // NATIVE stratum describes the SAME plays as the rows we just imported, and
+    // `reconcileWatchStateFromHistory` counts both. `MediaItem.playCount` is
+    // monotonic and arms destructive lifecycle rules, so a double count is not
+    // self-correcting: once inflated it never comes back down.
+    //
+    // Runs after rows landed, so a failed run can never leave the server with
+    // neither source. Unconditional rather than first-run-only: a mixed stratum
+    // can also arrive with a non-null watermark (a restored backup), and the
+    // DELETE is an indexed no-op on every healthy sync.
+    {
+      const purged = await prisma.$executeRawUnsafe(
+        `DELETE FROM "WatchHistory" WHERE "mediaServerId"=$1 AND "source"='NATIVE'`,
+        serverId,
+      );
+      if (purged > 0) {
+        logger.info(
+          "WatchHistory",
+          `Removed ${purged} native watch-history row(s) for "${server.name}" — ` +
+            `superseded by the Tracearr import`,
+        );
+      }
+    }
+
     // Same non-fatal contract as the native path: the history rows are already
     // committed, so a reconcile failure is corrected by the next run rather
     // than worth failing this one over.
@@ -443,6 +566,70 @@ export async function syncTracearrHistory(
   );
 
   return { count: total };
+}
+
+/**
+ * Find the enabled Tracearr instance that actually monitors `tracearrServerId`.
+ *
+ * The mapping stored on `MediaServer` is a Tracearr-side server UUID, not a
+ * reference to a Librariarr instance row — one instance aggregates many media
+ * servers, and an install may configure more than one instance. Picking "the
+ * oldest enabled instance" would therefore point a correctly-mapped server at
+ * the wrong Tracearr whenever two exist, and the import would quietly return
+ * nothing (the `server_id` filter matches no rows there) while the settings UI
+ * still showed the mapping as valid.
+ *
+ * With a single enabled instance — the overwhelmingly common case — the answer
+ * is settled without any network call. Only a genuine multi-instance setup pays
+ * for a `listServers()` probe, and an instance that cannot be reached is
+ * skipped rather than treated as "does not own it", so a transient outage on
+ * instance A cannot silently hand the mapping to instance B.
+ */
+async function resolveInstanceForServer(
+  userId: string,
+  tracearrServerId: string,
+  serverName: string,
+): Promise<{ id: string; name: string; url: string; apiKey: string } | null> {
+  const instances = await prisma.tracearrInstance.findMany({
+    where: { userId, enabled: true },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, name: true, url: true, apiKey: true },
+  });
+
+  if (instances.length === 0) {
+    logger.warn(
+      "WatchHistory",
+      `Tracearr history sync skipped for "${serverName}" — no enabled Tracearr instance configured`,
+    );
+    return null;
+  }
+
+  if (instances.length === 1) return instances[0];
+
+  for (const candidate of instances) {
+    try {
+      const servers = await new TracearrClient(
+        candidate.url,
+        candidate.apiKey,
+      ).listServers();
+      if (servers.some((s) => s.id === tracearrServerId)) return candidate;
+    } catch (error) {
+      logger.warn(
+        "WatchHistory",
+        `Could not list servers on Tracearr instance "${candidate.name}" while ` +
+          `resolving the mapping for "${serverName}" — skipping this instance`,
+        { error: String(error) },
+      );
+    }
+  }
+
+  logger.warn(
+    "WatchHistory",
+    `Tracearr history sync skipped for "${serverName}" — none of the ` +
+      `${instances.length} enabled Tracearr instances monitor server ` +
+      `${tracearrServerId}. Re-pick the watch-history source in settings.`,
+  );
+  return null;
 }
 
 /**

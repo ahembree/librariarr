@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { completedPlaySql } from "@/lib/media/watch-completion";
 
 /**
  * Reconciliation between the `WatchHistory` table (the app's own complete,
@@ -92,7 +93,7 @@ export async function loadWatchCountsFromHistory(
        FROM "WatchHistory" wh
        JOIN "MediaItem" mi ON mi."id" = wh."mediaItemId"
       WHERE wh."mediaServerId"=$1
-        AND wh."watched" IS DISTINCT FROM false
+        AND ${completedPlaySql("wh")}
         AND mi."ratingKey" = ANY($2)
       GROUP BY mi."ratingKey"`,
     serverId,
@@ -143,7 +144,7 @@ export async function reconcileWatchStateFromHistory(
                 MAX("watchedAt") AS "lastWatched"
            FROM "WatchHistory"
           WHERE "mediaServerId"=$1
-            AND "watched" IS DISTINCT FROM false
+            AND ${completedPlaySql()}
           GROUP BY "mediaItemId"
        ) hist
       WHERE mi."id" = hist."mediaItemId"

@@ -290,17 +290,49 @@ export class TracearrClient {
     version?: string;
     serverCount?: number;
   }> {
+    let health: TracearrHealthResponse;
     try {
-      const health = await this.getHealth();
-      return {
-        ok: true,
-        version: health.version,
-        serverCount: health.servers.length,
-      };
+      health = await this.getHealth();
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : "Connection failed";
       return { ok: false, error: msg };
     }
+
+    // Health alone is not a sufficient test. It lives on v1, which every
+    // Tracearr serves, but the history import is v2-only — v1's history carries
+    // no media identifier and cannot be joined to a library item. A pre-2.0.0
+    // instance therefore passes a health check and then imports precisely
+    // nothing, silently, forever. Since mapping a media server to an instance
+    // clears that server's stored watch history, "connection OK" has to mean
+    // "the endpoint this integration actually depends on works".
+    //
+    // One record is enough to prove the route exists and the key is accepted.
+    // A server_id is required by our own paging helper but not by the API, so
+    // probe unscoped — this is a capability check, not a data fetch.
+    try {
+      await this.getWithRateLimitRetry("/api/v2/public/history", {
+        pageSize: 1,
+      });
+    } catch (error: unknown) {
+      const status = error instanceof IntegrationError ? error.status : null;
+      if (status === 404 || status === 400) {
+        return {
+          ok: false,
+          error:
+            `Reached Tracearr ${health.version}, but its v2 public API is not available ` +
+            `(HTTP ${status}). Librariarr needs Tracearr 2.0.0 or later — v1 history ` +
+            `carries no media identifier, so plays cannot be matched to library items.`,
+        };
+      }
+      const msg = error instanceof Error ? error.message : "Connection failed";
+      return { ok: false, error: msg };
+    }
+
+    return {
+      ok: true,
+      version: health.version,
+      serverCount: health.servers.length,
+    };
   }
 
   async getHealth(): Promise<TracearrHealthResponse> {

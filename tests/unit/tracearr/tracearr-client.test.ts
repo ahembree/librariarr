@@ -318,12 +318,53 @@ describe("TracearrClient", () => {
 
   describe("testConnection", () => {
     it("reports the version and server count on success", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: HEALTH });
+      // Two probes: v1 health, then a v2 capability check. See the client.
+      mockAxiosInstance.get
+        .mockResolvedValueOnce({ data: HEALTH })
+        .mockResolvedValueOnce({ data: { data: [], meta: { nextCursor: null } } });
       await expect(client.testConnection()).resolves.toEqual({
         ok: true,
         version: "2.0.0",
         serverCount: 2,
       });
+    });
+
+    it("probes the v2 history route, not just v1 health", async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce({ data: HEALTH })
+        .mockResolvedValueOnce({ data: { data: [], meta: { nextCursor: null } } });
+      await client.testConnection();
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
+      expect(mockAxiosInstance.get.mock.calls[0][0]).toBe("/api/v1/public/health");
+      expect(mockAxiosInstance.get.mock.calls[1][0]).toBe("/api/v2/public/history");
+    });
+
+    it.each([404, 400])(
+      "fails with a version hint when the v2 API answers %i",
+      async (status) => {
+        // A pre-2.0.0 Tracearr serves v1 health happily and has no v2 history
+        // route. Passing the test would map a server and wipe its history for
+        // an import that could never return anything.
+        mockAxiosInstance.get
+          .mockResolvedValueOnce({ data: HEALTH })
+          .mockRejectedValueOnce(
+            new IntegrationError("Tracearr", axiosFailure(status, {}, "/api/v2/public/history")),
+          );
+        const result = await client.testConnection();
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain("2.0.0 or later");
+      },
+    );
+
+    it("surfaces a v2 auth failure as-is", async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce({ data: HEALTH })
+        .mockRejectedValueOnce(
+          new IntegrationError("Tracearr", axiosFailure(403, {}, "/api/v2/public/history")),
+        );
+      const result = await client.testConnection();
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("Tracearr HTTP 403");
     });
 
     it("returns the failure reason instead of throwing", async () => {

@@ -4,6 +4,7 @@ import type { TracearrHistoryRecord } from "@/lib/tracearr/tracearr-client";
 const {
   mockPrisma,
   mockGetHistoryPage,
+  mockListServers,
   mockBuildIndex,
   mockResolve,
   mockReconcile,
@@ -11,11 +12,12 @@ const {
 } = vi.hoisted(() => ({
   mockPrisma: {
     mediaServer: { findFirst: vi.fn() },
-    tracearrInstance: { findFirst: vi.fn() },
+    tracearrInstance: { findMany: vi.fn() },
     $queryRawUnsafe: vi.fn(),
     $executeRawUnsafe: vi.fn(),
   },
   mockGetHistoryPage: vi.fn(),
+  mockListServers: vi.fn(),
   mockBuildIndex: vi.fn(),
   mockResolve: vi.fn(),
   mockReconcile: vi.fn(),
@@ -33,8 +35,11 @@ vi.mock("@/lib/logger", () => ({
 vi.mock("@/lib/tracearr/tracearr-client", () => ({
   MAX_PAGE_SIZE: 100,
   // Constructor mock — must be a `function`, not an arrow (Vitest 4).
-  TracearrClient: function (this: Record<string, unknown>) {
+  TracearrClient: function (this: Record<string, unknown>, url: string) {
     this.getHistoryPage = mockGetHistoryPage;
+    // Only reached when more than one enabled instance exists, so the importer
+    // has to work out which one actually monitors the mapped server.
+    this.listServers = () => mockListServers(url);
   },
 }));
 
@@ -165,12 +170,14 @@ describe("syncTracearrHistory", () => {
       tracearrServerId: TRACEARR_SERVER_ID,
       userId: "user-1",
     });
-    mockPrisma.tracearrInstance.findFirst.mockResolvedValue({
-      id: "tracearr-1",
-      name: "Tracearr",
-      url: "http://tracearr:8080",
-      apiKey: "key",
-    });
+    mockPrisma.tracearrInstance.findMany.mockResolvedValue([
+      {
+        id: "tracearr-1",
+        name: "Tracearr",
+        url: "http://tracearr:8080",
+        apiKey: "key",
+      },
+    ]);
 
     mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string) => {
       if (sql.includes('MAX("watchedAt")')) return [watermark];
@@ -208,10 +215,50 @@ describe("syncTracearrHistory", () => {
     });
 
     it("imports nothing when no enabled Tracearr instance is configured", async () => {
-      mockPrisma.tracearrInstance.findFirst.mockResolvedValueOnce(null);
+      mockPrisma.tracearrInstance.findMany.mockResolvedValueOnce([]);
 
       await expect(syncTracearrHistory("server-1")).resolves.toEqual({ count: 0 });
       expect(mockGetHistoryPage).not.toHaveBeenCalled();
+    });
+
+    it("picks the enabled instance that actually monitors the mapped server", async () => {
+      // The mapping stores a Tracearr-side server UUID, not an instance id, and
+      // one install may run two instances. Choosing the oldest would point a
+      // correctly-mapped server at the wrong Tracearr, which then returns an
+      // empty page for a `server_id` it does not know — a silent no-op import.
+      mockPrisma.tracearrInstance.findMany.mockResolvedValueOnce([
+        { id: "old", name: "Old", url: "http://old:8080", apiKey: "k1" },
+        { id: "new", name: "New", url: "http://new:8080", apiKey: "k2" },
+      ]);
+      mockListServers.mockImplementation(async (url: string) =>
+        url === "http://new:8080"
+          ? [{ id: TRACEARR_SERVER_ID, name: "Plex", type: "plex", online: true, activeStreams: 0 }]
+          : [{ id: "99999999-9999-9999-9999-999999999999", name: "Other", type: "plex", online: true, activeStreams: 0 }],
+      );
+
+      await syncTracearrHistory("server-1");
+
+      expect(mockGetHistoryPage).toHaveBeenCalled();
+      expect(mockListServers).toHaveBeenCalledWith("http://new:8080");
+    });
+
+    it("does not fall through to another instance when one cannot be reached", async () => {
+      // A transient outage on the instance that owns the mapping must not hand
+      // the import to a different Tracearr, which would silently import nothing
+      // (or, worse, someone else's plays for a colliding id).
+      mockPrisma.tracearrInstance.findMany.mockResolvedValueOnce([
+        { id: "a", name: "A", url: "http://a:8080", apiKey: "k1" },
+        { id: "b", name: "B", url: "http://b:8080", apiKey: "k2" },
+      ]);
+      mockListServers.mockRejectedValue(new Error("ECONNREFUSED"));
+
+      await expect(syncTracearrHistory("server-1")).resolves.toEqual({ count: 0 });
+      expect(mockGetHistoryPage).not.toHaveBeenCalled();
+    });
+
+    it("skips without a network call when a single instance is configured", async () => {
+      await syncTracearrHistory("server-1");
+      expect(mockListServers).not.toHaveBeenCalled();
     });
 
     it("scopes every page to the mapped Tracearr server at the API's max page size", async () => {
@@ -230,6 +277,21 @@ describe("syncTracearrHistory", () => {
   });
 
   describe("watermark", () => {
+    it("never asks for a window that starts in the future", async () => {
+      // `watchedAt` comes from Tracearr's `started_at`, so a clock skewed ahead
+      // on the Tracearr host puts the watermark past now. A future `since`
+      // matches nothing, stores nothing, and therefore never moves the
+      // watermark — a permanent stall rather than a transient one.
+      const future = new Date(Date.now() + 5 * DAY_MS);
+      watermark = { maxWatchedAt: future, oldestOpenChain: null };
+
+      await syncTracearrHistory("server-1");
+
+      const since = sinceArg();
+      expect(since).toBeDefined();
+      expect(since!.getTime()).toBeLessThanOrEqual(Date.now());
+    });
+
     it("pulls the full history on a first run", async () => {
       await syncTracearrHistory("server-1");
 
@@ -346,10 +408,35 @@ describe("syncTracearrHistory", () => {
         'ON CONFLICT ("mediaServerId","sourceEventId") DO UPDATE SET',
       );
       expect(sql).not.toContain("DO NOTHING");
+      // ...but the merge is non-regressive, not a blind overwrite. `since`
+      // scopes the aggregation as well as the selection, so a chain that
+      // started before the window is re-delivered with truncated
+      // duration/segment/percent figures. Those columns may only move forward.
+      expect(sql).toContain(
+        '"percentComplete" = GREATEST("WatchHistory"."percentComplete", EXCLUDED."percentComplete")',
+      );
+      for (const column of ["progressMs", "durationMs", "segmentCount", "stoppedAt"]) {
+        expect(sql).toContain(
+          `"${column}" = GREATEST("WatchHistory"."${column}", EXCLUDED."${column}")`,
+        );
+      }
+      // `watched` and `isTranscode` latch: a truncated re-delivery must never
+      // un-watch a play that really completed (watch-reconcile.ts would then
+      // stop counting it) or erase that the play transcoded.
+      for (const column of ["watched", "isTranscode"]) {
+        expect(sql).toContain(
+          `"${column}" = ("WatchHistory"."${column}" IS TRUE OR EXCLUDED."${column}" IS TRUE)`,
+        );
+      }
+      expect(sql).not.toContain('"watched" = EXCLUDED."watched"');
+      expect(sql).not.toContain('"percentComplete" = EXCLUDED."percentComplete"');
+      // Descriptive columns prefer the newer value but never let a null erase
+      // a known one.
+      expect(sql).toContain(
+        '"resolution" = COALESCE(EXCLUDED."resolution", "WatchHistory"."resolution")',
+      );
       // The chain's start instant and our own row identity must survive a
       // re-delivery.
-      expect(sql).toContain('"watched" = EXCLUDED."watched"');
-      expect(sql).toContain('"percentComplete" = EXCLUDED."percentComplete"');
       expect(sql).not.toContain('"watchedAt" = EXCLUDED."watchedAt"');
       expect(sql).not.toContain('"createdAt" = EXCLUDED."createdAt"');
       expect(sql).not.toContain('"id" = EXCLUDED."id"');
@@ -505,4 +592,40 @@ describe("syncTracearrHistory", () => {
       expect(mockInvalidate).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("single-source invariant", () => {
+    it("removes a leftover NATIVE stratum once Tracearr rows land", async () => {
+      // Native rows describe the SAME plays as the imported ones, and
+      // reconcileWatchStateFromHistory counts both — so a mixed stratum
+      // permanently doubles MediaItem.playCount (it is monotonic, so it never
+      // comes back down) and arms playCount-based DELETE rules.
+      mockGetHistoryPage.mockResolvedValueOnce({
+        records: [historyRecord()],
+        nextCursor: null,
+      });
+
+      await syncTracearrHistory("server-1");
+
+      const purges = mockPrisma.$executeRawUnsafe.mock.calls.filter((args) =>
+        (args[0] as string).includes(`DELETE FROM "WatchHistory"`),
+      );
+      expect(purges).toHaveLength(1);
+      expect(purges[0][0]).toContain(`"source"='NATIVE'`);
+      expect(purges[0][1]).toBe("server-1");
+    });
+
+    it("does not purge when the import wrote nothing", async () => {
+      // A failed or empty run must never leave the server with neither source.
+      mockGetHistoryPage.mockResolvedValueOnce({ records: [], nextCursor: null });
+
+      await syncTracearrHistory("server-1");
+
+      expect(
+        mockPrisma.$executeRawUnsafe.mock.calls.filter((args) =>
+          (args[0] as string).includes(`DELETE FROM "WatchHistory"`),
+        ),
+      ).toHaveLength(0);
+    });
+  });
+
 });

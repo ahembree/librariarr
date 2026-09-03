@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const { mockPrisma, mockClient, mockReconcile } = vi.hoisted(() => {
+const { mockPrisma, mockClient, mockReconcile, mockSyncTracearr } = vi.hoisted(() => {
   // The DELETE + INSERTs run inside prisma.$transaction(cb) via tx.$executeRawUnsafe.
   // Route the tx's raw methods to the same fn the tests assert against so the
   // existing call-inspection (DELETE/INSERT string filters) keeps working.
@@ -8,6 +8,7 @@ const { mockPrisma, mockClient, mockReconcile } = vi.hoisted(() => {
   const tx = { $queryRawUnsafe: queryRawUnsafe, $executeRawUnsafe: queryRawUnsafe };
   return {
     mockPrisma: {
+      tracearrInstance: { findFirst: vi.fn() },
       $queryRawUnsafe: queryRawUnsafe,
       $executeRawUnsafe: queryRawUnsafe,
       $transaction: vi.fn(async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx)),
@@ -16,6 +17,7 @@ const { mockPrisma, mockClient, mockReconcile } = vi.hoisted(() => {
       getDetailedWatchHistory: vi.fn(),
     },
     mockReconcile: vi.fn(async () => 0),
+    mockSyncTracearr: vi.fn(async () => ({ count: 7 })),
   };
 });
 
@@ -39,12 +41,80 @@ vi.mock("@/lib/sync/watch-reconcile", () => ({
   reconcileWatchStateFromHistory: mockReconcile,
 }));
 
+vi.mock("@/lib/sync/sync-tracearr-history", () => ({
+  syncTracearrHistory: mockSyncTracearr,
+}));
+
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 
 describe("syncWatchHistory", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockReconcile.mockResolvedValue(0);
+    mockSyncTracearr.mockResolvedValue({ count: 7 });
+    mockPrisma.tracearrInstance.findFirst.mockResolvedValue(null);
+  });
+
+  /** The server row the route's first raw SELECT returns. */
+  function serverRow(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "server-1",
+      name: "Test Server",
+      url: "http://plex:32400",
+      accessToken: "token",
+      type: "PLEX",
+      tlsSkipVerify: false,
+      enabled: true,
+      userId: "user-1",
+      tracearrServerId: null,
+      ...overrides,
+    };
+  }
+
+  describe("watch-history source selection", () => {
+    it("delegates to the Tracearr importer for a mapped server with an enabled instance", async () => {
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+        serverRow({ tracearrServerId: "srv-uuid" }),
+      ]);
+      mockPrisma.tracearrInstance.findFirst.mockResolvedValueOnce({ id: "t1" });
+
+      await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 7 });
+      expect(mockSyncTracearr).toHaveBeenCalledWith("server-1");
+      expect(mockClient.getDetailedWatchHistory).not.toHaveBeenCalled();
+    });
+
+    it("skips entirely — never falls back to native — when the instance is disabled", async () => {
+      // Falling back would be doubly destructive: the native path's unscoped
+      // full-replace DELETEs the imported Tracearr rows, and because the
+      // importer's watermark is derived from those rows, re-enabling the
+      // instance then re-imports the whole history ON TOP of the NATIVE rows
+      // the fallback wrote. reconcileWatchStateFromHistory counts both, and
+      // MediaItem.playCount is monotonic — so every play would be permanently
+      // double-counted, arming playCount-based DELETE rules across the library.
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+        serverRow({ tracearrServerId: "srv-uuid" }),
+      ]);
+      mockPrisma.tracearrInstance.findFirst.mockResolvedValueOnce(null);
+
+      await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 0 });
+      expect(mockSyncTracearr).not.toHaveBeenCalled();
+      expect(mockClient.getDetailedWatchHistory).not.toHaveBeenCalled();
+      // The decisive assertion: nothing was deleted, so the imported rows survive.
+      const deletes = mockPrisma.$queryRawUnsafe.mock.calls.filter((args) =>
+        typeof args[0] === "string" && args[0].includes(`DELETE FROM "WatchHistory"`),
+      );
+      expect(deletes).toHaveLength(0);
+    });
+
+    it("uses the native path for an unmapped server", async () => {
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([serverRow()]);
+      mockClient.getDetailedWatchHistory.mockResolvedValueOnce([]);
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
+
+      await syncWatchHistory("server-1");
+      expect(mockSyncTracearr).not.toHaveBeenCalled();
+      expect(mockClient.getDetailedWatchHistory).toHaveBeenCalled();
+    });
   });
 
   it("throws when server not found", async () => {
