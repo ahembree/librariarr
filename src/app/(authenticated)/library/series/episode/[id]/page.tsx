@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
+import { SeriesWatchHistory } from "@/components/series-watch-history";
 
 function formatResolution(resolution: string | null): string {
   if (!resolution) return "Unknown";
@@ -146,6 +147,16 @@ export default function EpisodeDetailPage() {
       playServers={playServers}
     >
       <MediaDetailContent item={item} />
+
+      {item.parentTitle && item.seasonNumber != null && item.episodeNumber != null && (
+        <SeriesWatchHistory
+          parentTitle={item.parentTitle}
+          seasonNumber={item.seasonNumber}
+          episodeNumber={item.episodeNumber}
+          heading="Recent Plays"
+          hideEpisode
+        />
+      )}
     </MediaDetailHero>
   );
 }
