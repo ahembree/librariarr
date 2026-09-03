@@ -49,10 +49,12 @@ interface SeriesWatchHistoryProps {
   /** Section heading. */
   heading?: string;
   /**
-   * Omit the per-row episode label and title — redundant when every row is
-   * the same episode (its own detail page).
+   * These rows are all the same episode — the one whose page this is. The
+   * episode is still named on every row (so a play says exactly what was
+   * watched), but as plain text rather than a link back to the page you are
+   * already on.
    */
-  hideEpisode?: boolean;
+  currentEpisode?: boolean;
   /** Bump to refetch — e.g. on a `sync:completed` realtime event. */
   refreshKey?: number;
   /**
@@ -101,28 +103,35 @@ function formatPlayCount(count: number): string {
 
 interface PlayRowProps {
   row: WatchHistoryRow;
-  hideEpisode: boolean;
+  /** Render the episode as plain text instead of a self-link (see the prop). */
+  currentEpisode: boolean;
   /** Only worth naming the server when the plays actually span more than one. */
   multiServer: boolean;
   card: boolean;
 }
 
-function PlayRow({ row, hideEpisode, multiServer, card }: PlayRowProps) {
+function PlayRow({ row, currentEpisode, multiServer, card }: PlayRowProps) {
   const label = episodeLabel(row);
   const device = row.deviceName || row.platform;
 
-  const episode = !hideEpisode && (
+  const episode = (
     <div className={card ? "mb-1 flex min-w-0 items-center gap-2" : "flex min-w-0 items-center gap-2 sm:flex-1"}>
       {label && (
         <ColorChip className="border-border font-mono text-muted-foreground">{label}</ColorChip>
       )}
-      <Link
-        href={`/library/series/episode/${row.mediaItem.id}`}
-        className="truncate font-medium hover:text-primary hover:underline"
-        title={row.mediaItem.title}
-      >
-        {row.mediaItem.title}
-      </Link>
+      {currentEpisode ? (
+        <span className="truncate font-medium" title={row.mediaItem.title}>
+          {row.mediaItem.title}
+        </span>
+      ) : (
+        <Link
+          href={`/library/series/episode/${row.mediaItem.id}`}
+          className="truncate font-medium hover:text-primary hover:underline"
+          title={row.mediaItem.title}
+        >
+          {row.mediaItem.title}
+        </Link>
+      )}
     </div>
   );
   const serverChip = multiServer && (
@@ -206,7 +215,7 @@ export function SeriesWatchHistory({
   episodeNumber,
   serverId,
   heading = "Watch History",
-  hideEpisode = false,
+  currentEpisode = false,
   refreshKey = 0,
   variant = "section",
 }: SeriesWatchHistoryProps) {
@@ -314,7 +323,7 @@ export function SeriesWatchHistory({
     <>
       <ul className={card ? "space-y-2" : "space-y-1.5"}>
         {rows.map((row) => (
-          <PlayRow key={row.id} row={row} hideEpisode={hideEpisode} multiServer={multiServer} card={card} />
+          <PlayRow key={row.id} row={row} currentEpisode={currentEpisode} multiServer={multiServer} card={card} />
         ))}
       </ul>
 

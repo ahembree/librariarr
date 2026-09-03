@@ -164,11 +164,11 @@ The series, season, and episode detail pages each show their own watch history s
 |-|-|
 | **Series** | Every play of every episode in the series, newest first — with the user, the date and time, and which episode |
 | **Season** | The same, narrowed to episodes in that season |
-| **Episode** | Every play of that one episode, with the user, the date and time, and the device — shown as the **Watch History** card beside the file and playback details |
+| **Episode** | Every play of that one episode — the episode it belongs to, the user, the date and time, and the device — shown as the **Watch History** card beside the file and playback details |
 
 **Every user on the server is included** — not just the account Librariarr connects with. Plays are read from the server's full, per-user history, so anyone in your household who watched an episode appears by name.
 
-Each row also names the device or platform where available; on the series and season pages it links back to the episode that was played. All three pages load 25 plays at a time, with a **Load more** button for the rest.
+Every row names the episode that was played; on the series and season pages that name links to the episode, and on an episode's own page it is plain text since you are already there. Each row also names the device or platform where available. All three pages load 25 plays at a time, with a **Load more** button for the rest.
 
 When a show exists on more than one server, plays from *every* server are listed and each row is tagged with its server name. A play is a real event on the copy that was actually played, so nothing is hidden by [deduplication](#multi-server-deduplication). The series is matched the same way the library groups shows — by series identity (its TVDB/TMDB id, falling back to the title) — so a server that spells the title differently still contributes its plays, and two different shows that share a title never blend their history.
 

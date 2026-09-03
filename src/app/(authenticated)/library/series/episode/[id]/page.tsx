@@ -165,7 +165,7 @@ export default function EpisodeDetailPage() {
               parentTitle={item.parentTitle}
               seasonNumber={item.seasonNumber}
               episodeNumber={item.episodeNumber}
-              hideEpisode
+              currentEpisode
               refreshKey={syncTick}
             />
           ) : undefined
