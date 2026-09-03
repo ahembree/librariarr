@@ -186,9 +186,16 @@ interface MediaDetailContentProps {
   matchedCriteriaSection?: React.ReactNode;
   /** When true, this is a series/artist aggregate — skip episode-level detail fetches */
   isAggregate?: boolean;
+  /**
+   * Replaces the built-in Watch/Listen History card (the per-user aggregate
+   * fetched live from `/api/media/[id]/history`), whose fetch is then skipped.
+   * The episode page passes the per-play `SeriesWatchHistory` card here, so an
+   * episode has one history section instead of two views of the same plays.
+   */
+  historySection?: React.ReactNode;
 }
 
-export function MediaDetailContent({ item, children, hideVideo, compact, matchedCriteriaSection, isAggregate }: MediaDetailContentProps) {
+export function MediaDetailContent({ item, children, hideVideo, compact, matchedCriteriaSection, isAggregate, historySection }: MediaDetailContentProps) {
   const { getBadgeStyle } = useChipColors();
 
   // Fetch full detail data (summary, tagline, genres, directors, etc.)
@@ -286,13 +293,22 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
     setMetadataOpenMap({});
   }
 
+  // A boolean, not the node itself: a fresh element every render would re-run
+  // the effect (and refetch) on every parent render.
+  const hasHistorySection = Boolean(historySection);
+
   useEffect(() => {
     if (isAggregate) return;
     const token = ++reqToken.current;
     void (async () => {
-      await Promise.all([fetchItemDetail(item.id, token), fetchHistory(item.id, token)]);
+      await Promise.all([
+        fetchItemDetail(item.id, token),
+        // The slot brings its own history; the live aggregate would only be
+        // fetched to be thrown away.
+        ...(hasHistorySection ? [] : [fetchHistory(item.id, token)]),
+      ]);
     })();
-  }, [item.id, isAggregate, fetchItemDetail, fetchHistory]);
+  }, [item.id, isAggregate, hasHistorySection, fetchItemDetail, fetchHistory]);
 
   return (
     <div className="mt-6 space-y-6">
@@ -441,8 +457,9 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
 
       {/* ── Detail columns (individual items only) ─────────── */}
       {!isAggregate && <div className={compact ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 stagger-children"}>
-        {/* Column 1: Watch/Listen History */}
-        <div className="rounded-xl border border-white/6 bg-card p-5 shadow-[var(--shadow-card)] space-y-3">
+        {/* Column 1: Watch/Listen History — the caller's section when given
+            (per-play list on the episode page), else the per-user aggregate */}
+        {historySection ? historySection : <div className="rounded-xl border border-white/6 bg-card p-5 shadow-[var(--shadow-card)] space-y-3">
           <div className="flex items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
             <History className="h-3.5 w-3.5" />
             {merged.type === "MUSIC" ? "Listen History" : "Watch History"}
@@ -515,7 +532,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
               ))}
             </div>
           )}
-        </div>
+        </div>}
 
         {/* Column 2: File, Playback, Subtitles, Metadata */}
         <div className="rounded-xl border border-white/6 bg-card p-5 shadow-[var(--shadow-card)] space-y-5">

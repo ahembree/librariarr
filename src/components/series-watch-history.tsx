@@ -48,10 +48,21 @@ interface SeriesWatchHistoryProps {
   serverId?: string | null;
   /** Section heading. */
   heading?: string;
-  /** Hide the per-row episode label (redundant on an episode's own page). */
+  /**
+   * Omit the per-row episode label and title — redundant when every row is
+   * the same episode (its own detail page).
+   */
   hideEpisode?: boolean;
   /** Bump to refetch — e.g. on a `sync:completed` realtime event. */
   refreshKey?: number;
+  /**
+   * `section` (default): a full-width block under a series/season page.
+   * `card`: one of the detail cards in `MediaDetailContent`'s grid — the
+   * episode page passes it through `historySection` so this per-play list
+   * *is* the episode's Watch History card, rather than a second section
+   * beneath the per-user aggregate showing the same plays.
+   */
+  variant?: "section" | "card";
 }
 
 function episodeLabel(row: WatchHistoryRow): string | null {
@@ -84,14 +95,109 @@ function formatWatchedAt(dateStr: string | null): string {
   return `${day} ${time}`;
 }
 
+function formatPlayCount(count: number): string {
+  return `${count.toLocaleString()} ${count === 1 ? "play" : "plays"}`;
+}
+
+interface PlayRowProps {
+  row: WatchHistoryRow;
+  hideEpisode: boolean;
+  /** Only worth naming the server when the plays actually span more than one. */
+  multiServer: boolean;
+  card: boolean;
+}
+
+function PlayRow({ row, hideEpisode, multiServer, card }: PlayRowProps) {
+  const label = episodeLabel(row);
+  const device = row.deviceName || row.platform;
+
+  const episode = !hideEpisode && (
+    <div className={card ? "mb-1 flex min-w-0 items-center gap-2" : "flex min-w-0 items-center gap-2 sm:flex-1"}>
+      {label && (
+        <ColorChip className="border-border font-mono text-muted-foreground">{label}</ColorChip>
+      )}
+      <Link
+        href={`/library/series/episode/${row.mediaItem.id}`}
+        className="truncate font-medium hover:text-primary hover:underline"
+        title={row.mediaItem.title}
+      >
+        {row.mediaItem.title}
+      </Link>
+    </div>
+  );
+  const serverChip = multiServer && (
+    <ColorChip className={(SERVER_TYPE_STYLES[row.server.type] ?? DEFAULT_SERVER_STYLE).classes}>
+      {row.server.name}
+    </ColorChip>
+  );
+  const watchedAt = (
+    <span className="font-mono tabular-nums" title={row.watchedAt ?? undefined}>
+      {formatWatchedAt(row.watchedAt)}
+    </span>
+  );
+
+  if (card) {
+    // Card columns are narrow, so the row keeps the shape of the other detail
+    // cards' rows: name on the left with a muted secondary line, one mono
+    // value on the right.
+    return (
+      <li className="rounded-lg bg-muted/50 px-3 py-2 text-sm transition-colors hover:bg-muted/70">
+        {episode}
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0 space-y-0.5">
+            <span className="font-medium">{row.serverUsername}</span>
+            {(device || serverChip) && (
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                {device && (
+                  <span className="flex min-w-0 items-center gap-1" title={device}>
+                    <Monitor className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{device}</span>
+                  </span>
+                )}
+                {serverChip}
+              </div>
+            )}
+          </div>
+          <span className="shrink-0 text-xs text-muted-foreground">{watchedAt}</span>
+        </div>
+      </li>
+    );
+  }
+
+  return (
+    // Stacks below `sm`: the metadata block can't shrink (chips and the
+    // timestamp don't wrap), so side-by-side on a phone squeezed the title to
+    // a single clipped character and overlapped it.
+    <li className="flex flex-col gap-1 rounded-lg bg-muted/50 px-3 py-2 text-sm transition-colors hover:bg-muted/70 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+      {episode}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground sm:shrink-0 sm:flex-nowrap">
+        <span className="flex items-center gap-1">
+          <User className="h-3 w-3" />
+          <span className="font-medium text-foreground/80">{row.serverUsername}</span>
+        </span>
+        {device && (
+          <span className="flex items-center gap-1" title={device}>
+            <Monitor className="h-3 w-3" />
+            <span className="max-w-[10rem] truncate">{device}</span>
+          </span>
+        )}
+        {serverChip}
+        {watchedAt}
+      </div>
+    </li>
+  );
+}
+
 /**
  * Per-play watch history for a series, a single season, or a single episode —
  * who watched, when, and which episode.
  *
  * Reads `/api/media/series/watch-history` (the stored `WatchHistory` table).
- * The per-user aggregate card in `MediaDetailContent` answers a different
- * question (how many plays per user, fetched live from the server) and has no
- * per-play timestamps, so it can't stand in for this.
+ * `MediaDetailContent`'s built-in history card answers a different question
+ * (how many plays per user, fetched live from the server) and has no per-play
+ * timestamps, so it can't stand in for this — which is why the episode page
+ * swaps that card for this component (`variant="card"`) instead of showing
+ * both.
  */
 export function SeriesWatchHistory({
   seriesKey,
@@ -102,6 +208,7 @@ export function SeriesWatchHistory({
   heading = "Watch History",
   hideEpisode = false,
   refreshKey = 0,
+  variant = "section",
 }: SeriesWatchHistoryProps) {
   const [rows, setRows] = useState<WatchHistoryRow[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -174,8 +281,69 @@ export function SeriesWatchHistory({
     void loadPage(Math.floor(rows.length / PAGE_SIZE) + 1, reqToken.current);
   }, [loadPage, rows.length]);
 
+  const card = variant === "card";
   // Only worth naming the server when the plays actually span more than one.
   const multiServer = new Set(rows.map((r) => r.server.id)).size > 1;
+
+  const body = loading ? (
+    <div className="space-y-2">
+      {(card ? [0, 1] : [0, 1, 2]).map((i) => (
+        <div
+          key={i}
+          className="flex animate-pulse items-center justify-between rounded-lg bg-muted/50 px-3 py-2.5"
+        >
+          <div className="space-y-1.5">
+            <div className={card ? "h-3 w-20 rounded bg-muted-foreground/20" : "h-3 w-40 rounded bg-muted-foreground/20"} />
+            <div className={card ? "h-2 w-28 rounded bg-muted-foreground/10" : "h-2 w-24 rounded bg-muted-foreground/10"} />
+          </div>
+          <div className={card ? "h-2.5 w-12 rounded bg-muted-foreground/10" : "h-2.5 w-20 rounded bg-muted-foreground/10"} />
+        </div>
+      ))}
+    </div>
+  ) : error ? (
+    <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-white/5 bg-muted/30 px-3 py-6 text-center">
+      <History className="h-5 w-5 text-muted-foreground/50" />
+      <p className="text-xs text-muted-foreground">Could not load watch history</p>
+    </div>
+  ) : rows.length === 0 ? (
+    <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-white/5 bg-muted/30 px-3 py-6 text-center">
+      <History className="h-5 w-5 text-muted-foreground/50" />
+      <p className="text-xs text-muted-foreground">No watch history yet</p>
+    </div>
+  ) : (
+    <>
+      <ul className={card ? "space-y-2" : "space-y-1.5"}>
+        {rows.map((row) => (
+          <PlayRow key={row.id} row={row} hideEpisode={hideEpisode} multiServer={multiServer} card={card} />
+        ))}
+      </ul>
+
+      {hasMore && (
+        <div className="mt-3 flex justify-center">
+          <Button variant="outline" size="sm" onClick={loadMore} disabled={loadingMore}>
+            {loadingMore && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
+            Load more
+          </Button>
+        </div>
+      )}
+    </>
+  );
+
+  if (card) {
+    // Same shell and heading treatment as the other cards in the detail grid.
+    return (
+      <div className="rounded-xl border border-white/6 bg-card p-5 shadow-[var(--shadow-card)] space-y-3">
+        <h3 className="flex items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
+          <History className="h-3.5 w-3.5" />
+          {heading}
+          {!loading && totalCount > 0 && (
+            <span className="text-xs font-normal normal-case">({formatPlayCount(totalCount)})</span>
+          )}
+        </h3>
+        {body}
+      </div>
+    );
+  }
 
   return (
     <section className="mt-6">
@@ -185,108 +353,11 @@ export function SeriesWatchHistory({
         </h2>
         {!loading && totalCount > 0 && (
           <span className="font-mono text-xs tabular-nums text-muted-foreground">
-            {totalCount.toLocaleString()} {totalCount === 1 ? "play" : "plays"}
+            {formatPlayCount(totalCount)}
           </span>
         )}
       </div>
-
-      {loading ? (
-        <div className="space-y-2">
-          {[0, 1, 2].map((i) => (
-            <div
-              key={i}
-              className="flex animate-pulse items-center justify-between rounded-lg bg-muted/50 px-3 py-2.5"
-            >
-              <div className="space-y-1.5">
-                <div className="h-3 w-40 rounded bg-muted-foreground/20" />
-                <div className="h-2 w-24 rounded bg-muted-foreground/10" />
-              </div>
-              <div className="h-2.5 w-20 rounded bg-muted-foreground/10" />
-            </div>
-          ))}
-        </div>
-      ) : error ? (
-        <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-white/5 bg-muted/30 px-3 py-6 text-center">
-          <History className="h-5 w-5 text-muted-foreground/50" />
-          <p className="text-xs text-muted-foreground">Could not load watch history</p>
-        </div>
-      ) : rows.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-white/5 bg-muted/30 px-3 py-6 text-center">
-          <History className="h-5 w-5 text-muted-foreground/50" />
-          <p className="text-xs text-muted-foreground">No watch history yet</p>
-        </div>
-      ) : (
-        <>
-          <ul className="space-y-1.5">
-            {rows.map((row) => {
-              const label = episodeLabel(row);
-              const device = row.deviceName || row.platform;
-              return (
-                // Stacks below `sm`: the metadata block can't shrink (chips and
-                // the timestamp don't wrap), so side-by-side on a phone squeezed
-                // the title to a single clipped character and overlapped it.
-                <li
-                  key={row.id}
-                  className="flex flex-col gap-1 rounded-lg bg-muted/50 px-3 py-2 text-sm transition-colors hover:bg-muted/70 sm:flex-row sm:items-center sm:justify-between sm:gap-3"
-                >
-                  <div className="flex min-w-0 items-center gap-2 sm:flex-1">
-                    {!hideEpisode && label && (
-                      <ColorChip className="border-border font-mono text-muted-foreground">
-                        {label}
-                      </ColorChip>
-                    )}
-                    {hideEpisode ? (
-                      <span className="truncate font-medium">{row.mediaItem.title}</span>
-                    ) : (
-                      <Link
-                        href={`/library/series/episode/${row.mediaItem.id}`}
-                        className="truncate font-medium hover:text-primary hover:underline"
-                        title={row.mediaItem.title}
-                      >
-                        {row.mediaItem.title}
-                      </Link>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground sm:shrink-0 sm:flex-nowrap">
-                    <span className="flex items-center gap-1">
-                      <User className="h-3 w-3" />
-                      <span className="font-medium text-foreground/80">{row.serverUsername}</span>
-                    </span>
-                    {device && (
-                      <span className="flex items-center gap-1" title={device}>
-                        <Monitor className="h-3 w-3" />
-                        <span className="max-w-[10rem] truncate">{device}</span>
-                      </span>
-                    )}
-                    {multiServer && (
-                      <ColorChip
-                        className={(SERVER_TYPE_STYLES[row.server.type] ?? DEFAULT_SERVER_STYLE).classes}
-                      >
-                        {row.server.name}
-                      </ColorChip>
-                    )}
-                    <span
-                      className="font-mono tabular-nums"
-                      title={row.watchedAt ?? undefined}
-                    >
-                      {formatWatchedAt(row.watchedAt)}
-                    </span>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-
-          {hasMore && (
-            <div className="mt-3 flex justify-center">
-              <Button variant="outline" size="sm" onClick={loadMore} disabled={loadingMore}>
-                {loadingMore && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
-                Load more
-              </Button>
-            </div>
-          )}
-        </>
-      )}
+      {body}
     </section>
   );
 }

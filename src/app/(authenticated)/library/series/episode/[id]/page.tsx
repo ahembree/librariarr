@@ -146,18 +146,24 @@ export default function EpisodeDetailPage() {
       useParentArt
       playServers={playServers}
     >
-      <MediaDetailContent item={item} />
-
-      {item.parentTitle && item.seasonNumber != null && item.episodeNumber != null && (
-        <SeriesWatchHistory
-          seriesKey={item.seriesKey}
-          parentTitle={item.parentTitle}
-          seasonNumber={item.seasonNumber}
-          episodeNumber={item.episodeNumber}
-          heading="Recent Plays"
-          hideEpisode
-        />
-      )}
+      <MediaDetailContent
+        item={item}
+        // The per-play list *is* this episode's Watch History card. It replaces
+        // the per-user aggregate card (which reads the same plays live from the
+        // server, minus the timestamps), so the page shows the data once.
+        historySection={
+          item.parentTitle && item.seasonNumber != null && item.episodeNumber != null ? (
+            <SeriesWatchHistory
+              variant="card"
+              seriesKey={item.seriesKey}
+              parentTitle={item.parentTitle}
+              seasonNumber={item.seasonNumber}
+              episodeNumber={item.episodeNumber}
+              hideEpisode
+            />
+          ) : undefined
+        }
+      />
     </MediaDetailHero>
   );
 }
