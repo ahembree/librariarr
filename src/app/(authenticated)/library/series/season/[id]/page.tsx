@@ -24,6 +24,7 @@ import type { MediaItemWithRelations, MediaListItem } from "@/lib/types";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
 import { IntegrationsSection } from "@/components/integrations-section";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { SeriesWatchHistory } from "@/components/series-watch-history";
 
 function formatResolution(resolution: string | null): string {
   if (!resolution) return "Unknown";
@@ -341,6 +342,15 @@ export default function SeasonDetailPage() {
             </div>
           )}
         </section>
+      )}
+
+      {item.parentTitle && (
+        <SeriesWatchHistory
+          parentTitle={item.parentTitle}
+          seasonNumber={seasonNumber}
+          heading={`${seasonLabel} Watch History`}
+          refreshKey={syncTick}
+        />
       )}
 
       <Separator className="mt-6" />

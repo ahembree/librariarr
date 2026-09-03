@@ -26,6 +26,8 @@ Series are grouped by show title. Drill down into:
 - **Seasons** — View seasons within a series with episode counts
 - **Episodes** — Individual episodes with per-episode metadata and quality info
 
+Each of these pages also carries a [watch history section](#watch-history-on-series-pages) listing the individual plays for whatever you are looking at.
+
 ### Music
 
 Music is organized by artist. Browse artists, albums, and individual tracks with audio format, quality, and duration details.
@@ -151,6 +153,20 @@ When browsing with multiple servers connected:
 ## Watch History
 
 View detailed, per-play watch history across all your media servers. Each row represents an individual play event, showing who watched what, when, and on which device.
+
+### Watch History on Series Pages
+
+The series, season, and episode detail pages each show their own watch history section, so you can see who has been watching a show without leaving it for the main history page:
+
+| Page | Shows |
+|-|-|
+| **Series** | Every play of every episode in the series, newest first — with the user, the date and time, and which episode |
+| **Season** | The same, narrowed to episodes in that season |
+| **Episode** | Recent plays of that one episode, with the user and the date and time |
+
+Each row also names the device or platform where available, and links back to the episode that was played. Series and season pages load 25 plays at a time, with a **Load more** button for the rest. When a title exists on more than one server, plays from *every* server are listed — a play is a real event on the copy that was actually played, so nothing is hidden by [deduplication](#multi-server-deduplication) — and each row is tagged with its server name.
+
+These sections read the same stored watch history as the main history page, so they fill in after a watch-history sync (see below).
 
 ### Syncing Watch History
 
