@@ -8,6 +8,7 @@ const {
   mockFindOldestPlayAt,
   mockListServers,
   mockGetServerAccountNames,
+  mockInvalidateWatchHistoryEvidence,
   mockBuildIndex,
   mockResolve,
   mockReconcile,
@@ -25,6 +26,7 @@ const {
   mockFindOldestPlayAt: vi.fn(),
   mockListServers: vi.fn(),
   mockGetServerAccountNames: vi.fn(),
+  mockInvalidateWatchHistoryEvidence: vi.fn(),
   mockBuildIndex: vi.fn(),
   mockResolve: vi.fn(),
   mockReconcile: vi.fn(),
@@ -33,6 +35,10 @@ const {
 
 vi.mock("@/lib/db", () => ({
   prisma: mockPrisma,
+}));
+
+vi.mock("@/lib/media/watch-evidence", () => ({
+  invalidateWatchHistoryEvidence: mockInvalidateWatchHistoryEvidence,
 }));
 
 vi.mock("@/lib/logger", () => ({
@@ -2305,6 +2311,93 @@ describe("syncTracearrHistory", () => {
       });
 
       expect(mockGetHistoryPage).not.toHaveBeenCalled();
+    });
+  });
+
+
+  describe("degraded attribution withdraws the evidence marker", () => {
+    /** `withUser` lives in another describe; this block needs its own. */
+    function play(id: string, serverUserId: string, username: string) {
+      return historyRecord({
+        id,
+        user: {
+          id: "identity-1",
+          server_user_id: serverUserId,
+          username,
+          thumb_url: null,
+          avatar_url: null,
+        },
+      });
+    }
+
+    // The forward pass runs without the account-name map on purpose, so its
+    // rows land under Tracearr's identity label ("Nick W") instead of the
+    // media server's account name ("weingart"). `watchedByUser` matches on that
+    // exact string, and a MISSING name arms a negative rule rather than
+    // disarming it: "delete unless watched by weingart" matches an item
+    // weingart did watch, because the play is filed under a name the rule does
+    // not recognise. Monotonic play state cannot save that one.
+    it("pauses play-activity rules after storing rows without the account map", async () => {
+      storedRows({
+        min: new Date("2025-07-10T11:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: true,
+      });
+      mockGetServerAccountNames.mockRejectedValue(new Error("users endpoint down"));
+      mockGetHistoryPage.mockResolvedValueOnce({
+        records: [play("chain-new", "srv-user-1", "Nick W")],
+        nextCursor: null,
+      });
+
+      await syncTracearrHistory("server-1", { passes: "forward" });
+
+      expect(mockInvalidateWatchHistoryEvidence).toHaveBeenCalledWith(["server-1"]);
+    });
+
+    it("does not pause when the map loaded and merely lacks a removed user", async () => {
+      // A user Tracearr has since removed is legitimately absent from a healthy
+      // map. That fallback is permanent and correct, so pausing for it would
+      // never lift — the condition is an UNUSABLE map, not any fallback name.
+      storedRows({
+        min: new Date("2025-07-10T11:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: true,
+      });
+      mockGetServerAccountNames.mockResolvedValue(new Map([["srv-user-1", "weingart"]]));
+      mockGetHistoryPage.mockResolvedValueOnce({
+        records: [play("chain-departed", "gone", "Departed User")],
+        nextCursor: null,
+      });
+
+      await syncTracearrHistory("server-1", { passes: "forward" });
+
+      expect(mockInvalidateWatchHistoryEvidence).not.toHaveBeenCalled();
+    });
+
+    it("pauses before the first page, not after the run", async () => {
+      // Rows commit per page and the forward window has no upper bound, so an
+      // end-of-run withdrawal leaves the guard vouching for the server for the
+      // whole walk — and a match formed in that window survives the later pause,
+      // because a transient refusal preserves existing matches and the executor
+      // never re-checks. Asserted by the ORDER of the two calls.
+      storedRows({
+        min: new Date("2025-07-10T11:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: true,
+      });
+      mockGetServerAccountNames.mockResolvedValue(new Map());
+      const order: string[] = [];
+      mockInvalidateWatchHistoryEvidence.mockImplementation(async () => {
+        order.push("paused");
+      });
+      mockGetHistoryPage.mockImplementation(async () => {
+        order.push("fetched");
+        return { records: [], nextCursor: null };
+      });
+
+      await syncTracearrHistory("server-1", { passes: "forward" });
+
+      expect(order[0]).toBe("paused");
     });
   });
 

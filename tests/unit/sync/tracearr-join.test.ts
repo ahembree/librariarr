@@ -363,4 +363,74 @@ describe("resolveMediaItemId — unsupported types", () => {
       ).toEqual({ skipped: "unsupported-type" });
     },
   );
+
+  describe("a rating key that now points somewhere else", () => {
+    // Rating keys are the server's own ids, and Plex reuses them — they are
+    // rowids, so a key that identified a deleted film can later identify a
+    // different one. An un-corroborated hit files the old item's plays against
+    // the new item under REAL usernames, which is the direction that ARMS a
+    // positive `watchedByUser` DELETE (inflated play state only ever disarms).
+    // Nothing revisits an upserted row, so it is permanent.
+    it("skips a hit whose type disagrees with the record", async () => {
+      const index = await buildIndex([episode("ep-1", "900", 1, 2)]);
+
+      // Tracearr says this play was a movie; the key now belongs to an episode.
+      expect(
+        resolveMediaItemId(index, record({ media_type: "movie", rating_key: "900" })),
+      ).toEqual({ skipped: "ambiguous" });
+    });
+
+    it("skips a hit whose provider id contradicts the record's", async () => {
+      const index = await buildIndex(
+        [movie("movie-new", "900")],
+        [{ mediaItemId: "movie-new", source: "TMDB", externalId: "111" }],
+      );
+
+      expect(
+        resolveMediaItemId(
+          index,
+          record({ media_type: "movie", rating_key: "900", tmdb_id: 222 }),
+        ),
+      ).toEqual({ skipped: "ambiguous" });
+    });
+
+    it("still resolves when the ids agree", async () => {
+      const index = await buildIndex(
+        [movie("movie-1", "900")],
+        [{ mediaItemId: "movie-1", source: "TMDB", externalId: "111" }],
+      );
+
+      expect(
+        resolveMediaItemId(
+          index,
+          record({ media_type: "movie", rating_key: "900", tmdb_id: 111 }),
+        ),
+      ).toEqual({ mediaItemId: "movie-1" });
+    });
+
+    it("accepts silence on either side rather than treating it as disagreement", async () => {
+      // Provider ids are far from universally populated; refusing on absence
+      // would drop most legitimate plays to catch a rare reuse.
+      const bare = await buildIndex([movie("movie-1", "900")]);
+      expect(
+        resolveMediaItemId(
+          bare,
+          record({ media_type: "movie", rating_key: "900", tmdb_id: 222 }),
+        ),
+      ).toEqual({ mediaItemId: "movie-1" });
+
+      const withId = await buildIndex(
+        [movie("movie-1", "900")],
+        [{ mediaItemId: "movie-1", source: "TMDB", externalId: "111" }],
+      );
+      // The record carries an IMDB id the item has nothing to compare against.
+      expect(
+        resolveMediaItemId(
+          withId,
+          record({ media_type: "movie", rating_key: "900", imdb_id: "tt999" }),
+        ),
+      ).toEqual({ mediaItemId: "movie-1" });
+    });
+  });
+
 });

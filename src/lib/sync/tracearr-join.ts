@@ -74,6 +74,12 @@ interface JoinCandidate {
   type: LibraryType;
   seasonNumber: number | null;
   episodeNumber: number | null;
+  /**
+   * `"<SOURCE>:<id>"` keys this item carries, used to detect a rating key that
+   * now points somewhere else — see the contradiction check in
+   * `resolveMediaItemId`.
+   */
+  providerIds: Set<string>;
 }
 
 export interface TracearrJoinIndex {
@@ -152,6 +158,7 @@ export async function buildTracearrJoinIndex(
       type: row.type,
       seasonNumber: row.seasonNumber,
       episodeNumber: row.episodeNumber,
+      providerIds: new Set(),
     };
     byId.set(row.id, candidate);
 
@@ -188,6 +195,8 @@ export async function buildTracearrJoinIndex(
       row.source.toUpperCase() as ProviderSource,
       value,
     );
+    candidate.providerIds.add(key);
+
     const existing = byExternalId.get(key);
     if (existing) existing.push(candidate);
     else byExternalId.set(key, [candidate]);
@@ -247,6 +256,39 @@ function narrowCandidates(
 }
 
 /**
+ * Whether a candidate's provider ids actively DISAGREE with the record's.
+ *
+ * Only a same-source mismatch counts. An item with no ids, or a record naming a
+ * source the item does not carry, tells us nothing — and refusing on silence
+ * would drop most legitimate plays, since a library's provider ids are far from
+ * universally populated.
+ *
+ * Season/episode numbers are deliberately NOT compared here, unlike on the
+ * provider path: the rating key already identifies the exact episode on that
+ * server, whereas Tracearr and the server can legitimately disagree about
+ * numbering (absolute vs aired ordering on anime, say), so narrowing on it
+ * would drop real plays to catch a case the type and provider checks already
+ * cover.
+ */
+function contradictsProviderIds(
+  candidate: JoinCandidate,
+  record: TracearrJoinRecord,
+): boolean {
+  if (candidate.providerIds.size === 0) return false;
+  for (const { source, value } of providerIdsFor(record)) {
+    const key = externalIdKey(source, value);
+    if (candidate.providerIds.has(key)) continue;
+    // Same source, different value — the item this key now points at is not the
+    // one the play was recorded against.
+    const prefix = `${source}:`;
+    for (const held of candidate.providerIds) {
+      if (held.startsWith(prefix)) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Resolve one record against a prebuilt index. Never returns a "best guess" —
  * see the file header for why.
  */
@@ -261,8 +303,27 @@ export function resolveMediaItemId(
   const ratingKey = record.rating_key?.trim();
   if (ratingKey) {
     const hits = index.byRatingKey.get(ratingKey);
-    if (hits && hits.length === 1) return { mediaItemId: hits[0].id };
     if (hits && hits.length > 1) return { skipped: "ambiguous" };
+    if (hits && hits.length === 1) {
+      const hit = hits[0];
+      // A rating key is the server's own id for an item, but it is NOT stable
+      // across a delete: Plex reuses them (they are rowids), so a key that
+      // identified a deleted film can later identify a different one. An
+      // un-corroborated hit then files the old item's plays against the new
+      // item — under REAL usernames, which is the dangerous direction: play
+      // state is monotonic so inflating it only disarms rules, but a wrong
+      // `serverUsername` ARMS a positive `watchedByUser` DELETE. And nothing
+      // revisits an upserted row, so it is permanent.
+      //
+      // Two cheap corroborations, both of which a genuine hit passes:
+      //  - the item must be the type the record says it is;
+      //  - where BOTH sides carry a provider id from the same source, they must
+      //    agree. Silence on either side proves nothing and is accepted, so
+      //    this only rejects an actual contradiction.
+      if (hit.type !== expectedType) return { skipped: "ambiguous" };
+      if (contradictsProviderIds(hit, record)) return { skipped: "ambiguous" };
+      return { mediaItemId: hit.id };
+    }
     // Zero hits: fall through. A null/stale rating key is the normal reason a
     // real play needs the provider fallback.
   }

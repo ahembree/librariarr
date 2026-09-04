@@ -18,6 +18,7 @@ import {
   TracearrClient,
   type TracearrHistoryRecord,
 } from "@/lib/tracearr/tracearr-client";
+import { invalidateWatchHistoryEvidence } from "@/lib/media/watch-evidence";
 
 /**
  * Incremental import of Tracearr play history into `WatchHistory`.
@@ -565,6 +566,8 @@ export async function syncTracearrHistory(
   // Whether a failure here is survivable depends entirely on WHICH pass wants
   // to run, so it is recorded rather than shrugged off — see the backfill gate
   // below, which refuses to walk the archive without it.
+
+
   let accountNames: Map<string, string> | undefined;
   try {
     accountNames = await client.getServerAccountNames(mappedServerId, { signal });
@@ -575,6 +578,40 @@ export async function syncTracearrHistory(
         `attributed by Tracearr's identity name, which may not match the ` +
         `server's own account names`,
       { error: String(error) },
+    );
+  }
+
+  // ATTRIBUTION IS DEGRADED — say so BEFORE writing a single row.
+  //
+  // The forward pass deliberately keeps running without the map, because it
+  // covers an hour of overlap whose rows the next successful run re-delivers
+  // and re-labels. But those rows carry Tracearr's identity label ("Nick W")
+  // where every other row on this server carries the media server's account
+  // name ("weingart"), and `watchedByUser` matches on exactly that string. So
+  // a rule "delete unless watched by weingart" matches an item weingart DID
+  // watch in this window: the play is there, under a name the rule does not
+  // recognise. Monotonic play state does not save this one — unlike playCount,
+  // a missing username ARMS a negative rule rather than disarming it.
+  //
+  // Withdrawing the marker FIRST, not at the end of the run, is the whole
+  // point. Rows commit per page, the forward window has no upper bound (after
+  // downtime it can walk days of plays over minutes), and detection runs on its
+  // own dispatcher — unserialised against a History-page Refresh. An
+  // end-of-run withdrawal leaves the guard vouching for the server for the
+  // entire walk, and a match formed in that window SURVIVES the later pause,
+  // because a transient refusal preserves existing matches and pending actions
+  // and the executor never re-checks evaluability before firing.
+  //
+  // Conditioned on the map being UNUSABLE, not on any fallback name: a user
+  // Tracearr has since removed is legitimately absent from a healthy map, and
+  // that fallback is permanent and correct — pausing for it would never lift.
+  if (!accountNames || accountNames.size === 0) {
+    await invalidateWatchHistoryEvidence([serverId]);
+    logger.warn(
+      "WatchHistory",
+      `Importing plays for "${serverName}" without the account-name map, so they ` +
+        `will carry Tracearr's identity names. Play-activity lifecycle rules are ` +
+        `paused for this server until a sync with a usable map re-establishes it.`,
     );
   }
 
