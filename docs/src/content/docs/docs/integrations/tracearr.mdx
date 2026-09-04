@@ -123,6 +123,8 @@ When the backfill finishes, the number of plays Librariarr holds is usually **lo
 
 **Librariarr stores a play against a library item.** Every imported play points at a specific movie, episode, or track in your library — that link is what lets a play affect **Last Played**, **Play Count**, and the lifecycle rules that read them. A play whose media has since been **deleted from your library** has nothing to point at, so it is not imported. On an older library that is a large share of the oldest history: in one real import, roughly **40% of plays from before 2023** referenced media that no longer exists on the server.
 
+Measured on a real library of ~32,000 items against an archive of 160,000 plays: **99.6% of the most recent plays resolve, falling to roughly 55–65% for plays from 2020–2022** — and of the ones that do not, over 99.8% reference media whose show is not in the library at all and which matches no provider id we hold. There is nothing to attach those plays to, so the shortfall is the library's history, not a lookup failure.
+
 **Tautulli keeps its own copy of the title**, independent of the library, which is exactly why it can still show you what you watched in 2020 and deleted in 2021. That is a difference in what the two tools are *for*, not data loss in Librariarr. Tautulli is a viewing archive; Librariarr uses watch history to decide what to do with the media **you still have** — so a play about a file that no longer exists has nothing to inform.
 
 Two more differences are on Tracearr's side, before Librariarr ever sees the data, so Tracearr's own totals will not match Tautulli's either:

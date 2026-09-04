@@ -61,6 +61,7 @@ export type TracearrJoinRecord = Pick<
   TracearrHistoryRecord,
   | "media_type"
   | "rating_key"
+  | "grandparent_rating_key"
   | "season_number"
   | "episode_number"
   | "tvdb_id"
@@ -77,9 +78,12 @@ interface JoinCandidate {
   /**
    * `"<SOURCE>:<id>"` keys this item carries, used to detect a rating key that
    * now points somewhere else — see the contradiction check in
-   * `resolveMediaItemId`.
+   * `resolveMediaItemId`. SERIES-level for an episode, which is why the check
+   * that reads them excludes episodes entirely.
    */
   providerIds: Set<string>;
+  /** The show's rating key on this server — an episode's same-granularity id. */
+  grandparentRatingKey: string | null;
 }
 
 export interface TracearrJoinIndex {
@@ -140,9 +144,11 @@ export async function buildTracearrJoinIndex(
       type: LibraryType;
       seasonNumber: number | null;
       episodeNumber: number | null;
+      grandparentRatingKey: string | null;
     }>
   >(
-    `SELECT mi."id", mi."ratingKey", mi."type", mi."seasonNumber", mi."episodeNumber"
+    `SELECT mi."id", mi."ratingKey", mi."type", mi."seasonNumber", mi."episodeNumber",
+            mi."grandparentRatingKey"
        FROM "MediaItem" mi
        JOIN "Library" l ON mi."libraryId" = l."id"
       WHERE l."mediaServerId" = $1`,
@@ -159,6 +165,7 @@ export async function buildTracearrJoinIndex(
       seasonNumber: row.seasonNumber,
       episodeNumber: row.episodeNumber,
       providerIds: new Set(),
+      grandparentRatingKey: row.grandparentRatingKey,
     };
     byId.set(row.id, candidate);
 
@@ -256,26 +263,49 @@ function narrowCandidates(
 }
 
 /**
- * Whether a candidate's provider ids actively DISAGREE with the record's.
+ * Whether a candidate actively DISAGREES with the record about what it is.
  *
- * Only a same-source mismatch counts. An item with no ids, or a record naming a
- * source the item does not carry, tells us nothing — and refusing on silence
- * would drop most legitimate plays, since a library's provider ids are far from
- * universally populated.
+ * Only a same-source, same-granularity mismatch counts. Silence on either side
+ * tells us nothing and is accepted — refusing on absence would drop most
+ * legitimate plays, since neither library metadata nor Tracearr's records carry
+ * ids universally.
  *
- * Season/episode numbers are deliberately NOT compared here, unlike on the
- * provider path: the rating key already identifies the exact episode on that
- * server, whereas Tracearr and the server can legitimately disagree about
- * numbering (absolute vs aired ordering on anime, say), so narrowing on it
- * would drop real plays to catch a case the type and provider checks already
- * cover.
+ * **Episodes are corroborated on the show's rating key, never on provider ids**,
+ * because the two sides mean different things by them. Tracearr sends the
+ * EPISODE's tvdb/tmdb/imdb (a different value per episode), while Librariarr
+ * deliberately stores the SERIES-level ids on every episode row — see "Series
+ * identity". Comparing them finds a mismatch for every episode of every show
+ * whose records carry ids at all, which is most of them: measured against a live
+ * instance, this rejected all 138 episodes of one show whose plays Tracearr held
+ * under our own rating keys, while shows whose records happened to carry no ids
+ * imported fine. `grandparent_rating_key` is the same server's id for the same
+ * show, so it is comparable and it is what a reused episode key would fail.
+ *
+ * Season and episode numbers are deliberately NOT compared: the rating key
+ * already identifies the exact episode, and Tracearr and the server can
+ * legitimately disagree about numbering (absolute vs aired ordering).
  */
-function contradictsProviderIds(
+function contradictsIdentity(
   candidate: JoinCandidate,
   record: TracearrJoinRecord,
 ): boolean {
+  if (record.media_type === "episode") {
+    const recordShow = record.grandparent_rating_key?.trim();
+    if (!recordShow || !candidate.grandparentRatingKey) return false;
+    return candidate.grandparentRatingKey !== recordShow;
+  }
+
   if (candidate.providerIds.size === 0) return false;
   for (const { source, value } of providerIdsFor(record)) {
+    // TVDB is excluded: the two sides populate it from different namespaces
+    // even for a film, so a mismatch there is not evidence of anything.
+    // Measured against a live instance, "Batman: The Dark Knight Returns,
+    // Part 2" is tvdb 2113 in the library and 292129 in Tracearr, and
+    // "Demon Slayer: Infinity Castle" is 357928 against 357931 — same movie,
+    // both times, from two catalogues that disagree about its TVDB identity.
+    // TMDB and IMDB are single-namespace and mean the same thing to both, so
+    // they are the only two worth contradicting on.
+    if (source === "TVDB") continue;
     const key = externalIdKey(source, value);
     if (candidate.providerIds.has(key)) continue;
     // Same source, different value — the item this key now points at is not the
@@ -321,7 +351,7 @@ export function resolveMediaItemId(
       //    agree. Silence on either side proves nothing and is accepted, so
       //    this only rejects an actual contradiction.
       if (hit.type !== expectedType) return { skipped: "ambiguous" };
-      if (contradictsProviderIds(hit, record)) return { skipped: "ambiguous" };
+      if (contradictsIdentity(hit, record)) return { skipped: "ambiguous" };
       return { mediaItemId: hit.id };
     }
     // Zero hits: fall through. A null/stale rating key is the normal reason a

@@ -25,6 +25,8 @@ interface ItemRow {
   type: "MOVIE" | "SERIES" | "MUSIC";
   seasonNumber: number | null;
   episodeNumber: number | null;
+  /** The show's rating key — an episode's only same-granularity identifier. */
+  grandparentRatingKey?: string | null;
 }
 
 interface ExternalIdRow {
@@ -52,6 +54,7 @@ function record(
   return {
     media_type: "movie",
     rating_key: null,
+    grandparent_rating_key: null,
     season_number: null,
     episode_number: null,
     tvdb_id: null,
@@ -67,6 +70,7 @@ const movie = (id: string, ratingKey: string): ItemRow => ({
   type: "MOVIE",
   seasonNumber: null,
   episodeNumber: null,
+  grandparentRatingKey: null,
 });
 
 const episode = (
@@ -74,7 +78,14 @@ const episode = (
   ratingKey: string,
   seasonNumber: number,
   episodeNumber: number,
-): ItemRow => ({ id, ratingKey, type: "SERIES", seasonNumber, episodeNumber });
+): ItemRow => ({
+  id,
+  ratingKey,
+  type: "SERIES",
+  seasonNumber,
+  episodeNumber,
+  grandparentRatingKey: null,
+});
 
 describe("buildTracearrJoinIndex", () => {
   beforeEach(() => {
@@ -380,7 +391,7 @@ describe("resolveMediaItemId — unsupported types", () => {
       ).toEqual({ skipped: "ambiguous" });
     });
 
-    it("skips a hit whose provider id contradicts the record's", async () => {
+    it("skips a hit whose TMDB id contradicts the record's", async () => {
       const index = await buildIndex(
         [movie("movie-new", "900")],
         [{ mediaItemId: "movie-new", source: "TMDB", externalId: "111" }],
@@ -392,6 +403,26 @@ describe("resolveMediaItemId — unsupported types", () => {
           record({ media_type: "movie", rating_key: "900", tmdb_id: 222 }),
         ),
       ).toEqual({ skipped: "ambiguous" });
+    });
+
+    it("does not contradict on TVDB, which the two catalogues disagree about", async () => {
+      // Observed on a live instance for films that are unambiguously the same:
+      // "Batman: The Dark Knight Returns, Part 2" is tvdb 2113 in the library
+      // and 292129 in Tracearr; "Demon Slayer: Infinity Castle" is 357928 vs
+      // 357931. TVDB carries more than one namespace and the two systems
+      // populate it from different ones, so a mismatch there proves nothing —
+      // only TMDB and IMDB are worth contradicting on.
+      const index = await buildIndex(
+        [movie("movie-1", "900")],
+        [{ mediaItemId: "movie-1", source: "TVDB", externalId: "2113" }],
+      );
+
+      expect(
+        resolveMediaItemId(
+          index,
+          record({ media_type: "movie", rating_key: "900", tvdb_id: 292129 }),
+        ),
+      ).toEqual({ mediaItemId: "movie-1" });
     });
 
     it("still resolves when the ids agree", async () => {
@@ -430,6 +461,78 @@ describe("resolveMediaItemId — unsupported types", () => {
           record({ media_type: "movie", rating_key: "900", imdb_id: "tt999" }),
         ),
       ).toEqual({ mediaItemId: "movie-1" });
+    });
+  });
+
+
+  describe("episodes are corroborated on the show, not on provider ids", () => {
+    // The granularity trap, found in production. Tracearr sends the EPISODE's
+    // tvdb/tmdb/imdb — a different value per episode — while Librariarr stores
+    // the SERIES-level ids on every episode row. Comparing them finds a
+    // mismatch for every episode of every show whose records carry ids, which
+    // is most of them: measured against a live instance this rejected all 138
+    // episodes of one show whose plays Tracearr held under our own rating keys,
+    // while shows whose records happened to carry no ids imported fine.
+    it("resolves an episode whose record carries episode-level provider ids", async () => {
+      const index = await buildIndex(
+        [{ ...episode("ep-1", "157667", 1, 1), grandparentRatingKey: "58337" }],
+        // Series-level ids, as the sync stores them on every episode.
+        [{ mediaItemId: "ep-1", source: "TVDB", externalId: "248741" }],
+      );
+
+      expect(
+        resolveMediaItemId(
+          index,
+          record({
+            media_type: "episode",
+            rating_key: "157667",
+            grandparent_rating_key: "58337",
+            season_number: 1,
+            episode_number: 1,
+            tvdb_id: 4099506, // the EPISODE's id — not comparable to ours
+          }),
+        ),
+      ).toEqual({ mediaItemId: "ep-1" });
+    });
+
+    it("still skips an episode whose rating key now belongs to a different show", async () => {
+      // The reuse hazard the corroboration exists for, checked on the one id
+      // that IS comparable: the show's own rating key on the same server.
+      const index = await buildIndex([
+        { ...episode("ep-1", "157667", 1, 1), grandparentRatingKey: "99999" },
+      ]);
+
+      expect(
+        resolveMediaItemId(
+          index,
+          record({
+            media_type: "episode",
+            rating_key: "157667",
+            grandparent_rating_key: "58337",
+            season_number: 1,
+            episode_number: 1,
+          }),
+        ),
+      ).toEqual({ skipped: "ambiguous" });
+    });
+
+    it("accepts when either side has no show rating key", async () => {
+      const index = await buildIndex([
+        { ...episode("ep-1", "157667", 1, 1), grandparentRatingKey: null },
+      ]);
+
+      expect(
+        resolveMediaItemId(
+          index,
+          record({
+            media_type: "episode",
+            rating_key: "157667",
+            grandparent_rating_key: "58337",
+            season_number: 1,
+            episode_number: 1,
+          }),
+        ),
+      ).toEqual({ mediaItemId: "ep-1" });
     });
   });
 
