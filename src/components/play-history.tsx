@@ -71,6 +71,8 @@ interface WatchHistoryRow {
   mediaItem: {
     id: string;
     title: string;
+    /** Drives whether the row links out — only an episode has a page to go to. */
+    type: string;
     parentTitle: string | null;
     seasonNumber: number | null;
     episodeNumber: number | null;
@@ -83,7 +85,16 @@ interface WatchHistoryResponse {
   pagination: { page: number; limit: number; hasMore: boolean; totalCount: number };
 }
 
-interface SeriesWatchHistoryProps {
+interface PlayHistoryProps {
+  /**
+   * Scope to ONE media item — a movie, a track, or any single row. Takes
+   * precedence over the series props below and switches the fetch to
+   * `/api/media/[id]/plays`.
+   *
+   * Series pages scope by series identity instead, because a show's history is
+   * the union of its episodes' plays across every server holding it.
+   */
+  mediaItemId?: string | null;
   /**
    * Series identity (see src/lib/media/series-key.ts) — the preferred way to
    * scope the history, so two same-titled shows don't blend. Falls back to
@@ -107,6 +118,12 @@ interface SeriesWatchHistoryProps {
    * already on.
    */
   currentEpisode?: boolean;
+  /**
+   * The item whose page this is, when scoping by `mediaItemId`. Every row is
+   * then that same item, so naming it on each play would just repeat the page
+   * heading — the row leads with the user instead.
+   */
+  singleItem?: boolean;
   /** Bump to refetch — e.g. on a `sync:completed` realtime event. */
   refreshKey?: number;
   /**
@@ -647,21 +664,29 @@ interface PlayRowProps {
   row: WatchHistoryRow;
   /** Render the episode as plain text instead of a self-link (see the prop). */
   currentEpisode: boolean;
+  /** Every row is the item whose page this is — omit the title line entirely. */
+  singleItem: boolean;
   /** Only worth naming the server when the plays actually span more than one. */
   multiServer: boolean;
   card: boolean;
 }
 
-function PlayRow({ row, currentEpisode, multiServer, card }: PlayRowProps) {
+function PlayRow({ row, currentEpisode, singleItem, multiServer, card }: PlayRowProps) {
   const label = episodeLabel(row);
   const device = row.deviceName || row.platform;
+  // Only an episode has somewhere else to go. A movie's or track's own page is
+  // where this list already lives, and `/library/series/episode/<id>` would be
+  // a 404 for either — the link has to follow the row's type, not the caller's.
+  const isEpisode = row.mediaItem.type === "SERIES";
 
-  const episode = (
+  // Scoped to one item: every row names the same thing, so the title would just
+  // repeat the page heading on every line. The user leads instead.
+  const episode = singleItem ? null : (
     <div className={card ? "mb-1 flex min-w-0 items-center gap-2" : "flex min-w-0 items-center gap-2 sm:flex-1"}>
       {label && (
         <ColorChip className="border-border font-mono text-muted-foreground">{label}</ColorChip>
       )}
-      {currentEpisode ? (
+      {currentEpisode || !isEpisode ? (
         <span className="truncate font-medium" title={row.mediaItem.title}>
           {row.mediaItem.title}
         </span>
@@ -757,7 +782,8 @@ function PlayRow({ row, currentEpisode, multiServer, card }: PlayRowProps) {
  * swaps that card for this component (`variant="card"`) instead of showing
  * both.
  */
-export function SeriesWatchHistory({
+export function PlayHistory({
+  mediaItemId,
   seriesKey,
   parentTitle,
   seasonNumber,
@@ -765,9 +791,10 @@ export function SeriesWatchHistory({
   serverId,
   heading = "Watch History",
   currentEpisode = false,
+  singleItem = false,
   refreshKey = 0,
   variant = "section",
-}: SeriesWatchHistoryProps) {
+}: PlayHistoryProps) {
   const [rows, setRows] = useState<WatchHistoryRow[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -785,13 +812,22 @@ export function SeriesWatchHistory({
           page: String(page),
           limit: String(PAGE_SIZE),
         });
-        if (seriesKey) params.set("seriesKey", seriesKey);
-        else if (parentTitle) params.set("parentTitle", parentTitle);
-        if (seasonNumber != null) params.set("seasonNumber", String(seasonNumber));
-        if (episodeNumber != null) params.set("episodeNumber", String(episodeNumber));
         if (serverId) params.set("serverId", serverId);
 
-        const res = await fetch(`/api/media/series/watch-history?${params}`);
+        // Two scopes, two endpoints. An item id is the narrower and more
+        // certain of the two, so it wins when both are somehow supplied.
+        let url: string;
+        if (mediaItemId) {
+          url = `/api/media/${mediaItemId}/plays?${params}`;
+        } else {
+          if (seriesKey) params.set("seriesKey", seriesKey);
+          else if (parentTitle) params.set("parentTitle", parentTitle);
+          if (seasonNumber != null) params.set("seasonNumber", String(seasonNumber));
+          if (episodeNumber != null) params.set("episodeNumber", String(episodeNumber));
+          url = `/api/media/series/watch-history?${params}`;
+        }
+
+        const res = await fetch(url);
         if (!res.ok) throw new Error("Failed to load watch history");
         const data: WatchHistoryResponse = await res.json();
         if (token !== reqToken.current) return;
@@ -807,14 +843,14 @@ export function SeriesWatchHistory({
         setLoadingMore(false);
       }
     },
-    [seriesKey, parentTitle, seasonNumber, episodeNumber, serverId],
+    [mediaItemId, seriesKey, parentTitle, seasonNumber, episodeNumber, serverId],
   );
 
   // Reset to the loading state when the scope changes, so a new series/season
   // never shows the previous one's plays while its own request is in flight.
   // (set-state-during-render is React 19's idiom for "reset state on prop change" —
   // https://react.dev/learn/you-might-not-need-an-effect#adjusting-state-when-a-prop-changes)
-  const scopeKey = `${seriesKey ?? parentTitle ?? ""}|${seasonNumber ?? ""}|${episodeNumber ?? ""}|${serverId ?? ""}`;
+  const scopeKey = `${mediaItemId ?? ""}|${seriesKey ?? parentTitle ?? ""}|${seasonNumber ?? ""}|${episodeNumber ?? ""}|${serverId ?? ""}`;
   const [prevScopeKey, setPrevScopeKey] = useState(scopeKey);
   if (prevScopeKey !== scopeKey) {
     setPrevScopeKey(scopeKey);
@@ -872,7 +908,14 @@ export function SeriesWatchHistory({
     <>
       <ul className={card ? "space-y-2" : "space-y-1.5"}>
         {rows.map((row) => (
-          <PlayRow key={row.id} row={row} currentEpisode={currentEpisode} multiServer={multiServer} card={card} />
+          <PlayRow
+            key={row.id}
+            row={row}
+            currentEpisode={currentEpisode}
+            singleItem={singleItem}
+            multiServer={multiServer}
+            card={card}
+          />
         ))}
       </ul>
 

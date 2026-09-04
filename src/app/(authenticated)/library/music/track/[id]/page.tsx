@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { MediaDetailContent } from "@/components/media-detail-content";
+import { PlayHistory } from "@/components/play-history";
 import { ColorChip } from "@/components/color-chip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize, formatDuration } from "@/lib/format";
@@ -104,7 +105,14 @@ export default function TrackDetailPage() {
       posterAspectRatio="1/1"
       playServers={playServers}
     >
-      <MediaDetailContent item={item} hideVideo />
+      <MediaDetailContent item={item} hideVideo 
+        // The per-play list *is* this track's Listen History card. It replaces the
+        // per-user aggregate card, which reads the same plays live from the
+        // server but without their timestamps, device, or any of the
+        // completion/transcode detail a Tracearr-sourced row carries — so the
+        // page shows the richer view rather than the same data twice.
+        historySection={<PlayHistory variant="card" mediaItemId={item.id} singleItem />}
+      />
     </MediaDetailHero>
   );
 }

@@ -1,16 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import type { Prisma } from "@/generated/prisma/client";
-
-/** Page size bounds — mirrors /api/media/history so the two behave alike. */
-const DEFAULT_LIMIT = 50;
-const MAX_LIMIT = 200;
+import { fetchPlayHistory, parsePlayHistoryPaging } from "@/lib/media/play-history";
 
 /**
  * Per-play watch history scoped to one series (and optionally one season or a
  * single episode), for the watch-history section on the series/season/episode
  * detail pages.
+ *
+ * This route owns only the SCOPE RESOLUTION — which episodes belong to the
+ * series being asked about. The row shape, ordering, paging and ownership
+ * guard live in `src/lib/media/play-history.ts`, shared with the item-scoped
+ * route that backs movies and tracks, so the two cannot drift into showing
+ * different detail for the same underlying rows.
  *
  * Reads the stored `WatchHistory` table rather than the live server, because
  * this view needs the individual play events (who / when / which episode).
@@ -23,22 +25,6 @@ const MAX_LIMIT = 200;
  * Jellyfin/Emby's per-user `/Users/{id}/Items`), and nothing here filters on
  * `serverUsername` — `session.userId` is the Librariarr admin who owns the
  * server record, not a media-server account.
- *
- * A row's `source` says where it came from: `NATIVE` (the media-server scan,
- * which knows only who/when/what) or `TRACEARR` (an imported play event, which
- * additionally carries completion, transcode decisions and the full stream
- * fidelity). Every Tracearr column is nullable and null on a native row, so
- * this route returns them unconditionally and the card renders each only when
- * present. A `watched: false` row is returned like any other — this is display
- * data, and a partial play is a real play; only the watch-state reconcile
- * (`src/lib/sync/watch-reconcile.ts`) cares about the completion threshold.
- *
- * Dedup is deliberately NOT applied. A `WatchHistory` row is a real play event
- * recorded against the copy that was actually played; filtering to
- * `dedupCanonical` would silently drop every play that happened on a
- * non-canonical server. `/api/media/history` scopes the same way — by owner,
- * with an optional explicit `serverId` — and each row carries its server so a
- * multi-server library stays legible.
  */
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -55,12 +41,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "seriesKey or parentTitle is required" }, { status: 400 });
   }
 
-  const serverId = searchParams.get("serverId");
-  const page = Math.max(1, parseInt(searchParams.get("page") ?? "1") || 1);
-  const rawLimit = parseInt(searchParams.get("limit") ?? String(DEFAULT_LIMIT));
-  // Floor at 1 and cap at MAX_LIMIT — a negative/zero limit produced LIMIT 0 or
-  // a negative OFFSET (Postgres rejects a negative OFFSET → 500).
-  const limit = Math.max(1, Math.min(Number.isNaN(rawLimit) ? DEFAULT_LIMIT : rawLimit, MAX_LIMIT));
+  const { page, limit, serverId } = parsePlayHistoryPaging(searchParams);
 
   // A season/episode number of 0 is real (Specials, and some servers number a
   // pilot as episode 0), so parse explicitly rather than leaning on falsiness.
@@ -103,131 +84,13 @@ export async function GET(request: NextRequest) {
       AND (${episodeNumber}::int IS NULL OR mi."episodeNumber" = ${episodeNumber}::int)
   `;
 
-  if (scopedItems.length === 0) {
-    return NextResponse.json({
-      items: [],
-      pagination: { page, limit, hasMore: false, totalCount: 0 },
-    });
-  }
-
-  const where: Prisma.WatchHistoryWhereInput = {
-    mediaItemId: { in: scopedItems.map((i) => i.id) },
-    // Ownership guard: only history recorded on this user's servers.
-    mediaServer: { userId: session.userId!, ...(serverId ? { id: serverId } : {}) },
-  };
-
-  const [rows, totalCount] = await Promise.all([
-    prisma.watchHistory.findMany({
-      where,
-      // Newest play first. A unique tiebreaker after the user-visible sort keeps
-      // the order total, so paging can't duplicate or drop rows in a tie block.
-      orderBy: [{ watchedAt: { sort: "desc", nulls: "last" } }, { id: "asc" }],
-      take: limit + 1,
-      skip: (page - 1) * limit,
-      select: {
-        id: true,
-        serverUsername: true,
-        watchedAt: true,
-        deviceName: true,
-        platform: true,
-        // Provenance + the rich per-play detail a Tracearr-sourced row carries.
-        // Every one of these is nullable, and all of them are null on a NATIVE
-        // row (a media-server scan only knows who/when/what), so the card
-        // renders each only when present rather than as empty placeholders.
-        source: true,
-        sourceEventId: true,
-        referenceId: true,
-        watched: true,
-        percentComplete: true,
-        state: true,
-        progressMs: true,
-        durationMs: true,
-        totalDurationMs: true,
-        segmentCount: true,
-        stoppedAt: true,
-        player: true,
-        product: true,
-        isTranscode: true,
-        videoDecision: true,
-        audioDecision: true,
-        bitrate: true,
-        resolution: true,
-        sourceVideoCodec: true,
-        sourceAudioCodec: true,
-        streamVideoCodec: true,
-        streamAudioCodec: true,
-        transcodeInfo: true,
-        subtitleInfo: true,
-        streamQuality: true,
-        mediaItem: {
-          select: {
-            id: true,
-            title: true,
-            parentTitle: true,
-            seasonNumber: true,
-            episodeNumber: true,
-          },
-        },
-        mediaServer: { select: { id: true, name: true, type: true } },
-      },
+  return NextResponse.json(
+    await fetchPlayHistory({
+      userId: session.userId!,
+      mediaItemIds: scopedItems.map((i) => i.id),
+      serverId,
+      page,
+      limit,
     }),
-    prisma.watchHistory.count({ where }),
-  ]);
-
-  const hasMore = rows.length > limit;
-  if (hasMore) rows.pop();
-
-  const items = rows.map((row) => ({
-    id: row.id,
-    serverUsername: row.serverUsername,
-    watchedAt: row.watchedAt?.toISOString() ?? null,
-    deviceName: row.deviceName,
-    platform: row.platform,
-    source: row.source,
-    sourceEventId: row.sourceEventId,
-    referenceId: row.referenceId,
-    watched: row.watched,
-    percentComplete: row.percentComplete,
-    state: row.state,
-    progressMs: row.progressMs,
-    durationMs: row.durationMs,
-    totalDurationMs: row.totalDurationMs,
-    segmentCount: row.segmentCount,
-    stoppedAt: row.stoppedAt?.toISOString() ?? null,
-    player: row.player,
-    product: row.product,
-    isTranscode: row.isTranscode,
-    videoDecision: row.videoDecision,
-    audioDecision: row.audioDecision,
-    bitrate: row.bitrate,
-    resolution: row.resolution,
-    sourceVideoCodec: row.sourceVideoCodec,
-    sourceAudioCodec: row.sourceAudioCodec,
-    streamVideoCodec: row.streamVideoCodec,
-    streamAudioCodec: row.streamAudioCodec,
-    // Passed through verbatim. These are `Prisma.JsonValue`s — Tracearr's own
-    // nested objects, stored as-is so the UI gets the full stream fidelity
-    // without a scalar column per field. The card reads them structurally;
-    // nothing here reshapes or validates them.
-    transcodeInfo: row.transcodeInfo,
-    subtitleInfo: row.subtitleInfo,
-    streamQuality: row.streamQuality,
-    mediaItem: {
-      id: row.mediaItem.id,
-      title: row.mediaItem.title,
-      parentTitle: row.mediaItem.parentTitle,
-      seasonNumber: row.mediaItem.seasonNumber,
-      episodeNumber: row.mediaItem.episodeNumber,
-    },
-    server: {
-      id: row.mediaServer.id,
-      name: row.mediaServer.name,
-      type: row.mediaServer.type,
-    },
-  }));
-
-  return NextResponse.json({
-    items,
-    pagination: { page, limit, hasMore, totalCount },
-  });
+  );
 }
