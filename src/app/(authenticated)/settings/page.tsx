@@ -565,6 +565,55 @@ export default function SettingsPage() {
     }
   }, []);
 
+  // Blank string = no ceiling, which is the default. `savedDeleteCeiling`
+  // mirrors what is persisted so the Save button can tell "unchanged" from
+  // "cleared", which a number-or-null pair could not express on its own.
+  const [deleteCeilingInput, setDeleteCeilingInput] = useState("");
+  const [savedDeleteCeiling, setSavedDeleteCeiling] = useState("");
+  const [savingDeleteCeiling, setSavingDeleteCeiling] = useState(false);
+
+  const fetchDeleteCeiling = useCallback(async () => {
+    try {
+      const response = await fetch("/api/settings/delete-ceiling");
+      const data = await response.json();
+      const value = data.maxAutoDeleteItems == null ? "" : String(data.maxAutoDeleteItems);
+      setDeleteCeilingInput(value);
+      setSavedDeleteCeiling(value);
+    } catch (error) {
+      console.error("Failed to fetch delete ceiling:", error);
+    }
+  }, []);
+
+  const saveDeleteCeiling = async () => {
+    const trimmed = deleteCeilingInput.trim();
+    // An empty field is the meaningful "no limit" value, not a validation
+    // failure — sending null is how the ceiling gets cleared.
+    const value = trimmed === "" ? null : parseInt(trimmed);
+    if (value !== null && (isNaN(value) || value < 1)) {
+      toast.error("Enter a number of at least 1, or leave it empty for no limit");
+      return;
+    }
+    setSavingDeleteCeiling(true);
+    try {
+      const response = await fetch("/api/settings/delete-ceiling", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxAutoDeleteItems: value }),
+      });
+      if (response.ok) {
+        setSavedDeleteCeiling(value === null ? "" : String(value));
+        setDeleteCeilingInput(value === null ? "" : String(value));
+        toast.success(value === null ? "Deletion limit removed" : "Deletion limit saved");
+      } else {
+        toast.error("Failed to save deletion limit");
+      }
+    } catch {
+      toast.error("Failed to save deletion limit");
+    } finally {
+      setSavingDeleteCeiling(false);
+    }
+  };
+
   const fetchActionRetention = useCallback(async () => {
     try {
       const response = await fetch("/api/settings/action-retention");
@@ -697,6 +746,7 @@ export default function SettingsPage() {
         fetchChipColors(),
         fetchLogRetention(),
         fetchActionRetention(),
+        fetchDeleteCeiling(),
         fetchBackupSettings(),
         fetchLifecycleSchedule(),
         fetchScheduleInfo(),
@@ -2353,6 +2403,11 @@ export default function SettingsPage() {
             savingActionRetention={savingActionRetention}
             onActionRetentionInputChange={setActionRetentionInput}
             onSaveActionRetention={saveActionRetention}
+          deleteCeilingInput={deleteCeilingInput}
+          savedDeleteCeiling={savedDeleteCeiling}
+          savingDeleteCeiling={savingDeleteCeiling}
+          onDeleteCeilingInputChange={setDeleteCeilingInput}
+          onSaveDeleteCeiling={saveDeleteCeiling}
             backupSchedule={backupSchedule}
             backupRetentionCount={backupRetentionCount}
             backups={backups}

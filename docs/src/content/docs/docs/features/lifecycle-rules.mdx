@@ -36,6 +36,39 @@ Negation is part of the operator choice: alongside each comparison the picker of
 
 **Whole groups can be negated too.** Every group has a **NOT** toggle that inverts its entire result — for example `NOT (watched by Alice OR watched by Bob)` matches items watched by neither. The Logic Preview shows the negation in place, and items the group would have matched are excluded instead. (Stream query groups negate through their ANY/NO quantifier rather than a NOT toggle.)
 
+## Limiting how much one run can delete
+
+By default there is no limit. Librariarr is built to run unattended, and if your rules
+legitimately select thousands of items, it deletes thousands of items — that is the point
+of the tool, not a bug to guard against.
+
+You can opt into a ceiling under **Settings → General → Delete without asking, up to N
+items per run**. A run that would delete more than N is **held**: nothing is deleted, the
+actions stay on the [Pending](/docs/features/lifecycle-rules/) page, and you execute them
+from there once you have looked at them. That review step is the approval — there is no
+separate queue to manage.
+
+What it is for is worth being precise about. It is **not** a safety net for a rule you
+wrote wrong; a rule that selects 40 items you did not mean will happily delete 40 items
+under a limit of 50. It bounds the other case — where something *upstream* of the rule is
+wrong and the match set is far larger than anything you intended. Librariarr already
+refuses to evaluate rules whose evidence is missing (unavailable Arr metadata, unestablished
+play history), but those guards each cover a hazard someone found. A ceiling covers the
+ones nobody has found yet.
+
+Details worth knowing:
+
+- **Deletions only.** Unmonitor, tag and search actions never count toward it and are never held.
+- **Per run, across every rule set** — one number for the whole execution pass.
+- **All-or-nothing.** Exceeding the limit holds the entire batch rather than deleting up to
+  the limit. Acting on an arbitrary slice of a match set you already have reason to distrust
+  is not safer.
+- **It applies to manual bulk actions too** — "Execute All" on the Matches page and the Query
+  page's actions — not just scheduled runs.
+- If you have a [Discord webhook](/docs/features/notifications/) configured, a held run
+  notifies you, so it cannot fail silently.
+
+
 ## Available Fields
 
 Over 50 fields are available for rule conditions.
