@@ -2228,7 +2228,7 @@ describe("syncTracearrHistory", () => {
     //
     // Declaring completion there is worse than never completing: the mapping
     // change already wiped the server's native history, so clearing
-    // `watchHistoryClearedAt` hands the evaluability guard a clean bill of
+    // `watchHistorySyncedAt` hands the evaluability guard a clean bill of
     // health for an empty relation, and `watchedByUser` negatives go on to
     // match the entire library.
     it("does not mark the backfill complete when Tracearr returned no records at all", async () => {
@@ -2257,10 +2257,10 @@ describe("syncTracearrHistory", () => {
       ).resolves.toMatchObject({ backfillPending: false });
 
       const write = mockPrisma.mediaServer.updateMany.mock.calls.at(-1)?.[0];
-      expect(write.data).toMatchObject({
-        tracearrBackfillComplete: true,
-        watchHistoryClearedAt: null,
-      });
+      expect(write.data).toMatchObject({ tracearrBackfillComplete: true });
+      // Established in the SAME guarded statement as the completion flag, so
+      // one can never land without the other.
+      expect(write.data.watchHistorySyncedAt).toBeInstanceOf(Date);
     });
 
     it("completes normally once the server already holds rows from earlier slices", async () => {

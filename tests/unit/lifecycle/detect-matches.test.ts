@@ -45,6 +45,7 @@ const mockHasArrRules = vi.hoisted(() => vi.fn());
 const mockHasSeerrRules = vi.hoisted(() => vi.fn());
 const mockHasSeriesAggregateRules = vi.hoisted(() => vi.fn());
 const mockHasWatchedByUserRules = vi.hoisted(() => vi.fn());
+const mockHasPlayActivityRules = vi.hoisted(() => vi.fn());
 const mockGetMatchedCriteriaForItems = vi.hoisted(() => vi.fn());
 const mockGetActualValuesForAllRules = vi.hoisted(() => vi.fn());
 const mockFetchArrMetadata = vi.hoisted(() => vi.fn());
@@ -68,6 +69,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   hasSeerrRules: mockHasSeerrRules,
   hasSeriesAggregateRules: mockHasSeriesAggregateRules,
   hasWatchedByUserRules: mockHasWatchedByUserRules,
+  hasPlayActivityRules: mockHasPlayActivityRules,
   getMatchedCriteriaForItems: mockGetMatchedCriteriaForItems,
   getActualValuesForAllRules: mockGetActualValuesForAllRules,
 }));
@@ -631,7 +633,8 @@ describe("runDetection", () => {
     // for the same rule set — one unrelated server part-way through its
     // Tracearr import made manual re-evaluation refuse rule sets the scheduler
     // was happily running, with nothing in the UI to explain why.
-    mockHasWatchedByUserRules.mockReturnValue(true);
+    // The guard triggers on ANY play-activity field now, not just watchedByUser.
+    mockHasPlayActivityRules.mockReturnValue(true);
     mockPrisma.mediaServer.count.mockResolvedValue(0);
     mockPrisma.ruleSet.findMany.mockResolvedValue([
       {

@@ -869,13 +869,12 @@ describe("syncWatchHistory", () => {
     });
   });
 
-  describe("releasing the history-cleared marker", () => {
-    // `MediaServer.watchHistoryClearedAt` is set by the `/api/servers/[id]` PUT
-    // when a source switch wipes a server's rows, and read by
-    // `checkWatchHistoryCompleteness` to pause `watchedByUser` rules while the
-    // relation is empty. Nothing else in the system ever clears it for a native
-    // server, so every successful full replace has to — a guard that never
-    // releases is its own outage.
+  describe("establishing the watch-history marker", () => {
+    // `MediaServer.watchHistorySyncedAt` records that a sync established what
+    // was played on a server; `checkWatchHistoryCompleteness` reads it to pause
+    // every play-activity criterion while it is null. Nothing else sets it for
+    // a native server, so every successful full replace has to — a guard that
+    // never releases is its own outage.
     function serverRow() {
       return [{
         id: "server-1",
@@ -888,14 +887,15 @@ describe("syncWatchHistory", () => {
       }];
     }
 
-    function clearCalls() {
+    function establishCalls() {
       return mockPrisma.mediaServer.updateMany.mock.calls.filter(
-        (args) => (args[0] as { data?: Record<string, unknown> }).data
-          ?.watchHistoryClearedAt === null,
+        (args) =>
+          (args[0] as { data?: Record<string, unknown> }).data
+            ?.watchHistorySyncedAt instanceof Date,
       );
     }
 
-    it("releases it after a normal full replace", async () => {
+    it("sets it after a normal full replace", async () => {
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce(serverRow());
       mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
         { ratingKey: "100", username: "Admin", watchedAt: "2024-01-01T00:00:00Z", deviceName: null, platform: null },
@@ -904,16 +904,15 @@ describe("syncWatchHistory", () => {
 
       await syncWatchHistory("server-1");
 
-      expect(clearCalls()).toHaveLength(1);
+      expect(establishCalls()).toHaveLength(1);
     });
 
-    it("releases it when the server legitimately reports no plays at all", async () => {
-      // The hole. A server switched Tracearr → native whose native history is
-      // genuinely empty — a fresh Plex, or Jellyfin degrading to a per-user
-      // response — took an early return that deleted the rows and left the
-      // marker standing with nothing in the system able to clear it. Every
-      // `watchedByUser` rule set scoped to that server then stayed paused
-      // forever, silently.
+    it("sets it when the server legitimately reports no plays at all", async () => {
+      // The hole, and the reason "a server nobody watches" has to settle: a
+      // genuinely empty native history — a fresh Plex, or Jellyfin degrading to
+      // a per-user response — took an early return that deleted the rows and
+      // never marked the history established. Every play-activity rule set
+      // scoped to that server then stayed paused forever, silently.
       //
       // This IS a successful full replace: the fetch throws on a hard failure,
       // so reaching here means the server's answer is "no plays", which is a
@@ -923,16 +922,16 @@ describe("syncWatchHistory", () => {
 
       await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 0 });
 
-      expect(clearCalls()).toHaveLength(1);
+      expect(establishCalls()).toHaveLength(1);
     });
 
-    it("leaves it set when the fetch failed, because the history is still unrepresentative", async () => {
+    it("leaves it unset when the fetch failed, because the history is still unknown", async () => {
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce(serverRow());
       mockClient.getDetailedWatchHistory.mockRejectedValueOnce(new Error("plex down"));
 
       await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 0 });
 
-      expect(clearCalls()).toHaveLength(0);
+      expect(establishCalls()).toHaveLength(0);
     });
   });
 

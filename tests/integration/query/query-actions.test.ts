@@ -913,7 +913,7 @@ describe("POST /api/query/actions", () => {
       });
 
       const body = await expectJson<{ error: string }>(response, 400);
-      expect(body.error).toMatch(/Watched By User/i);
+      expect(body.error).toMatch(/play-activity/i);
       // The query must not even run: executing it would produce the vacuous
       // whole-library match set this guard exists to keep out of an action.
       expect(mockedExecuteQuery).not.toHaveBeenCalled();
@@ -923,12 +923,13 @@ describe("POST /api/query/actions", () => {
     it("returns 400 after an unlink, when the mapping is gone but the rows are too", async () => {
       // The direction a `tracearrServerId != null` check misses: unlinking nulls
       // that column AND wipes the rows, so the server is at its emptiest exactly
-      // when it stops looking Tracearr-mapped.
+      // when it stops looking Tracearr-mapped. Caught by the positive marker
+      // instead — the wipe withdrew it, so the history is not established.
       const user = await createTestUser();
       setMockSession({ isLoggedIn: true, userId: user.id });
       const server = await createTestServer(user.id, {
         tracearrServerId: null,
-        watchHistoryClearedAt: new Date(),
+        watchHistorySyncedAt: null,
       });
       const radarr = await createTestRadarrInstance(user.id);
 

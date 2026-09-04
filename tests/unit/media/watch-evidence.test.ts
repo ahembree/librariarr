@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 /**
- * The write half of `MediaServer.watchHistoryClearedAt`.
+ * The write half of `MediaServer.watchHistorySyncedAt`.
  *
  * The marker is what pauses `watchedByUser` rules while a server's plays are
  * gone, so the invariants that matter are: it never slides an existing
@@ -19,41 +19,40 @@ vi.mock("@/lib/db", () => ({
 }));
 
 import {
-  markWatchHistoryCleared,
-  markServersWithoutWatchHistory,
+  invalidateWatchHistoryEvidence,
+  invalidateServersWithoutWatchHistory,
 } from "@/lib/media/watch-evidence";
 
-describe("markWatchHistoryCleared", () => {
+describe("invalidateWatchHistoryEvidence", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     m.updateMany.mockResolvedValue({ count: 0 });
     m.findMany.mockResolvedValue([]);
   });
 
-  it("marks only servers that are not already marked", async () => {
+  it("withdraws the marker only from servers that currently claim one", async () => {
     m.updateMany.mockResolvedValue({ count: 2 });
 
-    await markWatchHistoryCleared(["s1", "s2"]);
+    await invalidateWatchHistoryEvidence(["s1", "s2"]);
 
     const arg = m.updateMany.mock.calls[0][0];
     expect(arg.where).toMatchObject({
       id: { in: ["s1", "s2"] },
-      // Without this the timestamp would slide forward on every bulk
-      // operation, so a server marked days ago would look freshly cleared.
-      watchHistoryClearedAt: null,
+      // Only servers that currently claim established history need withdrawing.
+      watchHistorySyncedAt: { not: null },
     });
-    expect(arg.data.watchHistoryClearedAt).toBeInstanceOf(Date);
+    expect(arg.data.watchHistorySyncedAt).toBeNull();
   });
 
   it("issues no UPDATE at all for an empty list", async () => {
     // An unscoped `updateMany` here would mark EVERY server on the install and
     // pause every watchedByUser rule set at once.
-    await expect(markWatchHistoryCleared([])).resolves.toBe(0);
+    await expect(invalidateWatchHistoryEvidence([])).resolves.toBe(0);
     expect(m.updateMany).not.toHaveBeenCalled();
   });
 });
 
-describe("markServersWithoutWatchHistory", () => {
+describe("invalidateServersWithoutWatchHistory", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     m.updateMany.mockResolvedValue({ count: 0 });
@@ -65,18 +64,18 @@ describe("markServersWithoutWatchHistory", () => {
     m.findMany.mockResolvedValue([{ id: "s1" }]);
     m.updateMany.mockResolvedValue({ count: 1 });
 
-    await expect(markServersWithoutWatchHistory()).resolves.toBe(1);
+    await expect(invalidateServersWithoutWatchHistory()).resolves.toBe(1);
 
     expect(m.findMany.mock.calls[0][0].where).toMatchObject({
-      watchHistoryClearedAt: null,
+      watchHistorySyncedAt: { not: null },
       watchHistory: { none: {} },
     });
   });
 
-  it("marks nothing when every server still holds plays", async () => {
+  it("withdraws nothing when every server still holds plays", async () => {
     m.findMany.mockResolvedValue([]);
 
-    await expect(markServersWithoutWatchHistory()).resolves.toBe(0);
+    await expect(invalidateServersWithoutWatchHistory()).resolves.toBe(0);
     expect(m.updateMany).not.toHaveBeenCalled();
   });
 });

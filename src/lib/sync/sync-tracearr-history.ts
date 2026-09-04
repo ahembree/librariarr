@@ -964,7 +964,7 @@ export async function syncTracearrHistory(
     // a `tracearrServerId` this instance doesn't monitor (`resolveInstanceForServer`
     // short-circuits on a single enabled instance without probing), or a
     // freshly-installed Tracearr with no retained history. Writing completion
-    // there would clear `watchHistoryClearedAt` on a server whose native history
+    // there would mark history established on a server whose native history
     // the mapping change had already wiped, handing the evaluability guard a
     // clean bill of health for an empty relation — `watchedByUser` negatives
     // then match the entire library, which is the precise failure both flags
@@ -993,11 +993,11 @@ export async function syncTracearrHistory(
         ...(finished
           ? {
               tracearrBackfillComplete: true,
-              // Evidenced again: the archive has been walked to its oldest
-              // play, so `watchedByUser` can be answered faithfully. Written
-              // with the completion flag — same guarded statement, so it can
-              // never be missed or land without it.
-              watchHistoryClearedAt: null,
+              // Established: the archive has been walked to its oldest play, so
+              // play-activity criteria can be answered faithfully again.
+              // Written with the completion flag in the SAME guarded statement,
+              // so it can never be missed or land without it.
+              watchHistorySyncedAt: new Date(),
             }
           : {}),
       });
@@ -1321,7 +1321,7 @@ async function persistMappedState(
   serverName: string,
   data: {
     tracearrOldestPlayAt?: Date;
-    watchHistoryClearedAt?: Date | null;
+    watchHistorySyncedAt?: Date | null;
     tracearrBackfillCursorAt?: Date | null;
     tracearrBackfillComplete?: boolean;
   },

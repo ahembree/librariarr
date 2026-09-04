@@ -8,7 +8,7 @@ import { validateRequest, serverEditSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { eventBus } from "@/lib/events/event-bus";
-import { markWatchHistoryCleared } from "@/lib/media/watch-evidence";
+import { invalidateWatchHistoryEvidence } from "@/lib/media/watch-evidence";
 
 export async function PUT(
   request: NextRequest,
@@ -111,7 +111,7 @@ export async function PUT(
     // both directions: unlinking sets `tracearrServerId` to null, so the
     // Tracearr-specific flags stop describing the server precisely when its
     // history is emptiest.
-    await markWatchHistoryCleared([server.id]);
+    await invalidateWatchHistoryEvidence([server.id]);
 
     // Every watch-history-derived cache (`watch-history-filters:` among them)
     // now describes rows that no longer exist.
@@ -156,7 +156,7 @@ export async function PUT(
       // disable, so it will be re-enabled and re-synced later with an empty
       // history — mark it un-evidenced so `watchedByUser` rules do not read
       // that emptiness as "nobody watched anything".
-      await markWatchHistoryCleared([server.id]);
+      await invalidateWatchHistoryEvidence([server.id]);
     }
 
     apiLogger.info(

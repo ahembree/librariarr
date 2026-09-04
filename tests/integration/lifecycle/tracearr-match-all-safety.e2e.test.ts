@@ -63,8 +63,11 @@ const { checkLifecycleRuleEvaluability, checkWatchHistoryCompleteness } =
   await import("@/lib/lifecycle/evaluability");
 const { evaluateLifecycleRules } = await import("@/lib/rules/lifecycle-engine");
 const { reconcileWatchStateFromHistory } = await import("@/lib/sync/watch-reconcile");
-const { markWatchHistoryCleared, markServersWithoutWatchHistory } =
-  await import("@/lib/media/watch-evidence");
+const {
+  invalidateWatchHistoryEvidence,
+  invalidateServersWithoutWatchHistory,
+  markWatchHistoryEstablished,
+} = await import("@/lib/media/watch-evidence");
 
 const LIBRARY_SIZE = 6;
 
@@ -96,6 +99,11 @@ async function seedWatchedLibrary(): Promise<Fixture> {
       machineId: `audit-${Math.random().toString(36).slice(2)}`,
       tracearrServerId: "trc-server",
       tracearrBackfillComplete: true,
+      // Established: a sync has determined what was played here. Without this
+      // the server starts in the schema's own default — never synced — and the
+      // guard would refuse every rule below for the right reason but the wrong
+      // one, hiding whatever the test meant to assert.
+      watchHistorySyncedAt: new Date(),
     },
   });
   const library = await prisma.library.create({
@@ -141,7 +149,7 @@ async function switchWatchHistorySource(
       tracearrBackfillComplete: false,
       tracearrOldestPlayAt: null,
       tracearrBackfillCursorAt: null,
-      watchHistoryClearedAt: new Date(),
+      watchHistorySyncedAt: null,
     },
   });
 }
@@ -198,7 +206,7 @@ describe("Tracearr criteria cannot select the whole library", () => {
           await prisma.watchHistory.deleteMany({ where: { mediaServerId: fx.serverId } });
           await prisma.mediaServer.update({
             where: { id: fx.serverId },
-            data: { tracearrBackfillComplete: false, watchHistoryClearedAt: null },
+            data: { tracearrBackfillComplete: false, watchHistorySyncedAt: new Date() },
           });
           // One recent play landed; everything older is still un-walked.
           await prisma.watchHistory.create({
@@ -221,8 +229,10 @@ describe("Tracearr criteria cannot select the whole library", () => {
           await prisma.watchHistory.deleteMany({ where: { mediaServerId: fx.serverId } });
           await prisma.mediaServer.update({
             where: { id: fx.serverId },
-            // The contradiction: the flag says done, the table says nothing.
-            data: { tracearrBackfillComplete: true, watchHistoryClearedAt: null },
+            // The flag says done and a sync did once establish history — but
+            // the rows are gone, so the evidence the flag vouches for is not
+            // there. Caught by the restore/purge paths withdrawing the marker.
+            data: { tracearrBackfillComplete: true, watchHistorySyncedAt: null },
           });
         },
       },
@@ -272,7 +282,7 @@ describe("Tracearr criteria cannot select the whole library", () => {
 
           expect(verdict.evaluable).toBe(false);
           if (verdict.evaluable) throw new Error("expected a refusal");
-          expect(verdict.reason).toMatch(/watch history/i);
+          expect(verdict.reason).toMatch(/play history/i);
           // Transient: it lifts by itself when the import finishes, so callers
           // skip the rule set rather than disarming it.
           expect(verdict.permanent).toBe(false);
@@ -321,6 +331,7 @@ describe("Tracearr criteria cannot select the whole library", () => {
           url: "http://other:32400",
           accessToken: "x",
           machineId: "audit-healthy",
+          watchHistorySyncedAt: new Date(),
         },
       });
 
@@ -488,7 +499,7 @@ describe("Tracearr criteria cannot select the whole library", () => {
       const prisma = getTestPrisma();
 
       await prisma.mediaItem.deleteMany({ where: { libraryId: fx.libraryId } });
-      await markWatchHistoryCleared([fx.serverId]);
+      await invalidateWatchHistoryEvidence([fx.serverId]);
 
       await expect(
         checkWatchHistoryCompleteness(fx.userId, [fx.serverId]),
@@ -504,7 +515,7 @@ describe("Tracearr criteria cannot select the whole library", () => {
 
       await prisma.watchHistory.deleteMany({});
       await prisma.mediaItem.deleteMany({});
-      await markServersWithoutWatchHistory();
+      await invalidateServersWithoutWatchHistory();
 
       await expect(
         checkWatchHistoryCompleteness(fx.userId, [fx.serverId]),
@@ -514,7 +525,7 @@ describe("Tracearr criteria cannot select the whole library", () => {
     it("leaves a server that still holds plays alone", async () => {
       const fx = await seedWatchedLibrary();
 
-      await markServersWithoutWatchHistory();
+      await invalidateServersWithoutWatchHistory();
 
       await expect(
         checkWatchHistoryCompleteness(fx.userId, [fx.serverId]),
@@ -527,19 +538,114 @@ describe("Tracearr criteria cannot select the whole library", () => {
       const fx = await seedWatchedLibrary();
       const prisma = getTestPrisma();
 
-      await markWatchHistoryCleared([fx.serverId]);
+      await invalidateWatchHistoryEvidence([fx.serverId]);
       const first = await prisma.mediaServer.findUniqueOrThrow({
         where: { id: fx.serverId },
-        select: { watchHistoryClearedAt: true },
+        select: { watchHistorySyncedAt: true },
       });
 
-      await markWatchHistoryCleared([fx.serverId]);
+      await invalidateWatchHistoryEvidence([fx.serverId]);
       const second = await prisma.mediaServer.findUniqueOrThrow({
         where: { id: fx.serverId },
-        select: { watchHistoryClearedAt: true },
+        select: { watchHistorySyncedAt: true },
       });
 
-      expect(second.watchHistoryClearedAt).toEqual(first.watchHistoryClearedAt);
+      expect(second.watchHistorySyncedAt).toEqual(first.watchHistorySyncedAt);
+    });
+  });
+
+
+  // ── The broadened policy: play activity is only answerable where it exists ─
+  //
+  // watchedByUser was gated first because it reads the rows and goes vacuous
+  // the instant they are gone. But playCount and lastPlayedAt go vacuous the
+  // same way wherever the denormalized columns were never established — and
+  // unlike a source switch, which preserves them, nothing establishes them for
+  // a server that has never synced or whose items were recreated by a purge or
+  // a restore. Every field that reads play activity is therefore gated on the
+  // same question: do we actually know what was played here?
+  describe("every play-activity field is gated, not just watchedByUser", () => {
+    const playActivityRules: Array<{ label: string; rules: LifecycleRuleGroup[] }> = [
+      { label: "playCount", rules: group("playCount", "equals", 0) },
+      { label: "lastPlayedAt", rules: group("lastPlayedAt", "isNull", null) },
+      { label: "watchedByUser", rules: group("watchedByUser", "isNull", null) },
+      { label: "seriesLastPlayedAt", rules: group("seriesLastPlayedAt", "isNull", null) },
+      { label: "latestEpisodeViewDate", rules: group("latestEpisodeViewDate", "isNull", null) },
+      { label: "watchedEpisodeCount", rules: group("watchedEpisodeCount", "equals", 0) },
+      {
+        label: "watchedEpisodePercentage",
+        rules: group("watchedEpisodePercentage", "lessThan", 50),
+      },
+    ];
+
+    for (const field of playActivityRules) {
+      it(`refuses ${field.label} on a server that has never synced`, async () => {
+        // The state a "cleared at" marker could not express: nothing destroyed
+        // this history, it was simply never read. A null default has to mean
+        // "we don't know", or absence of evidence presents itself as evidence
+        // of absence.
+        const fx = await seedWatchedLibrary();
+        await getTestPrisma().mediaServer.update({
+          where: { id: fx.serverId },
+          data: { watchHistorySyncedAt: null },
+        });
+
+        const verdict = await checkLifecycleRuleEvaluability(
+          fx.userId,
+          field.label.startsWith("series") ||
+            field.label.startsWith("watchedEpisode") ||
+            field.label.startsWith("latest")
+            ? "SERIES"
+            : "MOVIE",
+          field.rules,
+          [fx.serverId],
+        );
+
+        expect(verdict.evaluable).toBe(false);
+        if (verdict.evaluable) throw new Error("expected a refusal");
+        expect(verdict.reason).toMatch(/play history/i);
+      });
+    }
+
+    it("allows them all once a sync has established the history", async () => {
+      // Including the case that must NOT stay paused: a server nobody has
+      // watched anything on is a real steady state. Its sync finds no plays,
+      // marks the history established, and `playCount = 0` then legitimately
+      // matches everything on it.
+      const fx = await seedWatchedLibrary();
+      await getTestPrisma().watchHistory.deleteMany({ where: { mediaServerId: fx.serverId } });
+      await markWatchHistoryEstablished([fx.serverId]);
+
+      for (const field of playActivityRules) {
+        const verdict = await checkLifecycleRuleEvaluability(
+          fx.userId,
+          "SERIES",
+          field.rules,
+          [fx.serverId],
+        );
+        expect(verdict, `${field.label} should be evaluable`).toEqual({ evaluable: true });
+      }
+    });
+
+    it("still ignores fields that do not read play activity", async () => {
+      // The gate must stay narrow. `addedAt` and `rating` come from the media
+      // server's own metadata and say nothing about plays, so an unsynced
+      // history is no reason to refuse them.
+      const fx = await seedWatchedLibrary();
+      await getTestPrisma().mediaServer.update({
+        where: { id: fx.serverId },
+        data: { watchHistorySyncedAt: null },
+      });
+
+      for (const rules of [
+        group("addedAt", "before", "2020-01-01"),
+        group("rating", "lessThan", 5),
+        group("title", "contains", "Movie"),
+      ]) {
+        await expect(
+          checkLifecycleRuleEvaluability(fx.userId, "MOVIE", rules, [fx.serverId]),
+        ).resolves.toEqual({ evaluable: true });
+      }
     });
   });
 

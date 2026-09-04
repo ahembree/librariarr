@@ -8,7 +8,7 @@ import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
 import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
 import { arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
-import { hasArrRules, hasSeerrRules, hasWatchedByUserRules } from "@/lib/conditions/helpers";
+import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions/helpers";
 import { checkWatchHistoryCompleteness } from "@/lib/lifecycle/evaluability";
 import type { ConditionGroup } from "@/lib/conditions/types";
 import { validateRequest, queryActionSchema } from "@/lib/validation";
@@ -164,23 +164,24 @@ export async function POST(request: NextRequest) {
       );
     }
   }
-  // The same hazard a third time, via watch history rather than an external
-  // service. `watchedByUser`'s negative forms compile to
-  // `watchHistory: { none: … }`, which is trivially true for EVERY item while a
-  // server's history is empty — and a server reaches exactly that state on
-  // purpose whenever its watch-history source is switched, staying there for
-  // the minutes-to-hours the newest-first Tracearr walk takes to reach back.
+  // The same hazard a third time, via play history rather than an external
+  // service — and covering EVERY criterion that reads it, not just
+  // "Watched By User". That one compiles to `watchHistory: { none: … }` and
+  // goes vacuous the instant the rows are gone; "Play Count" and "Last Played"
+  // go vacuous identically wherever the denormalized columns were never
+  // established. A server sits in that state on purpose whenever its
+  // watch-history source is switched, and by default before it has ever synced.
   //
   // This route needs the guard MORE than the lifecycle path does, not less: a
   // rule set schedules an action for `actionDelayDays` in the future and the
   // Pending page shows it before it fires, whereas this executes immediately on
   // whatever the query returned. Scoped to the query's own servers so an
   // unrelated server's import doesn't block queries that never read it.
-  if (hasWatchedByUserRules(queryGroups)) {
+  if (hasPlayActivityRules(queryGroups)) {
     const watch = await checkWatchHistoryCompleteness(userId, query.serverIds);
     if (!watch.complete) {
       return NextResponse.json(
-        { error: `The query uses "Watched By User" but ${watch.reason}` },
+        { error: `The query uses play-activity criteria but ${watch.reason}` },
         { status: 400 },
       );
     }

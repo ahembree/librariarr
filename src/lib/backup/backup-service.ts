@@ -5,7 +5,7 @@ import fs from "fs/promises";
 import path from "path";
 import { gzipSync, gunzipSync } from "zlib";
 import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from "crypto";
-import { markServersWithoutWatchHistory } from "@/lib/media/watch-evidence";
+import { invalidateServersWithoutWatchHistory } from "@/lib/media/watch-evidence";
 
 const BACKUP_DIR = process.env.BACKUP_DIR || "/config/backups";
 const FILENAME_REGEX = /^librariarr-backup-[\w.-]+\.json(\.gz(\.enc)?)?$/;
@@ -322,7 +322,7 @@ export async function restoreBackup(
   // library on any `watchedByUser` negative. Done outside the transaction: it
   // is a safety marker, not part of the restore's atomicity, and it is asked of
   // the rows rather than of the operation so it cannot miss a server.
-  const marked = await markServersWithoutWatchHistory();
+  const marked = await invalidateServersWithoutWatchHistory();
   if (marked > 0) {
     logger.info(
       "Backup",

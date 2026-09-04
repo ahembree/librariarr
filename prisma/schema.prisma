@@ -172,18 +172,31 @@ model MediaServer {
   /// Set when this server's stored watch history was deliberately cleared and
   /// has not yet been repopulated; null once a sync has refilled it.
   ///
-  /// Exists because an EMPTY watch history is indistinguishable from "nobody
-  /// watched anything", and the two demand opposite behaviour. `watchedByUser`
-  /// reads the `WatchHistory` relation directly, so its negative forms compile
-  /// to `watchHistory: { none: … }` — trivially true for every item when the
-  /// relation is empty. Changing a server's watch-history source empties it on
-  /// purpose, in BOTH directions, so without a marker the first detection run
-  /// afterwards matches the entire library and a DELETE rule set acts on it.
+  /// When this server's watch history was last ESTABLISHED — i.e. a sync
+  /// successfully determined what has been played on it. `null` means it never
+  /// was, or that something invalidated it since.
+  ///
+  /// Deliberately a positive marker rather than a "cleared at" one. An EMPTY
+  /// `WatchHistory` is indistinguishable from "nobody watched anything", and
+  /// the two demand opposite behaviour: every play-activity criterion
+  /// (`watchedByUser`, `playCount`, `lastPlayedAt`, and the series aggregates
+  /// built on them) has a negative form that goes vacuously TRUE for the entire
+  /// library against absent evidence. On a DELETE rule set that is the whole
+  /// library. So the question a guard has to answer is "do we KNOW what was
+  /// played here", and only a positive marker answers it — a `null` default
+  /// then correctly reads as "we don't", which covers a brand-new server that
+  /// has never synced as well as one whose history was destroyed.
+  ///
+  /// Set by a SUCCESSFUL sync, including one that legitimately finds no plays
+  /// (a server nobody watches is a real steady state, and must not stay paused
+  /// forever). Nulled by every path that destroys history in bulk: the source
+  /// switch in the `/api/servers/[id]` PUT, library and type-wide purges,
+  /// disable-with-delete-data, and backup restore.
   ///
   /// `tracearrBackfillComplete` cannot serve here: unlinking sets
   /// `tracearrServerId` to null, so the server stops looking Tracearr-mapped at
   /// exactly the moment its history is emptiest.
-  watchHistoryClearedAt DateTime?
+  watchHistorySyncedAt DateTime?
   /// How far back the backfill has actually WALKED, as opposed to how far back
   /// it has stored rows.
   ///

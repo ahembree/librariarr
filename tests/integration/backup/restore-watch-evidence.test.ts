@@ -55,6 +55,8 @@ async function seed(tracearrMapped: boolean) {
       url: "http://plex:32400",
       accessToken: "x",
       machineId: `restore-${Math.random().toString(36).slice(2)}`,
+      // A synced server, so the pre-restore sanity check is meaningful.
+      watchHistorySyncedAt: new Date(),
       ...(tracearrMapped
         ? { tracearrServerId: "trc-server", tracearrBackfillComplete: true }
         : {}),
@@ -87,7 +89,7 @@ describe("restoring a config-only backup", () => {
     await fs.rm(backupDir, { recursive: true, force: true });
   });
 
-  it("leaves the restored server marked un-evidenced, so watchedByUser stays paused", async () => {
+  it("leaves the restored server un-evidenced, so play-activity rules stay paused", async () => {
     const { userId, serverId } = await seed(false);
     const prisma = getTestPrisma();
 
@@ -113,9 +115,8 @@ describe("restoring a config-only backup", () => {
 
   it("does not let a restored tracearrBackfillComplete flag vouch for an empty history", async () => {
     // The `MediaServer` row is restored verbatim, so the flag survives while
-    // the rows it describes do not. Two independent conditions catch this —
-    // the marker written at restore time, and the guard's own "mapped but
-    // holding no rows" clause — and either alone is enough.
+    // the rows it describes do not. The restore withdraws the evidence marker,
+    // so the guard refuses regardless of what the stale flag claims.
     const { userId, serverId } = await seed(true);
     const prisma = getTestPrisma();
 
@@ -124,10 +125,10 @@ describe("restoring a config-only backup", () => {
 
     const server = await prisma.mediaServer.findUniqueOrThrow({
       where: { id: serverId },
-      select: { tracearrBackfillComplete: true, watchHistoryClearedAt: true },
+      select: { tracearrBackfillComplete: true, watchHistorySyncedAt: true },
     });
     expect(server.tracearrBackfillComplete).toBe(true);
-    expect(server.watchHistoryClearedAt).not.toBeNull();
+    expect(server.watchHistorySyncedAt).toBeNull();
 
     await expect(
       checkWatchHistoryCompleteness(userId, [serverId]),

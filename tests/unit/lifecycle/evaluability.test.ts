@@ -142,7 +142,7 @@ describe("checkLifecycleRuleEvaluability", () => {
 
 
 
-    it("refuses watchedByUser after an UNLINK, not just during an import", async () => {
+    it("refuses after an UNLINK, not just during an import", async () => {
       // The hole the first version of this guard had. Unlinking a server
       // (Tracearr -> native) wipes its rows AND sets `tracearrServerId` to
       // null, so a check keyed on "is Tracearr-mapped and unfinished" stops
@@ -157,30 +157,25 @@ describe("checkLifecycleRuleEvaluability", () => {
 
       const where = mockServerCount.mock.calls[0][0].where;
       expect(where.OR).toEqual(
-        expect.arrayContaining([{ watchHistoryClearedAt: { not: null } }]),
+        expect.arrayContaining([{ watchHistorySyncedAt: null }]),
       );
       // ...and must NOT require a Tracearr mapping at the top level, or an
       // unlinked server would be filtered out before the OR is considered.
       expect(where).not.toHaveProperty("tracearrServerId");
     });
 
-    it("refuses a Tracearr-mapped server that holds no plays, whatever the flag says", async () => {
-      // `tracearrBackfillComplete` describes rows, and the rows can go without
-      // it: a config-only backup restore truncates `WatchHistory` but restores
-      // `MediaServer` verbatim, and a disable-with-purge cascades through
-      // `WatchHistory.mediaItem`. Both leave "complete" standing over an empty
-      // relation. The importer does re-walk from scratch, but that takes hours,
-      // and for all of them a flag-only check would vouch for a history that
-      // isn't there while `watchedByUser` negatives match the whole library.
+    it("refuses a server whose history has never been established", async () => {
+      // The state a null default has to cover: a brand-new server, and one
+      // whose history was destroyed by a purge or a restore. A "cleared at"
+      // marker could not express either — its null read as healthy, so absence
+      // of evidence presented itself as evidence of absence.
       mockServerCount.mockResolvedValue(0);
 
       await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("watchedByUser"));
 
       const where = mockServerCount.mock.calls[0][0].where;
       expect(where.OR).toEqual(
-        expect.arrayContaining([
-          { tracearrServerId: { not: null }, watchHistory: { none: {} } },
-        ]),
+        expect.arrayContaining([{ watchHistorySyncedAt: null }]),
       );
     });
 

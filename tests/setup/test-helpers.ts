@@ -152,13 +152,15 @@ export async function createTestServer(
     machineId: string;
     tlsSkipVerify: boolean;
     enabled: boolean;
-    // Watch-history provenance state. Defaults mirror the schema's, which
-    // describe a plain native server: unmapped and never cleared, so the
-    // completeness check passes regardless of the (Tracearr-only) backfill flag
-    // and existing callers are unaffected.
+    // Watch-history provenance state. A test server defaults to having its
+    // history ESTABLISHED — unmapped, already synced — so the completeness
+    // check passes and existing callers are unaffected. The schema's own
+    // default is the opposite (null = never synced), which is right for a real
+    // server that genuinely has not been read yet but would otherwise pause
+    // play-activity rules in every unrelated test.
     tracearrServerId: string | null;
     tracearrBackfillComplete: boolean;
-    watchHistoryClearedAt: Date | null;
+    watchHistorySyncedAt: Date | null;
   }>
 ) {
   const prisma = getTestPrisma();
@@ -174,7 +176,13 @@ export async function createTestServer(
       enabled: overrides?.enabled ?? true,
       tracearrServerId: overrides?.tracearrServerId ?? null,
       tracearrBackfillComplete: overrides?.tracearrBackfillComplete ?? false,
-      watchHistoryClearedAt: overrides?.watchHistoryClearedAt ?? null,
+      // `!== undefined`, not `??`: the default is non-null, so a nullish
+      // coalesce would silently discard an explicit `null` — which is exactly
+      // how a test says "this server's history has never been established".
+      watchHistorySyncedAt:
+        overrides?.watchHistorySyncedAt !== undefined
+          ? overrides.watchHistorySyncedAt
+          : new Date(),
     },
   });
 }

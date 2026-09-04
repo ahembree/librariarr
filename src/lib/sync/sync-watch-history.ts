@@ -10,6 +10,7 @@ import {
 import type { MediaServerType } from "@/generated/prisma/client";
 import { enqueueJob } from "@/lib/jobs/client";
 import { TASK_TRACEARR_BACKFILL, MAIN_QUEUE } from "@/lib/jobs/constants";
+import { markWatchHistoryEstablished } from "@/lib/media/watch-evidence";
 
 // 500 rows × 8 params = 4000 bind params per INSERT — well under Postgres's
 // 65535 limit, but ~5× fewer round-trips than 100, which keeps the full-replace
@@ -32,24 +33,23 @@ const BATCH_SIZE = 500;
 const TX_OPTIONS = { timeout: 25 * 60_000, maxWait: 15_000 } as const;
 
 /**
- * Release the "history deliberately cleared, not yet refilled" marker
- * (`MediaServer.watchHistoryClearedAt`) that `checkWatchHistoryCompleteness`
- * reads to pause `watchedByUser` rules.
+ * Record that this sync established what was played on the server — the write
+ * that lets `checkWatchHistoryCompleteness` answer play-activity criteria for
+ * it again.
  *
- * Shared by both native full-replace exits — the normal one and the
- * legitimately-empty one — because a guard that never releases is its own
- * outage: the marker is the ONLY thing keeping those rules paused, and nothing
- * else in the system ever clears it for a native server.
+ * Shared by both native full-replace exits, the normal one and the
+ * legitimately-empty one, because "the server reports no plays" is a complete
+ * and faithful answer: the fetch throws on a hard failure, so reaching either
+ * exit means the question was answered. Leaving the empty case unmarked paused
+ * every play-activity rule on that server forever, with nothing in the system
+ * able to release it — and a server nobody watches is a real steady state, not
+ * an error.
  *
- * Only ever called after a successful full replace. A failed fetch returns
- * earlier and leaves the marker standing, which is correct: the history is
- * still unrepresentative.
+ * Never called on a failed fetch, which returns earlier: the history is still
+ * unknown there, and the marker must keep saying so.
  */
-async function clearWatchHistoryClearedMarker(serverId: string): Promise<void> {
-  await prisma.mediaServer.updateMany({
-    where: { id: serverId, watchHistoryClearedAt: { not: null } },
-    data: { watchHistoryClearedAt: null },
-  });
+async function markHistoryEstablished(serverId: string): Promise<void> {
+  await markWatchHistoryEstablished([serverId]);
 }
 
 export async function syncWatchHistory(
@@ -265,7 +265,7 @@ export async function syncWatchHistory(
     // (a fresh Plex, or Jellyfin degrading to a per-user response) marked
     // un-evidenced FOREVER, silently pausing every `watchedByUser` rule set
     // scoped to it with nothing that could ever release it.
-    await clearWatchHistoryClearedMarker(serverId);
+    await markHistoryEstablished(serverId);
     return { count: 0 };
   }
 
@@ -390,7 +390,7 @@ export async function syncWatchHistory(
     }
   }, TX_OPTIONS);
 
-  await clearWatchHistoryClearedMarker(serverId);
+  await markHistoryEstablished(serverId);
 
   logger.info(
     "WatchHistory",

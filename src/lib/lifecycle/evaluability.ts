@@ -1,5 +1,5 @@
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
-import { hasArrRules, hasSeerrRules, hasWatchedByUserRules } from "@/lib/rules/lifecycle-engine";
+import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/rules/lifecycle-engine";
 import { prisma } from "@/lib/db";
 import { hasEnabledArrInstances, arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
 import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
@@ -31,38 +31,49 @@ export type RuleEvaluability =
   | { evaluable: false; reason: string; permanent: boolean };
 
 /**
- * Whether every in-scope server's stored `WatchHistory` is currently a faithful
- * record of what was played.
+ * Whether every in-scope server has ESTABLISHED play history — i.e. a sync has
+ * actually determined what was played there, and that determination is current.
  *
- * Extracted from the rule-set guard because TWO independent paths can act
- * destructively on a `watchedByUser` criterion — saved lifecycle rule sets, and
- * the ad-hoc query page's actions route, which has no `actionDelayDays` review
- * window at all — and they must refuse under exactly the same conditions or the
- * looser one becomes the way around the stricter one.
+ * The principle: a criterion that reads play activity may only be answered
+ * where play activity is known. An empty `WatchHistory` is indistinguishable
+ * from "nobody watched anything", and the negative form of every play-activity
+ * field goes vacuously TRUE against it for the entire library —
+ * `watchedByUser is not alice` compiles to `watchHistory: { none: … }`,
+ * `playCount = 0` and `lastPlayedAt is null` match everything once the
+ * denormalized columns were never established. On a DELETE rule set that is the
+ * whole library, so the answer must be "refuse", not "no evidence, therefore
+ * false".
  *
- * `watchedByUser` reads the `WatchHistory` relation DIRECTLY, not the
- * denormalized `playCount`/`lastPlayedAt` (which are monotonic and therefore
- * safe). Its negative forms (`notEquals`/`notContains`/`isNull`, and any
- * positive form under `negate`, which `pushDownGroupNegation` turns into
- * `NOT { some }`) compile to `watchHistory: { none: … }` — trivially true for
- * every item in the library when the relation is empty.
+ * Extracted from the rule-set guard because TWO independent paths act
+ * destructively on these criteria — saved lifecycle rule sets, and the ad-hoc
+ * query page's actions route, which has no `actionDelayDays` review window at
+ * all — and they must refuse under identical conditions or the looser one
+ * becomes the way around the stricter one.
  *
- * A Tracearr-mapped server reaches exactly that state on purpose: changing a
- * server's watch-history source wipes its rows, and the re-import is a
- * background walk that takes minutes to hours and runs newest-first, so an item
- * last played long ago stays un-evidenced until the walk reaches back that far.
- * Without this check the first evaluation in that window matches the WHOLE
- * library and a DELETE acts on it.
+ * A server is NOT established when either holds:
  *
- * Always transient: it resolves by itself the moment the backfill completes, so
- * callers skip/refuse rather than disarming anything.
+ *  - `watchHistorySyncedAt` is null. No sync has ever established its history,
+ *    or something invalidated it since — a source switch, a library or
+ *    type-wide purge, a disable-with-delete-data, or a backup restore. This is
+ *    also the state a brand-new server starts in, which is the point: absence
+ *    of evidence is not evidence of absence, and the default has to say so.
+ *  - It is Tracearr-mapped with `tracearrBackfillComplete` false. History
+ *    exists but is incomplete: the archive walk runs newest-first over minutes
+ *    to hours, so an item last played long ago still looks never-watched until
+ *    the walk reaches back that far.
+ *
+ * Always transient: it resolves the moment a sync establishes the history (or
+ * the backfill finishes), so callers skip/refuse rather than disarming
+ * anything. Note that a server nobody has ever watched anything on settles
+ * correctly — its sync finds no plays, marks the history established, and
+ * `playCount = 0` then legitimately matches everything on it.
  *
  * @param serverIds The servers the caller actually reads (a rule set's
  *   `serverIds`, a query's `serverIds`). Empty or omitted means "every server",
  *   which is also their shared default. Scoping matters: without it, one
  *   unrelated server part-way through its Tracearr import would pause every
- *   `watchedByUser` rule set and query on the install, including ones scoped
- *   entirely to native servers whose history is complete and correct.
+ *   play-activity rule set and query on the install, including ones scoped
+ *   entirely to servers whose history is complete and correct.
  */
 export async function checkWatchHistoryCompleteness(
   userId: string,
@@ -76,24 +87,8 @@ export async function checkWatchHistoryCompleteness(
       enabled: true,
       ...scope,
       OR: [
-        // History deliberately cleared and not yet refilled — either switch
-        // direction. Keyed on the marker rather than on `tracearrServerId`
-        // because UNLINKING nulls that column, so a Tracearr → native switch
-        // would otherwise slip past at exactly its emptiest moment.
-        { watchHistoryClearedAt: { not: null } },
-        // Still importing its archive: rows exist but the older span has not
-        // been walked yet, so an item last played long ago still looks
-        // never-watched.
+        { watchHistorySyncedAt: null },
         { tracearrServerId: { not: null }, tracearrBackfillComplete: false },
-        // Mapped, flagged complete, and yet holding no plays at all. The flag
-        // describes rows that something removed out from under it — a
-        // config-only backup restore (which truncates `WatchHistory` but
-        // restores `MediaServer` verbatim), a disable-with-purge that cascaded
-        // through `WatchHistory.mediaItem`, a manual delete — and the importer
-        // does re-walk from scratch, but that takes hours during which the flag
-        // still reads "complete". Asked of the rows rather than of the flag, so
-        // a stale flag cannot vouch for a history that isn't there.
-        { tracearrServerId: { not: null }, watchHistory: { none: {} } },
       ],
     },
   });
@@ -103,9 +98,9 @@ export async function checkWatchHistoryCompleteness(
     complete: false,
     incomplete,
     reason:
-      `${incomplete} server(s) have no complete watch history yet (recently cleared, ` +
-      `or still importing) — evaluating "watched by user" now would treat every item ` +
-      `as never-watched and match the entire library`,
+      `${incomplete} server(s) have no established play history yet (never synced, ` +
+      `recently cleared, or still importing) — evaluating play-activity criteria now ` +
+      `would treat every item as never-watched and match the entire library`,
   };
 }
 
@@ -148,16 +143,22 @@ export async function checkLifecycleRuleEvaluability(
     }
   }
   // Watch history is the third external dependency, and it fails the same way.
-  // Gated on the rule check FIRST so a rule set with no `watchedByUser`
-  // criterion never pays for the server count — this runs per rule set on every
+  // The trigger is EVERY play-activity field, not just `watchedByUser`: that
+  // one reads the rows and goes vacuous the instant they are gone, but
+  // `playCount = 0` and `lastPlayedAt is null` go vacuous identically whenever
+  // the denormalized columns were never established. Gating only the first left
+  // the other six answering "never watched" for a whole library on no evidence.
+  //
+  // Gated on the rule check FIRST so a rule set that asks nothing about play
+  // activity never pays for the server count — this runs per rule set on every
   // detection pass.
-  if (hasWatchedByUserRules(rules)) {
+  if (hasPlayActivityRules(rules)) {
     const watch = await checkWatchHistoryCompleteness(userId, serverIds);
     if (!watch.complete) {
       return {
         evaluable: false,
         permanent: false,
-        reason: `Rules use watchedByUser but ${watch.reason}`,
+        reason: `Rules read play activity but ${watch.reason}`,
       };
     }
   }

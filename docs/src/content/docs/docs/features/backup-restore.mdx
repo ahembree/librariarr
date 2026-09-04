@@ -36,7 +36,7 @@ Enable full backups by checking **Include media data** when creating a manual ba
 :::caution[Restoring clears watch history]
 A restore replaces the whole database, and a **config-only** backup (the default) contains no watch history — so restoring one leaves every server with none. Your media returns on the next sync; your play history returns when the next watch-history sync refills it, which for a [Tracearr](/docs/integrations/tracearr/)-linked server means re-walking the archive.
 
-In between, every item is present with no record of ever being played. Librariarr handles this rather than letting it arm your rules: restored servers are marked as having no watch history yet, which **pauses lifecycle rules that use "Watched By User"** until a sync refills them. The pause lifts on its own.
+In between, every item is present with no record of ever being played. Librariarr handles this rather than letting it arm your rules: restored servers are marked as having no watch history yet, which **pauses lifecycle rules that read play activity** — Watched By User, Play Count, Last Played and the series aggregates — until a sync re-establishes it. The pause lifts on its own.
 
 Take a **full** backup (tick *Include media data*) if you want history to come back with the restore.
 :::
