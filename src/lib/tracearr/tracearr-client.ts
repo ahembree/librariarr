@@ -211,9 +211,17 @@ export interface TracearrHistoryRecord {
   poster_url: string | null;
   /** Watch time summed over the play's in-window segments. Required, non-null. */
   duration_ms: number;
-  progress_ms: number | null;
+  /**
+   * int64 milliseconds, and Tracearr serializes these two as JSON **strings**
+   * (`"110500"`) while every other numeric field is a JSON number — the usual
+   * way to keep a 64-bit integer away from a float64 parser. Typed as the union
+   * it actually is, because declaring them `number` is what let the importer
+   * discard every one of them without a type error; `asInt` in
+   * `sync-tracearr-history.ts` coerces both shapes.
+   */
+  progress_ms: number | string | null;
   /** The item's full runtime. Nullable — the denominator may be unknown. */
-  total_duration_ms: number | null;
+  total_duration_ms: number | string | null;
   /** 0-100 with 1 decimal. The headline completion figure, and nullable. */
   percent_complete: number | null;
   started_at: string;

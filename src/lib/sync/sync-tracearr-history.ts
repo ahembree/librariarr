@@ -1718,14 +1718,37 @@ function toJsonParam(value: unknown): string | null {
  * change that started sending a fractional value would abort the whole INSERT —
  * and take the rest of the batch with it — so round rather than trust.
  */
-function asInt(value: number | null | undefined): number | null {
-  if (value == null || !Number.isFinite(value)) return null;
-  return Math.round(value);
+/**
+ * Coerce one of Tracearr's numeric fields, which arrive in TWO JSON shapes.
+ *
+ * Most are JSON numbers, but the int64 ones — `progress_ms` and
+ * `total_duration_ms` — are serialized as JSON **strings** (`"110500"`), the
+ * usual way to keep a 64-bit integer safe from a float64 parser. Accepting only
+ * numbers silently discarded both, on 2,998 of 3,000 sampled records: every row
+ * in a 106,133-row import had `progressMs` and `totalDurationMs` NULL while the
+ * source carried a value for essentially all of them, which left the History
+ * page's "3m 40s of 42m" line permanently unrenderable.
+ *
+ * Nothing about the failure was visible from inside: `Number.isFinite("110500")`
+ * is false so the value was dropped rather than erroring, the client's types
+ * declared these `number` so TypeScript was satisfied, and every test fixture
+ * passed numbers — the exact shape the API never sends for these two fields.
+ */
+function toNumber(value: number | string | null | undefined): number | null {
+  if (value == null) return null;
+  // A string is the int64 encoding, not a mistake. `Number("")` is 0, so an
+  // empty string has to be refused explicitly or it would read as a real zero.
+  const n = typeof value === "string" ? (value.trim() === "" ? NaN : Number(value)) : value;
+  return Number.isFinite(n) ? n : null;
 }
 
-function asFloat(value: number | null | undefined): number | null {
-  if (value == null || !Number.isFinite(value)) return null;
-  return value;
+function asInt(value: number | string | null | undefined): number | null {
+  const n = toNumber(value);
+  return n === null ? null : Math.round(n);
+}
+
+function asFloat(value: number | string | null | undefined): number | null {
+  return toNumber(value);
 }
 
 /** A parsed timestamp, or null for a missing or unparseable one. */

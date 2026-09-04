@@ -2515,4 +2515,83 @@ describe("syncTracearrHistory", () => {
     });
   });
 
+
+  describe("Tracearr's two JSON encodings for numbers", () => {
+    // `progress_ms` and `total_duration_ms` are int64 and arrive as JSON
+    // STRINGS ("110500"); every other numeric field is a JSON number. Accepting
+    // only numbers discarded both silently — 2,998 of 3,000 sampled records
+    // carried a value, and all 106,133 rows of a real import stored NULL for
+    // each, leaving the History page's "3m 40s of 42m" line unrenderable.
+    //
+    // Nothing surfaced it: `Number.isFinite("110500")` is false so the value was
+    // dropped rather than erroring, the client's types said `number` so
+    // TypeScript was satisfied, and every fixture passed numbers — the one shape
+    // the API never sends for these two fields.
+    function storedParams() {
+      const call = insertCalls()[0];
+      return call.slice(1) as unknown[];
+    }
+
+    it("stores progress_ms and total_duration_ms when sent as strings", async () => {
+      storedRows({
+        min: new Date("2025-07-10T11:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: true,
+      });
+      mockGetHistoryPage.mockResolvedValueOnce({
+        records: [
+          historyRecord({
+            id: "chain-1",
+            progress_ms: "110500",
+            total_duration_ms: "126000",
+            duration_ms: 126406,
+          } as never),
+        ],
+        nextCursor: null,
+      });
+
+      await syncTracearrHistory("server-1", { passes: "forward" });
+
+      const params = storedParams();
+      expect(params).toContain(110500);
+      expect(params).toContain(126000);
+    });
+
+    it("still accepts the plain-number shape every other field uses", async () => {
+      storedRows({
+        min: new Date("2025-07-10T11:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: true,
+      });
+      mockGetHistoryPage.mockResolvedValueOnce({
+        records: [historyRecord({ id: "chain-1", progress_ms: 4242 } as never)],
+        nextCursor: null,
+      });
+
+      await syncTracearrHistory("server-1", { passes: "forward" });
+      expect(storedParams()).toContain(4242);
+    });
+
+    it("refuses an empty string rather than storing it as zero", async () => {
+      // `Number("")` is 0, so an empty string would otherwise read as a real
+      // measurement of zero progress instead of an absent one.
+      storedRows({
+        min: new Date("2025-07-10T11:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: true,
+      });
+      mockGetHistoryPage.mockResolvedValueOnce({
+        records: [
+          historyRecord({ id: "chain-1", progress_ms: "", total_duration_ms: "  " } as never),
+        ],
+        nextCursor: null,
+      });
+
+      await syncTracearrHistory("server-1", { passes: "forward" });
+
+      const params = storedParams();
+      expect(params).not.toContain(0);
+    });
+  });
+
 });
