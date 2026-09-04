@@ -16,6 +16,7 @@ import type {
   PlexSession,
 } from "./types";
 import type { MediaServerClient, LibraryItemType } from "@/lib/media-server/client";
+import { MediaItemNotFoundError } from "@/lib/media-server/client";
 import { isMediaItem } from "@/lib/media-server/item-types";
 import { normalizeResolutionFromDimensions } from "@/lib/resolution";
 import { logger } from "@/lib/logger";
@@ -212,11 +213,46 @@ export class PlexClient implements MediaServerClient {
     return { items, total };
   }
 
+  /**
+   * Fetch one item's metadata.
+   *
+   * **Always returns an item or throws** — never `undefined`. Eight call sites
+   * dereference the result directly, and `enrichBatch` in the full sync uses
+   * `Promise.allSettled` specifically so a *rejection* leaves the un-enriched
+   * bulk-listing item in place; resolving `undefined` there would write it over
+   * a good row and abort the whole library sync.
+   *
+   * Two failure shapes, deliberately distinguished — the incremental sync
+   * deletes a row on the first and falls back to a full reconcile on the second:
+   *
+   * - A well-formed `MediaContainer` holding no `Metadata` → the server is
+   *   telling us the item is gone → {@link MediaItemNotFoundError}.
+   * - Anything else (an empty body, an XML or HTML page from a reverse proxy, a
+   *   login redirect, a container that isn't an object) → a plain error. That is
+   *   NOT evidence of deletion, and treating it as such would destroy the row
+   *   along with the `RuleMatch` / `LifecycleException` / `WatchHistory` rows
+   *   that cascade from it.
+   *
+   * `librarySectionID` lives on the `MediaContainer` as well as (usually) the
+   * element; merging it down lets the incremental sync map an item to its
+   * library when only the container carries it.
+   */
   async getItemMetadata(ratingKey: string): Promise<PlexMetadataItem> {
     const response = await this.client.get(
       `/library/metadata/${ratingKey}`
     );
-    return response.data.MediaContainer.Metadata[0];
+    const container = response.data?.MediaContainer;
+    if (!container || typeof container !== "object") {
+      throw new Error(
+        `Unrecognized Plex metadata response for ${ratingKey} (no MediaContainer)`
+      );
+    }
+    const meta = container.Metadata?.[0];
+    if (!meta) throw new MediaItemNotFoundError(ratingKey);
+    return {
+      ...meta,
+      librarySectionID: meta.librarySectionID ?? container.librarySectionID,
+    };
   }
 
   /**
