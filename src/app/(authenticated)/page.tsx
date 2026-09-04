@@ -278,6 +278,16 @@ export default function DashboardPage() {
     router.push(`/library/music/track/${trackId}`);
   }, [router]);
 
+  // Collapsed Recently Added tiles stand for a whole season / album, so they
+  // open that rather than the member row representing them.
+  const handleSeasonClick = useCallback((mediaItemId: string) => {
+    router.push(`/library/series/season/${mediaItemId}`);
+  }, [router]);
+
+  const handleAlbumClick = useCallback((mediaItemId: string) => {
+    router.push(`/library/music/album/${mediaItemId}`);
+  }, [router]);
+
   const handleAddCustom = useCallback(
     (config: CustomCardConfig) => {
       const id = `custom-${generateId()}`;
@@ -425,6 +435,8 @@ export default function DashboardPage() {
             onMovieClick={handleMovieClick}
             onEpisodeClick={handleEpisodeClick}
             onTrackClick={handleTrackClick}
+            onSeasonClick={handleSeasonClick}
+            onAlbumClick={handleAlbumClick}
           />
         </section>
 
@@ -501,6 +513,8 @@ export default function DashboardPage() {
             onArtistClick={handleArtistClick}
             onEpisodeClick={handleEpisodeClick}
             onTrackClick={handleTrackClick}
+            onSeasonClick={handleSeasonClick}
+            onAlbumClick={handleAlbumClick}
             onSyncComplete={fetchStats}
             onConfigChange={handleConfigChange}
           />
