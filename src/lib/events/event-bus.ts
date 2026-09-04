@@ -7,7 +7,21 @@ export type AppEventType =
   | "lifecycle:detection-completed"
   | "lifecycle:action-executed"
   | "settings:changed"
-  | "server:changed";
+  | "server:changed"
+  /**
+   * A Tracearr import wrote plays for a server (`meta.serverId`).
+   *
+   * Carries no figures on purpose — the receiver refetches
+   * `/api/integrations/tracearr/status`, which is the one place the import
+   * readout is computed. Emitting the numbers here would mean deriving them a
+   * second time, in the importer, where they could silently disagree with what
+   * the settings page shows for the same server.
+   *
+   * Throttled by the emitter, because the archive walk commits a page roughly
+   * every second over thousands of pages and each event costs the receiver a
+   * status query.
+   */
+  | "tracearr:import-progress";
 
 export interface AppEvent {
   type: AppEventType;

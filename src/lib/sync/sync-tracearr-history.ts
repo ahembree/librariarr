@@ -19,6 +19,7 @@ import {
   type TracearrHistoryRecord,
 } from "@/lib/tracearr/tracearr-client";
 import { invalidateWatchHistoryEvidence } from "@/lib/media/watch-evidence";
+import { eventBus } from "@/lib/events/event-bus";
 
 /**
  * Incremental import of Tracearr play history into `WatchHistory`.
@@ -467,6 +468,31 @@ export interface TracearrImportResult {
   backfillPending: boolean;
 }
 
+/**
+ * Throttled `tracearr:import-progress` emitter.
+ *
+ * The importer commits a page roughly every second across thousands of pages,
+ * and every event costs a listening client one status query — so an unthrottled
+ * emit would turn a background archive walk into a steady query load for as
+ * long as it runs. Two seconds is below the threshold at which a moving number
+ * reads as stuttering, and bounds that load regardless of how fast the walk goes.
+ *
+ * Keyed per server so two servers importing at once cannot starve each other's
+ * updates. Module-level rather than per-run because the backfill runs as a
+ * series of separate five-minute slices, and a fresh map each slice would let
+ * the first page of every slice through unthrottled.
+ */
+const lastImportProgressEmit = new Map<string, number>();
+const IMPORT_PROGRESS_THROTTLE_MS = 2_000;
+
+function emitImportProgress(userId: string, serverId: string, force = false): void {
+  const now = Date.now();
+  const last = lastImportProgressEmit.get(serverId) ?? 0;
+  if (!force && now - last < IMPORT_PROGRESS_THROTTLE_MS) return;
+  lastImportProgressEmit.set(serverId, now);
+  eventBus.emit({ type: "tracearr:import-progress", userId, meta: { serverId } });
+}
+
 export async function syncTracearrHistory(
   serverId: string,
   options: TracearrImportOptions = {},
@@ -547,6 +573,9 @@ export async function syncTracearrHistory(
   // previous walk ever reached the end. Everything else is derived from the
   // rows themselves.
   const serverName = server.name;
+  // Captured for the same reason as `serverName`: read inside the `walk`
+  // closure, which TypeScript's control-flow analysis cannot see through.
+  const ownerUserId = server.userId;
   // Bound once so the paging closure keeps the narrowed, non-null value.
   const mappedServerId = tracearrServerId;
   const window = await resolveImportWindow(
@@ -821,6 +850,11 @@ export async function syncTracearrHistory(
           counters.updated += written.updated;
           counters.vanished += written.vanished;
         }
+
+        // Tell any watching client the readout moved. Emitted AFTER the page
+        // commits, so a listener that refetches can never read a figure this
+        // run has not durably written.
+        emitImportProgress(ownerUserId, serverId);
 
         // The page is committed, so its position is now safe to keep. Doing this
         // after the writes is what makes a mid-page failure re-walked rather
@@ -1097,6 +1131,13 @@ export async function syncTracearrHistory(
 
     invalidateMediaCaches();
   }
+
+  // Unthrottled: the last page's emit may have been swallowed by the throttle,
+  // and this is the one that carries the terminal state — the final count, and
+  // whether the backfill just finished. A readout stuck one page short of done
+  // is exactly the "it never updates" complaint, arriving at the end instead of
+  // throughout.
+  emitImportProgress(ownerUserId, serverId, true);
 
   logger.info(
     "WatchHistory",

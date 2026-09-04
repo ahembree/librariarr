@@ -55,6 +55,7 @@ import type {
   ReleaseNote,
 } from "./types";
 import { PRESET_VALUES } from "./types";
+import { useRealtime } from "@/hooks/use-realtime";
 
 /** Stable empty reference — see `visibleTracearrImportStatus`. */
 const NO_TRACEARR_IMPORT_STATUS: TracearrImportStatus[] = [];
@@ -84,6 +85,7 @@ const VALID_SETTINGS_TABS = new Set<string>(SETTINGS_TABS.map((t) => t.value));
  * reports complete.
  */
 const TRACEARR_IMPORT_POLL_MS = 30_000;
+
 
 function getInitialSettingsTab(): SettingsTab {
   if (typeof window === "undefined") return "general";
@@ -870,20 +872,6 @@ export default function SettingsPage() {
     ? tracearrImportStatus
     : NO_TRACEARR_IMPORT_STATUS;
 
-  // Slow poll while any mapped server still owes a backfill. The walk happens
-  // on the job queue in five-minute slices, so the numbers on screen would
-  // otherwise be frozen at whatever they were when the page loaded — exactly
-  // the "no indication anywhere" problem. The dependency is a BOOLEAN, not the
-  // status array, so each poll's fresh array doesn't tear down and rebuild the
-  // interval; the interval is cleared the moment the last server reports
-  // complete, and by the effect cleanup on unmount.
-  const tracearrBackfillRunning = visibleTracearrImportStatus.some((s) => !s.backfillComplete);
-  useEffect(() => {
-    if (!tracearrBackfillRunning) return;
-    const interval = setInterval(() => { void fetchTracearrImportStatus(); }, TRACEARR_IMPORT_POLL_MS);
-    return () => clearInterval(interval);
-  }, [tracearrBackfillRunning, fetchTracearrImportStatus]);
-
   // Poll server data during active sync for real-time progress bar
   const hasActiveSync = servers.some(
     (s) => s.syncJobs[0]?.status === "RUNNING" || s.syncJobs[0]?.status === "PENDING"
@@ -893,6 +881,39 @@ export default function SettingsPage() {
     const interval = setInterval(fetchServers, 2000);
     return () => clearInterval(interval);
   }, [hasActiveSync, fetchServers]);
+
+  // The import readout is PUSHED, not polled. The importer emits
+  // `tracearr:import-progress` after each page commits (throttled there, since
+  // it commits a page roughly every second across thousands), and this refetches
+  // the status endpoint — which stays the single place the readout is computed,
+  // so the event carries no figures to disagree with it.
+  //
+  // Polling was the wrong shape twice over: it moved on a fixed clock rather
+  // than when anything changed, and it was gated on the backfill being
+  // incomplete — so a forward-pass import on an already-backfilled server, which
+  // is most syncs, updated nothing at all while the server rows beside it
+  // refreshed every two seconds.
+  useRealtime("tracearr:import-progress", () => {
+    if (!hasTracearrInstance) return;
+    void fetchTracearrImportStatus();
+  });
+
+  // Slow poll kept ONLY as the fallback for a dropped stream. SSE dies to proxy
+  // buffering and idle timeouts, and the readout is the sole indication a
+  // multi-hour archive walk is progressing — so it must not depend entirely on a
+  // connection staying up. Deliberately slow: the push covers the live case, and
+  // this only has to stop the number going stale for good. Runs while a backfill
+  // is owed, which is the case that lasts long enough for a drop to matter.
+  const tracearrBackfillRunning = visibleTracearrImportStatus.some((s) => !s.backfillComplete);
+  const pollTracearrImport = hasTracearrInstance && tracearrBackfillRunning;
+  useEffect(() => {
+    if (!pollTracearrImport) return;
+    const interval = setInterval(
+      () => { void fetchTracearrImportStatus(); },
+      TRACEARR_IMPORT_POLL_MS,
+    );
+    return () => clearInterval(interval);
+  }, [pollTracearrImport, fetchTracearrImportStatus]);
 
   // ─── Server handlers ───
 

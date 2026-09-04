@@ -9,6 +9,7 @@ const {
   mockListServers,
   mockGetServerAccountNames,
   mockInvalidateWatchHistoryEvidence,
+  mockEventBus,
   mockBuildIndex,
   mockResolve,
   mockReconcile,
@@ -27,6 +28,7 @@ const {
   mockListServers: vi.fn(),
   mockGetServerAccountNames: vi.fn(),
   mockInvalidateWatchHistoryEvidence: vi.fn(),
+  mockEventBus: { emit: vi.fn() },
   mockBuildIndex: vi.fn(),
   mockResolve: vi.fn(),
   mockReconcile: vi.fn(),
@@ -36,6 +38,8 @@ const {
 vi.mock("@/lib/db", () => ({
   prisma: mockPrisma,
 }));
+
+vi.mock("@/lib/events/event-bus", () => ({ eventBus: mockEventBus }));
 
 vi.mock("@/lib/media/watch-evidence", () => ({
   invalidateWatchHistoryEvidence: mockInvalidateWatchHistoryEvidence,
@@ -2398,6 +2402,116 @@ describe("syncTracearrHistory", () => {
       await syncTracearrHistory("server-1", { passes: "forward" });
 
       expect(order[0]).toBe("paused");
+    });
+  });
+
+
+  describe("progress is pushed, not waited for", () => {
+    // The settings page and the History page both render an import readout, and
+    // both used to move only on a fixed-interval poll — so a sync in progress
+    // showed a static number while the server rows beside it refreshed every
+    // two seconds. The importer emits after each page COMMITS, so a listener
+    // that refetches can never read a figure this run has not durably written.
+    it("emits after a page commits, tagged with the server", async () => {
+      storedRows({
+        min: new Date("2025-07-10T11:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: true,
+      });
+      mockGetHistoryPage.mockResolvedValueOnce({
+        records: [historyRecord({ id: "chain-1" })],
+        nextCursor: null,
+      });
+
+      await syncTracearrHistory("server-1", { passes: "forward" });
+
+      expect(mockEventBus.emit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "tracearr:import-progress",
+          userId: "user-1",
+          meta: { serverId: "server-1" },
+        }),
+      );
+    });
+
+    it("emits per page as the walk proceeds, not only once at the end", async () => {
+      // The distinction that matters: a single terminal emit would satisfy a
+      // "did it emit" assertion while leaving the readout frozen for the whole
+      // walk — which is the bug. Three pages, with the clock advanced past the
+      // throttle between them, must produce more than the one closing emit.
+      storedRows({
+        min: new Date("2021-01-01T00:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: false,
+      });
+      let clock = Date.now();
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => clock);
+      mockGetHistoryPage.mockImplementation(async () => {
+        clock += 5_000; // past IMPORT_PROGRESS_THROTTLE_MS
+        return { records: [historyRecord({ id: `chain-${clock}` })], nextCursor: null };
+      });
+
+      try {
+        await syncTracearrHistory("server-1", { passes: "backfill" });
+      } finally {
+        nowSpy.mockRestore();
+      }
+
+      const progress = mockEventBus.emit.mock.calls.filter(
+        (c) => (c[0] as { type: string }).type === "tracearr:import-progress",
+      );
+      expect(progress.length).toBeGreaterThan(1);
+    });
+
+    it("throttles, so a long walk cannot flood every listening client", async () => {
+      // Each event costs a listener one status query. The archive walk commits a
+      // page roughly every second across thousands of pages, so an unthrottled
+      // emit turns a background import into a steady query load for as long as
+      // it runs. With the clock held still, many committed pages must collapse
+      // to the first emit plus the closing one.
+      storedRows({
+        min: new Date("2021-01-01T00:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: false,
+      });
+      const frozen = Date.now();
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => frozen);
+      let page = 0;
+      mockGetHistoryPage.mockImplementation(async () => ({
+        records: [historyRecord({ id: `chain-${page++}` })],
+        nextCursor: page < 8 ? `cursor-${page}` : null,
+      }));
+
+      try {
+        await syncTracearrHistory("server-1", { passes: "backfill" });
+      } finally {
+        nowSpy.mockRestore();
+      }
+
+      const progress = mockEventBus.emit.mock.calls.filter(
+        (c) => (c[0] as { type: string }).type === "tracearr:import-progress",
+      );
+      expect(mockGetHistoryPage.mock.calls.length).toBeGreaterThanOrEqual(8);
+      expect(progress.length).toBeLessThanOrEqual(2);
+    });
+
+    it("always emits a final update, even when the throttle swallowed the last page", async () => {
+      // The terminal emit is unthrottled on purpose: it carries the final count
+      // and whether the backfill just finished. A readout stuck one page short
+      // of done is the same complaint, arriving at the end instead of throughout.
+      storedRows({
+        min: new Date("2025-07-10T11:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: true,
+      });
+      mockGetHistoryPage.mockResolvedValueOnce({ records: [], nextCursor: null });
+
+      await syncTracearrHistory("server-1", { passes: "forward" });
+
+      const progress = mockEventBus.emit.mock.calls.filter(
+        (c) => (c[0] as { type: string }).type === "tracearr:import-progress",
+      );
+      expect(progress.length).toBeGreaterThanOrEqual(1);
     });
   });
 

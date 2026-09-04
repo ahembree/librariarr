@@ -23,8 +23,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  ChevronLeft,
-  ChevronRight,
   Columns3,
   History,
   Loader2,
@@ -38,6 +36,7 @@ import { QueryProgress, useStreamProgress } from "@/components/query-progress";
 import { consumeProgressStream } from "@/lib/progress/client";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
+import { PaginationControls } from "@/components/pagination-controls";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { useServers } from "@/hooks/use-servers";
 import { useChipColors } from "@/components/chip-color-provider";
@@ -46,6 +45,7 @@ import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MEDIA_TYPE_BADGE_COLORS, MEDIA_TYPE_LABELS } from "@/lib/theme/media-type-colors";
 import { EmptyState } from "@/components/empty-state";
 import type { MediaItemWithRelations } from "@/lib/types";
+import { useRealtime } from "@/hooks/use-realtime";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -325,7 +325,6 @@ export default function HistoryPage() {
   // Pagination
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
 
   // Sort (server-side)
   const [sortBy, setSortBy] = useState("watchedAt");
@@ -668,7 +667,6 @@ export default function HistoryPage() {
       if (token !== reqToken.current) return;
       setItems(data.items || []);
       setTotalCount(data.pagination?.totalCount ?? 0);
-      setHasMore(data.pagination?.hasMore ?? false);
       setPage(fetchPage);
       setUsernames(data.usernames ?? []);
       setPlatforms(data.platforms ?? []);
@@ -676,7 +674,6 @@ export default function HistoryPage() {
       if (token !== reqToken.current) return;
       setItems([]);
       setTotalCount(0);
-      setHasMore(false);
     } finally {
       if (token === reqToken.current) setLoading(false);
     }
@@ -764,6 +761,15 @@ export default function HistoryPage() {
     const interval = setInterval(() => { void fetchImportBackfillPending(); }, TRACEARR_IMPORT_POLL_MS);
     return () => clearInterval(interval);
   }, [importBackfillSettled, fetchImportBackfillPending]);
+
+  // ...and pushed, so the "older history is still coming in" notice clears when
+  // the walk actually finishes rather than up to 30 seconds later. The interval
+  // above stays as the fallback for a dropped stream — this notice is the only
+  // thing telling the user the page is not yet showing everything, so it must
+  // not depend solely on a connection staying up.
+  useRealtime("tracearr:import-progress", () => {
+    void fetchImportBackfillPending();
+  });
 
   // ── Sort handler (server-side) ─────────────────────────────────
 
@@ -951,12 +957,6 @@ export default function HistoryPage() {
       if (token === detailReqToken.current) setLoadingDetail(false);
     }
   }, []);
-
-  // ── Pagination info ───────────────────────────────────────────
-
-  const totalPages = Math.ceil(totalCount / PAGE_SIZE);
-  const rangeStart = (page - 1) * PAGE_SIZE + 1;
-  const rangeEnd = Math.min(page * PAGE_SIZE, totalCount);
 
   // Map current sortBy back to DataTable column ID for sort indicator
   const activeColumnSortId = useMemo(() => {
@@ -1262,34 +1262,14 @@ export default function HistoryPage() {
 
               {/* Pagination */}
               {totalCount > 0 && (
-                <div className="flex items-center justify-between mt-6 text-sm text-muted-foreground">
-                  <span className="font-mono text-xs text-muted-foreground tabular-nums">
-                    {rangeStart.toLocaleString()}-{rangeEnd.toLocaleString()} of {totalCount.toLocaleString()}
-                  </span>
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="h-8 w-8"
-                      disabled={page <= 1}
-                      onClick={() => fetchHistory(page - 1)}
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <span className="px-2 text-sm">
-                      Page {page} of {totalPages}
-                    </span>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="h-8 w-8"
-                      disabled={!hasMore}
-                      onClick={() => fetchHistory(page + 1)}
-                    >
-                      <ChevronRight className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
+                <PaginationControls
+                  className="mt-6"
+                  page={page}
+                  totalCount={totalCount}
+                  pageSize={PAGE_SIZE}
+                  onPageChange={fetchHistory}
+                  busy={loading}
+                />
               )}
             </>
           )}
