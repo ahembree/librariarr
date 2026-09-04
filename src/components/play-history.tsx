@@ -7,21 +7,20 @@ import {
   CircleDashed,
   History,
   Info,
-  Loader2,
   Monitor,
   MonitorPlay,
   Repeat,
   User,
 } from "lucide-react";
 import { ColorChip } from "@/components/color-chip";
-import { Button } from "@/components/ui/button";
+import { PaginationControls } from "@/components/pagination-controls";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { formatDurationClock } from "@/lib/format";
 import { SERVER_TYPE_STYLES, DEFAULT_SERVER_STYLE } from "@/lib/server-styles";
 import { cn } from "@/lib/utils";
 
-/** How many plays each request pulls; "Load more" appends another page. */
-const PAGE_SIZE = 25;
+/** How many plays one page shows; the footer steps between pages. */
+const PAGE_SIZE = 5;
 
 interface WatchHistoryRow {
   id: string;
@@ -781,6 +780,11 @@ function PlayRow({ row, currentEpisode, singleItem, multiServer, card }: PlayRow
  * timestamps, so it can't stand in for this — which is why the episode page
  * swaps that card for this component (`variant="card"`) instead of showing
  * both.
+ *
+ * Paged, not appended: one page is `PAGE_SIZE` plays under a shared
+ * `PaginationControls` footer (first / prev / typed page number / next / last).
+ * The card variant renders in a narrow detail-grid column and in the media
+ * detail side panel, where an ever-growing list buries the cards beside it.
  */
 export function PlayHistory({
   mediaItemId,
@@ -796,54 +800,87 @@ export function PlayHistory({
   variant = "section",
 }: PlayHistoryProps) {
   const [rows, setRows] = useState<WatchHistoryRow[]>([]);
+  const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [paging, setPaging] = useState(false);
   const [error, setError] = useState(false);
+  // Every server seen so far in this scope, not just on the page on screen: a
+  // page whose five plays happen to share a server must not drop the server
+  // names the previous page showed. Cleared with the rest of the scope state.
+  const [seenServers, setSeenServers] = useState<string[]>([]);
   // Guards against a stale slow response landing after the scope changed and
   // overwriting the current series'/season's rows.
   const reqToken = useRef(0);
 
+  const fetchPage = useCallback(
+    async (target: number): Promise<WatchHistoryResponse> => {
+      const params = new URLSearchParams({
+        page: String(target),
+        limit: String(PAGE_SIZE),
+      });
+      if (serverId) params.set("serverId", serverId);
+
+      // Two scopes, two endpoints. An item id is the narrower and more
+      // certain of the two, so it wins when both are somehow supplied.
+      let url: string;
+      if (mediaItemId) {
+        url = `/api/media/${mediaItemId}/plays?${params}`;
+      } else {
+        if (seriesKey) params.set("seriesKey", seriesKey);
+        else if (parentTitle) params.set("parentTitle", parentTitle);
+        if (seasonNumber != null) params.set("seasonNumber", String(seasonNumber));
+        if (episodeNumber != null) params.set("episodeNumber", String(episodeNumber));
+        url = `/api/media/series/watch-history?${params}`;
+      }
+
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to load watch history");
+      return (await res.json()) as WatchHistoryResponse;
+    },
+    [mediaItemId, seriesKey, parentTitle, seasonNumber, episodeNumber, serverId],
+  );
+
   const loadPage = useCallback(
-    async (page: number, token: number) => {
-      try {
-        const params = new URLSearchParams({
-          page: String(page),
-          limit: String(PAGE_SIZE),
+    async (target: number, token: number) => {
+      const apply = (data: WatchHistoryResponse, applied: number) => {
+        setRows(data.items);
+        setPage(applied);
+        // A page that lands after a failed one clears the error card, so a
+        // transient failure doesn't outlive the request that recovered from it.
+        setError(false);
+        setTotalCount(data.pagination.totalCount);
+        setSeenServers((prev) => {
+          const next = new Set(prev);
+          for (const row of data.items) next.add(row.server.id);
+          return next.size === prev.length ? prev : [...next];
         });
-        if (serverId) params.set("serverId", serverId);
+      };
 
-        // Two scopes, two endpoints. An item id is the narrower and more
-        // certain of the two, so it wins when both are somehow supplied.
-        let url: string;
-        if (mediaItemId) {
-          url = `/api/media/${mediaItemId}/plays?${params}`;
-        } else {
-          if (seriesKey) params.set("seriesKey", seriesKey);
-          else if (parentTitle) params.set("parentTitle", parentTitle);
-          if (seasonNumber != null) params.set("seasonNumber", String(seasonNumber));
-          if (episodeNumber != null) params.set("episodeNumber", String(episodeNumber));
-          url = `/api/media/series/watch-history?${params}`;
-        }
-
-        const res = await fetch(url);
-        if (!res.ok) throw new Error("Failed to load watch history");
-        const data: WatchHistoryResponse = await res.json();
+      try {
+        const data = await fetchPage(target);
         if (token !== reqToken.current) return;
 
-        setRows((prev) => (page === 1 ? data.items : [...prev, ...data.items]));
-        setTotalCount(data.pagination.totalCount);
-        setHasMore(data.pagination.hasMore);
+        // The list shrank under us — plays purged, or a refresh landed on a
+        // shorter history — so this page no longer exists. Fall back to the
+        // first rather than stranding the user on an empty one.
+        if (data.items.length === 0 && target > 1) {
+          const first = await fetchPage(1);
+          if (token !== reqToken.current) return;
+          apply(first, 1);
+          return;
+        }
+
+        apply(data, target);
       } catch {
         if (token === reqToken.current) setError(true);
       } finally {
         if (token !== reqToken.current) return;
         setLoading(false);
-        setLoadingMore(false);
+        setPaging(false);
       }
     },
-    [mediaItemId, seriesKey, parentTitle, seasonNumber, episodeNumber, serverId],
+    [fetchPage],
   );
 
   // Reset to the loading state when the scope changes, so a new series/season
@@ -855,8 +892,9 @@ export function PlayHistory({
   if (prevScopeKey !== scopeKey) {
     setPrevScopeKey(scopeKey);
     setRows([]);
+    setPage(1);
     setTotalCount(0);
-    setHasMore(false);
+    setSeenServers([]);
     setError(false);
     setLoading(true);
   }
@@ -868,16 +906,20 @@ export function PlayHistory({
     })();
   }, [loadPage, refreshKey]);
 
-  const loadMore = useCallback(() => {
-    setLoadingMore(true);
-    // The next page is derived from what's already rendered, so a "Load more"
-    // that races a refresh can't skip a page.
-    void loadPage(Math.floor(rows.length / PAGE_SIZE) + 1, reqToken.current);
-  }, [loadPage, rows.length]);
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+
+  const goToPage = useCallback(
+    (target: number) => {
+      if (paging || target < 1 || target > totalPages) return;
+      setPaging(true);
+      void loadPage(target, reqToken.current);
+    },
+    [loadPage, paging, totalPages],
+  );
 
   const card = variant === "card";
   // Only worth naming the server when the plays actually span more than one.
-  const multiServer = new Set(rows.map((r) => r.server.id)).size > 1;
+  const multiServer = seenServers.length > 1;
 
   const body = loading ? (
     <div className="space-y-2">
@@ -906,7 +948,14 @@ export function PlayHistory({
     </div>
   ) : (
     <>
-      <ul className={card ? "space-y-2" : "space-y-1.5"}>
+      <ul
+        className={cn(
+          card ? "space-y-2" : "space-y-1.5",
+          // Dim rather than swap in a skeleton, so the rows don't jump while
+          // the next page lands.
+          paging && "opacity-60",
+        )}
+      >
         {rows.map((row) => (
           <PlayRow
             key={row.id}
@@ -919,13 +968,16 @@ export function PlayHistory({
         ))}
       </ul>
 
-      {hasMore && (
-        <div className="mt-3 flex justify-center">
-          <Button variant="outline" size="sm" onClick={loadMore} disabled={loadingMore}>
-            {loadingMore && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
-            Load more
-          </Button>
-        </div>
+      {totalCount > PAGE_SIZE && (
+        <PaginationControls
+          className="mt-3"
+          page={page}
+          totalCount={totalCount}
+          pageSize={PAGE_SIZE}
+          onPageChange={goToPage}
+          busy={paging}
+          compact={card}
+        />
       )}
     </>
   );

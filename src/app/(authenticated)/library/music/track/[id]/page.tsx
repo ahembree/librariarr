@@ -111,7 +111,7 @@ export default function TrackDetailPage() {
         // server but without their timestamps, device, or any of the
         // completion/transcode detail a Tracearr-sourced row carries — so the
         // page shows the richer view rather than the same data twice.
-        historySection={<PlayHistory variant="card" mediaItemId={item.id} singleItem />}
+        historySection={<PlayHistory variant="card" mediaItemId={item.id} singleItem heading="Listen History" />}
       />
     </MediaDetailHero>
   );
