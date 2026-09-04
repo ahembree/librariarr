@@ -5,7 +5,10 @@ const mockHasEnabledSeerrInstances = vi.hoisted(() => vi.fn());
 
 // Real hasArrRules/hasSeerrRules from the engine classify the rule fixtures;
 // only the instance lookups (DB) are mocked.
-vi.mock("@/lib/db", () => ({ prisma: {} }));
+const mockServerCount = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/db", () => ({
+  prisma: { mediaServer: { count: mockServerCount } },
+}));
 vi.mock("@/lib/lifecycle/fetch-arr-metadata", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/lifecycle/fetch-arr-metadata")>();
   return {
@@ -40,6 +43,8 @@ describe("checkLifecycleRuleEvaluability", () => {
     vi.clearAllMocks();
     mockHasEnabledArrInstances.mockResolvedValue(true);
     mockHasEnabledSeerrInstances.mockResolvedValue(true);
+    // No server mid-import by default.
+    mockServerCount.mockResolvedValue(0);
   });
 
   it("is evaluable for plain DB rules without touching instance lookups", async () => {
@@ -99,4 +104,126 @@ describe("checkLifecycleRuleEvaluability", () => {
     expect(result).toEqual({ evaluable: true });
     expect(mockHasEnabledSeerrInstances).toHaveBeenCalledWith("u1");
   });
+
+  describe("watch history", () => {
+    it("refuses watchedByUser rules while a Tracearr server is still importing", async () => {
+      // The match-all hazard, in its third flavour. `watchedByUser` reads the
+      // `WatchHistory` relation directly — not the monotonic playCount columns —
+      // so its negative forms compile to `watchHistory: { none: … }`, which is
+      // trivially TRUE for every item against an empty relation.
+      //
+      // Changing a server's watch-history source wipes its rows on purpose, and
+      // the re-import is a background walk taking minutes to hours. A detection
+      // run in that window would match the entire library, and on a DELETE rule
+      // set that is the whole library deleted.
+      mockServerCount.mockResolvedValue(1);
+
+      const result = await checkLifecycleRuleEvaluability(
+        "u1",
+        "MOVIE",
+        groupsWith("watchedByUser"),
+      );
+
+      expect(result.evaluable).toBe(false);
+      if (result.evaluable) throw new Error("expected not evaluable");
+      // Transient: it resumes by itself once the backfill finishes, so callers
+      // skip rather than disarm.
+      expect(result.permanent).toBe(false);
+      expect(result.reason).toMatch(/watch history|importing/i);
+    });
+
+    it("is evaluable once every Tracearr server has finished importing", async () => {
+      mockServerCount.mockResolvedValue(0);
+
+      await expect(
+        checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("watchedByUser")),
+      ).resolves.toEqual({ evaluable: true });
+    });
+
+
+
+    it("refuses watchedByUser after an UNLINK, not just during an import", async () => {
+      // The hole the first version of this guard had. Unlinking a server
+      // (Tracearr -> native) wipes its rows AND sets `tracearrServerId` to
+      // null, so a check keyed on "is Tracearr-mapped and unfinished" stops
+      // seeing the server at exactly its emptiest moment. The marker is set by
+      // the wipe itself, so it covers both directions.
+      //
+      // Asserted through the WHERE clause: the count must consider a cleared
+      // history independently of any Tracearr mapping.
+      mockServerCount.mockResolvedValue(0);
+
+      await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("watchedByUser"));
+
+      const where = mockServerCount.mock.calls[0][0].where;
+      expect(where.OR).toEqual(
+        expect.arrayContaining([{ watchHistoryClearedAt: { not: null } }]),
+      );
+      // ...and must NOT require a Tracearr mapping at the top level, or an
+      // unlinked server would be filtered out before the OR is considered.
+      expect(where).not.toHaveProperty("tracearrServerId");
+    });
+
+    it("refuses a Tracearr-mapped server that holds no plays, whatever the flag says", async () => {
+      // `tracearrBackfillComplete` describes rows, and the rows can go without
+      // it: a config-only backup restore truncates `WatchHistory` but restores
+      // `MediaServer` verbatim, and a disable-with-purge cascades through
+      // `WatchHistory.mediaItem`. Both leave "complete" standing over an empty
+      // relation. The importer does re-walk from scratch, but that takes hours,
+      // and for all of them a flag-only check would vouch for a history that
+      // isn't there while `watchedByUser` negatives match the whole library.
+      mockServerCount.mockResolvedValue(0);
+
+      await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("watchedByUser"));
+
+      const where = mockServerCount.mock.calls[0][0].where;
+      expect(where.OR).toEqual(
+        expect.arrayContaining([
+          { tracearrServerId: { not: null }, watchHistory: { none: {} } },
+        ]),
+      );
+    });
+
+    it("only considers the servers the rule set targets", async () => {
+      // Without scoping, one unrelated server part-way through its Tracearr
+      // import would pause every watchedByUser rule set on the install —
+      // including ones reading only native servers whose history is complete.
+      // Worse, a backfill that never finishes (instance disabled, mapping to a
+      // server Tracearr no longer monitors) would disable them permanently.
+      mockServerCount.mockResolvedValue(0);
+
+      await checkLifecycleRuleEvaluability(
+        "u1",
+        "MOVIE",
+        groupsWith("watchedByUser"),
+        ["server-a", "server-b"],
+      );
+
+      expect(mockServerCount).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: { in: ["server-a", "server-b"] } }),
+        }),
+      );
+    });
+
+    it("falls back to every server when the rule set targets all of them", async () => {
+      // An empty `serverIds` is the rule set's own default and means "all", so
+      // the check must stay broad rather than silently matching nothing.
+      mockServerCount.mockResolvedValue(0);
+
+      await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("watchedByUser"), []);
+
+      const where = mockServerCount.mock.calls[0][0].where;
+      expect(where).not.toHaveProperty("id");
+    });
+
+    it("does not consult watch history for rules that never read it", async () => {
+      // The lookup is a DB round-trip on the hot detection path; a rule set with
+      // no watchedByUser rule must not pay for it.
+      await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("title"));
+
+      expect(mockServerCount).not.toHaveBeenCalled();
+    });
+  });
+
 });

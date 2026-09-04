@@ -24,6 +24,15 @@ const MAX_LIMIT = 200;
  * `serverUsername` — `session.userId` is the Librariarr admin who owns the
  * server record, not a media-server account.
  *
+ * A row's `source` says where it came from: `NATIVE` (the media-server scan,
+ * which knows only who/when/what) or `TRACEARR` (an imported play event, which
+ * additionally carries completion, transcode decisions and the full stream
+ * fidelity). Every Tracearr column is nullable and null on a native row, so
+ * this route returns them unconditionally and the card renders each only when
+ * present. A `watched: false` row is returned like any other — this is display
+ * data, and a partial play is a real play; only the watch-state reconcile
+ * (`src/lib/sync/watch-reconcile.ts`) cares about the completion threshold.
+ *
  * Dedup is deliberately NOT applied. A `WatchHistory` row is a real play event
  * recorded against the copy that was actually played; filtering to
  * `dedupCanonical` would silently drop every play that happened on a
@@ -121,6 +130,35 @@ export async function GET(request: NextRequest) {
         watchedAt: true,
         deviceName: true,
         platform: true,
+        // Provenance + the rich per-play detail a Tracearr-sourced row carries.
+        // Every one of these is nullable, and all of them are null on a NATIVE
+        // row (a media-server scan only knows who/when/what), so the card
+        // renders each only when present rather than as empty placeholders.
+        source: true,
+        sourceEventId: true,
+        referenceId: true,
+        watched: true,
+        percentComplete: true,
+        state: true,
+        progressMs: true,
+        durationMs: true,
+        totalDurationMs: true,
+        segmentCount: true,
+        stoppedAt: true,
+        player: true,
+        product: true,
+        isTranscode: true,
+        videoDecision: true,
+        audioDecision: true,
+        bitrate: true,
+        resolution: true,
+        sourceVideoCodec: true,
+        sourceAudioCodec: true,
+        streamVideoCodec: true,
+        streamAudioCodec: true,
+        transcodeInfo: true,
+        subtitleInfo: true,
+        streamQuality: true,
         mediaItem: {
           select: {
             id: true,
@@ -145,6 +183,35 @@ export async function GET(request: NextRequest) {
     watchedAt: row.watchedAt?.toISOString() ?? null,
     deviceName: row.deviceName,
     platform: row.platform,
+    source: row.source,
+    sourceEventId: row.sourceEventId,
+    referenceId: row.referenceId,
+    watched: row.watched,
+    percentComplete: row.percentComplete,
+    state: row.state,
+    progressMs: row.progressMs,
+    durationMs: row.durationMs,
+    totalDurationMs: row.totalDurationMs,
+    segmentCount: row.segmentCount,
+    stoppedAt: row.stoppedAt?.toISOString() ?? null,
+    player: row.player,
+    product: row.product,
+    isTranscode: row.isTranscode,
+    videoDecision: row.videoDecision,
+    audioDecision: row.audioDecision,
+    bitrate: row.bitrate,
+    resolution: row.resolution,
+    sourceVideoCodec: row.sourceVideoCodec,
+    sourceAudioCodec: row.sourceAudioCodec,
+    streamVideoCodec: row.streamVideoCodec,
+    streamAudioCodec: row.streamAudioCodec,
+    // Passed through verbatim. These are `Prisma.JsonValue`s — Tracearr's own
+    // nested objects, stored as-is so the UI gets the full stream fidelity
+    // without a scalar column per field. The card reads them structurally;
+    // nothing here reshapes or validates them.
+    transcodeInfo: row.transcodeInfo,
+    subtitleInfo: row.subtitleInfo,
+    streamQuality: row.streamQuality,
     mediaItem: {
       id: row.mediaItem.id,
       title: row.mediaItem.title,

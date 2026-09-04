@@ -18,6 +18,11 @@ const mockPrisma = vi.hoisted(() => ({
   lifecycleAction: {
     deleteMany: vi.fn(),
   },
+  // Read by the real `checkLifecycleRuleEvaluability` when a rule set uses
+  // `watchedByUser` — see the serverIds scoping test below.
+  mediaServer: {
+    count: vi.fn().mockResolvedValue(0),
+  },
   // Detection runs its match writes inside a transaction in two shapes:
   //   - callback form: $transaction(async (tx) => { ... }) (full re-eval)
   //   - array form:    $transaction([p1, p2])              (incremental)
@@ -618,6 +623,51 @@ describe("runDetection", () => {
     expect(mockPrisma.ruleMatch.deleteMany).toHaveBeenCalledWith({ where: { ruleSetId: "rs1" } });
   });
 
+
+  it("scopes the evaluability check to the rule set's own servers", async () => {
+    // `processLifecycleRules` (the scheduled path) passes `serverIds`; this
+    // manual "Re-evaluate All" path did not. The watch-history half of the
+    // check is scoped by it, so without it the two paths gave DIFFERENT answers
+    // for the same rule set — one unrelated server part-way through its
+    // Tracearr import made manual re-evaluation refuse rule sets the scheduler
+    // was happily running, with nothing in the UI to explain why.
+    mockHasWatchedByUserRules.mockReturnValue(true);
+    mockPrisma.mediaServer.count.mockResolvedValue(0);
+    mockPrisma.ruleSet.findMany.mockResolvedValue([
+      {
+        id: "rs1",
+        userId: "u1",
+        name: "Test",
+        type: "MOVIE",
+        rules: [{ field: "watchedByUser", operator: "notEquals", value: "alice", enabled: true }],
+        seriesScope: false,
+        serverIds: ["s1", "s-disabled"],
+        actionEnabled: false,
+        actionType: null,
+        actionDelayDays: 0,
+        arrInstanceId: null,
+        addImportExclusion: false,
+        addArrTags: [],
+        removeArrTags: [],
+        collectionEnabled: false,
+        collectionName: null,
+        stickyMatches: false,
+        // `s-disabled` is not among the user's servers, so it is filtered out
+        // before the check — the scope passed is the INTERSECTION, exactly what
+        // detection will actually read.
+        user: { mediaServers: [{ id: "s1" }] },
+      },
+    ]);
+    mockPrisma.mediaItem.findMany.mockResolvedValue([]);
+
+    await runDetection("u1");
+
+    expect(mockPrisma.mediaServer.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: { in: ["s1"] } }),
+      }),
+    );
+  });
 });
 
 describe("detectAndSaveMatches evaluability defense-in-depth", () => {

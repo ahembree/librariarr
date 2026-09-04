@@ -5,6 +5,7 @@ import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
+import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { logger } from "@/lib/logger";
 import { syncCollectionById, syncAllCollections } from "@/lib/lifecycle/collections";
 import { describePlexError } from "@/lib/plex/errors";
@@ -80,7 +81,12 @@ export async function detectAndSaveMatches(
   // "seerrRequested = false" into a whole-library match. Callers normally
   // pre-check via the same helper (and handle permanent-case disarming); this
   // internal check is the choke point that protects any future caller.
-  const evaluability = await checkLifecycleRuleEvaluability(ruleSet.userId, ruleSet.type, rules);
+  const evaluability = await checkLifecycleRuleEvaluability(
+    ruleSet.userId,
+    ruleSet.type,
+    rules,
+    ruleSet.serverIds,
+  );
   if (!evaluability.evaluable) {
     const existingMatches = await prisma.ruleMatch.findMany({
       where: { ruleSetId: ruleSet.id },
@@ -430,8 +436,16 @@ export async function detectAndSaveMatches(
         externalIds: true,
         streams: true,
         // Re-evaluation needs per-user play history to compute accurate
-        // "no longer matching" reasons for watchedByUser rules.
-        ...(hasWatchedByUserRules(rules) ? { watchHistory: { select: { serverUsername: true } } } : {}),
+        // "no longer matching" reasons for watchedByUser rules. Filtered to
+        // completed plays for the same reason the engines' eager loads are:
+        // this re-runs the Phase 2 evaluator over rows Phase 1 already
+        // filtered, so an unfiltered load makes a partial Tracearr play look
+        // like a watch here and nowhere else — the item would be reported as
+        // "was matching" (i.e. dropped for some unexplained reason) when in
+        // fact it dropped precisely because the abandoned play never counted.
+        ...(hasWatchedByUserRules(rules)
+          ? { watchHistory: { where: COMPLETED_PLAY_FILTER, select: { serverUsername: true } } }
+          : {}),
         library: {
           select: {
             title: true,
@@ -552,7 +566,13 @@ export async function runDetection(userId: string, ruleSetId?: string, fullReEva
     // against an empty metadata map (which would make "foundInArr = false" /
     // "seerrRequested = false" match the whole library). Permanent failures
     // (Seerr on MUSIC) also disarm the rule set — see evaluability.ts.
-    const evaluability = await checkLifecycleRuleEvaluability(userId, rs.type, rules);
+    // `serverIds` (the rule set's targets, intersected with enabled servers
+    // above) must be passed here exactly as `processLifecycleRules` passes it:
+    // the watch-history check is scoped by it, so omitting it makes this
+    // manual "Re-evaluate All" path refuse rule sets the scheduled path
+    // happily evaluates — the same rule set, a different answer depending on
+    // how it was triggered.
+    const evaluability = await checkLifecycleRuleEvaluability(userId, rs.type, rules, serverIds);
     if (!evaluability.evaluable) {
       logger.warn("Lifecycle", `Skipping rule set "${rs.name}" — ${evaluability.reason}`);
       if (evaluability.permanent) {

@@ -152,6 +152,13 @@ export async function createTestServer(
     machineId: string;
     tlsSkipVerify: boolean;
     enabled: boolean;
+    // Watch-history provenance state. Defaults mirror the schema's, which
+    // describe a plain native server: unmapped and never cleared, so the
+    // completeness check passes regardless of the (Tracearr-only) backfill flag
+    // and existing callers are unaffected.
+    tracearrServerId: string | null;
+    tracearrBackfillComplete: boolean;
+    watchHistoryClearedAt: Date | null;
   }>
 ) {
   const prisma = getTestPrisma();
@@ -165,6 +172,9 @@ export async function createTestServer(
       machineId: overrides?.machineId ?? `machine-${unique()}`,
       tlsSkipVerify: overrides?.tlsSkipVerify ?? false,
       enabled: overrides?.enabled ?? true,
+      tracearrServerId: overrides?.tracearrServerId ?? null,
+      tracearrBackfillComplete: overrides?.tracearrBackfillComplete ?? false,
+      watchHistoryClearedAt: overrides?.watchHistoryClearedAt ?? null,
     },
   });
 }
@@ -396,6 +406,22 @@ export async function createTestSeerrInstance(
       name: overrides?.name ?? "Test Seerr",
       url: overrides?.url ?? "http://seerr.test:5055",
       apiKey: overrides?.apiKey ?? "test-api-key",
+      enabled: overrides?.enabled ?? true,
+    },
+  });
+}
+
+export async function createTestTracearrInstance(
+  userId: string,
+  overrides?: Partial<{ name: string; url: string; apiKey: string; enabled: boolean }>
+) {
+  const prisma = getTestPrisma();
+  return prisma.tracearrInstance.create({
+    data: {
+      userId,
+      name: overrides?.name ?? "Test Tracearr",
+      url: overrides?.url ?? "http://tracearr.test:3000",
+      apiKey: overrides?.apiKey ?? "trr_pub_test-key",
       enabled: overrides?.enabled ?? true,
     },
   });

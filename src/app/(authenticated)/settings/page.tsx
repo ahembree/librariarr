@@ -21,13 +21,14 @@ import {
   Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { SettingsSkeleton } from "@/components/skeletons";
 
 // ─── Tab components ───
 import { GeneralTab } from "./tabs/general-tab";
 import { SchedulingTab } from "./tabs/scheduling-tab";
 import { ServersTab } from "./tabs/servers-tab";
-import type { AddServerDialogState, AddServerFormState, PurgeDialogState, SyncPromptState, RemoveServerDialogState, ServerTestResult } from "./tabs/servers-tab";
+import type { AddServerDialogState, AddServerFormState, PurgeDialogState, SyncPromptState, RemoveServerDialogState, ServerTestResult, WatchHistorySourceDialogState } from "./tabs/servers-tab";
 import { IntegrationsTab } from "./tabs/integrations-tab";
 import { NotificationsTab } from "./tabs/notifications-tab";
 import { AuthenticationTab } from "./tabs/authentication-tab";
@@ -41,6 +42,9 @@ import type {
   MediaServer,
   ArrInstance,
   SeerrInstance,
+  TracearrInstance,
+  TracearrImportStatus,
+  TracearrServerListState,
   PlexServer,
   ScheduleInfo,
   AuthInfo,
@@ -51,6 +55,9 @@ import type {
   ReleaseNote,
 } from "./types";
 import { PRESET_VALUES } from "./types";
+
+/** Stable empty reference — see `visibleTracearrImportStatus`. */
+const NO_TRACEARR_IMPORT_STATUS: TracearrImportStatus[] = [];
 
 // ─── Tab navigation ───
 
@@ -68,6 +75,15 @@ const SETTINGS_TABS: { value: SettingsTab; label: string; icon: typeof SettingsI
 ];
 
 const VALID_SETTINGS_TABS = new Set<string>(SETTINGS_TABS.map((t) => t.value));
+
+/**
+ * How often the Tracearr import status is re-read while a backfill is still
+ * owed. Deliberately slow: the backfill runs for minutes-to-hours in
+ * five-minute job slices, so a tighter poll would only add requests without
+ * changing what the user reads. Polling stops the moment every mapped server
+ * reports complete.
+ */
+const TRACEARR_IMPORT_POLL_MS = 30_000;
 
 function getInitialSettingsTab(): SettingsTab {
   if (typeof window === "undefined") return "general";
@@ -211,6 +227,13 @@ export default function SettingsPage() {
   const [removeServerDialog, setRemoveServerDialog] = useState<RemoveServerDialogState | null>(null);
   const [removingServer, setRemovingServer] = useState(false);
 
+  // Watch history source (Tracearr ↔ media server mapping)
+  const [tracearrServerLists, setTracearrServerLists] = useState<Record<string, TracearrServerListState>>({});
+  /** Per-mapped-server import progress; empty until the first status response. */
+  const [tracearrImportStatus, setTracearrImportStatus] = useState<TracearrImportStatus[]>([]);
+  const [watchHistorySourceDialog, setWatchHistorySourceDialog] = useState<WatchHistorySourceDialogState | null>(null);
+  const [savingWatchHistorySource, setSavingWatchHistorySource] = useState<string | null>(null);
+
   // Scheduled job time
   const [scheduledJobTime, setScheduledJobTime] = useState("00:00");
   const [savingJobTime, setSavingJobTime] = useState(false);
@@ -250,6 +273,13 @@ export default function SettingsPage() {
   const [seerrForm, setSeerrForm] = useState({ name: "", url: "", apiKey: "" });
   const [seerrSaving, setSeerrSaving] = useState(false);
   const [seerrError, setSeerrError] = useState("");
+
+  // Tracearr instances
+  const [tracearrInstances, setTracearrInstances] = useState<TracearrInstance[]>([]);
+  const [showTracearrForm, setShowTracearrForm] = useState(false);
+  const [tracearrForm, setTracearrForm] = useState({ name: "", url: "", apiKey: "" });
+  const [tracearrSaving, setTracearrSaving] = useState(false);
+  const [tracearrError, setTracearrError] = useState("");
 
   // System info
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
@@ -388,6 +418,14 @@ export default function SettingsPage() {
   const [editSeerrTesting, setEditSeerrTesting] = useState(false);
   const [editSeerrTestResult, setEditSeerrTestResult] = useState<TestResult | null>(null);
 
+  // Tracearr edit state
+  const [editingTracearrId, setEditingTracearrId] = useState<string | null>(null);
+  const [editTracearrForm, setEditTracearrForm] = useState({ name: "", url: "", apiKey: "" });
+  const [editTracearrSaving, setEditTracearrSaving] = useState(false);
+  const [editTracearrError, setEditTracearrError] = useState("");
+  const [editTracearrTesting, setEditTracearrTesting] = useState(false);
+  const [editTracearrTestResult, setEditTracearrTestResult] = useState<TestResult | null>(null);
+
   // Sync active tab to URL hash (replaceState avoids creating extra history
   // entries that break browser back/forward navigation in the App Router)
   useEffect(() => {
@@ -494,6 +532,78 @@ export default function SettingsPage() {
       setSeerrInstances(data.instances || []);
     } catch (error) {
       console.error("Failed to fetch Seerr instances:", error);
+    }
+  }, []);
+
+  const fetchTracearrInstances = useCallback(async () => {
+    try {
+      const response = await fetch("/api/integrations/tracearr");
+      const data = await response.json();
+      setTracearrInstances(data.instances || []);
+    } catch (error) {
+      console.error("Failed to fetch Tracearr instances:", error);
+    }
+  }, []);
+
+  /**
+   * The media servers one Tracearr instance monitors, for the per-server
+   * watch-history-source dropdown. A failure is stored rather than swallowed:
+   * the dropdown shows it and stays disabled, because an empty option list
+   * would read as "Tracearr monitors nothing" instead of "we couldn't ask it".
+   */
+  const fetchTracearrServers = useCallback(async (instanceId: string) => {
+    setTracearrServerLists((prev) => ({
+      ...prev,
+      [instanceId]: { loading: true, error: null, servers: prev[instanceId]?.servers ?? [] },
+    }));
+    try {
+      const response = await fetch(`/api/integrations/tracearr/${instanceId}/servers`);
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        setTracearrServerLists((prev) => ({
+          ...prev,
+          [instanceId]: {
+            loading: false,
+            error: data?.detail ?? data?.error ?? "Failed to load servers",
+            servers: [],
+          },
+        }));
+        return;
+      }
+      setTracearrServerLists((prev) => ({
+        ...prev,
+        [instanceId]: { loading: false, error: null, servers: data?.servers ?? [] },
+      }));
+    } catch (error) {
+      console.error("Failed to fetch Tracearr servers:", error);
+      setTracearrServerLists((prev) => ({
+        ...prev,
+        [instanceId]: { loading: false, error: "Request failed", servers: [] },
+      }));
+    }
+  }, []);
+
+  /**
+   * How far the Tracearr import has got, per mapped server, for the status
+   * line under each watch-history-source dropdown.
+   *
+   * A failure clears the list instead of storing an error the way
+   * `fetchTracearrServers` does: this is a progress readout beside a working
+   * control, not the control itself, so a transient blip should make the line
+   * disappear rather than plant an error next to a setting that is fine.
+   */
+  const fetchTracearrImportStatus = useCallback(async () => {
+    try {
+      const response = await fetch("/api/integrations/tracearr/status");
+      if (!response.ok) {
+        setTracearrImportStatus([]);
+        return;
+      }
+      const data = (await response.json()) as { servers?: TracearrImportStatus[] };
+      setTracearrImportStatus(data.servers ?? []);
+    } catch (error) {
+      console.error("Failed to fetch Tracearr import status:", error);
+      setTracearrImportStatus([]);
     }
   }, []);
 
@@ -692,6 +802,7 @@ export default function SettingsPage() {
         fetchRadarrInstances(),
         fetchLidarrInstances(),
         fetchSeerrInstances(),
+        fetchTracearrInstances(),
         fetchSystemInfo(),
         fetchAccentColor(),
         fetchChipColors(),
@@ -713,7 +824,65 @@ export default function SettingsPage() {
     fetch("/api/settings/auth").then((r) => r.json()).then(setAuthInfo).catch(() => {});
     // Fetch display preferences separately (non-blocking)
     fetch("/api/settings/title-preference").then((r) => r.ok ? r.json() : null).then((data) => { if (data) { setPreferredTitleServerId(data.preferredTitleServerId ?? null); setPreferredArtworkServerId(data.preferredArtworkServerId ?? null); } }).catch(() => {});
-  }, [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchDedupSetting, fetchRealtimeSetting, fetchImageCacheStats, fetchChangelog]);
+  }, [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchTracearrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchDedupSetting, fetchRealtimeSetting, fetchImageCacheStats, fetchChangelog]);
+
+  // Load each enabled Tracearr instance's server list lazily — nothing is
+  // requested until an instance exists, so the (common) native-history setup
+  // pays nothing for the mapping dropdown. The dependency is a joined id
+  // string, not the array, so refreshing the instance list doesn't refetch
+  // every server list on every render.
+  const enabledTracearrIds = tracearrInstances.filter((i) => i.enabled).map((i) => i.id).join(",");
+  useEffect(() => {
+    if (!enabledTracearrIds) return;
+    // Kicked off from an async IIFE (the idiom the initial-load effect above
+    // uses) rather than called directly: `fetchTracearrServers` sets its
+    // loading flag before its first await, and a setState that runs
+    // synchronously inside an effect body triggers a cascading render.
+    void (async () => {
+      await Promise.all(
+        enabledTracearrIds.split(",").map((id) => fetchTracearrServers(id)),
+      );
+    })();
+  }, [enabledTracearrIds, fetchTracearrServers]);
+
+  // Import progress for the mapped servers. Gated on an instance existing at
+  // all — including a disabled one, which can still own a live mapping — so
+  // the (overwhelmingly common) native-history setup never issues the request.
+  // The state reset returns the SAME empty array when it is already empty, or
+  // the new reference would re-render every settings page that has no Tracearr.
+  const hasTracearrInstance = tracearrInstances.length > 0;
+  useEffect(() => {
+    if (!hasTracearrInstance) return;
+    // Async IIFE, not a bare call: the fetch sets its loading state before the
+    // first await, and a setState running synchronously in an effect body is a
+    // cascading render.
+    void (async () => {
+      await fetchTracearrImportStatus();
+    })();
+  }, [hasTracearrInstance, fetchTracearrImportStatus]);
+
+  // Derived, never stored. With no Tracearr instance there is nothing to
+  // report, and expressing that as a state RESET meant a synchronous setState
+  // inside the effect above — a cascading render to say something the render
+  // can simply compute. The module-level empty array keeps the reference stable
+  // so a settings page with no Tracearr doesn't re-render on every pass.
+  const visibleTracearrImportStatus = hasTracearrInstance
+    ? tracearrImportStatus
+    : NO_TRACEARR_IMPORT_STATUS;
+
+  // Slow poll while any mapped server still owes a backfill. The walk happens
+  // on the job queue in five-minute slices, so the numbers on screen would
+  // otherwise be frozen at whatever they were when the page loaded — exactly
+  // the "no indication anywhere" problem. The dependency is a BOOLEAN, not the
+  // status array, so each poll's fresh array doesn't tear down and rebuild the
+  // interval; the interval is cleared the moment the last server reports
+  // complete, and by the effect cleanup on unmount.
+  const tracearrBackfillRunning = visibleTracearrImportStatus.some((s) => !s.backfillComplete);
+  useEffect(() => {
+    if (!tracearrBackfillRunning) return;
+    const interval = setInterval(() => { void fetchTracearrImportStatus(); }, TRACEARR_IMPORT_POLL_MS);
+    return () => clearInterval(interval);
+  }, [tracearrBackfillRunning, fetchTracearrImportStatus]);
 
   // Poll server data during active sync for real-time progress bar
   const hasActiveSync = servers.some(
@@ -1000,6 +1169,44 @@ export default function SettingsPage() {
     }
   };
 
+  /**
+   * Writes the pending watch-history-source change from the confirm dialog.
+   * `tracearrServerId: null` unlinks back to the media server's own history;
+   * the route clears the server's stored `WatchHistory` either way, which is
+   * what the dialog warned about, so the servers refetch afterwards keeps the
+   * dropdown honest about what is actually stored.
+   */
+  const confirmWatchHistorySource = async () => {
+    if (!watchHistorySourceDialog) return;
+    const { serverId, tracearrServerId, sourceLabel } = watchHistorySourceDialog;
+    setSavingWatchHistorySource(serverId);
+    try {
+      const res = await fetch(`/api/servers/${serverId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tracearrServerId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        toast.error("Failed to change watch history source", {
+          description: data?.detail ?? data?.error,
+        });
+        return;
+      }
+      setWatchHistorySourceDialog(null);
+      // The PUT clears the stored history AND resets the backfill flag, so the
+      // status line under the dropdown is stale the instant it returns —
+      // refetch rather than leave a "fully imported" tick over an empty table.
+      await Promise.all([fetchServers(), fetchTracearrImportStatus()]);
+      toast.success("Watch history source changed", { description: `Now using ${sourceLabel}.` });
+    } catch (error) {
+      console.error("Failed to change watch history source:", error);
+      toast.error("Failed to change watch history source");
+    } finally {
+      setSavingWatchHistorySource(null);
+    }
+  };
+
   const toggleArrEnabled = async (type: string, id: string, enabled: boolean) => {
     try {
       const res = await fetch(`/api/integrations/${type}/${id}`, {
@@ -1037,6 +1244,25 @@ export default function SettingsPage() {
     } catch (error) {
       console.error("Failed to toggle Seerr enabled:", error);
       toast.error("Failed to update Seerr");
+    }
+  };
+
+  const toggleTracearrEnabled = async (id: string, enabled: boolean) => {
+    try {
+      const res = await fetch(`/api/integrations/tracearr/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      if (res.ok) {
+        await fetchTracearrInstances();
+        toast.success(enabled ? "Tracearr enabled" : "Tracearr disabled");
+      } else {
+        toast.error("Failed to update Tracearr");
+      }
+    } catch (error) {
+      console.error("Failed to toggle Tracearr enabled:", error);
+      toast.error("Failed to update Tracearr");
     }
   };
 
@@ -1979,6 +2205,124 @@ export default function SettingsPage() {
     }
   };
 
+  // ─── Tracearr handlers ───
+
+  const addTracearrInstance = async () => {
+    setTracearrSaving(true);
+    setTracearrError("");
+    try {
+      const response = await fetch("/api/integrations/tracearr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(tracearrForm),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        // There is no unsaved-instance test endpoint for Tracearr, so the POST
+        // is the connection test — surface its detail or a bad URL/key gives
+        // the user nothing to act on.
+        setTracearrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to add Tracearr instance"));
+        return;
+      }
+      setTracearrForm({ name: "", url: "", apiKey: "" });
+      setShowTracearrForm(false);
+      await fetchTracearrInstances();
+      toast.success("Tracearr instance added");
+    } catch (error) {
+      setTracearrError("Failed to add Tracearr instance");
+      console.error(error);
+    } finally {
+      setTracearrSaving(false);
+    }
+  };
+
+  const deleteTracearrInstance = async (id: string) => {
+    try {
+      const res = await fetch(`/api/integrations/tracearr/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        toast.error("Failed to remove Tracearr instance");
+        return;
+      }
+      toast.success("Tracearr instance removed");
+      await fetchTracearrInstances();
+    } catch {
+      toast.error("Failed to remove Tracearr instance");
+    }
+  };
+
+  /**
+   * Tests a saved instance. The edited URL is passed as an override so the
+   * button tests what is on screen, but a `MASKED_VALUE` key is dropped rather
+   * than sent: it is the placeholder the GET returned, not a credential. The
+   * route treats the mask as "use the stored key" too — this just keeps the
+   * placeholder from travelling at all.
+   */
+  const testTracearrConnection = async (id: string, overrides: { url?: string; apiKey?: string }) => {
+    setEditTracearrTesting(true);
+    setEditTracearrTestResult(null);
+    try {
+      const body: Record<string, string> = {};
+      if (overrides.url) body.url = overrides.url;
+      if (overrides.apiKey && overrides.apiKey !== MASKED_VALUE) body.apiKey = overrides.apiKey;
+      const response = await fetch(`/api/integrations/tracearr/${id}/test-connection`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await response.json();
+      setEditTracearrTestResult(data);
+    } catch {
+      setEditTracearrTestResult({ ok: false, error: "Request failed" });
+    } finally {
+      setEditTracearrTesting(false);
+    }
+  };
+
+  const startEditTracearr = (instance: TracearrInstance) => {
+    setEditingTracearrId(instance.id);
+    // The key is pre-filled with the mask the GET returned and echoed back on
+    // save, which the update schema reads as "keep the stored key".
+    setEditTracearrForm({ name: instance.name, url: instance.url, apiKey: instance.apiKey });
+    setEditTracearrError("");
+    setEditTracearrTestResult(null);
+    testTracearrConnection(instance.id, {});
+  };
+
+  const saveEditTracearr = async () => {
+    if (!editingTracearrId) return;
+    setEditTracearrSaving(true);
+    setEditTracearrError("");
+    try {
+      const body: Record<string, string> = {};
+      if (editTracearrForm.name) body.name = editTracearrForm.name;
+      if (editTracearrForm.url) body.url = editTracearrForm.url;
+      if (editTracearrForm.apiKey) body.apiKey = editTracearrForm.apiKey;
+
+      const response = await fetch(`/api/integrations/tracearr/${editingTracearrId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setEditTracearrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to update"));
+        return;
+      }
+      const savedId = editingTracearrId;
+      setEditingTracearrId(null);
+      await fetchTracearrInstances();
+      // The URL may now point at a different Tracearr, so the cached server
+      // list for this instance is stale — the mapping dropdown would otherwise
+      // keep offering servers that instance no longer monitors.
+      await fetchTracearrServers(savedId);
+      toast.success("Tracearr instance updated");
+    } catch {
+      setEditTracearrError("Failed to update Tracearr instance");
+    } finally {
+      setEditTracearrSaving(false);
+    }
+  };
+
   // ─── Notification handlers ───
 
   const saveDiscordSettings = async () => {
@@ -2450,6 +2794,11 @@ export default function SettingsPage() {
             syncPrompt={syncPrompt}
             removeServerDialog={removeServerDialog}
             removingServer={removingServer}
+            tracearrInstances={tracearrInstances}
+            tracearrServerLists={tracearrServerLists}
+            tracearrImportStatus={visibleTracearrImportStatus}
+            watchHistorySourceDialog={watchHistorySourceDialog}
+            savingWatchHistorySource={savingWatchHistorySource}
             setAddServerDialog={setAddServerDialog}
             setAddServerForm={setAddServerForm}
             setAddServerError={setAddServerError}
@@ -2466,6 +2815,7 @@ export default function SettingsPage() {
             setPurgeDialog={setPurgeDialog}
             setSyncPrompt={setSyncPrompt}
             setRemoveServerDialog={setRemoveServerDialog}
+            setWatchHistorySourceDialog={setWatchHistorySourceDialog}
             onSyncServer={syncServer}
             onSyncAllServers={syncAllServers}
             onTestServerConnection={testServerConnection}
@@ -2479,6 +2829,7 @@ export default function SettingsPage() {
             onAddJellyfinEmbyServer={addJellyfinEmbyServer}
             onConfirmAddServerLibraries={confirmAddServerLibraries}
             onToggleServerEnabled={toggleServerEnabled}
+            onConfirmWatchHistorySource={confirmWatchHistorySource}
           />
         </TabsContent>
 
@@ -2619,6 +2970,34 @@ export default function SettingsPage() {
               },
               onEditTest: () => testEditArrConnection("seerr", editingSeerrId!, { url: editSeerrForm.url, apiKey: editSeerrForm.apiKey }, setEditSeerrTesting, setEditSeerrTestResult),
               onToggleEnabled: (id: string, enabled: boolean) => toggleSeerrEnabled(id, enabled),
+            }}
+            tracearr={{
+              instances: tracearrInstances,
+              showForm: showTracearrForm,
+              form: tracearrForm,
+              saving: tracearrSaving,
+              error: tracearrError,
+              editing: {
+                id: editingTracearrId,
+                form: editTracearrForm,
+                saving: editTracearrSaving,
+                error: editTracearrError,
+                testing: editTracearrTesting,
+                testResult: editTracearrTestResult,
+              },
+              onShowForm: setShowTracearrForm,
+              onFormChange: setTracearrForm,
+              onAdd: addTracearrInstance,
+              onDelete: deleteTracearrInstance,
+              onStartEdit: startEditTracearr,
+              onSaveEdit: saveEditTracearr,
+              onCancelEdit: () => setEditingTracearrId(null),
+              onEditFormChange: (form) => {
+                if (form.url !== editTracearrForm.url || form.apiKey !== editTracearrForm.apiKey) setEditTracearrTestResult(null);
+                setEditTracearrForm(form);
+              },
+              onEditTest: () => testTracearrConnection(editingTracearrId!, { url: editTracearrForm.url, apiKey: editTracearrForm.apiKey }),
+              onToggleEnabled: (id: string, enabled: boolean) => toggleTracearrEnabled(id, enabled),
             }}
           />
         </TabsContent>

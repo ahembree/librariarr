@@ -31,6 +31,7 @@ import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
 import { Prisma } from "@/generated/prisma/client";
 import { resolveSeriesKey } from "@/lib/media/series-key";
+import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 
 const STREAM_LANG_CODEC_FIELDS = new Set(["audioLanguage", "subtitleLanguage", "streamAudioCodec"]);
 const STREAM_LANGUAGE_FIELDS = new Set(["audioLanguage", "subtitleLanguage"]);
@@ -2053,7 +2054,13 @@ export async function evaluateSeriesScope(
     include: {
       externalIds: true,
       ...(needsStreams ? { streams: true } : {}),
-      ...(needsWatchHistory ? { watchHistory: { select: { serverUsername: true } } } : {}),
+      ...(needsWatchHistory ? { watchHistory: {
+          // Phase 2 must see the same rows Phase 1 filtered on, or a
+          // `watchedByUser` rule matches a different set depending on
+          // whether something else forced in-memory re-evaluation.
+          where: COMPLETED_PLAY_FILTER,
+          select: { serverUsername: true },
+        } } : {}),
       library: {
         select: {
           title: true,
@@ -2327,7 +2334,13 @@ export async function evaluateMusicScope(
     include: {
       externalIds: true,
       ...(needsStreams ? { streams: true } : {}),
-      ...(needsWatchHistory ? { watchHistory: { select: { serverUsername: true } } } : {}),
+      ...(needsWatchHistory ? { watchHistory: {
+          // Phase 2 must see the same rows Phase 1 filtered on, or a
+          // `watchedByUser` rule matches a different set depending on
+          // whether something else forced in-memory re-evaluation.
+          where: COMPLETED_PLAY_FILTER,
+          select: { serverUsername: true },
+        } } : {}),
       library: {
         select: {
           title: true,
@@ -2527,7 +2540,13 @@ export async function evaluateLifecycleRules(
     include: {
       ...(needsExternalIds ? { externalIds: true } : {}),
       ...(needsStreams ? { streams: true } : {}),
-      ...(needsWatchHistory ? { watchHistory: { select: { serverUsername: true } } } : {}),
+      ...(needsWatchHistory ? { watchHistory: {
+          // Phase 2 must see the same rows Phase 1 filtered on, or a
+          // `watchedByUser` rule matches a different set depending on
+          // whether something else forced in-memory re-evaluation.
+          where: COMPLETED_PLAY_FILTER,
+          select: { serverUsername: true },
+        } } : {}),
       library: {
         select: {
           title: true,

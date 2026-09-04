@@ -39,6 +39,9 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   hasAnyActiveRules: mockHasAnyActiveRules,
   hasArrRules: mockHasArrRules,
   hasSeerrRules: mockHasSeerrRules,
+  // The evaluability guard now also checks watch history: an empty
+  // `WatchHistory` makes negative `watchedByUser` rules match everything.
+  hasWatchedByUserRules: vi.fn(() => false),
   hasStreamRules: mockHasStreamRules,
   lookupSeerrMeta: vi.fn().mockReturnValue(undefined),
 }));

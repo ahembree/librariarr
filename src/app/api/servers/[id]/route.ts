@@ -8,6 +8,7 @@ import { validateRequest, serverEditSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { eventBus } from "@/lib/events/event-bus";
+import { markWatchHistoryCleared } from "@/lib/media/watch-evidence";
 
 export async function PUT(
   request: NextRequest,
@@ -31,7 +32,15 @@ export async function PUT(
   const { data, error } = await validateRequest(request, serverEditSchema);
   if (error) return error;
 
-  const { url, externalUrl, tlsSkipVerify, accessToken, enabled, deleteData } = data;
+  const { url, externalUrl, tlsSkipVerify, accessToken, enabled, deleteData, tracearrServerId } =
+    data;
+
+  // Did this server's watch-history source actually change? `undefined` means
+  // the client never sent the field at all (leave the mapping alone), so only a
+  // value that was sent AND differs from what is stored counts — re-saving the
+  // same mapping must not trigger the wipe below.
+  const tracearrMappingChanged =
+    tracearrServerId !== undefined && tracearrServerId !== server.tracearrServerId;
 
   // Test connection if URL or access token changed (skip if just toggling enabled)
   if ((url || accessToken) && enabled !== false) {
@@ -57,8 +66,75 @@ export async function PUT(
       ...(tlsSkipVerify !== undefined && { tlsSkipVerify }),
       ...(accessToken !== undefined && accessToken !== "" && { accessToken }),
       ...(enabled !== undefined && { enabled }),
+      // `!== undefined`, never a truthy check: `null` is the meaningful
+      // "unlink, go back to native history" value, and a truthy check would
+      // make unlinking impossible to express.
+      ...(tracearrServerId !== undefined && { tracearrServerId }),
+      // A source switch wipes the server's rows below, so the backfill state
+      // those rows represent has to be reset with them. Leaving it true would
+      // tell the next import "the history is already fully walked" and it would
+      // only ever fetch new plays — permanently missing everything before the
+      // switch. Reset on any mapping change, including Tracearr → Tracearr.
+      ...(tracearrMappingChanged && {
+        tracearrBackfillComplete: false,
+        // The other two are measured against the OLD Tracearr server's archive:
+        // its history start (which the progress bar divides by) and how far the
+        // walk had reached. Carried over, the bar would report progress through
+        // a span that no longer applies, and the walk would resume at a point
+        // that means nothing on the new server.
+        tracearrOldestPlayAt: null,
+        tracearrBackfillCursorAt: null,
+      }),
     },
   });
+
+  // A source switch (native <-> Tracearr, or one Tracearr server to another)
+  // invalidates every WatchHistory row already stored for this server, because
+  // the two sources have incompatible row models: the native sync is a
+  // full-replace that leaves all of the rich Tracearr columns null, while the
+  // Tracearr sync is an incremental append keyed on `sourceEventId`. Neither
+  // path ever revisits the other's rows — the append model never wipes, and the
+  // native full-replace only deletes rows on a *successful* fetch — so without
+  // this one-shot delete the server would keep a permanent stratum of stale
+  // rows from its previous source. The next sync repopulates from the new one.
+  // Placed after the update so a failed write can't destroy history.
+  if (tracearrMappingChanged) {
+    const wiped = await prisma.watchHistory.deleteMany({
+      where: { mediaServerId: server.id },
+    });
+
+    // Mark the server as un-evidenced until a sync refills it. An empty
+    // `WatchHistory` is indistinguishable from "nobody watched anything", and
+    // `watchedByUser`'s negative forms are trivially true against an empty
+    // relation — so without this marker the next detection run matches the
+    // WHOLE library for this server and a DELETE rule set acts on it. Covers
+    // both directions: unlinking sets `tracearrServerId` to null, so the
+    // Tracearr-specific flags stop describing the server precisely when its
+    // history is emptiest.
+    await markWatchHistoryCleared([server.id]);
+
+    // Every watch-history-derived cache (`watch-history-filters:` among them)
+    // now describes rows that no longer exist.
+    invalidateMediaCaches();
+
+    // The denormalized `MediaItem.playCount`/`lastPlayedAt` are deliberately
+    // left standing, and they survive the gap: every writer of those two
+    // columns is non-regressive — the watch-reconcile helpers via GREATEST /
+    // Math.max, and the item upsert itself via `GREATEST_ON_UPDATE` in
+    // `sync-server.ts`. That last one is what makes this safe rather than
+    // merely intended: without it a full or incremental sync landing between
+    // this wipe and the re-import wrote `playCount = 0` / `lastPlayedAt = null`
+    // over the real values for every item only another household member had
+    // watched, arming exactly the "not played in N months" DELETE rules the
+    // `watchedByUser` guard below does not cover.
+
+    apiLogger.info(
+      "Auth",
+      `Watch-history source for media server "${server.name}" changed ` +
+        `(${server.tracearrServerId ?? "native"} -> ${tracearrServerId ?? "native"}); ` +
+        `cleared ${wiped.count} stored watch-history rows`
+    );
+  }
 
   // Purge media data when disabling with deleteData
   if (enabled === false && deleteData) {
@@ -75,6 +151,12 @@ export async function PUT(
       await prisma.mediaItem.deleteMany({
         where: { libraryId: { in: libraryIds } },
       });
+      // The item delete cascades through `WatchHistory.mediaItem`, so this
+      // server's plays are gone as well. The server row itself survives a
+      // disable, so it will be re-enabled and re-synced later with an empty
+      // history — mark it un-evidenced so `watchedByUser` rules do not read
+      // that emptiness as "nobody watched anything".
+      await markWatchHistoryCleared([server.id]);
     }
 
     apiLogger.info(

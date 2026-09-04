@@ -8,7 +8,8 @@ import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
 import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
 import { arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
-import { hasArrRules, hasSeerrRules } from "@/lib/conditions/helpers";
+import { hasArrRules, hasSeerrRules, hasWatchedByUserRules } from "@/lib/conditions/helpers";
+import { checkWatchHistoryCompleteness } from "@/lib/lifecycle/evaluability";
 import type { ConditionGroup } from "@/lib/conditions/types";
 import { validateRequest, queryActionSchema } from "@/lib/validation";
 import { progressStreamResponse } from "@/lib/progress/stream";
@@ -159,6 +160,27 @@ export async function POST(request: NextRequest) {
     if (!seerrAvailable) {
       return NextResponse.json(
         { error: 'The query uses Seerr criteria but no enabled Seerr instance is selected for it — rules like "Has Request = false" would match the entire library' },
+        { status: 400 },
+      );
+    }
+  }
+  // The same hazard a third time, via watch history rather than an external
+  // service. `watchedByUser`'s negative forms compile to
+  // `watchHistory: { none: … }`, which is trivially true for EVERY item while a
+  // server's history is empty — and a server reaches exactly that state on
+  // purpose whenever its watch-history source is switched, staying there for
+  // the minutes-to-hours the newest-first Tracearr walk takes to reach back.
+  //
+  // This route needs the guard MORE than the lifecycle path does, not less: a
+  // rule set schedules an action for `actionDelayDays` in the future and the
+  // Pending page shows it before it fires, whereas this executes immediately on
+  // whatever the query returned. Scoped to the query's own servers so an
+  // unrelated server's import doesn't block queries that never read it.
+  if (hasWatchedByUserRules(queryGroups)) {
+    const watch = await checkWatchHistoryCompleteness(userId, query.serverIds);
+    if (!watch.complete) {
+      return NextResponse.json(
+        { error: `The query uses "Watched By User" but ${watch.reason}` },
         { status: 400 },
       );
     }

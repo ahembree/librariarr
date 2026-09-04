@@ -38,6 +38,7 @@ import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
 import { pushDownGroupNegation } from "@/lib/conditions/negation";
 import { nullValueResult } from "@/lib/conditions/helpers";
+import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 
 // Phase 1 rule → WHERE conversion is shared with the lifecycle rule engine via
 // `ruleToWhere` in where-builder.ts (the query and lifecycle dispatchers were
@@ -163,7 +164,13 @@ function buildItemSelectFull(opts: { includeWatchHistory: boolean }) {
   if (!opts.includeWatchHistory) return ITEM_SELECT_FULL;
   return {
     ...ITEM_SELECT_FULL,
-    watchHistory: { select: { serverUsername: true } } as const,
+    watchHistory: {
+          // Phase 2 must see the same rows Phase 1 filtered on, or a
+          // `watchedByUser` rule matches a different set depending on
+          // whether something else forced in-memory re-evaluation.
+          where: COMPLETED_PLAY_FILTER,
+          select: { serverUsername: true },
+        } as const,
   };
 }
 
