@@ -837,7 +837,13 @@ export async function executeLifecycleActions(userId?: string) {
     logger.info("Lifecycle", `Triggering targeted sync for ${librariesToSync.size} affected ${librariesToSync.size === 1 ? "library" : "libraries"}`);
     for (const [, { serverId, libraryKey }] of librariesToSync) {
       try {
-        await syncMediaServer(serverId, libraryKey);
+        await syncMediaServer(serverId, libraryKey, {
+          trigger: "lifecycle execution: re-sync after destructive actions",
+          // A deletion changes no play, and the native watch-history refresh
+          // is a SERVER-WIDE scan — with several libraries touched in one run
+          // it ran once per library. The stored history is reconciled instead.
+          skipWatchHistory: true,
+        });
       } catch (error) {
         logger.error("Lifecycle", `Failed to sync library ${libraryKey} on server ${serverId} after action execution`, { error: String(error) });
       }

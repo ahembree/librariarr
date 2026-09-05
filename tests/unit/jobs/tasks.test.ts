@@ -109,9 +109,11 @@ describe("taskList", () => {
       { serverId: "server-1", changedIds: ["a"], removedIds: [] },
       helpers,
     );
+    // The fallback reason rides on the job, so the full sync's own start line
+    // says why it ran instead of appearing out of nowhere.
     expect(enqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_SERVER,
-      { serverId: "server-1" },
+      { serverId: "server-1", trigger: "incremental sync fell back to a full sync: too many" },
       expect.objectContaining({ jobKey: "sync:server-1" }),
     );
   });
@@ -147,6 +149,30 @@ describe("taskList", () => {
       helpers,
     );
     expect(syncMediaServer).toHaveBeenCalledWith("server-1", "lib-1", { skipWatchHistory: true });
+  });
+
+  it("sync task passes the job's trigger through to the sync", async () => {
+    // The payload is the only place the reason survives the hop through the
+    // queue; the sync logs it on its "Starting sync" line.
+    await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", trigger: "scheduled sync" },
+      helpers,
+    );
+    expect(syncMediaServer).toHaveBeenCalledWith("server-1", undefined, { trigger: "scheduled sync" });
+  });
+
+  it("sync task names the trigger when it skips an already-running sync", async () => {
+    const { logger } = await import("@/lib/logger");
+    syncJob.findFirst.mockResolvedValue({ id: "running" });
+    await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", trigger: "manual sync request for this server" },
+      helpers,
+    );
+    expect(syncMediaServer).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      "Jobs",
+      expect.stringContaining("(manual sync request for this server) — already running"),
+    );
   });
 
   it("sync task skips when a sync is already running", async () => {

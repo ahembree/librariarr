@@ -83,7 +83,7 @@ const dispatch: Task = async () => {
 };
 
 const syncServer: Task = async (payload) => {
-  const { serverId, libraryKey, skipWatchHistory } = payload as SyncServerPayload;
+  const { serverId, libraryKey, skipWatchHistory, trigger } = payload as SyncServerPayload;
 
   // Skip if a sync is already in progress for this server (belt-and-suspenders
   // alongside the queue serialization and the sync engine's own semaphore).
@@ -92,11 +92,20 @@ const syncServer: Task = async (payload) => {
     select: { id: true },
   });
   if (running) {
-    logger.info("Jobs", `Skipping sync for server ${serverId} — already running`);
+    logger.info(
+      "Jobs",
+      `Skipping sync for server ${serverId} (${trigger ?? "trigger not recorded"}) — already running`,
+    );
     return;
   }
 
-  await syncMediaServer(serverId, libraryKey, skipWatchHistory ? { skipWatchHistory: true } : undefined);
+  // The trigger rides along so the sync's own "Starting sync" line says why it
+  // ran — the job payload is the only place that knowledge survives the hop
+  // through the queue.
+  await syncMediaServer(serverId, libraryKey, {
+    ...(skipWatchHistory ? { skipWatchHistory: true } : {}),
+    ...(trigger ? { trigger } : {}),
+  });
 };
 
 /**
@@ -236,11 +245,13 @@ const syncIncremental: Task = async (payload) => {
   const { serverId, changedIds, removedIds } = payload as SyncIncrementalPayload;
   const result = await syncMediaServerItems(serverId, changedIds ?? [], removedIds ?? []);
   if (result.status === "fell-back") {
+    const trigger = `incremental sync fell back to a full sync: ${result.reason ?? "no reason given"}`;
     logger.info("Jobs", `Incremental sync for ${serverId} fell back to full sync (${result.reason})`);
     // Same jobKey as the scheduler so it dedupes with any pending full sync.
+    // The reason rides along so the full sync's own start line repeats it.
     await enqueueJob(
       TASK_SYNC_SERVER,
-      { serverId },
+      { serverId, trigger },
       { jobKey: `sync:${serverId}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
     );
   }

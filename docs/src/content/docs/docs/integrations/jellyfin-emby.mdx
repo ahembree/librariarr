@@ -61,6 +61,7 @@ Most Librariarr features work identically with Jellyfin and Emby. However, some 
 | Maintenance mode | Yes | Yes |
 | Preroll support | Native (Plex Pass) | Varies by version/plugins |
 | Transcode management | Yes | Yes |
+| Real-time sync of added items | Yes | Yes — the item's library is resolved from its parent chain |
 
 <Aside>
   Plex OAuth remains the primary authentication method for Librariarr itself. Even when using Jellyfin or Emby as your media server, you can use Plex OAuth to log in to Librariarr, or use local authentication as an alternative.
@@ -82,3 +83,5 @@ When the same media exists on multiple servers, Librariarr's [deduplication syst
 - No auto-discovery for Jellyfin/Emby — you must enter the URL manually
 - Some metadata fields may differ slightly between server types due to different APIs
 - Preroll functionality depends on server-side support, which varies for Jellyfin and Emby
+- Only libraries whose content type is **Movies**, **Shows** or **Music** are synced. A *mixed content* library has no content type and is skipped; if you change an existing library's content type to mixed, it is removed from Librariarr on the next full sync like any library the server no longer reports as one of those three
+- Watch history comes from each user's played-items list, so it carries play counts and last-played dates but not the per-play timestamps Plex provides. If a user's list cannot be fetched during a sync, the previous history is kept rather than partially replaced; a user the API key cannot read is skipped and logged

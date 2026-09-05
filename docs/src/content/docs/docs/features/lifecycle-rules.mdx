@@ -449,6 +449,7 @@ With **Sort order: Action date**, items are arranged soonest-scheduled-action fi
 
 - Disabling collection sync on a rule, or deleting the rule, simply detaches it — the collection is re-synced to the remaining rules' matches. The Plex collection is removed only when it has no remaining members.
 - The collection Librariarr writes to Plex is never read back in as a library item. Collections are containers, not media, so the [library sync](/docs/features/library/#library-views) skips them — a "Leaving Soon" shelf can't turn into a fake movie in your Movies list, and it can never be matched by a rule.
+- Writing the collection does not trigger a library sync. Plex reports the write back as a change to the collection and to every item it tagged, and the [real-time sync](/docs/features/real-time-sync/) recognises that echo as Librariarr's own and ignores it — so a detection run cannot cause an off-schedule full sync of the server.
 - To delete a collection definition outright, select it in the dropdown and use the **trash** button. You can delete it from the **last rule that uses it** — doing so removes the collection from that rule and deletes it from Plex. The button is disabled (and the API refuses) only while **other** rules still reference it, so remove it from those first.
 
 ### Troubleshooting: matches exist but the collection is empty
@@ -487,7 +488,7 @@ Some fields are **series-aggregate** fields — `availableEpisodeCount`, `watche
 :::note[Plays by other users count too]
 **Play Count**, **Last Played** and **Series Last Played** reflect plays by **every** user on your media server, not just the account Librariarr signs in as. They're kept in step with the same watch history the [History page](/docs/features/library/) shows, so if a rule ever disagrees with History for a title, run a sync.
 
-**Is Watchlisted** is different: a Plex watchlist belongs to *your* Plex account, and Librariarr reads it during a full sync — so watchlist changes appear on the next full sync rather than instantly.
+**Is Watchlisted** is different: a Plex watchlist belongs to *your* Plex account, and Librariarr reads it during a full sync — so watchlist changes appear on the next full sync rather than instantly. Every item in the library is checked against the watchlist on that sync, whether or not its own metadata changed, so removing a title from your watchlist clears the flag just as adding one sets it. If the watchlist cannot be fetched (plex.tv unreachable, token expired), the stored flags are kept unchanged for that sync and the failure is logged, rather than every item being marked as not watchlisted.
 :::
 
 When Series Scope is **off** and your rule mixes an aggregate field with a per-episode field (for example, *available episode count ≥ 20 **and** resolution = 4K*), the show first has to qualify on the aggregate, and then a member-scoped file delete acts only on the episodes that individually satisfy the per-episode conditions (here, just the 4K episodes) — not every episode of the series. With Series Scope **on**, the same rule deletes the whole series.

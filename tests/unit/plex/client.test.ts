@@ -418,6 +418,34 @@ describe("PlexClient", () => {
       expect(result.size).toBe(0);
     });
 
+    it("keeps paging past a short page while totalSize says more remain", async () => {
+      // A server that caps the page below the 5,000 asked for must not
+      // truncate the history to its first page: the native watch-history sync
+      // commits whatever this returns with a full replace.
+      mockAxiosInstance.get
+        .mockResolvedValueOnce({
+          data: { MediaContainer: { totalSize: 3, Metadata: [{ ratingKey: "1", viewedAt: 1 }, { ratingKey: "2", viewedAt: 2 }] } },
+        })
+        .mockResolvedValueOnce({
+          data: { MediaContainer: { totalSize: 3, Metadata: [{ ratingKey: "3", viewedAt: 3 }] } },
+        });
+
+      const result = await client.getWatchCounts();
+      expect(result.size).toBe(3);
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
+      // The second request starts where the first page actually ended.
+      expect(mockAxiosInstance.get.mock.calls[1][1].params["X-Plex-Container-Start"]).toBe(2);
+    });
+
+    it("stops on a short page when the server reports no total", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: { MediaContainer: { Metadata: [{ ratingKey: "1", viewedAt: 1 }] } },
+      });
+      const result = await client.getWatchCounts();
+      expect(result.size).toBe(1);
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
+    });
+
     it("paginates when metadata length equals PAGE_SIZE", async () => {
       // First page: 5000 items (full page)
       const page1 = Array.from({ length: 5000 }, (_, i) => ({
@@ -1016,16 +1044,30 @@ describe("PlexClient", () => {
         },
       });
       const result = await client.getWatchlistGuids();
-      expect(result.has("tmdb://123")).toBe(true);
-      expect(result.has("imdb://tt456")).toBe(true);
-      expect(result.has("tvdb://789")).toBe(true);
+      expect(result?.has("tmdb://123")).toBe(true);
+      expect(result?.has("imdb://tt456")).toBe(true);
+      expect(result?.has("tvdb://789")).toBe(true);
     });
 
-    it("returns empty set on error", async () => {
+    it("returns an empty set for an account with nothing watchlisted", async () => {
+      // A real answer, distinct from a failure: this one legitimately clears
+      // every watchlist flag.
+      const { default: axios } = await import("axios");
+      vi.mocked(axios.get).mockResolvedValueOnce({ data: { MediaContainer: {} } });
+      const result = await client.getWatchlistGuids();
+      expect(result).not.toBeNull();
+      expect(result?.size).toBe(0);
+    });
+
+    it("returns null (not an empty set) when the fetch fails", async () => {
+      // The sync writes every Plex item's isWatchlisted from this set, and an
+      // empty set means "nothing is watchlisted". Returning it for a failed
+      // fetch cleared the flag on every item the sync touched whenever plex.tv
+      // was unreachable or the token had expired.
       const { default: axios } = await import("axios");
       vi.mocked(axios.get).mockRejectedValueOnce(new Error("fail"));
       const result = await client.getWatchlistGuids();
-      expect(result.size).toBe(0);
+      expect(result).toBeNull();
     });
   });
 

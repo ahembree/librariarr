@@ -34,6 +34,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { RealtimeManager } from "@/lib/media-server/realtime/manager";
+import { markSelfWrites, _resetSelfWritesForTesting } from "@/lib/media-server/realtime/self-writes";
 import { TASK_SYNC_SERVER, TASK_SYNC_INCREMENTAL } from "@/lib/jobs/constants";
 import type { RealtimeSocket, SocketFactory } from "@/lib/media-server/realtime/socket";
 import addFrames from "./fixtures/plex-add.json";
@@ -86,6 +87,7 @@ describe("Plex realtime — replay of captured frames", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    _resetSelfWritesForTesting();
     h.enqueueJob.mockResolvedValue(true);
     h.runEnforcerTick.mockResolvedValue(undefined);
   });
@@ -169,6 +171,36 @@ describe("Plex realtime — replay of captured frames", () => {
     const { incremental, full } = await replay([{ type: "timeline", TimelineEntry: many }]);
     expect(incremental).toHaveLength(0);
     expect(full).toHaveLength(1);
-    expect(full[0][1]).toEqual({ serverId: "p1" });
+    expect(full[0][1]).toEqual({
+      serverId: "p1",
+      trigger: "realtime library change: 150 changed item(s) exceeds the 100-item incremental limit",
+    });
+  });
+
+  it("librariarr's own collection write does not sync anything, however large", async () => {
+    // The shape of a collection write on the wire, modelled on the captured
+    // metadata-update frames: Plex walks EVERY tagged member through
+    // processing → loading → done (three frames each), plus the collection
+    // itself (type 18). A manual detection run against a 150-item collection
+    // therefore used to arrive as 150 changed movies — an off-schedule
+    // whole-server sync caused by nothing but the app's own bookkeeping.
+    const members = Array.from({ length: 150 }, (_, i) => String(200_000 + i));
+    markSelfWrites("p1", ["300000", ...members]);
+    const frames: unknown[] = [];
+    for (const itemID of ["300000", ...members]) {
+      const type = itemID === "300000" ? 18 : 1;
+      frames.push(
+        { type: "timeline", TimelineEntry: [{ sectionID: "1", itemID, type, state: 5, metadataState: "processing" }] },
+        { type: "timeline", TimelineEntry: [{ sectionID: "1", itemID, type, state: 4, metadataState: "loading" }] },
+        { type: "timeline", TimelineEntry: [{ sectionID: "1", itemID, type, state: 5 }] },
+      );
+    }
+    frames.push({
+      type: "activity",
+      ActivityNotification: [{ event: "ended", Activity: { type: "library.update.item.metadata" } }],
+    });
+    const { incremental, full } = await replay(frames);
+    expect(full).toHaveLength(0);
+    expect(incremental).toHaveLength(0);
   });
 });

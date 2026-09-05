@@ -165,6 +165,69 @@ describe("normalizePlexMessage", () => {
     expect(events[0].detail?.changedIds).toEqual(["169827"]);
   });
 
+  it("drops collection and playlist entries — containers are never library items", () => {
+    // Plex emits a timeline entry for the collection itself on every
+    // collection edit (librariarr's own collection sync included). Carrying it
+    // forward only ever bought a metadata fetch that ended in "skip".
+    const events = normalizePlexMessage(
+      {
+        NotificationContainer: {
+          type: "timeline",
+          TimelineEntry: [
+            { sectionID: "1", itemID: "900", type: 18, state: 5 },
+            { sectionID: "1", itemID: "901", type: "18", state: 9, metadataState: "deleted" },
+            { sectionID: "1", itemID: "902", type: 15, state: 5 },
+            { sectionID: "1", itemID: "903", type: 16, state: 5 },
+            { sectionID: "1", itemID: "10", type: 1, state: 5 },
+            { sectionID: "2", itemID: "11", type: 4, state: 5 },
+            // No type at all is a response gap, not evidence of a container.
+            { sectionID: "1", itemID: "12", state: 5 },
+          ],
+        },
+      },
+      ctx,
+    );
+    expect(events[0].detail?.changedIds).toEqual(["10", "11", "12"]);
+    expect(events[0].detail?.droppedContainers).toBe(4);
+  });
+
+  it("a frame naming only containers emits nothing", () => {
+    const events = normalizePlexMessage(
+      {
+        NotificationContainer: {
+          type: "timeline",
+          TimelineEntry: [{ sectionID: "1", itemID: "900", type: 18, state: 5 }],
+        },
+      },
+      ctx,
+    );
+    expect(events).toEqual([]);
+  });
+
+  it("flags entries that look like deletions, without removing them from changedIds", () => {
+    // Advisory: the sync still resolves every id against the server. The flag
+    // exists so the manager never drops a deletion as the echo of librariarr's
+    // own write, and it must survive an earlier non-deletion frame for the
+    // same id in the same container.
+    const events = normalizePlexMessage(
+      {
+        NotificationContainer: {
+          type: "timeline",
+          TimelineEntry: [
+            { sectionID: "1", itemID: "1", type: 1, state: 5 },
+            { sectionID: "1", itemID: "1", type: 1, state: 9, metadataState: "deleted" },
+            { sectionID: "1", itemID: "2", type: 1, state: 5, metadataState: "Deleted" },
+            { sectionID: "1", itemID: "3", type: 1, state: "9" },
+            { sectionID: "1", itemID: "4", type: 1, state: 5 },
+          ],
+        },
+      },
+      ctx,
+    );
+    expect(events[0].detail?.changedIds).toEqual(["1", "2", "3", "4"]);
+    expect(events[0].detail?.deletedIds).toEqual(["1", "2", "3"]);
+  });
+
   it("carries changed item ratingKeys (itemID) for incremental sync", () => {
     const events = normalizePlexMessage(
       { NotificationContainer: { type: "timeline", TimelineEntry: [{ itemID: 12, state: 5 }, { itemID: 34, state: 9 }] } },

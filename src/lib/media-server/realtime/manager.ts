@@ -11,6 +11,7 @@ import { Throttle } from "./throttle";
 import { ServerRealtimeConnection } from "./connection";
 import { wsSocketFactory, type SocketFactory } from "./socket";
 import type { RealtimeEvent, RealtimeServerConfig, RealtimeConnectionStatus, LibraryChangeDetail } from "./types";
+import { isSelfWrite } from "./self-writes";
 
 // A library scan emits a burst of change events; coalesce them into one sync
 // after it goes quiet, but never wait longer than the max. The quiet window is
@@ -84,6 +85,11 @@ export class RealtimeManager {
   // full server sync. Reconciliation for anything the push channel never reports
   // belongs to the scheduled full sync.
   private readonly pendingChanges = new Map<string, { changed: Set<string>; removed: Set<string> }>();
+  // Per-server count of library changes dropped as the echo of librariarr's
+  // own collection writes, and the debouncer that logs it once per burst —
+  // Plex emits one frame per tagged member, so a line per frame would be noise.
+  private readonly suppressedSelfWrites = new Map<string, number>();
+  private readonly selfWriteLogDebouncers = new Map<string, Debouncer>();
   private readonly enforcerThrottle: Throttle;
   private readonly socketFactory: SocketFactory;
   private reconciling = false;
@@ -260,8 +266,27 @@ export class RealtimeManager {
   /** @returns true when the event contributed at least one id. */
   private accumulateLibraryChange(event: RealtimeEvent): boolean {
     const detail = event.detail as LibraryChangeDetail | undefined;
-    const changed = detail?.changedIds ?? [];
     const removed = detail?.removedIds ?? [];
+    // Drop the echo of librariarr's own writes. Plex reports a collection write
+    // back as a metadata change on the collection AND on every member it
+    // tagged, so a detection run that synced a 150-item collection used to
+    // arrive here as 150 changed movies — and past the incremental limit that
+    // is a whole-server sync caused by nothing but the app's own bookkeeping.
+    // A deletion is never dropped, marked or not: nothing librariarr writes
+    // deletes media, and a row left alive for media that is gone is the worse
+    // failure. `removedIds` (Jellyfin's `ItemsRemoved`) are kept for the same
+    // reason.
+    const deleted = new Set(detail?.deletedIds ?? []);
+    const changed: string[] = [];
+    let ownEchoes = 0;
+    for (const id of detail?.changedIds ?? []) {
+      if (!deleted.has(id) && isSelfWrite(event.serverId, id)) {
+        ownEchoes++;
+        continue;
+      }
+      changed.push(id);
+    }
+    if (ownEchoes > 0) this.noteSuppressedSelfWrites(event.serverId, ownEchoes);
     // An id-less event (a Jellyfin `LibraryChanged` whose arrays are all empty)
     // contributes nothing rather than escalating the window to a full sync.
     if (changed.length === 0 && removed.length === 0) return false;
@@ -274,6 +299,41 @@ export class RealtimeManager {
     for (const id of changed) pending.changed.add(id);
     for (const id of removed) pending.removed.add(id);
     return true;
+  }
+
+  /**
+   * Count a dropped self-write echo and arm the once-per-burst summary log.
+   *
+   * Deliberately NOT the sync debouncer: an echo contributes nothing, so
+   * letting it re-arm that quiet window would hold real accumulated ids
+   * hostage for as long as a collection sync keeps writing.
+   */
+  private noteSuppressedSelfWrites(serverId: string, count: number): void {
+    this.suppressedSelfWrites.set(serverId, (this.suppressedSelfWrites.get(serverId) ?? 0) + count);
+    let debouncer = this.selfWriteLogDebouncers.get(serverId);
+    if (!debouncer) {
+      debouncer = new Debouncer(
+        () => {
+          const total = this.suppressedSelfWrites.get(serverId) ?? 0;
+          this.suppressedSelfWrites.delete(serverId);
+          if (total === 0) return;
+          logger.info(
+            "Realtime",
+            `Ignored ${total} library change(s) on server ${this.serverLabel(serverId)} that echo ` +
+              `librariarr's own Plex collection writes — not a media change, nothing to sync`,
+          );
+        },
+        { quietMs: LIBRARY_SYNC_QUIET_MS, maxWaitMs: LIBRARY_SYNC_MAX_MS },
+      );
+      this.selfWriteLogDebouncers.set(serverId, debouncer);
+    }
+    debouncer.trigger();
+  }
+
+  /** `"Name"` while the server is connected, else the bare id — for log lines. */
+  private serverLabel(serverId: string): string {
+    const name = this.connections.get(serverId)?.config.name;
+    return name ? `"${name}"` : serverId;
   }
 
   private getSyncDebouncer(serverId: string): Debouncer {
@@ -298,29 +358,31 @@ export class RealtimeManager {
     const removedIds = pending ? [...pending.removed] : [];
     const total = changedIds.length + removedIds.length;
 
+    const label = this.serverLabel(serverId);
+
     if (total === 0) {
       // Nothing actionable accumulated. `accumulateLibraryChange` drops id-less
       // events, so this is either a debounce fire that raced an empty window or
       // a server that reported a change without naming anything. Either way a
       // full sync would be a guess; the scheduled sync reconciles.
-      logger.debug("Realtime", `Library change for server ${serverId} named no items — nothing to sync`);
+      logger.debug("Realtime", `Library change for server ${label} named no items — nothing to sync`);
       return;
     }
 
     if (total > INCREMENTAL_MAX_ITEMS) {
       // Genuinely bulk — listing the libraries beats fetching each item.
-      // Same jobKey as the scheduler so it dedupes.
+      // Same jobKey as the scheduler so it dedupes. The trigger travels with
+      // the job so the sync itself logs WHY it ran: an off-schedule full sync
+      // with no stated cause is indistinguishable from a bug.
+      const trigger =
+        `realtime library change: ${total} changed item(s) exceeds the ` +
+        `${INCREMENTAL_MAX_ITEMS}-item incremental limit`;
       void enqueueJob(
         TASK_SYNC_SERVER,
-        { serverId },
+        { serverId, trigger },
         { jobKey: `sync:${serverId}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
       ).then((ok) => {
-        if (ok) {
-          logger.info(
-            "Realtime",
-            `Enqueued full sync for server ${serverId} (${total} changed items exceeds ${INCREMENTAL_MAX_ITEMS})`,
-          );
-        }
+        if (ok) logger.info("Realtime", `Enqueued full sync for server ${label} (${trigger})`);
       });
       return;
     }
@@ -336,7 +398,7 @@ export class RealtimeManager {
       if (ok) {
         logger.info(
           "Realtime",
-          `Enqueued incremental sync for server ${serverId} (${changedIds.length} changed, ${removedIds.length} removed)`,
+          `Enqueued incremental sync for server ${label} (${changedIds.length} changed, ${removedIds.length} removed)`,
         );
       }
     });
@@ -381,7 +443,12 @@ export class RealtimeManager {
             { serverId },
             { jobKey: `watch-history:${serverId}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
           ).then((ok) => {
-            if (ok) logger.info("Realtime", `Enqueued watch-history refresh for server ${serverId} (watch state changed)`);
+            if (ok) {
+              logger.info(
+                "Realtime",
+                `Enqueued watch-history refresh for server ${this.serverLabel(serverId)} (watch state changed)`,
+              );
+            }
           });
         },
         { quietMs: WATCH_SYNC_QUIET_MS, maxWaitMs: WATCH_SYNC_MAX_MS },
@@ -399,6 +466,9 @@ export class RealtimeManager {
     this.sessionBridges.get(serverId)?.cancel();
     this.sessionBridges.delete(serverId);
     this.pendingChanges.delete(serverId);
+    this.selfWriteLogDebouncers.get(serverId)?.cancel();
+    this.selfWriteLogDebouncers.delete(serverId);
+    this.suppressedSelfWrites.delete(serverId);
   }
 
   private async isRealtimeEnabled(): Promise<boolean> {

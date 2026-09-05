@@ -28,6 +28,19 @@ import { isRecord, asArray } from "./normalize-util";
  * `reachability`, preference changes, …) is intentionally ignored — connection
  * liveness is tracked by the connection layer, not derived from messages.
  */
+/**
+ * Plex metadata `type` codes that are containers, never library media: a
+ * collection (18) and a playlist (15) / playlist folder (16). Their timeline
+ * entries are dropped here, before anything is fetched: librariarr never
+ * stores one (`isMediaItem` refuses them), so the only thing carrying the id
+ * forward could buy is a metadata round trip that ends in "skip". Plex emits
+ * one on every collection edit — librariarr's own collection sync, Kometa,
+ * a hand edit — so this is a hot path, not an edge case. Real media types
+ * (1 movie, 2 show, 3 season, 4 episode, 8 artist, 9 album, 10 track) are
+ * untouched, as is an entry with no `type` at all.
+ */
+const PLEX_CONTAINER_TYPES: ReadonlySet<number> = new Set([15, 16, 18]);
+
 export function normalizePlexMessage(raw: unknown, ctx: { serverId: string }): RealtimeEvent[] {
   const container = extractContainer(raw);
   if (!container || typeof container.type !== "string") return [];
@@ -63,8 +76,12 @@ export function normalizePlexMessage(raw: unknown, ctx: { serverId: string }): R
       // single sync regardless of how many entries fire, so being permissive
       // costs nothing but catches every real change.
       //
-      // Two filters ARE applied, both on identity rather than state:
+      // Three filters ARE applied, all on identity rather than state:
       //
+      //  - **Drop containers by `type`.** A collection (18) or playlist (15/16)
+      //    is never a library item, so its id would only ever be fetched and
+      //    skipped — and Plex emits one on every collection edit, including
+      //    librariarr's own collection sync after each detection run.
       //  - **Dedupe by itemID.** One added movie emitted seven frames for the
       //    same ratingKey (state 0→1→1→1→4→5) as Plex walked it through
       //    create/analyze/load. They are one change, not seven.
@@ -82,8 +99,11 @@ export function normalizePlexMessage(raw: unknown, ctx: { serverId: string }): R
       // goes to `changedIds`; the incremental sync resolves each one
       // (present → upsert, 404 → delete).
       const changedIds: string[] = [];
+      const deletedIds: string[] = [];
       const seen = new Set<string>();
+      const seenDeleted = new Set<string>();
       let droppedSectionless = 0;
+      let droppedContainers = 0;
       for (const e of entries) {
         if (!isRecord(e) || e.itemID == null) continue;
         // Absent `sectionID` is a response gap, not evidence of no section —
@@ -94,7 +114,21 @@ export function normalizePlexMessage(raw: unknown, ctx: { serverId: string }): R
           droppedSectionless++;
           continue;
         }
+        // A collection or playlist is a container, never a library item.
+        if (e.type != null && PLEX_CONTAINER_TYPES.has(Number(e.type))) {
+          droppedContainers++;
+          continue;
+        }
         const id = String(e.itemID);
+        // Checked on EVERY entry, before the dedupe: an item's deletion frame
+        // (`state=9 metadataState=deleted`) can follow an earlier frame for the
+        // same id in one container, and it must still be flagged. The flag is
+        // advisory (see `LibraryChangeDetail.deletedIds`); the id goes to
+        // `changedIds` like any other, for the sync to resolve.
+        if (looksDeleted(e) && !seenDeleted.has(id)) {
+          seenDeleted.add(id);
+          deletedIds.push(id);
+        }
         if (seen.has(id)) continue;
         seen.add(id);
         changedIds.push(id);
@@ -103,7 +137,7 @@ export function normalizePlexMessage(raw: unknown, ctx: { serverId: string }): R
         events.push({
           ...base,
           kind: "library-changed",
-          detail: { entries: entries.length, changedIds, droppedSectionless },
+          detail: { entries: entries.length, changedIds, deletedIds, droppedSectionless, droppedContainers },
         });
       }
       break;
@@ -120,6 +154,17 @@ function extractContainer(raw: unknown): Record<string, unknown> | null {
   if (isRecord(raw.NotificationContainer)) return raw.NotificationContainer;
   if (typeof raw.type === "string") return raw;
   return null;
+}
+
+/**
+ * True when a timeline entry reads as a deletion. Verified on the wire: a
+ * deleted movie arrives `state=9 metadataState=deleted`, a deleted episode the
+ * same. Either signal alone counts — this only ever widens what the manager
+ * refuses to suppress, and a false positive costs one metadata fetch.
+ */
+function looksDeleted(e: Record<string, unknown>): boolean {
+  if (e.state != null && Number(e.state) === 9) return true;
+  return typeof e.metadataState === "string" && e.metadataState.toLowerCase() === "deleted";
 }
 
 function pickPlaying(n: unknown): Record<string, unknown> {

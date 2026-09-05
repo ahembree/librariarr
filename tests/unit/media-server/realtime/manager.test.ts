@@ -16,7 +16,13 @@ vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+import { logger } from "@/lib/logger";
 import { RealtimeManager } from "@/lib/media-server/realtime/manager";
+import {
+  markSelfWrites,
+  SELF_WRITE_TTL_MS,
+  _resetSelfWritesForTesting,
+} from "@/lib/media-server/realtime/self-writes";
 import { MAIN_QUEUE, TASK_SYNC_SERVER, TASK_SYNC_WATCH_HISTORY, TASK_SYNC_INCREMENTAL } from "@/lib/jobs/constants";
 import type { RealtimeSocket, SocketFactory } from "@/lib/media-server/realtime/socket";
 import type { RealtimeServerConfig } from "@/lib/media-server/realtime/types";
@@ -89,6 +95,7 @@ describe("RealtimeManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    _resetSelfWritesForTesting();
     h.enqueueJob.mockResolvedValue(true);
     h.runEnforcerTick.mockResolvedValue(undefined);
   });
@@ -232,9 +239,10 @@ describe("RealtimeManager", () => {
     const many = Array.from({ length: 150 }, (_, i) => `m${i}`);
     sockets[0].fireMessage({ MessageType: "LibraryChanged", Data: { ItemsAdded: many } });
     vi.advanceTimersByTime(30_000);
+    // The payload names the trigger, so the full sync it starts logs WHY it ran.
     expect(h.enqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_SERVER,
-      { serverId: "j1" },
+      { serverId: "j1", trigger: expect.stringContaining("150 changed item(s) exceeds the 100-item") },
       expect.objectContaining({ jobKey: "sync:j1" }),
     );
     expect(h.enqueueJob.mock.calls.some((c) => c[0] === TASK_SYNC_INCREMENTAL)).toBe(false);
@@ -343,5 +351,127 @@ describe("RealtimeManager", () => {
       .map((c) => c[0])
       .filter((e) => e.type === "server-status");
     expect(statusEvents).toHaveLength(1);
+  });
+
+  // ── Self-write suppression ──────────────────────────────────────────
+  // Plex reports librariarr's own collection writes back as timeline entries
+  // for the collection and every member it tagged. Those must never become a
+  // sync: a manual detection run that synced a 150-item collection used to
+  // enqueue an off-schedule whole-server sync.
+
+  const plexTimeline = (entries: Array<Record<string, unknown>>) => ({
+    NotificationContainer: { type: "timeline", TimelineEntry: entries },
+  });
+
+  it("ignores library changes that echo librariarr's own collection writes", async () => {
+    const { sockets } = await setup([plexServer]);
+    markSelfWrites("p1", ["col-1", "m1", "m2"]);
+    sockets[0].fireMessage(plexTimeline([
+      { sectionID: "1", itemID: "col-1", type: 18, state: 5 },
+      { sectionID: "1", itemID: "m1", type: 1, state: 5 },
+      { sectionID: "1", itemID: "m2", type: 1, state: 5 },
+      // A real change arriving in the same window is still applied.
+      { sectionID: "1", itemID: "m3", type: 1, state: 5 },
+    ]));
+    vi.advanceTimersByTime(30_000);
+    expect(h.enqueueJob).toHaveBeenCalledTimes(1);
+    expect(h.enqueueJob).toHaveBeenCalledWith(
+      TASK_SYNC_INCREMENTAL,
+      { serverId: "p1", changedIds: ["m3"], removedIds: [] },
+      expect.objectContaining({ queueName: MAIN_QUEUE }),
+    );
+  });
+
+  it("a collection write larger than the incremental limit does not escalate to a full sync", async () => {
+    // The user-visible bug: detection → collection sync → 150 tagged members →
+    // "150 changed items exceeds 100" → whole-server sync, off schedule.
+    const { sockets } = await setup([plexServer]);
+    const members = Array.from({ length: 150 }, (_, i) => `m${i}`);
+    markSelfWrites("p1", ["col-1", ...members]);
+    sockets[0].fireMessage(plexTimeline([
+      { sectionID: "1", itemID: "col-1", type: 18, state: 5 },
+      ...members.map((id) => ({ sectionID: "1", itemID: id, type: 1, state: 5 })),
+    ]));
+    vi.advanceTimersByTime(30_000);
+    expect(h.enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it("logs one summary line for a burst of suppressed echoes, not one per frame", async () => {
+    const { sockets } = await setup([plexServer]);
+    markSelfWrites("p1", ["m1", "m2", "m3"]);
+    // Plex sends one frame per tagged member.
+    for (const id of ["m1", "m2", "m3"]) {
+      sockets[0].fireMessage(plexTimeline([{ sectionID: "1", itemID: id, type: 1, state: 5 }]));
+    }
+    vi.advanceTimersByTime(30_000);
+    const lines = vi
+      .mocked(logger.info)
+      .mock.calls.map((c) => String(c[1]))
+      .filter((m) => m.includes("echo"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("Ignored 3 library change(s)");
+    expect(lines[0]).toContain('"Plex"');
+  });
+
+  it("never suppresses a deletion, even for a marked item", async () => {
+    // Nothing librariarr writes deletes media, and a row left alive for media
+    // that is gone is the worse failure — so a deletion frame always goes through.
+    const { sockets } = await setup([plexServer]);
+    markSelfWrites("p1", ["m1"]);
+    sockets[0].fireMessage(plexTimeline([
+      { sectionID: "1", itemID: "m1", type: 1, state: 9, metadataState: "deleted" },
+    ]));
+    vi.advanceTimersByTime(30_000);
+    expect(h.enqueueJob).toHaveBeenCalledWith(
+      TASK_SYNC_INCREMENTAL,
+      { serverId: "p1", changedIds: ["m1"], removedIds: [] },
+      expect.objectContaining({ queueName: MAIN_QUEUE }),
+    );
+  });
+
+  it("a mark is scoped to its server", async () => {
+    // Rating keys are per-server rowids: the same key on another server is a
+    // different item, and its change is real.
+    const { sockets } = await setup([
+      plexServer,
+      { id: "p2", name: "Plex B", type: "PLEX", url: "http://b", accessToken: "t", tlsSkipVerify: false, userId: "user-1" },
+    ]);
+    markSelfWrites("p1", ["m1"]);
+    sockets[1].fireMessage(plexTimeline([{ sectionID: "1", itemID: "m1", type: 1, state: 5 }]));
+    vi.advanceTimersByTime(30_000);
+    expect(h.enqueueJob).toHaveBeenCalledWith(
+      TASK_SYNC_INCREMENTAL,
+      { serverId: "p2", changedIds: ["m1"], removedIds: [] },
+      expect.objectContaining({ queueName: MAIN_QUEUE }),
+    );
+  });
+
+  it("a suppressed echo does not re-arm the quiet window of real accumulated ids", async () => {
+    // Same rule as an id-less event: an echo contributes nothing, so it must
+    // not hold a real change hostage for as long as a collection sync writes.
+    const { sockets } = await setup([plexServer]);
+    markSelfWrites("p1", ["m1"]);
+    sockets[0].fireMessage(plexTimeline([{ sectionID: "1", itemID: "real", type: 1, state: 5 }]));
+    vi.advanceTimersByTime(4_000);
+    sockets[0].fireMessage(plexTimeline([{ sectionID: "1", itemID: "m1", type: 1, state: 5 }]));
+    vi.advanceTimersByTime(1_500); // 5.5s after the real change
+    expect(h.enqueueJob).toHaveBeenCalledWith(
+      TASK_SYNC_INCREMENTAL,
+      { serverId: "p1", changedIds: ["real"], removedIds: [] },
+      expect.objectContaining({ queueName: MAIN_QUEUE }),
+    );
+  });
+
+  it("a mark expires, so a later real change to the same item is applied", async () => {
+    const { sockets } = await setup([plexServer]);
+    markSelfWrites("p1", ["m1"]);
+    vi.advanceTimersByTime(SELF_WRITE_TTL_MS + 1);
+    sockets[0].fireMessage(plexTimeline([{ sectionID: "1", itemID: "m1", type: 1, state: 5 }]));
+    vi.advanceTimersByTime(30_000);
+    expect(h.enqueueJob).toHaveBeenCalledWith(
+      TASK_SYNC_INCREMENTAL,
+      { serverId: "p1", changedIds: ["m1"], removedIds: [] },
+      expect.objectContaining({ queueName: MAIN_QUEUE }),
+    );
   });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 // --- Mocks ---
 
@@ -90,6 +90,8 @@ import {
   syncMediaServer,
   processBatch,
 } from "@/lib/sync/sync-server";
+import { createMediaServerClient } from "@/lib/media-server/factory";
+import { PlexClient } from "@/lib/plex/client";
 import type { MediaStream, MediaPart } from "@/lib/media-server/types";
 
 // Note: detectDynamicRangeFromFilename and detectAudioProfileFromFilename
@@ -288,6 +290,26 @@ describe("syncMediaServer", () => {
 
     const completedCalls = findDbCalls('UPDATE "SyncJob"', "COMPLETED");
     expect(completedCalls.length).toBeGreaterThan(0);
+  });
+
+  it("logs what triggered the sync on the start line", async () => {
+    const { logger } = await import("@/lib/logger");
+    await syncMediaServer("server-1", undefined, { trigger: "scheduled sync" });
+    expect(logger.info).toHaveBeenCalledWith(
+      "Sync",
+      'Starting sync for server "Test Plex" — triggered by scheduled sync',
+    );
+  });
+
+  it("names the library scope and flags a caller that gave no trigger", async () => {
+    // An unexplained sync must be visible as such, not silent: the whole point
+    // is that an off-schedule sync with no stated cause reads as a bug.
+    const { logger } = await import("@/lib/logger");
+    await syncMediaServer("server-1", "3");
+    expect(logger.info).toHaveBeenCalledWith(
+      "Sync",
+      'Starting sync for server "Test Plex" (library key 3) — triggered by an unrecorded caller',
+    );
   });
 
   it("creates a sync job and acquires semaphore", async () => {
@@ -761,5 +783,221 @@ describe("syncMediaServer per-item enrichment resilience", () => {
 
     const inserts = findDbCalls('INSERT INTO "MediaItem"');
     expect(inserts.some((args) => args.includes("Enriched Title"))).toBe(true);
+  });
+});
+
+// Two reconciliations the full sync performs against the server's own view of
+// its libraries: purging libraries the server no longer lists, and setting the
+// Plex watchlist flag on rows the per-item upsert never revisits.
+describe("syncMediaServer library and watchlist reconciliation", () => {
+  const SERVER_ROW = {
+    id: "server-1", name: "Test Plex", url: "http://plex:32400",
+    accessToken: "token", type: "PLEX", userId: "user-1",
+    tlsSkipVerify: false, enabled: true,
+  };
+  const MOVIES = { key: "1", title: "Movies", type: "movie", agent: "", scanner: "" };
+
+  interface DbOpts {
+    vanished?: Array<{ id: string; key: string; title: string }>;
+    vanishedItems?: Array<{ id: string; thumbUrl: null; parentThumbUrl: null; seasonThumbUrl: null }>;
+    exceptionCount?: bigint;
+    existingRows?: Array<Record<string, unknown>>;
+    watchlistChanged?: Array<{ id: string }>;
+  }
+
+  function mockDb(opts: DbOpts = {}) {
+    mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string) => {
+      if (sql.includes('INSERT INTO "SyncJob"')) return [{ id: "sync-job-id" }];
+      if (sql.includes('SELECT "cancelRequested"')) return [{ cancelRequested: false }];
+      if (sql.includes('SELECT "id" FROM "SyncJob"')) return [{ id: "sync-job-id" }];
+      if (sql.includes('UPDATE "SyncJob"')) return [];
+      if (sql.includes('SELECT') && sql.includes('"MediaServer"')) return [SERVER_ROW];
+      // Vanished-library purge: the libraries, their items, their exceptions.
+      if (sql.includes('NOT ("key" = ANY')) return opts.vanished ?? [];
+      if (sql.includes('FROM "LifecycleException" le')) return [{ count: opts.exceptionCount ?? BigInt(0) }];
+      // Stale-item candidate select must be matched BEFORE the vanished-items
+      // select — both read thumb columns from "MediaItem" by libraryId.
+      if (sql.includes('"updatedAt"<$2')) return [];
+      if (
+        sql.includes('FROM "MediaItem" WHERE "libraryId"=$1') &&
+        sql.includes('"thumbUrl"') &&
+        !sql.includes('"ratingKey" = ANY') // not the per-page existing-row prefetch
+      ) {
+        return opts.vanishedItems ?? [];
+      }
+      if (sql.includes('INSERT INTO "Library"')) return [{ id: "lib-1", enabled: true }];
+      if (sql.includes('SELECT') && sql.includes('"Library"') && sql.includes('enabled')) return [];
+      if (sql.includes('COUNT(*)') && sql.includes('"MediaItem"')) return [{ count: BigInt(0) }];
+      if (sql.includes('SET "isWatchlisted" = w."listed"')) return opts.watchlistChanged ?? [];
+      // Existing-row page prefetch
+      if (sql.includes('"ratingKey" = ANY')) return opts.existingRows ?? [];
+      if (sql.includes('INSERT INTO "MediaItem"')) return [{ id: "mi-1", ratingKey: "rk1" }];
+      return [];
+    });
+    mockClient.getLibraries.mockResolvedValue([MOVIES]);
+    mockClient.getWatchCounts.mockResolvedValue(new Map());
+    mockClient.getLibraryItemsPage.mockResolvedValue({ items: [], total: 0 });
+    mockPrisma.lifecycleException.count.mockResolvedValue(0);
+  }
+
+  /** The value written to `isWatchlisted` by the first row of the first upsert. */
+  function upsertedWatchlistFlag(): unknown {
+    const call = findDbCalls('INSERT INTO "MediaItem"')[0];
+    expect(call).toBeDefined();
+    const sql = String(call[0]);
+    const columns = sql.slice(sql.indexOf("(") + 1, sql.indexOf(")")).split(",").map((c) => c.trim().replace(/"/g, ""));
+    const idx = columns.indexOf("isWatchlisted");
+    expect(idx).toBeGreaterThan(-1);
+    return call[1 + idx];
+  }
+
+  /**
+   * A client the sync recognises as Plex. `instanceof PlexClient` gates the
+   * watchlist handling, and the shared `mockClient` is a plain object.
+   */
+  function plexLikeClient(watchlist: Set<string> | null) {
+    return Object.assign(Object.create(PlexClient.prototype), mockClient, {
+      bulkListingIncomplete: false,
+      getWatchlistGuids: vi.fn().mockResolvedValue(watchlist),
+    }) as unknown as PlexClient;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockClient.testConnection.mockResolvedValue({ ok: true, serverName: "Test Plex" });
+  });
+
+  afterEach(() => {
+    vi.mocked(createMediaServerClient).mockImplementation(() => mockClient as never);
+  });
+
+  // ── Libraries the server no longer lists ─────────────────────────────
+
+  it("removes a library the server no longer reports, with its items", async () => {
+    // Nothing else ever removed it: the stale-item purge only visits libraries
+    // the server reported, so its rows lived on — listed, and evaluated by
+    // lifecycle rules with a lastPlayedAt that could never advance again.
+    mockDb({
+      vanished: [{ id: "lib-gone", key: "9", title: "Old Movies" }],
+      vanishedItems: [
+        { id: "gone-1", thumbUrl: null, parentThumbUrl: null, seasonThumbUrl: null },
+        { id: "gone-2", thumbUrl: null, parentThumbUrl: null, seasonThumbUrl: null },
+      ],
+      exceptionCount: BigInt(1),
+    });
+    const { logger } = await import("@/lib/logger");
+
+    await syncMediaServer("server-1");
+
+    const purge = findDbCalls('DELETE FROM "Library" WHERE "id"=$1');
+    expect(purge).toHaveLength(1);
+    expect(purge[0][1]).toBe("lib-gone");
+    // The server's own list is what decides: only key "1" survives.
+    const select = findDbCalls('NOT ("key" = ANY');
+    expect(select[0][2]).toEqual(["1"]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "Sync",
+      expect.stringMatching(/"Old Movies" \(key 9\) is no longer on the server — removed it and its 2 item\(s\), deleting 1 lifecycle exception/),
+    );
+  });
+
+  it("leaves every library alone when the server reports none at all", async () => {
+    // An empty list is far more likely a bad answer than "delete everything" —
+    // the same fail-toward-keeping stance as the item purge.
+    mockDb({ vanished: [{ id: "lib-gone", key: "9", title: "Old Movies" }] });
+    mockClient.getLibraries.mockResolvedValue([]);
+
+    await syncMediaServer("server-1");
+
+    expect(findDbCalls('NOT ("key" = ANY')).toHaveLength(0);
+    expect(findDbCalls('DELETE FROM "Library"')).toHaveLength(0);
+  });
+
+  it("does not purge libraries during a library-scoped sync", async () => {
+    // A one-library sync says nothing about the others.
+    mockDb({ vanished: [{ id: "lib-gone", key: "9", title: "Old Movies" }] });
+
+    await syncMediaServer("server-1", "1");
+
+    expect(findDbCalls('NOT ("key" = ANY')).toHaveLength(0);
+    expect(findDbCalls('DELETE FROM "Library"')).toHaveLength(0);
+  });
+
+  // ── Plex watchlist ────────────────────────────────────────────────────
+
+  it("reconciles the watchlist flag across the whole library from the fetched watchlist", async () => {
+    // Adding a movie to the plex.tv watchlist changes nothing on the item, so
+    // an unchanged item skipped the upsert and kept whatever flag it was first
+    // stored with. The set-based pass covers every row, both directions.
+    mockDb({ watchlistChanged: [{ id: "a" }, { id: "b" }] });
+    vi.mocked(createMediaServerClient).mockImplementation(
+      () => plexLikeClient(new Set(["tmdb://1", "imdb://tt2"])) as never,
+    );
+    const { logger } = await import("@/lib/logger");
+
+    await syncMediaServer("server-1");
+
+    const reconcile = findDbCalls('SET "isWatchlisted" = w."listed"');
+    expect(reconcile).toHaveLength(1);
+    expect(reconcile[0][1]).toBe("lib-1");
+    expect(reconcile[0][2]).toEqual(["tmdb://1", "imdb://tt2"]);
+    expect(logger.info).toHaveBeenCalledWith("Sync", expect.stringContaining("watchlist flag updated on 2 item(s)"));
+  });
+
+  it("clears every flag when the watchlist is genuinely empty", async () => {
+    // An empty set is a real answer — "nothing is watchlisted" — and must
+    // still run: the pass with an empty list clears stale flags.
+    mockDb();
+    vi.mocked(createMediaServerClient).mockImplementation(() => plexLikeClient(new Set()) as never);
+
+    await syncMediaServer("server-1");
+
+    const reconcile = findDbCalls('SET "isWatchlisted" = w."listed"');
+    expect(reconcile).toHaveLength(1);
+    expect(reconcile[0][2]).toEqual([]);
+  });
+
+  it("keeps stored flags when the watchlist could not be fetched", async () => {
+    // Plex item metadata carries no watchlist flag, so `false` from the upsert
+    // would be the absence of an answer written over a stored `true`. The
+    // stored flag rides along on the upsert and the set-based pass is skipped.
+    mockDb({
+      existingRows: [{
+        ratingKey: "rk1", thumbUrl: null, parentThumbUrl: null, seasonThumbUrl: null,
+        serverUpdatedAt: null, isWatchlisted: true,
+      }],
+    });
+    mockClient.getLibraryItemsPage.mockResolvedValue({
+      items: [{ ratingKey: "rk1", title: "Movie A", type: "movie" }],
+      total: 1,
+    });
+    vi.mocked(createMediaServerClient).mockImplementation(() => plexLikeClient(null) as never);
+    const { logger } = await import("@/lib/logger");
+
+    await syncMediaServer("server-1");
+
+    expect(upsertedWatchlistFlag()).toBe(true);
+    expect(findDbCalls('SET "isWatchlisted" = w."listed"')).toHaveLength(0);
+    expect(logger.warn).toHaveBeenCalledWith("Sync", expect.stringContaining("Plex watchlist unavailable"));
+  });
+
+  it("writes the fetched answer, not the stored flag, when the watchlist is known", async () => {
+    // The carry-forward is for an UNKNOWN watchlist only: with a fetched one,
+    // an item no longer on it must come back false.
+    mockDb({
+      existingRows: [{
+        ratingKey: "rk1", thumbUrl: null, parentThumbUrl: null, seasonThumbUrl: null,
+        serverUpdatedAt: null, isWatchlisted: true,
+      }],
+    });
+    mockClient.getLibraryItemsPage.mockResolvedValue({
+      items: [{ ratingKey: "rk1", title: "Movie A", type: "movie", Guid: [{ id: "tmdb://999" }] }],
+      total: 1,
+    });
+    vi.mocked(createMediaServerClient).mockImplementation(() => plexLikeClient(new Set(["tmdb://1"])) as never);
+
+    await syncMediaServer("server-1");
+
+    expect(upsertedWatchlistFlag()).toBe(false);
   });
 });

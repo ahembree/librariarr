@@ -204,10 +204,11 @@ export async function syncMediaServerItems(
       if (!item || !item.ratingKey) {
         toDelete.add(id);
       } else if (!isMediaItem(item)) {
-        // A container, not media (Plex collection, Jellyfin box set). This is
-        // the hot path for it: librariarr creates Plex collections itself, and
-        // the server reports that write back as a library change — so without
-        // this guard the app's own collections round-trip in as phantom items.
+        // A container, not media (a Jellyfin box set, or a Plex collection
+        // whose timeline entry carried no `type` — `normalize-plex` drops the
+        // typed ones before they get here, and the self-write registry drops
+        // the echo of librariarr's own collection writes). Kept as defence in
+        // depth: without it a container would round-trip in as a phantom item.
         // Route the id to the delete set so a phantom row synced before this
         // guard existed is cleaned up rather than waiting for a full sync
         // (nothing legitimate shares a container's ratingKey).
@@ -265,8 +266,30 @@ export async function syncMediaServerItems(
       libraryId = lib.id;
     } else {
       // No section reported at all — Jellyfin/Emby never populate it. Fall back
-      // to the item's own stored row.
+      // to the item's own stored row, and for an item never stored (a new add)
+      // ask the server which library holds it. Without that lookup every new
+      // Jellyfin/Emby item was unresolved — and unresolved escalates on those
+      // servers — so every single add cost a whole-server sync.
       libraryId = soleExisting(item.ratingKey)?.libraryId;
+      if (!libraryId && client.resolveLibraryKey) {
+        try {
+          const key = await client.resolveLibraryKey(item.ratingKey);
+          if (key) {
+            const lib = libByKey.get(key);
+            if (lib) libraryId = lib.id;
+            else if (canBelongToSyncedLibrary(item)) newLibrarySeen = true;
+          }
+        } catch (error) {
+          // Left unresolved. On Jellyfin/Emby that still falls back to a full
+          // sync below — exactly the behaviour before this lookup existed — so
+          // a transient failure here costs what every add used to cost.
+          logger.debug(
+            "SyncIncremental",
+            `Could not resolve the library holding ${item.ratingKey}; leaving it unresolved`,
+            { error: String(error) },
+          );
+        }
+      }
     }
     if (!libraryId || !libById.has(libraryId)) {
       // No evidence at all. Dropping is deliberate: a full sync lists one type
@@ -452,11 +475,12 @@ export async function syncMediaServerItems(
   //  - A section key we hold no `Library` row for: a library was added on the
   //    server, and only `syncMediaServer` creates `Library` rows.
   //  - ANY unresolved id on Jellyfin/Emby. Their `normalizeItem` never populates
-  //    `librarySectionID`, so a brand-new item there has no section evidence at
-  //    all and would otherwise be dropped — a regression on those servers.
-  //    Escalating is bounded there (no Plex-style extras storm emitting dozens
-  //    of sectionless ids per add) and is exactly today's behaviour. Resolving
-  //    them properly via `/Items/{id}/Ancestors` is a follow-up.
+  //    `librarySectionID`; a new item there is placed through
+  //    `client.resolveLibraryKey` (`/Items/{id}/Ancestors`) above, so this now
+  //    covers only an item that lookup could not place — a transient failure,
+  //    or a library the server does not report as one. Escalating is bounded
+  //    there (no Plex-style extras storm emitting dozens of sectionless ids per
+  //    add) and keeps those servers from dropping a change on the floor.
   // Side effects run whenever rows actually changed, BEFORE any status decision.
   // A run can now both write rows and report `fell-back` (per-item classification
   // means the fallback is decided at the end, not on the first bad id), so

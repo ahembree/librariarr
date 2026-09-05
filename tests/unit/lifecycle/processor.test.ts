@@ -1368,7 +1368,14 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockSyncMediaServer).toHaveBeenCalledWith("s1", "1");
+    // The re-sync says why it runs, and skips the server-wide watch-history
+    // scan: a deletion changes no play, and with several libraries touched the
+    // scan ran once per library.
+    expect(mockSyncMediaServer).toHaveBeenCalledWith(
+      "s1",
+      "1",
+      { trigger: "lifecycle execution: re-sync after destructive actions", skipWatchHistory: true },
+    );
   });
 
   it("sends Discord success notification when configured", async () => {
