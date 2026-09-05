@@ -1,0 +1,28 @@
+[
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "2",
+    "itemID": "138453",
+    "type": 4,
+    "state": 9,
+    "metadataState": "deleted"
+   }
+  ]
+ },
+ {
+  "type": "activity",
+  "ActivityNotification": [
+   {
+    "event": "ended",
+    "Activity": {
+     "type": "library.update.section",
+     "Context": {
+      "librarySectionID": "2"
+     }
+    }
+   }
+  ]
+ }
+]

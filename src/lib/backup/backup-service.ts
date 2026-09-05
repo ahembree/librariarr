@@ -5,6 +5,7 @@ import fs from "fs/promises";
 import path from "path";
 import { gzipSync, gunzipSync } from "zlib";
 import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from "crypto";
+import { invalidateServersWithoutWatchHistory } from "@/lib/media/watch-evidence";
 
 const BACKUP_DIR = process.env.BACKUP_DIR || "/config/backups";
 const FILENAME_REGEX = /^librariarr-backup-[\w.-]+\.json(\.gz(\.enc)?)?$/;
@@ -103,6 +104,7 @@ const TABLE_ORDER = [
   "radarrInstance",
   "lidarrInstance",
   "seerrInstance",
+  "tracearrInstance",
   "ruleSet",
   "ruleMatch",
   "lifecycleAction",
@@ -307,6 +309,28 @@ export async function restoreBackup(
     }
   }, { timeout: 300000 }); // 5 min timeout for large restores
 
+  // Restore TRUNCATEs every table in `TABLE_ORDER` — `MediaItem` and
+  // `WatchHistory` included — and then re-inserts only what the file actually
+  // holds. A config-only backup holds neither, so it empties both and refills
+  // neither: the media comes back on the next sync, the watch history does not
+  // (native history is re-fetched, but a Tracearr server's `MediaServer` row is
+  // restored verbatim with `tracearrBackfillComplete` still true, so only the
+  // one-hour forward pass runs until the archive walk is re-triggered).
+  //
+  // An empty `WatchHistory` reads as "nobody watched anything", so without this
+  // the first detection run after a restore-plus-resync matches the WHOLE
+  // library on any `watchedByUser` negative. Done outside the transaction: it
+  // is a safety marker, not part of the restore's atomicity, and it is asked of
+  // the rows rather than of the operation so it cannot miss a server.
+  const marked = await invalidateServersWithoutWatchHistory();
+  if (marked > 0) {
+    logger.info(
+      "Backup",
+      `Marked ${marked} media server(s) as having no watch history yet — ` +
+        `watchedByUser lifecycle rules are paused for them until a sync refills it`,
+    );
+  }
+
   onProgress?.({ phase: "complete", message: "Restore completed" });
   logger.info("Backup", `Restore completed from ${filename}`);
 }
@@ -440,6 +464,7 @@ function tableToDbName(table: string): string {
     radarrInstance: "RadarrInstance",
     lidarrInstance: "LidarrInstance",
     seerrInstance: "SeerrInstance",
+    tracearrInstance: "TracearrInstance",
     ruleSet: "RuleSet",
     ruleMatch: "RuleMatch",
     lifecycleAction: "LifecycleAction",

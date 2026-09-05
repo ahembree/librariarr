@@ -8,6 +8,7 @@ import { MediaDetailHero } from "@/components/media-detail-hero";
 import { RatingChip } from "@/components/rating-chip";
 import { getRatingLabel } from "@/lib/rating-labels";
 import { MediaDetailContent } from "@/components/media-detail-content";
+import { PlayHistory } from "@/components/play-history";
 import { ColorChip } from "@/components/color-chip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize, formatDuration } from "@/lib/format";
@@ -123,7 +124,14 @@ export default function MovieDetailPage() {
       backLabel="Movies"
       playServers={playServers}
     >
-      <MediaDetailContent item={item} />
+      <MediaDetailContent item={item} 
+        // The per-play list *is* this movie's Watch History card. It replaces the
+        // per-user aggregate card, which reads the same plays live from the
+        // server but without their timestamps, device, or any of the
+        // completion/transcode detail a Tracearr-sourced row carries — so the
+        // page shows the richer view rather than the same data twice.
+        historySection={<PlayHistory variant="card" mediaItemId={item.id} singleItem />}
+      />
     </MediaDetailHero>
   );
 }

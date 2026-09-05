@@ -33,6 +33,7 @@ const mockHasArrRules = vi.hoisted(() => vi.fn().mockReturnValue(false));
 const mockHasSeerrRules = vi.hoisted(() => vi.fn().mockReturnValue(false));
 const mockHasAnyActiveRules = vi.hoisted(() => vi.fn().mockReturnValue(true));
 const mockHasWatchedByUserRules = vi.hoisted(() => vi.fn().mockReturnValue(false));
+const mockHasPlayActivityRules = vi.hoisted(() => vi.fn().mockReturnValue(false));
 const mockGroupSeriesResults = vi.hoisted(() => vi.fn().mockImplementation((items: unknown[]) => items));
 const mockGetMatchedCriteriaForItems = vi.hoisted(() => vi.fn().mockReturnValue(new Map()));
 const mockGetActualValuesForAllRules = vi.hoisted(() => vi.fn().mockReturnValue(new Map()));
@@ -45,6 +46,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   hasSeerrRules: mockHasSeerrRules,
   hasAnyActiveRules: mockHasAnyActiveRules,
   hasWatchedByUserRules: mockHasWatchedByUserRules,
+  hasPlayActivityRules: mockHasPlayActivityRules,
   groupSeriesResults: mockGroupSeriesResults,
   getMatchedCriteriaForItems: mockGetMatchedCriteriaForItems,
   getActualValuesForAllRules: mockGetActualValuesForAllRules,
@@ -496,4 +498,77 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
 
     expect(body.counts.added).toBe(0);
   });
+
+  describe("watchedByUser: the removed-item eager load", () => {
+    // The diff is what a user reads BEFORE saving a rule edit that arms a
+    // DELETE. It re-runs the Phase-2 evaluator over the removed items to
+    // annotate them with `matchedCriteria` / `actualValues`, and that eager load
+    // has to apply the same completed-play predicate Phase 1 does
+    // (`COMPLETED_PLAY_FILTER` in `where-builder.ts`). Loading every row instead
+    // makes a 4%-complete abandoned Tracearr play read as a watch here and
+    // nowhere else, so the preview explains an item with evidence the engine
+    // that will actually delete it never saw.
+    it("hides abandoned plays from the removed items it annotates", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const removedItem = await createTestMediaItem(library.id, { title: "Removed", type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, { name: "Test" });
+      await createTestRuleMatch(ruleSet.id, removedItem.id, { title: "Removed", parentTitle: null });
+
+      const prisma = getTestPrisma();
+      await prisma.watchHistory.createMany({
+        data: [
+          {
+            mediaItemId: removedItem.id,
+            mediaServerId: server.id,
+            serverUsername: "alice",
+            watchedAt: new Date("2025-01-01T00:00:00Z"),
+            source: "TRACEARR",
+            sourceEventId: "chain-abandoned",
+            // Tracearr's completion verdict: this play never reached the
+            // threshold, so it does not count as a watch.
+            watched: false,
+          },
+          {
+            mediaItemId: removedItem.id,
+            mediaServerId: server.id,
+            serverUsername: "bob",
+            watchedAt: new Date("2025-01-02T00:00:00Z"),
+            source: "TRACEARR",
+            sourceEventId: "chain-finished",
+            watched: true,
+          },
+        ],
+      });
+
+      mockHasWatchedByUserRules.mockReturnValue(true);
+      mockEvaluateRules.mockResolvedValue([]);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      await callRouteWithParams(
+        POST,
+        { id: ruleSet.id },
+        {
+          url: `/api/lifecycle/rules/${ruleSet.id}/diff`,
+          method: "POST",
+          body: {
+            rules: [{ field: "watchedByUser", operator: "notEquals", value: "alice" }],
+            type: "MOVIE",
+            serverIds: [server.id],
+          },
+        }
+      );
+
+      // The evaluator is handed the item; assert on the watch history it was
+      // given, which is the thing the eager load controls.
+      const [records] = mockGetMatchedCriteriaForItems.mock.calls.at(-1) as [
+        Array<{ watchHistory?: Array<{ serverUsername: string }> }>,
+      ];
+      const names = (records[0]?.watchHistory ?? []).map((w) => w.serverUsername);
+      expect(names).toEqual(["bob"]);
+      expect(names).not.toContain("alice");
+    });
+  });
+
 });

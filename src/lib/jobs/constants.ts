@@ -26,6 +26,17 @@ export const TASK_SYNC_WATCH_HISTORY = "sync-watch-history";
  */
 export const TASK_SYNC_INCREMENTAL = "sync-incremental";
 
+/**
+ * One time-sliced slice of a server's Tracearr history backfill.
+ *
+ * Separate from `TASK_SYNC_WATCH_HISTORY` because the two have opposite cost
+ * profiles: that one is a bounded catch-up, this one walks a server's entire
+ * retained history (~1,600 pages at 160k plays). It re-enqueues itself until
+ * the walk reaches the oldest play, so no single job occupies the serial
+ * `MAIN_QUEUE` for longer than its slice.
+ */
+export const TASK_TRACEARR_BACKFILL = "tracearr-backfill";
+
 /** Run lifecycle rule detection for a user. */
 export const TASK_LIFECYCLE_DETECTION = "lifecycle-detection";
 

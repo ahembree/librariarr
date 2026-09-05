@@ -27,6 +27,7 @@ import {
   hasStreamCountRules as _hasStreamCountRules,
   hasSeriesAggregateRules as _hasSeriesAggregateRules,
   hasWatchedByUserRules as _hasWatchedByUserRules,
+  hasPlayActivityRules as _hasPlayActivityRules,
   isSeriesAggregateField as _isSeriesAggregateField,
   type Condition,
   type ConditionGroup,
@@ -77,6 +78,7 @@ export const hasResolutionRules = _hasResolutionRules;
 export const hasArrayFieldRules = _hasArrayFieldRules;
 export const hasStreamCountRules = _hasStreamCountRules;
 export const hasWatchedByUserRules = _hasWatchedByUserRules;
+export const hasPlayActivityRules = _hasPlayActivityRules;
 export const isSeriesAggregateField = _isSeriesAggregateField;
 
 // ─── Query definition shape ──────────────────────────────────────────────

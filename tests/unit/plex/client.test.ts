@@ -31,6 +31,7 @@ vi.mock("axios", () => {
 });
 
 import { PlexClient } from "@/lib/plex/client";
+import { MediaItemNotFoundError } from "@/lib/media-server/client";
 
 describe("PlexClient", () => {
   let client: PlexClient;
@@ -221,6 +222,54 @@ describe("PlexClient", () => {
       const result = await client.getItemMetadata("123");
       expect(result).toEqual(item);
       expect(mockAxiosInstance.get).toHaveBeenCalledWith("/library/metadata/123");
+    });
+
+    it("merges librarySectionID down from the container when the item lacks it", async () => {
+      // The incremental sync maps a brand-new item to its library through this
+      // field; some responses carry it only on the MediaContainer.
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            librarySectionID: 1,
+            Metadata: [{ ratingKey: "123", title: "Test" }],
+          },
+        },
+      });
+      const result = await client.getItemMetadata("123");
+      expect(result.librarySectionID).toBe(1);
+    });
+
+    it("prefers the item's own librarySectionID over the container's", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            librarySectionID: 1,
+            Metadata: [{ ratingKey: "123", title: "Test", librarySectionID: 2 }],
+          },
+        },
+      });
+      expect((await client.getItemMetadata("123")).librarySectionID).toBe(2);
+    });
+
+    it("throws MediaItemNotFoundError for a 200 carrying an empty MediaContainer", async () => {
+      // A well-formed container holding no item is the server saying "gone".
+      // It must THROW, not resolve undefined: enrichBatch in the full sync uses
+      // Promise.allSettled so a rejection keeps the un-enriched bulk item, and a
+      // resolved undefined would be written over it and abort the library sync.
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: { MediaContainer: { size: 0 } } });
+      await expect(client.getItemMetadata("123")).rejects.toBeInstanceOf(MediaItemNotFoundError);
+    });
+
+    it("throws a NON-not-found error for an unparseable response", async () => {
+      // An empty body or a proxy's HTML/XML page is NOT evidence of deletion.
+      // Conflating the two would let the incremental sync delete a live row —
+      // cascading its RuleMatch, LifecycleException and WatchHistory rows.
+      for (const data of ["", "<html>bad gateway</html>", null, { nope: true }]) {
+        mockAxiosInstance.get.mockResolvedValueOnce({ data });
+        const err = await client.getItemMetadata("123").catch((e) => e);
+        expect(err).toBeInstanceOf(Error);
+        expect(err).not.toBeInstanceOf(MediaItemNotFoundError);
+      }
     });
   });
 

@@ -240,7 +240,12 @@ export async function processLifecycleRules(userId?: string) {
       // like a metadata fetch failure; a PERMANENT failure (Seerr on MUSIC)
       // also disarms the rule set, because a vacuous flood armed before this
       // guard existed would otherwise stay frozen forever and still execute.
-      const evaluability = await checkLifecycleRuleEvaluability(ruleSet.userId, ruleSet.type, rules);
+      const evaluability = await checkLifecycleRuleEvaluability(
+        ruleSet.userId,
+        ruleSet.type,
+        rules,
+        ruleSet.serverIds,
+      );
       if (!evaluability.evaluable) {
         logger.warn("Lifecycle", `Skipping rule set "${ruleSet.name}" — ${evaluability.reason}`);
         if (evaluability.permanent) {
