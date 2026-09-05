@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/auth/session";
+import { rotateSession } from "@/lib/auth/session";
 import { currentSsoIssuer, getSsoSettings, isSsoUsable } from "@/lib/sso/config";
 import { apiLogger } from "@/lib/logger";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
@@ -91,8 +91,7 @@ export async function GET(request: NextRequest) {
     await prisma.user.update({ where: { id: user.id }, data: updateData });
   }
 
-  const session = await getSession();
-  session.destroy();
+  const session = await rotateSession();
   session.userId = user.id;
   session.isLoggedIn = true;
   session.sessionVersion = user.sessionVersion;

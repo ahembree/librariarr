@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPlexUser } from "@/lib/plex/auth";
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/auth/session";
+import { rotateSession } from "@/lib/auth/session";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, plexTokenSchema } from "@/lib/validation";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
@@ -63,8 +63,7 @@ export async function POST(request: NextRequest) {
       // Destroy first to clear any transient state (e.g. SSO handshake fields
       // from an abandoned OIDC init) before replacing with the authenticated
       // session — matches the pattern in local/login and the SSO callback.
-      const session = await getSession();
-      session.destroy();
+      const session = await rotateSession();
       session.userId = existingUser.id;
       session.plexToken = authToken;
       session.isLoggedIn = true;
@@ -131,12 +130,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const session = await getSession();
-    // Destroy first to clear any transient state (e.g. SSO handshake fields
-    // from an abandoned OIDC init) before replacing with the authenticated
-    // session — matches the pattern in the existing-user branch above and
-    // in local/login and the SSO callback.
-    session.destroy();
+    // Rotating clears any transient state (e.g. SSO handshake fields from an
+    // abandoned OIDC init) before establishing the authenticated session —
+    // matches the pattern in the existing-user branch above and in local/login
+    // and the SSO callback.
+    const session = await rotateSession();
     session.userId = user.id;
     session.plexToken = authToken;
     session.isLoggedIn = true;
