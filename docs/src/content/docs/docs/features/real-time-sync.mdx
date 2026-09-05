@@ -28,7 +28,7 @@ Only **item-level** events drive a sync. Servers also announce that a scan or me
 
 Only changes that are actually library media are applied. Three kinds are skipped:
 
-- **Containers** — a Plex collection, a Jellyfin/Emby box set, a playlist. This matters most for Librariarr's own [collection sync](/docs/features/lifecycle-rules/#plex-collections): writing a collection to Plex makes Plex report a library change, which would otherwise pull that collection straight back in as a phantom item.
+- **Containers** — a Plex collection, a Jellyfin/Emby box set, a playlist. Plex names the type of every changed item, so its collections and playlists are dropped before anything is fetched at all; a Jellyfin/Emby box set is recognised once fetched. Either way a container can never become a phantom item.
 - **The levels above the item that changed** — adding one episode makes a server report the episode, its season *and* its show as changed. A series library stores episodes (and a music library stores tracks), so only the episode is applied; the show and season would otherwise appear as phantom rows until the next full sync cleared them.
 - **Anything outside a library section** — a movie's extras, trailers and featurettes belong to no library, so there is nothing to file them under. Plex reports these on every add: one added movie was announced alongside 27 of them.
 

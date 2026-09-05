@@ -204,10 +204,11 @@ export async function syncMediaServerItems(
       if (!item || !item.ratingKey) {
         toDelete.add(id);
       } else if (!isMediaItem(item)) {
-        // A container, not media (Plex collection, Jellyfin box set). This is
-        // the hot path for it: librariarr creates Plex collections itself, and
-        // the server reports that write back as a library change — so without
-        // this guard the app's own collections round-trip in as phantom items.
+        // A container, not media (a Jellyfin box set, or a Plex collection
+        // whose timeline entry carried no `type` — `normalize-plex` drops the
+        // typed ones before they get here, and the self-write registry drops
+        // the echo of librariarr's own collection writes). Kept as defence in
+        // depth: without it a container would round-trip in as a phantom item.
         // Route the id to the delete set so a phantom row synced before this
         // guard existed is cleaned up rather than waiting for a full sync
         // (nothing legitimate shares a container's ratingKey).
