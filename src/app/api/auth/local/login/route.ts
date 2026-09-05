@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/auth/session";
+import { rotateSession } from "@/lib/auth/session";
 import bcrypt from "bcryptjs";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, authLoginSchema } from "@/lib/validation";
@@ -65,8 +65,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Destroy first to clear any stale data (e.g. prior plexToken from a different session)
-    const session = await getSession();
-    session.destroy();
+    const session = await rotateSession();
     session.userId = user.id;
     session.isLoggedIn = true;
     session.sessionVersion = user.sessionVersion;

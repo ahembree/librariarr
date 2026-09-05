@@ -215,6 +215,39 @@ describe("getSession — Secure cookie attribute (COOKIE_SECURE)", () => {
   });
 });
 
+describe("rotateSession", () => {
+  it("destroys the incoming session and hands back a freshly read one", async () => {
+    const destroy = vi.fn();
+    const previous = { userId: "old", isLoggedIn: true, destroy };
+    const fresh = { destroy: vi.fn() };
+    mockGetIronSession.mockResolvedValueOnce(previous).mockResolvedValueOnce(fresh);
+
+    const { rotateSession } = await load();
+    const returned = await rotateSession();
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+    // The returned session must be the one read AFTER the destroy: iron-session
+    // refuses to save a destroyed session that has been written back into.
+    expect(returned).toBe(fresh);
+    expect(mockGetIronSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads both sessions from the same cookie store with the same options", async () => {
+    const cookieStore = { get: vi.fn(), set: vi.fn() };
+    mockCookies.mockResolvedValue(cookieStore);
+    mockGetIronSession.mockResolvedValue({ destroy: vi.fn() });
+
+    const { rotateSession } = await load();
+    await rotateSession();
+
+    const [first, second] = mockGetIronSession.mock.calls;
+    expect(first[0]).toBe(cookieStore);
+    expect(second[0]).toBe(cookieStore);
+    expect(first[1]).toEqual(second[1]);
+    expect((first[1] as { password: string }).password).toBe(VALID_SECRET);
+  });
+});
+
 describe("isSessionValid", () => {
   it("returns false when the session is not logged in", async () => {
     mockGetIronSession.mockResolvedValue({ isLoggedIn: false });

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
-import { getSession } from "@/lib/auth/session";
+import { getSession, rotateSession } from "@/lib/auth/session";
 import { currentSsoIssuer, getSsoSettings, isSsoUsable } from "@/lib/sso/config";
 import {
   discoverOidc,
@@ -253,12 +253,12 @@ export async function GET(request: NextRequest) {
   }
 
   // Replace any prior session data so we don't leak Plex tokens across logins.
-  session.destroy();
-  session.userId = user.id;
-  session.isLoggedIn = true;
-  session.sessionVersion = user.sessionVersion;
-  if (user.plexToken) session.plexToken = user.plexToken;
-  await session.save();
+  const authenticated = await rotateSession();
+  authenticated.userId = user.id;
+  authenticated.isLoggedIn = true;
+  authenticated.sessionVersion = user.sessionVersion;
+  if (user.plexToken) authenticated.plexToken = user.plexToken;
+  await authenticated.save();
 
   apiLogger.info("Auth", `SSO (OIDC) login: "${user.username}"`);
 

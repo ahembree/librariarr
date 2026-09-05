@@ -109,7 +109,7 @@ Real-browser end-to-end tests live in `e2e/` (Playwright, **separate from Vitest
 ### Key Libraries
 
 - `src/lib/db.ts` — Prisma singleton (import as `@/lib/db`, NOT `@/lib/prisma`)
-- `src/lib/auth/session.ts` — iron-session encrypted cookies (30-day expiry)
+- `src/lib/auth/session.ts` — iron-session encrypted cookies (30-day expiry). **Every login path establishes its session through `rotateSession()`, never `getSession()`** — setup, local login, both Plex token branches, the OIDC callback and forward-auth. It signs the visitor out and hands back a *fresh* session to write the login into, which is both the session-fixation defence and what drops a stale Plex token or a half-finished OIDC handshake. It reads twice from the same cookie store on purpose: iron-session rejects `destroy()` → write → `save()` on one session object ("saving these fields would restore the cookie you just cleared"), so collapsing the two reads back into one breaks every login at runtime. The route-level tests mock this module, so that failure is invisible to them — `tests/unit/auth/session-rotation.test.ts` drives the real library over an in-memory cookie store and is the only place the semantics are actually checked
 - `src/lib/validation.ts` — Zod schemas + `validateRequest` helper for all API mutation routes (see API Validation below)
 - `src/lib/cache/memory-cache.ts` — In-process `MemoryCache` class with `appCache` singleton (see In-Memory Cache below)
 - `src/lib/dedup/` — Multi-server dedup: `resolveServerFilter`, `server-presence` helpers (see Multi-Server Dedup below)
