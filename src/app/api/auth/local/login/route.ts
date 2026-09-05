@@ -7,6 +7,13 @@ import { validateRequest, authLoginSchema } from "@/lib/validation";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
 import { getSsoSettings, isSsoOverrideActive, isSsoUsable } from "@/lib/sso/config";
 
+/**
+ * A real cost-12 bcrypt hash of a throwaway string. Compared against on the
+ * unknown-username path purely to equalise timing; nothing ever matches it.
+ */
+const UNKNOWN_USER_DUMMY_HASH =
+  "$2b$12$Hx3w06n5Vs5p8Ajdvdz9FuOw0kR7BGtKcAGI4PyfqiNglFBMsoFY6";
+
 export async function POST(request: NextRequest) {
   try {
     const rateLimited = checkAuthRateLimit(request, "login");
@@ -50,6 +57,10 @@ export async function POST(request: NextRequest) {
     });
 
     if (!user || !user.passwordHash) {
+      // Burn the same bcrypt cost the known-user path pays, so the response
+      // time does not tell the caller whether the username exists (a cost-12
+      // compare is ~250ms; skipping it made an unknown name answer in ~5ms).
+      await bcrypt.compare(password, UNKNOWN_USER_DUMMY_HASH);
       return NextResponse.json(
         { error: "Invalid username or password" },
         { status: 401 }

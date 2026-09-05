@@ -49,7 +49,7 @@ Backups can be encrypted with a passphrase for security.
 - Minimum passphrase length: 8 characters
 - Uses strong encryption (AES-256-GCM) with brute-force-resistant key derivation
 
-Set the encryption password in **Settings → General → Backup & Restore**.
+Set the encryption password in **Settings → General → Backup & Restore**. While no password is set, the Create Backup panel shows a warning and every backup written (manual or scheduled) is logged as unencrypted in System Logs.
 
 <Aside type="danger">
   If you lose the encryption passphrase, encrypted backups **cannot be recovered**. There is no passphrase reset or recovery mechanism. Store your passphrase securely.

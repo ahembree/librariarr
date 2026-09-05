@@ -65,6 +65,49 @@ export function isSameOriginRequest(
   return !options.strict;
 }
 
+/**
+ * CSRF guard for state-changing `/api/*` requests, applied in `src/proxy.ts`.
+ *
+ * Browsers attach `Origin` to every cross-origin request that is not a
+ * simple GET/HEAD (and to same-origin POST/PUT/DELETE too), and it cannot be
+ * set or removed by page script. So a mutation whose `Origin` names a host
+ * other than the one this app is being served on did not come from our own
+ * UI. `SameSite=Lax` on the cookie already stops most of this, but not a
+ * sibling on the same registrable domain (`grafana.home.example` posting to
+ * `librariarr.home.example` — the ordinary homelab layout), nor browsers
+ * with inconsistent SameSite enforcement.
+ *
+ * Compared by HOST, not full origin: a proxy that terminates TLS but does
+ * not set `x-forwarded-proto` would otherwise make every mutation from the
+ * app's own UI fail as `https://host` ≠ `http://host`. Scheme carries no
+ * CSRF signal here — an attacker on the same host is not a CSRF attacker.
+ *
+ * Requests carrying NEITHER `Origin` nor `Referer` are allowed: those are
+ * non-browser clients (curl, scripts), which carry no ambient cookie and
+ * are not what CSRF is about. `Referer` is the fallback for the browsers
+ * that omit `Origin` on same-origin requests.
+ */
+export function isTrustedMutationOrigin(request: NextRequest): boolean {
+  const expectedHost = expectedRequestHost(request);
+  const origin = request.headers.get("origin");
+  if (origin) return hostOf(origin) === expectedHost;
+  const referer = request.headers.get("referer");
+  if (referer) return hostOf(referer) === expectedHost;
+  return true;
+}
+
+function hostOf(url: string): string | null {
+  try {
+    return new URL(url).host.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function expectedRequestHost(request: NextRequest): string {
+  return new URL(getExternalBaseUrl(request)).host.toLowerCase();
+}
+
 export function getExternalBaseUrl(request: NextRequest): string {
   const requestUrl = new URL(request.url);
 

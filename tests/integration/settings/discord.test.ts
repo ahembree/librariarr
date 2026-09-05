@@ -16,6 +16,7 @@ vi.mock("@/lib/logger", () => ({
 
 // Import route handlers AFTER mocks
 import { GET, PUT } from "@/app/api/settings/discord/route";
+import { MASKED_VALUE } from "@/lib/api/sanitize";
 
 beforeEach(async () => {
   await cleanDatabase();
@@ -76,7 +77,9 @@ describe("GET /api/settings/discord", () => {
       notifyMaintenance: boolean;
     }>(res);
 
-    expect(body.webhookUrl).toBe("https://discord.com/api/webhooks/123/abc");
+    // A webhook URL is a bearer credential: never returned verbatim.
+    expect(body.webhookUrl).toBe(MASKED_VALUE);
+    expect((body as { hasWebhookUrl?: boolean }).hasWebhookUrl).toBe(true);
     expect(body.webhookUsername).toBe("Librariarr");
     expect(body.webhookAvatarUrl).toBe("https://example.com/avatar.png");
     expect(body.notifyMaintenance).toBe(true);
@@ -110,7 +113,8 @@ describe("PUT /api/settings/discord", () => {
       notifyMaintenance: boolean;
     }>(res);
 
-    expect(body.webhookUrl).toBe("https://discord.com/api/webhooks/999/xyz");
+    expect(body.webhookUrl).toBe(MASKED_VALUE);
+    expect((body as { hasWebhookUrl?: boolean }).hasWebhookUrl).toBe(true);
     // Defaults for other fields
     expect(body.webhookUsername).toBe("");
     expect(body.webhookAvatarUrl).toBe("");
@@ -142,9 +146,33 @@ describe("PUT /api/settings/discord", () => {
       notifyMaintenance: boolean;
     }>(res);
 
-    expect(body.webhookUrl).toBe("https://discord.com/api/webhooks/123/abc");
+    // A webhook URL is a bearer credential: never returned verbatim.
+    expect(body.webhookUrl).toBe(MASKED_VALUE);
+    expect((body as { hasWebhookUrl?: boolean }).hasWebhookUrl).toBe(true);
     expect(body.webhookUsername).toBe("Bot");
     expect(body.notifyMaintenance).toBe(true);
+  });
+
+  it("treats the echoed mask as 'keep the saved URL'", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    await callRoute(PUT, {
+      method: "PUT",
+      body: { webhookUrl: "https://discord.com/api/webhooks/123/abc" },
+    });
+
+    // The settings page round-trips whatever GET returned.
+    const res = await callRoute(PUT, {
+      method: "PUT",
+      body: { webhookUrl: MASKED_VALUE, webhookUsername: "Bot" },
+    });
+    const body = await expectJson<{ webhookUrl: string; webhookUsername: string }>(res);
+    expect(body.webhookUrl).toBe(MASKED_VALUE);
+    expect(body.webhookUsername).toBe("Bot");
+
+    const { getTestPrisma } = await import("../../setup/test-db");
+    const row = await getTestPrisma().appSettings.findUnique({ where: { userId: user.id } });
+    expect(row?.discordWebhookUrl).toBe("https://discord.com/api/webhooks/123/abc");
   });
 
   it("clears webhookUrl when empty string is provided", async () => {

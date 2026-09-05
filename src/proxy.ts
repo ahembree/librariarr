@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { getExternalBaseUrl } from "@/lib/url";
+import { getExternalBaseUrl, isTrustedMutationOrigin } from "@/lib/url";
+
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 export function proxy(request: NextRequest) {
   const sessionCookie = request.cookies.get("librariarr_session");
@@ -9,8 +11,16 @@ export function proxy(request: NextRequest) {
     request.nextUrl.pathname.startsWith("/onboarding");
   const isApiRoute = request.nextUrl.pathname.startsWith("/api");
 
-  // Skip proxy for API routes (they handle auth themselves)
+  // API routes handle auth themselves. The proxy's one job for them is the
+  // CSRF origin check on state-changing methods — applied here, once, rather
+  // than remembered in 100+ route files. See `isTrustedMutationOrigin`.
   if (isApiRoute) {
+    if (!SAFE_METHODS.has(request.method) && !isTrustedMutationOrigin(request)) {
+      return NextResponse.json(
+        { error: "Cross-site request rejected" },
+        { status: 403 }
+      );
+    }
     return NextResponse.next();
   }
 

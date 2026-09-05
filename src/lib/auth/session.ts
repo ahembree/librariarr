@@ -3,7 +3,7 @@ import {
   type IronSession,
   type SessionOptions,
 } from "iron-session";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { randomBytes } from "crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
@@ -105,40 +105,139 @@ function getSessionOptions(): SessionOptions {
     _sessionOptions = {
       password: sessionSecret,
       cookieName: "librariarr_session",
+      // The seal's own lifetime. iron-session defaults this to 14 days
+      // regardless of the cookie's Max-Age, so without it a 30-day cookie
+      // carried a seal that stopped unsealing after two weeks — the docs
+      // promised 30 days and the cookie said 30 days, but the session died
+      // at 14. Keep `ttl` and `maxAge` in lockstep.
+      ttl: SESSION_LIFETIME_SECONDS,
       cookieOptions: {
-        secure: resolveCookieSecure(),
+        secure: resolveCookieSecure() ?? false,
         httpOnly: true,
         sameSite: "lax" as const,
-        maxAge: 60 * 60 * 24 * 30, // 30 days
+        maxAge: SESSION_LIFETIME_SECONDS,
       },
     };
   }
   return _sessionOptions;
 }
 
+/** 30 days — the one number both the seal TTL and the cookie Max-Age use. */
+export const SESSION_LIFETIME_SECONDS = 60 * 60 * 24 * 30;
+
 /**
- * Resolve the `Secure` cookie attribute.
- *
- * Defaults to `false` so direct-HTTP deployments (LAN, http://host:3000 with
- * no proxy) keep working. The Docker image sets `NODE_ENV=production`, so a
- * NODE_ENV-based default would silently break HTTP-only setups on upgrade —
- * the browser would refuse to send the cookie and users would never stay
- * logged in.
- *
- * HTTPS deployments should explicitly set `COOKIE_SECURE=true`. Accepts the
- * lenient parse: `true`/`1`/`yes` (case-insensitive). The install docs flag
- * this as recommended for any HTTPS-fronted deployment.
+ * Per-request session options: the memoized base plus a `Secure` attribute
+ * that follows the request when `COOKIE_SECURE` is not set explicitly. A
+ * request that arrived over HTTPS (directly, or via a proxy that sets
+ * `x-forwarded-proto: https`) gets a Secure cookie, so an HTTPS-fronted
+ * deployment no longer leaks its session cookie over a stray plain-HTTP
+ * request just because the operator never found the env var.
  */
-function resolveCookieSecure(): boolean {
+async function getRequestSessionOptions(): Promise<SessionOptions> {
+  const base = getSessionOptions();
+  const explicit = resolveCookieSecure();
+  if (explicit !== null) return base;
+  return {
+    ...base,
+    cookieOptions: { ...base.cookieOptions, secure: await requestIsHttps() },
+  };
+}
+
+async function requestIsHttps(): Promise<boolean> {
+  try {
+    const h = await headers();
+    const proto = h.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+    return proto === "https";
+  } catch {
+    // Outside a request scope (instrumentation, tests) — no way to know.
+    return false;
+  }
+}
+
+/**
+ * Resolve the explicit `COOKIE_SECURE` setting: `true`/`1`/`yes` → true, any
+ * other value → false, unset → `null` (infer from the request, see
+ * `getRequestSessionOptions`).
+ *
+ * The inferred default exists because a hard `false` left every HTTPS
+ * deployment whose operator never found the env var sending its session
+ * cookie without `Secure`, while a hard `true` would silently break direct
+ * plain-HTTP setups (LAN, http://host:3000 with no proxy) — the browser would
+ * refuse to store the cookie and users would never stay logged in. Following
+ * `x-forwarded-proto` gets both right; the env var remains the override.
+ */
+function resolveCookieSecure(): boolean | null {
   const raw = process.env.COOKIE_SECURE;
-  if (!raw) return false;
+  if (!raw) return null;
   const normalized = raw.trim().toLowerCase();
   return normalized === "true" || normalized === "1" || normalized === "yes";
 }
 
-export async function getSession() {
+/**
+ * Read the session cookie WITHOUT checking it against the User row. Only the
+ * login flows and `getSession` itself should need this — everything that
+ * answers a request on behalf of a logged-in user must go through
+ * `getSession`, which is what enforces revocation.
+ */
+export async function getRawSession(): Promise<IronSession<SessionData>> {
   const cookieStore = await cookies();
-  return getIronSession<SessionData>(cookieStore, getSessionOptions());
+  return getIronSession<SessionData>(cookieStore, await getRequestSessionOptions());
+}
+
+/**
+ * Read the session AND enforce revocation. A cookie that unseals is not
+ * enough: the User row is the source of truth for whether it is still
+ * honoured. A logged-in session whose `userId` no longer exists, or whose
+ * `sessionVersion` no longer matches the row (a credential change, an SSO
+ * link/unlink — everything that increments it "to invalidate other
+ * sessions"), comes back with `isLoggedIn` false and no `userId`, so every
+ * `if (!session.isLoggedIn) return 401` guard downstream refuses it.
+ *
+ * This lives in `getSession` itself, rather than in a second helper the
+ * routes would have to remember to call, because the check was previously
+ * only made by the page layout — and the 170-odd API routes each checked
+ * `isLoggedIn` alone. A password change therefore logged the stale cookie out
+ * of the HTML pages while it kept full read/write access to every `/api/*`
+ * route, including the backup download that carries the Plex token in
+ * plaintext. Revocation that only covers the UI is not revocation.
+ *
+ * The downgrade is in-memory only — nothing is saved — so a route that goes
+ * on to `save()` the session (the OIDC login handshake writes its `state`
+ * into whatever session the visitor carries) persists the logged-out state,
+ * never resurrects the stale one. A session with NO `sessionVersion` is
+ * treated as stale too: every login path has stamped one for a long time,
+ * and a cookie without one could otherwise never be revoked at all.
+ *
+ * The DB lookup is a single primary-key read; a DB error is treated as
+ * "not valid" (fail closed), matching what `isSessionValid` always did.
+ */
+export async function getSession(): Promise<IronSession<SessionData>> {
+  const session = await getRawSession();
+  if (!session.isLoggedIn) return session;
+  const valid = await isUserSessionCurrent(session.userId, session.sessionVersion);
+  if (!valid) {
+    session.isLoggedIn = false;
+    session.userId = undefined;
+    session.sessionVersion = undefined;
+    session.plexToken = undefined;
+  }
+  return session;
+}
+
+async function isUserSessionCurrent(
+  userId: string | undefined,
+  sessionVersion: number | undefined
+): Promise<boolean> {
+  if (!userId || sessionVersion === undefined) return false;
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { sessionVersion: true },
+    });
+    return !!user && user.sessionVersion === sessionVersion;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -156,32 +255,18 @@ export async function getSession() {
  */
 export async function rotateSession(): Promise<IronSession<SessionData>> {
   const cookieStore = await cookies();
-  const options = getSessionOptions();
+  const options = await getRequestSessionOptions();
   const previous = await getIronSession<SessionData>(cookieStore, options);
   previous.destroy();
   return getIronSession<SessionData>(cookieStore, options);
 }
 
 /**
- * Check if the session's userId still exists in the database.
- * Returns false if the user is gone (e.g. database was recreated)
- * or the database is unreachable.
+ * Whether the current request carries a session that is still honoured.
+ * `getSession` already performs the User-row check, so this is just its
+ * verdict — kept as a named helper for the page layout.
  */
 export async function isSessionValid(): Promise<boolean> {
   const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) return false;
-  try {
-    const user = await prisma.user.findUnique({
-      where: { id: session.userId },
-      select: { id: true, sessionVersion: true },
-    });
-    if (!user) return false;
-    // Version mismatch = session was invalidated (e.g. password change)
-    if (session.sessionVersion !== undefined && session.sessionVersion !== user.sessionVersion) {
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
+  return session.isLoggedIn === true && !!session.userId;
 }

@@ -43,6 +43,9 @@ const SECRET = "rotation-secret-that-is-long-enough-for-iron!!";
 const ORIG_SECRET = process.env.SESSION_SECRET;
 
 let store: ReturnType<typeof makeCookieStore>;
+// `getSession` checks a logged-in cookie against the User row; the tests
+// below point this at the version they stamp so the round-trip is honoured.
+const mockFindUnique = vi.fn();
 
 type SessionModule = typeof import("@/lib/auth/session");
 const load = (): Promise<SessionModule> => import("@/lib/auth/session");
@@ -52,7 +55,8 @@ beforeEach(() => {
   store = makeCookieStore();
   process.env.SESSION_SECRET = SECRET;
   vi.doMock("next/headers", () => ({ cookies: async () => store }));
-  vi.doMock("@/lib/db", () => ({ prisma: { user: { findUnique: vi.fn() } } }));
+  mockFindUnique.mockReset();
+  vi.doMock("@/lib/db", () => ({ prisma: { user: { findUnique: mockFindUnique } } }));
   vi.doMock("@/lib/logger", () => ({
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   }));
@@ -67,6 +71,21 @@ afterEach(() => {
 });
 
 describe("rotateSession (real iron-session)", () => {
+  it("a saved login cookie is refused once the User row's version moves on", async () => {
+    const { rotateSession, getSession } = await load();
+
+    const session = await rotateSession();
+    session.userId = "user-1";
+    session.isLoggedIn = true;
+    session.sessionVersion = 4;
+    await session.save();
+
+    mockFindUnique.mockResolvedValue({ sessionVersion: 5 });
+    const readBack = await getSession();
+    expect(readBack.isLoggedIn).toBe(false);
+    expect(readBack.userId).toBeUndefined();
+  });
+
   it("writes a saveable session — the login flows' whole shape", async () => {
     const { rotateSession, getSession } = await load();
 
@@ -76,6 +95,7 @@ describe("rotateSession (real iron-session)", () => {
     session.sessionVersion = 4;
     await session.save();
 
+    mockFindUnique.mockResolvedValue({ sessionVersion: 4 });
     const readBack = await getSession();
     expect(readBack.userId).toBe("user-1");
     expect(readBack.isLoggedIn).toBe(true);
@@ -102,8 +122,10 @@ describe("rotateSession (real iron-session)", () => {
 
     session.userId = "user-2";
     session.isLoggedIn = true;
+    session.sessionVersion = 1;
     await session.save();
 
+    mockFindUnique.mockResolvedValue({ sessionVersion: 1 });
     const readBack = await getSession();
     expect(readBack.userId).toBe("user-2");
     expect(readBack.plexToken).toBeUndefined();
