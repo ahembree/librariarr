@@ -290,6 +290,26 @@ describe("syncMediaServer", () => {
     expect(completedCalls.length).toBeGreaterThan(0);
   });
 
+  it("logs what triggered the sync on the start line", async () => {
+    const { logger } = await import("@/lib/logger");
+    await syncMediaServer("server-1", undefined, { trigger: "scheduled sync" });
+    expect(logger.info).toHaveBeenCalledWith(
+      "Sync",
+      'Starting sync for server "Test Plex" — triggered by scheduled sync',
+    );
+  });
+
+  it("names the library scope and flags a caller that gave no trigger", async () => {
+    // An unexplained sync must be visible as such, not silent: the whole point
+    // is that an off-schedule sync with no stated cause reads as a bug.
+    const { logger } = await import("@/lib/logger");
+    await syncMediaServer("server-1", "3");
+    expect(logger.info).toHaveBeenCalledWith(
+      "Sync",
+      'Starting sync for server "Test Plex" (library key 3) — triggered by an unrecorded caller',
+    );
+  });
+
   it("creates a sync job and acquires semaphore", async () => {
     const { acquireSyncSlot, releaseSyncSlot } = await import("@/lib/sync/sync-semaphore");
     await syncMediaServer("server-1");

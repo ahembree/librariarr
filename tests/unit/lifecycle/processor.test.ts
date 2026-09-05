@@ -1368,7 +1368,11 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockSyncMediaServer).toHaveBeenCalledWith("s1", "1");
+    expect(mockSyncMediaServer).toHaveBeenCalledWith(
+      "s1",
+      "1",
+      { trigger: "lifecycle execution: re-sync after destructive actions" },
+    );
   });
 
   it("sends Discord success notification when configured", async () => {

@@ -165,6 +165,30 @@ describe("normalizePlexMessage", () => {
     expect(events[0].detail?.changedIds).toEqual(["169827"]);
   });
 
+  it("flags entries that look like deletions, without removing them from changedIds", () => {
+    // Advisory: the sync still resolves every id against the server. The flag
+    // exists so the manager never drops a deletion as the echo of librariarr's
+    // own write, and it must survive an earlier non-deletion frame for the
+    // same id in the same container.
+    const events = normalizePlexMessage(
+      {
+        NotificationContainer: {
+          type: "timeline",
+          TimelineEntry: [
+            { sectionID: "1", itemID: "1", type: 1, state: 5 },
+            { sectionID: "1", itemID: "1", type: 1, state: 9, metadataState: "deleted" },
+            { sectionID: "1", itemID: "2", type: 1, state: 5, metadataState: "Deleted" },
+            { sectionID: "1", itemID: "3", type: 1, state: "9" },
+            { sectionID: "1", itemID: "4", type: 1, state: 5 },
+          ],
+        },
+      },
+      ctx,
+    );
+    expect(events[0].detail?.changedIds).toEqual(["1", "2", "3", "4"]);
+    expect(events[0].detail?.deletedIds).toEqual(["1", "2", "3"]);
+  });
+
   it("carries changed item ratingKeys (itemID) for incremental sync", () => {
     const events = normalizePlexMessage(
       { NotificationContainer: { type: "timeline", TimelineEntry: [{ itemID: 12, state: 5 }, { itemID: 34, state: 9 }] } },

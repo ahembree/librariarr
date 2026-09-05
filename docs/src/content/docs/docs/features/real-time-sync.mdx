@@ -34,7 +34,11 @@ Only changes that are actually library media are applied. Three kinds are skippe
 
 Items in a library you have **disabled** are recognised and skipped, exactly as the full sync skips them.
 
+**Librariarr's own writes are recognised and ignored.** Keeping a rule set's matches in a [Plex collection](/docs/features/lifecycle-rules/#plex-collections) is, to Plex, a metadata change on the collection *and on every item it tags* — so a detection run that refreshes a 150-item "Leaving Soon" shelf is announced back over the notification socket as 150 changed movies. Nothing Librariarr stores changes when an item joins or leaves a collection, so those announcements are dropped rather than re-fetched or, past the 100-item limit, turned into an off-schedule full sync. Only the items Librariarr itself just wrote are affected, only on that server, and only for a couple of minutes after the write; a deletion is never dropped this way. The system log records how many were ignored (`Ignored N library change(s) … echo librariarr's own Plex collection writes`).
+
 A full sync is still requested when the real-time path genuinely can't do the job: a change too large to apply item-by-item (100+ at once), an item naming a library section Librariarr has no record of (a new library — only a full sync can create one), a transient error reaching the server, or a full sync already running. An item that simply can't be placed in any library is skipped and logged rather than escalated.
+
+Every full sync — scheduled, manual, real-time or lifecycle-triggered — logs what started it on its `Starting sync for server … — triggered by …` line in **System → Logs**, so a sync that appears off-schedule can always be traced to its cause.
 
 ## Live updates in the browser
 

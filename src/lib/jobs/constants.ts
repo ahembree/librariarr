@@ -70,6 +70,15 @@ export interface SyncServerPayload {
   serverId: string;
   libraryKey?: string;
   skipWatchHistory?: boolean;
+  /**
+   * Why this sync was requested, in plain words — "scheduled sync", "manual
+   * sync request for this server", "realtime library change: 150 changed
+   * item(s) exceeds the 100-item incremental limit", … Logged on the sync's
+   * "Starting sync" line. Every enqueue site sets it: a full sync that appears
+   * off-schedule with no stated cause reads as a bug, and the only way to tell
+   * a bug from a legitimate trigger is for the sync to say which one it was.
+   */
+  trigger?: string;
 }
 
 /** Payload for {@link TASK_SYNC_WATCH_HISTORY}. */

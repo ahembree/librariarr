@@ -837,7 +837,9 @@ export async function executeLifecycleActions(userId?: string) {
     logger.info("Lifecycle", `Triggering targeted sync for ${librariesToSync.size} affected ${librariesToSync.size === 1 ? "library" : "libraries"}`);
     for (const [, { serverId, libraryKey }] of librariesToSync) {
       try {
-        await syncMediaServer(serverId, libraryKey);
+        await syncMediaServer(serverId, libraryKey, {
+          trigger: "lifecycle execution: re-sync after destructive actions",
+        });
       } catch (error) {
         logger.error("Lifecycle", `Failed to sync library ${libraryKey} on server ${serverId} after action execution`, { error: String(error) });
       }

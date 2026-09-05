@@ -31,10 +31,12 @@ vi.mock("@/lib/plex/client", () => ({
 }));
 
 import { logger } from "@/lib/logger";
+import { isSelfWrite, _resetSelfWritesForTesting } from "@/lib/media-server/realtime/self-writes";
 import {
   syncCollection,
   syncCollectionById,
   syncAllCollections,
+  removeItemFromCollections,
   removePlexCollection,
   renameCollectionInPlex,
   type CollectionContribution,
@@ -529,5 +531,93 @@ describe("renameCollectionInPlex", () => {
     await renameCollectionInPlex("u1", "MOVIE", "Old Name", "New Name");
 
     expect(mockPlexClient.renameCollection).not.toHaveBeenCalled();
+  });
+});
+
+describe("self-write marks (realtime echo suppression)", () => {
+  // Plex reports a collection write back over its notification socket as a
+  // metadata change on the collection and on every member it tags. The marks
+  // are what let the realtime manager recognise that echo as librariarr's own
+  // instead of re-fetching the members — or, past 100 of them, escalating to a
+  // whole-server sync straight after a detection run.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetSelfWritesForTesting();
+  });
+
+  it("marks every member before the create goes out, and the collection once it exists", async () => {
+    mockPrisma.library.findMany.mockResolvedValue(oneMovieLibrary);
+    mockPlexClient.getCollections.mockResolvedValue([]);
+    let markedAtWrite = false;
+    mockPlexClient.createCollection.mockImplementation(async () => {
+      // The members must already be marked when the write goes out — the echo
+      // can land before the call returns.
+      markedAtWrite = isSelfWrite("s1", "rk1") && isSelfWrite("s1", "rk2");
+      return { ratingKey: "col1", title: "Test Collection" };
+    });
+    stubSortAndVisibility();
+
+    await syncCollection(makeCollection(), [
+      contribution([
+        { libraryId: "lib1", ratingKey: "rk1", title: "Movie 1", parentTitle: null },
+        { libraryId: "lib1", ratingKey: "rk2", title: "Movie 2", parentTitle: null },
+      ]),
+    ]);
+
+    expect(markedAtWrite).toBe(true);
+    expect(isSelfWrite("s1", "col1")).toBe(true);
+    expect(isSelfWrite("s1", "unrelated")).toBe(false);
+    // Rating keys are per-server: nothing is marked for another server.
+    expect(isSelfWrite("s2", "rk1")).toBe(false);
+  });
+
+  it("marks the collection, every current member and the removed ones on an existing collection", async () => {
+    mockPrisma.library.findMany.mockResolvedValue(oneMovieLibrary);
+    mockPlexClient.getCollections.mockResolvedValue([{ ratingKey: "col1", title: "Test Collection" }]);
+    mockPlexClient.getCollectionItems.mockResolvedValue([{ ratingKey: "rk1" }, { ratingKey: "rk_extra" }]);
+    mockPlexClient.addCollectionItems.mockResolvedValue(undefined);
+    mockPlexClient.removeCollectionItem.mockResolvedValue(undefined);
+    stubSortAndVisibility();
+
+    await syncCollection(makeCollection(), [
+      contribution([
+        { libraryId: "lib1", ratingKey: "rk1", title: "Movie 1", parentTitle: null },
+        { libraryId: "lib1", ratingKey: "rk_new", title: "Movie 2", parentTitle: null },
+      ]),
+    ]);
+
+    // rk1 was not added or removed, but the ordering pass rewrites every member.
+    for (const key of ["col1", "rk1", "rk_new", "rk_extra"]) {
+      expect(isSelfWrite("s1", key)).toBe(true);
+    }
+  });
+
+  it("marks the collection and the item when an excluded item is removed", async () => {
+    mockPrisma.library.findMany.mockResolvedValue(oneMovieLibrary);
+    mockPlexClient.getCollections.mockResolvedValue([{ ratingKey: "col1", title: "Test Collection" }]);
+    mockPlexClient.getCollectionItems
+      .mockResolvedValueOnce([{ ratingKey: "rk1" }, { ratingKey: "rk2" }])
+      .mockResolvedValueOnce([{ ratingKey: "rk2" }]);
+    mockPlexClient.removeCollectionItem.mockResolvedValue(undefined);
+
+    await removeItemFromCollections("u1", "MOVIE", "Test Collection", "rk1", null);
+
+    expect(mockPlexClient.removeCollectionItem).toHaveBeenCalledWith("col1", "rk1");
+    expect(isSelfWrite("s1", "col1")).toBe(true);
+    expect(isSelfWrite("s1", "rk1")).toBe(true);
+    expect(isSelfWrite("s1", "rk2")).toBe(false);
+  });
+
+  it("marks the collection on rename and on removal", async () => {
+    mockPrisma.library.findMany.mockResolvedValue(oneMovieLibrary);
+    mockPlexClient.getCollections.mockResolvedValue([{ ratingKey: "col1", title: "Test Collection" }]);
+    mockPlexClient.renameCollection.mockResolvedValue(undefined);
+    await renameCollectionInPlex("u1", "MOVIE", "Test Collection", "Renamed");
+    expect(isSelfWrite("s1", "col1")).toBe(true);
+
+    _resetSelfWritesForTesting();
+    mockPlexClient.deleteCollection.mockResolvedValue(undefined);
+    await removePlexCollection("u1", "MOVIE", "Test Collection");
+    expect(isSelfWrite("s1", "col1")).toBe(true);
   });
 });

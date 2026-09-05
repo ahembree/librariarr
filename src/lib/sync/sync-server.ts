@@ -690,7 +690,17 @@ export async function processBatch(
   }
 }
 
-export async function syncMediaServer(serverId: string, libraryKey?: string, options?: { skipWatchHistory?: boolean }) {
+export interface SyncMediaServerOptions {
+  skipWatchHistory?: boolean;
+  /**
+   * Why the sync is running, logged on the "Starting sync" line. See
+   * `SyncServerPayload.trigger` — every caller states one, so an unexplained
+   * sync in the logs points at a caller that forgot, not at a mystery.
+   */
+  trigger?: string;
+}
+
+export async function syncMediaServer(serverId: string, libraryKey?: string, options?: SyncMediaServerOptions) {
   // Create the job as PENDING immediately so the UI can show a "Pending" indicator
   // while the server waits for its turn (semaphore allows one sync at a time).
   const syncJobRows = await prisma.$queryRawUnsafe<{ id: string }[]>(
@@ -759,7 +769,15 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       // Non-fatal — continue with existing name
     }
 
-    logger.info("Sync", `Starting sync for server "${server.name}"`);
+    // Always says WHY. The scheduler, the manual buttons, the realtime layer
+    // and the lifecycle executor all enqueue the same job, so a sync that
+    // appears off-schedule with no stated cause is indistinguishable from a bug.
+    logger.info(
+      "Sync",
+      `Starting sync for server "${server.name}"` +
+        (libraryKey ? ` (library key ${libraryKey})` : "") +
+        ` — triggered by ${options?.trigger ?? "an unrecorded caller"}`,
+    );
     logHeapAndCollect("sync start");
 
     // Track completed operation timings for status display
