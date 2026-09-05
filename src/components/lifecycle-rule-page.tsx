@@ -1369,13 +1369,13 @@ export function LifecycleRulePage({
           const detectData = await detectResponse.json().catch(() => null);
           if (!detectResponse.ok) {
             toast.error(detectData?.error ?? "Failed to detect matches");
-          } else if (detectData?.skippedReason) {
+          } else if (Array.isArray(detectData?.skipped) && detectData.skipped.length > 0) {
             // The run succeeded as a request but detection refused this rule
             // set and preserved its previous matches. Navigating to Matches
             // here would present those as the result of the run that just
             // "finished", so stay put and say why nothing was evaluated.
             toast.warning("Detection skipped this rule set", {
-              description: detectData.skippedReason as string,
+              description: (detectData.skipped[0] as { reason: string }).reason,
             });
           } else {
             router.push("/lifecycle/matches");

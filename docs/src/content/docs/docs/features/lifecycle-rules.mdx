@@ -354,6 +354,8 @@ The last case also shows a **"Play history not established yet"** warning in the
 
 Saving with **Run detection now** reports the same thing: if detection refuses the rule set, you stay on the editor with the reason rather than being sent to Matches, where the previous run's matches would otherwise look like the new result.
 
+**Run** and **Re-evaluate All** on the [Matches](/docs/features/lifecycle-rules/) page report it too. A refused rule set keeps the matches it already had — detection preserves them deliberately — so its row is left as it was and a notification names the rule set and the reason. It is not shown as having zero matches; that would be the opposite of what happened.
+
 ## Actions
 
 Actions determine what happens to matched media. Configure them in the **Actions** tab of a rule set.
