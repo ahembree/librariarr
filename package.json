@@ -96,7 +96,7 @@
     "sonner": "^2.0.8",
     "tailwind-merge": "^3.6.0",
     "ws": "^8.21.1",
-    "zod": "^4.4.3"
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.2.2",
