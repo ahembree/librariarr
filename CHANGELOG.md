@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.30.0](https://github.com/ahembree/librariarr/compare/v0.29.0...v0.30.0) (2026-09-05)
+
+
+### Features
+
+* **library:** add per-play watch history for series, seasons, and episodes ([#369](https://github.com/ahembree/librariarr/issues/369)) ([7110506](https://github.com/ahembree/librariarr/commit/711050602547358c6ccd7296142724dc3b3f5616))
+* **library:** key series identity on seriesKey, not parentTitle ([#370](https://github.com/ahembree/librariarr/issues/370)) ([5853c8e](https://github.com/ahembree/librariarr/commit/5853c8e255f24e44461540de9fe82514abb028f0))
+* **lifecycle:** add an optional ceiling on how much one run may delete ([#386](https://github.com/ahembree/librariarr/issues/386)) ([840993b](https://github.com/ahembree/librariarr/commit/840993b0bd4f3d138147107ef136a9ce92d80c45))
+* **lifecycle:** report why detection skips rule sets instead of silently preserving matches ([#390](https://github.com/ahembree/librariarr/issues/390)) ([a1b3094](https://github.com/ahembree/librariarr/commit/a1b3094ed69a864fc54c0d949a3a6abe11a1534f))
+* **realtime:** add sync-progress, watch-history and media-server push events ([#387](https://github.com/ahembree/librariarr/issues/387)) ([07b3681](https://github.com/ahembree/librariarr/commit/07b368135040cee1c7da7505fb2c11bb5d05961c))
+* **tracearr:** use Tracearr as a per-server watch-history source ([#385](https://github.com/ahembree/librariarr/issues/385)) ([f4aad82](https://github.com/ahembree/librariarr/commit/f4aad8265bf7dc36a038f64882519664ec41a6ee))
+
+
+### Bug Fixes
+
+* **build:** stop tracing the whole project into standalone output ([#388](https://github.com/ahembree/librariarr/issues/388)) ([b3428a4](https://github.com/ahembree/librariarr/commit/b3428a4a28e4fa03f3fd2d50a3bca7ddb91c5339))
+* correct watch state reconciliation and rule operator evaluation ([#366](https://github.com/ahembree/librariarr/issues/366)) ([aac62ce](https://github.com/ahembree/librariarr/commit/aac62cedcf706ca9afa816a30c52aad8eb6f800d))
+* **library:** show an episode's watch history once, as the per-play card ([#381](https://github.com/ahembree/librariarr/issues/381)) ([9f8fabf](https://github.com/ahembree/librariarr/commit/9f8fabf7524797092fa44761920a5cba5e395b57))
+* **realtime:** ignore echoes of own Plex collection writes, log sync triggers ([#391](https://github.com/ahembree/librariarr/issues/391)) ([6f9e989](https://github.com/ahembree/librariarr/commit/6f9e98987528e18ce301bdd5cf0f4105dcf3c1be))
+* rule-engine phase disagreements, series preview shape, and all-user play state ([#368](https://github.com/ahembree/librariarr/issues/368)) ([e2e6866](https://github.com/ahembree/librariarr/commit/e2e6866f7eb1cab8007c09f8b38961a01285f042))
+* **sync:** apply Plex library changes incrementally instead of resyncing everything ([#384](https://github.com/ahembree/librariarr/issues/384)) ([d787eb4](https://github.com/ahembree/librariarr/commit/d787eb436a27d7a97dd896e8d5cb848a88574549))
+
 ## [0.29.0](https://github.com/ahembree/librariarr/compare/v0.28.0...v0.29.0) (2026-08-29)
 
 
