@@ -223,7 +223,7 @@ function logHeapAndCollect(label: string): { usedMB: number; rss: number } {
   const limitMB = heap.heap_size_limit / 1024 / 1024;
   const usedMB = heap.used_heap_size / 1024 / 1024;
   const pct = ((usedMB / limitMB) * 100).toFixed(0);
-  logger.info(
+  logger.debug(
     "Sync",
     `[Memory] ${label}: heap ${toMB(heap.used_heap_size)}/${toMB(heap.heap_size_limit)} MB (${pct}%), ` +
     `RSS ${toMB(rss)} MB, external ${toMB(heap.external_memory)}` +
