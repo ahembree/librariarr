@@ -20,7 +20,8 @@ import { RuleBuilder, ruleBuilderConfig, countAllRules, validateAllRules } from 
 import { BuilderWithPseudocode } from "@/components/builder/builder-with-pseudocode";
 import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
 import { useIntegrationsHealth, deriveIntegrationsStatus, arrTypeForMediaType } from "@/hooks/use-integrations-health";
-import { hasArrRules, hasSeerrRules } from "@/lib/conditions";
+import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions";
+import { useRealtime } from "@/hooks/use-realtime";
 import { MediaTable } from "@/components/media-table";
 import { MediaDetailSidePanel, type MatchedCriterion } from "@/components/media-detail-side-panel";
 import { usePanelResize } from "@/hooks/use-panel-resize";
@@ -249,6 +250,19 @@ interface MediaServer {
   id: string;
   name: string;
   type: string;
+  /** Disabled servers are outside every guard's scope — `checkWatchHistoryCompleteness`
+   *  counts `enabled: true` only, and `runDetection` intersects the rule set's
+   *  targets with the enabled set before evaluating. */
+  enabled: boolean;
+  /**
+   * Mirrors `checkWatchHistoryCompleteness`: whether a sync has established what
+   * was played on this server (`watchHistorySyncedAt` set) AND, for a
+   * Tracearr-mapped server, whether the newest-first archive walk has finished
+   * (`tracearrBackfillComplete`). Held client-side only so the editor can WARN
+   * about a refusal before the user triggers one — the server-side guard stays
+   * the authority on whether the rule set is actually safe to evaluate.
+   */
+  playHistoryEstablished: boolean;
 }
 
 interface ScopeConfig {
@@ -710,6 +724,11 @@ export function LifecycleRulePage({
   );
   const ruleUsesArr = useMemo(() => hasArrRules(groups), [groups]);
   const ruleUsesSeerr = useMemo(() => hasSeerrRules(groups), [groups]);
+  // The third external dependency the evaluability guard checks, and the only
+  // one with no UI of its own until now: play activity. `hasPlayActivityRules`
+  // is the SAME shared predicate the server-side guard triggers on, so the
+  // banner can't come to a different conclusion about which rules count.
+  const ruleUsesPlayActivity = useMemo(() => hasPlayActivityRules(groups), [groups]);
 
   // Recycle bin safety check
   const [recycleBinStatus, setRecycleBinStatus] = useState<{
@@ -755,6 +774,17 @@ export function LifecycleRulePage({
   const [serverIds, setServerIds] = useState<string[]>([]);
   const [servers, setServers] = useState<MediaServer[]>([]);
   const [serverPopoverOpen, setServerPopoverOpen] = useState(false);
+
+  // Scoped to the rule set's own targets, exactly as the guard scopes its count
+  // — an unrelated server mid-import must not warn on a rule set that never
+  // reads it. Disabled servers are outside the guard's scope entirely.
+  const serversAwaitingPlayHistory = useMemo(
+    () =>
+      serverIds
+        .map((id) => servers.find((s) => s.id === id))
+        .filter((s): s is MediaServer => !!s && s.enabled && !s.playHistoryEstablished),
+    [serverIds, servers],
+  );
 
   // Router for navigation
   const router = useRouter();
@@ -944,7 +974,30 @@ export function LifecycleRulePage({
     try {
       const response = await fetch("/api/servers");
       const data = await response.json();
-      setServers((data.servers || []).map((s: { id: string; name: string; type: string }) => ({ id: s.id, name: s.name, type: s.type })));
+      setServers((data.servers || []).map((s: {
+        id: string;
+        name: string;
+        type: string;
+        enabled?: boolean;
+        watchHistorySyncedAt?: string | null;
+        tracearrServerId?: string | null;
+        tracearrBackfillComplete?: boolean;
+      }) => ({
+        id: s.id,
+        name: s.name,
+        type: s.type,
+        enabled: s.enabled !== false,
+        // A field absent from the payload reads as ESTABLISHED. This flag only
+        // decides whether to show a warning, and a false alarm about play
+        // history is worse than no banner: the server-side guard still refuses
+        // and now reports its reason, so the failure mode of guessing wrong
+        // here is a missing hint, not a missed refusal.
+        playHistoryEstablished:
+          s.watchHistorySyncedAt === undefined
+            ? true
+            : s.watchHistorySyncedAt !== null &&
+              !(s.tracearrServerId != null && s.tracearrBackfillComplete === false),
+      })));
     } catch (error) {
       console.error("Failed to fetch servers:", error);
     }
@@ -978,6 +1031,15 @@ export function LifecycleRulePage({
       ]);
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A Tracearr backfill finishing is what CLEARS the play-history warning below,
+  // and it happens minutes-to-hours after this page mounted. Without a refresh
+  // the banner would keep claiming a rule set is paused long after the import
+  // finished, until the user reloaded — a stale warning about a stale-data
+  // problem. Both events carry only `meta.serverId`, so refetch the servers and
+  // let the list stay the one place the state is read from.
+  useRealtime("tracearr:import-progress", () => { void fetchServers(); });
+  useRealtime("watch-history:updated", () => { void fetchServers(); });
 
   // Fetch arr-specific metadata (tags, quality profiles, languages) when an instance is selected.
   // The "reset when arrInstanceId is cleared" half of this lives in handleArrInstanceChange below
@@ -1304,11 +1366,19 @@ export function LifecycleRulePage({
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ ruleSetId: savedRuleSetId, fullReEval: clearMatches, processActions }),
           });
-          if (detectResponse.ok) {
-            router.push("/lifecycle/matches");
-          } else {
-            const detectData = await detectResponse.json().catch(() => null);
+          const detectData = await detectResponse.json().catch(() => null);
+          if (!detectResponse.ok) {
             toast.error(detectData?.error ?? "Failed to detect matches");
+          } else if (detectData?.skippedReason) {
+            // The run succeeded as a request but detection refused this rule
+            // set and preserved its previous matches. Navigating to Matches
+            // here would present those as the result of the run that just
+            // "finished", so stay put and say why nothing was evaluated.
+            toast.warning("Detection skipped this rule set", {
+              description: detectData.skippedReason as string,
+            });
+          } else {
+            router.push("/lifecycle/matches");
           }
         } catch (error) {
           console.error("Failed to detect matches:", error);
@@ -2765,6 +2835,30 @@ export function LifecycleRulePage({
                   This rule set uses Seerr criteria but no Seerr instance is connected.
                   Connect Overseerr or Jellyseerr in Settings &rarr; Integrations so Preview,
                   Test Media, and Save can evaluate those criteria.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {ruleUsesPlayActivity && serversAwaitingPlayHistory.length > 0 && (
+            <div className="flex items-start gap-2 rounded-md border border-amber/30 bg-amber/10 p-3 text-sm">
+              <AlertTriangle className="h-4 w-4 mt-0.5 text-amber shrink-0" />
+              <div className="space-y-1">
+                <p className="font-medium text-amber">
+                  Play history not established yet
+                </p>
+                <p className="text-muted-foreground">
+                  This rule set uses play-activity criteria (watched by, play count,
+                  last played) but {serversAwaitingPlayHistory.length === 1 ? "" : "these servers have "}
+                  <span className="text-foreground">
+                    {serversAwaitingPlayHistory.map((s) => s.name).join(", ")}
+                  </span>
+                  {serversAwaitingPlayHistory.length === 1 ? " has " : " "}
+                  no complete play history — it has never synced, was recently cleared,
+                  or a Tracearr import is still running. Until it finishes, every item
+                  looks never-watched, so Preview, Test Media, and detection are paused
+                  rather than matching your whole library. Watch the import progress
+                  under Settings &rarr; Servers; this clears itself when it completes.
                 </p>
               </div>
             </div>

@@ -5,6 +5,49 @@ import { runDetection, syncCollectionsAfterDetection } from "@/lib/lifecycle/det
 import { scheduleActionsForRuleSet } from "@/lib/lifecycle/processor";
 import { eventBus } from "@/lib/events/event-bus";
 import { validateRequest, ruleRunSchema } from "@/lib/validation";
+import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
+import { hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
+import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
+
+/**
+ * Why `runDetection` produced no result for a rule set the caller named.
+ *
+ * `runDetection` skips a rule set silently — it logs a warning and moves on —
+ * so a manual run of one that the evaluability guard refuses returned 200 with
+ * an empty `ruleMatches`, and the editor navigated to Matches showing the
+ * PRESERVED matches from the last successful run. Nothing on screen said the
+ * run had not happened. A skip is invisible by construction, so the only way to
+ * report it is to ask, after the fact, why the rule set is missing.
+ *
+ * Re-derived rather than plumbed out of `runDetection` so this stays a
+ * reporting path with no say in policy: it calls the same shared helpers the
+ * loop itself skipped on, and if it can find no reason it says nothing.
+ */
+async function explainSkippedRuleSet(
+  userId: string,
+  ruleSetId: string,
+): Promise<string | null> {
+  const ruleSet = await prisma.ruleSet.findFirst({
+    where: { id: ruleSetId, userId },
+    include: {
+      user: { include: { mediaServers: { where: { enabled: true }, select: { id: true } } } },
+    },
+  });
+  if (!ruleSet) return null;
+  if (!ruleSet.enabled) return "The rule set is disabled.";
+
+  const enabledIds = new Set(ruleSet.user.mediaServers.map((s) => s.id));
+  const serverIds = ruleSet.serverIds.filter((id) => enabledIds.has(id));
+  if (serverIds.length === 0) {
+    return "None of the rule set's selected servers are enabled.";
+  }
+
+  const rules = ruleSet.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
+  if (!hasAnyActiveRules(rules)) return "The rule set has no active rules.";
+
+  const evaluability = await checkLifecycleRuleEvaluability(userId, ruleSet.type, rules, serverIds);
+  return evaluability.evaluable ? null : evaluability.reason;
+}
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -63,5 +106,13 @@ export async function POST(request: NextRequest) {
     meta: { ruleSetId: data.ruleSetId ?? null, manual: true },
   });
 
-  return NextResponse.json({ ruleMatches: results });
+  // A named rule set missing from the results was skipped. Report the reason so
+  // the caller can say what happened instead of presenting the previous run's
+  // matches as this run's answer.
+  const skippedReason =
+    data.ruleSetId && !results.some((r) => r.ruleSet.id === data.ruleSetId)
+      ? await explainSkippedRuleSet(session.userId!, data.ruleSetId)
+      : null;
+
+  return NextResponse.json({ ruleMatches: results, skippedReason });
 }
