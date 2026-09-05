@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { sendDiscordNotification } from "@/lib/discord/client";
 import { validateRequest, discordTestSchema } from "@/lib/validation";
+import { MASKED_VALUE } from "@/lib/api/sanitize";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -12,7 +13,8 @@ export async function POST(request: NextRequest) {
 
   const { data, error } = await validateRequest(request, discordTestSchema);
   if (error) return error;
-  let webhookUrl = data.webhookUrl;
+  // The settings page echoes the GET's mask back; that means "the saved one".
+  let webhookUrl = data.webhookUrl === MASKED_VALUE ? "" : data.webhookUrl;
   let webhookUsername: string | null | undefined = data.webhookUsername;
   let webhookAvatarUrl: string | null | undefined = data.webhookAvatarUrl;
 

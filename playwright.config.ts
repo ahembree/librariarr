@@ -78,7 +78,7 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], storageState: "e2e/.auth/admin.json" },
       dependencies: ["setup"],
       testMatch: /.*\.spec\.ts/,
-      testIgnore: /unauthenticated\.spec\.ts/,
+      testIgnore: [/unauthenticated\.spec\.ts/, /logout\.spec\.ts/],
     },
     // 3. Unauthenticated journeys (auth guard, login page) with a clean state.
     {
@@ -86,6 +86,15 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], storageState: { cookies: [], origins: [] } },
       dependencies: ["setup"],
       testMatch: /unauthenticated\.spec\.ts/,
+    },
+    // 4. Logout runs LAST. Logging out revokes every session for the admin
+    //    (it bumps `sessionVersion`), which kills the saved admin.json state
+    //    for any spec that ran after it — so it depends on everything else.
+    {
+      name: "chromium-logout",
+      use: { ...devices["Desktop Chrome"], storageState: "e2e/.auth/admin.json" },
+      dependencies: ["chromium", "chromium-anon"],
+      testMatch: /logout\.spec\.ts/,
     },
   ],
 

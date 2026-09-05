@@ -591,6 +591,11 @@ export function GeneralTab({
             <p className="mt-2 text-xs text-muted-foreground">
               By default, backups only include settings and configuration. Media data, streams, and logs are retrieved during a full sync.
             </p>
+            {!hasBackupPassword && (
+              <p className="mt-2 text-xs text-amber-500">
+                No encryption password is set, so this backup will be written unencrypted. Backups contain your Plex token, integration API keys and SSO client secret in plaintext — set an encryption password above before creating or downloading one.
+              </p>
+            )}
           </div>
 
           {(backups.length > 0 || backupLoading) && <Separator />}

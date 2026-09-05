@@ -143,6 +143,7 @@ const discordWebhookUrlSchema = z
   .refine(
     (val) => {
       if (val === "") return true; // Allow empty string to clear
+      if (val === MASKED_VALUE) return true; // The masked placeholder echoed back = keep saved
       try {
         const parsed = new URL(val);
         return (

@@ -21,8 +21,16 @@ hidden until you do.
 | Single Sign-On (SSO) | OIDC / forward-auth configured, an identity is linked, and the *Enable SSO Login* toggle is on |
 
 Sessions are encrypted via [iron-session](https://github.com/vvo/iron-session)
-and expire after 30 days. They're invalidated server-side when you change
-credentials, link/unlink SSO, or rotate your `SESSION_SECRET`.
+and expire after 30 days. Every request — pages and API calls alike — checks
+the session against the admin record, so a cookie stops working the moment
+you change credentials, link/unlink SSO, **log out** (which revokes every
+session on every device, not just the one you pressed the button in), or
+rotate your `SESSION_SECRET`.
+
+The cookie's `Secure` attribute follows the request: it is set whenever the
+request arrived over HTTPS (directly, or through a proxy that sends
+`X-Forwarded-Proto: https`) and omitted on plain HTTP, so LAN installs keep
+working. Set `COOKIE_SECURE` explicitly to override in either direction.
 
 ### Initial setup
 

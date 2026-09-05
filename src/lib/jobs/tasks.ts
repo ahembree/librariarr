@@ -73,6 +73,12 @@ export async function runScheduledBackup(): Promise<void> {
     select: { backupRetentionCount: true },
   });
   const passphrase = await getBackupPassphrase();
+  if (!passphrase) {
+    logger.warn(
+      "Jobs",
+      "Scheduled backup is UNENCRYPTED — it contains plaintext secrets. Set a backup encryption password under Settings → General."
+    );
+  }
   await createBackup(passphrase);
   await pruneBackups(settings?.backupRetentionCount ?? 7);
   logger.info("Jobs", "Scheduled backup completed");

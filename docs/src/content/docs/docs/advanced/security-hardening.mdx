@@ -20,6 +20,21 @@ The default Compose templates work out of the box without any special security c
 | `cap_add: [...]` | Re-adds only the capabilities each service actually needs |
 | `tmpfs: /tmp:noexec,nosuid` | Mounts `/tmp` as a tmpfs with execution and SUID disabled |
 
+## Built-in application protections
+
+These are always on and need no configuration; they are listed so you know what the app does on its own and where the environment variables above fit in.
+
+| Protection | What it does |
+|------------|--------------|
+| Session revocation | Every request, page or API, checks the session cookie against the admin record. Changing credentials, linking/unlinking SSO, or logging out increments a version counter and every outstanding cookie stops working immediately — on all devices. A stolen cookie is dead the moment you log out. |
+| Session lifetime | 30 days, enforced on both the encrypted payload and the cookie's `Max-Age`. |
+| `Secure` cookie | Set automatically on HTTPS requests (see `COOKIE_SECURE` in [Installation](/docs/getting-started/installation/)). |
+| CSRF | Every state-changing `/api/*` request (`POST`, `PUT`, `PATCH`, `DELETE`) must carry an `Origin` or `Referer` on the app's own host; a request from another site is rejected with `403`. Combined with the `SameSite=Lax` cookie this also blocks a sibling app on the same parent domain. Requests with neither header (curl, scripts) are allowed — they carry no ambient cookie. |
+| Rate limiting | Login, Plex PIN, SSO and password-change endpoints allow 10 attempts per 15 minutes per client, plus a global ceiling of 60 per 15 minutes across all clients that no forged header can escape. See `TRUST_PROXY_HEADERS`. |
+| Login timing | The local login spends the same bcrypt cost whether or not the username exists, so response time does not reveal which usernames are real. |
+| Secret masking | API keys, tokens, the OIDC client secret, the AI key and the Discord webhook URL are never returned by the API once saved; the UI shows a placeholder and saving the placeholder keeps the stored value. |
+| Content Security Policy | `frame-ancestors 'none'` and `X-Frame-Options: DENY` prevent clickjacking; scripts and connections are restricted to the app itself and plex.tv. The production build does not permit `eval`. |
+
 ## Hardened Compose template
 
 ```yaml title="docker-compose.yml"

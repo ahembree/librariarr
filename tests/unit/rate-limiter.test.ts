@@ -1,5 +1,11 @@
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
-import { RateLimiter, getClientIp, checkRateLimit } from "@/lib/rate-limit/rate-limiter";
+import {
+  RateLimiter,
+  getClientIp,
+  checkRateLimit,
+  checkAuthRateLimit,
+  authGlobalRateLimiter,
+} from "@/lib/rate-limit/rate-limiter";
 
 describe("RateLimiter", () => {
   let limiter: RateLimiter;
@@ -139,11 +145,20 @@ describe("checkRateLimit", () => {
 });
 
 describe("getClientIp", () => {
-  it("returns first IP from x-forwarded-for header", () => {
+  it("returns the LAST (proxy-appended) IP from x-forwarded-for, not the client-supplied first", () => {
+    // A proxy appends the address it saw; the first entry is whatever the
+    // client typed. Taking the first let a client pick its own bucket.
     const request = new Request("http://localhost/api/test", {
       headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8" },
     });
-    expect(getClientIp(request)).toBe("1.2.3.4");
+    expect(getClientIp(request)).toBe("5.6.7.8");
+  });
+
+  it("ignores empty trailing entries in x-forwarded-for", () => {
+    const request = new Request("http://localhost/api/test", {
+      headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8, " },
+    });
+    expect(getClientIp(request)).toBe("5.6.7.8");
   });
 
   it("returns single IP from x-forwarded-for", () => {
@@ -155,9 +170,9 @@ describe("getClientIp", () => {
 
   it("trims whitespace from x-forwarded-for", () => {
     const request = new Request("http://localhost/api/test", {
-      headers: { "x-forwarded-for": "  1.2.3.4  , 5.6.7.8" },
+      headers: { "x-forwarded-for": "1.2.3.4,   5.6.7.8  " },
     });
-    expect(getClientIp(request)).toBe("1.2.3.4");
+    expect(getClientIp(request)).toBe("5.6.7.8");
   });
 
   it("falls back to x-real-ip when x-forwarded-for is absent", () => {
@@ -226,5 +241,52 @@ describe("getClientIp", () => {
       });
       expect(getClientIp(request)).toBe("1.2.3.4");
     });
+  });
+});
+
+describe("checkAuthRateLimit — global floor", () => {
+  const originalValue = process.env.TRUST_PROXY_HEADERS;
+
+  afterEach(() => {
+    if (originalValue === undefined) delete process.env.TRUST_PROXY_HEADERS;
+    else process.env.TRUST_PROXY_HEADERS = originalValue;
+    // The global limiter is a module singleton; drop our bucket's entry.
+    (authGlobalRateLimiter as unknown as { store: Map<string, unknown> }).store.clear();
+  });
+
+  it("rotating X-Forwarded-For cannot escape the limit indefinitely", () => {
+    delete process.env.TRUST_PROXY_HEADERS;
+    const bucket = "login-global-floor-test";
+    let limited = 0;
+    // 61 attempts, each from a "different" client. The per-IP limit (10)
+    // never trips; the global floor (60 per bucket) must.
+    for (let i = 0; i < 61; i++) {
+      const req = new Request("http://localhost/api/auth/local/login", {
+        method: "POST",
+        headers: { "x-forwarded-for": `10.0.${Math.floor(i / 256)}.${i % 256}` },
+      });
+      if (checkAuthRateLimit(req, bucket)) limited++;
+    }
+    expect(limited).toBe(1);
+  });
+
+  it("the global floor is per bucket", () => {
+    delete process.env.TRUST_PROXY_HEADERS;
+    for (let i = 0; i < 60; i++) {
+      const req = new Request("http://localhost/api/x", {
+        headers: { "x-forwarded-for": `10.1.0.${i}` },
+      });
+      expect(checkAuthRateLimit(req, "bucket-a")).toBeNull();
+    }
+    const other = new Request("http://localhost/api/x", {
+      headers: { "x-forwarded-for": "10.1.0.1" },
+    });
+    expect(checkAuthRateLimit(other, "bucket-b")).toBeNull();
+    const again = new Request("http://localhost/api/x", {
+      headers: { "x-forwarded-for": "10.1.0.61" },
+    });
+    const res = checkAuthRateLimit(again, "bucket-a");
+    expect(res?.status).toBe(429);
+    expect(res?.headers.get("Retry-After")).toBeTruthy();
   });
 });

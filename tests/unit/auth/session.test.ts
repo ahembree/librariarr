@@ -17,6 +17,7 @@ vi.unmock("@/lib/auth/session");
  */
 const mockGetIronSession = vi.fn();
 const mockCookies = vi.fn();
+const mockHeaders = vi.fn();
 const mockUserFindUnique = vi.fn();
 const mockFs = {
   existsSync: vi.fn(),
@@ -37,6 +38,7 @@ beforeEach(() => {
   vi.resetModules();
   mockGetIronSession.mockReset();
   mockCookies.mockReset().mockResolvedValue({ get: vi.fn(), set: vi.fn() });
+  mockHeaders.mockReset().mockResolvedValue(new Headers());
   mockUserFindUnique.mockReset();
   for (const f of Object.values(mockFs)) f.mockReset();
   mockFs.existsSync.mockReturnValue(false);
@@ -45,7 +47,7 @@ beforeEach(() => {
   // doMock (not hoisted) applies to the dynamic import() each test performs
   // after the registry reset above.
   vi.doMock("iron-session", () => ({ getIronSession: mockGetIronSession }));
-  vi.doMock("next/headers", () => ({ cookies: mockCookies }));
+  vi.doMock("next/headers", () => ({ cookies: mockCookies, headers: mockHeaders }));
   vi.doMock("@/lib/db", () => ({ prisma: { user: { findUnique: mockUserFindUnique } } }));
   vi.doMock("@/lib/logger", () => ({ logger: mockLogger }));
   vi.doMock("fs", () => ({ default: mockFs, ...mockFs }));
@@ -71,6 +73,7 @@ afterEach(() => {
 function lastSessionOptions(): {
   password: string;
   cookieName: string;
+  ttl: number;
   cookieOptions: { secure: boolean; httpOnly: boolean; sameSite: string; maxAge: number };
 } {
   return mockGetIronSession.mock.calls.at(-1)![1];
@@ -88,6 +91,9 @@ describe("getSession — session options & secret resolution", () => {
     expect(opts.cookieOptions.httpOnly).toBe(true);
     expect(opts.cookieOptions.sameSite).toBe("lax");
     expect(opts.cookieOptions.maxAge).toBe(60 * 60 * 24 * 30);
+    // The seal TTL must match the cookie's Max-Age: iron-session defaults it
+    // to 14 days, which silently ended "30-day" sessions after two weeks.
+    expect(opts.ttl).toBe(opts.cookieOptions.maxAge);
     expect(mockFs.existsSync).not.toHaveBeenCalled();
   });
 
@@ -206,7 +212,43 @@ describe("getSession — Secure cookie attribute (COOKIE_SECURE)", () => {
     expect(lastSessionOptions().cookieOptions.secure).toBe(expected);
   });
 
-  it("defaults secure to false when COOKIE_SECURE is unset", async () => {
+  it("infers secure=true from x-forwarded-proto: https when COOKIE_SECURE is unset", async () => {
+    delete process.env.COOKIE_SECURE;
+    mockHeaders.mockResolvedValue(new Headers({ "x-forwarded-proto": "https" }));
+    mockGetIronSession.mockResolvedValue({});
+    const { getSession } = await load();
+    await getSession();
+    expect(lastSessionOptions().cookieOptions.secure).toBe(true);
+  });
+
+  it("uses the first hop of a chained x-forwarded-proto", async () => {
+    delete process.env.COOKIE_SECURE;
+    mockHeaders.mockResolvedValue(new Headers({ "x-forwarded-proto": "https, http" }));
+    mockGetIronSession.mockResolvedValue({});
+    const { getSession } = await load();
+    await getSession();
+    expect(lastSessionOptions().cookieOptions.secure).toBe(true);
+  });
+
+  it("an explicit COOKIE_SECURE=false overrides an HTTPS request", async () => {
+    process.env.COOKIE_SECURE = "false";
+    mockHeaders.mockResolvedValue(new Headers({ "x-forwarded-proto": "https" }));
+    mockGetIronSession.mockResolvedValue({});
+    const { getSession } = await load();
+    await getSession();
+    expect(lastSessionOptions().cookieOptions.secure).toBe(false);
+  });
+
+  it("stays insecure when headers() is unavailable (outside a request)", async () => {
+    delete process.env.COOKIE_SECURE;
+    mockHeaders.mockRejectedValue(new Error("headers() called outside a request scope"));
+    mockGetIronSession.mockResolvedValue({});
+    const { getSession } = await load();
+    await getSession();
+    expect(lastSessionOptions().cookieOptions.secure).toBe(false);
+  });
+
+  it("defaults secure to false when COOKIE_SECURE is unset and the request is plain HTTP", async () => {
     delete process.env.COOKIE_SECURE;
     mockGetIronSession.mockResolvedValue({});
     const { getSession } = await load();
@@ -270,11 +312,12 @@ describe("isSessionValid", () => {
     expect(await isSessionValid()).toBe(true);
   });
 
-  it("returns true when the session carries no version (no version check)", async () => {
+  it("returns false when the session carries no version (unrevocable cookies are not honoured)", async () => {
     mockGetIronSession.mockResolvedValue({ isLoggedIn: true, userId: "u1" });
     mockUserFindUnique.mockResolvedValue({ id: "u1", sessionVersion: 7 });
     const { isSessionValid } = await load();
-    expect(await isSessionValid()).toBe(true);
+    expect(await isSessionValid()).toBe(false);
+    expect(mockUserFindUnique).not.toHaveBeenCalled();
   });
 
   it("returns false when the session version is stale", async () => {
@@ -296,5 +339,82 @@ describe("isSessionValid", () => {
     mockUserFindUnique.mockRejectedValue(new Error("db down"));
     const { isSessionValid } = await load();
     expect(await isSessionValid()).toBe(false);
+  });
+});
+
+/**
+ * The revocation check lives in `getSession` itself so that every
+ * `if (!session.isLoggedIn) return 401` in the API refuses a revoked cookie —
+ * previously only the page layout checked, and a password change left the
+ * stale cookie with full API access.
+ */
+describe("getSession — enforces revocation against the User row", () => {
+  it("passes a current session through untouched", async () => {
+    const raw = { isLoggedIn: true, userId: "u1", sessionVersion: 3, plexToken: "tok" };
+    mockGetIronSession.mockResolvedValue(raw);
+    mockUserFindUnique.mockResolvedValue({ sessionVersion: 3 });
+    const { getSession } = await load();
+    const session = await getSession();
+    expect(session.isLoggedIn).toBe(true);
+    expect(session.userId).toBe("u1");
+    expect(session.plexToken).toBe("tok");
+    expect(mockUserFindUnique).toHaveBeenCalledWith({
+      where: { id: "u1" },
+      select: { sessionVersion: true },
+    });
+  });
+
+  it("downgrades a session whose version is stale to logged-out, without saving", async () => {
+    const save = vi.fn();
+    mockGetIronSession.mockResolvedValue({
+      isLoggedIn: true,
+      userId: "u1",
+      sessionVersion: 1,
+      plexToken: "tok",
+      save,
+    });
+    mockUserFindUnique.mockResolvedValue({ sessionVersion: 2 });
+    const { getSession } = await load();
+    const session = await getSession();
+    expect(session.isLoggedIn).toBe(false);
+    expect(session.userId).toBeUndefined();
+    expect(session.sessionVersion).toBeUndefined();
+    expect(session.plexToken).toBeUndefined();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("downgrades a session whose user no longer exists", async () => {
+    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, userId: "ghost", sessionVersion: 1 });
+    mockUserFindUnique.mockResolvedValue(null);
+    const { getSession } = await load();
+    const session = await getSession();
+    expect(session.isLoggedIn).toBe(false);
+    expect(session.userId).toBeUndefined();
+  });
+
+  it("fails closed when the database lookup throws", async () => {
+    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, userId: "u1", sessionVersion: 1 });
+    mockUserFindUnique.mockRejectedValue(new Error("db down"));
+    const { getSession } = await load();
+    const session = await getSession();
+    expect(session.isLoggedIn).toBe(false);
+  });
+
+  it("does not touch the database for an anonymous session", async () => {
+    mockGetIronSession.mockResolvedValue({ isLoggedIn: false, oidcState: "abc" });
+    const { getSession } = await load();
+    const session = await getSession();
+    expect(session.isLoggedIn).toBe(false);
+    expect(session.oidcState).toBe("abc");
+    expect(mockUserFindUnique).not.toHaveBeenCalled();
+  });
+
+  it("getRawSession skips the check (login flows only)", async () => {
+    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, userId: "u1", sessionVersion: 1 });
+    mockUserFindUnique.mockResolvedValue({ sessionVersion: 99 });
+    const { getRawSession } = await load();
+    const session = await getRawSession();
+    expect(session.isLoggedIn).toBe(true);
+    expect(mockUserFindUnique).not.toHaveBeenCalled();
   });
 });
