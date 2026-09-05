@@ -14,7 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
-import { SeriesWatchHistory } from "@/components/series-watch-history";
+import { PlayHistory } from "@/components/play-history";
 
 function formatResolution(resolution: string | null): string {
   if (!resolution) return "Unknown";
@@ -159,7 +159,7 @@ export default function EpisodeDetailPage() {
         // server, minus the timestamps), so the page shows the data once.
         historySection={
           item.parentTitle && item.seasonNumber != null && item.episodeNumber != null ? (
-            <SeriesWatchHistory
+            <PlayHistory
               variant="card"
               seriesKey={item.seriesKey}
               parentTitle={item.parentTitle}

@@ -88,6 +88,7 @@ import {
   detectDynamicRange,
   detectAudioProfile,
   syncMediaServer,
+  processBatch,
 } from "@/lib/sync/sync-server";
 import type { MediaStream, MediaPart } from "@/lib/media-server/types";
 
@@ -599,6 +600,76 @@ describe("syncMediaServer stale-item purge guard", () => {
     expect(inserts[0]).toContain("rk1");
     // 500 skipped + 1 upserted == the reported total, so the purge still runs.
     expect(staleDelete().length).toBe(1);
+  });
+});
+
+describe("MediaItem upsert: non-regressive play state", () => {
+  // `playCount`/`lastPlayedAt` are the two columns destructive lifecycle rules
+  // read ("not played in N months", `playCount = 0`), and every OTHER writer of
+  // them is monotonic — both `watch-reconcile.ts` helpers use GREATEST /
+  // Math.max, and the Tracearr importer's ON CONFLICT merge does too. The item
+  // upsert was the one that was not, which made that stated invariant false.
+  //
+  // Both of `buildItemData`'s inputs can legitimately read zero for an item
+  // somebody else watched: Plex metadata carries only the admin token's own
+  // `viewCount`, `JellyfinBase.getWatchCounts()` returns an empty map by design,
+  // and `loadWatchCountsFromHistory` returns nothing while `WatchHistory` is
+  // empty. `WatchHistory` IS empty, deliberately, from the moment a server's
+  // watch-history source is switched until the newest-first Tracearr re-import
+  // reaches back — hours. Any sync landing in that window wrote
+  // `playCount = 0, lastPlayedAt = null` over the real values for every item
+  // only another household member had watched, and the trailing reconcile could
+  // not undo it: it is monotonic over a table that is, at that moment, empty.
+  //
+  // Unlike `watchedByUser`, these two are NOT gated by the evaluability guard,
+  // so nothing else stands between that and a whole-library DELETE.
+  function upsertSql(): string {
+    const call = mockPrisma.$queryRawUnsafe.mock.calls.find((args: unknown[]) =>
+      String(args[0]).includes('INSERT INTO "MediaItem"'),
+    );
+    if (!call) throw new Error("no MediaItem upsert was issued");
+    return String(call[0]);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPrisma.$queryRawUnsafe.mockResolvedValue([]);
+  });
+
+  it("merges playCount and lastPlayedAt with GREATEST, never a bare overwrite", async () => {
+    await processBatch(
+      [{ ratingKey: "100", title: "A Movie", type: "movie" } as never],
+      "lib-1",
+      "MOVIE",
+      new Map(),
+      new Map(),
+    );
+
+    const sql = upsertSql();
+    expect(sql).toContain('"playCount"=GREATEST(EXCLUDED."playCount","MediaItem"."playCount")');
+    expect(sql).toContain(
+      '"lastPlayedAt"=GREATEST(EXCLUDED."lastPlayedAt","MediaItem"."lastPlayedAt")',
+    );
+    // The exact forms that regress, spelled out so a refactor back to them fails
+    // here rather than in someone's library.
+    expect(sql).not.toContain('"playCount"=EXCLUDED."playCount"');
+    expect(sql).not.toContain('"lastPlayedAt"=EXCLUDED."lastPlayedAt"');
+  });
+
+  it("still overwrites columns the server is authoritative for", async () => {
+    // The guarantee is scoped to play state. Making everything monotonic would
+    // freeze titles, file sizes and resolutions at their first-seen values.
+    await processBatch(
+      [{ ratingKey: "100", title: "A Movie", type: "movie" } as never],
+      "lib-1",
+      "MOVIE",
+      new Map(),
+      new Map(),
+    );
+
+    const sql = upsertSql();
+    expect(sql).toContain('"title"=EXCLUDED."title"');
+    expect(sql).toContain('"fileSize"=EXCLUDED."fileSize"');
   });
 });
 

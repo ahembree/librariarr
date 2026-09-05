@@ -289,6 +289,33 @@ const COALESCE_ON_UPDATE = new Set(["genres", "directors", "writers", "roles", "
 // Columns that should not be overwritten on conflict
 const SKIP_ON_UPDATE = new Set(["id", "libraryId", "ratingKey", "type", "createdAt"]);
 
+// Play state is written NON-REGRESSIVELY: an item can never come back from a
+// sync looking less watched than it already was.
+//
+// `buildItemData` maxes the fetched metadata against the stored watch history,
+// but both of its inputs are account-scoped or table-derived and can legitimately
+// read zero for an item somebody else watched: Plex metadata carries only the
+// admin token's own `viewCount`, `JellyfinBase.getWatchCounts()` returns an
+// empty map by design, and `loadWatchCountsFromHistory` returns nothing while
+// `WatchHistory` is empty. A plain `= EXCLUDED` then writes `playCount = 0,
+// lastPlayedAt = null` over a real, higher stored value.
+//
+// That is reachable on purpose, not just in theory: changing a server's
+// watch-history source WIPES its `WatchHistory` (see the `/api/servers/[id]`
+// PUT), and the Tracearr re-import that refills it runs newest-first over
+// hours. Any full or incremental sync landing in that window zeroed both
+// columns for every item only another household member had watched — and
+// unlike `watchedByUser`, these two feed `playCount = 0` and "not played in N
+// months" DELETE rules that the evaluability guard does not gate. The trailing
+// `reconcileWatchStateFromHistory` could not undo it either: it is monotonic
+// GREATEST over a table that is, at that moment, empty.
+//
+// GREATEST ignores NULLs in Postgres, so a null `lastPlayedAt` on either side
+// simply yields the other. This mirrors `watch-reconcile.ts` and makes true the
+// invariant the rest of the codebase already states: a server that prunes or
+// loses its history can never make an item look less recently watched.
+const GREATEST_ON_UPDATE = new Set(["playCount", "lastPlayedAt"]);
+
 function buildUpsertSql(rowCount: number): string {
   const cols = MEDIA_ITEM_COLUMNS.map((c) => `"${c}"`).join(",");
   const rows: string[] = [];
@@ -304,7 +331,9 @@ function buildUpsertSql(rowCount: number): string {
     .map((c) =>
       COALESCE_ON_UPDATE.has(c)
         ? `"${c}"=COALESCE(EXCLUDED."${c}","MediaItem"."${c}")`
-        : `"${c}"=EXCLUDED."${c}"`
+        : GREATEST_ON_UPDATE.has(c)
+          ? `"${c}"=GREATEST(EXCLUDED."${c}","MediaItem"."${c}")`
+          : `"${c}"=EXCLUDED."${c}"`
     );
   return (
     `INSERT INTO "MediaItem" (${cols}) VALUES ${rows.join(",")} ` +

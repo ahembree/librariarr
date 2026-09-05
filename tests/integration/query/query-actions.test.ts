@@ -865,4 +865,189 @@ describe("POST /api/query/actions", () => {
       expect(mockedExecuteAction).not.toHaveBeenCalled();
     });
   });
+  // MATCH-ALL SAFETY, third flavour: watch history. `watchedByUser` reads the
+  // `WatchHistory` relation directly, so its negative forms compile to
+  // `watchHistory: { none: … }` — trivially TRUE for every item while a
+  // server's history is empty. A server sits in exactly that state on purpose
+  // after a watch-history source switch, for as long as the newest-first
+  // Tracearr walk takes to reach back.
+  //
+  // This route is the one that needs the guard MOST: a lifecycle rule set
+  // schedules its action `actionDelayDays` out and shows it on the Pending page
+  // first, whereas this executes immediately on whatever the query returned.
+  describe("incomplete watch history guard", () => {
+    const watchedByUserGroups = [
+      {
+        id: "g1",
+        condition: "AND" as const,
+        rules: [
+          {
+            id: "r1",
+            field: "watchedByUser",
+            operator: "notEquals",
+            value: "alice",
+            condition: "AND" as const,
+          },
+        ],
+        groups: [],
+      },
+    ];
+
+    it("returns 400 while a targeted server is still importing its Tracearr archive", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const server = await createTestServer(user.id, {
+        tracearrServerId: "trc-server-uuid",
+        tracearrBackfillComplete: false,
+      });
+      const radarr = await createTestRadarrInstance(user.id);
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: { ...BASE_QUERY, serverIds: [server.id], groups: watchedByUserGroups },
+          mediaItemIds: ["m1"],
+          actionType: "DELETE_RADARR",
+          arrInstanceId: radarr.id,
+        },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/play-activity/i);
+      // The query must not even run: executing it would produce the vacuous
+      // whole-library match set this guard exists to keep out of an action.
+      expect(mockedExecuteQuery).not.toHaveBeenCalled();
+      expect(mockedExecuteAction).not.toHaveBeenCalled();
+    });
+
+    it("returns 400 after an unlink, when the mapping is gone but the rows are too", async () => {
+      // The direction a `tracearrServerId != null` check misses: unlinking nulls
+      // that column AND wipes the rows, so the server is at its emptiest exactly
+      // when it stops looking Tracearr-mapped. Caught by the positive marker
+      // instead — the wipe withdrew it, so the history is not established.
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const server = await createTestServer(user.id, {
+        tracearrServerId: null,
+        watchHistorySyncedAt: null,
+      });
+      const radarr = await createTestRadarrInstance(user.id);
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: { ...BASE_QUERY, serverIds: [server.id], groups: watchedByUserGroups },
+          mediaItemIds: ["m1"],
+          actionType: "DELETE_RADARR",
+          arrInstanceId: radarr.id,
+        },
+      });
+
+      await expectJson<{ error: string }>(response, 400);
+      expect(mockedExecuteAction).not.toHaveBeenCalled();
+    });
+
+    it("proceeds when the targeted server's history is complete", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const server = await createTestServer(user.id, {
+        tracearrServerId: "trc-server-uuid",
+        tracearrBackfillComplete: true,
+      });
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const movie = await createTestMediaItem(library.id, { type: "MOVIE", title: "Watched Movie" });
+      // A server flagged complete must actually HOLD plays: "complete with zero
+      // rows" is a contradiction the guard refuses independently of the flag,
+      // because a restore or a purge can empty the table while leaving the flag
+      // standing.
+      await getTestPrisma().watchHistory.create({
+        data: {
+          mediaItemId: movie.id,
+          mediaServerId: server.id,
+          serverUsername: "alice",
+          source: "TRACEARR",
+          sourceEventId: "chain-1",
+          watched: true,
+        },
+      });
+      const radarr = await createTestRadarrInstance(user.id);
+
+      mockedExecuteQuery.mockResolvedValue(
+        queryResult([{ id: movie.id, type: "MOVIE", title: "Watched Movie", parentTitle: null }]),
+      );
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: { ...BASE_QUERY, serverIds: [server.id], groups: watchedByUserGroups },
+          mediaItemIds: [movie.id],
+          actionType: "DELETE_RADARR",
+          arrInstanceId: radarr.id,
+        },
+      });
+
+      const { result: body } = await expectStreamResult<{ executed: number }>(response);
+      expect(body.executed).toBe(1);
+    });
+
+    it("ignores an importing server the query does not target", async () => {
+      // Scoping matters as much as the guard does: without it, one unrelated
+      // server part-way through its import would block every watchedByUser
+      // query on the install.
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const importing = await createTestServer(user.id, {
+        name: "Importing",
+        tracearrServerId: "trc-other",
+        tracearrBackfillComplete: false,
+      });
+      const native = await createTestServer(user.id, { name: "Native" });
+      const library = await createTestLibrary(native.id, { type: "MOVIE" });
+      const movie = await createTestMediaItem(library.id, { type: "MOVIE", title: "Native Movie" });
+      const radarr = await createTestRadarrInstance(user.id);
+
+      mockedExecuteQuery.mockResolvedValue(
+        queryResult([{ id: movie.id, type: "MOVIE", title: "Native Movie", parentTitle: null }]),
+      );
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: { ...BASE_QUERY, serverIds: [native.id], groups: watchedByUserGroups },
+          mediaItemIds: [movie.id],
+          actionType: "DELETE_RADARR",
+          arrInstanceId: radarr.id,
+        },
+      });
+
+      const { result: body } = await expectStreamResult<{ executed: number }>(response);
+      expect(body.executed).toBe(1);
+      expect(importing.id).not.toBe(native.id);
+    });
+
+    it("refuses an unscoped query while ANY server is still importing", async () => {
+      // An empty `serverIds` means "every server", so an importing server is in
+      // scope even though it is not named.
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      await createTestServer(user.id, {
+        tracearrServerId: "trc-other",
+        tracearrBackfillComplete: false,
+      });
+      const radarr = await createTestRadarrInstance(user.id);
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: { ...BASE_QUERY, serverIds: [], groups: watchedByUserGroups },
+          mediaItemIds: ["m1"],
+          actionType: "DELETE_RADARR",
+          arrInstanceId: radarr.id,
+        },
+      });
+
+      await expectJson<{ error: string }>(response, 400);
+      expect(mockedExecuteAction).not.toHaveBeenCalled();
+    });
+  });
 });

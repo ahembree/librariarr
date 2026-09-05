@@ -8,34 +8,35 @@ datasource db {
 }
 
 model User {
-  id               String            @id @default(cuid())
-  plexId           String?           @unique
-  plexToken        String?
-  localUsername     String?           @unique
-  passwordHash     String?
-  email            String?
-  username         String
-  sessionVersion   Int               @default(0)
-  ssoSubject       String?
-  ssoIssuer        String?
-  ssoProvider      String?
-  ssoEnabled       Boolean           @default(false)
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  mediaServers     MediaServer[]
-  ruleSets         RuleSet[]
-  collections      Collection[]
-  appSettings      AppSettings?
-  sonarrInstances  SonarrInstance[]
-  radarrInstances  RadarrInstance[]
-  lidarrInstances  LidarrInstance[]
-  seerrInstances   SeerrInstance[]
+  id                    String                 @id @default(cuid())
+  plexId                String?                @unique
+  plexToken             String?
+  localUsername         String?                @unique
+  passwordHash          String?
+  email                 String?
+  username              String
+  sessionVersion        Int                    @default(0)
+  ssoSubject            String?
+  ssoIssuer             String?
+  ssoProvider           String?
+  ssoEnabled            Boolean                @default(false)
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  mediaServers          MediaServer[]
+  ruleSets              RuleSet[]
+  collections           Collection[]
+  appSettings           AppSettings?
+  sonarrInstances       SonarrInstance[]
+  radarrInstances       RadarrInstance[]
+  lidarrInstances       LidarrInstance[]
+  seerrInstances        SeerrInstance[]
+  tracearrInstances     TracearrInstance[]
   lifecycleActions      LifecycleAction[]
-  lifecycleExceptions  LifecycleException[]
-  blackoutSchedules    BlackoutSchedule[]
-  prerollPresets      PrerollPreset[]
-  prerollSchedules   PrerollSchedule[]
-  savedQueries       SavedQuery[]
+  lifecycleExceptions   LifecycleException[]
+  blackoutSchedules     BlackoutSchedule[]
+  prerollPresets        PrerollPreset[]
+  prerollSchedules      PrerollSchedule[]
+  savedQueries          SavedQuery[]
   trashManagedResources TrashManagedResource[]
 
   // SSO subjects are only unique per-issuer. Two users can have sub "abc" if
@@ -46,92 +47,92 @@ model User {
 }
 
 model AppSettings {
-  id                String    @id @default(cuid())
-  userId            String    @unique
-  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  syncSchedule      String    @default("DAILY")
-  lastScheduledSync DateTime?
-  accentColor       String    @default("default")
-  logRetentionDays  Int       @default(7)
+  id                              String    @id @default(cuid())
+  userId                          String    @unique
+  user                            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  syncSchedule                    String    @default("DAILY")
+  lastScheduledSync               DateTime?
+  accentColor                     String    @default("default")
+  logRetentionDays                Int       @default(7)
   lifecycleDetectionSchedule      String    @default("EVERY_6H")
   lastScheduledLifecycleDetection DateTime?
   lifecycleExecutionSchedule      String    @default("EVERY_6H")
   lastScheduledLifecycleExecution DateTime?
-  dashboardLayout   Json?
-  columnPreferences       Json?
-  cardDisplayPreferences  Json?
-  chipColors              Json?
-  maintenanceMode              Boolean   @default(false)
-  maintenanceMessage           String    @default("")
-  maintenanceDelay             Int       @default(30)
-  transcodeManagerEnabled      Boolean   @default(false)
-  transcodeManagerMessage      String    @default("")
-  transcodeManagerDelay        Int       @default(30)
-  transcodeManagerCriteria     Json?
+  dashboardLayout                 Json?
+  columnPreferences               Json?
+  cardDisplayPreferences          Json?
+  chipColors                      Json?
+  maintenanceMode                 Boolean   @default(false)
+  maintenanceMessage              String    @default("")
+  maintenanceDelay                Int       @default(30)
+  transcodeManagerEnabled         Boolean   @default(false)
+  transcodeManagerMessage         String    @default("")
+  transcodeManagerDelay           Int       @default(30)
+  transcodeManagerCriteria        Json?
   // Skip streams the server reports as hardware-accelerated (GPU encode), which
   // cost the CPU little. Off by default so existing criteria keep their meaning.
-  transcodeManagerExemptHardware Boolean @default(false)
+  transcodeManagerExemptHardware  Boolean   @default(false)
   // Discord notifications
-  discordWebhookUrl            String?
-  discordWebhookUsername       String?
-  discordWebhookAvatarUrl      String?
-  discordNotifyMaintenance     Boolean   @default(false)
-  localAuthEnabled       Boolean @default(false)
+  discordWebhookUrl               String?
+  discordWebhookUsername          String?
+  discordWebhookAvatarUrl         String?
+  discordNotifyMaintenance        Boolean   @default(false)
+  localAuthEnabled                Boolean   @default(false)
   // Allow signing in with Plex from the login page. When false, the Plex
   // button is hidden and /api/auth/plex/token rejects logins — but the
   // user's plexToken stays attached for media server / library sync.
-  plexLoginEnabled       Boolean @default(true)
+  plexLoginEnabled                Boolean   @default(true)
   // SSO — when ssoEnabled is true, the local username/password form is hidden
   // on the login screen. Plex login remains available if a Plex account is linked.
-  ssoEnabled                Boolean   @default(false)
-  ssoMode                   String    @default("OIDC")
-  oidcIssuer                String?
-  oidcClientId              String?
-  oidcClientSecret          String?
-  oidcScopes                String    @default("openid profile email")
-  oidcUsernameClaim         String    @default("preferred_username")
-  forwardAuthUserHeader     String    @default("Remote-User")
-  forwardAuthEmailHeader    String    @default("Remote-Email")
-  forwardAuthNameHeader     String    @default("Remote-Name")
+  ssoEnabled                      Boolean   @default(false)
+  ssoMode                         String    @default("OIDC")
+  oidcIssuer                      String?
+  oidcClientId                    String?
+  oidcClientSecret                String?
+  oidcScopes                      String    @default("openid profile email")
+  oidcUsernameClaim               String    @default("preferred_username")
+  forwardAuthUserHeader           String    @default("Remote-User")
+  forwardAuthEmailHeader          String    @default("Remote-Email")
+  forwardAuthNameHeader           String    @default("Remote-Name")
   // Single-step undo for SSO config changes. Snapshotted on every PUT to
   // /api/settings/sso. Resistant to backup rotation — gives admins a
   // recovery path when bad credentials are saved and the only available
   // backups all have the broken state.
-  previousSsoConfig         Json?
-  preferredTitleServerId   String?
-  preferredArtworkServerId String?
+  previousSsoConfig               Json?
+  preferredTitleServerId          String?
+  preferredArtworkServerId        String?
   // Backup
-  backupSchedule                String    @default("DAILY")
-  backupRetentionCount          Int       @default(7)
-  backupEncryptionPassword      String?
-  lastBackupAt                  DateTime?
+  backupSchedule                  String    @default("DAILY")
+  backupRetentionCount            Int       @default(7)
+  backupEncryptionPassword        String?
+  lastBackupAt                    DateTime?
   // User exclusion lists
-  maintenanceExcludedUsers      String[]  @default([])
-  transcodeManagerExcludedUsers String[]  @default([])
+  maintenanceExcludedUsers        String[]  @default([])
+  transcodeManagerExcludedUsers   String[]  @default([])
   // Scheduling
-  scheduledJobTime              String    @default("00:00")
+  scheduledJobTime                String    @default("00:00")
   // Display
-  dedupStats                    Boolean   @default(true)
+  dedupStats                      Boolean   @default(true)
   // Real-time media-server WebSocket sync (instant sessions/enforcement,
   // incremental library + watch-history sync). Master switch — off closes all
   // server WebSockets and falls back to scheduled polling only.
-  realtimeSync                  Boolean   @default(true)
+  realtimeSync                    Boolean   @default(true)
   // Retention
-  actionHistoryRetentionDays    Int       @default(30)
+  actionHistoryRetentionDays      Int       @default(30)
   // Deletion stats
-  deletionStatsResetAt          DateTime?
+  deletionStatsResetAt            DateTime?
   // AI analysis (read-only library assistant). Provider-neutral so any backend
   // works — "openai-compatible" covers OpenAI, Ollama, LM Studio, OpenRouter,
   // Groq, vLLM, LocalAI, etc.; "anthropic" is the native Claude Messages API.
   // aiBaseUrl overrides the provider default (required for local models);
   // aiApiKey is optional (local models often need none) and masked by sanitize().
-  aiEnabled                     Boolean   @default(false)
-  aiProvider                    String    @default("openai-compatible")
-  aiBaseUrl                     String?
-  aiApiKey                      String?
-  aiModel                       String?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  aiEnabled                       Boolean   @default(false)
+  aiProvider                      String    @default("openai-compatible")
+  aiBaseUrl                       String?
+  aiApiKey                        String?
+  aiModel                         String?
+  createdAt                       DateTime  @default(now())
+  updatedAt                       DateTime  @updatedAt
 }
 
 enum MediaServerType {
@@ -141,51 +142,118 @@ enum MediaServerType {
 }
 
 model MediaServer {
-  id            String          @id @default(cuid())
-  userId        String
-  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type          MediaServerType @default(PLEX)
-  name          String
-  url           String
-  externalUrl   String?
-  accessToken   String
-  machineId     String?
-  tlsSkipVerify Boolean         @default(false)
-  enabled       Boolean         @default(true)
-  libraries     Library[]
-  syncJobs      SyncJob[]
-  watchHistory  WatchHistory[]
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  id                       String          @id @default(cuid())
+  userId                   String
+  user                     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type                     MediaServerType @default(PLEX)
+  name                     String
+  url                      String
+  externalUrl              String?
+  accessToken              String
+  machineId                String?
+  tlsSkipVerify            Boolean         @default(false)
+  enabled                  Boolean         @default(true)
+  /// The Tracearr `server_id` (UUID) this media server maps to, or null to use
+  /// the server's own native watch history. Set + an enabled TracearrInstance
+  /// switches `syncWatchHistory` to the incremental Tracearr import.
+  tracearrServerId         String?
+  /// The `started_at` of the OLDEST play Tracearr holds for this server, found
+  /// once by bisecting the `until` filter (~16 calls, versus ~1,600 to page the
+  /// whole history).
+  ///
+  /// Exists so the backfill can report determinate progress. The history API is
+  /// keyset-paginated with no total and no count endpoint, so "N of M records"
+  /// is unobtainable — and would be misleading anyway, because a large share of
+  /// fetched plays reference media since removed from the library and are
+  /// deliberately not stored, so a record-count bar could never reach 100%.
+  /// Time coverage can: the walk is finished exactly when it reaches this
+  /// instant. Null until measured.
+  tracearrOldestPlayAt DateTime?
+  /// Set when this server's stored watch history was deliberately cleared and
+  /// has not yet been repopulated; null once a sync has refilled it.
+  ///
+  /// When this server's watch history was last ESTABLISHED — i.e. a sync
+  /// successfully determined what has been played on it. `null` means it never
+  /// was, or that something invalidated it since.
+  ///
+  /// Deliberately a positive marker rather than a "cleared at" one. An EMPTY
+  /// `WatchHistory` is indistinguishable from "nobody watched anything", and
+  /// the two demand opposite behaviour: every play-activity criterion
+  /// (`watchedByUser`, `playCount`, `lastPlayedAt`, and the series aggregates
+  /// built on them) has a negative form that goes vacuously TRUE for the entire
+  /// library against absent evidence. On a DELETE rule set that is the whole
+  /// library. So the question a guard has to answer is "do we KNOW what was
+  /// played here", and only a positive marker answers it — a `null` default
+  /// then correctly reads as "we don't", which covers a brand-new server that
+  /// has never synced as well as one whose history was destroyed.
+  ///
+  /// Set by a SUCCESSFUL sync, including one that legitimately finds no plays
+  /// (a server nobody watches is a real steady state, and must not stay paused
+  /// forever). Nulled by every path that destroys history in bulk: the source
+  /// switch in the `/api/servers/[id]` PUT, library and type-wide purges,
+  /// disable-with-delete-data, and backup restore.
+  ///
+  /// `tracearrBackfillComplete` cannot serve here: unlinking sets
+  /// `tracearrServerId` to null, so the server stops looking Tracearr-mapped at
+  /// exactly the moment its history is emptiest.
+  watchHistorySyncedAt DateTime?
+  /// How far back the backfill has actually WALKED, as opposed to how far back
+  /// it has stored rows.
+  ///
+  /// These differ, and the difference is a live-lock. Resuming from
+  /// `MIN(watchedAt)` over stored rows means the position only advances when a
+  /// record is importable — but a large share of old plays reference media that
+  /// has since left the library and are deliberately not stored (~41% before
+  /// 2023 on a real library). A contiguous unstorable stretch longer than one
+  /// slice therefore leaves the position exactly where it was, and every
+  /// subsequent slice re-walks the same pages forever. Recording what was SEEN
+  /// guarantees forward progress regardless of what was kept.
+  tracearrBackfillCursorAt DateTime?
+  /// Whether the one-time backfill of this server's Tracearr history has walked
+  /// all the way to the oldest play.
+  ///
+  /// Tracearr returns history **newest first**, so `MAX(watchedAt)` — the
+  /// forward watermark — is set by the very first page and says nothing about
+  /// how far back the import got. Without this flag an import interrupted at
+  /// any point (crash, container restart, the request's lifetime cap, or the
+  /// user pressing Stop) would resume from that watermark and silently abandon
+  /// everything older, reporting success. Cleared whenever the mapping changes,
+  /// because the rows it describes are wiped at the same time.
+  tracearrBackfillComplete Boolean         @default(false)
+  libraries                Library[]
+  syncJobs                 SyncJob[]
+  watchHistory             WatchHistory[]
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
 }
 
 model SonarrInstance {
-  id               String            @id @default(cuid())
-  userId           String
-  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name             String
-  url              String
-  apiKey           String
-  externalUrl      String?
-  enabled          Boolean           @default(true)
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
+  id                    String                 @id @default(cuid())
+  userId                String
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name                  String
+  url                   String
+  apiKey                String
+  externalUrl           String?
+  enabled               Boolean                @default(true)
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
   trashManagedResources TrashManagedResource[]
 
   @@index([userId])
 }
 
 model RadarrInstance {
-  id               String            @id @default(cuid())
-  userId           String
-  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name             String
-  url              String
-  apiKey           String
-  externalUrl      String?
-  enabled          Boolean           @default(true)
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
+  id                    String                 @id @default(cuid())
+  userId                String
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name                  String
+  url                   String
+  apiKey                String
+  externalUrl           String?
+  enabled               Boolean                @default(true)
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
   trashManagedResources TrashManagedResource[]
 
   @@index([userId])
@@ -207,6 +275,23 @@ model LidarrInstance {
 }
 
 model SeerrInstance {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  url       String
+  apiKey    String
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+/// A Tracearr instance (self-hosted Plex/Jellyfin/Emby playback monitor).
+/// One instance aggregates many media servers, so the per-server link lives on
+/// `MediaServer.tracearrServerId` — see the notes there.
+model TracearrInstance {
   id        String   @id @default(cuid())
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -243,100 +328,100 @@ model Library {
 }
 
 model MediaItem {
-  id               String                @id @default(cuid())
-  libraryId        String
-  library          Library               @relation(fields: [libraryId], references: [id], onDelete: Cascade)
+  id                     String                @id @default(cuid())
+  libraryId              String
+  library                Library               @relation(fields: [libraryId], references: [id], onDelete: Cascade)
   ratingKey              String
   parentRatingKey        String?
   grandparentRatingKey   String?
-  title            String
-  year             Int?
-  type             LibraryType
-  summary          String?
-  thumbUrl         String?
-  artUrl           String?
-  parentThumbUrl   String?
-  parentSummary    String?
-  seasonThumbUrl   String?
-  parentTitle      String?
-  albumTitle       String?
-  seasonNumber     Int?
-  episodeNumber    Int?
+  title                  String
+  year                   Int?
+  type                   LibraryType
+  summary                String?
+  thumbUrl               String?
+  artUrl                 String?
+  parentThumbUrl         String?
+  parentSummary          String?
+  seasonThumbUrl         String?
+  parentTitle            String?
+  albumTitle             String?
+  seasonNumber           Int?
+  episodeNumber          Int?
   // Content metadata
-  contentRating    String?
-  rating           Float?
-  audienceRating   Float?
-  userRating       Float?
-  studio           String?
-  tagline          String?
-  originalTitle    String?
-  originallyAvailableAt DateTime?
-  viewOffset       Int?
+  contentRating          String?
+  rating                 Float?
+  audienceRating         Float?
+  userRating             Float?
+  studio                 String?
+  tagline                String?
+  originalTitle          String?
+  originallyAvailableAt  DateTime?
+  viewOffset             Int?
   // Genres, directors, etc. stored as JSON arrays of tag names
-  genres           Json?
-  directors        Json?
-  writers          Json?
-  roles            Json?
-  countries        Json?
+  genres                 Json?
+  directors              Json?
+  writers                Json?
+  roles                  Json?
+  countries              Json?
   // Video metadata
-  resolution       String?
-  videoWidth       Int?
-  videoHeight      Int?
-  videoCodec       String?
-  videoProfile     String?
-  videoFrameRate   String?
-  videoBitDepth    Int?
-  videoBitrate     Int?
+  resolution             String?
+  videoWidth             Int?
+  videoHeight            Int?
+  videoCodec             String?
+  videoProfile           String?
+  videoFrameRate         String?
+  videoBitDepth          Int?
+  videoBitrate           Int?
   videoColorPrimaries    String?
   videoColorRange        String?
   videoChromaSubsampling String?
-  aspectRatio      String?
-  scanType         String?
+  aspectRatio            String?
+  scanType               String?
   // Audio metadata
-  audioCodec       String?
-  audioChannels    Int?
-  audioProfile     String?
-  audioBitrate     Int?
-  audioSamplingRate Int?
+  audioCodec             String?
+  audioChannels          Int?
+  audioProfile           String?
+  audioBitrate           Int?
+  audioSamplingRate      Int?
   // File metadata
-  container        String?
-  dynamicRange     String?
-  optimizedForStreaming Boolean?
-  fileSize         BigInt?
-  filePath         String?
-  duration         Int?
+  container              String?
+  dynamicRange           String?
+  optimizedForStreaming  Boolean?
+  fileSize               BigInt?
+  filePath               String?
+  duration               Int?
   // Enriched metadata (from per-item endpoint)
-  titleSort            String?
-  ratingCount          Int?
-  ratingImage          String?
-  audienceRatingImage  String?
-  absoluteIndex        Int?
-  chapterSource        String?
-  labels               Json?
-  videoRangeType       String?
+  titleSort              String?
+  ratingCount            Int?
+  ratingImage            String?
+  audienceRatingImage    String?
+  absoluteIndex          Int?
+  chapterSource          String?
+  labels                 Json?
+  videoRangeType         String?
   // Playback
-  playCount        Int                   @default(0)
-  lastPlayedAt     DateTime?
-  addedAt          DateTime?
-  serverUpdatedAt  DateTime?
+  playCount              Int                   @default(0)
+  lastPlayedAt           DateTime?
+  addedAt                DateTime?
+  serverUpdatedAt        DateTime?
   // Dedup
-  dedupKey         String?
-  dedupCanonical   Boolean               @default(true)
+  dedupKey               String?
+  dedupCanonical         Boolean               @default(true)
   // Series identity (see src/lib/media/series-key.ts). Set by the sync for
   // SERIES episodes only: "tvdb:<id>" / "tmdb:<id>" from the show-level
   // external ids, else "title:<lower(trim(parentTitle))>". Every series-level
   // grouping (library, rule engines, watch history) keys on this, never on the
   // ambiguous parentTitle. Null for movies and tracks.
-  seriesKey        String?
-  isWatchlisted    Boolean               @default(false)
-  streams          MediaStream[]
-  externalIds      MediaItemExternalId[]
-  lifecycleActions    LifecycleAction[]
-  lifecycleExceptions LifecycleException[]
-  ruleMatches        RuleMatch[]
-  watchHistory       WatchHistory[]
-  createdAt          DateTime              @default(now())
-  updatedAt        DateTime              @updatedAt
+  seriesKey              String?
+  isWatchlisted          Boolean               @default(false)
+  streams                MediaStream[]
+  externalIds            MediaItemExternalId[]
+  lifecycleActions       LifecycleAction[]
+  lifecycleExceptions    LifecycleException[]
+  ruleMatches            RuleMatch[]
+  watchHistory           WatchHistory[]
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
 
   @@unique([libraryId, ratingKey])
   @@index([type])
@@ -376,36 +461,36 @@ model MediaItemExternalId {
 }
 
 model MediaStream {
-  id                    String    @id @default(cuid())
-  mediaItemId           String
-  mediaItem             MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
-  streamType            Int       // 1=video, 2=audio, 3=subtitle
-  index                 Int?
-  codec                 String?
-  profile               String?
-  bitrate               Int?
-  isDefault             Boolean   @default(false)
-  displayTitle          String?
-  extendedDisplayTitle  String?
-  language              String?
-  languageCode          String?
+  id                   String    @id @default(cuid())
+  mediaItemId          String
+  mediaItem            MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  streamType           Int // 1=video, 2=audio, 3=subtitle
+  index                Int?
+  codec                String?
+  profile              String?
+  bitrate              Int?
+  isDefault            Boolean   @default(false)
+  displayTitle         String?
+  extendedDisplayTitle String?
+  language             String?
+  languageCode         String?
   // Video
-  width                 Int?
-  height                Int?
-  frameRate             Float?
-  scanType              String?
-  colorPrimaries        String?
-  colorRange            String?
-  chromaSubsampling     String?
-  bitDepth              Int?
-  videoRangeType        String?
+  width                Int?
+  height               Int?
+  frameRate            Float?
+  scanType             String?
+  colorPrimaries       String?
+  colorRange           String?
+  chromaSubsampling    String?
+  bitDepth             Int?
+  videoRangeType       String?
   // Audio
-  channels              Int?
-  samplingRate          Int?
-  audioChannelLayout    String?
+  channels             Int?
+  samplingRate         Int?
+  audioChannelLayout   String?
   // Subtitle
-  forced                Boolean?
-  createdAt             DateTime  @default(now())
+  forced               Boolean?
+  createdAt            DateTime  @default(now())
 
   @@index([mediaItemId])
   @@index([mediaItemId, streamType])
@@ -420,49 +505,49 @@ enum SyncJobStatus {
 }
 
 model SyncJob {
-  id             String        @id @default(cuid())
-  mediaServerId  String
-  mediaServer    MediaServer   @relation(fields: [mediaServerId], references: [id], onDelete: Cascade)
+  id              String        @id @default(cuid())
+  mediaServerId   String
+  mediaServer     MediaServer   @relation(fields: [mediaServerId], references: [id], onDelete: Cascade)
   status          SyncJobStatus @default(PENDING)
   cancelRequested Boolean       @default(false)
   startedAt       DateTime      @default(now())
-  completedAt    DateTime?
-  error          String?
-  itemsProcessed Int           @default(0)
-  totalItems     Int           @default(0)
-  currentLibrary String?
+  completedAt     DateTime?
+  error           String?
+  itemsProcessed  Int           @default(0)
+  totalItems      Int           @default(0)
+  currentLibrary  String?
 
   @@index([mediaServerId, status])
 }
 
 model RuleSet {
-  id                    String            @id @default(cuid())
-  userId                String
-  user                  User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name                  String
-  type                  LibraryType
-  rules                 Json
-  enabled               Boolean           @default(true)
-  seriesScope           Boolean           @default(true)
-  actionEnabled         Boolean           @default(false)
-  actionType            String?
-  actionDelayDays       Int               @default(7)
-  arrInstanceId         String?
+  id                     String            @id @default(cuid())
+  userId                 String
+  user                   User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name                   String
+  type                   LibraryType
+  rules                  Json
+  enabled                Boolean           @default(true)
+  seriesScope            Boolean           @default(true)
+  actionEnabled          Boolean           @default(false)
+  actionType             String?
+  actionDelayDays        Int               @default(7)
+  arrInstanceId          String?
   targetQualityProfileId Int?
-  addImportExclusion    Boolean           @default(false)
-  searchAfterAction     Boolean           @default(false)
-  addArrTags            String[]          @default([])
-  removeArrTags         String[]          @default([])
-  collectionId          String?
-  collection            Collection?       @relation(fields: [collectionId], references: [id], onDelete: SetNull)
-  discordNotifyOnAction Boolean           @default(false)
-  discordNotifyOnMatch  Boolean           @default(false)
-  stickyMatches         Boolean           @default(false)
-  serverIds             String[]          @default([])
-  lifecycleActions      LifecycleAction[]
-  ruleMatches           RuleMatch[]
-  createdAt             DateTime          @default(now())
-  updatedAt             DateTime          @updatedAt
+  addImportExclusion     Boolean           @default(false)
+  searchAfterAction      Boolean           @default(false)
+  addArrTags             String[]          @default([])
+  removeArrTags          String[]          @default([])
+  collectionId           String?
+  collection             Collection?       @relation(fields: [collectionId], references: [id], onDelete: SetNull)
+  discordNotifyOnAction  Boolean           @default(false)
+  discordNotifyOnMatch   Boolean           @default(false)
+  stickyMatches          Boolean           @default(false)
+  serverIds              String[]          @default([])
+  lifecycleActions       LifecycleAction[]
+  ruleMatches            RuleMatch[]
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
 
   @@index([collectionId])
 }
@@ -497,33 +582,33 @@ enum LifecycleActionStatus {
 }
 
 model LifecycleAction {
-  id              String                @id @default(cuid())
-  userId          String
-  user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  mediaItemId          String?
-  mediaItem            MediaItem?            @relation(fields: [mediaItemId], references: [id], onDelete: SetNull)
-  mediaItemTitle       String?
-  mediaItemParentTitle String?
-  ruleSetId       String?
-  ruleSet         RuleSet?              @relation(fields: [ruleSetId], references: [id], onDelete: SetNull)
-  ruleSetName     String?
-  ruleSetType     String?
-  actionType      String
-  status          LifecycleActionStatus @default(PENDING)
-  scheduledFor    DateTime
-  executedAt      DateTime?
-  error           String?
-  arrInstanceId        String?
+  id                     String                @id @default(cuid())
+  userId                 String
+  user                   User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaItemId            String?
+  mediaItem              MediaItem?            @relation(fields: [mediaItemId], references: [id], onDelete: SetNull)
+  mediaItemTitle         String?
+  mediaItemParentTitle   String?
+  ruleSetId              String?
+  ruleSet                RuleSet?              @relation(fields: [ruleSetId], references: [id], onDelete: SetNull)
+  ruleSetName            String?
+  ruleSetType            String?
+  actionType             String
+  status                 LifecycleActionStatus @default(PENDING)
+  scheduledFor           DateTime
+  executedAt             DateTime?
+  error                  String?
+  arrInstanceId          String?
   targetQualityProfileId Int?
-  addImportExclusion   Boolean               @default(false)
-  searchAfterAction    Boolean               @default(false)
-  matchedMediaItemIds  String[]              @default([])
-  addArrTags           String[]              @default([])
-  removeArrTags        String[]              @default([])
-  externalMediaId      Int?
-  deletedBytes         BigInt?
-  createdAt       DateTime              @default(now())
-  updatedAt       DateTime              @updatedAt
+  addImportExclusion     Boolean               @default(false)
+  searchAfterAction      Boolean               @default(false)
+  matchedMediaItemIds    String[]              @default([])
+  addArrTags             String[]              @default([])
+  removeArrTags          String[]              @default([])
+  externalMediaId        Int?
+  deletedBytes           BigInt?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
 
   @@index([status, scheduledFor])
   @@index([ruleSetId])
@@ -532,13 +617,13 @@ model LifecycleAction {
 }
 
 model RuleMatch {
-  id              String    @id @default(cuid())
-  ruleSetId       String
-  ruleSet         RuleSet   @relation(fields: [ruleSetId], references: [id], onDelete: Cascade)
-  mediaItemId     String
-  mediaItem       MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
-  itemData        Json
-  detectedAt      DateTime  @default(now())
+  id          String    @id @default(cuid())
+  ruleSetId   String
+  ruleSet     RuleSet   @relation(fields: [ruleSetId], references: [id], onDelete: Cascade)
+  mediaItemId String
+  mediaItem   MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  itemData    Json
+  detectedAt  DateTime  @default(now())
 
   // [ruleSetId] alone is covered by the composite unique's leading column.
   @@unique([ruleSetId, mediaItemId])
@@ -599,18 +684,18 @@ model BlackoutSchedule {
   user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   name          String
   enabled       Boolean   @default(true)
-  scheduleType  String    // "one_time" | "recurring"
+  scheduleType  String // "one_time" | "recurring"
   startDate     DateTime?
   endDate       DateTime?
-  daysOfWeek    Json?     // [0,1,2,3,4,5,6] where 0=Sunday
-  startTime     String?   // "HH:mm"
-  endTime       String?   // "HH:mm"
-  action        String    // "terminate_immediate" | "warn_then_terminate" | "block_new_only"
-  message        String    @default("Stream terminated due to scheduled blackout period.")
-  delay          Int       @default(30)
-  excludedUsers  String[]  @default([])
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  daysOfWeek    Json? // [0,1,2,3,4,5,6] where 0=Sunday
+  startTime     String? // "HH:mm"
+  endTime       String? // "HH:mm"
+  action        String // "terminate_immediate" | "warn_then_terminate" | "block_new_only"
+  message       String    @default("Stream terminated due to scheduled blackout period.")
+  delay         Int       @default(30)
+  excludedUsers String[]  @default([])
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@index([userId])
   @@index([enabled])
@@ -635,12 +720,12 @@ model PrerollSchedule {
   name         String
   enabled      Boolean   @default(true)
   prerollPath  String
-  scheduleType String    // "one_time" | "recurring" | "seasonal"
+  scheduleType String // "one_time" | "recurring" | "seasonal"
   startDate    DateTime?
   endDate      DateTime?
-  daysOfWeek   Json?     // [0..6]
-  startTime    String?   // "HH:mm"
-  endTime      String?   // "HH:mm"
+  daysOfWeek   Json? // [0..6]
+  startTime    String? // "HH:mm"
+  endTime      String? // "HH:mm"
   priority     Int       @default(0)
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -661,26 +746,103 @@ model SavedQuery {
   @@index([userId])
 }
 
+/// One play event. Two provenances, distinguished by `source`:
+///
+///  - `NATIVE` — from the media server's own history
+///    (`getDetailedWatchHistory()`), full-replaced on every sync. Every
+///    Tracearr-only column below stays null, including `watched`.
+///  - `TRACEARR` — from Tracearr's `/api/v2/public/history`, appended
+///    incrementally and deduped on `(mediaServerId, sourceEventId)`.
+///
+/// **`watched` is the reconcile lynchpin.** A Tracearr record is an aggregate
+/// over a *resume chain*, so it can describe a partial or still-playing view
+/// (`watched = false`). Those rows are stored and displayed but must never
+/// inflate `MediaItem.playCount` or advance `lastPlayedAt`, so both queries in
+/// `watch-reconcile.ts` count only rows where `watched IS DISTINCT FROM false`
+/// — native rows (null) keep counting exactly as they always did.
 model WatchHistory {
-  id              String       @id @default(cuid())
-  mediaItemId     String
-  mediaItem       MediaItem    @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
-  mediaServerId   String
-  mediaServer     MediaServer  @relation(fields: [mediaServerId], references: [id], onDelete: Cascade)
-  serverUsername   String
-  watchedAt       DateTime?
-  deviceName      String?
-  platform        String?
-  createdAt       DateTime     @default(now())
+  id             String      @id @default(cuid())
+  mediaItemId    String
+  mediaItem      MediaItem   @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  mediaServerId  String
+  mediaServer    MediaServer @relation(fields: [mediaServerId], references: [id], onDelete: Cascade)
+  serverUsername String
+  watchedAt      DateTime?
+  deviceName     String?
+  platform       String?
+  createdAt      DateTime    @default(now())
 
+  /// Provenance: "NATIVE" | "TRACEARR". The migration default correctly tags
+  /// every pre-existing row as NATIVE.
+  source        String  @default("NATIVE")
+  /// Tracearr's stable chain id for the play (its `id`, a uuid). Null for
+  /// native rows — Postgres treats nulls as distinct in a unique index, so the
+  /// dedup constraint below does not collide across native rows.
+  sourceEventId String?
+  /// Tracearr `reference_id`. Documented as the chain key shared by every
+  /// segment of the play; in the current spec it always equals `id`, so
+  /// `segmentCount` is what actually reveals a resumed play.
+  referenceId   String?
+
+  /// True once the play crossed Tracearr's per-media-type completion threshold
+  /// (85% by default). See the model comment — this drives the reconcile.
+  watched         Boolean?
+  /// Playback progress 0-100 (Tracearr `percent_complete`); the headline
+  /// completion figure, and nullable even when progress/duration are known.
+  percentComplete Float?
+  /// Most recent segment's state: "playing" | "paused" | "stopped".
+  state           String?
+
+  /// Playback position in ms (Tracearr `progress_ms`).
+  progressMs      Int?
+  /// Watch time summed across the play's in-window segments (`duration_ms`).
+  durationMs      Int?
+  /// The item's full runtime in ms (`total_duration_ms`) — the denominator
+  /// `durationMs`/`progressMs` are measured against.
+  totalDurationMs Int?
+  /// Number of sessions in the resume chain (`segment_count`); > 1 means the
+  /// play was resumed.
+  segmentCount    Int?
+  stoppedAt       DateTime?
+
+  player  String?
+  product String?
+
+  isTranscode   Boolean?
+  /// "directplay" | "copy" | "transcode".
+  videoDecision String?
+  audioDecision String?
+
+  /// Stream bitrate in kbps.
+  bitrate          Int?
+  resolution       String?
+  sourceVideoCodec String?
+  sourceAudioCodec String?
+  streamVideoCodec String?
+  streamAudioCodec String?
+
+  /// Tracearr `transcode_info` verbatim (container decision, hw encode/decode,
+  /// speed, throttled, reasons).
+  transcodeInfo Json?
+  /// Tracearr `subtitle_info` verbatim (decision, codec, language, forced).
+  subtitleInfo  Json?
+  /// The source_/stream_ video+audio detail objects and their display strings,
+  /// bundled — full fidelity without 20+ scalar columns.
+  streamQuality Json?
+
+  @@unique([mediaServerId, sourceEventId])
   @@index([mediaItemId])
   @@index([mediaServerId])
   @@index([serverUsername])
   @@index([watchedAt])
   @@index([deviceName])
   @@index([platform])
+  @@index([source])
+  @@index([watched])
+  @@index([isTranscode])
+  @@index([player])
+  @@index([resolution])
 }
-
 
 // Tracks which TRaSH Guides resources (custom formats, quality profiles,
 // quality-size definitions, naming schemes) the user has explicitly assigned
@@ -693,18 +855,18 @@ model TrashManagedResource {
   id               String          @id @default(cuid())
   userId           String
   user             User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  serviceType      String          // "SONARR" | "RADARR"
+  serviceType      String // "SONARR" | "RADARR"
   sonarrInstanceId String?
   sonarrInstance   SonarrInstance? @relation(fields: [sonarrInstanceId], references: [id], onDelete: Cascade)
   radarrInstanceId String?
   radarrInstance   RadarrInstance? @relation(fields: [radarrInstanceId], references: [id], onDelete: Cascade)
-  resourceType     String          // "CUSTOM_FORMAT" | "QUALITY_PROFILE" | "QUALITY_DEFINITION" | "NAMING"
-  trashId          String          // TRaSH trash_id (or a synthetic key for singleton resources like NAMING)
-  name             String          // display name captured at assignment time
-  arrId            Int?            // id of the resource inside the Arr once synced (null for bulk/config resources)
-  selection        Json?           // extra choices for the resource (e.g. chosen naming variants)
+  resourceType     String // "CUSTOM_FORMAT" | "QUALITY_PROFILE" | "QUALITY_DEFINITION" | "NAMING"
+  trashId          String // TRaSH trash_id (or a synthetic key for singleton resources like NAMING)
+  name             String // display name captured at assignment time
+  arrId            Int? // id of the resource inside the Arr once synced (null for bulk/config resources)
+  selection        Json? // extra choices for the resource (e.g. chosen naming variants)
   lastSyncedAt     DateTime?
-  lastSyncHash     String?         // hash of the last-synced TRaSH definition, used to flag upstream guide changes
+  lastSyncHash     String? // hash of the last-synced TRaSH definition, used to flag upstream guide changes
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
