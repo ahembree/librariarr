@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { SeerrClient } from "@/lib/seerr/seerr-client";
 import { appCache } from "@/lib/cache/memory-cache";
+import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { logger } from "@/lib/logger";
 
 const REQUEST_PAGE_SIZE = 100;
@@ -323,6 +324,13 @@ async function buildWatchMaps(
 
   // Watch history for movies — match by either canonical mediaItemId OR same dedupKey
   // (handles the case where the user watched on a non-canonical copy on another server).
+  //
+  // Both queries below filter to completed plays. The whole point of this stat
+  // is "did the requester actually watch what they asked for" — a Tracearr row
+  // with `watched = false` is someone starting it and giving up, which is the
+  // opposite answer, and counting it would report a request as satisfied when
+  // it demonstrably was not. Native rows carry a null `watched` and still
+  // count, so the shared predicate leaves pre-Tracearr behaviour untouched.
   if (movieMap.size > 0) {
     const movieDedupKeys = new Set<string>();
     const tmdbByDedupKey = new Map<string, number>();
@@ -334,6 +342,7 @@ async function buildWatchMaps(
     }
     const rows = await prisma.watchHistory.findMany({
       where: {
+        ...COMPLETED_PLAY_FILTER,
         serverUsername: { in: usernameList },
         mediaItem: {
           type: "MOVIE",
@@ -370,6 +379,7 @@ async function buildWatchMaps(
     }
     const rows = await prisma.watchHistory.findMany({
       where: {
+        ...COMPLETED_PLAY_FILTER,
         serverUsername: { in: usernameList },
         mediaItem: {
           type: "SERIES",

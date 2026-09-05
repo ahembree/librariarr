@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { toast } from "sonner";
 import { useLocalStorage, useLocalStorageJSON } from "@/hooks/use-local-storage";
 import Link from "next/link";
 import { useColumnResize } from "@/hooks/use-column-resize";
@@ -694,6 +695,11 @@ export default function RuleMatchesPage() {
   }, []);
 
   useRealtime("lifecycle:detection-completed", fetchMatches);
+  // Executing an action cascade-deletes the RuleMatch rows this page renders,
+  // and a sync or purge can remove the underlying media — so detection alone
+  // was never enough to keep the list honest.
+  useRealtime("lifecycle:action-executed", fetchMatches);
+  useRealtime("sync:completed", fetchMatches);
 
   useEffect(() => {
     void (async () => { await fetchMatches(); })();
@@ -755,6 +761,27 @@ export default function RuleMatchesPage() {
     setExcludePromptItem(item);
   }, []);
 
+  // Detection skips a rule set rather than evaluating it whenever it cannot be
+  // answered faithfully — an *arr/Seerr instance missing, or a targeted server
+  // whose play history isn't established yet (never synced, recently cleared,
+  // or a Tracearr import still backfilling). The skip is silent server-side by
+  // design (it logs and moves on), so without this the button just spins back
+  // to idle and the matches on screen are last run's, not this run's.
+  const reportSkipped = useCallback(
+    (skipped: unknown) => {
+      if (!Array.isArray(skipped) || skipped.length === 0) return;
+      const entries = skipped as Array<{ name: string; reason: string }>;
+      if (entries.length === 1) {
+        toast.warning(`Skipped "${entries[0].name}"`, { description: entries[0].reason });
+        return;
+      }
+      toast.warning(`Skipped ${entries.length} rule sets`, {
+        description: entries.map((e) => `${e.name}: ${e.reason}`).join("\n"),
+      });
+    },
+    [],
+  );
+
   const runRule = useCallback(async (ruleSetId: string, fullReEval = false) => {
     setRunningRules((prev) => new Set(prev).add(ruleSetId));
     try {
@@ -764,20 +791,33 @@ export default function RuleMatchesPage() {
         body: JSON.stringify({ ruleSetId, fullReEval, processActions: true }),
       });
       const data = await response.json();
+      if (!response.ok) {
+        toast.error("Couldn't run the rule", {
+          description: (data?.error as string) ?? "The detection run failed.",
+        });
+        return;
+      }
+      reportSkipped(data.skipped);
       if (data.ruleMatches) {
         setRuleMatches((prev) => {
           const updated = data.ruleMatches as RuleSetMatch[];
           const updatedMap = new Map(updated.map((m) => [m.ruleSet.id, m]));
           return prev.map((m) => {
-            if (m.ruleSet.id === ruleSetId) {
-              return updatedMap.get(ruleSetId) ?? { ...m, items: [], count: 0 };
-            }
-            return m;
+            if (m.ruleSet.id !== ruleSetId) return m;
+            // A rule set ABSENT from the results was skipped, not evaluated to
+            // zero — `runDetection` pushes an entry for every rule set it
+            // evaluates, including one that matched nothing. Detection
+            // deliberately PRESERVES a skipped rule set's matches, so blanking
+            // the row here showed the user the opposite of what happened: a
+            // rule set paused mid-Tracearr-import appeared to have lost every
+            // match, with no error, until the page was reloaded.
+            return updatedMap.get(ruleSetId) ?? m;
           });
         });
       }
     } catch (error) {
       console.error("Failed to run rule:", error);
+      toast.error("Couldn't run the rule");
     } finally {
       setRunningRules((prev) => {
         const next = new Set(prev);
@@ -785,7 +825,7 @@ export default function RuleMatchesPage() {
         return next;
       });
     }
-  }, []);
+  }, [reportSkipped]);
 
   const reEvalAllRules = useCallback(async () => {
     setReEvalRunning(true);
@@ -796,19 +836,27 @@ export default function RuleMatchesPage() {
         body: JSON.stringify({ fullReEval: true, processActions: true }),
       });
       const data = await response.json();
+      if (!response.ok) {
+        toast.error("Couldn't re-evaluate rules", {
+          description: (data?.error as string) ?? "The detection run failed.",
+        });
+        return;
+      }
+      reportSkipped(data.skipped);
       if (data.ruleMatches) {
         const updated = data.ruleMatches as RuleSetMatch[];
         const updatedMap = new Map(updated.map((m) => [m.ruleSet.id, m]));
-        setRuleMatches((prev) =>
-          prev.map((m) => updatedMap.get(m.ruleSet.id) ?? { ...m, items: [], count: 0 })
-        );
+        // Same as `runRule`: a rule set missing from the results was skipped and
+        // still holds its matches, so leave its row alone rather than zeroing it.
+        setRuleMatches((prev) => prev.map((m) => updatedMap.get(m.ruleSet.id) ?? m));
       }
     } catch (error) {
       console.error("Failed to re-evaluate all rules:", error);
+      toast.error("Couldn't re-evaluate rules");
     } finally {
       setReEvalRunning(false);
     }
-  }, []);
+  }, [reportSkipped]);
 
   const toggleExpand = (ruleSetId: string) => {
     setExpandedRules((prev) => {

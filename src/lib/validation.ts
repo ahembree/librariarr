@@ -1,6 +1,7 @@
 import { z } from "zod/v4";
 import { NextResponse } from "next/server";
 import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
+import { MASKED_VALUE } from "@/lib/api/sanitize";
 
 /**
  * Parse and validate request JSON against a Zod schema.
@@ -79,6 +80,20 @@ export const lifecycleScheduleSchema = z.object({
 
 export const logRetentionSchema = z.object({
   logRetentionDays: z.number().int().min(1).max(365),
+});
+
+/**
+ * `null` disables the ceiling (the default). A positive integer sets it; zero
+ * and negatives are rejected rather than silently meaning "block everything",
+ * which would disable lifecycle deletion entirely.
+ */
+export const deleteCeilingSchema = z.object({
+  maxAutoDeleteItems: z
+    .number()
+    .int()
+    .min(1, "The limit must be at least 1 — leave it empty to disable it")
+    .max(1_000_000)
+    .nullable(),
 });
 
 export const actionRetentionSchema = z.object({
@@ -542,6 +557,34 @@ export const seerrInstanceUpdateSchema = z.object({
   enabled: z.boolean().optional(),
 });
 
+export const tracearrInstanceCreateSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  url: z.string().min(1, "URL is required").refine(
+    (val) => /^https?:\/\//i.test(val),
+    "URL must start with http:// or https://"
+  ),
+  apiKey: z.string().min(1, "API key is required"),
+});
+
+/**
+ * The API key is returned to the client masked (`MASKED_VALUE`), and the
+ * settings form echoes whatever it was given straight back. Stripping the mask
+ * here — rather than in each route — means a save that did not touch the key
+ * field arrives as `apiKey: undefined`, which every write path already reads as
+ * "keep the stored value".
+ */
+export const tracearrInstanceUpdateSchema = z.object({
+  name: z.string().optional(),
+  url: z.string().refine(
+    (val) => /^https?:\/\//i.test(val),
+    "URL must start with http:// or https://"
+  ).optional(),
+  apiKey: z.string().optional().transform((val) =>
+    val === undefined || val === MASKED_VALUE ? undefined : val
+  ),
+  enabled: z.boolean().optional(),
+});
+
 export const arrTestSchema = z.object({
   url: z.string().min(1, "URL is required").refine(
     (val) => /^https?:\/\//i.test(val),
@@ -589,6 +632,16 @@ export const serverEditSchema = z.object({
   tlsSkipVerify: z.boolean().optional(),
   enabled: z.boolean().optional(),
   deleteData: z.boolean().optional(),
+  /**
+   * Tracearr `server_id` (uuid) to pull this server's watch history from.
+   * `null` unlinks and reverts to the server's native history; omitted leaves
+   * the mapping untouched — the three states are distinguishable because the
+   * write path checks `!== undefined` before writing. An empty string is
+   * normalised to null so the settings `<select>`'s "None" option works.
+   */
+  tracearrServerId: z.string().nullable().optional().transform((val) =>
+    val === undefined ? undefined : val === null || val.trim() === "" ? null : val.trim()
+  ),
 });
 
 export const serverLibraryUpdateSchema = z.object({

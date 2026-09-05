@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { apiLogger } from "@/lib/logger";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
+import { invalidateWatchHistoryEvidence } from "@/lib/media/watch-evidence";
+import { eventBus } from "@/lib/events/event-bus";
 
 export async function DELETE(request: NextRequest) {
   const session = await getSession();
@@ -33,6 +35,19 @@ export async function DELETE(request: NextRequest) {
       where: { libraryId: library.id },
     });
 
+    // Deleting the items cascades through `WatchHistory.mediaItem`, so this
+    // server's plays went with them. Mark it un-evidenced until a sync refills
+    // it, or the next detection run reads the empty relation as "nobody
+    // watched anything" and `watchedByUser`'s negative forms match everything
+    // the re-sync brings back.
+    const purgedServer = await prisma.library.findUnique({
+      where: { id: library.id },
+      select: { mediaServerId: true },
+    });
+    if (purgedServer?.mediaServerId) {
+      await invalidateWatchHistoryEvidence([purgedServer.mediaServerId]);
+    }
+
     // Recompute canonical so surviving duplicates on other servers don't stay
     // non-canonical (and therefore vanish from multi-server listings) when the
     // purged library held the canonical copy.
@@ -43,6 +58,16 @@ export async function DELETE(request: NextRequest) {
       "Media",
       `Purged ${result.count} media items from library "${library.title}"`
     );
+
+
+    // Purge deletes MediaItems (and cascades their WatchHistory), so every open
+    // library listing is pointing at rows that no longer exist. `sync:completed`
+    // is the event the 16 library subscribers already refetch on.
+    eventBus.emit({
+      type: "sync:completed",
+      userId: session.userId!,
+      meta: { purged: result.count },
+    });
 
     return NextResponse.json({ deleted: result.count });
   }
@@ -82,6 +107,9 @@ export async function DELETE(request: NextRequest) {
     where: { libraryId: { in: libraryIds } },
   });
 
+  // Same cascade, across every enabled server of this media type.
+  await invalidateWatchHistoryEvidence(serverIds);
+
   await recomputeCanonical(session.userId!);
   invalidateMediaCaches();
 
@@ -89,6 +117,16 @@ export async function DELETE(request: NextRequest) {
     "Media",
     `Purged ${result.count} ${type} media items from ${libraryIds.length} libraries`
   );
+
+
+  // Purge deletes MediaItems (and cascades their WatchHistory), so every open
+  // library listing is pointing at rows that no longer exist. `sync:completed`
+  // is the event the 16 library subscribers already refetch on.
+  eventBus.emit({
+    type: "sync:completed",
+    userId: session.userId!,
+    meta: { purged: result.count },
+  });
 
   return NextResponse.json({ deleted: result.count });
 }

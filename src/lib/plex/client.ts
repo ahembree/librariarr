@@ -16,6 +16,7 @@ import type {
   PlexSession,
 } from "./types";
 import type { MediaServerClient, LibraryItemType } from "@/lib/media-server/client";
+import { MediaItemNotFoundError } from "@/lib/media-server/client";
 import { isMediaItem } from "@/lib/media-server/item-types";
 import { normalizeResolutionFromDimensions } from "@/lib/resolution";
 import { logger } from "@/lib/logger";
@@ -212,11 +213,46 @@ export class PlexClient implements MediaServerClient {
     return { items, total };
   }
 
+  /**
+   * Fetch one item's metadata.
+   *
+   * **Always returns an item or throws** — never `undefined`. Eight call sites
+   * dereference the result directly, and `enrichBatch` in the full sync uses
+   * `Promise.allSettled` specifically so a *rejection* leaves the un-enriched
+   * bulk-listing item in place; resolving `undefined` there would write it over
+   * a good row and abort the whole library sync.
+   *
+   * Two failure shapes, deliberately distinguished — the incremental sync
+   * deletes a row on the first and falls back to a full reconcile on the second:
+   *
+   * - A well-formed `MediaContainer` holding no `Metadata` → the server is
+   *   telling us the item is gone → {@link MediaItemNotFoundError}.
+   * - Anything else (an empty body, an XML or HTML page from a reverse proxy, a
+   *   login redirect, a container that isn't an object) → a plain error. That is
+   *   NOT evidence of deletion, and treating it as such would destroy the row
+   *   along with the `RuleMatch` / `LifecycleException` / `WatchHistory` rows
+   *   that cascade from it.
+   *
+   * `librarySectionID` lives on the `MediaContainer` as well as (usually) the
+   * element; merging it down lets the incremental sync map an item to its
+   * library when only the container carries it.
+   */
   async getItemMetadata(ratingKey: string): Promise<PlexMetadataItem> {
     const response = await this.client.get(
       `/library/metadata/${ratingKey}`
     );
-    return response.data.MediaContainer.Metadata[0];
+    const container = response.data?.MediaContainer;
+    if (!container || typeof container !== "object") {
+      throw new Error(
+        `Unrecognized Plex metadata response for ${ratingKey} (no MediaContainer)`
+      );
+    }
+    const meta = container.Metadata?.[0];
+    if (!meta) throw new MediaItemNotFoundError(ratingKey);
+    return {
+      ...meta,
+      librarySectionID: meta.librarySectionID ?? container.librarySectionID,
+    };
   }
 
   /**
@@ -313,6 +349,51 @@ export class PlexClient implements MediaServerClient {
   }
 
   /**
+   * Walk `/status/sessions/history/all` newest-first, handing each page to
+   * `onPage`. Shared by `getWatchCounts` and `getDetailedWatchHistory` so the
+   * two cannot disagree about where the history ends.
+   *
+   * A short page ends the walk only when the container reports no `totalSize`
+   * or that total has been reached. The previous loops stopped on ANY page
+   * shorter than the size requested, which trusts the server to honour a
+   * 5,000-entry page: a server that caps the page lower would have silently
+   * truncated the history to its newest few hundred plays — and the native
+   * watch-history sync then commits that truncated set with a full replace.
+   */
+  private async forEachHistoryPage(
+    onPage: (metadata: Array<Record<string, unknown>>) => void,
+  ): Promise<void> {
+    const PAGE_SIZE = 5000;
+    let start = 0;
+
+    while (true) {
+      const response = await this.client.get("/status/sessions/history/all", {
+        params: {
+          sort: "viewedAt:desc",
+          "X-Plex-Container-Start": start,
+          "X-Plex-Container-Size": PAGE_SIZE,
+        },
+      });
+      const container = response.data?.MediaContainer ?? {};
+      const metadata: Array<Record<string, unknown>> = container.Metadata || [];
+      if (metadata.length === 0) break;
+
+      onPage(metadata);
+      start += metadata.length;
+
+      const total = typeof container.totalSize === "number" ? container.totalSize : null;
+      if (total != null) {
+        if (start >= total) break;
+      } else if (metadata.length < PAGE_SIZE) {
+        break;
+      }
+
+      // Yield between pages so V8 can collect the previous page's parsed JSON
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+    }
+  }
+
+  /**
    * Fetches server-wide watch history and returns per-ratingKey play counts.
    * Unlike viewCount (which is per-authenticated-user), this counts watches
    * from ALL users on the server — important for lifecycle decisions.
@@ -321,20 +402,7 @@ export class PlexClient implements MediaServerClient {
     const counts = new Map<string, { count: number; lastWatchedAt: number }>();
 
     try {
-      const PAGE_SIZE = 5000;
-      let start = 0;
-
-      while (true) {
-        const response = await this.client.get("/status/sessions/history/all", {
-          params: {
-            sort: "viewedAt:desc",
-            "X-Plex-Container-Start": start,
-            "X-Plex-Container-Size": PAGE_SIZE,
-          },
-        });
-        const metadata = response.data.MediaContainer.Metadata || [];
-        if (metadata.length === 0) break;
-
+      await this.forEachHistoryPage((metadata) => {
         for (const entry of metadata) {
           const key = String(entry.ratingKey ?? "");
           if (!key) continue;
@@ -359,13 +427,7 @@ export class PlexClient implements MediaServerClient {
             counts.set(key, { count: 1, lastWatchedAt: viewedAt });
           }
         }
-
-        if (metadata.length < PAGE_SIZE) break;
-        start += PAGE_SIZE;
-
-        // Yield between pages so V8 can collect the previous page's parsed JSON
-        await new Promise<void>((resolve) => { setImmediate(resolve); });
-      }
+      });
     } catch {
       // Non-fatal: if history fetch fails, viewCount from metadata is used as-is
       logger.debug("Plex", "Failed to fetch watch history counts, using metadata viewCount only");
@@ -411,20 +473,7 @@ export class PlexClient implements MediaServerClient {
         this.getDevices(),
       ]);
 
-      const PAGE_SIZE = 5000;
-      let start = 0;
-
-      while (true) {
-        const response = await this.client.get("/status/sessions/history/all", {
-          params: {
-            sort: "viewedAt:desc",
-            "X-Plex-Container-Start": start,
-            "X-Plex-Container-Size": PAGE_SIZE,
-          },
-        });
-        const metadata = response.data.MediaContainer.Metadata || [];
-        if (metadata.length === 0) break;
-
+      await this.forEachHistoryPage((metadata) => {
         for (const entry of metadata) {
           const key = String(entry.ratingKey ?? "");
           if (!key) continue;
@@ -457,12 +506,7 @@ export class PlexClient implements MediaServerClient {
             platform: device?.platform ?? null,
           });
         }
-
-        if (metadata.length < PAGE_SIZE) break;
-        start += PAGE_SIZE;
-
-        await new Promise<void>((resolve) => { setImmediate(resolve); });
-      }
+      });
     } catch (error) {
       // Re-throw so the caller can tell a fetch failure apart from a genuinely
       // empty history. The watch-history sync does a destructive full-replace;
@@ -931,7 +975,18 @@ export class PlexClient implements MediaServerClient {
 
   // --- Watchlist ---
 
-  async getWatchlistGuids(): Promise<Set<string>> {
+  /**
+   * The account's plex.tv watchlist as `source://id` GUID strings, or `null`
+   * when it could not be fetched.
+   *
+   * Null rather than an empty set, deliberately: the sync writes every Plex
+   * item's `isWatchlisted` from this set, and an empty set is a real answer —
+   * "nothing is watchlisted" — that clears the flag. Returning it for a
+   * failed fetch made every plex.tv outage, timeout or expired token clear
+   * the flag on every item the sync touched, and with it the "Is Watchlisted"
+   * rule/query criterion. The caller carries the stored flags forward instead.
+   */
+  async getWatchlistGuids(): Promise<Set<string> | null> {
     const guids = new Set<string>();
     try {
       const response = await axios.get(
@@ -956,9 +1011,10 @@ export class PlexClient implements MediaServerClient {
         }
       }
     } catch (error) {
-      logger.debug("Plex", "Failed to fetch watchlist", {
+      logger.warn("Plex", "Failed to fetch the plex.tv watchlist — stored watchlist flags are kept unchanged this sync", {
         error: error instanceof Error ? error.message : "Unknown error",
       });
+      return null;
     }
     return guids;
   }

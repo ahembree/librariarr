@@ -2,7 +2,8 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import type { MediaMetadataItem } from "@/lib/media-server/types";
-import { isMediaItem, isItemForLibraryType } from "@/lib/media-server/item-types";
+import { isMediaItem, isItemForLibraryType, canBelongToSyncedLibrary } from "@/lib/media-server/item-types";
+import { MediaItemNotFoundError } from "@/lib/media-server/client";
 import type { MediaServerType } from "@/generated/prisma/client";
 import { processBatch } from "@/lib/sync/sync-server";
 import { loadWatchCountsFromHistory } from "@/lib/sync/watch-reconcile";
@@ -26,6 +27,17 @@ import { eventBus } from "@/lib/events/event-bus";
  * or stale-item detection — those belong to the full sync, which remains the
  * periodic reconciliation backstop.
  *
+ * **A mapping failure is per-item and does not escalate.** An id no evidence can
+ * place in a library is counted as `unresolved`, logged, and dropped. This is
+ * load-bearing: Plex emits unmappable ids on every routine add (one new movie
+ * arrived alongside 27 extras/trailers belonging to no library section), and the
+ * previous "first unmappable id aborts the batch and triggers a whole-server
+ * sync" turned a single added movie into ~64k item-writes. A full sync lists one
+ * type per enabled library, so it could not have stored those ids either —
+ * escalating was pure cost. The exceptions are a section key with no matching
+ * `Library` row (a genuinely new library, which only the full sync can create)
+ * and Jellyfin/Emby, which report no section at all; both still fall back.
+ *
  * **The upsert overwrites every column it writes**, so any column whose
  * authoritative source this path lacks has to be handled explicitly or it is
  * silently destroyed until the next full sync:
@@ -43,6 +55,12 @@ export interface IncrementalSyncResult {
   status: "done" | "fell-back" | "skipped";
   upserted: number;
   deleted: number;
+  /** Containers (collections/playlists) and items of the wrong type for their library. */
+  skippedNonMedia?: number;
+  /** Items resolved to a library the user has disabled — the full sync ignores those too. */
+  skippedDisabled?: number;
+  /** Items no evidence could place in a library. Dropped, NOT escalated (see below). */
+  unresolved?: number;
   reason?: string;
 }
 
@@ -64,6 +82,7 @@ interface LibraryRow {
   id: string;
   key: string;
   type: "MOVIE" | "SERIES" | "MUSIC";
+  enabled: boolean;
 }
 interface ItemRow {
   id: string;
@@ -75,8 +94,21 @@ interface ItemRow {
   isWatchlisted: boolean;
 }
 
+/**
+ * "The server answered, and said this item is gone."
+ *
+ * Only this may turn into a DELETE. A `MediaItemNotFoundError` is thrown by the
+ * client for a well-formed response holding no item; a bare 404 says the same
+ * thing over HTTP. Every other failure — an unparseable body, a proxy error
+ * page, a timeout — is transient and must reconcile via a full sync instead,
+ * because a delete here cascades `RuleMatch`, `LifecycleException` and
+ * `WatchHistory`, and a re-added item then reads as never watched.
+ */
 function isNotFound(error: unknown): boolean {
-  return (error as { response?: { status?: number } })?.response?.status === 404;
+  return (
+    error instanceof MediaItemNotFoundError ||
+    (error as { response?: { status?: number } })?.response?.status === 404
+  );
 }
 
 export async function syncMediaServerItems(
@@ -106,8 +138,12 @@ export async function syncMediaServerItems(
   });
   if (runningSync) return skipped("full sync in progress");
 
+  // Disabled libraries are loaded too, carrying their `enabled` flag. They must
+  // be RECOGNISED so an item in one can be skipped deliberately; filtering them
+  // out here made such an item look like it belonged to an unknown library,
+  // which escalated to a whole-server sync that then skipped the library anyway.
   const libraryRows = await prisma.$queryRawUnsafe<LibraryRow[]>(
-    `SELECT "id","key","type"::text AS "type" FROM "Library" WHERE "mediaServerId"=$1 AND "enabled"=true`,
+    `SELECT "id","key","type"::text AS "type","enabled" FROM "Library" WHERE "mediaServerId"=$1`,
     serverId,
   );
   const libById = new Map(libraryRows.map((l) => [l.id, l]));
@@ -122,7 +158,37 @@ export async function syncMediaServerItems(
         serverId, allIds,
       )
     : [];
-  const existingByRatingKey = new Map(existingRows.map((r) => [r.ratingKey, r]));
+  // Keyed to a LIST, not a single row: the uniqueness constraint is
+  // `@@unique([libraryId, ratingKey])`, so one server can legitimately hold the
+  // same ratingKey in two libraries. Collapsing to one row let an arbitrary
+  // "last row wins" pick decide an item's library — and with it the LibraryType
+  // and the whole Arr/Seerr correlation.
+  const existingByRatingKey = new Map<string, ItemRow[]>();
+  for (const row of existingRows) {
+    const bucket = existingByRatingKey.get(row.ratingKey);
+    if (bucket) bucket.push(row);
+    else existingByRatingKey.set(row.ratingKey, [row]);
+  }
+  /** The unambiguous stored row for a ratingKey, or undefined when 0 or >1 match. */
+  const soleExisting = (ratingKey: string): ItemRow | undefined => {
+    const bucket = existingByRatingKey.get(ratingKey);
+    return bucket?.length === 1 ? bucket[0] : undefined;
+  };
+  /**
+   * The stored row for a ratingKey in the library it actually resolved to.
+   *
+   * Used by the carry-forwards, which must not degrade just because a ratingKey
+   * appears in two libraries: `soleExisting` gives up on that case (correctly —
+   * it can't pick a library), but once mapping HAS picked one, the right row is
+   * unambiguous. Falling back to `soleExisting` here would silently un-watchlist
+   * the item and skip the artwork diff.
+   */
+  const storedFor = (ratingKey: string): ItemRow | undefined => {
+    const libraryId = resolvedLibrary.get(ratingKey);
+    const bucket = existingByRatingKey.get(ratingKey);
+    if (!bucket) return undefined;
+    return libraryId ? bucket.find((r) => r.libraryId === libraryId) : soleExisting(ratingKey);
+  };
 
   const client = createMediaServerClient(server.type, server.url, server.accessToken, {
     skipTlsVerify: server.tlsSkipVerify,
@@ -138,10 +204,11 @@ export async function syncMediaServerItems(
       if (!item || !item.ratingKey) {
         toDelete.add(id);
       } else if (!isMediaItem(item)) {
-        // A container, not media (Plex collection, Jellyfin box set). This is
-        // the hot path for it: librariarr creates Plex collections itself, and
-        // the server reports that write back as a library change — so without
-        // this guard the app's own collections round-trip in as phantom items.
+        // A container, not media (a Jellyfin box set, or a Plex collection
+        // whose timeline entry carried no `type` — `normalize-plex` drops the
+        // typed ones before they get here, and the self-write registry drops
+        // the echo of librariarr's own collection writes). Kept as defence in
+        // depth: without it a container would round-trip in as a phantom item.
         // Route the id to the delete set so a phantom row synced before this
         // guard existed is cleaned up rather than waiting for a full sync
         // (nothing legitimate shares a container's ratingKey).
@@ -160,16 +227,81 @@ export async function syncMediaServerItems(
     }
   }
 
-  // Group upsert items by their DB library (existing row's library, else Plex's
-  // librarySectionID). Anything unmappable → full sync handles it.
+  // Group upsert items by their DB library. Mapping evidence, in order:
+  //   1. the item's own stored row (unambiguous ones only)
+  //   2. the server-reported library section key
+  //
+  // A mapping failure is classified PER ITEM and never escalates the batch.
+  // This used to `return fellBack(...)` on the first unmappable id, which threw
+  // away the work already done for every other item and triggered a whole-server
+  // sync — and Plex guarantees unmappable ids on a routine add: one new movie
+  // arrived with 27 extras/trailers that belong to no library section at all.
+  // A full sync cannot place those either, so escalating was pure cost.
   const groups = new Map<string, MediaMetadataItem[]>();
+  const unresolvedIds: string[] = [];
+  /** ratingKey → the library it resolved to, so carry-forwards read the right row. */
+  const resolvedLibrary = new Map<string, string>();
+  let skippedDisabled = 0;
+  let newLibrarySeen = false;
   for (const item of fetched) {
-    let libraryId = existingByRatingKey.get(item.ratingKey)?.libraryId;
-    if (!libraryId && item.librarySectionID != null) {
-      libraryId = libByKey.get(String(item.librarySectionID))?.id;
+    // The server's own section wins over the stored row. An item that MOVED
+    // between libraries would otherwise be rewritten into its old one — and if
+    // that library is disabled, skipped forever while the full sync eventually
+    // creates a second row for the same ratingKey.
+    let libraryId: string | undefined;
+    if (item.librarySectionID != null) {
+      const sectionKey = String(item.librarySectionID);
+      const lib = libByKey.get(sectionKey);
+      if (!lib) {
+        // The server named a section we hold no `Library` row for. That is
+        // positive evidence a NEW library appeared — but only when the item
+        // could belong to a library we sync at all. A Plex Photos or Home
+        // Videos section is filtered out by `getLibraries()` and will NEVER get
+        // a row, so escalating for a photo buys a full server sync that cannot
+        // fix anything, and the next photo does it again.
+        if (canBelongToSyncedLibrary(item)) newLibrarySeen = true;
+        unresolvedIds.push(item.ratingKey);
+        continue;
+      }
+      libraryId = lib.id;
+    } else {
+      // No section reported at all — Jellyfin/Emby never populate it. Fall back
+      // to the item's own stored row, and for an item never stored (a new add)
+      // ask the server which library holds it. Without that lookup every new
+      // Jellyfin/Emby item was unresolved — and unresolved escalates on those
+      // servers — so every single add cost a whole-server sync.
+      libraryId = soleExisting(item.ratingKey)?.libraryId;
+      if (!libraryId && client.resolveLibraryKey) {
+        try {
+          const key = await client.resolveLibraryKey(item.ratingKey);
+          if (key) {
+            const lib = libByKey.get(key);
+            if (lib) libraryId = lib.id;
+            else if (canBelongToSyncedLibrary(item)) newLibrarySeen = true;
+          }
+        } catch (error) {
+          // Left unresolved. On Jellyfin/Emby that still falls back to a full
+          // sync below — exactly the behaviour before this lookup existed — so
+          // a transient failure here costs what every add used to cost.
+          logger.debug(
+            "SyncIncremental",
+            `Could not resolve the library holding ${item.ratingKey}; leaving it unresolved`,
+            { error: String(error) },
+          );
+        }
+      }
     }
     if (!libraryId || !libById.has(libraryId)) {
-      return fellBack(`cannot map item ${item.ratingKey} to a known library`);
+      // No evidence at all. Dropping is deliberate: a full sync lists one type
+      // per enabled library and would never have stored this either, so
+      // escalating buys nothing. The scheduled full sync stays the backstop.
+      unresolvedIds.push(item.ratingKey);
+      continue;
+    }
+    if (!libById.get(libraryId)!.enabled) {
+      // The user disabled this library; the full sync skips it outright.
+      skippedDisabled++;
+      continue;
     }
     if (!isItemForLibraryType(item, libById.get(libraryId)!.type)) {
       // Real media, but not the type this library stores — a show or season
@@ -182,6 +314,7 @@ export async function syncMediaServerItems(
       skippedNonMedia++;
       continue;
     }
+    resolvedLibrary.set(item.ratingKey, libraryId);
     const bucket = groups.get(libraryId) ?? [];
     bucket.push(item);
     groups.set(libraryId, bucket);
@@ -199,7 +332,7 @@ export async function syncMediaServerItems(
   // overriding it here would instead make un-favouriting take until a full sync.
   if (server.type === "PLEX") {
     for (const item of fetched) {
-      if (existingByRatingKey.get(item.ratingKey)?.isWatchlisted) {
+      if (storedFor(item.ratingKey)?.isWatchlisted) {
         item.isWatchlisted = true;
       }
     }
@@ -259,7 +392,7 @@ export async function syncMediaServerItems(
 
     const existingThumbUrls = new Map(
       items
-        .map((it) => existingByRatingKey.get(it.ratingKey))
+        .map((it) => storedFor(it.ratingKey))
         .filter((r): r is ItemRow => !!r)
         .map((r) => [
           r.ratingKey,
@@ -285,6 +418,18 @@ export async function syncMediaServerItems(
   // Delete removed / gone items (FK cascades external ids, streams, watch history).
   let deleted = 0;
   if (toDelete.size > 0) {
+    // Deliberately NOT scoped by `Library.enabled`, unlike the upsert path above.
+    // The asymmetry is the point: we must not CREATE a row in a library the user
+    // disabled (the full sync would never have listed it), but a row whose media
+    // the server says is GONE has to go regardless of which library holds it.
+    // Nothing else would remove it — the full sync skips disabled libraries, so
+    // its stale purge never enumerates them — while no read path filters on
+    // `Library.enabled` either, so the row stays live in listings, stats and the
+    // rule engine. An immortal row for deleted media is the worse failure: a
+    // "not played in N months" rule would match it and fire DELETE_RADARR
+    // against media that no longer exists. The cascade into `RuleMatch` /
+    // `LifecycleException` / `WatchHistory` is correct here — those records
+    // describe an item that is genuinely gone.
     const rows = await prisma.$queryRawUnsafe<ItemRow[]>(
       `SELECT mi."id", mi."ratingKey", mi."libraryId", mi."thumbUrl", mi."parentThumbUrl", mi."seasonThumbUrl", mi."isWatchlisted"
          FROM "MediaItem" mi JOIN "Library" l ON mi."libraryId"=l."id"
@@ -306,26 +451,66 @@ export async function syncMediaServerItems(
     }
   }
 
-  if (skippedNonMedia > 0) {
-    logger.info(
+  // One line per run, always. Every classification counter is here: before this,
+  // a run that silently dropped every id it was handed logged nothing at all,
+  // which is why diagnosing the escalation loop needed a WebSocket capture.
+  const counters =
+    `upserted ${upserted}, deleted ${deleted}` +
+    (skippedNonMedia > 0 ? `, skipped ${skippedNonMedia} non-media` : "") +
+    (skippedDisabled > 0 ? `, skipped ${skippedDisabled} in disabled librar${skippedDisabled === 1 ? "y" : "ies"}` : "") +
+    (unresolvedIds.length > 0 ? `, ${unresolvedIds.length} unresolved` : "");
+  logger.info("SyncIncremental", `Server "${server.name}": ${counters} (incremental)`);
+
+  if (unresolvedIds.length > 0) {
+    logger.warn(
       "SyncIncremental",
-      `Server "${server.name}": skipped ${skippedNonMedia} changed id(s) that are not library media ` +
-        `(collections/playlists, or shows/seasons/albums above the item that changed)`,
+      `Server "${server.name}": could not map ${unresolvedIds.length} changed id(s) to a library — ` +
+        `left for the scheduled full sync. ratingKeys: ${unresolvedIds.slice(0, 10).join(", ")}` +
+        (unresolvedIds.length > 10 ? ` (+${unresolvedIds.length - 10} more)` : ""),
     );
   }
 
-  if (upserted === 0 && deleted === 0) {
-    return { status: "done", upserted: 0, deleted: 0 };
+  // Two mapping failures still warrant a full reconcile:
+  //
+  //  - A section key we hold no `Library` row for: a library was added on the
+  //    server, and only `syncMediaServer` creates `Library` rows.
+  //  - ANY unresolved id on Jellyfin/Emby. Their `normalizeItem` never populates
+  //    `librarySectionID`; a new item there is placed through
+  //    `client.resolveLibraryKey` (`/Items/{id}/Ancestors`) above, so this now
+  //    covers only an item that lookup could not place — a transient failure,
+  //    or a library the server does not report as one. Escalating is bounded
+  //    there (no Plex-style extras storm emitting dozens of sectionless ids per
+  //    add) and keeps those servers from dropping a change on the floor.
+  // Side effects run whenever rows actually changed, BEFORE any status decision.
+  // A run can now both write rows and report `fell-back` (per-item classification
+  // means the fallback is decided at the end, not on the first bad id), so
+  // returning early here would leave the caches holding pre-write answers, the
+  // dedup canonical flags stale — every list showing the item twice on a
+  // multi-server install — and the UI unrefreshed until the enqueued full sync
+  // eventually runs on the serial MAIN_QUEUE.
+  if (upserted > 0 || deleted > 0) {
+    await recomputeCanonical(server.userId).catch((e) =>
+      logger.error("SyncIncremental", "recomputeCanonical failed", { error: String(e) }),
+    );
+    invalidateMediaCaches();
+    eventBus.emit({ type: "sync:completed", userId: server.userId, meta: { serverId, incremental: true } });
   }
 
-  // Adding/removing an item can change which copy is canonical for a dedup group
-  // (single atomic UPDATE, cheap), then drop media caches and refresh the UI.
-  await recomputeCanonical(server.userId).catch((e) =>
-    logger.error("SyncIncremental", "recomputeCanonical failed", { error: String(e) }),
-  );
-  invalidateMediaCaches();
-  eventBus.emit({ type: "sync:completed", userId: server.userId, meta: { serverId, incremental: true } });
+  const needsFullSync = newLibrarySeen || (server.type !== "PLEX" && unresolvedIds.length > 0);
+  if (needsFullSync) {
+    return {
+      status: "fell-back",
+      upserted, deleted, skippedNonMedia, skippedDisabled,
+      unresolved: unresolvedIds.length,
+      reason: newLibrarySeen
+        ? "item reported a library section with no matching Library row (new library?)"
+        : `${unresolvedIds.length} item(s) carry no library section (${server.type} reports none)`,
+    };
+  }
 
-  logger.info("SyncIncremental", `Server "${server.name}": upserted ${upserted}, deleted ${deleted} (incremental)`);
-  return { status: "done", upserted, deleted };
+  return {
+    status: "done",
+    upserted, deleted, skippedNonMedia, skippedDisabled,
+    unresolved: unresolvedIds.length,
+  };
 }

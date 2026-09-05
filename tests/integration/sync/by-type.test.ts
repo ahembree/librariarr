@@ -69,7 +69,12 @@ describe("POST /api/sync/by-type", () => {
     expect(body.syncedCount).toBe(1);
     expect(mockEnqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_SERVER,
-      { serverId: server.id, libraryKey: movies.key, skipWatchHistory: true },
+      {
+        serverId: server.id,
+        libraryKey: movies.key,
+        skipWatchHistory: true,
+        trigger: "manual sync of every MOVIE library",
+      },
       expect.objectContaining({ jobKey: `sync:${server.id}:${movies.key}`, queueName: MAIN_QUEUE }),
     );
   });

@@ -22,13 +22,13 @@ export const CONDITION_FIELDS: ConditionField[] = [
   { value: "country", label: "Country", type: "text", section: "content", enumerable: true, invalidForLibraryType: ["SERIES", "MUSIC"] },
 
   // ─── Activity ───────────────────────────────────────────────────────────
-  { value: "playCount", label: "Play Count", type: "number", section: "activity" },
-  { value: "watchedByUser", label: "Watched By User", type: "text", section: "activity", enumerable: true },
+  { value: "playCount", label: "Play Count", type: "number", section: "activity", readsPlayActivity: true },
+  { value: "watchedByUser", label: "Watched By User", type: "text", section: "activity", enumerable: true, readsPlayActivity: true },
   { value: "rating", label: "Rating", type: "number", section: "activity" },
   { value: "audienceRating", label: "Audience Rating", type: "number", section: "activity" },
   { value: "ratingCount", label: "Rating Count", type: "number", section: "activity" },
   { value: "isWatchlisted", label: "Is Watchlisted", type: "boolean", section: "activity", knownValues: ["true", "false"] },
-  { value: "lastPlayedAt", label: "Last Played", type: "date", section: "activity" },
+  { value: "lastPlayedAt", label: "Last Played", type: "date", section: "activity", readsPlayActivity: true },
   { value: "addedAt", label: "Date Added", type: "date", section: "activity" },
   { value: "originallyAvailableAt", label: "Release Date", type: "date", section: "activity" },
 
@@ -117,11 +117,11 @@ export const CONDITION_FIELDS: ConditionField[] = [
   { value: "seerrDeclineDate", label: "Decline Date", type: "date", section: "seerr", requiresSeerr: true, invalidForLibraryType: ["MUSIC"] },
 
   // ─── Series (aggregate fields, computed by aggregating across episodes) ─
-  { value: "latestEpisodeViewDate", label: "Latest Episode View Date", type: "date", section: "series", isSeriesAggregate: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
-  { value: "seriesLastPlayedAt", label: "Series Last Played", type: "date", section: "series", isSeriesAggregate: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
+  { value: "latestEpisodeViewDate", label: "Latest Episode View Date", type: "date", section: "series", isSeriesAggregate: true, readsPlayActivity: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
+  { value: "seriesLastPlayedAt", label: "Series Last Played", type: "date", section: "series", isSeriesAggregate: true, readsPlayActivity: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
   { value: "availableEpisodeCount", label: "Available Episode Count", type: "number", section: "series", isSeriesAggregate: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
-  { value: "watchedEpisodeCount", label: "Watched Episode Count", type: "number", section: "series", isSeriesAggregate: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
-  { value: "watchedEpisodePercentage", label: "Watched Episode %", type: "number", section: "series", isSeriesAggregate: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
+  { value: "watchedEpisodeCount", label: "Watched Episode Count", type: "number", section: "series", isSeriesAggregate: true, readsPlayActivity: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
+  { value: "watchedEpisodePercentage", label: "Watched Episode %", type: "number", section: "series", isSeriesAggregate: true, readsPlayActivity: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
   { value: "lastEpisodeAddedAt", label: "Last Episode Added", type: "date", section: "series", isSeriesAggregate: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
   { value: "lastEpisodeAiredAt", label: "Last Episode Aired", type: "date", section: "series", isSeriesAggregate: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
 ];

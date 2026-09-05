@@ -73,7 +73,7 @@ describe("POST /api/settings/schedule-info/run", () => {
     for (const s of [s1, s2]) {
       expect(mockEnqueueJob).toHaveBeenCalledWith(
         TASK_SYNC_SERVER,
-        { serverId: s.id },
+        { serverId: s.id, trigger: "manual sync from Settings (Run now)" },
         expect.objectContaining({ jobKey: `sync:${s.id}`, queueName: MAIN_QUEUE }),
       );
     }
@@ -96,7 +96,7 @@ describe("POST /api/settings/schedule-info/run", () => {
     expect(mockEnqueueJob).toHaveBeenCalledTimes(1);
     expect(mockEnqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_SERVER,
-      { serverId: enabled.id },
+      { serverId: enabled.id, trigger: "manual sync from Settings (Run now)" },
       expect.objectContaining({ jobKey: `sync:${enabled.id}` }),
     );
 

@@ -192,15 +192,20 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
   useRealtime("sync:started", fetchStatus);
   useRealtime("sync:completed", fetchStatus);
   useRealtime("sync:failed", fetchStatus);
+  // Progress within a run, so the bar advances on a push instead of a 2s poll.
+  useRealtime("sync:progress", fetchStatus);
 
   useEffect(() => {
     void (async () => { await fetchStatus(); })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Poll: fast when active, slow when idle
+  // Fallback poll only — `sync:progress` above is the primary path now. The
+  // active-sync case no longer needs 2s (that existed solely because there was
+  // no progress event), but stays quicker than idle so an SSE-down environment
+  // still shows a moving bar.
   useEffect(() => {
     if (!initialCheckDone) return;
-    const interval = setInterval(fetchStatus, hasActiveSync ? 2000 : 30000);
+    const interval = setInterval(fetchStatus, hasActiveSync ? 15000 : 60000);
     return () => clearInterval(interval);
   }, [fetchStatus, hasActiveSync, initialCheckDone]);
 

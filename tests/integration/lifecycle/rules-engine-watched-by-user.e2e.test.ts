@@ -259,3 +259,80 @@ describe("evaluateMusicScope — watchedByUser aggregates across tracks", () => 
     expect(artists.map((a) => a.title).sort()).toEqual(["Artist 2"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Partial Tracearr plays must not count as "watched by"
+// ---------------------------------------------------------------------------
+
+describe("watchedByUser ignores partial Tracearr plays", () => {
+  let partialMovieId: string;
+
+  beforeAll(async () => {
+    const prisma = getTestPrisma();
+    const lib = await prisma.library.findFirstOrThrow({
+      where: { mediaServerId: serverId, type: "MOVIE" },
+    });
+    const movie = await prisma.mediaItem.create({
+      data: {
+        libraryId: lib.id,
+        ratingKey: "m-partial",
+        title: "Only Started By Carol",
+        type: "MOVIE",
+      },
+    });
+    partialMovieId = movie.id;
+
+    // Carol pressed play, watched 4%, and gave up. Tracearr records that as a
+    // real row with `watched: false`. Treating it as "Carol watched this" would
+    // let a DELETE rule keyed on watchedByUser destroy something nobody saw.
+    await prisma.watchHistory.create({
+      data: {
+        mediaItemId: partialMovieId,
+        mediaServerId: serverId,
+        serverUsername: "carol",
+        source: "TRACEARR",
+        sourceEventId: "chain-partial",
+        watched: false,
+        percentComplete: 4.1,
+        state: "stopped",
+      },
+    });
+  });
+
+  it("equals does not match a movie the user only started", async () => {
+    expect(await movieTitles(group("equals", "carol"))).toEqual([]);
+  });
+
+  it("isNull still treats a partially-played movie as never watched", async () => {
+    expect(await movieTitles(group("isNull", ""))).toContain("Only Started By Carol");
+  });
+
+  it("notEquals includes a movie the user only started", async () => {
+    expect(await movieTitles(group("notEquals", "carol"))).toContain(
+      "Only Started By Carol",
+    );
+  });
+
+  it("counts the same user's completed Tracearr play", async () => {
+    const prisma = getTestPrisma();
+    await prisma.watchHistory.create({
+      data: {
+        mediaItemId: partialMovieId,
+        mediaServerId: serverId,
+        serverUsername: "carol",
+        source: "TRACEARR",
+        sourceEventId: "chain-complete",
+        watched: true,
+        percentComplete: 99.2,
+        state: "stopped",
+      },
+    });
+
+    expect(await movieTitles(group("equals", "carol"))).toEqual([
+      "Only Started By Carol",
+    ]);
+    expect(await movieTitles(group("isNull", ""))).not.toContain(
+      "Only Started By Carol",
+    );
+  });
+});

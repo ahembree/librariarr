@@ -6,6 +6,7 @@ import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { validateRequest, ruleDiffSchema } from "@/lib/validation";
 import { loadGroupMemberStats, aggregateGroupMembers, memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
@@ -129,7 +130,7 @@ export async function POST(
 
   // MATCH-ALL SAFETY: mirror detection — Arr/Seerr rules with no enabled
   // instance behind them would diff against a vacuous whole-library match set.
-  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, type, typedRules);
+  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, type, typedRules, serverIds);
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }
@@ -229,7 +230,14 @@ export async function POST(
         externalIds: true,
         // Required for watchedByUser rules so the diff view displays
         // accurate "actual value" and matched-criteria flags.
-        ...(hasWatchedByUserRules(typedRules) ? { watchHistory: { select: { serverUsername: true } } } : {}),
+        // Filtered to completed plays for the same reason detection's eager
+        // load is: Phase 1 already excluded abandoned Tracearr plays via
+        // `COMPLETED_PLAY_FILTER`, so loading them unfiltered here makes the
+        // preview annotate an item as "watched by alice" when the engine that
+        // will actually delete it saw no completed play at all.
+        ...(hasWatchedByUserRules(typedRules)
+          ? { watchHistory: { where: COMPLETED_PLAY_FILTER, select: { serverUsername: true } } }
+          : {}),
       },
     });
     const removedRecords = fullRemovedItems.map((item) => item as unknown as Record<string, unknown>);

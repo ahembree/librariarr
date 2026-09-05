@@ -50,7 +50,12 @@ export async function POST(request: NextRequest) {
     for (const library of server.libraries) {
       await enqueueJob(
         TASK_SYNC_SERVER,
-        { serverId: server.id, libraryKey: library.key, skipWatchHistory: true },
+        {
+          serverId: server.id,
+          libraryKey: library.key,
+          skipWatchHistory: true,
+          trigger: `manual sync of every ${libraryType} library`,
+        },
         { jobKey: `sync:${server.id}:${library.key}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
       );
     }
