@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
   // ("foundInArr = false" / "seerrRequested = false" go vacuously true).
   // Detection skips such rule sets, so error here instead of previewing a
   // result detection would never produce.
-  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, type, typedRules);
+  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, type, typedRules, serverIds);
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }

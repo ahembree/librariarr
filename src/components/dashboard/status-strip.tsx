@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -106,7 +106,7 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
   const [sync, setSync] = useState<SyncState | null>(null);
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
 
-  useEffect(() => {
+  const fetchSessions = useCallback(() => {
     fetch("/api/tools/sessions")
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
@@ -117,7 +117,9 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
         });
       })
       .catch(() => setSessions("error"));
+  }, []);
 
+  const fetchHealth = useCallback(() => {
     // No fresh=1: ride the server-side 30s cache instead of re-probing
     // every Arr instance on each dashboard visit.
     fetch("/api/integrations/health")
@@ -137,6 +139,11 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
         });
       })
       .catch(() => setHealth("error"));
+  }, []);
+
+  useEffect(() => {
+    fetchSessions();
+    fetchHealth();
 
     fetch("/api/system/update-check")
       .then((res) => (res.ok ? res.json() : null))
@@ -146,7 +153,14 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
         }
       })
       .catch(() => {});
-  }, []);
+  }, [fetchSessions, fetchHealth]);
+
+  // The sync tile was wired to all three sync events while the two tiles beside
+  // it were one-shot mount fetches — so a stream starting, or an integration
+  // going down, never showed on the dashboard.
+  useRealtime("session-changed", fetchSessions);
+  useRealtime("server-status", fetchSessions);
+  useRealtime("server:changed", fetchHealth);
 
   const fetchSync = () => {
     fetch("/api/sync/status")

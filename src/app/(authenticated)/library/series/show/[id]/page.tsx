@@ -19,7 +19,7 @@ import { formatFileSize } from "@/lib/format";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
 import { IntegrationsSection } from "@/components/integrations-section";
-import { SeriesWatchHistory } from "@/components/series-watch-history";
+import { PlayHistory } from "@/components/play-history";
 
 interface SeasonData {
   seasonNumber: number;
@@ -299,7 +299,7 @@ export default function SeriesDetailPage() {
         </section>
       )}
 
-      <SeriesWatchHistory seriesKey={item.seriesKey} parentTitle={seriesTitle} refreshKey={syncTick} />
+      <PlayHistory seriesKey={item.seriesKey} parentTitle={seriesTitle} refreshKey={syncTick} />
 
       <Separator className="mt-6" />
     </MediaDetailHero>

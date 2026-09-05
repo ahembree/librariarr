@@ -62,6 +62,9 @@ vi.mock("@/lib/arr/lidarr-client", () => ({
 // Import AFTER mocks
 import { POST as savedPreviewPOST } from "@/app/api/lifecycle/rules/[id]/preview/route";
 import { POST as adHocPreviewPOST } from "@/app/api/lifecycle/rules/preview/route";
+// The real client the Preview button feeds every response to. Imported here so
+// the refusal below is asserted end-to-end rather than only at the route.
+import { consumeProgressStream } from "@/lib/progress/client";
 
 describe("Lifecycle Rules Preview", () => {
   beforeEach(async () => {
@@ -576,6 +579,99 @@ describe("Lifecycle Rules Preview", () => {
 
       const body = await expectJson<{ error: string }>(response, 400);
       expect(body.error).toMatch(/Seerr criteria are not supported for music/i);
+    });
+  });
+  // ---- The refusal actually reaching the user ----
+  //
+  // The route and the client were each correct in isolation and broken
+  // together. A refusal is answered as plain JSON BEFORE the NDJSON stream
+  // opens, and the client fed EVERY response to `consumeProgressStream`, where
+  // that single line parsed as an event with no `type`, fell through every
+  // branch, and surfaced as "Stream ended without a result" — the guard's
+  // reason discarded and replaced by a parse complaint the UI then swallowed
+  // into `console.error`. Clicking Preview mid-Tracearr-import did nothing
+  // visible at all.
+  //
+  // So these assert the seam, not either half: the REAL route's response run
+  // through the REAL client, and the message that comes out is the one the
+  // toast puts on screen.
+  describe("a refusal reaches the client that reads it", () => {
+    it("surfaces the play-history reason through consumeProgressStream", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      // Never synced: what a brand-new server, a watch-history source switch,
+      // or an in-flight Tracearr backfill all leave behind.
+      const server = await createTestServer(user.id, { watchHistorySyncedAt: null });
+      await createTestLibrary(server.id, { type: "MOVIE" });
+
+      const response = await callRoute(adHocPreviewPOST, {
+        url: "/api/lifecycle/rules/preview",
+        method: "POST",
+        body: {
+          rules: [{ field: "playCount", operator: "equals", value: "0" }],
+          type: "MOVIE",
+          serverIds: [server.id],
+        },
+      });
+
+      expect(response.status).toBe(400);
+      await expect(consumeProgressStream(response, () => {})).rejects.toThrow(
+        /play activity.*no established play history/is,
+      );
+    });
+
+    // The other two dimensions of the same guard travel the same path.
+    it("surfaces the missing-Arr-instance reason through consumeProgressStream", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const server = await createTestServer(user.id);
+      await createTestLibrary(server.id, { type: "MOVIE" });
+
+      const response = await callRoute(adHocPreviewPOST, {
+        url: "/api/lifecycle/rules/preview",
+        method: "POST",
+        body: {
+          rules: [{ field: "foundInArr", operator: "equals", value: "false" }],
+          type: "MOVIE",
+          serverIds: [server.id],
+        },
+      });
+
+      expect(response.status).toBe(400);
+      await expect(consumeProgressStream(response, () => {})).rejects.toThrow(
+        /no enabled Radarr instance/i,
+      );
+    });
+
+    // The success path must keep working through the same client — a non-OK
+    // guard that also broke ordinary previews would be a worse bug than the
+    // one it fixes.
+    it("still yields the result payload for a preview that is allowed", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      await createTestMediaItem(library.id, { title: "Unwatched Film", playCount: 0 });
+
+      const response = await callRoute(adHocPreviewPOST, {
+        url: "/api/lifecycle/rules/preview",
+        method: "POST",
+        body: {
+          rules: [{ field: "playCount", operator: "equals", value: "0" }],
+          type: "MOVIE",
+          serverIds: [server.id],
+        },
+      });
+
+      expect(response.status).toBe(200);
+      const result = await consumeProgressStream<{ items: Array<{ title: string }> }>(
+        response,
+        () => {},
+      );
+      expect(result.items.map((i) => i.title)).toContain("Unwatched Film");
     });
   });
 });

@@ -89,6 +89,13 @@ export interface GeneralTabProps {
   onActionRetentionInputChange: (value: string) => void;
   onSaveActionRetention: () => void;
 
+  // Deletion ceiling — blank means unlimited, which is the default.
+  deleteCeilingInput: string;
+  savedDeleteCeiling: string;
+  savingDeleteCeiling: boolean;
+  onDeleteCeilingInputChange: (value: string) => void;
+  onSaveDeleteCeiling: () => void;
+
   // Backup & Restore
   backupSchedule: string;
   backupRetentionCount: number;
@@ -139,6 +146,11 @@ export function GeneralTab({
   savingActionRetention,
   onActionRetentionInputChange,
   onSaveActionRetention,
+  deleteCeilingInput,
+  savedDeleteCeiling,
+  savingDeleteCeiling,
+  onDeleteCeilingInputChange,
+  onSaveDeleteCeiling,
   backupSchedule,
   backupRetentionCount,
   backups,
@@ -418,6 +430,34 @@ export function GeneralTab({
               </div>
               <p className="mt-1.5 text-xs text-muted-foreground">
                 Completed and failed actions older than this will be automatically deleted. Set to 0 to keep forever.
+              </p>
+            </div>
+            <div>
+              <Label htmlFor="delete-ceiling">Delete without asking, up to</Label>
+              <div className="mt-1.5 flex items-center gap-2">
+                <Input
+                  id="delete-ceiling"
+                  type="number"
+                  min={1}
+                  placeholder="No limit"
+                  value={deleteCeilingInput}
+                  onChange={(e) => onDeleteCeilingInputChange(e.target.value)}
+                  className="w-28"
+                />
+                <span className="text-sm text-muted-foreground">items per run</span>
+                <Button
+                  size="sm"
+                  onClick={onSaveDeleteCeiling}
+                  disabled={savingDeleteCeiling || deleteCeilingInput === savedDeleteCeiling}
+                >
+                  {savingDeleteCeiling && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Save
+                </Button>
+              </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                A run that would delete more than this is held instead: nothing is deleted, the
+                actions stay on the Pending page, and you execute them there once you have looked.
+                Counts only deletions, across all rule sets. Leave empty for no limit.
               </p>
             </div>
           </div>

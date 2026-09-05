@@ -7,7 +7,7 @@ import {
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
   RULE_FIELDS, STREAM_QUERY_FIELDS, type RuleField,
 } from "./types";
-import { isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWatchedByUserRules as hasWatchedByUserGroupRules } from "@/lib/conditions/helpers";
+import { isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWatchedByUserRules as hasWatchedByUserGroupRules, hasPlayActivityRules as hasPlayActivityGroupRules, PLAY_ACTIVITY_FIELDS } from "@/lib/conditions/helpers";
 import { detectStreamAudioProfile, detectStreamDynamicRange } from "./stream-detection";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import {
@@ -31,6 +31,7 @@ import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
 import { Prisma } from "@/generated/prisma/client";
 import { resolveSeriesKey } from "@/lib/media/series-key";
+import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 
 const STREAM_LANG_CODEC_FIELDS = new Set(["audioLanguage", "subtitleLanguage", "streamAudioCodec"]);
 const STREAM_LANGUAGE_FIELDS = new Set(["audioLanguage", "subtitleLanguage"]);
@@ -345,6 +346,22 @@ export function hasWatchedByUserRules(rules: LifecycleRule[] | LifecycleRuleGrou
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) return hasWatchedByUserGroupRules(rules as LifecycleRuleGroup[]);
   return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "watchedByUser");
+}
+
+/**
+ * Whether any rule reads play activity — `watchedByUser`, `playCount`,
+ * `lastPlayedAt`, or a series aggregate built on those. The trigger for the
+ * watch-history half of the evaluability guard; see `hasPlayActivityRules` in
+ * `conditions/helpers.ts` for why it is broader than `hasWatchedByUserRules`.
+ *
+ * Accepts both grouped and flat rule shapes, mirroring its sibling above.
+ */
+export function hasPlayActivityRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+  if (rules.length === 0) return false;
+  if (isRuleGroups(rules)) return hasPlayActivityGroupRules(rules as LifecycleRuleGroup[]);
+  return (rules as LifecycleRule[]).some(
+    (r) => r.enabled !== false && PLAY_ACTIVITY_FIELDS.has(r.field),
+  );
 }
 
 /**
@@ -2053,7 +2070,13 @@ export async function evaluateSeriesScope(
     include: {
       externalIds: true,
       ...(needsStreams ? { streams: true } : {}),
-      ...(needsWatchHistory ? { watchHistory: { select: { serverUsername: true } } } : {}),
+      ...(needsWatchHistory ? { watchHistory: {
+          // Phase 2 must see the same rows Phase 1 filtered on, or a
+          // `watchedByUser` rule matches a different set depending on
+          // whether something else forced in-memory re-evaluation.
+          where: COMPLETED_PLAY_FILTER,
+          select: { serverUsername: true },
+        } } : {}),
       library: {
         select: {
           title: true,
@@ -2327,7 +2350,13 @@ export async function evaluateMusicScope(
     include: {
       externalIds: true,
       ...(needsStreams ? { streams: true } : {}),
-      ...(needsWatchHistory ? { watchHistory: { select: { serverUsername: true } } } : {}),
+      ...(needsWatchHistory ? { watchHistory: {
+          // Phase 2 must see the same rows Phase 1 filtered on, or a
+          // `watchedByUser` rule matches a different set depending on
+          // whether something else forced in-memory re-evaluation.
+          where: COMPLETED_PLAY_FILTER,
+          select: { serverUsername: true },
+        } } : {}),
       library: {
         select: {
           title: true,
@@ -2527,7 +2556,13 @@ export async function evaluateLifecycleRules(
     include: {
       ...(needsExternalIds ? { externalIds: true } : {}),
       ...(needsStreams ? { streams: true } : {}),
-      ...(needsWatchHistory ? { watchHistory: { select: { serverUsername: true } } } : {}),
+      ...(needsWatchHistory ? { watchHistory: {
+          // Phase 2 must see the same rows Phase 1 filtered on, or a
+          // `watchedByUser` rule matches a different set depending on
+          // whether something else forced in-memory re-evaluation.
+          where: COMPLETED_PLAY_FILTER,
+          select: { serverUsername: true },
+        } } : {}),
       library: {
         select: {
           title: true,

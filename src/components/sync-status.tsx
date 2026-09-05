@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useRealtime } from "@/hooks/use-realtime";
 import {
   Card,
   CardContent,
@@ -102,13 +103,20 @@ export function SyncStatus({ onSyncComplete }: SyncStatusProps) {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Poll fast (2s) during an active sync, and slowly (30s) when idle. The idle
-  // poll is essential: without it, once a sync finishes the card would stop
-  // polling entirely, so on SSE-down environments a NEW sync would never be
-  // detected and the card could stay hidden until a full page reload.
+  // This card had no SSE subscription at all — it duplicated sync-indicator's
+  // 2s poll on the same page while every event it needed was already being
+  // broadcast.
+  useRealtime("sync:started", fetchStatus);
+  useRealtime("sync:progress", fetchStatus);
+  useRealtime("sync:completed", fetchStatus);
+  useRealtime("sync:failed", fetchStatus);
+
+  // Fallback poll. The idle tick is still essential: on an SSE-down environment
+  // a NEW sync would otherwise never be detected and the card could stay hidden
+  // until a full page reload.
   useEffect(() => {
     if (!initialCheckDone) return;
-    const interval = setInterval(fetchStatus, hasActiveSync ? 2000 : 30000);
+    const interval = setInterval(fetchStatus, hasActiveSync ? 15000 : 60000);
     return () => clearInterval(interval);
   }, [fetchStatus, hasActiveSync, initialCheckDone]);
 

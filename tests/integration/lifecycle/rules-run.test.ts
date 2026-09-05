@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
-import { callRoute, expectJson, createTestUser, createTestRuleSet } from "../../setup/test-helpers";
+import { callRoute, expectJson, createTestUser, createTestRuleSet, createTestServer } from "../../setup/test-helpers";
 
 // Mock the lifecycle processor
 const mockRunDetection = vi.hoisted(() => vi.fn());
@@ -217,5 +217,155 @@ describe("POST /api/lifecycle/rules/run", () => {
     await expectJson(response, 200);
 
     expect(mockScheduleActionsForRuleSet).not.toHaveBeenCalled();
+  });
+  // `runDetection` skips a rule set silently (it logs a warning and moves on),
+  // so a manual run of one the evaluability guard refuses used to answer 200
+  // with an empty `ruleMatches` and nothing else. The editor read that as
+  // success and navigated to Matches, presenting the PRESERVED matches from the
+  // previous run as this run's result. The route reports the reason instead.
+  describe("skipped", () => {
+    it("explains a rule set skipped for unestablished play history", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      // Never synced — exactly the state a brand-new server, a source switch or
+      // an in-flight Tracearr backfill leaves behind.
+      const server = await createTestServer(user.id, { watchHistorySyncedAt: null });
+      const ruleSet = await createTestRuleSet(user.id, {
+        rules: [{ field: "playCount", operator: "equals", value: "0" }],
+        serverIds: [server.id],
+      });
+
+      mockRunDetection.mockResolvedValue([]);
+
+      const response = await callRoute(POST, {
+        url: "/api/lifecycle/rules/run",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id },
+      });
+      const body = await expectJson<{ skipped: Array<{ ruleSetId: string; name: string; reason: string }> }>(response, 200);
+
+      expect(body.skipped[0]?.reason).toMatch(/play activity/i);
+      expect(body.skipped[0]?.reason).toMatch(/no established play history/i);
+    });
+
+    it("explains a rule set skipped because it is disabled", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const server = await createTestServer(user.id);
+      const ruleSet = await createTestRuleSet(user.id, {
+        enabled: false,
+        rules: [{ field: "playCount", operator: "equals", value: "0" }],
+        serverIds: [server.id],
+      });
+
+      mockRunDetection.mockResolvedValue([]);
+
+      const response = await callRoute(POST, {
+        url: "/api/lifecycle/rules/run",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id },
+      });
+      const body = await expectJson<{ skipped: Array<{ ruleSetId: string; name: string; reason: string }> }>(response, 200);
+      expect(body.skipped[0]?.reason).toMatch(/disabled/i);
+    });
+
+    it("explains a rule set whose selected servers are all disabled", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const server = await createTestServer(user.id, { enabled: false });
+      const ruleSet = await createTestRuleSet(user.id, {
+        rules: [{ field: "playCount", operator: "equals", value: "0" }],
+        serverIds: [server.id],
+      });
+
+      mockRunDetection.mockResolvedValue([]);
+
+      const response = await callRoute(POST, {
+        url: "/api/lifecycle/rules/run",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id },
+      });
+      const body = await expectJson<{ skipped: Array<{ ruleSetId: string; name: string; reason: string }> }>(response, 200);
+      expect(body.skipped[0]?.reason).toMatch(/enabled/i);
+    });
+
+    // The reason is only derived for a rule set the caller NAMED and that is
+    // missing from the results — an evaluated rule set must never be reported
+    // as skipped, or the editor would refuse to navigate after a good run.
+    it("is null when the named rule set was evaluated", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const ruleSet = await createTestRuleSet(user.id);
+      mockRunDetection.mockResolvedValue([
+        { ruleSet: { id: ruleSet.id, name: ruleSet.name }, items: [], count: 0 },
+      ]);
+
+      const response = await callRoute(POST, {
+        url: "/api/lifecycle/rules/run",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id },
+      });
+      const body = await expectJson<{ skipped: Array<{ ruleSetId: string; name: string; reason: string }> }>(response, 200);
+      expect(body.skipped).toEqual([]);
+    });
+
+    // A full run only ever considers ENABLED rule sets, so reporting every
+    // disabled one would be noise about rule sets the user turned off on
+    // purpose. "It is disabled" is only an answer when they named that one.
+    it("does not report disabled rule sets on a run over all rule sets", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      await createTestRuleSet(user.id, { enabled: false });
+      mockRunDetection.mockResolvedValue([]);
+
+      const response = await callRoute(POST, {
+        url: "/api/lifecycle/rules/run",
+        method: "POST",
+        body: {},
+      });
+      const body = await expectJson<{ skipped: Array<{ ruleSetId: string; name: string; reason: string }> }>(response, 200);
+      expect(body.skipped).toEqual([]);
+    });
+
+    // The "Re-evaluate All" path. Every enabled rule set the run passed over
+    // has to be named, or the Matches page cannot tell a skipped rule set from
+    // one that legitimately matched nothing — and blanks its row either way.
+    it("names each enabled rule set skipped by a run over all rule sets", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const server = await createTestServer(user.id, { watchHistorySyncedAt: null });
+      const paused = await createTestRuleSet(user.id, {
+        name: "Stale movies",
+        rules: [{ field: "lastPlayedAt", operator: "lt", value: "2020-01-01" }],
+        serverIds: [server.id],
+      });
+      const evaluated = await createTestRuleSet(user.id, {
+        name: "Big files",
+        rules: [{ field: "fileSize", operator: "gt", value: "1000" }],
+        serverIds: [server.id],
+      });
+
+      mockRunDetection.mockResolvedValue([
+        { ruleSet: { id: evaluated.id, name: evaluated.name }, items: [], count: 0 },
+      ]);
+
+      const response = await callRoute(POST, {
+        url: "/api/lifecycle/rules/run",
+        method: "POST",
+        body: {},
+      });
+      const body = await expectJson<{ skipped: Array<{ ruleSetId: string; name: string; reason: string }> }>(response, 200);
+
+      expect(body.skipped).toHaveLength(1);
+      expect(body.skipped[0].ruleSetId).toBe(paused.id);
+      expect(body.skipped[0].name).toBe("Stale movies");
+      expect(body.skipped[0].reason).toMatch(/no established play history/i);
+    });
   });
 });

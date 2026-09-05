@@ -6,6 +6,11 @@ import sharp from "sharp";
 import { logger } from "@/lib/logger";
 import { ALL_CACHE_WIDTHS, CACHE_WIDTH_DEFAULT } from "@/lib/image-url";
 
+// Runtime data directory: env-resolved and outside the project (under /config in
+// the container), so Turbopack's build-time tracer cannot resolve it statically and
+// falls back to tracing the WHOLE project into the standalone output ("Dynamic
+// filesystem access causes tracing of the whole project"). Nothing here is a build
+// input, so every fs/path call it flags carries `/* turbopackIgnore: true */`.
 const IMAGE_CACHE_DIR = process.env.IMAGE_CACHE_DIR || "/config/cache/images";
 const STATS_FILE = path.join(IMAGE_CACHE_DIR, "_stats.json");
 const CACHE_QUALITY = 80;
@@ -53,7 +58,7 @@ function getCacheKey(thumbPath: string): string {
 function getCachePath(cacheKey: string): string {
   const shard1 = cacheKey.slice(0, 2);
   const shard2 = cacheKey.slice(2, 4);
-  return path.join(IMAGE_CACHE_DIR, shard1, shard2, `${cacheKey}.webp`);
+  return path.join(/* turbopackIgnore: true */ IMAGE_CACHE_DIR, shard1, shard2, `${cacheKey}.webp`);
 }
 
 async function optimizeImage(buffer: Buffer, maxWidth: number = CACHE_WIDTH_DEFAULT): Promise<Buffer | null> {
@@ -104,25 +109,25 @@ async function scanCacheStats(): Promise<{ fileCount: number; totalSize: number 
 
   try {
     await ensureCacheDir();
-    const shard1Entries = await fs.readdir(IMAGE_CACHE_DIR, { withFileTypes: true });
+    const shard1Entries = await fs.readdir(/* turbopackIgnore: true */ IMAGE_CACHE_DIR, { withFileTypes: true });
 
     await Promise.all(
       shard1Entries
         .filter((e) => e.isDirectory())
         .map(async (s1) => {
-          const s1Path = path.join(IMAGE_CACHE_DIR, s1.name);
-          const shard2Entries = await fs.readdir(s1Path, { withFileTypes: true });
+          const s1Path = path.join(/* turbopackIgnore: true */ IMAGE_CACHE_DIR, s1.name);
+          const shard2Entries = await fs.readdir(/* turbopackIgnore: true */ s1Path, { withFileTypes: true });
 
           await Promise.all(
             shard2Entries
               .filter((e) => e.isDirectory())
               .map(async (s2) => {
-                const s2Path = path.join(s1Path, s2.name);
-                const files = await fs.readdir(s2Path, { withFileTypes: true });
+                const s2Path = path.join(/* turbopackIgnore: true */ s1Path, s2.name);
+                const files = await fs.readdir(/* turbopackIgnore: true */ s2Path, { withFileTypes: true });
                 const webpFiles = files.filter((f) => f.isFile() && f.name.endsWith(".webp"));
 
                 const fileSizes = await Promise.all(
-                  webpFiles.map((f) => fs.stat(path.join(s2Path, f.name)).then((st) => st.size)),
+                  webpFiles.map((f) => fs.stat(/* turbopackIgnore: true */ path.join(/* turbopackIgnore: true */ s2Path, f.name)).then((st) => st.size)),
                 );
 
                 for (const size of fileSizes) {
@@ -309,12 +314,12 @@ export async function invalidateCachedUrls(urls: (string | null | undefined)[]):
  */
 export async function clearImageCache(): Promise<void> {
   try {
-    const entries = await fs.readdir(IMAGE_CACHE_DIR);
+    const entries = await fs.readdir(/* turbopackIgnore: true */ IMAGE_CACHE_DIR);
     await Promise.all(
       entries
         .filter((entry) => entry !== "_stats.json")
         .map((entry) =>
-          fs.rm(path.join(IMAGE_CACHE_DIR, entry), { recursive: true, force: true }),
+          fs.rm(path.join(/* turbopackIgnore: true */ IMAGE_CACHE_DIR, entry), { recursive: true, force: true }),
         ),
     );
     await writeStatsFile({ fileCount: 0, totalSize: 0 });
@@ -354,26 +359,26 @@ export async function pruneImageCache(): Promise<{ removed: number }> {
   let removed = 0;
   try {
     await ensureCacheDir();
-    const shard1Entries = await fs.readdir(IMAGE_CACHE_DIR, { withFileTypes: true });
+    const shard1Entries = await fs.readdir(/* turbopackIgnore: true */ IMAGE_CACHE_DIR, { withFileTypes: true });
     await Promise.all(
       shard1Entries
         .filter((e) => e.isDirectory())
         .map(async (s1) => {
-          const s1Path = path.join(IMAGE_CACHE_DIR, s1.name);
-          const shard2Entries = await fs.readdir(s1Path, { withFileTypes: true });
+          const s1Path = path.join(/* turbopackIgnore: true */ IMAGE_CACHE_DIR, s1.name);
+          const shard2Entries = await fs.readdir(/* turbopackIgnore: true */ s1Path, { withFileTypes: true });
           await Promise.all(
             shard2Entries
               .filter((e) => e.isDirectory())
               .map(async (s2) => {
-                const s2Path = path.join(s1Path, s2.name);
-                const files = await fs.readdir(s2Path, { withFileTypes: true });
+                const s2Path = path.join(/* turbopackIgnore: true */ s1Path, s2.name);
+                const files = await fs.readdir(/* turbopackIgnore: true */ s2Path, { withFileTypes: true });
                 await Promise.all(
                   files
                     .filter((f) => f.isFile() && f.name.endsWith(".webp"))
                     .map(async (f) => {
-                      const fp = path.join(s2Path, f.name);
+                      const fp = path.join(/* turbopackIgnore: true */ s2Path, f.name);
                       try {
-                        const st = await fs.stat(fp);
+                        const st = await fs.stat(/* turbopackIgnore: true */ fp);
                         if (st.mtimeMs < cutoff) {
                           await fs.unlink(fp);
                           removed++;

@@ -50,7 +50,7 @@ export async function POST(
 
   // MATCH-ALL SAFETY: mirror detection — Arr/Seerr rules with no enabled
   // instance behind them would preview the entire library as matching.
-  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, ruleSet.type, rules);
+  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, ruleSet.type, rules, serverIds);
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }

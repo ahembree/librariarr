@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { ColorChip } from "@/components/color-chip";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MediaDetailContent } from "@/components/media-detail-content";
+import { PlayHistory } from "@/components/play-history";
 import { FadeImage } from "@/components/ui/fade-image";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useChipColors } from "@/components/chip-color-provider";
@@ -257,9 +258,41 @@ export function MediaDetailSidePanel({
     </div>
   ) : null;
 
+  // The panel's Watch History card is the same per-play list the detail pages
+  // show, scoped the same way they scope it: an episode by series identity (so
+  // the same episode's plays on a second server are merged in), anything else
+  // by its own id. Filling the slot also skips `MediaDetailContent`'s live
+  // per-user aggregate fetch, which answered a different question anyway.
+  // Aggregate rows render no detail columns at all, so they get nothing.
+  const historySection = isAggregate ? undefined
+    : mediaType === "SERIES" && item.parentTitle && item.seasonNumber != null && item.episodeNumber != null ? (
+      <PlayHistory
+        variant="card"
+        seriesKey={item.seriesKey}
+        parentTitle={item.parentTitle}
+        seasonNumber={item.seasonNumber}
+        episodeNumber={item.episodeNumber}
+        currentEpisode
+      />
+    ) : (
+      <PlayHistory
+        variant="card"
+        mediaItemId={item.id}
+        singleItem
+        heading={mediaType === "MUSIC" ? "Listen History" : "Watch History"}
+      />
+    );
+
   const content = (
     <div className="flex-1 overflow-y-auto p-4">
-      <MediaDetailContent item={item} hideVideo={mediaType === "MUSIC"} compact isAggregate={isAggregate} matchedCriteriaSection={combinedMatchSection} />
+      <MediaDetailContent
+        item={item}
+        hideVideo={mediaType === "MUSIC"}
+        compact
+        isAggregate={isAggregate}
+        matchedCriteriaSection={combinedMatchSection}
+        historySection={historySection}
+      />
     </div>
   );
 
