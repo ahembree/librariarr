@@ -319,6 +319,53 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     expect(body.requests[0].watch.watched).toBe(true);
   });
 
+  it("does not count an abandoned Tracearr play as watched", async () => {
+    // `request-stats.ts` computes the aggregate "watched" counts over this same
+    // table for this same user WITH `COMPLETED_PLAY_FILTER`. Without it here, a
+    // 4%-complete abandoned play marks the request watched in this per-user
+    // list while the summary sitting beside it says it was not — two views of
+    // one fact, disagreeing. `watched` is Tracearr's completion verdict and is
+    // null on every native row, which is why the predicate is
+    // "IS DISTINCT FROM false" rather than "= true".
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "MOVIE" });
+    const movie = await createTestMediaItem(library.id, { type: "MOVIE", title: "Inception" });
+    const prisma = getTestPrisma();
+    await prisma.mediaItem.update({
+      where: { id: movie.id },
+      data: { dedupKey: "inception-dedup" },
+    });
+    await createTestExternalId(movie.id, "TMDB", "27205");
+    await prisma.watchHistory.create({
+      data: {
+        mediaItemId: movie.id,
+        mediaServerId: server.id,
+        serverUsername: "alice",
+        source: "TRACEARR",
+        sourceEventId: "chain-abandoned",
+        watched: false,
+      },
+    });
+
+    await createTestSeerrInstance(user.id);
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    mockGetRequests.mockResolvedValueOnce({
+      pageInfo: { page: 1, pages: 1, results: 1 },
+      results: [
+        makeRequest(1, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 27205 }),
+      ],
+    });
+
+    const body = await expectJson<{
+      requests: { watch: { watched: boolean; correlatable: boolean } }[];
+    }>(await callRouteWithParams(GET, { userKey: "alice" }), 200);
+
+    expect(body.requests[0].watch.correlatable).toBe(true);
+    expect(body.requests[0].watch.watched).toBe(false);
+  });
+
   it("falls back to Seerr getTvShow when tvdbId is null (uses tmdbId)", async () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);

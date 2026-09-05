@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { toast } from "sonner";
 import { usePanelResize } from "@/hooks/use-panel-resize";
+import { useRealtime } from "@/hooks/use-realtime";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { EmptyState } from "@/components/empty-state";
 import { TabNav } from "@/components/tab-nav";
@@ -326,7 +327,12 @@ export default function LifecycleExceptionsPage() {
     }
   }, [activeTab]);
 
-  useEffect(() => {
+// Exceptions cascade away with the media they protect, so a purge or a sync
+  // that removes items silently invalidates rows this page is still rendering.
+  useRealtime("sync:completed", fetchExceptions);
+  useRealtime("lifecycle:action-executed", fetchExceptions);
+
+    useEffect(() => {
     void (async () => { await fetchExceptions(); })();
   }, [fetchExceptions]);
 

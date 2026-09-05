@@ -56,27 +56,34 @@ vi.mock("next/headers", () => ({
 
 // ---- Mock session module ----
 
+// Return a Proxy so the route's mutations (e.g. `session.oidcState = "x"`,
+// `session.userId = "u1"`) write through to the module-level `currentSession`.
+// Without this, the spread-then-mutate pattern would mutate a detached copy and
+// tests couldn't observe the changes.
+function sessionProxy() {
+  return new Proxy({} as Record<string, unknown>, {
+    get(_target, prop: string | symbol) {
+      if (prop === "save") return async () => undefined;
+      if (prop === "destroy")
+        return () => {
+          currentSession = { isLoggedIn: false };
+        };
+      return (currentSession as unknown as Record<string, unknown>)[prop as string];
+    },
+    set(_target, prop: string | symbol, value: unknown) {
+      (currentSession as unknown as Record<string, unknown>)[prop as string] = value;
+      return true;
+    },
+  });
+}
+
 vi.mock("@/lib/auth/session", () => ({
-  // Return a Proxy so the route's mutations (e.g. `session.oidcState = "x"`,
-  // `session.userId = "u1"`) write through to the module-level
-  // `currentSession`. Without this, the spread-then-mutate pattern would
-  // mutate a detached copy and tests couldn't observe the changes.
-  getSession: vi.fn().mockImplementation(async () => {
-    const proxy = new Proxy({} as Record<string, unknown>, {
-      get(_target, prop: string | symbol) {
-        if (prop === "save") return async () => undefined;
-        if (prop === "destroy")
-          return () => {
-            currentSession = { isLoggedIn: false };
-          };
-        return (currentSession as unknown as Record<string, unknown>)[prop as string];
-      },
-      set(_target, prop: string | symbol, value: unknown) {
-        (currentSession as unknown as Record<string, unknown>)[prop as string] = value;
-        return true;
-      },
-    });
-    return proxy;
+  getSession: vi.fn().mockImplementation(async () => sessionProxy()),
+  // Mirrors the real helper: whatever the visitor was carrying is discarded,
+  // and the caller gets an empty session to write the new login into.
+  rotateSession: vi.fn().mockImplementation(async () => {
+    currentSession = { isLoggedIn: false };
+    return sessionProxy();
   }),
   isSessionValid: vi.fn().mockImplementation(async () => {
     return currentSession.isLoggedIn && !!currentSession.userId;

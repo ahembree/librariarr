@@ -8,7 +8,10 @@ import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
 import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
 import { arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
-import { hasArrRules, hasSeerrRules } from "@/lib/conditions/helpers";
+import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions/helpers";
+import { checkWatchHistoryCompleteness } from "@/lib/lifecycle/evaluability";
+import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
+import { eventBus } from "@/lib/events/event-bus";
 import type { ConditionGroup } from "@/lib/conditions/types";
 import { validateRequest, queryActionSchema } from "@/lib/validation";
 import { progressStreamResponse } from "@/lib/progress/stream";
@@ -163,6 +166,44 @@ export async function POST(request: NextRequest) {
       );
     }
   }
+  // The same hazard a third time, via play history rather than an external
+  // service — and covering EVERY criterion that reads it, not just
+  // "Watched By User". That one compiles to `watchHistory: { none: … }` and
+  // goes vacuous the instant the rows are gone; "Play Count" and "Last Played"
+  // go vacuous identically wherever the denormalized columns were never
+  // established. A server sits in that state on purpose whenever its
+  // watch-history source is switched, and by default before it has ever synced.
+  //
+  // This route needs the guard MORE than the lifecycle path does, not less: a
+  // rule set schedules an action for `actionDelayDays` in the future and the
+  // Pending page shows it before it fires, whereas this executes immediately on
+  // whatever the query returned. Scoped to the query's own servers so an
+  // unrelated server's import doesn't block queries that never read it.
+  if (hasPlayActivityRules(queryGroups)) {
+    const watch = await checkWatchHistoryCompleteness(userId, query.serverIds);
+    if (!watch.complete) {
+      return NextResponse.json(
+        { error: `The query uses play-activity criteria but ${watch.reason}` },
+        { status: 400 },
+      );
+    }
+  }
+
+  // BLAST-RADIUS CEILING. This route batches — the client chunks a large
+  // selection into sequential requests of at most MAX_QUERY_ACTION_ITEMS — so
+  // the per-request cap is not a limit on how much one action can destroy. The
+  // ceiling is, and it is checked per request against the same setting the
+  // automated executor uses, so a batched 5,000-item selection is refused on
+  // its first batch rather than after the first 1,000 are gone.
+  {
+    const verdict = await checkDeleteCeiling(
+      userId,
+      mediaItemIds.map(() => actionType),
+    );
+    if (!verdict.allowed) {
+      return NextResponse.json({ error: verdict.reason }, { status: 400 });
+    }
+  }
 
   // Stream phase-by-phase progress, then the final result, as NDJSON so the
   // query page can render a live progress bar (re-validating the selection, then
@@ -210,7 +251,7 @@ export async function POST(request: NextRequest) {
       // batch's deleted items) — so memoize it per client `runId` and reuse it
       // across batches. Keyed by run id (unique per run) so there's no cross-run
       // staleness; without a run id (a single request) it just computes.
-      type LiveItem = { id: string; type: string; parentTitle: string | null; title: string | null };
+      type LiveItem = { id: string; type: string; parentTitle: string | null; title: string | null; seriesKey: string | null };
       const RUN_LIVE_TTL_MS = 10 * 60 * 1000;
       const toLiveItems = (items: Array<Record<string, unknown>>): LiveItem[] =>
         items.map((it) => ({
@@ -218,6 +259,7 @@ export async function POST(request: NextRequest) {
           type: String(it.type),
           parentTitle: (it.parentTitle ?? null) as string | null,
           title: (it.title ?? null) as string | null,
+          seriesKey: (it.seriesKey ?? null) as string | null,
         }));
       const liveMatch = (variant: string, compute: () => Promise<LiveItem[]>): Promise<LiveItem[]> =>
         runId
@@ -250,11 +292,14 @@ export async function POST(request: NextRequest) {
       const isMemberScoped = actionHonorsMemberIds(actionType);
       const isWholeRecordDestructive = isWholeRecordDestructiveAction(actionType);
 
-      // Group by the SAME key the query engine uses for grouped shows
-      // (LOWER(TRIM(parentTitle))). Using a looser key (e.g. normalizeTitle)
-      // would collapse distinct shows like "The Office (US)" / "The Office (UK)"
-      // and act on the wrong episodes.
+      // Group a show's episodes by the SAME series identity the query engine
+      // groups on: seriesKey when the row carries one, else the legacy
+      // LOWER(TRIM(parentTitle)) fallback. Keying on the title alone would
+      // collapse two genuinely different shows that share a title (The Office
+      // US / UK) and act on the wrong episodes.
       const showKey = (s: unknown) => String(s ?? "").trim().toLowerCase();
+      const seriesGroupKey = (it: { seriesKey?: string | null; parentTitle?: string | null; title?: string | null }) =>
+        it.seriesKey ?? showKey(it.parentTitle ?? it.title);
 
       // Resolve SERIES episode-level member IDs and the units the action runs on.
       const episodeIdMap = new Map<string, string[]>();
@@ -281,7 +326,7 @@ export async function POST(request: NextRequest) {
             // mirrors the grouped path and the scheduler (processor.ts).
             const matchedByShow = new Map<string, string[]>();
             for (const it of liveOfType) {
-              const key = showKey(it.parentTitle ?? it.title);
+              const key = seriesGroupKey(it);
               const arr = matchedByShow.get(key) ?? [];
               arr.push(it.id);
               matchedByShow.set(key, arr);
@@ -290,7 +335,7 @@ export async function POST(request: NextRequest) {
             actionUnitIds = [];
             for (const id of validIds) {
               const item = liveOfType.find((it) => String(it.id) === id);
-              const key = showKey(item?.parentTitle ?? item?.title);
+              const key = item ? seriesGroupKey(item) : showKey(null);
               if (seenShows.has(key)) continue; // one representative per show
               seenShows.add(key);
               actionUnitIds.push(id);
@@ -315,16 +360,17 @@ export async function POST(request: NextRequest) {
           });
           const groups = new Map<string, string[]>();
           for (const ep of episodeItems) {
-            const key = showKey(ep.parentTitle);
+            const key = seriesGroupKey(ep);
             const arr = groups.get(key) ?? [];
             arr.push(ep.id);
             groups.set(key, arr);
           }
           for (const id of validIds) {
-            // For grouped shows the representative row carries the show name in
-            // `title` (MIN(parentTitle)); episodes carry it in `parentTitle`.
+            // Both the grouped representative row and the episode rows carry
+            // `seriesKey`, so identity lines up without relying on where the
+            // show name happens to live (title vs parentTitle).
             const item = liveOfType.find((it) => String(it.id) === id);
-            const key = showKey(item?.title ?? item?.parentTitle);
+            const key = item ? seriesGroupKey(item) : showKey(null);
             const members = groups.get(key);
             if (members && members.length > 0) episodeIdMap.set(id, members);
           }
@@ -443,6 +489,19 @@ export async function POST(request: NextRequest) {
       );
 
       emit({ type: "phase", key: "finalize" });
+
+      // The NDJSON stream above reports progress to the tab that started the
+      // run and nowhere else — but this route deletes media, so every library
+      // listing, the Matches page and the dashboard are stale for everyone
+      // else the moment it finishes.
+      if (executed > 0 || failed > 0) {
+        eventBus.emit({
+          type: "lifecycle:action-executed",
+          userId: session.userId!,
+          meta: { executed, failed, source: "query" },
+        });
+      }
+
       return { executed, failed, skipped, errors };
     },
     { signal: request.signal },

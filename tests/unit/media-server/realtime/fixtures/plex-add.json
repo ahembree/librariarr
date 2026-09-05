@@ -1,0 +1,448 @@
+[
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "1",
+    "itemID": "169827",
+    "type": 1,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "1",
+    "itemID": "169827",
+    "type": 1,
+    "state": 1,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "1",
+    "itemID": "169827",
+    "type": 1,
+    "state": 1,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "1",
+    "itemID": "169827",
+    "type": 1,
+    "state": 1,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "1",
+    "itemID": "169827",
+    "type": 1,
+    "state": 1,
+    "metadataState": "processing"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "1",
+    "itemID": "169827",
+    "type": 1,
+    "state": 4,
+    "metadataState": "loading"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169828",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169829",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169830",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169831",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169832",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169833",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169834",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169835",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169836",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169837",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169838",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169839",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169840",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169841",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169842",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169843",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169844",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169845",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169846",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169847",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169848",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169849",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169850",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169851",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169852",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169853",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "-1",
+    "itemID": "169854",
+    "type": 12,
+    "state": 0,
+    "metadataState": "created"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "1",
+    "itemID": "169827",
+    "type": 1,
+    "state": 5
+   }
+  ]
+ },
+ {
+  "type": "activity",
+  "ActivityNotification": [
+   {
+    "event": "ended",
+    "Activity": {
+     "type": "library.update.item.metadata"
+    }
+   }
+  ]
+ },
+ {
+  "type": "activity",
+  "ActivityNotification": [
+   {
+    "event": "ended",
+    "Activity": {
+     "type": "library.update.section",
+     "Context": {
+      "librarySectionID": "1"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "type": "activity",
+  "ActivityNotification": [
+   {
+    "event": "ended",
+    "Activity": {
+     "type": "library.update.section",
+     "Context": {
+      "librarySectionID": "1"
+     }
+    }
+   }
+  ]
+ }
+]

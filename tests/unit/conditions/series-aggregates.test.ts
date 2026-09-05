@@ -35,6 +35,35 @@ describe("aggregateEpisodesIntoSeries", () => {
     expect(showALib1?.memberIds.sort()).toEqual(["e1", "e2"]);
   });
 
+  it("splits two same-titled shows with different seriesKeys within a library", () => {
+    // Both shows are "The Office" in the same library; only the seriesKey differs.
+    const episodes: AggregableEpisode[] = [
+      ep({ id: "uk1", parentTitle: "The Office", libraryId: "L1", seriesKey: "tvdb:78107" }),
+      ep({ id: "us1", parentTitle: "The Office", libraryId: "L1", seriesKey: "tvdb:73244" }),
+      ep({ id: "us2", parentTitle: "The Office", libraryId: "L1", seriesKey: "tvdb:73244" }),
+    ];
+    const result = aggregateEpisodesIntoSeries(episodes);
+    // Two aggregates, not one blended series.
+    expect(result).toHaveLength(2);
+    const uk = result.find((s) => s.memberIds.includes("uk1"))!;
+    const us = result.find((s) => s.memberIds.includes("us1"))!;
+    expect(uk.episodeCount).toBe(1);
+    expect(us.episodeCount).toBe(2);
+    expect(us.memberIds.sort()).toEqual(["us1", "us2"]);
+  });
+
+  it("keeps the same show as separate per-library aggregates (collapsed by Arr id downstream)", () => {
+    // Same seriesKey on two libraries/servers stays two aggregates so episode
+    // counts aren't doubled; the multi-server caller collapses them by Arr id.
+    const episodes: AggregableEpisode[] = [
+      ep({ id: "a", parentTitle: "BSG", libraryId: "L1", seriesKey: "tvdb:73545" }),
+      ep({ id: "b", parentTitle: "BSG", libraryId: "L2", seriesKey: "tvdb:73545" }),
+    ];
+    const result = aggregateEpisodesIntoSeries(episodes);
+    expect(result).toHaveLength(2);
+    expect(result.every((s) => s.episodeCount === 1)).toBe(true);
+  });
+
   it("sums playCount across episodes", () => {
     const episodes: AggregableEpisode[] = [
       ep({ id: "e1", parentTitle: "S", libraryId: "L", playCount: 2 }),

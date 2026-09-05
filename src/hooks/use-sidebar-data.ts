@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useRealtime } from "@/hooks/use-realtime";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import type { LucideIcon } from "lucide-react";
@@ -122,7 +123,7 @@ export function useSidebarData(initialCollapsed = false) {
     document.cookie = `sidebar-collapsed=${collapsed ? "1" : "0"}; path=/; max-age=31536000; samesite=lax`;
   }, [collapsed]);
 
-  useEffect(() => {
+  const fetchLibraryTypes = useCallback(() => {
     fetch("/api/media/library-types")
       .then((res) => res.json())
       .then((data) => {
@@ -135,6 +136,16 @@ export function useSidebarData(initialCollapsed = false) {
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    fetchLibraryTypes();
+  }, [fetchLibraryTypes]);
+
+  // The nav groups are derived from which library types exist. This was a
+  // one-shot mount fetch, so adding a server, enabling a library or finishing a
+  // first sync never added the group until a full reload.
+  useRealtime("server:changed", fetchLibraryTypes);
+  useRealtime("sync:completed", fetchLibraryTypes);
 
   useEffect(() => {
     fetch("/api/system/update-check")
@@ -197,9 +208,23 @@ export function useSidebarData(initialCollapsed = false) {
       .catch((e) => console.error("Failed to fetch session count", e));
   }, []);
 
+  // Pushed: `session-changed` is bridged from the media-server WebSocket layer
+  // (throttled 2s per server), so a stream starting or stopping updates the
+  // badge in about half a second.
+  useRealtime("session-changed", fetchSessionCount);
+  // A server socket dropping changes the unreachable set this same route
+  // reports, so recheck on that too.
+  useRealtime("server-status", fetchSessionCount);
+
   useEffect(() => {
     fetchSessionCount();
-    const interval = setInterval(fetchSessionCount, 30000);
+    // Fallback only, and deliberately slow. This is the most expensive poll in
+    // the app: it runs in the sidebar, which is mounted on every page for the
+    // life of the tab, and each tick calls getSessions() against every media
+    // server — a live outbound HTTP request per server. At 30s that cost was
+    // paid ~2,880 times a day per open tab to render a badge. The pushes above
+    // are now the primary path; this only covers a dropped SSE stream.
+    const interval = setInterval(fetchSessionCount, 300000);
     return () => clearInterval(interval);
   }, [fetchSessionCount]);
 

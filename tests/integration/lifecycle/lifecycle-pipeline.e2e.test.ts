@@ -46,6 +46,7 @@ vi.mock("@/lib/lifecycle/collections", () => ({
 }));
 
 import { processLifecycleRules, executeLifecycleActions } from "@/lib/lifecycle/processor";
+import { logger } from "@/lib/logger";
 
 const MATCH_RULE = [
   {
@@ -133,6 +134,78 @@ describe("lifecycle pipeline (e2e)", () => {
 
     expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
     expect(await prisma.lifecycleAction.count({ where: { ruleSetId: ruleSet.id, status: "PENDING" } })).toBe(0);
+  });
+
+  it("explains a watchedByUser drop caused by an abandoned Tracearr play instead of reporting it as unexplained", async () => {
+    // Detection re-evaluates every dropped item to say WHY it dropped, and it
+    // does that by re-running the Phase 2 evaluator over an eager-loaded
+    // `watchHistory`. That load has to filter to completed plays exactly like
+    // the Phase 1 clause that dropped the item, or the two phases disagree:
+    // Phase 1 says "alice has no completed play here, drop it" while the
+    // re-evaluation sees the abandoned Tracearr row, concludes the rule still
+    // matches, and logs the useless "(was matching: …)" fallback — the operator
+    // is told an item vanished for no discoverable reason.
+    const prisma = getTestPrisma();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "MOVIE" });
+    const item = await createTestMediaItem(library.id, { title: "Half Watched", type: "MOVIE" });
+
+    const ruleSet = await createTestRuleSet(user.id, {
+      name: "Watched by alice",
+      type: "MOVIE",
+      rules: [
+        {
+          id: "g1",
+          condition: "AND",
+          rules: [{ id: "r1", field: "watchedByUser", operator: "equals", value: "alice", condition: "AND" }],
+          groups: [],
+        },
+      ],
+      serverIds: [server.id],
+    });
+
+    // A NATIVE row carries a null `watched` and always counts as a play, so the
+    // item matches — this half also pins the pre-Tracearr behaviour in place.
+    const nativePlay = await prisma.watchHistory.create({
+      data: {
+        mediaItemId: item.id,
+        mediaServerId: server.id,
+        serverUsername: "alice",
+        watchedAt: new Date("2024-01-01"),
+      },
+    });
+    await processLifecycleRules(user.id);
+    expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(1);
+
+    // The server pruned its own history and all that survives is a Tracearr row
+    // for a play alice gave up 12% in. That is not a watch.
+    await prisma.watchHistory.delete({ where: { id: nativePlay.id } });
+    await prisma.watchHistory.create({
+      data: {
+        mediaItemId: item.id,
+        mediaServerId: server.id,
+        serverUsername: "alice",
+        watchedAt: new Date("2024-02-01"),
+        source: "TRACEARR",
+        sourceEventId: "chain-abandoned-1",
+        watched: false,
+        percentComplete: 12,
+      },
+    });
+
+    vi.mocked(logger.info).mockClear();
+    await processLifecycleRules(user.id);
+
+    expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
+
+    const staleLog = vi
+      .mocked(logger.info)
+      .mock.calls.map((call) => String(call[1]))
+      .find((message) => message.includes("Removed stale match"));
+    expect(staleLog).toBeDefined();
+    expect(staleLog).toContain("no longer matching");
+    expect(staleLog).not.toContain("was matching");
   });
 
   it("never floods matches for a foundInArr rule when no enabled Radarr instance exists (match-all guard)", async () => {

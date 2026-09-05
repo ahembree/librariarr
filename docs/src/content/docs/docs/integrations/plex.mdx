@@ -103,6 +103,10 @@ Plex libraries map to Librariarr's types:
 | TV Shows | `SERIES` |
 | Music | `MUSIC` |
 
+### Removed Libraries
+
+A library that no longer exists on the server is removed from Librariarr on the next full sync, together with its items, their play history, and any rule matches or exceptions attached to them (the removal is logged under **System → Logs**). Before this, a library deleted or re-created in Plex lived on in Librariarr indefinitely: its items were still listed and still evaluated by lifecycle rules, with play dates that could never advance again. As a safeguard, nothing is removed when the server reports no libraries at all, since that is far more likely a bad answer than a genuinely emptied server.
+
 ### Enabling/Disabling Libraries
 
 Each Plex library can be independently enabled or disabled for syncing in **Settings → Servers**.

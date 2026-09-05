@@ -62,7 +62,18 @@ export async function POST(request: NextRequest) {
 
   // MATCH-ALL SAFETY: mirror detection — Arr/Seerr rules with no enabled
   // instance behind them would report a vacuous "matches" for any item.
-  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, type, typedRules);
+  // Scoped to the tested item's OWN server rather than the rule set's whole
+  // target list: this route evaluates exactly one item, so only that server's
+  // watch history is read, and a different server still importing says nothing
+  // about whether this item's plays are known.
+  // (An orphaned library — its server deleted with `onDelete: SetNull` — has no
+  // server to scope to, so fall back to the rule set's own targets.)
+  const evaluability = await checkLifecycleRuleEvaluability(
+    session.userId!,
+    type,
+    typedRules,
+    item.library.mediaServer ? [item.library.mediaServer.id] : serverIds,
+  );
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }

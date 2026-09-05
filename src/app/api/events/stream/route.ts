@@ -8,6 +8,20 @@ export const dynamic = "force-dynamic";
 const HEARTBEAT_INTERVAL = 30000;
 const MAX_STREAM_LIFETIME = 3600000; // 1 hour safety limit
 
+/**
+ * Liveness/auth probe for the client hook.
+ *
+ * `EventSource` reports a non-200 as a bare `error` with readyState CLOSED —
+ * indistinguishable from a dropped connection — so the hook asks here whether
+ * the session is still valid before deciding to retry. This must NOT fall
+ * through to GET: Next.js derives HEAD from GET by discarding the body, which
+ * would open (and bill) a whole SSE stream for every probe.
+ */
+export async function HEAD() {
+  const session = await getSession();
+  return new Response(null, { status: session.isLoggedIn ? 200 : 401 });
+}
+
 export async function GET() {
   const session = await getSession();
   if (!session.isLoggedIn) {

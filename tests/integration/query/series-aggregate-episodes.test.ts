@@ -37,6 +37,8 @@ interface MatchableItem {
   id: string;
   type?: string;
   parentTitle?: string | null;
+  seriesKey?: string | null;
+  title?: string;
 }
 
 describe("executeQuery — series-aggregate fields with includeEpisodes", () => {
@@ -124,5 +126,35 @@ describe("executeQuery — series-aggregate fields with includeEpisodes", () => 
     // Grouped: a single show row (parentTitle nulled, title = show name).
     expect(items).toHaveLength(1);
     expect((items[0] as { title?: string }).title).toBe("Stale Show");
+  });
+
+  it("groups two same-titled shows as separate rows by seriesKey", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    // Two "The Office" shows, distinct seriesKeys, both fully unwatched so both
+    // survive `watchedEpisodePercentage < 50`.
+    await createTestMediaItem(library.id, {
+      type: "SERIES", title: "Downsize", parentTitle: "The Office",
+      seriesKey: "tvdb:78107", seasonNumber: 1, episodeNumber: 1, playCount: 0,
+    });
+    await createTestMediaItem(library.id, {
+      type: "SERIES", title: "Pilot", parentTitle: "The Office",
+      seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 1, playCount: 0,
+    });
+    await createTestMediaItem(library.id, {
+      type: "SERIES", title: "Finale", parentTitle: "The Office",
+      seriesKey: "tvdb:73244", seasonNumber: 9, episodeNumber: 23, playCount: 0,
+    });
+
+    const result = await executeQuery(aggregateQuery(server.id, false), user.id, 1, 0);
+    const items = result.items as unknown as MatchableItem[];
+
+    // Two grouped rows despite the shared title, keyed by distinct seriesKeys.
+    expect(items).toHaveLength(2);
+    expect(new Set(items.map((i) => i.seriesKey))).toEqual(new Set(["tvdb:78107", "tvdb:73244"]));
+    expect(items.every((i) => i.title === "The Office")).toBe(true);
   });
 });

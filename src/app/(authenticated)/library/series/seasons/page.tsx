@@ -27,6 +27,7 @@ import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 
 interface SeasonEntry {
   parentTitle: string;
+  seriesKey: string | null;
   seasonNumber: number;
   mediaItemId: string;
   episodeCount: number;
@@ -343,7 +344,7 @@ export default function AllSeasonsPage() {
             <DataTable<SeasonEntry>
               columns={seasonTableColumns(getHex)}
               data={seasons}
-              keyExtractor={(s) => `${s.parentTitle}::${s.seasonNumber}`}
+              keyExtractor={(s) => `${s.seriesKey ?? s.parentTitle}::${s.seasonNumber}`}
               defaultSortId="parentTitle"
               resizeStorageKey="dt-widths-seasons"
               onRowClick={navigateToSeason}
@@ -395,7 +396,7 @@ export default function AllSeasonsPage() {
                       <div style={{ display: "grid", gap: `${GAP}px`, gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))` }}>
                         {rowItems.map((season) => (
                           <MediaCard
-                            key={`${season.parentTitle}::${season.seasonNumber}`}
+                            key={`${season.seriesKey ?? season.parentTitle}::${season.seasonNumber}`}
                             priority={virtualRow.index < PRIORITY_ROWS}
                             imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
                             title={`${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`}

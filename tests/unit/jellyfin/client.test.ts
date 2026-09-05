@@ -428,4 +428,98 @@ describe("JellyfinClient", () => {
       expect(names).toEqual(["alice", "bob"]);
     });
   });
+
+  describe("resolveLibraryKey", () => {
+    function newClient(ancestors: unknown) {
+      const client = new JellyfinClient("http://jellyfin:8096", "jf-token");
+      const axiosClient = mockAxiosCreate.mock.results[0].value as { get: ReturnType<typeof vi.fn> };
+      axiosClient.get.mockImplementation(async (url: string) => {
+        if (url === "/Users/Me") return { data: { Id: "u-admin" } };
+        if (url.endsWith("/Ancestors")) return { data: ancestors };
+        throw new Error(`unexpected ${url}`);
+      });
+      return { client, axiosClient };
+    }
+
+    it("returns the id of the CollectionFolder ancestor — the library's VirtualFolders ItemId", async () => {
+      // Jellyfin items carry no library section, so the incremental sync had no
+      // way to place a new item and escalated every add to a full sync.
+      const { client, axiosClient } = newClient([
+        { Id: "season-1", Type: "Season" },
+        { Id: "series-1", Type: "Series" },
+        { Id: "lib-tv", Type: "CollectionFolder" },
+        { Id: "root", Type: "AggregateFolder" },
+      ]);
+      await expect(client.resolveLibraryKey("ep-1")).resolves.toBe("lib-tv");
+      expect(axiosClient.get).toHaveBeenCalledWith("/Items/ep-1/Ancestors", { params: { UserId: "u-admin" } });
+    });
+
+    it("returns null when no ancestor is a library", async () => {
+      const { client } = newClient([{ Id: "root", Type: "AggregateFolder" }]);
+      await expect(client.resolveLibraryKey("x")).resolves.toBeNull();
+    });
+
+    it("returns null for an unexpected response shape", async () => {
+      const { client } = newClient({ not: "an array" });
+      await expect(client.resolveLibraryKey("x")).resolves.toBeNull();
+    });
+  });
+
+  describe("getDetailedWatchHistory", () => {
+    const USERS = [{ Id: "u1", Name: "Alice" }, { Id: "u2", Name: "Bob" }];
+    const played = (id: string) => ({
+      data: { Items: [{ Id: id, UserData: { PlayCount: 1, LastPlayedDate: "2024-01-02T00:00:00.000Z" } }] },
+    });
+
+    function newClient(perUser: Record<string, () => Promise<unknown>>) {
+      const client = new JellyfinClient("http://jellyfin:8096", "jf-token");
+      const axiosClient = mockAxiosCreate.mock.results[0].value as { get: ReturnType<typeof vi.fn> };
+      axiosClient.get.mockImplementation(async (url: string) => {
+        if (url === "/Users") return { data: USERS };
+        const m = url.match(/^\/Users\/(.+)\/Items$/);
+        if (m && perUser[m[1]]) return perUser[m[1]]();
+        throw new Error(`unexpected ${url}`);
+      });
+      return { client, axiosClient };
+    }
+
+    it("asks only for the item types a library stores", async () => {
+      const { client, axiosClient } = newClient({ u1: async () => played("m1"), u2: async () => played("m2") });
+      await client.getDetailedWatchHistory();
+      const params = axiosClient.get.mock.calls.find((c) => c[0] === "/Users/u1/Items")?.[1]?.params;
+      expect(params?.IncludeItemTypes).toBe("Movie,Episode,Audio");
+      expect(params?.IsPlayed).toBe(true);
+    });
+
+    it("rethrows a transient per-user failure so the caller keeps its stored history", async () => {
+      // Swallowing it handed the caller a PARTIAL history that the native
+      // watch-history sync then committed with a destructive full replace,
+      // deleting every play this user's pages never delivered.
+      const { client } = newClient({
+        u1: async () => played("m1"),
+        u2: async () => { throw new Error("socket hang up"); },
+      });
+      await expect(client.getDetailedWatchHistory()).rejects.toThrow("socket hang up");
+    });
+
+    it("skips a user the key cannot read (403) and keeps the others", async () => {
+      // A permanent condition: failing the whole scan for it would block every
+      // history sync on the server.
+      const { default: axios } = await import("axios");
+      vi.mocked(axios.isAxiosError).mockImplementation(
+        (e: unknown) => !!(e as { isAxiosError?: boolean })?.isAxiosError,
+      );
+      const { client } = newClient({
+        u1: async () => played("m1"),
+        u2: async () => { throw Object.assign(new Error("forbidden"), { isAxiosError: true, response: { status: 403 } }); },
+      });
+      const { logger } = await import("@/lib/logger");
+
+      const entries = await client.getDetailedWatchHistory();
+
+      expect(entries.map((e) => e.username)).toEqual(["Alice"]);
+      expect(logger.warn).toHaveBeenCalledWith("Jellyfin", expect.stringContaining('user "Bob" (HTTP 403)'));
+      vi.mocked(axios.isAxiosError).mockImplementation(() => false);
+    });
+  });
 });

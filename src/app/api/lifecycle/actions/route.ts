@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
+import { loadGroupMemberStats, aggregateGroupMembers, memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 
 interface ActionItemMediaItem {
   id: string | null;
@@ -282,43 +283,24 @@ async function handlePendingGrouped(userId: string) {
     return true;
   });
 
-  // Pre-aggregate series/music member data so response has series-level totals
-  // instead of single-episode data for the representative item
-  const allMemberIds = [
+  // Pre-aggregate series/music member data so the response carries series-level
+  // totals instead of the representative episode's own. Shared with the rules
+  // diff route — see `group-aggregate.ts` for why the two must agree.
+  const memberDataMap = await loadGroupMemberStats([
     ...pendingActions.flatMap((a) => a.matchedMediaItemIds),
-    ...filteredUpcoming.flatMap((m) => {
-      const data = m.itemData as Record<string, unknown> | null;
-      return (data?.memberIds as string[] | undefined) ?? [];
-    }),
-  ];
-  let memberDataMap = new Map<string, { fileSize: bigint; playCount: number; lastPlayedAt: Date | null }>();
-  if (allMemberIds.length > 0) {
-    const members = await prisma.mediaItem.findMany({
-      where: { id: { in: allMemberIds } },
-      select: { id: true, fileSize: true, playCount: true, lastPlayedAt: true },
-    });
-    memberDataMap = new Map(members.map((m) => [m.id, { fileSize: m.fileSize ?? BigInt(0), playCount: m.playCount, lastPlayedAt: m.lastPlayedAt }]));
-  }
+    ...filteredUpcoming.flatMap((m) => memberIdsFromItemData(m.itemData)),
+  ]);
 
   /** Overlay aggregated series/music data onto the media item response */
   function applyGroupAggregation(mi: ActionItemMediaItem, memberIds: string[]): ActionItemMediaItem {
-    if (memberIds.length === 0) return mi;
-    let totalSize = BigInt(0);
-    let totalPlays = 0;
-    let latest: Date | null = null;
-    for (const id of memberIds) {
-      const d = memberDataMap.get(id);
-      if (!d) continue;
-      totalSize += d.fileSize;
-      totalPlays += d.playCount;
-      if (d.lastPlayedAt && (!latest || d.lastPlayedAt > latest)) latest = d.lastPlayedAt;
-    }
+    const totals = aggregateGroupMembers(memberIds, memberDataMap);
+    if (!totals) return mi;
     return {
       ...mi,
-      fileSize: totalSize > BigInt(0) ? totalSize.toString() : mi.fileSize,
-      playCount: totalPlays > 0 ? totalPlays : mi.playCount,
-      lastPlayedAt: latest?.toISOString() ?? mi.lastPlayedAt,
-      matchedEpisodes: memberIds.length,
+      fileSize: totals.fileSize > BigInt(0) ? totals.fileSize.toString() : mi.fileSize,
+      playCount: totals.playCount > 0 ? totals.playCount : mi.playCount,
+      lastPlayedAt: totals.lastPlayedAt?.toISOString() ?? mi.lastPlayedAt,
+      matchedEpisodes: totals.matchedEpisodes,
     };
   }
 

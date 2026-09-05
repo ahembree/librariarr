@@ -112,7 +112,7 @@ describe("POST /api/servers/[id]/sync", () => {
     expect(body.message).toBe("Sync started");
     expect(mockEnqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_SERVER,
-      { serverId: server.id, libraryKey: undefined },
+      { serverId: server.id, libraryKey: undefined, trigger: "manual sync request for this server" },
       expect.objectContaining({ jobKey: `sync:${server.id}`, queueName: MAIN_QUEUE }),
     );
   });
@@ -191,7 +191,7 @@ describe("POST /api/servers/[id]/sync", () => {
 
     expect(mockEnqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_SERVER,
-      { serverId: server.id, libraryKey: "lib-key" },
+      { serverId: server.id, libraryKey: "lib-key", trigger: "manual sync request for this server" },
       expect.objectContaining({ jobKey: `sync:${server.id}:lib-key`, queueName: MAIN_QUEUE }),
     );
   });

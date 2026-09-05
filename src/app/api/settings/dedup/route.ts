@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
+import { eventBus } from "@/lib/events/event-bus";
 import { validateRequest, dedupSettingsSchema } from "@/lib/validation";
 
 export async function GET() {
@@ -39,6 +40,15 @@ export async function PUT(request: NextRequest) {
   // Stats are cached per dedup-mode; drop them so the dashboard reflects the
   // toggle immediately instead of after the TTL.
   invalidateMediaCaches();
+
+  // The toggle changes which copy every listing renders, not just the cached
+  // stats — so tell open pages to refetch rather than leaving them on the
+  // pre-toggle view until the next navigation.
+  eventBus.emit({
+    type: "sync:completed",
+    userId: session.userId!,
+    meta: { dedupStats },
+  });
 
   return NextResponse.json({ dedupStats });
 }

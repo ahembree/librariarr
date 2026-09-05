@@ -92,6 +92,26 @@ export interface ConditionField {
   isSeriesAggregate?: boolean;
   /** Library types for which this field is invalid. */
   invalidForLibraryType?: LibraryType[];
+  /**
+   * Field's value is derived from stored `WatchHistory` — either read from the
+   * relation directly (`watchedByUser`) or through the denormalized
+   * `MediaItem.playCount` / `lastPlayedAt` that `watch-reconcile.ts` maintains,
+   * including the series aggregates built on those.
+   *
+   * Marks the field as answerable ONLY where play history has actually been
+   * established. An empty `WatchHistory` is indistinguishable from "nobody
+   * watched anything", and the negative form of every one of these fields is
+   * then vacuously true for the entire library — `playCount = 0`,
+   * `lastPlayedAt is null`, `watchedByUser is not alice`. On a DELETE rule set
+   * that is the whole library, so `checkWatchHistoryCompleteness` refuses to
+   * evaluate any rule carrying one of these until the servers it reads have
+   * established history.
+   *
+   * Declared here rather than as a hardcoded Set so a new play-derived field
+   * has to make the decision explicitly instead of silently defaulting to
+   * ungated.
+   */
+  readsPlayActivity?: boolean;
 }
 
 export interface ConditionOperatorDef {

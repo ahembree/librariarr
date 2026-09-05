@@ -24,19 +24,54 @@ import { formatRelativeDate } from "@/lib/format";
 import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
 import { LazyMediaHoverPopover } from "@/components/lazy-media-hover-popover";
+import { useRealtime } from "@/hooks/use-realtime";
 import type { MediaHoverData } from "@/components/media-hover-popover";
 
 interface RecentItem {
   id: string;
+  /** Stable identity of the collapsed entry — the React key. `id` is the
+   *  representative row and changes whenever a newer member arrives. */
+  groupKey: string;
   title: string;
   year: number | null;
   type: "MOVIE" | "SERIES" | "MUSIC";
   parentTitle: string | null;
+  albumTitle: string | null;
   seasonNumber: number | null;
   episodeNumber: number | null;
   addedAt: string | null;
   thumbUrl: string | null;
   parentThumbUrl: string | null;
+  seasonThumbUrl: string | null;
+  /** Rows collapsed into this tile — a season's episodes, an album's tracks. */
+  memberCount: number;
+}
+
+/**
+ * Artwork for a tile.
+ *
+ * A shelf entry is "this SEASON gained episodes" / "this ALBUM gained tracks",
+ * so it shows the immediate parent's art — `?type=season`, which the sync fills
+ * from the server's `parentThumb` (the season poster for an episode, the album
+ * cover for a track) and which falls back season → series/artist → the item's
+ * own image server-side. `?type=parent` reads `parentThumbUrl`, written from
+ * `grandparentThumb`: the SERIES poster, or for music the ARTIST photo — one
+ * image for every season of a show, and an artist shot instead of a cover.
+ * Matches the seasons, show and album pages, which all request `?type=season`.
+ */
+function artworkUrl(item: RecentItem, tier: 0 | 1 = 0): string {
+  const useSeason = item.type === "SERIES" || (item.type === "MUSIC" && item.memberCount > 1);
+  if (!useSeason) return `/api/media/${item.id}/image`;
+  return `/api/media/${item.id}/image?type=${tier === 0 ? "season" : "parent"}`;
+}
+
+/** True when this tile stands for several rows (a season pack, an album). */
+function isGroup(item: RecentItem): boolean {
+  return item.memberCount > 1;
+}
+
+function plural(n: number, one: string): string {
+  return `${n} ${one}${n === 1 ? "" : "s"}`;
 }
 
 interface RecentlyAddedProps {
@@ -48,6 +83,10 @@ interface RecentlyAddedProps {
   onMovieClick?: (movieId: string) => void;
   onEpisodeClick?: (episodeId: string) => void;
   onTrackClick?: (trackId: string) => void;
+  /** Collapsed season tile — falls back to `onEpisodeClick` when absent. */
+  onSeasonClick?: (mediaItemId: string) => void;
+  /** Collapsed album tile — falls back to `onTrackClick` when absent. */
+  onAlbumClick?: (mediaItemId: string) => void;
 }
 
 /** How many items the shelf fetches (scrolled horizontally, no paging). */
@@ -65,9 +104,13 @@ function formatEpisode(item: RecentItem): string {
     return item.year ? `${item.title} (${item.year})` : item.title;
   }
   if (item.type === "MUSIC") {
-    return `${item.parentTitle ?? "Unknown"} — ${item.title}`;
+    return isGroup(item)
+      ? `${item.parentTitle ?? "Unknown"} — ${item.albumTitle ?? "Unknown"} (${plural(item.memberCount, "track")})`
+      : `${item.parentTitle ?? "Unknown"} — ${item.title}`;
   }
-  return `${item.parentTitle ?? "Unknown"} — S${pad2(item.seasonNumber)}E${pad2(item.episodeNumber)}`;
+  return isGroup(item)
+    ? `${item.parentTitle ?? "Unknown"} — Season ${item.seasonNumber ?? "?"} (${plural(item.memberCount, "episode")})`
+    : `${item.parentTitle ?? "Unknown"} — S${pad2(item.seasonNumber)}E${pad2(item.episodeNumber)}`;
 }
 
 /** One poster tile on the shelf. Video uses 2:3 posters (episodes show the
@@ -79,17 +122,36 @@ function ShelfTile({
   className,
   ...rest
 }: { item: RecentItem } & ComponentProps<"button">) {
+  // `resolveArtworkPath` degrades season → series → own thumb, but only over
+  // NULL columns: it cannot know a stored URL 404s upstream. Jellyfin/Emby set
+  // the season thumb from `SeasonId` alone, with none of the image-tag guard
+  // `grandparentThumb` has, so a season with no artwork yields a URL that fails
+  // to fetch. Fall back once to the series/artist image before giving up, so
+  // those tiles keep the poster they used to show instead of a bare icon.
+  const [artTier, setArtTier] = useState<0 | 1>(0);
   const [imgError, setImgError] = useState(false);
   const isMusic = item.type === "MUSIC";
   const Icon = TYPE_ICONS[item.type];
 
-  const primary = item.type === "SERIES" ? (item.parentTitle ?? item.title) : item.title;
+  const grouped = isGroup(item);
+  const primary =
+    item.type === "SERIES"
+      ? item.parentTitle ?? item.title
+      : item.type === "MUSIC" && grouped
+        ? item.albumTitle ?? item.title
+        : item.title;
+  // A collapsed tile says what arrived, not which single row represents it —
+  // "S27 · 27 episodes" rather than one arbitrary episode number.
   const secondary =
     item.type === "MOVIE"
       ? item.year?.toString() ?? ""
       : item.type === "SERIES"
-        ? `S${pad2(item.seasonNumber)} · E${pad2(item.episodeNumber)}`
-        : item.parentTitle ?? "";
+        ? grouped
+          ? `S${pad2(item.seasonNumber)} · ${plural(item.memberCount, "episode")}`
+          : `S${pad2(item.seasonNumber)} · E${pad2(item.episodeNumber)}`
+        : grouped
+          ? `${item.parentTitle ?? ""} · ${plural(item.memberCount, "track")}`.replace(/^ · /, "")
+          : item.parentTitle ?? "";
 
   return (
     <button
@@ -109,12 +171,16 @@ function ShelfTile({
           </div>
         ) : (
           <FadeImage
-            src={withImageWidth(`/api/media/${item.id}/image${item.type === "SERIES" ? "?type=parent" : ""}`, CACHE_WIDTH_GRID)}
+            key={artTier}
+            src={withImageWidth(artworkUrl(item, artTier), CACHE_WIDTH_GRID)}
             alt=""
             loading="lazy"
             decoding="async"
             className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-105"
-            onError={() => setImgError(true)}
+            onError={() => {
+              if (artTier === 0 && artworkUrl(item, 1) !== artworkUrl(item, 0)) setArtTier(1);
+              else setImgError(true);
+            }}
           />
         )}
         {item.addedAt && (
@@ -138,6 +204,8 @@ export function RecentlyAdded({
   onMovieClick,
   onEpisodeClick,
   onTrackClick,
+  onSeasonClick,
+  onAlbumClick,
 }: RecentlyAddedProps) {
   const [items, setItems] = useState<RecentItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -189,6 +257,13 @@ export function RecentlyAdded({
     void (async () => { await fetchData(); })();
   }, [fetchData]);
 
+  // Refresh when a sync lands new media, so the shelf reflects the library
+  // without a page reload. `sync:completed` is emitted by both the full and the
+  // incremental sync (the latter within a second of a server reporting an add),
+  // and is only emitted when something actually changed — a no-op sync returns
+  // before emitting, so this doesn't refetch on every scan.
+  useRealtime("sync:completed", fetchData);
+
   const updateScroll = useCallback(() => {
     const el = shelfRef.current;
     if (!el) return;
@@ -198,11 +273,18 @@ export function RecentlyAdded({
     });
   }, []);
 
-  // Recompute chevron state when content or container size changes (the
-  // shelf can resize without a window resize — e.g. sidebar collapse);
-  // reset the shelf to the start when the filtered item set is replaced.
+  // Reset to the start only when the USER changed the selection. Doing it on
+  // every `items` change would yank the shelf back to 0 on each background sync:
+  // the full sync emits `sync:completed` unconditionally (and /api/sync/by-type
+  // fans out one job per library, so several land in a row), which now triggers
+  // a refetch here — scrolling someone out of position while they read.
   useEffect(() => {
     shelfRef.current?.scrollTo({ left: 0 });
+  }, [effectiveType, effectiveServerId]);
+
+  // Recompute chevron state when content or container size changes (the shelf
+  // can resize without a window resize — e.g. sidebar collapse).
+  useEffect(() => {
     updateScroll();
     const observer = new ResizeObserver(updateScroll);
     if (shelfRef.current) observer.observe(shelfRef.current);
@@ -216,12 +298,16 @@ export function RecentlyAdded({
   };
 
   const handleClick = (item: RecentItem) => {
+    // A collapsed tile represents a season / an album, so it opens that rather
+    // than the one member row that happens to represent it.
     if (item.type === "MOVIE") {
       onMovieClick?.(item.id);
     } else if (item.type === "SERIES") {
-      onEpisodeClick?.(item.id);
+      if (isGroup(item) && onSeasonClick) onSeasonClick(item.id);
+      else onEpisodeClick?.(item.id);
     } else if (item.type === "MUSIC") {
-      onTrackClick?.(item.id);
+      if (isGroup(item) && onAlbumClick) onAlbumClick(item.id);
+      else onTrackClick?.(item.id);
     }
   };
 
@@ -334,27 +420,36 @@ export function RecentlyAdded({
             onScroll={updateScroll}
             className="flex snap-x gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
-            {items.map((item) => (
-              <LazyMediaHoverPopover
-                key={item.id}
-                fetchUrl={`/api/media/${item.id}`}
-                extractData={(json) => {
-                  const data = (json as { item: MediaHoverData }).item;
-                  return item.type === "MOVIE"
-                    ? data
-                    : { ...data, title: formatEpisode(item) };
-                }}
-                placeholder={{
-                  title: formatEpisode(item),
-                  year: item.year,
-                  addedAt: item.addedAt,
-                }}
-                imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" ? "?type=parent" : ""}`}
-                imageAspect={item.type === "MUSIC" ? "square" : "poster"}
-              >
-                <ShelfTile item={item} onClick={() => handleClick(item)} />
-              </LazyMediaHoverPopover>
-            ))}
+            {items.map((item) =>
+              // A collapsed tile gets no popover: the popover describes ONE
+              // media item (its file size, resolution, codecs), and showing the
+              // representative episode's numbers under a "Season 27 · 27
+              // episodes" heading would attribute one file's properties to the
+              // whole season.
+              isGroup(item) ? (
+                <ShelfTile key={item.groupKey} item={item} onClick={() => handleClick(item)} />
+              ) : (
+                <LazyMediaHoverPopover
+                  key={item.groupKey}
+                  fetchUrl={`/api/media/${item.id}`}
+                  extractData={(json) => {
+                    const data = (json as { item: MediaHoverData }).item;
+                    return item.type === "MOVIE"
+                      ? data
+                      : { ...data, title: formatEpisode(item) };
+                  }}
+                  placeholder={{
+                    title: formatEpisode(item),
+                    year: item.year,
+                    addedAt: item.addedAt,
+                  }}
+                  imageUrl={artworkUrl(item)}
+                  imageAspect={item.type === "MUSIC" ? "square" : "poster"}
+                >
+                  <ShelfTile item={item} onClick={() => handleClick(item)} />
+                </LazyMediaHoverPopover>
+              ),
+            )}
           </div>
         )}
       </CardContent>

@@ -64,11 +64,13 @@ export async function computeLibraryStats(serverIds: string[], dedupEnabled: boo
       },
     }),
     prisma.mediaItem.groupBy({
-      by: ["parentTitle"],
+      // Top series by cumulative plays, keyed on series identity (seriesKey) so
+      // two same-titled shows don't pool their plays into one row.
+      by: ["seriesKey"],
       where: {
         ...serverFilter,
         type: "SERIES",
-        parentTitle: { not: null },
+        seriesKey: { not: null },
         playCount: { gt: 0 },
         ...(dedupEnabled ? { dedupCanonical: true } : {}),
       },
@@ -118,7 +120,7 @@ export async function computeLibraryStats(serverIds: string[], dedupEnabled: boo
       { value: string; type: string; _count: number }[]
     >`
       SELECT g.genre AS "value", mi.type::text AS "type",
-        COUNT(DISTINCT COALESCE(mi."parentTitle", mi.id))::int AS "_count"
+        COUNT(DISTINCT COALESCE(CASE WHEN mi.type = 'SERIES' THEN mi."seriesKey" END, mi."parentTitle", mi.id))::int AS "_count"
       FROM "MediaItem" mi
       JOIN "Library" l ON mi."libraryId" = l.id
       CROSS JOIN LATERAL jsonb_array_elements_text(mi.genres) AS g(genre)
@@ -137,9 +139,9 @@ export async function computeLibraryStats(serverIds: string[], dedupEnabled: boo
     >`
       SELECT
         COUNT(DISTINCT CASE WHEN mi.type = 'SERIES'
-          THEN COALESCE(mi."grandparentRatingKey", mi."parentTitle") END)::int AS "seriesCount",
+          THEN COALESCE(mi."seriesKey", mi."grandparentRatingKey", mi."parentTitle") END)::int AS "seriesCount",
         COUNT(DISTINCT CASE WHEN mi.type = 'SERIES' AND mi."seasonNumber" IS NOT NULL
-          THEN COALESCE(mi."parentRatingKey", mi."parentTitle" || ':' || mi."seasonNumber") END)::int AS "seasonCount",
+          THEN COALESCE(mi."seriesKey" || ':' || mi."seasonNumber", mi."parentRatingKey", mi."parentTitle" || ':' || mi."seasonNumber") END)::int AS "seasonCount",
         COUNT(DISTINCT CASE WHEN mi.type = 'MUSIC'
           THEN COALESCE(mi."grandparentRatingKey", mi."parentTitle") END)::int AS "artistCount",
         COUNT(DISTINCT CASE WHEN mi.type = 'MUSIC'
@@ -187,21 +189,22 @@ export async function computeLibraryStats(serverIds: string[], dedupEnabled: boo
     dedupTotalSize = sizeDedup._sum.fileSize;
   }
 
-  // Batch fetch thumb URLs for top series and music in parallel (avoids N+1)
-  const topSeriesTitles = topSeriesAgg
-    .map((s) => s.parentTitle)
-    .filter((t): t is string => t != null);
+  // Batch fetch a representative row (title/thumb/id) per top series/music,
+  // avoiding N+1. Series are keyed by seriesKey (identity); music by artist name.
+  const topSeriesKeys = topSeriesAgg
+    .map((s) => s.seriesKey)
+    .filter((k): k is string => k != null);
   const topMusicArtists = topMusicAgg
     .map((s) => s.parentTitle)
     .filter((t): t is string => t != null);
 
-  const [seriesThumbs, musicDetails] = await Promise.all([
-    topSeriesTitles.length > 0
+  const [seriesReps, musicDetails] = await Promise.all([
+    topSeriesKeys.length > 0
       ? prisma.mediaItem.findMany({
-          where: { ...serverFilter, type: "SERIES", parentTitle: { in: topSeriesTitles } },
-          select: { id: true, parentTitle: true, parentThumbUrl: true, playCount: true },
+          where: { ...serverFilter, type: "SERIES", seriesKey: { in: topSeriesKeys } },
+          select: { id: true, seriesKey: true, parentTitle: true, parentThumbUrl: true, playCount: true },
           orderBy: { playCount: "desc" },
-          distinct: ["parentTitle"],
+          distinct: ["seriesKey"],
         })
       : [],
     topMusicArtists.length > 0
@@ -214,19 +217,21 @@ export async function computeLibraryStats(serverIds: string[], dedupEnabled: boo
       : [],
   ]);
 
-  const thumbMap = new Map(
-    seriesThumbs.map((s) => [s.parentTitle, s.parentThumbUrl])
-  );
-  const seriesIdMap = new Map(
-    seriesThumbs.map((s) => [s.parentTitle, s.id])
+  const seriesRepMap = new Map(
+    seriesReps.map((s) => [s.seriesKey, { parentTitle: s.parentTitle, thumbUrl: s.parentThumbUrl, id: s.id }])
   );
 
-  const topSeriesWithThumbs = topSeriesAgg.map((s) => ({
-    parentTitle: s.parentTitle!,
-    totalPlays: s._sum?.playCount ?? 0,
-    thumbUrl: thumbMap.get(s.parentTitle!) ?? null,
-    mediaItemId: seriesIdMap.get(s.parentTitle!) ?? null,
-  }));
+  const topSeriesWithThumbs = topSeriesAgg.map((s) => {
+    const rep = seriesRepMap.get(s.seriesKey);
+    return {
+      // Display name of the representative episode's show (may repeat across two
+      // same-titled shows, which are distinct rows keyed by seriesKey).
+      parentTitle: rep?.parentTitle ?? "",
+      totalPlays: s._sum?.playCount ?? 0,
+      thumbUrl: rep?.thumbUrl ?? null,
+      mediaItemId: rep?.id ?? null,
+    };
+  });
 
   const musicDetailMap = new Map(
     musicDetails.map((s) => [s.parentTitle, { thumbUrl: s.parentThumbUrl, id: s.id }])

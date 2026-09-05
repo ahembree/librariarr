@@ -211,6 +211,140 @@ describe("GET /api/seerr/request-stats", () => {
     expect(body.users[0].moviesWatched).toBe(1);
   });
 
+  it("does not count an abandoned Tracearr play as a watched movie", async () => {
+    // This stat answers "did the requester actually watch what they asked for",
+    // which is the one question a partial play answers in the negative: a
+    // Tracearr row with `watched = false` is someone starting a film and giving
+    // up. Counting it reports the request as satisfied when it demonstrably was
+    // not — the exact inversion of the stat's purpose.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "MOVIE" });
+    const prisma = getTestPrisma();
+
+    const finished = await createTestMediaItem(library.id, { type: "MOVIE", title: "Finished" });
+    const abandoned = await createTestMediaItem(library.id, { type: "MOVIE", title: "Abandoned" });
+    await prisma.mediaItem.update({ where: { id: finished.id }, data: { dedupKey: "dedup-finished" } });
+    await prisma.mediaItem.update({ where: { id: abandoned.id }, data: { dedupKey: "dedup-abandoned" } });
+    await createTestExternalId(finished.id, "TMDB", "100");
+    await createTestExternalId(abandoned.id, "TMDB", "101");
+
+    await prisma.watchHistory.createMany({
+      data: [
+        // NATIVE: `watched` is null and always counts — this half pins the
+        // pre-Tracearr behaviour so the filter can't silently drop every row.
+        {
+          mediaItemId: finished.id,
+          mediaServerId: server.id,
+          serverUsername: "alice",
+          watchedAt: new Date("2024-06-01"),
+        },
+        {
+          mediaItemId: abandoned.id,
+          mediaServerId: server.id,
+          serverUsername: "alice",
+          watchedAt: new Date("2024-06-02"),
+          source: "TRACEARR",
+          sourceEventId: "chain-abandoned-movie",
+          watched: false,
+          percentComplete: 9,
+        },
+      ],
+    });
+
+    await createTestSeerrInstance(user.id);
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    invalidateSeerrRequestStats(user.id);
+
+    mockGetRequests.mockResolvedValueOnce({
+      pageInfo: { page: 1, pages: 1, results: 2 },
+      results: [
+        makeRequest(1, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 100 }),
+        makeRequest(2, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 101 }),
+      ],
+    });
+
+    const body = await expectJson<{
+      users: { movieCount: number; moviesWatched: number }[];
+      totals: { moviesWatched: number };
+    }>(await callRoute(GET), 200);
+
+    expect(body.users[0].movieCount).toBe(2);
+    expect(body.users[0].moviesWatched).toBe(1);
+    expect(body.totals.moviesWatched).toBe(1);
+  });
+
+  it("does not count an abandoned Tracearr play as a watched episode", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const prisma = getTestPrisma();
+
+    const episodes = await Promise.all(
+      [1, 2, 3].map((n) =>
+        createTestMediaItem(library.id, {
+          type: "SERIES",
+          title: `Ep${n}`,
+          parentTitle: "Half Finished Show",
+          seasonNumber: 1,
+          episodeNumber: n,
+        })
+      )
+    );
+    for (let i = 0; i < episodes.length; i++) {
+      await prisma.mediaItem.update({
+        where: { id: episodes[i].id },
+        data: { dedupKey: `abandoned-ep-${i + 1}` },
+      });
+      await createTestExternalId(episodes[i].id, "TVDB", "200");
+    }
+
+    await prisma.watchHistory.createMany({
+      data: [
+        // Ep1 finished natively; Ep2 abandoned nine minutes in; Ep3 never started.
+        {
+          mediaItemId: episodes[0].id,
+          mediaServerId: server.id,
+          serverUsername: "alice",
+        },
+        {
+          mediaItemId: episodes[1].id,
+          mediaServerId: server.id,
+          serverUsername: "alice",
+          source: "TRACEARR",
+          sourceEventId: "chain-abandoned-episode",
+          watched: false,
+          percentComplete: 15,
+        },
+      ],
+    });
+
+    await createTestSeerrInstance(user.id);
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    invalidateSeerrRequestStats(user.id);
+
+    mockGetRequests.mockResolvedValueOnce({
+      pageInfo: { page: 1, pages: 1, results: 1 },
+      results: [
+        makeRequest(1, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tvdbId: 200 }),
+      ],
+    });
+
+    const body = await expectJson<{
+      users: {
+        seriesWithAnyEpisodeWatched: number;
+        episodesWatched: number;
+        episodesAvailable: number;
+      }[];
+    }>(await callRoute(GET), 200);
+
+    // The completed native play still counts, so the series is not written off
+    // entirely — but the abandoned episode is not credited alongside it.
+    expect(body.users[0].episodesWatched).toBe(1);
+    expect(body.users[0].seriesWithAnyEpisodeWatched).toBe(1);
+    expect(body.users[0].episodesAvailable).toBe(3);
+  });
+
   it("correlates series episode requests with watch history", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);

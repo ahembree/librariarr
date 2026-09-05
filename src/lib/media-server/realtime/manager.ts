@@ -4,12 +4,14 @@ import { enqueueJob } from "@/lib/jobs/client";
 import { MAIN_QUEUE, TASK_SYNC_SERVER, TASK_SYNC_WATCH_HISTORY, TASK_SYNC_INCREMENTAL } from "@/lib/jobs/constants";
 import { runEnforcerTick } from "@/lib/maintenance/enforcer";
 import type { MediaServerType } from "@/generated/prisma/client";
+import { eventBus } from "@/lib/events/event-bus";
 import { realtimeBus } from "./bus";
 import { Debouncer } from "./debounce";
 import { Throttle } from "./throttle";
 import { ServerRealtimeConnection } from "./connection";
 import { wsSocketFactory, type SocketFactory } from "./socket";
 import type { RealtimeEvent, RealtimeServerConfig, RealtimeConnectionStatus, LibraryChangeDetail } from "./types";
+import { isSelfWrite } from "./self-writes";
 
 // A library scan emits a burst of change events; coalesce them into one sync
 // after it goes quiet, but never wait longer than the max. The quiet window is
@@ -29,6 +31,11 @@ const WATCH_SYNC_MAX_MS = 5 * 60_000;
 // session frames (Plex progress notifications, or a not-yet-suppressed frame)
 // can't drive the enforcer (which calls getSessions on every server) in a loop.
 const ENFORCER_MIN_INTERVAL_MS = 2_000;
+// Floor for the browser-facing `session-changed` bridge. Each bridged event
+// costs every listening tab one `/api/tools/sessions` query, and that route
+// fans out to every media server — so this is deliberately the same 2s floor
+// the Tracearr import progress uses.
+const SESSION_BRIDGE_THROTTLE_MS = 2_000;
 
 /** Identity of a server's connection config — a change forces a reconnect. */
 function connectionSignature(s: RealtimeServerConfig): string {
@@ -40,6 +47,12 @@ interface ManagedConnection {
   signature: string;
   status: RealtimeConnectionStatus;
   config: RealtimeServerConfig;
+  /**
+   * Last connected/disconnected state forwarded to the browser, so a repeated
+   * `server-status` (e.g. a reconnect attempt that fails again) does not emit
+   * a duplicate app event. Undefined until the first bridge.
+   */
+  lastBridgedConnected?: boolean;
 }
 
 export interface RealtimeStatusEntry {
@@ -64,10 +77,19 @@ export class RealtimeManager {
   private readonly connections = new Map<string, ManagedConnection>();
   private readonly syncDebouncers = new Map<string, Debouncer>();
   private readonly watchDebouncers = new Map<string, Debouncer>();
+  private readonly sessionBridges = new Map<string, Throttle>();
   // Accumulated changed/removed ratingKeys per server, applied on the sync
-  // debounce fire. `forceFull` is set when an event can't be applied
-  // incrementally (no ids — e.g. Plex's scan-ended activity) → full sync.
-  private readonly pendingChanges = new Map<string, { changed: Set<string>; removed: Set<string>; forceFull: boolean }>();
+  // debounce fire. An event carrying no ids contributes nothing: "something
+  // changed but we don't know what" is not actionable, and treating it as
+  // "resync everything" is what made a single library event cost a full
+  // full server sync. Reconciliation for anything the push channel never reports
+  // belongs to the scheduled full sync.
+  private readonly pendingChanges = new Map<string, { changed: Set<string>; removed: Set<string> }>();
+  // Per-server count of library changes dropped as the echo of librariarr's
+  // own collection writes, and the debouncer that logs it once per burst —
+  // Plex emits one frame per tagged member, so a line per frame would be noise.
+  private readonly suppressedSelfWrites = new Map<string, number>();
+  private readonly selfWriteLogDebouncers = new Map<string, Debouncer>();
   private readonly enforcerThrottle: Throttle;
   private readonly socketFactory: SocketFactory;
   private reconciling = false;
@@ -181,35 +203,137 @@ export class RealtimeManager {
         // ~30s. Leading-edge throttle: immediate on a real change, floored so a
         // server that keeps pushing session frames can't drive it in a loop.
         this.enforcerThrottle.trigger();
+        // Tell the browser too, so the sidebar's stream badge updates on a push
+        // rather than on a 30s poll that round-trips to every media server.
+        this.getSessionBridge(event.serverId).trigger();
         break;
       case "library-changed":
-        this.accumulateLibraryChange(event);
-        this.getSyncDebouncer(event.serverId).trigger();
+        // Only an event that actually named items may (re)arm the debouncer. An
+        // id-less one contributes nothing, so letting it call trigger() would
+        // reset the 5s quiet window and hold real accumulated ids hostage until
+        // the 5-minute ceiling — a Jellyfin scan emitting periodic empty
+        // LibraryChanged frames could delay an add by minutes.
+        if (this.accumulateLibraryChange(event)) {
+          this.getSyncDebouncer(event.serverId).trigger();
+        }
         break;
       case "watch-changed":
         this.getWatchDebouncer(event.serverId).trigger();
         break;
       case "server-status":
+        this.bridgeServerStatus(event);
         break;
     }
   }
 
-  private accumulateLibraryChange(event: RealtimeEvent): void {
+  /**
+   * Forward a media-server connection state change to the browser.
+   *
+   * `realtimeBus` is server-side only, so before this the UI could learn a
+   * server had dropped only by watching the sidebar's 30s session poll fail —
+   * a poll that round-trips to every server to find out something this layer
+   * already knew instantly.
+   *
+   * Only emitted on an actual transition. `server-status` can repeat the same
+   * state (a reconnect attempt that fails again), and a browser event per
+   * attempt would be noise on a server that is simply down.
+   */
+  private bridgeServerStatus(event: RealtimeEvent): void {
+    const managed = this.connections.get(event.serverId);
+    if (!managed) return;
+
+    // Only terminal states reach the browser. "connecting" is emitted on the
+    // way into every connect AND every reconnect attempt, so bridging it would
+    // flash the shell's "server unreachable" banner each time the socket
+    // retried — including once on normal startup, before it had ever failed.
+    if (event.status !== "connected" && event.status !== "disconnected") return;
+
+    const connected = event.status === "connected";
+    if (managed.lastBridgedConnected === connected) return;
+    managed.lastBridgedConnected = connected;
+
+    eventBus.emit({
+      type: "server-status",
+      userId: managed.config.userId,
+      meta: {
+        serverId: event.serverId,
+        serverName: managed.config.name,
+        connected,
+      },
+    });
+  }
+
+  /** @returns true when the event contributed at least one id. */
+  private accumulateLibraryChange(event: RealtimeEvent): boolean {
+    const detail = event.detail as LibraryChangeDetail | undefined;
+    const removed = detail?.removedIds ?? [];
+    // Drop the echo of librariarr's own writes. Plex reports a collection write
+    // back as a metadata change on the collection AND on every member it
+    // tagged, so a detection run that synced a 150-item collection used to
+    // arrive here as 150 changed movies — and past the incremental limit that
+    // is a whole-server sync caused by nothing but the app's own bookkeeping.
+    // A deletion is never dropped, marked or not: nothing librariarr writes
+    // deletes media, and a row left alive for media that is gone is the worse
+    // failure. `removedIds` (Jellyfin's `ItemsRemoved`) are kept for the same
+    // reason.
+    const deleted = new Set(detail?.deletedIds ?? []);
+    const changed: string[] = [];
+    let ownEchoes = 0;
+    for (const id of detail?.changedIds ?? []) {
+      if (!deleted.has(id) && isSelfWrite(event.serverId, id)) {
+        ownEchoes++;
+        continue;
+      }
+      changed.push(id);
+    }
+    if (ownEchoes > 0) this.noteSuppressedSelfWrites(event.serverId, ownEchoes);
+    // An id-less event (a Jellyfin `LibraryChanged` whose arrays are all empty)
+    // contributes nothing rather than escalating the window to a full sync.
+    if (changed.length === 0 && removed.length === 0) return false;
+
     let pending = this.pendingChanges.get(event.serverId);
     if (!pending) {
-      pending = { changed: new Set(), removed: new Set(), forceFull: false };
+      pending = { changed: new Set(), removed: new Set() };
       this.pendingChanges.set(event.serverId, pending);
     }
-    const detail = event.detail as LibraryChangeDetail | undefined;
-    const changed = detail?.changedIds ?? [];
-    const removed = detail?.removedIds ?? [];
-    if (changed.length === 0 && removed.length === 0) {
-      // No specific items (e.g. Plex's scan-ended activity) — reconcile fully.
-      pending.forceFull = true;
-    } else {
-      for (const id of changed) pending.changed.add(id);
-      for (const id of removed) pending.removed.add(id);
+    for (const id of changed) pending.changed.add(id);
+    for (const id of removed) pending.removed.add(id);
+    return true;
+  }
+
+  /**
+   * Count a dropped self-write echo and arm the once-per-burst summary log.
+   *
+   * Deliberately NOT the sync debouncer: an echo contributes nothing, so
+   * letting it re-arm that quiet window would hold real accumulated ids
+   * hostage for as long as a collection sync keeps writing.
+   */
+  private noteSuppressedSelfWrites(serverId: string, count: number): void {
+    this.suppressedSelfWrites.set(serverId, (this.suppressedSelfWrites.get(serverId) ?? 0) + count);
+    let debouncer = this.selfWriteLogDebouncers.get(serverId);
+    if (!debouncer) {
+      debouncer = new Debouncer(
+        () => {
+          const total = this.suppressedSelfWrites.get(serverId) ?? 0;
+          this.suppressedSelfWrites.delete(serverId);
+          if (total === 0) return;
+          logger.info(
+            "Realtime",
+            `Ignored ${total} library change(s) on server ${this.serverLabel(serverId)} that echo ` +
+              `librariarr's own Plex collection writes — not a media change, nothing to sync`,
+          );
+        },
+        { quietMs: LIBRARY_SYNC_QUIET_MS, maxWaitMs: LIBRARY_SYNC_MAX_MS },
+      );
+      this.selfWriteLogDebouncers.set(serverId, debouncer);
     }
+    debouncer.trigger();
+  }
+
+  /** `"Name"` while the server is connected, else the bare id — for log lines. */
+  private serverLabel(serverId: string): string {
+    const name = this.connections.get(serverId)?.config.name;
+    return name ? `"${name}"` : serverId;
   }
 
   private getSyncDebouncer(serverId: string): Debouncer {
@@ -233,16 +357,32 @@ export class RealtimeManager {
     const changedIds = pending ? [...pending.changed] : [];
     const removedIds = pending ? [...pending.removed] : [];
     const total = changedIds.length + removedIds.length;
-    const forceFull = pending?.forceFull ?? true;
 
-    if (forceFull || total === 0 || total > INCREMENTAL_MAX_ITEMS) {
-      // Full reconciliation — same jobKey as the scheduler so it dedupes.
+    const label = this.serverLabel(serverId);
+
+    if (total === 0) {
+      // Nothing actionable accumulated. `accumulateLibraryChange` drops id-less
+      // events, so this is either a debounce fire that raced an empty window or
+      // a server that reported a change without naming anything. Either way a
+      // full sync would be a guess; the scheduled sync reconciles.
+      logger.debug("Realtime", `Library change for server ${label} named no items — nothing to sync`);
+      return;
+    }
+
+    if (total > INCREMENTAL_MAX_ITEMS) {
+      // Genuinely bulk — listing the libraries beats fetching each item.
+      // Same jobKey as the scheduler so it dedupes. The trigger travels with
+      // the job so the sync itself logs WHY it ran: an off-schedule full sync
+      // with no stated cause is indistinguishable from a bug.
+      const trigger =
+        `realtime library change: ${total} changed item(s) exceeds the ` +
+        `${INCREMENTAL_MAX_ITEMS}-item incremental limit`;
       void enqueueJob(
         TASK_SYNC_SERVER,
-        { serverId },
+        { serverId, trigger },
         { jobKey: `sync:${serverId}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
       ).then((ok) => {
-        if (ok) logger.info("Realtime", `Enqueued full sync for server ${serverId} (library changed)`);
+        if (ok) logger.info("Realtime", `Enqueued full sync for server ${label} (${trigger})`);
       });
       return;
     }
@@ -258,10 +398,39 @@ export class RealtimeManager {
       if (ok) {
         logger.info(
           "Realtime",
-          `Enqueued incremental sync for server ${serverId} (${changedIds.length} changed, ${removedIds.length} removed)`,
+          `Enqueued incremental sync for server ${label} (${changedIds.length} changed, ${removedIds.length} removed)`,
         );
       }
     });
+  }
+
+  /**
+   * Per-server throttle for the browser-facing `session-changed` bridge.
+   *
+   * The connection layer already collapses the Jellyfin/Emby `Sessions`
+   * firehose (a frame every ~1.5s) to real changes only, but a busy server can
+   * still produce a burst — someone scrubbing a timeline changes session state
+   * continuously. Each event costs every listening tab one `/api/tools/sessions`
+   * query, which fans out to every media server, so this is floored at the same
+   * 2s the Tracearr import progress uses.
+   */
+  private getSessionBridge(serverId: string): Throttle {
+    let throttle = this.sessionBridges.get(serverId);
+    if (!throttle) {
+      throttle = new Throttle(() => {
+        const managed = this.connections.get(serverId);
+        if (!managed) return;
+        // Carries no session data: the receiver refetches the route that owns
+        // it, so there is only ever one place the count is computed.
+        eventBus.emit({
+          type: "session-changed",
+          userId: managed.config.userId,
+          meta: { serverId },
+        });
+      }, SESSION_BRIDGE_THROTTLE_MS);
+      this.sessionBridges.set(serverId, throttle);
+    }
+    return throttle;
   }
 
   private getWatchDebouncer(serverId: string): Debouncer {
@@ -274,7 +443,12 @@ export class RealtimeManager {
             { serverId },
             { jobKey: `watch-history:${serverId}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
           ).then((ok) => {
-            if (ok) logger.info("Realtime", `Enqueued watch-history refresh for server ${serverId} (watch state changed)`);
+            if (ok) {
+              logger.info(
+                "Realtime",
+                `Enqueued watch-history refresh for server ${this.serverLabel(serverId)} (watch state changed)`,
+              );
+            }
           });
         },
         { quietMs: WATCH_SYNC_QUIET_MS, maxWaitMs: WATCH_SYNC_MAX_MS },
@@ -289,7 +463,12 @@ export class RealtimeManager {
     this.syncDebouncers.delete(serverId);
     this.watchDebouncers.get(serverId)?.cancel();
     this.watchDebouncers.delete(serverId);
+    this.sessionBridges.get(serverId)?.cancel();
+    this.sessionBridges.delete(serverId);
     this.pendingChanges.delete(serverId);
+    this.selfWriteLogDebouncers.get(serverId)?.cancel();
+    this.selfWriteLogDebouncers.delete(serverId);
+    this.suppressedSelfWrites.delete(serverId);
   }
 
   private async isRealtimeEnabled(): Promise<boolean> {
@@ -315,6 +494,7 @@ export class RealtimeManager {
         url: true,
         accessToken: true,
         tlsSkipVerify: true,
+        userId: true,
       },
     });
   }

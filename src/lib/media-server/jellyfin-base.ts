@@ -485,6 +485,10 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
                 IsPlayed: true,
                 Recursive: true,
                 Fields: "UserData",
+                // Only the types a library stores. Without the filter the scan
+                // also walked every played Series, Season and BoxSet, which can
+                // never map to a MediaItem and were dropped on arrival.
+                IncludeItemTypes: "Movie,Episode,Audio",
                 StartIndex: startIndex,
                 Limit: pageSize,
               },
@@ -512,8 +516,23 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
             if (items.length < pageSize) break;
             startIndex += pageSize;
           }
-        } catch {
-          // Skip users where we can't access items (graceful per-user degrade).
+        } catch (error) {
+          // A user the key cannot read (401/403) or that no longer exists (404)
+          // is skipped: that is a permanent condition, and failing the whole
+          // scan for it would block every history sync on the server. Anything
+          // else — a timeout, a 5xx, a dropped connection mid-page — is
+          // transient and must propagate: swallowing it handed the caller a
+          // PARTIAL history that it then committed with a destructive full
+          // replace, deleting every play this user's pages never delivered.
+          const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+          if (status === 401 || status === 403 || status === 404) {
+            logger.warn(
+              this.logPrefix,
+              `Skipping watch history for user "${user.Name}" (HTTP ${status})`,
+            );
+            continue;
+          }
+          throw error;
         }
       }
     } catch (error) {
@@ -523,6 +542,29 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     }
 
     return entries;
+  }
+
+  /**
+   * The library an item belongs to, as the `ItemId` `getLibraries()` reports
+   * for it, or null when no ancestor is a library.
+   *
+   * Jellyfin/Emby items do not name their library — `BaseItemDto` has no
+   * section field, unlike Plex's `librarySectionID` — so the incremental sync
+   * had no way to place an item it had never stored, and escalated EVERY new
+   * item on these servers to a whole-server sync. `/Items/{id}/Ancestors`
+   * walks the parent chain (season → series → library → root); the
+   * `CollectionFolder` in it IS the library, and its id is the id
+   * `/Library/VirtualFolders` reports as `ItemId`.
+   */
+  async resolveLibraryKey(ratingKey: string): Promise<string | null> {
+    const userId = await this.getUserId();
+    const response = await this.client.get<Array<{ Id?: string; Type?: string }>>(
+      `/Items/${ratingKey}/Ancestors`,
+      { params: { UserId: userId } },
+    );
+    const ancestors = Array.isArray(response.data) ? response.data : [];
+    const library = ancestors.find((a) => a.Type === "CollectionFolder" && a.Id);
+    return library?.Id ?? null;
   }
 
   async getSessions(): Promise<MediaSession[]> {

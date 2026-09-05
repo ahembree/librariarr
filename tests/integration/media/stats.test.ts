@@ -382,4 +382,42 @@ describe("GET /api/media/stats", () => {
     const body = await expectJson<{ error: string }>(response, 404);
     expect(body.error).toBe("Server not found");
   });
+
+  it("counts and ranks two same-titled shows separately by seriesKey", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+
+    // Two "The Office" shows with distinct seriesKeys and different play totals.
+    await createTestMediaItem(lib.id, {
+      title: "Downsize", type: "SERIES", parentTitle: "The Office",
+      seriesKey: "tvdb:78107", seasonNumber: 1, episodeNumber: 1, playCount: 2, ratingKey: "uk1",
+    });
+    await createTestMediaItem(lib.id, {
+      title: "Pilot", type: "SERIES", parentTitle: "The Office",
+      seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 1, playCount: 5, ratingKey: "us1",
+    });
+    await createTestMediaItem(lib.id, {
+      title: "Diversity Day", type: "SERIES", parentTitle: "The Office",
+      seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 2, playCount: 4, ratingKey: "us2",
+    });
+
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const body = await expectJson<{
+      seriesCount: number;
+      seasonCount: number;
+      topSeries: { parentTitle: string; totalPlays: number }[];
+    }>(await callRoute(GET, { url: "/api/media/stats" }), 200);
+
+    // Two distinct shows (not one blended "The Office"), each with a season 1.
+    expect(body.seriesCount).toBe(2);
+    expect(body.seasonCount).toBe(2);
+
+    // Ranked separately: US show (9 plays) above UK show (2), not pooled to 11.
+    expect(body.topSeries).toHaveLength(2);
+    expect(body.topSeries.map((s) => s.parentTitle)).toEqual(["The Office", "The Office"]);
+    expect(body.topSeries[0].totalPlays).toBe(9);
+    expect(body.topSeries[1].totalPlays).toBe(2);
+  });
 });
