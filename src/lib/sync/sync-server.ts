@@ -16,6 +16,7 @@ import { withDeadlockRetry } from "@/lib/db-retry";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { normalizeResolutionFromDimensions } from "@/lib/resolution";
 import { eventBus } from "@/lib/events/event-bus";
+import { emitSyncProgress, clearSyncProgressThrottle } from "./sync-progress";
 import { acquireSyncSlot, releaseSyncSlot } from "@/lib/sync/sync-semaphore";
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 import { reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
@@ -698,6 +699,10 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       return;
     }
 
+    // Clear at the START, not only on the completed/failed paths: a cancelled
+    // sync (and a crashed one) exits elsewhere, and a leftover window would
+    // swallow the next run's first progress tick.
+    clearSyncProgressThrottle(serverId);
     eventBus.emit({ type: "sync:started", userId: server.userId, meta: { serverId } });
 
     const client = createMediaServerClient(server.type as import("@/generated/prisma/client").MediaServerType, server.url, server.accessToken, {
@@ -991,6 +996,12 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
             processedItems, syncJob.id,
           );
 
+          // Tell open tabs the counter moved. Emitted AFTER the row is written,
+          // so a listener that refetches can never read a figure this run has
+          // not durably committed — same ordering rule the Tracearr import
+          // progress follows.
+          emitSyncProgress(server.userId, serverId);
+
           // Yield to event loop between batches so V8 can run incremental GC
           // on the nulled-out items and processBatch's released locals.
           await new Promise<void>((resolve) => { setImmediate(resolve); });
@@ -1205,6 +1216,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
     );
 
     logger.info("Sync", `Sync completed for server (${processedItems} items processed)`);
+    clearSyncProgressThrottle(serverId);
     eventBus.emit({ type: "sync:completed", userId: server.userId, meta: { serverId } });
     logHeapAndCollect("sync complete");
   } catch (error) {
@@ -1229,6 +1241,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       `UPDATE "SyncJob" SET "status"=$1,"completedAt"=$2,"error"=$3,"currentLibrary"=NULL WHERE "id"=$4`,
       "FAILED", new Date(), errorMessage, syncJob.id,
     );
+    clearSyncProgressThrottle(serverId);
     if (syncUserId) eventBus.emit({ type: "sync:failed", userId: syncUserId, meta: { serverId } });
     throw error;
   } finally {

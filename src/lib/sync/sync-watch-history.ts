@@ -3,6 +3,7 @@ import { createMediaServerClient } from "@/lib/media-server/factory";
 import { logger } from "@/lib/logger";
 import { reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
 import type { MediaServerType } from "@/generated/prisma/client";
+import { emitWatchHistoryUpdated } from "./watch-history-events";
 
 // 500 rows × 8 params = 4000 bind params per INSERT — well under Postgres's
 // 65535 limit, but ~5× fewer round-trips than 100, which keeps the full-replace
@@ -203,6 +204,15 @@ export async function syncWatchHistory(
       `Failed to reconcile play state from watch history for "${server.name}"`,
       { error: String(error) }
     );
+  }
+
+  // Tell open pages the stored plays changed. Emitted from here, not from the
+  // callers, so every entry point is covered: the scheduled/realtime job, the
+  // History page's foreground Refresh (whose NDJSON progress reaches only the
+  // tab that started it), and the full sync's inline pass. Only when rows
+  // actually landed — a no-op sync should not cost every open tab a refetch.
+  if (insertedCount > 0) {
+    await emitWatchHistoryUpdated(serverId, { imported: insertedCount });
   }
 
   return { count: insertedCount };

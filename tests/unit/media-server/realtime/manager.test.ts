@@ -5,11 +5,13 @@ const h = vi.hoisted(() => ({
   mediaServer: { findMany: vi.fn() },
   enqueueJob: vi.fn(),
   runEnforcerTick: vi.fn(),
+  appEmit: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({ prisma: { appSettings: h.appSettings, mediaServer: h.mediaServer } }));
 vi.mock("@/lib/jobs/client", () => ({ enqueueJob: h.enqueueJob }));
 vi.mock("@/lib/maintenance/enforcer", () => ({ runEnforcerTick: h.runEnforcerTick }));
+vi.mock("@/lib/events/event-bus", () => ({ eventBus: { emit: h.appEmit } }));
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -71,8 +73,8 @@ function makeFactory() {
 
 type ServerRow = RealtimeServerConfig;
 
-const jfServer: ServerRow = { id: "j1", name: "JF", type: "JELLYFIN", url: "http://jf", accessToken: "t", tlsSkipVerify: false };
-const plexServer: ServerRow = { id: "p1", name: "Plex", type: "PLEX", url: "http://plex", accessToken: "t", tlsSkipVerify: false };
+const jfServer: ServerRow = { id: "j1", name: "JF", type: "JELLYFIN", url: "http://jf", accessToken: "t", tlsSkipVerify: false, userId: "user-1" };
+const plexServer: ServerRow = { id: "p1", name: "Plex", type: "PLEX", url: "http://plex", accessToken: "t", tlsSkipVerify: false, userId: "user-1" };
 
 async function setup(servers: ServerRow[], enabled = true) {
   h.appSettings.findFirst.mockResolvedValue({ realtimeSync: enabled });
@@ -94,9 +96,9 @@ describe("RealtimeManager", () => {
 
   it("opens one connection per enabled server, including multiple of the same type", async () => {
     const { mgr, sockets } = await setup([
-      { id: "p1", name: "Plex A", type: "PLEX", url: "http://a", accessToken: "t", tlsSkipVerify: false },
-      { id: "p2", name: "Plex B", type: "PLEX", url: "http://b", accessToken: "t", tlsSkipVerify: false },
-      { id: "j1", name: "JF", type: "JELLYFIN", url: "http://j", accessToken: "t", tlsSkipVerify: false },
+      { id: "p1", name: "Plex A", type: "PLEX", url: "http://a", accessToken: "t", tlsSkipVerify: false, userId: "user-1" },
+      { id: "p2", name: "Plex B", type: "PLEX", url: "http://b", accessToken: "t", tlsSkipVerify: false, userId: "user-1" },
+      { id: "j1", name: "JF", type: "JELLYFIN", url: "http://j", accessToken: "t", tlsSkipVerify: false, userId: "user-1" },
     ]);
     expect(sockets).toHaveLength(3);
     expect(mgr.getStatuses().map((s) => s.serverId).sort()).toEqual(["j1", "p1", "p2"]);
@@ -234,5 +236,76 @@ describe("RealtimeManager", () => {
     mgr.stopAll();
     expect(sockets.every((s) => s.closed)).toBe(true);
     expect(mgr.getStatuses()).toHaveLength(0);
+  });
+  // ── realtimeBus -> app eventBus bridge ────────────────────────────
+  // realtimeBus is server-side only; these are the only events that reach the
+  // browser, and they are what let the sidebar and shell stop polling.
+
+  it("bridges session-changed to the app bus so the browser can drop its 30s poll", async () => {
+    const { sockets } = await setup([jfServer]);
+    sockets[0].fireOpen();
+
+    const sessionEvents = h.appEmit.mock.calls
+      .map((c) => c[0])
+      .filter((e) => e.type === "session-changed");
+    expect(sessionEvents).toHaveLength(1);
+    expect(sessionEvents[0]).toEqual({
+      type: "session-changed",
+      userId: "user-1",
+      meta: { serverId: "j1" },
+    });
+  });
+
+  it("carries no session data on the bridged event", async () => {
+    const { sockets } = await setup([jfServer]);
+    sockets[0].fireOpen();
+
+    const event = h.appEmit.mock.calls.map((c) => c[0]).find((e) => e.type === "session-changed");
+    expect(Object.keys(event.meta)).toEqual(["serverId"]);
+  });
+
+  it("throttles bridged session changes, so a busy server cannot flood open tabs", async () => {
+    // Each bridged event costs every listening tab one /api/tools/sessions
+    // query, and that route fans out to every media server.
+    const { sockets } = await setup([jfServer]);
+    sockets[0].fireOpen();
+    sockets[0].fireMessage({ MessageType: "PlaybackProgress" });
+    sockets[0].fireMessage({ MessageType: "PlaybackProgress" });
+
+    const count = () =>
+      h.appEmit.mock.calls.map((c) => c[0]).filter((e) => e.type === "session-changed").length;
+    expect(count()).toBe(1);
+
+    vi.advanceTimersByTime(2000);
+    expect(count()).toBe(2); // single trailing fire
+  });
+
+  it("bridges a server-status transition to the app bus", async () => {
+    const { sockets } = await setup([jfServer]);
+    sockets[0].fireOpen();
+
+    const statusEvents = h.appEmit.mock.calls
+      .map((c) => c[0])
+      .filter((e) => e.type === "server-status");
+    expect(statusEvents).toHaveLength(1);
+    expect(statusEvents[0].meta).toMatchObject({
+      serverId: "j1",
+      serverName: "JF",
+      connected: true,
+    });
+  });
+
+  it("does not re-emit server-status for a repeated identical state", async () => {
+    // A server that is simply down produces a status event per failed reconnect
+    // attempt; the browser must not get one event per attempt.
+    const { sockets } = await setup([jfServer]);
+    sockets[0].fireOpen();
+    sockets[0].fireOpen();
+    sockets[0].fireOpen();
+
+    const statusEvents = h.appEmit.mock.calls
+      .map((c) => c[0])
+      .filter((e) => e.type === "server-status");
+    expect(statusEvents).toHaveLength(1);
   });
 });

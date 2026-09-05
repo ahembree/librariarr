@@ -67,4 +67,10 @@ export interface RealtimeServerConfig {
   url: string;
   accessToken: string;
   tlsSkipVerify: boolean;
+  /**
+   * Owner of the server. Carried here so the manager can address a bridged
+   * browser event without a database lookup per event — these fire on the hot
+   * path of the media-server socket.
+   */
+  userId: string;
 }
