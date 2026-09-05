@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { BackToTop } from "@/components/back-to-top";
 import { findScrollContainer } from "@/lib/scroll-utils";
 import { useScrollToTop } from "@/hooks/use-scroll-to-top";
+import { useRealtime } from "@/hooks/use-realtime";
+import { WifiOff } from "lucide-react";
 
 interface UnreachableServer {
   id: string;
@@ -38,9 +40,32 @@ export function AuthenticatedShell({
       .catch((e) => console.error("Failed to check maintenance status", e));
   }, []);
 
+  // Push-driven: `/api/tools/maintenance` emits `settings:changed` on an actual
+  // toggle, and the enforcer emits it when it flips maintenance itself. This
+  // subscription is also what keeps the shared EventSource alive — it lives in
+  // the shell, which never unmounts, so refCount never hits zero on a
+  // navigation and the connection is no longer torn down and rebuilt on every
+  // route change.
+  const { connected: realtimeConnected, authExpired } = useRealtime("settings:changed", checkMaintenance);
+
+  // A media server's socket dropping or recovering now arrives as a push
+  // (bridged from realtimeBus); previously this banner waited on the sidebar's
+  // 30s session poll failing.
+  useRealtime("server-status", () => {
+    fetch("/api/tools/sessions")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data) setUnreachableServers(data.unreachableServers ?? []);
+      })
+      .catch(() => {});
+  });
+
   useEffect(() => {
     checkMaintenance();
-    const interval = setInterval(checkMaintenance, 30000);
+    // Fallback only. SSE dies to proxy buffering and idle timeouts, so this
+    // stays as a safety net — but at 5 minutes rather than 30 seconds, because
+    // the push above is now the primary path.
+    const interval = setInterval(checkMaintenance, 300000);
 
     const onMaintenanceChanged = (e: Event) => {
       const detail = (e as CustomEvent<{ enabled: boolean }>).detail;
@@ -109,6 +134,20 @@ export function AuthenticatedShell({
             </span>
           </Link>
         )}
+        {authExpired ? (
+          <Link
+            href="/login"
+            className="flex shrink-0 items-center justify-center gap-2 bg-amber/15 border-b border-amber/30 px-4 py-1.5 text-sm text-amber hover:bg-amber/20 transition-colors"
+          >
+            <AlertTriangle className="h-3.5 w-3.5" />
+            <span>Your session expired &mdash; sign in again</span>
+          </Link>
+        ) : !realtimeConnected ? (
+          <div className="flex shrink-0 items-center justify-center gap-2 border-b border-muted-foreground/20 bg-muted/40 px-4 py-1.5 text-sm text-muted-foreground">
+            <WifiOff className="h-3.5 w-3.5" />
+            <span>Live updates disconnected &mdash; reconnecting</span>
+          </div>
+        ) : null}
         {maintenanceActive && (
           <Link
             href="/tools/streams"

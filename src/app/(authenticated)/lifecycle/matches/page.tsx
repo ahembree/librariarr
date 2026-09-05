@@ -694,6 +694,11 @@ export default function RuleMatchesPage() {
   }, []);
 
   useRealtime("lifecycle:detection-completed", fetchMatches);
+  // Executing an action cascade-deletes the RuleMatch rows this page renders,
+  // and a sync or purge can remove the underlying media — so detection alone
+  // was never enough to keep the list honest.
+  useRealtime("lifecycle:action-executed", fetchMatches);
+  useRealtime("sync:completed", fetchMatches);
 
   useEffect(() => {
     void (async () => { await fetchMatches(); })();

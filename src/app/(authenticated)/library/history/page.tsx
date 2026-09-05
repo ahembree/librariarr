@@ -36,6 +36,7 @@ import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { useServers } from "@/hooks/use-servers";
+import { useRealtime } from "@/hooks/use-realtime";
 import { useChipColors } from "@/components/chip-color-provider";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { normalizeResolutionLabel } from "@/lib/resolution";
@@ -489,6 +490,14 @@ export default function HistoryPage() {
   useEffect(() => {
     void (async () => { await fetchHistory(1); })();
   }, [fetchHistory]);
+
+  // The stored plays this page lists just changed (a sync, or — once Tracearr
+  // is wired up — an import slice landing). Rather than the whole-listing
+  // `sync:completed`, since that fires 16 refetches across the app and would
+  // turn a multi-hour backfill into a refetch storm across every one of them.
+  useRealtime("watch-history:updated", () => {
+    void fetchHistory(page);
+  });
 
   // ── Sort handler (server-side) ─────────────────────────────────
 

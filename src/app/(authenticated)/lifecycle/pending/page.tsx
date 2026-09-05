@@ -755,6 +755,10 @@ export default function PendingActionsPage() {
   }, [statusFilter]);
 
   useRealtime("lifecycle:action-executed", fetchActions);
+  // Detection is what CREATES pending actions. Without this the stats card
+  // above the table refreshed on a detection run and the table itself did not,
+  // so the two halves of this page disagreed.
+  useRealtime("lifecycle:detection-completed", fetchActions);
 
   useEffect(() => {
     fetchActions();

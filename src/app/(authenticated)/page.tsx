@@ -209,7 +209,19 @@ export default function DashboardPage() {
     }
   }, [selectedServerId]);
 
-  useRealtime("sync:completed", fetchStats);
+  // `fetchStats` refreshes only the headline tiles. `fetchData` also reloads the
+  // server list, library types and schedule info — all of which a sync, a
+  // server change or a scheduler run can move, and none of which had any
+  // refresh path at all.
+  useRealtime("sync:completed", fetchData);
+  useRealtime("server:changed", fetchData);
+  // Play data feeds the watch-derived tiles and charts. Fires about once per
+  // backfill slice, not per imported page.
+  useRealtime("watch-history:updated", fetchStats);
+  // Detection and execution change the figures the pipeline zone and schedule
+  // info render.
+  useRealtime("lifecycle:detection-completed", fetchData);
+  useRealtime("lifecycle:action-executed", fetchData);
 
   useEffect(() => {
     void (async () => { await fetchData(); })();
