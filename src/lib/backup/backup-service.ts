@@ -7,6 +7,11 @@ import { gzipSync, gunzipSync } from "zlib";
 import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from "crypto";
 import { invalidateServersWithoutWatchHistory } from "@/lib/media/watch-evidence";
 
+// Runtime data directory: env-resolved and outside the project (under /config in
+// the container), so Turbopack's build-time tracer cannot resolve it statically and
+// falls back to tracing the WHOLE project into the standalone output ("Dynamic
+// filesystem access causes tracing of the whole project"). Nothing here is a build
+// input, so every fs/path call it flags carries `/* turbopackIgnore: true */`.
 const BACKUP_DIR = process.env.BACKUP_DIR || "/config/backups";
 const FILENAME_REGEX = /^librariarr-backup-[\w.-]+\.json(\.gz(\.enc)?)?$/;
 
@@ -211,7 +216,7 @@ export async function restoreBackup(
     throw new Error("Invalid backup filename");
   }
 
-  const filepath = path.join(BACKUP_DIR, filename);
+  const filepath = path.join(/* turbopackIgnore: true */ BACKUP_DIR, filename);
   const BATCH_SIZE = 100;
   const tableCount = TABLE_ORDER.length;
 
@@ -224,15 +229,15 @@ export async function restoreBackup(
     }
     // Block-scope so fileData can be GC'd after decrypt
     const compressed = await (async () => {
-      const fileData = await fs.readFile(filepath);
+      const fileData = await fs.readFile(/* turbopackIgnore: true */ filepath);
       return decryptBuffer(fileData, passphrase);
     })();
     raw = gunzipSync(compressed).toString("utf-8");
   } else if (filename.endsWith(".gz")) {
-    const compressed = await fs.readFile(filepath);
+    const compressed = await fs.readFile(/* turbopackIgnore: true */ filepath);
     raw = gunzipSync(compressed).toString("utf-8");
   } else {
-    raw = await fs.readFile(filepath, "utf-8");
+    raw = await fs.readFile(/* turbopackIgnore: true */ filepath, "utf-8");
   }
 
   // Parse then immediately release the raw string to reduce peak memory
@@ -340,7 +345,7 @@ export async function listBackups(): Promise<BackupInfo[]> {
 
   let files: string[];
   try {
-    files = await fs.readdir(BACKUP_DIR);
+    files = await fs.readdir(/* turbopackIgnore: true */ BACKUP_DIR);
   } catch {
     return [];
   }
@@ -350,10 +355,10 @@ export async function listBackups(): Promise<BackupInfo[]> {
   const backups = await Promise.all(
     backupFiles.map(async (file): Promise<BackupInfo | null> => {
       try {
-        const filepath = path.join(BACKUP_DIR, file);
+        const filepath = path.join(/* turbopackIgnore: true */ BACKUP_DIR, file);
         const metaPath = filepath + ".meta.json";
 
-        const stat = await fs.stat(filepath);
+        const stat = await fs.stat(/* turbopackIgnore: true */ filepath);
 
         // Try sidecar metadata file first (instant)
         try {
@@ -380,10 +385,10 @@ export async function listBackups(): Promise<BackupInfo[]> {
 
         let raw: string;
         if (file.endsWith(".gz")) {
-          const compressed = await fs.readFile(filepath);
+          const compressed = await fs.readFile(/* turbopackIgnore: true */ filepath);
           raw = gunzipSync(compressed).toString("utf-8");
         } else {
-          raw = await fs.readFile(filepath, "utf-8");
+          raw = await fs.readFile(/* turbopackIgnore: true */ filepath, "utf-8");
         }
         const parsed = JSON.parse(raw) as { metadata: BackupMetadata };
 
@@ -412,7 +417,7 @@ export async function deleteBackup(filename: string): Promise<boolean> {
     throw new Error("Invalid backup filename");
   }
 
-  const filepath = path.join(BACKUP_DIR, filename);
+  const filepath = path.join(/* turbopackIgnore: true */ BACKUP_DIR, filename);
   try {
     await fs.unlink(filepath);
     // Also remove sidecar metadata file
@@ -445,7 +450,7 @@ export async function pruneBackups(retentionCount: number): Promise<number> {
 
 export function getBackupFilePath(filename: string): string | null {
   if (!FILENAME_REGEX.test(filename)) return null;
-  return path.join(BACKUP_DIR, filename);
+  return path.join(/* turbopackIgnore: true */ BACKUP_DIR, filename);
 }
 
 // Map Prisma model names to actual PostgreSQL table names
