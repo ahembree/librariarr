@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { runDetection, syncCollectionsAfterDetection } from "@/lib/lifecycle/detect-matches";
 import { scheduleActionsForRuleSet } from "@/lib/lifecycle/processor";
+import { eventBus } from "@/lib/events/event-bus";
 import { validateRequest, ruleRunSchema } from "@/lib/validation";
 
 export async function POST(request: NextRequest) {
@@ -51,6 +52,16 @@ export async function POST(request: NextRequest) {
   // Sync Plex collections last, so ACTION_DATE ordering reflects any actions
   // just scheduled above.
   await syncCollectionsAfterDetection(session.userId!, data.ruleSetId, results);
+
+  // Same event the scheduled processor emits. Without it, a detection run the
+  // user triggered by hand updated nothing outside the calling component,
+  // while an identical background run refreshed the Matches page and the
+  // dashboard — the opposite of what anyone expects from pressing a button.
+  eventBus.emit({
+    type: "lifecycle:detection-completed",
+    userId: session.userId!,
+    meta: { ruleSetId: data.ruleSetId ?? null, manual: true },
+  });
 
   return NextResponse.json({ ruleMatches: results });
 }

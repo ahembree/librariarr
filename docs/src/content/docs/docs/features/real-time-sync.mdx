@@ -17,6 +17,8 @@ This runs alongside — not instead of — the [scheduled sync](/docs/getting-st
 | Maintenance / blackout / transcode enforcement | New streams seen up to 30s late | New streams seen within ~½s, so the termination delay starts promptly |
 | New / removed / updated media | Appears on the next scheduled sync | Syncs just the changed/removed items seconds after the server's scan settles |
 | Watch state (played / unplayed, last watched) | Refreshed on the next full sync | Refreshed shortly after a play finishes |
+| Sidebar stream count | Polled every 30s | Pushed when a stream starts or stops |
+| Server-unreachable banner | Appeared when a 30s poll failed | Appears as soon as the connection drops |
 
 Watch state comes from your server's **server-wide** history, so a play by anyone in the household counts — not just the account Librariarr signs in as. Each refresh updates the **Play Count** and **Last Played** values that rules and queries read, so the [History page](/docs/features/library/) and your rules stay in agreement.
 
@@ -33,6 +35,24 @@ Only changes that are actually library media are applied. Three kinds are skippe
 Items in a library you have **disabled** are recognised and skipped, exactly as the full sync skips them.
 
 A full sync is still requested when the real-time path genuinely can't do the job: a change too large to apply item-by-item (100+ at once), an item naming a library section Librariarr has no record of (a new library — only a full sync can create one), a transient error reaching the server, or a full sync already running. An item that simply can't be placed in any library is skipped and logged rather than escalated.
+
+## Live updates in the browser
+
+The WebSocket connections above run on the server. A second, separate channel keeps the **pages you have open** current: the browser holds one [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) stream to Librariarr, and the app pushes an event down it whenever something changes that a page might be showing.
+
+This is why the UI updates on its own. A sync finishing, a lifecycle rule matching, an action executing, a server being added, maintenance mode being switched on, watch history being imported — each of these tells every open tab to refresh just the data it affects, instead of leaving you looking at stale figures until you reload.
+
+What that means in practice:
+
+- **Progress is pushed, not polled.** A running sync reports each committed batch, so progress bars advance without the page asking every couple of seconds. The same applies to a Tracearr history import, which can run for hours.
+- **Changes reach every tab.** Toggling maintenance mode, adding a server, or executing a pending action updates every window you have open, not just the one you did it in.
+- **Only the affected data is refetched.** Events carry no figures of their own — a page receiving one re-reads the endpoint that owns the number. That keeps a single source of truth for every value on screen, and stops a play import from forcing a full re-read of your library.
+
+<Aside type="caution">
+  If the stream drops — a reverse proxy that buffers responses or closes idle connections is the usual cause — a banner reading **Live updates disconnected** appears at the top of the page, and Librariarr reconnects automatically with backoff. On reconnect it refreshes the data on screen, because anything that happened while the stream was down was never delivered.
+
+  Every screen also keeps a slow background refresh as a fallback, so the app stays correct even with the stream permanently unavailable — just less immediate. To keep SSE working through a reverse proxy, disable response buffering for `/api/events/stream` (in nginx: `proxy_buffering off;`).
+</Aside>
 
 ## Supported servers
 

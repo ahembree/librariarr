@@ -30,15 +30,32 @@ describe("startRealtime", () => {
     expect(getRealtimeManager()).toBe(first);
   });
 
-  it("reconciles on start and on server:changed / settings:changed events", async () => {
+  it("reconciles on start and on server:changed", async () => {
     startRealtime();
     await vi.waitFor(() => expect(h.mediaServer.findMany).toHaveBeenCalledTimes(1));
 
     eventBus.emit({ type: "server:changed", userId: "u1" });
     await vi.waitFor(() => expect(h.mediaServer.findMany).toHaveBeenCalledTimes(2));
+  });
 
-    eventBus.emit({ type: "settings:changed", userId: "u1" });
-    await vi.waitFor(() => expect(h.mediaServer.findMany).toHaveBeenCalledTimes(3));
+  it("reconciles when the realtime toggle itself changes", async () => {
+    startRealtime();
+    await vi.waitFor(() => expect(h.mediaServer.findMany).toHaveBeenCalledTimes(1));
+
+    eventBus.emit({ type: "settings:changed", userId: "u1", meta: { realtimeSync: false } });
+    await vi.waitFor(() => expect(h.mediaServer.findMany).toHaveBeenCalledTimes(2));
+  });
+
+  it("ignores a settings:changed that has nothing to do with realtime", async () => {
+    // `settings:changed` is general-purpose — the maintenance toggle emits it
+    // too. Reconciling on all of them would re-read the DB and diff every
+    // media-server socket every time an unrelated setting moved.
+    startRealtime();
+    await vi.waitFor(() => expect(h.mediaServer.findMany).toHaveBeenCalledTimes(1));
+
+    eventBus.emit({ type: "settings:changed", userId: "u1", meta: { maintenanceMode: true } });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(h.mediaServer.findMany).toHaveBeenCalledTimes(1);
   });
 
   it("ignores unrelated app events", async () => {

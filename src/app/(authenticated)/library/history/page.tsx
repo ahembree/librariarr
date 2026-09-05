@@ -39,13 +39,13 @@ import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { PaginationControls } from "@/components/pagination-controls";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import { useServers } from "@/hooks/use-servers";
+import { useRealtime } from "@/hooks/use-realtime";
 import { useChipColors } from "@/components/chip-color-provider";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MEDIA_TYPE_BADGE_COLORS, MEDIA_TYPE_LABELS } from "@/lib/theme/media-type-colors";
 import { EmptyState } from "@/components/empty-state";
 import type { MediaItemWithRelations } from "@/lib/types";
-import { useRealtime } from "@/hooks/use-realtime";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -769,6 +769,18 @@ export default function HistoryPage() {
   // not depend solely on a connection staying up.
   useRealtime("tracearr:import-progress", () => {
     void fetchImportBackfillPending();
+  });
+
+  // The import is writing the very rows this page lists, so refresh them too.
+  // Previously only the notice above the table refreshed: a backfill could add
+  // tens of thousands of plays (27,046 in one observed session) while the table
+  // below it sat unchanged, which reads as "the import isn't working".
+  //
+  // `watch-history:updated` fires once per backfill slice — about every five
+  // minutes — rather than per page, so this cannot become a refetch storm.
+  useRealtime("watch-history:updated", () => {
+    void fetchImportBackfillPending();
+    void fetchHistory(page);
   });
 
   // ── Sort handler (server-side) ─────────────────────────────────

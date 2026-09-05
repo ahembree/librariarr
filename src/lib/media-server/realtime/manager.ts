@@ -4,6 +4,7 @@ import { enqueueJob } from "@/lib/jobs/client";
 import { MAIN_QUEUE, TASK_SYNC_SERVER, TASK_SYNC_WATCH_HISTORY, TASK_SYNC_INCREMENTAL } from "@/lib/jobs/constants";
 import { runEnforcerTick } from "@/lib/maintenance/enforcer";
 import type { MediaServerType } from "@/generated/prisma/client";
+import { eventBus } from "@/lib/events/event-bus";
 import { realtimeBus } from "./bus";
 import { Debouncer } from "./debounce";
 import { Throttle } from "./throttle";
@@ -29,6 +30,11 @@ const WATCH_SYNC_MAX_MS = 5 * 60_000;
 // session frames (Plex progress notifications, or a not-yet-suppressed frame)
 // can't drive the enforcer (which calls getSessions on every server) in a loop.
 const ENFORCER_MIN_INTERVAL_MS = 2_000;
+// Floor for the browser-facing `session-changed` bridge. Each bridged event
+// costs every listening tab one `/api/tools/sessions` query, and that route
+// fans out to every media server — so this is deliberately the same 2s floor
+// the Tracearr import progress uses.
+const SESSION_BRIDGE_THROTTLE_MS = 2_000;
 
 /** Identity of a server's connection config — a change forces a reconnect. */
 function connectionSignature(s: RealtimeServerConfig): string {
@@ -40,6 +46,12 @@ interface ManagedConnection {
   signature: string;
   status: RealtimeConnectionStatus;
   config: RealtimeServerConfig;
+  /**
+   * Last connected/disconnected state forwarded to the browser, so a repeated
+   * `server-status` (e.g. a reconnect attempt that fails again) does not emit
+   * a duplicate app event. Undefined until the first bridge.
+   */
+  lastBridgedConnected?: boolean;
 }
 
 export interface RealtimeStatusEntry {
@@ -64,6 +76,7 @@ export class RealtimeManager {
   private readonly connections = new Map<string, ManagedConnection>();
   private readonly syncDebouncers = new Map<string, Debouncer>();
   private readonly watchDebouncers = new Map<string, Debouncer>();
+  private readonly sessionBridges = new Map<string, Throttle>();
   // Accumulated changed/removed ratingKeys per server, applied on the sync
   // debounce fire. An event carrying no ids contributes nothing: "something
   // changed but we don't know what" is not actionable, and treating it as
@@ -184,6 +197,9 @@ export class RealtimeManager {
         // ~30s. Leading-edge throttle: immediate on a real change, floored so a
         // server that keeps pushing session frames can't drive it in a loop.
         this.enforcerThrottle.trigger();
+        // Tell the browser too, so the sidebar's stream badge updates on a push
+        // rather than on a 30s poll that round-trips to every media server.
+        this.getSessionBridge(event.serverId).trigger();
         break;
       case "library-changed":
         // Only an event that actually named items may (re)arm the debouncer. An
@@ -199,8 +215,46 @@ export class RealtimeManager {
         this.getWatchDebouncer(event.serverId).trigger();
         break;
       case "server-status":
+        this.bridgeServerStatus(event);
         break;
     }
+  }
+
+  /**
+   * Forward a media-server connection state change to the browser.
+   *
+   * `realtimeBus` is server-side only, so before this the UI could learn a
+   * server had dropped only by watching the sidebar's 30s session poll fail —
+   * a poll that round-trips to every server to find out something this layer
+   * already knew instantly.
+   *
+   * Only emitted on an actual transition. `server-status` can repeat the same
+   * state (a reconnect attempt that fails again), and a browser event per
+   * attempt would be noise on a server that is simply down.
+   */
+  private bridgeServerStatus(event: RealtimeEvent): void {
+    const managed = this.connections.get(event.serverId);
+    if (!managed) return;
+
+    // Only terminal states reach the browser. "connecting" is emitted on the
+    // way into every connect AND every reconnect attempt, so bridging it would
+    // flash the shell's "server unreachable" banner each time the socket
+    // retried — including once on normal startup, before it had ever failed.
+    if (event.status !== "connected" && event.status !== "disconnected") return;
+
+    const connected = event.status === "connected";
+    if (managed.lastBridgedConnected === connected) return;
+    managed.lastBridgedConnected = connected;
+
+    eventBus.emit({
+      type: "server-status",
+      userId: managed.config.userId,
+      meta: {
+        serverId: event.serverId,
+        serverName: managed.config.name,
+        connected,
+      },
+    });
   }
 
   /** @returns true when the event contributed at least one id. */
@@ -288,6 +342,35 @@ export class RealtimeManager {
     });
   }
 
+  /**
+   * Per-server throttle for the browser-facing `session-changed` bridge.
+   *
+   * The connection layer already collapses the Jellyfin/Emby `Sessions`
+   * firehose (a frame every ~1.5s) to real changes only, but a busy server can
+   * still produce a burst — someone scrubbing a timeline changes session state
+   * continuously. Each event costs every listening tab one `/api/tools/sessions`
+   * query, which fans out to every media server, so this is floored at the same
+   * 2s the Tracearr import progress uses.
+   */
+  private getSessionBridge(serverId: string): Throttle {
+    let throttle = this.sessionBridges.get(serverId);
+    if (!throttle) {
+      throttle = new Throttle(() => {
+        const managed = this.connections.get(serverId);
+        if (!managed) return;
+        // Carries no session data: the receiver refetches the route that owns
+        // it, so there is only ever one place the count is computed.
+        eventBus.emit({
+          type: "session-changed",
+          userId: managed.config.userId,
+          meta: { serverId },
+        });
+      }, SESSION_BRIDGE_THROTTLE_MS);
+      this.sessionBridges.set(serverId, throttle);
+    }
+    return throttle;
+  }
+
   private getWatchDebouncer(serverId: string): Debouncer {
     let debouncer = this.watchDebouncers.get(serverId);
     if (!debouncer) {
@@ -313,6 +396,8 @@ export class RealtimeManager {
     this.syncDebouncers.delete(serverId);
     this.watchDebouncers.get(serverId)?.cancel();
     this.watchDebouncers.delete(serverId);
+    this.sessionBridges.get(serverId)?.cancel();
+    this.sessionBridges.delete(serverId);
     this.pendingChanges.delete(serverId);
   }
 
@@ -339,6 +424,7 @@ export class RealtimeManager {
         url: true,
         accessToken: true,
         tlsSkipVerify: true,
+        userId: true,
       },
     });
   }

@@ -5,6 +5,7 @@ import { apiLogger } from "@/lib/logger";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
 import { invalidateWatchHistoryEvidence } from "@/lib/media/watch-evidence";
+import { eventBus } from "@/lib/events/event-bus";
 
 export async function DELETE(request: NextRequest) {
   const session = await getSession();
@@ -58,6 +59,16 @@ export async function DELETE(request: NextRequest) {
       `Purged ${result.count} media items from library "${library.title}"`
     );
 
+
+    // Purge deletes MediaItems (and cascades their WatchHistory), so every open
+    // library listing is pointing at rows that no longer exist. `sync:completed`
+    // is the event the 16 library subscribers already refetch on.
+    eventBus.emit({
+      type: "sync:completed",
+      userId: session.userId!,
+      meta: { purged: result.count },
+    });
+
     return NextResponse.json({ deleted: result.count });
   }
 
@@ -106,6 +117,16 @@ export async function DELETE(request: NextRequest) {
     "Media",
     `Purged ${result.count} ${type} media items from ${libraryIds.length} libraries`
   );
+
+
+  // Purge deletes MediaItems (and cascades their WatchHistory), so every open
+  // library listing is pointing at rows that no longer exist. `sync:completed`
+  // is the event the 16 library subscribers already refetch on.
+  eventBus.emit({
+    type: "sync:completed",
+    userId: session.userId!,
+    meta: { purged: result.count },
+  });
 
   return NextResponse.json({ deleted: result.count });
 }

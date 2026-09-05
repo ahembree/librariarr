@@ -5,6 +5,7 @@ import { syncMediaServer } from "@/lib/sync/sync-server";
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 import { syncMediaServerItems } from "@/lib/sync/sync-incremental";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
+import { emitWatchHistoryUpdated } from "@/lib/sync/watch-history-events";
 import { processLifecycleRules, executeLifecycleActions } from "@/lib/lifecycle/processor";
 import { createBackup, getBackupPassphrase, pruneBackups } from "@/lib/backup/backup-service";
 import { archiveLogs } from "@/lib/logs/archive";
@@ -181,6 +182,14 @@ const tracearrBackfill: Task = async (payload) => {
   // Watch-history-derived caches (filters, stats) must drop so listings reflect
   // the newly imported plays instead of waiting out the TTL.
   invalidateMediaCaches();
+  // Once per slice (so ~once every 5 minutes over a multi-hour walk), tell open
+  // pages the play data moved. `tracearr:import-progress` fires per page but
+  // only drives the "still importing" notice; this is what makes the rows,
+  // stats and dashboard actually reflect an import in flight.
+  await emitWatchHistoryUpdated(serverId, {
+    imported: result.count,
+    backfillPending: result.backfillPending,
+  });
 
   if (!result.backfillPending) {
     logger.info(

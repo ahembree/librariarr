@@ -39,7 +39,19 @@ If you haven't created any rule sets yet, this zone shows a shortcut to create y
 
 ### Recently Added
 
-A horizontally scrollable poster shelf of the newest additions across your libraries — 2:3 posters for movies and episodes (episodes show the series poster), square album art for music — each with an added-time badge, hover details, and type/server filters.
+A horizontally scrollable poster shelf of the newest additions across your libraries — 2:3 posters for movies and episodes, square album art for music — each with an added-time badge, hover details, and type/server filters.
+
+Each entry shows the artwork of the thing that actually changed: an episode entry uses its **season** poster (falling back to the series poster when a season has none), and a music entry uses the **album** cover rather than an artist photo.
+
+The shelf **updates on its own** as media is added or removed: it listens for sync events, so adding a file to your server surfaces it without reloading the page. With [real-time sync](/docs/features/real-time-sync/) enabled that is usually within a second or two of your server noticing.
+
+Additions are grouped into the unit you actually added, rather than one tile per file:
+
+- **Episodes** collapse per season — a season pack, or this week's episode, reads as one entry naming the season and how many episodes arrived, instead of one identical poster per episode. Two seasons of the same show stay separate, and two different shows that happen to share a title stay separate too (grouping keys on the series' TVDB/TMDB identity, not its name).
+- **Tracks** collapse per album, showing the album title over the artist.
+- **Movies** are never grouped.
+
+Clicking a grouped tile opens that season or album; clicking a single item opens the item. Grouped tiles have no hover card — one episode's file size and resolution shouldn't be presented as the whole season's.
 
 ### Insights
 

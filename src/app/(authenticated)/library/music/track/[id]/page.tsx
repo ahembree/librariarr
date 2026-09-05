@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef } from "react";
+import { useRealtime } from "@/hooks/use-realtime";
 import { useParams, useSearchParams } from "next/navigation";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { MediaDetailContent } from "@/components/media-detail-content";
@@ -12,6 +13,12 @@ import type { MediaItemWithRelations } from "@/lib/types";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
 
 export default function TrackDetailPage() {
+  // The play-history card below reads the *stored* WatchHistory table, so it
+  // only changes when a sync or an import lands. These were the only two media
+  // detail pages with no subscription at all.
+  const [syncTick, setSyncTick] = useState(0);
+  useRealtime("sync:completed", () => setSyncTick((t) => t + 1));
+  useRealtime("watch-history:updated", () => setSyncTick((t) => t + 1));
   const { id } = useParams<{ id: string }>();
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
@@ -111,7 +118,7 @@ export default function TrackDetailPage() {
         // server but without their timestamps, device, or any of the
         // completion/transcode detail a Tracearr-sourced row carries — so the
         // page shows the richer view rather than the same data twice.
-        historySection={<PlayHistory variant="card" mediaItemId={item.id} singleItem heading="Listen History" />}
+        historySection={<PlayHistory variant="card" mediaItemId={item.id} singleItem heading="Listen History" refreshKey={syncTick} />}
       />
     </MediaDetailHero>
   );

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { toast } from "sonner";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
+import { useRealtime } from "@/hooks/use-realtime";
 import {
   DEFAULT_CHIP_COLORS,
   mergeChipColors,
@@ -55,7 +56,6 @@ import type {
   ReleaseNote,
 } from "./types";
 import { PRESET_VALUES } from "./types";
-import { useRealtime } from "@/hooks/use-realtime";
 
 /** Stable empty reference — see `visibleTracearrImportStatus`. */
 const NO_TRACEARR_IMPORT_STATUS: TracearrImportStatus[] = [];
@@ -926,11 +926,32 @@ export default function SettingsPage() {
   const hasActiveSync = servers.some(
     (s) => s.syncJobs[0]?.status === "RUNNING" || s.syncJobs[0]?.status === "PENDING"
   );
+  // Pushed. `/api/servers` COUNTs MediaItem per library on every call, so the
+  // old 2s tick ran that aggregate ~30 times a minute for the whole of a sync.
+  useRealtime("sync:started", fetchServers);
+  useRealtime("sync:progress", fetchServers);
+  useRealtime("sync:completed", fetchServers);
+  useRealtime("sync:failed", fetchServers);
+  useRealtime("server:changed", fetchServers);
+
+  // Fallback only, for a dropped stream.
   useEffect(() => {
     if (!hasActiveSync) return;
-    const interval = setInterval(fetchServers, 2000);
+    const interval = setInterval(fetchServers, 15000);
     return () => clearInterval(interval);
   }, [hasActiveSync, fetchServers]);
+
+  // The per-server "syncing" button state, reconciled against the pushed server
+  // list. Derived during render rather than written back from an effect: the
+  // sync:* subscriptions above already keep `servers` current, so the finished
+  // state is a pure function of it and storing it again would only add a
+  // cascading render.
+  const activeSyncingServer = useMemo(() => {
+    if (!syncingServer) return null;
+    const latest = servers.find((s) => s.id === syncingServer)?.syncJobs[0];
+    if (latest?.status === "COMPLETED" || latest?.status === "FAILED") return null;
+    return syncingServer;
+  }, [servers, syncingServer]);
 
   // The import readout is PUSHED, not polled. The importer emits
   // `tracearr:import-progress` after each page commits (throttled there, since
@@ -1081,24 +1102,16 @@ export default function SettingsPage() {
         headers: libraryKey ? { "Content-Type": "application/json" } : undefined,
         body: libraryKey ? JSON.stringify({ libraryKey }) : undefined,
       });
-      const interval = setInterval(async () => {
-        // Inspect the freshly fetched list, not the stale closed-over `servers`
-        // snapshot — otherwise the COMPLETED/FAILED branch never fires.
-        const fresh = await fetchServers();
-        const server = fresh.find((s) => s.id === serverId);
-        const latestJob = server?.syncJobs[0];
-        if (
-          latestJob?.status === "COMPLETED" ||
-          latestJob?.status === "FAILED"
-        ) {
-          clearInterval(interval);
-          setSyncingServer(null);
-        }
-      }, 3000);
-
+      // No completion poll here any more. `servers` is refreshed by the
+      // sync:* subscriptions above, and the effect below clears the button
+      // state when the freshly pushed list shows the job finished — so this
+      // path no longer runs its own 3s /api/servers loop for up to 5 minutes
+      // alongside the one the page already had.
+      //
+      // The safety timeout stays: if every event is missed AND the fallback
+      // poll is also dead, the button must not spin forever.
       setTimeout(() => {
-        clearInterval(interval);
-        setSyncingServer(null);
+        setSyncingServer((current) => (current === serverId ? null : current));
       }, 300000);
     } catch {
       toast.error("Failed to start sync");
@@ -2844,7 +2857,7 @@ export default function SettingsPage() {
           <ServersTab
             servers={servers}
             hasActiveSync={hasActiveSync}
-            syncingServer={syncingServer}
+            syncingServer={activeSyncingServer}
             testingServer={testingServer}
             testResult={testResult}
             refreshingLibraries={refreshingLibraries}
