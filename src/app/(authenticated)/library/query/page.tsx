@@ -801,11 +801,21 @@ export default function QueryPage() {
           body: JSON.stringify({ query: definition, limit: 0 }),
         });
 
-        if (!resp.ok) throw new Error("Query failed");
+        // No `resp.ok` pre-check: a refusal is answered as plain JSON before the
+        // stream opens, and `consumeProgressStream` reads the server's reason out
+        // of it. Throwing a generic "Query failed" here would discard that.
         const data = await consumeProgressStream<{ items?: QueryResultItem[] }>(resp, onQueryProgress);
         setResults(data.items ?? []);
-      } catch {
+      } catch (error) {
+        // A failed query is not an empty one. The results header asserts
+        // "N results found", so leaving `hasRun` set rendered "0 results found"
+        // for a query that never ran — a positive claim about the library made
+        // out of an error. Stand the page back down and say what went wrong.
         setResults([]);
+        setHasRun(false);
+        toast.error("Query failed", {
+          description: error instanceof Error ? error.message : "Unknown error",
+        });
       } finally {
         setLoading(false);
         resetQueryProgress();
