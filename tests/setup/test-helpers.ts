@@ -147,6 +147,10 @@ export async function createTestServer(
   userId: string,
   overrides?: Partial<{
     name: string;
+    /** Server type — matters wherever behaviour branches on it (e.g. the
+     *  incremental sync's Plex-only watchlist carry-forward and its
+     *  Jellyfin/Emby fallback for items that report no library section). */
+    type: "PLEX" | "JELLYFIN" | "EMBY";
     url: string;
     accessToken: string;
     machineId: string;
@@ -158,7 +162,7 @@ export async function createTestServer(
   return prisma.mediaServer.create({
     data: {
       userId,
-      type: "PLEX",
+      type: overrides?.type ?? "PLEX",
       name: overrides?.name ?? "Test Server",
       url: overrides?.url ?? "http://plex.test:32400",
       accessToken: overrides?.accessToken ?? "test-access-token",
@@ -208,10 +212,10 @@ export async function createTestMediaItem(
     playCount: number;
     lastPlayedAt: Date;
     addedAt: Date;
-    parentTitle: string;
+    parentTitle: string | null;
     seriesKey: string | null;
     albumTitle: string;
-    seasonNumber: number;
+    seasonNumber: number | null;
     episodeNumber: number;
     container: string;
     duration: number;

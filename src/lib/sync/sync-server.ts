@@ -189,9 +189,15 @@ async function enrichBatch(
       batch.slice(i, end).map((item) => client.getItemMetadata(item.ratingKey))
     );
     for (let j = 0; j < results.length; j++) {
-      if (results[j].status === "fulfilled") {
-        batch[i + j] = (results[j] as PromiseFulfilledResult<MediaMetadataItem>).value;
-      }
+      const settled = results[j];
+      if (settled.status !== "fulfilled") continue;
+      // A falsy resolved value would overwrite a perfectly good bulk-listing row
+      // with `undefined`, which `buildItemData` then dereferences — aborting the
+      // whole library sync mid-page. `getItemMetadata` is contracted to throw
+      // rather than resolve nothing, but this batch is only as safe as the
+      // weakest client implementation, so don't rely on it.
+      const value = (settled as PromiseFulfilledResult<MediaMetadataItem>).value;
+      if (value) batch[i + j] = value;
     }
     // Yield between enrichment chunks to allow GC
     if (end < batch.length) {

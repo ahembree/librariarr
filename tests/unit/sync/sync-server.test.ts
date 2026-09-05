@@ -601,3 +601,94 @@ describe("syncMediaServer stale-item purge guard", () => {
     expect(staleDelete().length).toBe(1);
   });
 });
+
+describe("syncMediaServer per-item enrichment resilience", () => {
+  function mockSyncDb() {
+    mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string) => {
+      if (sql.includes('INSERT INTO "SyncJob"')) return [{ id: "sync-job-id" }];
+      if (sql.includes('SELECT "cancelRequested"')) return [{ cancelRequested: false }];
+      if (sql.includes('SELECT "id" FROM "SyncJob"')) return [{ id: "sync-job-id" }];
+      if (sql.includes('UPDATE "SyncJob"')) return [];
+      if (sql.includes("SELECT") && sql.includes('"MediaServer"')) {
+        return [{
+          id: "server-1", name: "Test Plex", url: "http://plex:32400",
+          accessToken: "token", type: "PLEX", userId: "user-1",
+          tlsSkipVerify: false, enabled: true,
+        }];
+      }
+      if (sql.includes('INSERT INTO "Library"')) return [{ id: "lib-1", enabled: true }];
+      if (sql.includes("SELECT") && sql.includes('"Library"') && sql.includes("enabled")) return [];
+      if (sql.includes("COUNT(*)") && sql.includes('"MediaItem"')) return [{ count: BigInt(0) }];
+      if (sql.includes('"updatedAt"<$2')) return [];
+      if (sql.includes('"ratingKey" = ANY')) return [];
+      if (sql.includes('INSERT INTO "MediaItem"')) return [];
+      return [];
+    });
+    mockClient.getLibraries.mockResolvedValue([
+      { key: "1", title: "Movies", type: "movie", agent: "", scanner: "" },
+    ]);
+    mockClient.getWatchCounts.mockResolvedValue(new Map());
+    mockPrisma.lifecycleException.count.mockResolvedValue(0);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockClient.testConnection.mockResolvedValue({ ok: true, serverName: "Test Plex" });
+    mockClient.bulkListingIncomplete = true; // Plex: per-item enrichment runs
+  });
+
+  it("keeps the bulk-listing item when its per-item fetch REJECTS", async () => {
+    // `enrichBatch` uses Promise.allSettled precisely so a failed per-item fetch
+    // leaves the (less detailed but valid) listing row in place. This is why
+    // `getItemMetadata` must reject rather than resolve `undefined`: a resolved
+    // undefined counts as "fulfilled" and would be written OVER the good row,
+    // then dereferenced by buildItemData — aborting the whole library sync.
+    mockSyncDb();
+    mockClient.getLibraryItemsPage.mockResolvedValue({
+      items: [{ ratingKey: "rk1", title: "Movie A", type: "movie" }],
+      total: 1,
+    });
+    mockClient.getItemMetadata.mockRejectedValue(new Error("gone mid-sync"));
+
+    await syncMediaServer("server-1");
+
+    // The sync COMPLETED rather than dying, and the row was still written.
+    expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBeGreaterThan(0);
+    const inserts = findDbCalls('INSERT INTO "MediaItem"');
+    expect(inserts.length).toBeGreaterThan(0);
+    expect(inserts.some((args) => args.includes("Movie A"))).toBe(true);
+  });
+
+  it("keeps the bulk-listing item when a client RESOLVES nothing", async () => {
+    // Defense in depth for the same failure: `getItemMetadata` is contracted to
+    // throw rather than resolve undefined, but allSettled counts a resolved
+    // undefined as "fulfilled", so the batch must not take it on faith.
+    mockSyncDb();
+    mockClient.getLibraryItemsPage.mockResolvedValue({
+      items: [{ ratingKey: "rk1", title: "Movie A", type: "movie" }],
+      total: 1,
+    });
+    mockClient.getItemMetadata.mockResolvedValue(undefined);
+
+    await syncMediaServer("server-1");
+
+    expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBeGreaterThan(0);
+    expect(findDbCalls('INSERT INTO "MediaItem"').some((args) => args.includes("Movie A"))).toBe(true);
+  });
+
+  it("uses the enriched item when the per-item fetch succeeds", async () => {
+    mockSyncDb();
+    mockClient.getLibraryItemsPage.mockResolvedValue({
+      items: [{ ratingKey: "rk1", title: "Stale Title", type: "movie" }],
+      total: 1,
+    });
+    mockClient.getItemMetadata.mockResolvedValue({
+      ratingKey: "rk1", title: "Enriched Title", type: "movie",
+    });
+
+    await syncMediaServer("server-1");
+
+    const inserts = findDbCalls('INSERT INTO "MediaItem"');
+    expect(inserts.some((args) => args.includes("Enriched Title"))).toBe(true);
+  });
+});
