@@ -477,7 +477,7 @@ Some fields are **series-aggregate** fields — `availableEpisodeCount`, `watche
 :::note[Plays by other users count too]
 **Play Count**, **Last Played** and **Series Last Played** reflect plays by **every** user on your media server, not just the account Librariarr signs in as. They're kept in step with the same watch history the [History page](/docs/features/library/) shows, so if a rule ever disagrees with History for a title, run a sync.
 
-**Is Watchlisted** is different: a Plex watchlist belongs to *your* Plex account, and Librariarr reads it during a full sync — so watchlist changes appear on the next full sync rather than instantly.
+**Is Watchlisted** is different: a Plex watchlist belongs to *your* Plex account, and Librariarr reads it during a full sync — so watchlist changes appear on the next full sync rather than instantly. Every item in the library is checked against the watchlist on that sync, whether or not its own metadata changed, so removing a title from your watchlist clears the flag just as adding one sets it. If the watchlist cannot be fetched (plex.tv unreachable, token expired), the stored flags are kept unchanged for that sync and the failure is logged, rather than every item being marked as not watchlisted.
 :::
 
 When Series Scope is **off** and your rule mixes an aggregate field with a per-episode field (for example, *available episode count ≥ 20 **and** resolution = 4K*), the show first has to qualify on the aggregate, and then a member-scoped file delete acts only on the episodes that individually satisfy the per-episode conditions (here, just the 4K episodes) — not every episode of the series. With Series Scope **on**, the same rule deletes the whole series.

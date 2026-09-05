@@ -38,6 +38,8 @@ Items in a library you have **disabled** are recognised and skipped, exactly as 
 
 A full sync is still requested when the real-time path genuinely can't do the job: a change too large to apply item-by-item (100+ at once), an item naming a library section Librariarr has no record of (a new library — only a full sync can create one), a transient error reaching the server, or a full sync already running. An item that simply can't be placed in any library is skipped and logged rather than escalated.
 
+Jellyfin and Emby do not label an item with its library the way Plex does, so a newly added item there is placed by asking the server for the item's parent chain and taking the library in it. Adding an item to Jellyfin or Emby is therefore incremental too; before this every add on those servers fell back to a full sync.
+
 Every full sync — scheduled, manual, real-time or lifecycle-triggered — logs what started it on its `Starting sync for server … — triggered by …` line in **System → Logs**, so a sync that appears off-schedule can always be traced to its cause.
 
 ## Live updates in the browser

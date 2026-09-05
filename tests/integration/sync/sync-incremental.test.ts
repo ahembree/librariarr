@@ -25,8 +25,15 @@ vi.mock("@/lib/image-cache/image-cache", () => ({
 }));
 
 const mockGetItemMetadata = vi.fn();
+// Jellyfin/Emby: which library an item lives in, resolved from its ancestors.
+// Undefined by default, so a test that does not care behaves as a server with
+// no such lookup.
+const mockResolveLibraryKey = vi.fn();
 vi.mock("@/lib/media-server/factory", () => ({
-  createMediaServerClient: vi.fn(() => ({ getItemMetadata: mockGetItemMetadata })),
+  createMediaServerClient: vi.fn(() => ({
+    getItemMetadata: mockGetItemMetadata,
+    resolveLibraryKey: mockResolveLibraryKey,
+  })),
 }));
 
 // Post-write side effects, asserted directly: a run can both write rows AND
@@ -579,6 +586,101 @@ describe("syncMediaServerItems", () => {
     expect(result.status).toBe("fell-back");
     expect(result.unresolved).toBe(1);
   });
+  // ── Jellyfin/Emby: placing an item the server does not label ──────────
+  // Their items carry no library section, so a brand-new item used to be
+  // unresolved on every add — and unresolved escalates on those servers, so
+  // every single add cost a whole-server sync.
+
+  it("places a new Jellyfin item through its ancestors instead of escalating", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { name: "JF", type: "JELLYFIN" });
+    const library = await createTestLibrary(server.id, { key: "lib-1", type: "MOVIE" });
+    const item = movieMeta("jf-new", { title: "New on Jellyfin" });
+    delete (item as { librarySectionID?: number }).librarySectionID;
+    mockGetItemMetadata.mockResolvedValue(item);
+    mockResolveLibraryKey.mockResolvedValue("lib-1");
+
+    const result = await syncMediaServerItems(server.id, ["jf-new"], []);
+
+    expect(result.status).toBe("done");
+    expect(result.upserted).toBe(1);
+    expect(result.unresolved).toBe(0);
+    expect(mockResolveLibraryKey).toHaveBeenCalledWith("jf-new");
+    const row = await getTestPrisma().mediaItem.findFirst({ where: { ratingKey: "jf-new" } });
+    expect(row?.libraryId).toBe(library.id);
+  });
+
+  it("does not look up the library for an item it already holds", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { name: "JF", type: "JELLYFIN" });
+    const library = await createTestLibrary(server.id, { key: "lib-1", type: "MOVIE" });
+    await createTestMediaItem(library.id, { ratingKey: "jf-known", title: "Old title" });
+    const item = movieMeta("jf-known", { title: "Renamed" });
+    delete (item as { librarySectionID?: number }).librarySectionID;
+    mockGetItemMetadata.mockResolvedValue(item);
+
+    const result = await syncMediaServerItems(server.id, ["jf-known"], []);
+
+    expect(result.status).toBe("done");
+    expect(result.upserted).toBe(1);
+    expect(mockResolveLibraryKey).not.toHaveBeenCalled();
+  });
+
+  it("skips a Jellyfin show resolved into a series library without escalating", async () => {
+    // One new episode makes Jellyfin report the episode, its season and its
+    // show as added. The show resolves to the same library, is the wrong type
+    // for it, and must be skipped — not left unresolved (a full sync).
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { name: "JF", type: "JELLYFIN" });
+    await createTestLibrary(server.id, { key: "tv-1", type: "SERIES" });
+    mockGetItemMetadata.mockResolvedValue({
+      ratingKey: "jf-show", key: "/Items/jf-show", type: "show", title: "A Show",
+      Guid: [{ id: "tvdb://1" }],
+    });
+    mockResolveLibraryKey.mockResolvedValue("tv-1");
+
+    const result = await syncMediaServerItems(server.id, ["jf-show"], []);
+
+    expect(result.status).toBe("done");
+    expect(result.upserted).toBe(0);
+    expect(result.skippedNonMedia).toBe(1);
+    expect(result.unresolved).toBe(0);
+  });
+
+  it("escalates when a Jellyfin item's ancestors name a library we have no row for", async () => {
+    // Only a full sync creates Library rows, so a new library is the one
+    // reason a placed item still warrants one.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { name: "JF", type: "JELLYFIN" });
+    await createTestLibrary(server.id, { key: "lib-1", type: "MOVIE" });
+    const item = movieMeta("jf-newlib");
+    delete (item as { librarySectionID?: number }).librarySectionID;
+    mockGetItemMetadata.mockResolvedValue(item);
+    mockResolveLibraryKey.mockResolvedValue("lib-brand-new");
+
+    const result = await syncMediaServerItems(server.id, ["jf-newlib"], []);
+
+    expect(result.status).toBe("fell-back");
+    expect(result.reason).toContain("no matching Library row");
+  });
+
+  it("still falls back when the ancestors lookup fails", async () => {
+    // Exactly what every add used to cost — a transient failure here must be
+    // no worse than before the lookup existed, and never a dropped change.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { name: "JF", type: "JELLYFIN" });
+    await createTestLibrary(server.id, { key: "lib-1", type: "MOVIE" });
+    const item = movieMeta("jf-fail");
+    delete (item as { librarySectionID?: number }).librarySectionID;
+    mockGetItemMetadata.mockResolvedValue(item);
+    mockResolveLibraryKey.mockRejectedValue(new Error("timeout"));
+
+    const result = await syncMediaServerItems(server.id, ["jf-fail"], []);
+
+    expect(result.status).toBe("fell-back");
+    expect(result.unresolved).toBe(1);
+  });
+
   it("runs cache invalidation and the sync event even when it also falls back", async () => {
     const { server, library } = await seed();
     await createTestLibrary(server.id, { key: "2", type: "MOVIE" });

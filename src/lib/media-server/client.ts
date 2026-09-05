@@ -63,6 +63,14 @@ export interface MediaServerClient {
 
   // Item metadata
   getItemMetadata(ratingKey: string): Promise<MediaMetadataItem>;
+  /**
+   * Which library an item belongs to, as the `key` `getLibraries()` reports,
+   * or null when it cannot be determined. Optional: Plex carries the section
+   * on the item itself (`librarySectionID`), Jellyfin/Emby need a lookup. The
+   * incremental sync uses it to place an item it has never stored — without
+   * it every new Jellyfin/Emby item escalated to a whole-server sync.
+   */
+  resolveLibraryKey?(ratingKey: string): Promise<string | null>;
 
   // Watch data
   getWatchCounts(): Promise<
