@@ -93,7 +93,7 @@
     "react-dom": "19.2.8",
     "recharts": "^3.10.1",
     "sharp": "^0.35.3",
-    "sonner": "^2.0.7",
+    "sonner": "^2.0.8",
     "tailwind-merge": "^3.6.0",
     "ws": "^8.21.1",
     "zod": "^4.4.3"
