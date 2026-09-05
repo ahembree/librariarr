@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
+import { eventBus } from "@/lib/events/event-bus";
 import { validateRequest, titlePreferenceSchema } from "@/lib/validation";
 
 export async function GET() {
@@ -71,6 +72,15 @@ export async function PUT(request: NextRequest) {
   // dedup canonical selection; drop all media-derived caches so listings/stats
   // don't serve the previous preference for up to the TTL.
   invalidateMediaCaches();
+
+  // recomputeCanonical has just changed which copy — and therefore which title
+  // and artwork — every listing renders. Dropping the caches only helps the
+  // next request; an open page needs to be told to make one.
+  eventBus.emit({
+    type: "sync:completed",
+    userId: session.userId,
+    meta: { titlePreferenceChanged: true },
+  });
 
   return NextResponse.json({
     preferredTitleServerId: settings.preferredTitleServerId,

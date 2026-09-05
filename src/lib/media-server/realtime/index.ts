@@ -45,7 +45,14 @@ export function startRealtime(): void {
 
   // Reconcile the connection set whenever servers or the realtime toggle change.
   state.unsubscribe = eventBus.subscribe((event) => {
-    if (event.type === "server:changed" || event.type === "settings:changed") {
+    // `settings:changed` is a general-purpose event — the maintenance toggle
+    // emits it too — but only the realtime switch changes the connection set.
+    // Reconciling on all of them would re-read the DB and diff every media
+    // server socket every time an unrelated setting moved. The 60s safety pass
+    // below covers anything this filter turns out to miss.
+    const isRealtimeSetting =
+      event.type === "settings:changed" && event.meta?.realtimeSync !== undefined;
+    if (event.type === "server:changed" || isRealtimeSetting) {
       state.manager
         .reconcile()
         .catch((error) => logger.debug("Realtime", "Reconcile after event failed", { error: String(error) }));

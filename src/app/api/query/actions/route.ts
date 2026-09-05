@@ -9,6 +9,7 @@ import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHono
 import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
 import { arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
 import { hasArrRules, hasSeerrRules } from "@/lib/conditions/helpers";
+import { eventBus } from "@/lib/events/event-bus";
 import type { ConditionGroup } from "@/lib/conditions/types";
 import { validateRequest, queryActionSchema } from "@/lib/validation";
 import { progressStreamResponse } from "@/lib/progress/stream";
@@ -448,6 +449,19 @@ export async function POST(request: NextRequest) {
       );
 
       emit({ type: "phase", key: "finalize" });
+
+      // The NDJSON stream above reports progress to the tab that started the
+      // run and nowhere else — but this route deletes media, so every library
+      // listing, the Matches page and the dashboard are stale for everyone
+      // else the moment it finishes.
+      if (executed > 0 || failed > 0) {
+        eventBus.emit({
+          type: "lifecycle:action-executed",
+          userId: session.userId!,
+          meta: { executed, failed, source: "query" },
+        });
+      }
+
       return { executed, failed, skipped, errors };
     },
     { signal: request.signal },

@@ -7,6 +7,7 @@ import { validateRequest, actionExecuteSchema } from "@/lib/validation";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
 import { sendDiscordNotification, buildFailureSummaryEmbed } from "@/lib/discord/client";
+import { eventBus } from "@/lib/events/event-bus";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -259,6 +260,18 @@ export async function POST(request: NextRequest) {
     } catch {
       // Don't let notification failures break the response
     }
+  }
+
+  // Same event the scheduled executor emits. A manual Execute deletes media,
+  // clears RuleMatch rows and moves the deletion stats — so the Pending list,
+  // the Matches page and the dashboard pipeline are all stale the moment it
+  // returns, and nothing was telling them.
+  if (executed > 0 || failed > 0) {
+    eventBus.emit({
+      type: "lifecycle:action-executed",
+      userId: session.userId!,
+      meta: { executed, failed, manual: true },
+    });
   }
 
   return NextResponse.json({ executed, failed, errors });
