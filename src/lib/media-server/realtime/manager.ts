@@ -78,9 +78,12 @@ export class RealtimeManager {
   private readonly watchDebouncers = new Map<string, Debouncer>();
   private readonly sessionBridges = new Map<string, Throttle>();
   // Accumulated changed/removed ratingKeys per server, applied on the sync
-  // debounce fire. `forceFull` is set when an event can't be applied
-  // incrementally (no ids — e.g. Plex's scan-ended activity) → full sync.
-  private readonly pendingChanges = new Map<string, { changed: Set<string>; removed: Set<string>; forceFull: boolean }>();
+  // debounce fire. An event carrying no ids contributes nothing: "something
+  // changed but we don't know what" is not actionable, and treating it as
+  // "resync everything" is what made a single library event cost a full
+  // full server sync. Reconciliation for anything the push channel never reports
+  // belongs to the scheduled full sync.
+  private readonly pendingChanges = new Map<string, { changed: Set<string>; removed: Set<string> }>();
   private readonly enforcerThrottle: Throttle;
   private readonly socketFactory: SocketFactory;
   private reconciling = false;
@@ -199,8 +202,14 @@ export class RealtimeManager {
         this.getSessionBridge(event.serverId).trigger();
         break;
       case "library-changed":
-        this.accumulateLibraryChange(event);
-        this.getSyncDebouncer(event.serverId).trigger();
+        // Only an event that actually named items may (re)arm the debouncer. An
+        // id-less one contributes nothing, so letting it call trigger() would
+        // reset the 5s quiet window and hold real accumulated ids hostage until
+        // the 5-minute ceiling — a Jellyfin scan emitting periodic empty
+        // LibraryChanged frames could delay an add by minutes.
+        if (this.accumulateLibraryChange(event)) {
+          this.getSyncDebouncer(event.serverId).trigger();
+        }
         break;
       case "watch-changed":
         this.getWatchDebouncer(event.serverId).trigger();
@@ -248,22 +257,23 @@ export class RealtimeManager {
     });
   }
 
-  private accumulateLibraryChange(event: RealtimeEvent): void {
-    let pending = this.pendingChanges.get(event.serverId);
-    if (!pending) {
-      pending = { changed: new Set(), removed: new Set(), forceFull: false };
-      this.pendingChanges.set(event.serverId, pending);
-    }
+  /** @returns true when the event contributed at least one id. */
+  private accumulateLibraryChange(event: RealtimeEvent): boolean {
     const detail = event.detail as LibraryChangeDetail | undefined;
     const changed = detail?.changedIds ?? [];
     const removed = detail?.removedIds ?? [];
-    if (changed.length === 0 && removed.length === 0) {
-      // No specific items (e.g. Plex's scan-ended activity) — reconcile fully.
-      pending.forceFull = true;
-    } else {
-      for (const id of changed) pending.changed.add(id);
-      for (const id of removed) pending.removed.add(id);
+    // An id-less event (a Jellyfin `LibraryChanged` whose arrays are all empty)
+    // contributes nothing rather than escalating the window to a full sync.
+    if (changed.length === 0 && removed.length === 0) return false;
+
+    let pending = this.pendingChanges.get(event.serverId);
+    if (!pending) {
+      pending = { changed: new Set(), removed: new Set() };
+      this.pendingChanges.set(event.serverId, pending);
     }
+    for (const id of changed) pending.changed.add(id);
+    for (const id of removed) pending.removed.add(id);
+    return true;
   }
 
   private getSyncDebouncer(serverId: string): Debouncer {
@@ -287,16 +297,30 @@ export class RealtimeManager {
     const changedIds = pending ? [...pending.changed] : [];
     const removedIds = pending ? [...pending.removed] : [];
     const total = changedIds.length + removedIds.length;
-    const forceFull = pending?.forceFull ?? true;
 
-    if (forceFull || total === 0 || total > INCREMENTAL_MAX_ITEMS) {
-      // Full reconciliation — same jobKey as the scheduler so it dedupes.
+    if (total === 0) {
+      // Nothing actionable accumulated. `accumulateLibraryChange` drops id-less
+      // events, so this is either a debounce fire that raced an empty window or
+      // a server that reported a change without naming anything. Either way a
+      // full sync would be a guess; the scheduled sync reconciles.
+      logger.debug("Realtime", `Library change for server ${serverId} named no items — nothing to sync`);
+      return;
+    }
+
+    if (total > INCREMENTAL_MAX_ITEMS) {
+      // Genuinely bulk — listing the libraries beats fetching each item.
+      // Same jobKey as the scheduler so it dedupes.
       void enqueueJob(
         TASK_SYNC_SERVER,
         { serverId },
         { jobKey: `sync:${serverId}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
       ).then((ok) => {
-        if (ok) logger.info("Realtime", `Enqueued full sync for server ${serverId} (library changed)`);
+        if (ok) {
+          logger.info(
+            "Realtime",
+            `Enqueued full sync for server ${serverId} (${total} changed items exceeds ${INCREMENTAL_MAX_ITEMS})`,
+          );
+        }
       });
       return;
     }

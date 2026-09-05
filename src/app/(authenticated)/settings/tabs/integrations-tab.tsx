@@ -34,12 +34,13 @@ import {
   Pencil,
   Boxes,
   Inbox,
+  History,
   AlertCircle,
   Link2,
   ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { ArrInstance, SeerrInstance, TestResult } from "../types";
+import type { ArrInstance, SeerrInstance, TracearrInstance, TestResult } from "../types";
 
 // ─── Type styling: matches the colored dots used on the media-detail Arr cards ───
 
@@ -75,6 +76,12 @@ const INTEGRATION_TYPE_STYLES: Record<string, IntegrationTypeStyle> = {
     tile: "bg-violet-500/10",
     border: "border-violet-500/30",
   },
+  tracearr: {
+    text: "text-cyan-400",
+    dot: "bg-cyan-400 shadow-[0_0_6px] shadow-cyan-400/60",
+    tile: "bg-cyan-500/10",
+    border: "border-cyan-500/30",
+  },
 };
 
 // ─── Shared sub-components ───
@@ -83,11 +90,15 @@ const INTEGRATION_TYPE_STYLES: Record<string, IntegrationTypeStyle> = {
 function ConfirmRemoveInstanceDialog({
   instance,
   productName,
+  consequence,
   onOpenChange,
   onConfirm,
 }: {
   instance: { id: string; name: string } | null;
   productName: string;
+  /** Replaces the default lifecycle-matching consequence copy, which only fits
+   *  the Arr/Seerr integrations. */
+  consequence?: React.ReactNode;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
 }) {
@@ -97,8 +108,12 @@ function ConfirmRemoveInstanceDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Remove {instance?.name}?</AlertDialogTitle>
           <AlertDialogDescription>
-            This removes the {productName} connection from Librariarr — lifecycle rules will no
-            longer match or act on items through it. Nothing is changed in {productName} itself.
+            {consequence ?? (
+              <>
+                This removes the {productName} connection from Librariarr — lifecycle rules will no
+                longer match or act on items through it. Nothing is changed in {productName} itself.
+              </>
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -128,7 +143,11 @@ function TestResultBadge({ result }: { result: TestResult }) {
     >
       <Icon className="h-3 w-3 shrink-0" />
       {result.ok
-        ? `Connected${result.appName ? ` to ${result.appName}` : ""}${result.version ? ` v${result.version}` : ""}`
+        ? `Connected${result.appName ? ` to ${result.appName}` : ""}${result.version ? ` v${result.version}` : ""}${
+            result.serverCount !== undefined
+              ? ` · ${result.serverCount} ${result.serverCount === 1 ? "server" : "servers"}`
+              : ""
+          }`
         : `Failed: ${result.error}`}
     </span>
   );
@@ -242,6 +261,21 @@ interface SeerrEditing {
   testResult: TestResult | null;
 }
 
+interface TracearrForm {
+  name: string;
+  url: string;
+  apiKey: string;
+}
+
+interface TracearrEditing {
+  id: string | null;
+  form: TracearrForm;
+  saving: boolean;
+  error: string;
+  testing: boolean;
+  testResult: TestResult | null;
+}
+
 interface ArrSectionProps {
   instances: ArrInstance[];
   showForm: boolean;
@@ -286,11 +320,38 @@ interface SeerrSectionProps {
   onToggleEnabled: (id: string, enabled: boolean) => void;
 }
 
+/**
+ * Tracearr has no unsaved-instance test endpoint (only
+ * `POST /api/integrations/tracearr/[id]/test-connection`), so the add form has
+ * no Test button — `POST /api/integrations/tracearr` verifies the connection
+ * itself and returns the failure detail, which the form shows inline. Hence no
+ * `testing`/`testResult`/`onTest` here; the test props live on `editing`.
+ */
+interface TracearrSectionProps {
+  instances: TracearrInstance[];
+  showForm: boolean;
+  form: TracearrForm;
+  saving: boolean;
+  error: string;
+  editing: TracearrEditing;
+  onShowForm: (show: boolean) => void;
+  onFormChange: (form: TracearrForm) => void;
+  onAdd: () => void;
+  onDelete: (id: string) => void;
+  onStartEdit: (instance: TracearrInstance) => void;
+  onSaveEdit: () => void;
+  onCancelEdit: () => void;
+  onEditFormChange: (form: TracearrForm) => void;
+  onEditTest: () => void;
+  onToggleEnabled: (id: string, enabled: boolean) => void;
+}
+
 export interface IntegrationsTabProps {
   sonarr: ArrSectionProps;
   radarr: ArrSectionProps;
   lidarr: ArrSectionProps;
   seerr: SeerrSectionProps;
+  tracearr: TracearrSectionProps;
 }
 
 // ─── Component ───
@@ -300,13 +361,15 @@ export function IntegrationsTab({
   radarr,
   lidarr,
   seerr,
+  tracearr,
 }: IntegrationsTabProps) {
   return (
     <div className="space-y-6">
       <div className="space-y-1">
         <h2 className="text-xl font-semibold">Integrations</h2>
         <p className="text-sm text-muted-foreground">
-          Connect Sonarr, Radarr, Lidarr, and Overseerr/Jellyseerr for lifecycle rule matching and request data.
+          Connect Sonarr, Radarr, Lidarr, and Overseerr/Jellyseerr for lifecycle rule matching and request
+          data, and Tracearr for detailed playback history.
         </p>
       </div>
 
@@ -339,6 +402,9 @@ export function IntegrationsTab({
 
       {/* Seerr */}
       <SeerrSection {...seerr} />
+
+      {/* Tracearr */}
+      <TracearrSection {...tracearr} />
     </div>
   );
 }
@@ -937,6 +1003,300 @@ function SeerrSection({
       <ConfirmRemoveInstanceDialog
         instance={confirmDelete}
         productName="Seerr"
+        onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
+        onConfirm={() => {
+          if (confirmDelete) onDelete(confirmDelete.id);
+          setConfirmDelete(null);
+        }}
+      />
+    </section>
+  );
+}
+
+// ─── Tracearr Section ───
+
+function TracearrSection({
+  instances,
+  showForm,
+  form,
+  saving,
+  error,
+  editing,
+  onShowForm,
+  onFormChange,
+  onAdd,
+  onDelete,
+  onStartEdit,
+  onSaveEdit,
+  onCancelEdit,
+  onEditFormChange,
+  onEditTest,
+  onToggleEnabled,
+}: TracearrSectionProps) {
+  const style = INTEGRATION_TYPE_STYLES.tracearr;
+  const disabledCount = instances.filter((i) => !i.enabled).length;
+  const hasInstances = instances.length > 0;
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
+
+  return (
+    <section>
+      <SectionHeader
+        title="Tracearr"
+        icon={History}
+        style={style}
+        count={instances.length}
+        disabledCount={disabledCount}
+        showAddButton={hasInstances && !showForm}
+        onShowForm={() => onShowForm(!showForm)}
+      />
+
+      <p className="-mt-2 mb-4 text-xs text-muted-foreground">
+        Tracearr records every play as its own event, so a linked media server&apos;s watch history
+        carries per-play detail — completion percentage, device, player, transcode decision — that
+        Plex, Jellyfin and Emby&apos;s own history does not report. Link a server under{" "}
+        <span className="text-foreground">Media Servers → Watch history source</span>.
+      </p>
+
+      {showForm && (
+        <Card className={cn("mb-4 border-l-2", style.border)}>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Plus className={cn("h-4 w-4", style.text)} />
+              Add Tracearr Instance
+            </CardTitle>
+            <CardDescription>
+              Connection will be tested before saving.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4 sm:grid-cols-4">
+              <div>
+                <Label htmlFor="tracearr-name">Name</Label>
+                <Input
+                  id="tracearr-name"
+                  placeholder="My Tracearr"
+                  value={form.name}
+                  onChange={(e) =>
+                    onFormChange({ ...form, name: e.target.value })
+                  }
+                />
+              </div>
+              <div>
+                <Label htmlFor="tracearr-url">URL</Label>
+                <Input
+                  id="tracearr-url"
+                  placeholder="http://localhost:3000"
+                  value={form.url}
+                  onChange={(e) =>
+                    onFormChange({ ...form, url: e.target.value })
+                  }
+                />
+              </div>
+              <div>
+                <Label htmlFor="tracearr-key">API Key</Label>
+                <SecretInput
+                  id="tracearr-key"
+                  placeholder="API key from Tracearr settings"
+                  value={form.apiKey}
+                  onChange={(e) =>
+                    onFormChange({ ...form, apiKey: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+            {error && (
+              <p className="mt-2 text-sm text-destructive">{error}</p>
+            )}
+            <div className="mt-4 flex items-center gap-2">
+              <Button
+                onClick={onAdd}
+                disabled={saving || !form.name || !form.url || !form.apiKey}
+              >
+                {saving ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="mr-2 h-4 w-4" />
+                )}
+                Save
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => onShowForm(false)}
+              >
+                Cancel
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {instances.length === 0 && !showForm ? (
+        <EmptyState
+          title="Tracearr"
+          icon={History}
+          style={style}
+          description="Connect Tracearr to replace a server's coarse watch history with per-play events."
+          onAdd={() => onShowForm(true)}
+        />
+      ) : (
+        <div className="space-y-2">
+          {instances.map((instance) => (
+            <Card key={instance.id} className="overflow-hidden transition-colors hover:bg-muted/20">
+              <CardContent className="py-4">
+                {editing.id === instance.id ? (
+                  <div className="space-y-3">
+                    <div className="grid gap-4 sm:grid-cols-4">
+                      <div>
+                        <Label>Name</Label>
+                        <Input
+                          value={editing.form.name}
+                          onChange={(e) => onEditFormChange({ ...editing.form, name: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <Label>URL</Label>
+                        <Input
+                          value={editing.form.url}
+                          onChange={(e) => onEditFormChange({ ...editing.form, url: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <Label>API Key</Label>
+                        {/* Pre-filled with the masked key the GET returned. Sent back
+                            untouched, which the update schema reads as "keep the stored
+                            key" — so an edit of just the name never rotates the secret. */}
+                        <SecretInput
+                          placeholder="Leave unchanged to keep current"
+                          value={editing.form.apiKey}
+                          onChange={(e) => onEditFormChange({ ...editing.form, apiKey: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                    {editing.error && (
+                      <p className="text-sm text-destructive">{editing.error}</p>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        onClick={onSaveEdit}
+                        disabled={editing.saving || !editing.form.name || !editing.form.url || !editing.testResult?.ok}
+                      >
+                        {editing.saving ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <Save className="mr-2 h-4 w-4" />
+                        )}
+                        Save
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={onEditTest}
+                        disabled={editing.testing || !editing.form.url}
+                      >
+                        {editing.testing ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <CheckCircle className="mr-2 h-4 w-4" />
+                        )}
+                        Test
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={onCancelEdit}
+                      >
+                        Cancel
+                      </Button>
+                      {editing.testResult && <TestResultBadge result={editing.testResult} />}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
+                      <span
+                        className={cn(
+                          "h-2 w-2 shrink-0 rounded-full",
+                          style.dot,
+                          !instance.enabled && "opacity-30 shadow-none",
+                        )}
+                        aria-hidden
+                      />
+                      <div className={cn("min-w-0 flex-1 space-y-0.5", !instance.enabled && "opacity-60")}>
+                        <div className="flex items-center gap-2">
+                          <p className="truncate font-medium">{instance.name}</p>
+                          {!instance.enabled && (
+                            <ColorChip className="border-amber-500/30 bg-amber-500/15 text-[10px] font-medium text-amber-400">
+                              Disabled
+                            </ColorChip>
+                          )}
+                        </div>
+                        <p className="flex items-center gap-1.5 truncate text-sm text-muted-foreground">
+                          <Link2 className="h-3 w-3 shrink-0" />
+                          <span className="truncate font-mono text-xs">{instance.url}</span>
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Switch
+                        checked={instance.enabled}
+                        onCheckedChange={(checked) => onToggleEnabled(instance.id, checked)}
+                      />
+                      <Separator orientation="vertical" className="mx-1 h-6" />
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => onStartEdit(instance)}
+                        title="Edit instance"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => setConfirmDelete({ id: instance.id, name: instance.name })}
+                        aria-label={`Remove ${instance.name}`}
+                        title="Remove instance"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* The consequence copy deliberately does NOT promise a fallback to
+          native history. With no enabled instance left, `syncWatchHistory`
+          SKIPS a server that is still linked to a Tracearr server rather than
+          running the native path — the native path full-replaces the server's
+          rows, so falling back would destroy the per-play history that was
+          imported (and re-enabling would then re-import it alongside the native
+          rows, permanently doubling `playCount`). The linked server therefore
+          just stops updating until the admin clears the link, which is the one
+          thing this dialog has to say and previously said backwards.
+
+          No affected-server count: this tab is pure render over its section
+          props, and the link lives on `MediaServer.tracearrServerId`, which is
+          not among them. Naming the control the admin has to visit is the
+          actionable half anyway, and it reads correctly whatever the count. */}
+      <ConfirmRemoveInstanceDialog
+        instance={confirmDelete}
+        productName="Tracearr"
+        consequence={
+          <>
+            This removes the Tracearr connection from Librariarr. Any media server still linked to
+            it stops updating its watch history — the sync skips a linked server instead of falling
+            back, so the per-play history already imported is never overwritten by the
+            server&apos;s own coarser history. To return a server to its native history, set its{" "}
+            <span className="text-foreground">Watch history source</span> to &ldquo;Native (server
+            history)&rdquo; under Media Servers. Nothing is changed in Tracearr itself.
+          </>
+        }
         onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
         onConfirm={() => {
           if (confirmDelete) onDelete(confirmDelete.id);

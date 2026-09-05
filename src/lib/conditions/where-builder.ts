@@ -31,6 +31,7 @@ import {
 } from "./helpers";
 import { isStreamQueryField } from "./stream-query";
 import { MB_IN_BYTES, DURATION_MS_PER_MIN } from "./constants";
+import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { wildcardToRegex } from "./wildcard";
 import type { Condition } from "./types";
 
@@ -668,6 +669,15 @@ const streamRelationHandler: FieldHandler = (operator, value, field, negate) => 
  * stores the per-server (Plex/Jellyfin/Emby) username that played the item.
  * "Any play by that user" semantics — a single matching row satisfies the
  * positive predicate.
+ *
+ * Every clause is additionally scoped by `COMPLETED_PLAY_FILTER`, because a
+ * Tracearr-sourced row can describe a play that was merely *started*. Without
+ * it, abandoning a show two minutes in would make `watchedByUser equals alice`
+ * true — and on a DELETE rule that is the difference between reclaiming space
+ * and destroying something nobody has actually watched. The `none` forms need
+ * it just as much and in the same direction: "not watched by alice" must not be
+ * falsified by a partial play. Phase 2 applies the identical predicate when it
+ * eager-loads the relation, so the two phases cannot disagree.
  */
 const watchedByUserHandler: FieldHandler = (operator, value, _field, negate) => {
   // Wildcard operators defer to Phase 2 — Prisma can't express regex against
@@ -677,29 +687,29 @@ const watchedByUserHandler: FieldHandler = (operator, value, _field, negate) => 
   let clause: Prisma.MediaItemWhereInput;
   switch (operator) {
     case "equals":
-      clause = { watchHistory: { some: { serverUsername: { equals: strVal, mode: "insensitive" } } } };
+      clause = { watchHistory: { some: { ...COMPLETED_PLAY_FILTER, serverUsername: { equals: strVal, mode: "insensitive" } } } };
       break;
     case "notEquals":
-      clause = { watchHistory: { none: { serverUsername: { equals: strVal, mode: "insensitive" } } } };
+      clause = { watchHistory: { none: { ...COMPLETED_PLAY_FILTER, serverUsername: { equals: strVal, mode: "insensitive" } } } };
       break;
     case "contains": {
       // Enumerable multi-select — exact list membership against any user.
       const parts = strVal.split("|").filter(Boolean);
       const matchValues = parts.length > 0 ? parts : [strVal];
-      clause = { watchHistory: { some: { serverUsername: { in: matchValues, mode: "insensitive" } } } };
+      clause = { watchHistory: { some: { ...COMPLETED_PLAY_FILTER, serverUsername: { in: matchValues, mode: "insensitive" } } } };
       break;
     }
     case "notContains": {
       const parts = strVal.split("|").filter(Boolean);
       const matchValues = parts.length > 0 ? parts : [strVal];
-      clause = { watchHistory: { none: { serverUsername: { in: matchValues, mode: "insensitive" } } } };
+      clause = { watchHistory: { none: { ...COMPLETED_PLAY_FILTER, serverUsername: { in: matchValues, mode: "insensitive" } } } };
       break;
     }
     case "isNull":
-      clause = { watchHistory: { none: {} } };
+      clause = { watchHistory: { none: { ...COMPLETED_PLAY_FILTER } } };
       break;
     case "isNotNull":
-      clause = { watchHistory: { some: {} } };
+      clause = { watchHistory: { some: { ...COMPLETED_PLAY_FILTER } } };
       break;
     default:
       return {};

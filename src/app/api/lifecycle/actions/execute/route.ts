@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
+import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
 import { validateRequest, actionExecuteSchema } from "@/lib/validation";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
@@ -220,6 +221,25 @@ export async function POST(request: NextRequest) {
   }
 
   // SAFETY: Log the bounded execution count before starting any destructive operations
+  // BLAST-RADIUS CEILING — applied to the manual path too, and on the final
+  // `items` count so it reflects what would actually be destroyed rather than
+  // what was requested. A human clicking "Execute All" has seen a LIST, not
+  // necessarily its size, and the whole point of the ceiling is to catch the
+  // case where the match set itself is wrong for a reason upstream of the rule.
+  // Refusing outright (rather than confirming inline) keeps the decision in one
+  // place — the setting — instead of training the user to click through a
+  // dialog.
+  {
+    const verdict = await checkDeleteCeiling(
+      session.userId!,
+      items.map(() => ruleSet.actionType ?? "DO_NOTHING"),
+    );
+    if (!verdict.allowed) {
+      logger.warn("Lifecycle", `Refused manual execute for rule set "${ruleSet.id}" — ${verdict.reason}`);
+      return NextResponse.json({ error: verdict.reason }, { status: 400 });
+    }
+  }
+
   logger.info("Lifecycle", `Executing ${ruleSet.actionType ?? "DO_NOTHING"} on ${items.length} items for rule set "${ruleSet.id}" (${itemIds.length} match IDs, ${items.length} ownership-verified)`);
 
   const { executed, failed, errors, failures } = await executeActionsForItems(

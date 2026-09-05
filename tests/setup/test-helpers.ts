@@ -147,24 +147,46 @@ export async function createTestServer(
   userId: string,
   overrides?: Partial<{
     name: string;
+    /** Server type — matters wherever behaviour branches on it (e.g. the
+     *  incremental sync's Plex-only watchlist carry-forward and its
+     *  Jellyfin/Emby fallback for items that report no library section). */
+    type: "PLEX" | "JELLYFIN" | "EMBY";
     url: string;
     accessToken: string;
     machineId: string;
     tlsSkipVerify: boolean;
     enabled: boolean;
+    // Watch-history provenance state. A test server defaults to having its
+    // history ESTABLISHED — unmapped, already synced — so the completeness
+    // check passes and existing callers are unaffected. The schema's own
+    // default is the opposite (null = never synced), which is right for a real
+    // server that genuinely has not been read yet but would otherwise pause
+    // play-activity rules in every unrelated test.
+    tracearrServerId: string | null;
+    tracearrBackfillComplete: boolean;
+    watchHistorySyncedAt: Date | null;
   }>
 ) {
   const prisma = getTestPrisma();
   return prisma.mediaServer.create({
     data: {
       userId,
-      type: "PLEX",
+      type: overrides?.type ?? "PLEX",
       name: overrides?.name ?? "Test Server",
       url: overrides?.url ?? "http://plex.test:32400",
       accessToken: overrides?.accessToken ?? "test-access-token",
       machineId: overrides?.machineId ?? `machine-${unique()}`,
       tlsSkipVerify: overrides?.tlsSkipVerify ?? false,
       enabled: overrides?.enabled ?? true,
+      tracearrServerId: overrides?.tracearrServerId ?? null,
+      tracearrBackfillComplete: overrides?.tracearrBackfillComplete ?? false,
+      // `!== undefined`, not `??`: the default is non-null, so a nullish
+      // coalesce would silently discard an explicit `null` — which is exactly
+      // how a test says "this server's history has never been established".
+      watchHistorySyncedAt:
+        overrides?.watchHistorySyncedAt !== undefined
+          ? overrides.watchHistorySyncedAt
+          : new Date(),
     },
   });
 }
@@ -396,6 +418,22 @@ export async function createTestSeerrInstance(
       name: overrides?.name ?? "Test Seerr",
       url: overrides?.url ?? "http://seerr.test:5055",
       apiKey: overrides?.apiKey ?? "test-api-key",
+      enabled: overrides?.enabled ?? true,
+    },
+  });
+}
+
+export async function createTestTracearrInstance(
+  userId: string,
+  overrides?: Partial<{ name: string; url: string; apiKey: string; enabled: boolean }>
+) {
+  const prisma = getTestPrisma();
+  return prisma.tracearrInstance.create({
+    data: {
+      userId,
+      name: overrides?.name ?? "Test Tracearr",
+      url: overrides?.url ?? "http://tracearr.test:3000",
+      apiKey: overrides?.apiKey ?? "trr_pub_test-key",
       enabled: overrides?.enabled ?? true,
     },
   });

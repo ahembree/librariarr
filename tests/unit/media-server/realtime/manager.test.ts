@@ -178,17 +178,53 @@ describe("RealtimeManager", () => {
     );
   });
 
-  it("falls back to a full sync when a change carries no item ids", async () => {
+  it("enqueues nothing when a change carries no item ids", async () => {
     const { sockets } = await setup([jfServer]);
-    // Empty LibraryChanged (no specific items) → can't apply incrementally.
+    // Empty LibraryChanged (no specific items). "Something changed but we don't
+    // know what" is not actionable — treating it as a full reconcile is what
+    // made a single library event cost a whole-server sync. The scheduled sync
+    // remains the reconciliation backstop.
+    sockets[0].fireMessage({ MessageType: "LibraryChanged", Data: {} });
+    vi.advanceTimersByTime(30_000);
+    expect(h.enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it("does not let an id-less change discard ids accumulated in the same window", async () => {
+    const { sockets } = await setup([jfServer]);
+    sockets[0].fireMessage({ MessageType: "LibraryChanged", Data: { ItemsAdded: ["x"] } });
+    // An id-less event landing in the same debounce window used to latch
+    // `forceFull` and throw away every ratingKey collected beside it.
     sockets[0].fireMessage({ MessageType: "LibraryChanged", Data: {} });
     vi.advanceTimersByTime(30_000);
     expect(h.enqueueJob).toHaveBeenCalledWith(
-      TASK_SYNC_SERVER,
-      { serverId: "j1" },
-      expect.objectContaining({ jobKey: "sync:j1", queueName: MAIN_QUEUE }),
+      TASK_SYNC_INCREMENTAL,
+      { serverId: "j1", changedIds: ["x"], removedIds: [] },
+      expect.objectContaining({ queueName: MAIN_QUEUE }),
     );
-    expect(h.enqueueJob.mock.calls.some((c) => c[0] === TASK_SYNC_INCREMENTAL)).toBe(false);
+    expect(h.enqueueJob.mock.calls.some((c) => c[0] === TASK_SYNC_SERVER)).toBe(false);
+  });
+
+  it("an id-less event does not reset the quiet window of accumulated ids", async () => {
+    const { sockets } = await setup([jfServer]);
+    // A Jellyfin scan can emit LibraryChanged frames whose Items* arrays are all
+    // empty (e.g. only FoldersAddedTo). Those contribute nothing, so if they
+    // re-armed the 5s debounce the real id beside them would be held until the
+    // 5-minute ceiling instead of syncing "within a few seconds".
+    sockets[0].fireMessage({ MessageType: "LibraryChanged", Data: { ItemsAdded: ["a"] } });
+    vi.advanceTimersByTime(2_000);             // t=2s
+    sockets[0].fireMessage({ MessageType: "LibraryChanged", Data: {} });
+    vi.advanceTimersByTime(2_000);             // t=4s
+    sockets[0].fireMessage({ MessageType: "LibraryChanged", Data: {} });
+    expect(h.enqueueJob).not.toHaveBeenCalled();
+
+    // t=5.5s — past the window measured from the FIRST (id-carrying) event.
+    // If an id-less event re-armed the debouncer this would still be pending.
+    vi.advanceTimersByTime(1_500);
+    expect(h.enqueueJob).toHaveBeenCalledWith(
+      TASK_SYNC_INCREMENTAL,
+      { serverId: "j1", changedIds: ["a"], removedIds: [] },
+      expect.objectContaining({ queueName: MAIN_QUEUE }),
+    );
   });
 
   it("falls back to a full sync when the change set exceeds the threshold", async () => {

@@ -21,6 +21,20 @@ export type AppEventType =
   | "settings:changed"
   | "server:changed"
   /**
+   * A Tracearr import wrote plays for a server (`meta.serverId`).
+   *
+   * Carries no figures on purpose — the receiver refetches
+   * `/api/integrations/tracearr/status`, which is the one place the import
+   * readout is computed. Emitting the numbers here would mean deriving them a
+   * second time, in the importer, where they could silently disagree with what
+   * the settings page shows for the same server.
+   *
+   * Throttled by the emitter, because the archive walk commits a page roughly
+   * every second over thousands of pages and each event costs the receiver a
+   * status query.
+   */
+  | "tracearr:import-progress"
+  /**
    * A server's stored `WatchHistory` changed (`meta.serverId`).
    *
    * Separate from `sync:completed` on purpose. That event means the library was
@@ -29,6 +43,10 @@ export type AppEventType =
    * page, the watch statistics and the per-item play lists. Reusing
    * `sync:completed` would make every library page re-pull tens of thousands of
    * rows once per backfill slice, for the hours an archive walk takes.
+   *
+   * Also distinct from `tracearr:import-progress`, which says an import is in
+   * flight and drives only the "still importing" notice. This one says the data
+   * is different and should be re-read.
    */
   | "watch-history:updated"
   /**

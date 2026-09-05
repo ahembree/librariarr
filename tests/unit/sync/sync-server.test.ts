@@ -88,6 +88,7 @@ import {
   detectDynamicRange,
   detectAudioProfile,
   syncMediaServer,
+  processBatch,
 } from "@/lib/sync/sync-server";
 import type { MediaStream, MediaPart } from "@/lib/media-server/types";
 
@@ -599,5 +600,166 @@ describe("syncMediaServer stale-item purge guard", () => {
     expect(inserts[0]).toContain("rk1");
     // 500 skipped + 1 upserted == the reported total, so the purge still runs.
     expect(staleDelete().length).toBe(1);
+  });
+});
+
+describe("MediaItem upsert: non-regressive play state", () => {
+  // `playCount`/`lastPlayedAt` are the two columns destructive lifecycle rules
+  // read ("not played in N months", `playCount = 0`), and every OTHER writer of
+  // them is monotonic — both `watch-reconcile.ts` helpers use GREATEST /
+  // Math.max, and the Tracearr importer's ON CONFLICT merge does too. The item
+  // upsert was the one that was not, which made that stated invariant false.
+  //
+  // Both of `buildItemData`'s inputs can legitimately read zero for an item
+  // somebody else watched: Plex metadata carries only the admin token's own
+  // `viewCount`, `JellyfinBase.getWatchCounts()` returns an empty map by design,
+  // and `loadWatchCountsFromHistory` returns nothing while `WatchHistory` is
+  // empty. `WatchHistory` IS empty, deliberately, from the moment a server's
+  // watch-history source is switched until the newest-first Tracearr re-import
+  // reaches back — hours. Any sync landing in that window wrote
+  // `playCount = 0, lastPlayedAt = null` over the real values for every item
+  // only another household member had watched, and the trailing reconcile could
+  // not undo it: it is monotonic over a table that is, at that moment, empty.
+  //
+  // Unlike `watchedByUser`, these two are NOT gated by the evaluability guard,
+  // so nothing else stands between that and a whole-library DELETE.
+  function upsertSql(): string {
+    const call = mockPrisma.$queryRawUnsafe.mock.calls.find((args: unknown[]) =>
+      String(args[0]).includes('INSERT INTO "MediaItem"'),
+    );
+    if (!call) throw new Error("no MediaItem upsert was issued");
+    return String(call[0]);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPrisma.$queryRawUnsafe.mockResolvedValue([]);
+  });
+
+  it("merges playCount and lastPlayedAt with GREATEST, never a bare overwrite", async () => {
+    await processBatch(
+      [{ ratingKey: "100", title: "A Movie", type: "movie" } as never],
+      "lib-1",
+      "MOVIE",
+      new Map(),
+      new Map(),
+    );
+
+    const sql = upsertSql();
+    expect(sql).toContain('"playCount"=GREATEST(EXCLUDED."playCount","MediaItem"."playCount")');
+    expect(sql).toContain(
+      '"lastPlayedAt"=GREATEST(EXCLUDED."lastPlayedAt","MediaItem"."lastPlayedAt")',
+    );
+    // The exact forms that regress, spelled out so a refactor back to them fails
+    // here rather than in someone's library.
+    expect(sql).not.toContain('"playCount"=EXCLUDED."playCount"');
+    expect(sql).not.toContain('"lastPlayedAt"=EXCLUDED."lastPlayedAt"');
+  });
+
+  it("still overwrites columns the server is authoritative for", async () => {
+    // The guarantee is scoped to play state. Making everything monotonic would
+    // freeze titles, file sizes and resolutions at their first-seen values.
+    await processBatch(
+      [{ ratingKey: "100", title: "A Movie", type: "movie" } as never],
+      "lib-1",
+      "MOVIE",
+      new Map(),
+      new Map(),
+    );
+
+    const sql = upsertSql();
+    expect(sql).toContain('"title"=EXCLUDED."title"');
+    expect(sql).toContain('"fileSize"=EXCLUDED."fileSize"');
+  });
+});
+
+describe("syncMediaServer per-item enrichment resilience", () => {
+  function mockSyncDb() {
+    mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string) => {
+      if (sql.includes('INSERT INTO "SyncJob"')) return [{ id: "sync-job-id" }];
+      if (sql.includes('SELECT "cancelRequested"')) return [{ cancelRequested: false }];
+      if (sql.includes('SELECT "id" FROM "SyncJob"')) return [{ id: "sync-job-id" }];
+      if (sql.includes('UPDATE "SyncJob"')) return [];
+      if (sql.includes("SELECT") && sql.includes('"MediaServer"')) {
+        return [{
+          id: "server-1", name: "Test Plex", url: "http://plex:32400",
+          accessToken: "token", type: "PLEX", userId: "user-1",
+          tlsSkipVerify: false, enabled: true,
+        }];
+      }
+      if (sql.includes('INSERT INTO "Library"')) return [{ id: "lib-1", enabled: true }];
+      if (sql.includes("SELECT") && sql.includes('"Library"') && sql.includes("enabled")) return [];
+      if (sql.includes("COUNT(*)") && sql.includes('"MediaItem"')) return [{ count: BigInt(0) }];
+      if (sql.includes('"updatedAt"<$2')) return [];
+      if (sql.includes('"ratingKey" = ANY')) return [];
+      if (sql.includes('INSERT INTO "MediaItem"')) return [];
+      return [];
+    });
+    mockClient.getLibraries.mockResolvedValue([
+      { key: "1", title: "Movies", type: "movie", agent: "", scanner: "" },
+    ]);
+    mockClient.getWatchCounts.mockResolvedValue(new Map());
+    mockPrisma.lifecycleException.count.mockResolvedValue(0);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockClient.testConnection.mockResolvedValue({ ok: true, serverName: "Test Plex" });
+    mockClient.bulkListingIncomplete = true; // Plex: per-item enrichment runs
+  });
+
+  it("keeps the bulk-listing item when its per-item fetch REJECTS", async () => {
+    // `enrichBatch` uses Promise.allSettled precisely so a failed per-item fetch
+    // leaves the (less detailed but valid) listing row in place. This is why
+    // `getItemMetadata` must reject rather than resolve `undefined`: a resolved
+    // undefined counts as "fulfilled" and would be written OVER the good row,
+    // then dereferenced by buildItemData — aborting the whole library sync.
+    mockSyncDb();
+    mockClient.getLibraryItemsPage.mockResolvedValue({
+      items: [{ ratingKey: "rk1", title: "Movie A", type: "movie" }],
+      total: 1,
+    });
+    mockClient.getItemMetadata.mockRejectedValue(new Error("gone mid-sync"));
+
+    await syncMediaServer("server-1");
+
+    // The sync COMPLETED rather than dying, and the row was still written.
+    expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBeGreaterThan(0);
+    const inserts = findDbCalls('INSERT INTO "MediaItem"');
+    expect(inserts.length).toBeGreaterThan(0);
+    expect(inserts.some((args) => args.includes("Movie A"))).toBe(true);
+  });
+
+  it("keeps the bulk-listing item when a client RESOLVES nothing", async () => {
+    // Defense in depth for the same failure: `getItemMetadata` is contracted to
+    // throw rather than resolve undefined, but allSettled counts a resolved
+    // undefined as "fulfilled", so the batch must not take it on faith.
+    mockSyncDb();
+    mockClient.getLibraryItemsPage.mockResolvedValue({
+      items: [{ ratingKey: "rk1", title: "Movie A", type: "movie" }],
+      total: 1,
+    });
+    mockClient.getItemMetadata.mockResolvedValue(undefined);
+
+    await syncMediaServer("server-1");
+
+    expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBeGreaterThan(0);
+    expect(findDbCalls('INSERT INTO "MediaItem"').some((args) => args.includes("Movie A"))).toBe(true);
+  });
+
+  it("uses the enriched item when the per-item fetch succeeds", async () => {
+    mockSyncDb();
+    mockClient.getLibraryItemsPage.mockResolvedValue({
+      items: [{ ratingKey: "rk1", title: "Stale Title", type: "movie" }],
+      total: 1,
+    });
+    mockClient.getItemMetadata.mockResolvedValue({
+      ratingKey: "rk1", title: "Enriched Title", type: "movie",
+    });
+
+    await syncMediaServer("server-1");
+
+    const inserts = findDbCalls('INSERT INTO "MediaItem"');
+    expect(inserts.some((args) => args.includes("Enriched Title"))).toBe(true);
   });
 });

@@ -1,0 +1,210 @@
+---
+title: Tracearr
+description: Link Tracearr as a watch-history source for per-play completion, transcode decisions, and stream quality.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+[Tracearr](https://github.com/connorgallopo/tracearr) is a self-hosted playback monitor for Plex, Jellyfin, and Emby. It sits alongside your servers, records every play as it happens, and exposes the result through a read-only API.
+
+Librariarr can use Tracearr as the **watch-history source** for a media server instead of that server's own history API. You would do this because the servers' own history endpoints are thin: they tell you *that* something was played, and not much more. Tracearr records the whole play.
+
+| Detail | Native server history | Tracearr |
+|-|-|-|
+| Per-play timestamp | Plex only (Jellyfin/Emby: most recent play only) | Yes, every play |
+| Completion percentage | No | Yes (`percent_complete`, one decimal) |
+| Partial / abandoned plays | Not reported | Yes, flagged as unwatched |
+| Direct play vs. transcode | No | Yes, per video and audio stream |
+| Player and product | Device name only, Plex only | Player, product, device, platform |
+| Stream quality | No | Resolution, bitrate, source and stream codecs, subtitle decision |
+| Resumed plays | Counted as separate plays or not at all | Folded into one play with a segment count |
+
+<Aside type="note">
+  Tracearr is a *history source*, not a media server. You still connect Plex, Jellyfin, or Emby to Librariarr as usual — Tracearr only replaces where the plays for that server are read from.
+</Aside>
+
+## Prerequisites
+
+- **Tracearr 2.0.0 or newer.** Librariarr uses Tracearr's v2 API, which older builds don't serve.
+- Tracearr must already be monitoring the same media server you want to link. A server Tracearr has never seen has no history to import.
+- Librariarr needs network access to Tracearr's URL. A private address is fine — the URL is only ever read server-side.
+
+## Setup
+
+<Steps>
+
+1. In Tracearr, go to **Settings → General** and generate a **public API key**. Keys look like `trr_pub_a1b2c3…`. Copy it — Tracearr won't show it again.
+2. In Librariarr, go to **Settings → Integrations**
+3. Under the **Tracearr** section, click **Add Tracearr Instance**
+4. Enter:
+   - **Name**: A label (e.g., "Tracearr")
+   - **URL**: Tracearr base URL (e.g., `http://192.168.1.100:3000`). If Tracearr sits under a sub-path on a reverse proxy, include it (e.g., `https://media.example.com/tracearr`)
+   - **API Key**: The `trr_pub_…` key from step 1
+5. Click **Save**. The connection is tested before the instance is saved, so a bad URL or key fails here with the reason rather than being stored and silently doing nothing. Editing a saved instance gets a **Test Connection** button of its own.
+
+</Steps>
+
+### Mapping a media server
+
+Adding the instance on its own changes nothing. Tracearr aggregates several media servers behind one API, so you tell Librariarr **which Tracearr server corresponds to which of your servers**:
+
+<Steps>
+
+1. Go to **Settings → Media Servers** and expand the media server you want to switch
+2. Set **Watch history source** to the matching Tracearr server. The dropdown is populated live from Tracearr and groups its servers under the instance they came from, naming each by server name and type — so a Plex server appears as Plex.
+3. Confirm the change in the dialog
+
+</Steps>
+
+Leave the source on **the server's own history** (the default) for any server you don't want imported. The choice is per server, so one Plex server can run on Tracearr while a second stays native. The dropdown only appears once at least one enabled Tracearr instance exists.
+
+<Aside type="caution">
+  Changing a server's watch-history source — in either direction — **clears that server's stored watch history once**. The two sources produce incompatible rows (a native row is one played item, a Tracearr row is one play with completion and stream detail), so they cannot be mixed in the same table. The next watch-history sync repopulates it. Play Count and Last Played are *not* walked back: those fields are monotonic (see [Play Count vs. Watch History](/docs/features/library/#play-count-vs-watch-history)), so switching sources never makes an item look less recently watched than it already did.
+</Aside>
+
+## How the sync works
+
+The import runs as part of the normal [watch-history sync](/docs/features/library/#syncing-watch-history) — the scheduled one, the **Refresh** button on the History page, and the refresh a [real-time](/docs/features/real-time-sync/) play event triggers — with the older history handed off to a background job (see below). Per server, Librariarr picks one path: a Tracearr mapping plus an enabled Tracearr instance uses the Tracearr import; a server with no mapping uses the unchanged native path. A server that *is* mapped but whose Tracearr instance is missing or disabled is **skipped** rather than falling back — the native path would delete the imported rows on its way to replacing them, and the two sources would then be mixed. Re-enable the instance, or set the source back to the server's own history, which clears the rows deliberately.
+
+**Two API versions, on purpose.** Play events come from Tracearr's **v2** API (`/api/v2/public/history`) because v1's history records carry no media identifier at all — only title strings — and cannot be joined to a library item without guessing. Connectivity and the server list come from `/api/v1/public/health`, which is the only place the Tracearr server IDs the mapping needs are enumerated; v2 has no health route.
+
+**The import is incremental and append-only, and it is two different jobs.** A **catch-up** collects the plays that are newer than the newest one already imported — a short, bounded window that finishes in seconds however much history the server holds. That is what the scheduled sync, a real-time play event, and the **Refresh** button on the History page each run. A **backfill** walks everything *older* than the oldest play already imported, all the way back to the first play the server recorded. On a large history that is the long job, so it does not run in the foreground at all: it runs on Librariarr's background job queue.
+
+**Tracearr hands back history newest first, so Librariarr tracks two boundaries, not one.** Going *forwards* — the catch-up — it starts from the newest play it already holds, with a **1-hour overlap** so a play that landed while the previous run was mid-page isn't skipped; if a play was still in progress at that boundary, the window reaches further back to pick up its finished form, bounded to **7 days** so the window can never grow without limit. Going *backwards* — the backfill — it keeps walking older history from the oldest play it holds, page after page, until it reaches the very first play the server recorded.
+
+**The backwards walk is a one-time backfill per server, and it runs in the background.** It is queued for a server as soon as that server is mapped to a Tracearr server — the first watch-history sync after the mapping queues it, whether that's the scheduled one, a real-time play event, or a **Refresh** — and after that it keeps itself going. You never start it by hand, you can close the page, and it survives a restart or an update: the walk resumes from the oldest play it has already imported, so nothing below that point is skipped. It runs in **five-minute slices that re-queue themselves** until the walk runs out of older history, so it never monopolises the queue it shares with library syncs and lifecycle runs. It is remembered as finished only when a slice genuinely reaches the end of the history — anything that cuts one short (a restart, or the slice's own time limit) leaves it unfinished, and the next slice picks up from the oldest play imported so far instead of skipping everything below it. Once it is done, every sync for that server is just the short catch-up.
+
+**How you know when it has finished.** The server's entry in **Settings → Media Servers** carries a Tracearr status line: while the backfill is running it shows a **progress bar**, how many plays have been imported so far, and how far back in time the walk has reached, and it switches to a completed state once there is no older history left. The [History page](/docs/features/library/#syncing-watch-history) also notes when older history is still importing, so a history that only goes back so far is explained rather than mysterious.
+
+**What the progress bar measures: how far back through your history the import has reached — not a count of records.** The walk goes newest-first, so the honest question is "how much of the time span between your oldest play and your newest one has it covered?" A bar at 60% means roughly 60% of the way back to your first ever play, so the remaining 40% is the oldest stretch of your history. It is *not* "60% of your plays imported", and the number can move unevenly: a year you barely used the server crosses in seconds, a year you watched every night takes far longer.
+
+It works that way for two reasons. Tracearr's history API hands back one page at a time with a pointer to the next and no total anywhere, so there is no record count to divide by. And even if there were, a record-based bar could never reach 100% — a sizeable share of fetched plays are deliberately not imported, for the reason in the [next section](#why-the-play-count-differs-from-tautulli-or-plex). Time coverage does reach 100%, so that is what the bar shows.
+
+To know where your history starts, Librariarr asks Tracearr **once per server** for the date of its oldest play, and finds it by narrowing the date range by halves rather than by paging through everything — about **19 requests to pin down a seven-year history**, instead of the ~1,600 pages the full walk takes. If that measurement doesn't succeed (Tracearr briefly unreachable, say), nothing breaks: the import runs exactly as before and the bar simply shows as still-working, with no percentage, until the next pass measures it.
+
+**Changing a server's watch-history source starts the backfill over.** That switch clears the server's stored rows (see the caution above), and those rows are what both boundaries are measured from — so the next sync is a first run again, and a fresh backfill is queued behind it.
+
+**A Tracearr history record is an aggregate over a resume chain, not a fixed event.** Pausing a movie on Sunday and finishing it on Monday is *one* record, whose completion percentage, stop time, state, and segment count all move when you resume. So Librariarr **updates** the stored row when it sees the same play again rather than ignoring the repeat — plays are keyed on Tracearr's stable chain ID, which is what makes the import safe to overlap.
+
+<Aside type="caution" title="Tracearr-side deletions do not propagate">
+  Because the import only ever appends and updates, a play you delete in Tracearr stays in Librariarr. The only thing that clears imported plays is clearing that server's history, which happens when you change its watch-history source.
+</Aside>
+
+**The import reports live progress.** The **Refresh** button on the [History page](/docs/features/library/#syncing-watch-history) streams progress while the sync runs, with one phase per server, so a mix of Tracearr-linked and native servers reads as one coherent list. A Tracearr server's phase shows a running count of plays imported and pages fetched, and deliberately shows **no percentage**: the history API is keyset-paginated — each page hands back a cursor to the next one and nothing else, and there is no count endpoint and no total anywhere in the response — so a percentage would have to be invented from a guess at how much history the server holds. A running count is the honest version of that number. What **Refresh** streams is the catch-up, which is short by construction; the backfill runs behind it on the job queue and reports how far it has got on the server's status line in **Settings → Media Servers** instead.
+
+**You can stop a running sync, and stopping is safe.** While a sync is running the History page offers a **Stop** control; closing the page or navigating away does the same thing. Either way the import ends after the page it is on, and nothing is lost: the import only ever appends and updates, so the rows already written stay written, and both boundaries are derived from those rows — so the next run carries on from the oldest play imported rather than starting the whole history over *or* stepping past the part it never reached. A stopped run is never mistaken for a finished backfill. **Stop only ends the foreground catch-up**: the backfill is a queued background job and is not attached to the page, so it keeps going after you press Stop or close the tab. Stopping early is a normal outcome, not an error — Librariarr says the run was stopped and keeps the plays it imported.
+
+**A large history takes a while, and that is expected.** History is fetched one page at a time and Tracearr's history API returns at most 100 records per page, so a server with roughly 160,000 plays is about 1,600 sequential pages. There is nothing to press and nothing to wait on: the slices keep queueing themselves until the walk reaches the very first play, and the meantime is visible on the server's status line in Settings.
+
+**Tracearr rate-limits per API key** on a rolling one-minute window, so a bulk import is throttled by design — the backfill paces itself against that limit rather than hammering the instance, waiting the window out and carrying on instead of abandoning the run. That pacing is the other reason a big archive takes time. Stopping a foreground sync interrupts that wait too, so **Stop** takes effect within a page rather than after the backoff.
+
+### How plays are matched to your library
+
+A Tracearr play is joined to a library item by:
+
+1. **Rating key** — the server's own item ID, which Tracearr records. This is the normal path and matches exactly.
+2. **Provider ID**, in TVDB → TMDB → IMDB order, when the rating key doesn't resolve (a re-added item, a rebuilt library). For episodes the provider ID identifies the show, so the season **and** episode number must match as well.
+
+**A play that cannot be matched unambiguously is skipped, not guessed.** Lifecycle rules read this data and delete files with it, so a play attributed to the wrong item is worse than a play that's missing. Skipped plays are counted in the sync's log entry.
+
+### Partial plays
+
+Tracearr marks a play as **watched** once it crosses its own completion threshold — 85% by default, configurable per media type in Tracearr's settings. Anything short of that is a partial play: someone sampled ten minutes of a film and stopped.
+
+Partial plays **are** imported and **are** shown in the watch-history views, with their completion percentage. They deliberately **do not** count toward an item's **Play Count** and **do not** advance its **Last Played** date. A 4%-watched abandoned play is not a viewing, and because Play Count and Last Played are monotonic, letting one through would permanently mark the item as recently watched and quietly disarm every rule that depends on it.
+
+<Aside type="tip">
+  This makes "requested, sampled, abandoned" visible for the first time. An item with plays in its history but a Play Count of zero was started and never finished — a good candidate for a lifecycle rule.
+</Aside>
+
+## Why the play count differs from Tautulli (or Plex)
+
+When the backfill finishes, the number of plays Librariarr holds is usually **lower** than the number Tautulli reports for the same server — often much lower on a long-lived library. That is expected, and it is not history that went missing on the way in.
+
+**Librariarr stores a play against a library item.** Every imported play points at a specific movie, episode, or track in your library — that link is what lets a play affect **Last Played**, **Play Count**, and the lifecycle rules that read them. A play whose media has since been **deleted from your library** has nothing to point at, so it is not imported. On an older library that is a large share of the oldest history: in one real import, roughly **40% of plays from before 2023** referenced media that no longer exists on the server.
+
+Measured on a real library of ~32,000 items against an archive of 160,000 plays: **99.6% of the most recent plays resolve, falling to roughly 55–65% for plays from 2020–2022** — and of the ones that do not, over 99.8% reference media whose show is not in the library at all and which matches no provider id we hold. There is nothing to attach those plays to, so the shortfall is the library's history, not a lookup failure.
+
+**Tautulli keeps its own copy of the title**, independent of the library, which is exactly why it can still show you what you watched in 2020 and deleted in 2021. That is a difference in what the two tools are *for*, not data loss in Librariarr. Tautulli is a viewing archive; Librariarr uses watch history to decide what to do with the media **you still have** — so a play about a file that no longer exists has nothing to inform.
+
+Two more differences are on Tracearr's side, before Librariarr ever sees the data, so Tracearr's own totals will not match Tautulli's either:
+
+- **A resumed play is one record, not several.** Pausing a film on Sunday and finishing it on Monday is a single play with a segment count, where Tautulli may log each session separately.
+- **Very short plays are excluded.** Tracearr drops a play whose sessions never reached **2 minutes**, so a channel-flick or a wrong-episode click never enters its API at all.
+
+<Aside type="tip" title="Seeing the breakdown for yourself">
+  Every import writes a per-server breakdown to [System Logs](/docs/features/system-logs/), counting the plays it skipped by reason: **unresolved** (the item isn't in that server's library — usually removed, or re-added with a new rating key and no provider ID to fall back on), **ambiguous** (several candidate items, none preferable) and **unsupported type** (a live-TV, photo, or trailer play, which isn't a library item at all). A line such as `18144 new … 12625 skipped unresolved` on an old slice of history is the normal shape of this, not a fault.
+</Aside>
+
+<Aside type="note">
+  A backfill that has reported itself finished really has read your whole history — it walks until Tracearr has no older play left to hand back. A lower stored count is the skip above, not an early stop. If you want the exact date your history starts, it is on the server's Tracearr status line in **Settings → Media Servers**.
+</Aside>
+
+## What happens when media is deleted or re-added
+
+A play is stored **against a library item**, so it cannot outlive that item: deleting a movie, episode, or track from your library deletes that item's stored plays with it. This is not Tracearr-specific — it is how Librariarr's watch history has always worked, native history included, and it is the same reason old plays for deleted media are skipped on the way in (see [above](#why-the-play-count-differs-from-tautulli-or-plex)). Tracearr keeps its own copy regardless, so nothing is lost upstream — only Librariarr's link to a file it no longer has.
+
+The consequence is worth stating plainly: **a re-added item comes back looking never watched** — play count zero, no last-played date. Those are exactly the fields lifecycle rules read, so a title the household watched last month, deleted and re-downloaded, is a fresh candidate for a "not played in N months" or a play-count-of-zero delete rule.
+
+So Librariarr goes looking for it. Once a server's backfill has finished, each background run asks Tracearr for the history of the items **added in the last 7 days** and re-imports whatever plays it finds. A re-add therefore recovers on its own, within a day or so of the next background run, with nothing to press.
+
+Two limits, stated honestly:
+
+- **It is bounded per run.** Tracearr's history can only be filtered one item at a time, so a targeted lookup costs one request per item against an API that rate-limits per key. Recovery works through a capped number of items each run rather than sweeping the library; the rest are picked up by later runs while they are still inside the window.
+- **It only looks at the recent window.** An item added longer ago than that is not revisited. To force a full re-import for a server, switch its **Watch history source** to the server's own history and back again — that clears the stored rows and makes the next sync a first run, so the whole history is walked again.
+
+<Aside type="note">
+  **Deleting media while an import is running is safe.** The import checks that an item is still there immediately before writing its plays and skips whatever has gone, rather than failing the run. The plays already imported stay imported, and the run carries on.
+</Aside>
+
+## Play-activity rules pause until a server's history is known
+
+Switching a server's watch history source **clears that server's stored plays**, and the re-import that refills them runs newest-first over minutes to hours. For that whole window the server's history is genuinely incomplete — and an empty watch history is indistinguishable from "nobody watched anything".
+
+That matters because it inverts a rule. **Watched By User is not `alice`** matches *every* item when there are no plays to contradict it. So does **Play Count = 0**, and **Last Played** before any date, once those values were never established — a rule set built to protect what the household watches would instead select the entire library, and a delete action would act on it.
+
+So Librariarr **refuses to evaluate** any criterion that reads play activity while a server it targets has no known history, rather than evaluating it against evidence it knows is missing. That covers **Watched By User**, **Play Count**, **Last Played**, and the series aggregates built on them — **Series Last Played**, **Latest Episode View Date**, **Watched Episode Count** and **Watched Episode %**. Criteria that read server metadata instead — Date Added, Rating, file size, resolution — are unaffected. Concretely:
+
+- **Scheduled detection** skips those rule sets and leaves their existing matches and pending actions untouched, logging the reason to [System Logs](/docs/features/system-logs/).
+- **Rule preview, Test Item, and the rule diff** return the same reason instead of showing you a match set that detection would never produce.
+- **The Query page's actions** refuse to run for the same reason. This one matters most: a lifecycle action is scheduled days ahead and visible on the Pending page before it fires, whereas a query action executes immediately on whatever the query returned.
+
+It is **scoped to the servers each rule set or query actually targets**, so one server importing does not pause rules that read only your other servers.
+
+The same pause applies after anything else that clears a server's plays, because watch history is stored against library items and dies with them: **purging a library or a media type**, **disabling a server with "delete data"**, and **restoring a backup** (a config-only backup — the default — contains no watch history, so restoring one empties it and the next sync brings your media back with a blank slate). In each case the affected servers are marked, and the mark lifts on the next successful sync.
+
+A server's history counts as known once a sync has established it — including a sync that legitimately finds **no plays at all**. A server nobody watches is a real steady state, not an error: after its first sync, **Play Count = 0** correctly matches everything on it. What the pause covers is the case where Librariarr simply hasn't looked yet, or no longer knows.
+
+This is temporary and clears itself. The pause lifts the moment the server's history is established — when the Tracearr backfill reaches the oldest play, or when a native sync finishes. Nothing needs to be re-armed. A **brand-new server** starts paused for the same reason, until its first watch-history sync runs.
+
+<Aside type="note" title="Play Count and Last Played never go backwards either">
+  Separately from the pause, no sync can make an item look *less* watched than it already did — every writer of those two columns takes the greater of the old and new value. So a Tracearr import in progress cannot walk them back; the pause exists for the case where they were never established in the first place.
+</Aside>
+
+## Where the extra detail shows up
+
+- **Series, season, and episode pages** — the [watch history section](/docs/features/library/#watch-history-on-detail-pages) on each of these shows completion, player, and whether the play was transcoded, alongside the user and timestamp it already showed.
+- **Movie and track pages** — the same per-play card, listing every individual play of that item with the same detail. This replaces the older Watch History card, which showed a per-user total fetched live from the server with no timestamps and none of the Tracearr detail.
+- **The History page** — a **Stream** column group appears in the column picker with **Transcode**, **Completion**, **Player**, and **Stream Resolution**. All four default to **hidden**, since they are empty for any server still on its native history; turn them on from the column controls. **Stream Resolution** is what was delivered to the client, which a transcode drops below the file's own **Resolution** — that's why it is a separate column rather than reusing the existing one.
+
+Everything else — filters, the detail side panel, lifecycle criteria such as **Last Played** and **Series Last Played** — behaves exactly as before. Tracearr changes where plays come from and how much each one records, not what the rest of the app does with them.
+
+## Troubleshooting
+
+| Symptom | Cause |
+|-|-|
+| **Test Connection fails with 401** | The API key is wrong, expired, or was regenerated in Tracearr. Generate a fresh key in **Settings → General** and paste it again — the field shows a mask (`••••••••`) for the saved key, and saving without changing it keeps the stored key. |
+| **Test Connection fails with a network error** | Librariarr can't reach the URL. Check the port, and include the sub-path if Tracearr is proxied under one. |
+| **The Watch history source dropdown is empty** | The instance is disabled, or Tracearr monitors no servers yet. The list comes straight from Tracearr's health response. |
+| **A server's history is empty after a sync** | That server has no Tracearr mapping and is still on its native history, or it's mapped to the wrong Tracearr server. If you run more than one Tracearr instance, Librariarr asks each of them which servers it monitors and uses the one that owns the mapped server, so an unreachable instance shows up in [System Logs](/docs/features/system-logs/) rather than silently importing nothing. Both look identical in the UI — check the mapping against the server names Tracearr reports. |
+| **Some plays are missing, or the total is lower than Tautulli's** | Expected on any library that has had media deleted from it — see [Why the play count differs from Tautulli (or Plex)](#why-the-play-count-differs-from-tautulli-or-plex) for the full explanation and the per-reason breakdown in [System Logs](/docs/features/system-logs/). One thing that section doesn't cover: if you have since fixed the underlying items, a full library sync refreshes rating keys, but the next watch-history sync only re-examines plays inside its window and will not reach back for older skipped ones. To re-import a server's whole history, switch its **Watch history source** to the server's own history and back again, which clears the stored rows and makes the following sync a first run. |
+| **A large first import never seems to finish** | It isn't meant to finish in the page. **Refresh** only runs the catch-up; everything older is walked by a background job in five-minute slices that re-queue themselves until the history runs out. A history of that size is thousands of sequential API pages (~1,600 for 160,000 plays), paced by Tracearr's per-key rate limit, so it legitimately takes a while. Watch the Tracearr status line on the server in **Settings → Media Servers** for the imported count and how far back the walk has reached; it switches to a completed state when there is no older history left. |
+| **The import count or progress bar looks stuck** | It updates as the import writes, pushed over the same live-updates channel the rest of the app uses — no refresh needed. If the numbers do stop moving, the page falls back to re-checking every 30 seconds, so give it that long before assuming something is wrong. A count that genuinely does not move across several minutes means the walk is skipping records rather than storing them (see the breakdown in [System Logs](/docs/features/system-logs/)), not that the display is stale. |
+| **The history only goes back so far** | The backfill is still walking older history — it imports newest-first, so the gap fills in from the recent end backwards. Check the server's Tracearr status line in **Settings → Media Servers**: while it is importing it shows a progress bar (how far back through your history the walk has reached), the running count, and the oldest play reached so far, and the History page notes that older history is still coming in. Nothing is lost by leaving it alone; the walk resumes from the oldest play imported, restarts included. |
+| **A rule set is skipped with "no established play history yet"** | Working as intended — see [Play-activity rules pause until a server's history is known](#play-activity-rules-pause-until-a-servers-history-is-known). It clears itself once a sync establishes the history. A brand-new server, or one whose data was purged or restored, starts in this state deliberately. |
+| **The status line never leaves "importing"** | If the import found no plays at all, Librariarr deliberately does *not* mark it complete — "finished with zero plays" is indistinguishable from a mapping pointing at the wrong Tracearr server, and treating it as done would let rules run against an empty history. Check the mapped server name against what Tracearr reports. [System Logs](/docs/features/system-logs/) records this explicitly. Separately, the archive walk will not run at all while Tracearr's user list is unreachable — it needs it to attribute plays to the right account name, and importing without it would file them under a different username than the rest of your history. |
+| **An item shows plays but a Play Count of zero** | Working as intended — every imported play is a partial that never crossed Tracearr's completion threshold. |
+
+<Aside>
+  Librariarr only ever reads from Tracearr. It never writes history, terminates streams, or changes settings there.
+</Aside>

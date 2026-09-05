@@ -326,6 +326,33 @@ export function hasWatchedByUserRules(groups: ConditionGroup[]): boolean {
   return anyRuleMatches(groups, (f) => f === "watchedByUser");
 }
 
+/**
+ * Every field whose value comes from stored `WatchHistory`, derived from the
+ * field registry's `readsPlayActivity` flag rather than hardcoded — one
+ * `watchedByUser` reading the relation directly, `playCount`/`lastPlayedAt`
+ * denormalized from it by `watch-reconcile.ts`, and the four series aggregates
+ * computed from those two.
+ */
+export const PLAY_ACTIVITY_FIELDS = new Set(
+  CONDITION_FIELDS.filter((f) => f.readsPlayActivity).map((f) => f.value),
+);
+
+/**
+ * Whether a rule set asks anything about play activity.
+ *
+ * The trigger for `checkWatchHistoryCompleteness`. It is deliberately BROADER
+ * than `hasWatchedByUserRules`: `watchedByUser` reads the rows and so goes
+ * vacuous the instant they are gone, but `playCount = 0` and
+ * `lastPlayedAt is null` go vacuous the same way whenever the denormalized
+ * columns were never established — a server whose history has never been
+ * synced, or whose items were recreated after a purge or restore with nothing
+ * left to reconcile them from. Gating only the first left the other six
+ * answering "never watched" for an entire library on no evidence at all.
+ */
+export function hasPlayActivityRules(groups: ConditionGroup[]): boolean {
+  return anyRuleMatches(groups, (f) => PLAY_ACTIVITY_FIELDS.has(f));
+}
+
 /** Resolution rules are evaluated in-memory in both engines (Phase 1 cannot
  *  express normalizeResolutionLabel semantics) — see resolutionHandler. */
 export function hasResolutionRules(groups: ConditionGroup[]): boolean {

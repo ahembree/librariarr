@@ -23,6 +23,9 @@ const mockPrisma = vi.hoisted(() => ({
   appSettings: {
     findUnique: vi.fn(),
     findMany: vi.fn(),
+    // Read by the deletion ceiling. Defaults to no row, i.e. unlimited, which
+    // is the shipped default and keeps every existing test's behaviour.
+    findFirst: vi.fn().mockResolvedValue(null),
   },
   mediaItem: {
     findMany: vi.fn(),
@@ -97,6 +100,10 @@ vi.mock("@/lib/discord/client", () => ({
 vi.mock("@/lib/rules/lifecycle-engine", () => ({
   hasArrRules: mockHasArrRules,
   hasSeerrRules: mockHasSeerrRules,
+  // The evaluability guard now also checks watch history: an empty
+  // `WatchHistory` makes negative `watchedByUser` rules match everything.
+  hasWatchedByUserRules: vi.fn(() => false),
+  hasPlayActivityRules: vi.fn(() => false),
   hasAnyActiveRules: mockHasAnyActiveRules,
 }));
 
@@ -1447,4 +1454,71 @@ describe("executeLifecycleActions", () => {
       where: { ruleSetId: "rs1", mediaItemId: "item1" },
     });
   });
+
+  describe("deletion ceiling", () => {
+    /** Two pending DELETE_RADARR actions for one user, both currently matching. */
+    function setupTwoPendingDeletes() {
+      const items = ["item1", "item2"].map((id) => ({
+        id,
+        title: `Movie ${id}`,
+        parentTitle: null,
+        year: 2024,
+        library: { key: "1", mediaServerId: "s1" },
+        externalIds: [],
+      }));
+      mockPrisma.lifecycleAction.findMany.mockResolvedValue(
+        items.map((mediaItem, i) => ({
+          id: `a${i + 1}`,
+          userId: "u1",
+          mediaItemId: mediaItem.id,
+          mediaItem,
+          ruleSetId: "rs1",
+          actionType: "DELETE_RADARR",
+          ruleSet: { name: "Test", discordNotifyOnAction: false, userId: "u1" },
+        })),
+      );
+      mockPrisma.ruleMatch.findMany.mockResolvedValue(
+        items.map((m) => ({ ruleSetId: "rs1", mediaItemId: m.id })),
+      );
+      mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+      mockExecuteAction.mockResolvedValue(undefined);
+      mockPrisma.lifecycleAction.update.mockResolvedValue({});
+      mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
+    }
+
+    // The automated executor is the path that fires with nobody watching, so it
+    // is the one the ceiling exists for. Held actions stay PENDING and
+    // untouched — the Pending page's existing Execute button IS the manual
+    // approval, so there is no separate approval queue to build or to desync.
+    it("holds destructive actions when the run exceeds the ceiling", async () => {
+      mockPrisma.appSettings.findFirst.mockResolvedValue({ maxAutoDeleteItems: 1 });
+      setupTwoPendingDeletes();
+
+      await executeLifecycleActions();
+
+      expect(mockExecuteAction).not.toHaveBeenCalled();
+      // Untouched, not cancelled: the user still needs to find and run them.
+      expect(mockPrisma.lifecycleAction.update).not.toHaveBeenCalled();
+      expect(mockPrisma.lifecycleAction.delete).not.toHaveBeenCalled();
+    });
+
+    it("runs normally when the ceiling is not configured", async () => {
+      mockPrisma.appSettings.findFirst.mockResolvedValue(null);
+      setupTwoPendingDeletes();
+
+      await executeLifecycleActions();
+
+      expect(mockExecuteAction).toHaveBeenCalledTimes(2);
+    });
+
+    it("runs normally at exactly the ceiling", async () => {
+      mockPrisma.appSettings.findFirst.mockResolvedValue({ maxAutoDeleteItems: 2 });
+      setupTwoPendingDeletes();
+
+      await executeLifecycleActions();
+
+      expect(mockExecuteAction).toHaveBeenCalledTimes(2);
+    });
+  });
+
 });

@@ -22,12 +22,19 @@ This runs alongside — not instead of — the [scheduled sync](/docs/getting-st
 
 Watch state comes from your server's **server-wide** history, so a play by anyone in the household counts — not just the account Librariarr signs in as. Each refresh updates the **Play Count** and **Last Played** values that rules and queries read, so the [History page](/docs/features/library/) and your rules stay in agreement.
 
-Real-time library changes carry the specific items that changed, so Librariarr fetches and updates **only those items** (and deletes the removed ones) instead of re-scanning the whole server. It falls back to a full sync when a change is too large (100+ items at once), when an item or show can't be resolved, or when a full sync is already running — and the scheduled full sync remains the periodic backstop. Either way the normal in-app "sync completed" refresh applies, so updated listings surface automatically.
+Real-time library changes carry the specific items that changed, so Librariarr fetches and updates **only those items** (and deletes the removed ones) instead of re-scanning the whole server. Adding one movie syncs one movie, and deleting one episode removes one row — typically in well under a second.
 
-Only changes that are actually library media are applied. Two kinds are skipped:
+Only **item-level** events drive a sync. Servers also announce that a scan or metadata refresh *finished*, without saying what (if anything) changed; those announcements are ignored, because the only thing they could ever justify is re-scanning everything, and they fire constantly whether or not any media actually changed. Every real change — additions, updates and deletions alike — is reported at the item level, so nothing is lost. The scheduled full sync remains the periodic backstop for anything a push channel never reports at all.
+
+Only changes that are actually library media are applied. Three kinds are skipped:
 
 - **Containers** — a Plex collection, a Jellyfin/Emby box set, a playlist. This matters most for Librariarr's own [collection sync](/docs/features/lifecycle-rules/#plex-collections): writing a collection to Plex makes Plex report a library change, which would otherwise pull that collection straight back in as a phantom item.
 - **The levels above the item that changed** — adding one episode makes a server report the episode, its season *and* its show as changed. A series library stores episodes (and a music library stores tracks), so only the episode is applied; the show and season would otherwise appear as phantom rows until the next full sync cleared them.
+- **Anything outside a library section** — a movie's extras, trailers and featurettes belong to no library, so there is nothing to file them under. Plex reports these on every add: one added movie was announced alongside 27 of them.
+
+Items in a library you have **disabled** are recognised and skipped, exactly as the full sync skips them.
+
+A full sync is still requested when the real-time path genuinely can't do the job: a change too large to apply item-by-item (100+ at once), an item naming a library section Librariarr has no record of (a new library — only a full sync can create one), a transient error reaching the server, or a full sync already running. An item that simply can't be placed in any library is skipped and logged rather than escalated.
 
 ## Live updates in the browser
 
@@ -53,14 +60,14 @@ All three server types are supported, and each connected server gets its own ind
 
 | Server | Endpoint |
 |--------|----------|
-| Plex | `/:/websockets/notifications` (play, library timeline, scan activity) |
+| Plex | `/:/websockets/notifications` (play, library timeline) |
 | Jellyfin | `/socket` (sessions, `LibraryChanged`, `UserDataChanged`) |
 | Emby | `/embywebsocket` (same protocol as Jellyfin) |
 
 ## How it behaves
 
 - **Self-healing.** If a connection drops, Librariarr reconnects automatically with exponential backoff (1s up to 60s). On reconnect it re-reads current state so nothing is missed.
-- **Debounced.** A library scan that emits hundreds of change events is coalesced — the changed item IDs are accumulated and applied in a single incremental pass; a burst of playback progress events is throttled so your server isn't hammered.
+- **Debounced and deduplicated.** A library scan that emits hundreds of change events is coalesced — the changed item IDs are accumulated, deduplicated and applied in a single incremental pass; a burst of playback progress events is throttled so your server isn't hammered. A server typically reports the same item several times as it walks it through scanning, analysing and loading; that is one change, not several.
 - **Reconciled.** Adding, editing, enabling/disabling, or removing a server immediately opens or closes its connection. A safety re-check also runs every minute.
 
 ## Enabling / disabling
