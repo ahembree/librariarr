@@ -29,6 +29,19 @@ vi.mock("@/lib/media-server/factory", () => ({
   createMediaServerClient: vi.fn(() => ({ getItemMetadata: mockGetItemMetadata })),
 }));
 
+// Post-write side effects, asserted directly: a run can both write rows AND
+// report `fell-back`, and skipping these leaves stale caches, stale dedup flags
+// and a UI that never refreshes.
+const sideEffects = vi.hoisted(() => ({
+  emit: vi.fn(),
+  invalidate: vi.fn(),
+  // Awaited with `.catch()` by the caller, so it must resolve, not return undefined.
+  recompute: vi.fn(async () => {}),
+}));
+vi.mock("@/lib/events/event-bus", () => ({ eventBus: { emit: sideEffects.emit } }));
+vi.mock("@/lib/cache/invalidate", () => ({ invalidateMediaCaches: sideEffects.invalidate }));
+vi.mock("@/lib/dedup/recompute-canonical", () => ({ recomputeCanonical: sideEffects.recompute }));
+
 // Import after mocks
 import { syncMediaServerItems } from "@/lib/sync/sync-incremental";
 
@@ -403,14 +416,227 @@ describe("syncMediaServerItems", () => {
     expect(rows.map((r) => r.ratingKey)).toEqual(["ep-1"]);
   });
 
-  it("falls back when a new item can't be mapped to a known library", async () => {
+  it("falls back when an item names a library section we have no row for", async () => {
     const { server } = await seed();
-    // No existing row and a librarySectionID that matches no library.
+    // No existing row and a librarySectionID that matches no library. This is
+    // positive evidence a NEW library appeared on the server, and only the full
+    // sync creates Library rows — the one mapping failure worth escalating.
     mockGetItemMetadata.mockResolvedValue(movieMeta("m9", { librarySectionID: 999 }));
 
     const result = await syncMediaServerItems(server.id, ["m9"], []);
 
     expect(result.status).toBe("fell-back");
     expect(await getTestPrisma().mediaItem.findFirst({ where: { ratingKey: "m9" } })).toBeNull();
+  });
+
+  it("drops an item with no library section at all instead of escalating", async () => {
+    const { server } = await seed();
+    // Plex emits these on every routine add: a movie's extras and trailers
+    // belong to no library section, so nothing can place them. Escalating to a
+    // whole-server sync used to turn one added movie into ~64k item-writes —
+    // and a full sync could not have stored them either.
+    const sectionless = movieMeta("extra-1", { type: "clip" });
+    delete (sectionless as { librarySectionID?: number }).librarySectionID;
+    mockGetItemMetadata.mockResolvedValue(sectionless);
+
+    const result = await syncMediaServerItems(server.id, ["extra-1"], []);
+
+    expect(result.status).toBe("done");
+    expect(result.unresolved).toBe(1);
+    expect(result.upserted).toBe(0);
+    expect(await getTestPrisma().mediaItem.findFirst({ where: { ratingKey: "extra-1" } })).toBeNull();
+  });
+
+  it("still syncs the mappable items in a batch containing an unmappable one", async () => {
+    const { server } = await seed();
+    // The realistic shape of a Plex add: one real item beside a pile of
+    // sectionless extras. The old all-or-nothing bail threw away the real one.
+    const sectionless = movieMeta("extra-1", { type: "clip" });
+    delete (sectionless as { librarySectionID?: number }).librarySectionID;
+    mockGetItemMetadata.mockImplementation(async (id: string) =>
+      id === "m1" ? movieMeta("m1", { title: "Real Movie" }) : { ...sectionless, ratingKey: id },
+    );
+
+    const result = await syncMediaServerItems(server.id, ["m1", "extra-1", "extra-2"], []);
+
+    expect(result.status).toBe("done");
+    expect(result.upserted).toBe(1);
+    expect(result.unresolved).toBe(2);
+    const rows = await getTestPrisma().mediaItem.findMany({ select: { ratingKey: true } });
+    expect(rows.map((r) => r.ratingKey)).toEqual(["m1"]);
+  });
+
+  it("skips an item in a disabled library without escalating", async () => {
+    const { user } = await seed();
+    const server2 = await createTestServer(user.id, { name: "S2" });
+    await createTestLibrary(server2.id, { key: "9", type: "MOVIE", enabled: false });
+    mockGetItemMetadata.mockResolvedValue(movieMeta("d1", { librarySectionID: 9 }));
+
+    const result = await syncMediaServerItems(server2.id, ["d1"], []);
+
+    // The full sync skips disabled libraries outright, so escalating to one was
+    // pure cost: it would have done nothing with this item either.
+    expect(result.status).toBe("done");
+    expect(result.skippedDisabled).toBe(1);
+    expect(await getTestPrisma().mediaItem.findFirst({ where: { ratingKey: "d1" } })).toBeNull();
+  });
+
+  it("DOES delete a gone item even in a disabled library", async () => {
+    const { user } = await seed();
+    const server2 = await createTestServer(user.id, { name: "S3" });
+    const disabled = await createTestLibrary(server2.id, { key: "9", type: "MOVIE", enabled: false });
+    await createTestMediaItem(disabled.id, { ratingKey: "d2" });
+    // Deliberately asymmetric with the upsert path, which skips disabled
+    // libraries. Nothing else would ever remove this row — the full sync skips
+    // disabled libraries so its stale purge never enumerates them — while no
+    // read path or rule filters on Library.enabled, so an immortal row for
+    // deleted media would go on matching a "not played in N months" DELETE rule.
+    mockGetItemMetadata.mockRejectedValue({ response: { status: 404 } });
+
+    const result = await syncMediaServerItems(server2.id, ["d2"], []);
+
+    expect(result.deleted).toBe(1);
+    expect(await getTestPrisma().mediaItem.findFirst({ where: { ratingKey: "d2" } })).toBeNull();
+  });
+
+  it("does not delete on an unparseable response (only on a definite not-found)", async () => {
+    const { server, library } = await seed();
+    await createTestMediaItem(library.id, { ratingKey: "live-1" });
+    // A proxy error page / empty body is transient, not evidence of deletion.
+    mockGetItemMetadata.mockRejectedValue(new Error("Unrecognized Plex metadata response"));
+
+    const result = await syncMediaServerItems(server.id, ["live-1"], []);
+
+    expect(result.status).toBe("fell-back");
+    expect(result.deleted).toBe(0);
+    expect(await getTestPrisma().mediaItem.findFirst({ where: { ratingKey: "live-1" } })).not.toBeNull();
+  });
+
+  it("does not escalate for an item type no library could hold", async () => {
+    const { server } = await seed();
+    // A Plex Photos section is filtered out by getLibraries(), so it can NEVER
+    // get a Library row. Escalating would enqueue a full sync that cannot fix
+    // it, and the next photo would do it again — forever.
+    mockGetItemMetadata.mockResolvedValue({
+      ratingKey: "photo-1", type: "photo", title: "IMG_1234", librarySectionID: 5,
+    });
+
+    const result = await syncMediaServerItems(server.id, ["photo-1"], []);
+
+    expect(result.status).toBe("done");
+    expect(result.unresolved).toBe(1);
+  });
+
+  it("still escalates for a syncable item in an unknown section (a new library)", async () => {
+    const { server } = await seed();
+    mockGetItemMetadata.mockResolvedValue(movieMeta("m99", { librarySectionID: 999 }));
+
+    const result = await syncMediaServerItems(server.id, ["m99"], []);
+
+    expect(result.status).toBe("fell-back");
+  });
+
+  it("prefers the server-reported section over a stale stored row", async () => {
+    const { user } = await seed();
+    const server2 = await createTestServer(user.id, { name: "S4" });
+    const oldLib = await createTestLibrary(server2.id, { key: "1", type: "MOVIE" });
+    const newLib = await createTestLibrary(server2.id, { key: "2", type: "MOVIE" });
+    await createTestMediaItem(oldLib.id, { ratingKey: "moved-1", title: "Old" });
+    // The item now lives in section 2 on the server.
+    mockGetItemMetadata.mockResolvedValue(movieMeta("moved-1", { title: "Moved", librarySectionID: 2 }));
+
+    await syncMediaServerItems(server2.id, ["moved-1"], []);
+
+    const rows = await getTestPrisma().mediaItem.findMany({ where: { ratingKey: "moved-1" } });
+    expect(rows.some((r) => r.libraryId === newLib.id)).toBe(true);
+  });
+
+  it("deletes a row the server reports as gone (404)", async () => {
+    const { server, library } = await seed();
+    await createTestMediaItem(library.id, { ratingKey: "gone-1" });
+    mockGetItemMetadata.mockRejectedValue({ response: { status: 404 } });
+
+    const result = await syncMediaServerItems(server.id, ["gone-1"], []);
+
+    expect(result.status).toBe("done");
+    expect(result.deleted).toBe(1);
+    expect(await getTestPrisma().mediaItem.findFirst({ where: { ratingKey: "gone-1" } })).toBeNull();
+  });
+  it("falls back on Jellyfin when an item carries no library section", async () => {
+    // Jellyfin/Emby `normalizeItem` never populates `librarySectionID`, so a
+    // brand-new item there has no section evidence at all. Plex drops such ids
+    // (they are extras); on Jellyfin dropping them would mean newly-added media
+    // never appears until the scheduled sync hours later, so it still escalates.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { name: "JF", type: "JELLYFIN" });
+    await createTestLibrary(server.id, { key: "jf-1", type: "MOVIE" });
+    const sectionless = movieMeta("jf-new", { title: "New On Jellyfin" });
+    delete (sectionless as { librarySectionID?: number }).librarySectionID;
+    mockGetItemMetadata.mockResolvedValue(sectionless);
+
+    const result = await syncMediaServerItems(server.id, ["jf-new"], []);
+
+    expect(result.status).toBe("fell-back");
+    expect(result.unresolved).toBe(1);
+  });
+  it("runs cache invalidation and the sync event even when it also falls back", async () => {
+    const { server, library } = await seed();
+    await createTestLibrary(server.id, { key: "2", type: "MOVIE" });
+    // One mappable item is written; a second names an unknown section, so the
+    // run reports `fell-back`. The write still happened, so the side effects
+    // must too — otherwise listings serve pre-write cache entries, the dedup
+    // canonical flags stay stale (the item renders twice on a multi-server
+    // install), and the dashboard shelf never refreshes.
+    mockGetItemMetadata.mockImplementation(async (id: string) =>
+      id === "ok-1"
+        ? movieMeta("ok-1", { librarySectionID: Number(library.key) })
+        : movieMeta("new-lib-1", { librarySectionID: 999 }),
+    );
+
+    const result = await syncMediaServerItems(server.id, ["ok-1", "new-lib-1"], []);
+
+    expect(result.status).toBe("fell-back");
+    expect(result.upserted).toBe(1);
+    expect(sideEffects.invalidate).toHaveBeenCalled();
+    expect(sideEffects.recompute).toHaveBeenCalledWith(server.userId);
+    expect(sideEffects.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "sync:completed" }),
+    );
+  });
+
+  it("skips the side effects when nothing was written", async () => {
+    const { server } = await seed();
+    const sectionless = movieMeta("nothing-1", { type: "clip" });
+    delete (sectionless as { librarySectionID?: number }).librarySectionID;
+    mockGetItemMetadata.mockResolvedValue(sectionless);
+
+    await syncMediaServerItems(server.id, ["nothing-1"], []);
+
+    expect(sideEffects.invalidate).not.toHaveBeenCalled();
+    expect(sideEffects.emit).not.toHaveBeenCalled();
+  });
+
+  it("carries the watchlist flag forward when a ratingKey exists in two libraries", async () => {
+    const { user } = await seed();
+    const server2 = await createTestServer(user.id, { name: "Dup" });
+    const libA = await createTestLibrary(server2.id, { key: "1", type: "MOVIE" });
+    const libB = await createTestLibrary(server2.id, { key: "2", type: "MOVIE" });
+    // Legal: @@unique([libraryId, ratingKey]) — one server, one key, two rows.
+    const rowInA = await createTestMediaItem(libA.id, { ratingKey: "dup-1" });
+    await createTestMediaItem(libB.id, { ratingKey: "dup-1" });
+    await getTestPrisma().mediaItem.update({
+      where: { id: rowInA.id }, data: { isWatchlisted: true },
+    });
+    // Plex item metadata carries no watchlist field, so the stored flag must be
+    // carried forward — from the row in the library that mapping actually
+    // resolved to, not abandoned because the ratingKey is ambiguous.
+    mockGetItemMetadata.mockResolvedValue(movieMeta("dup-1", { librarySectionID: 1 }));
+
+    await syncMediaServerItems(server2.id, ["dup-1"], []);
+
+    const rowA = await getTestPrisma().mediaItem.findFirst({
+      where: { ratingKey: "dup-1", libraryId: libA.id },
+    });
+    expect(rowA?.isWatchlisted).toBe(true);
   });
 });

@@ -18,6 +18,23 @@ export interface MediaServerClientOptions {
  * Required methods must be implemented by all server types.
  * Optional methods are Plex-only features.
  */
+/**
+ * The server answered successfully and said this item does not exist.
+ *
+ * Distinct from a transport/parse failure ON PURPOSE: the incremental sync
+ * treats this — and only this — as evidence to DELETE the stored row, while any
+ * other error falls back to a full reconcile. `getItemMetadata` must therefore
+ * never conflate "the response was well-formed and held no item" with "the
+ * response was unusable"; a delete cascades `RuleMatch`, `LifecycleException`
+ * and `WatchHistory`, and a re-added item then reads as never watched.
+ */
+export class MediaItemNotFoundError extends Error {
+  constructor(public readonly ratingKey: string) {
+    super(`Media item ${ratingKey} not found on server`);
+    this.name = "MediaItemNotFoundError";
+  }
+}
+
 export interface MediaServerClient {
   /** Whether the bulk listing endpoint may return incomplete metadata requiring per-item enrichment */
   readonly bulkListingIncomplete?: boolean;
