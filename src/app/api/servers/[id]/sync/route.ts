@@ -81,7 +81,7 @@ export async function POST(
   const jobKey = libraryKey ? `sync:${server.id}:${libraryKey}` : `sync:${server.id}`;
   await enqueueJob(
     TASK_SYNC_SERVER,
-    { serverId: server.id, libraryKey },
+    { serverId: server.id, libraryKey, trigger: "manual sync request for this server" },
     { jobKey, queueName: MAIN_QUEUE, maxAttempts: 3 },
   );
 

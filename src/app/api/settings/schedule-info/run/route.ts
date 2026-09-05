@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
           logger.info("Scheduler", `Manual sync triggered for server "${server.name}"`);
           const ok = await enqueueJob(
             TASK_SYNC_SERVER,
-            { serverId: server.id },
+            { serverId: server.id, trigger: "manual sync from Settings (Run now)" },
             { jobKey: `sync:${server.id}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
           );
           if (!ok) allEnqueued = false;

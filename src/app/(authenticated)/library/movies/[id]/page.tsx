@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useRealtime } from "@/hooks/use-realtime";
 import { useParams } from "next/navigation";
 import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
@@ -8,6 +9,7 @@ import { MediaDetailHero } from "@/components/media-detail-hero";
 import { RatingChip } from "@/components/rating-chip";
 import { getRatingLabel } from "@/lib/rating-labels";
 import { MediaDetailContent } from "@/components/media-detail-content";
+import { PlayHistory } from "@/components/play-history";
 import { ColorChip } from "@/components/color-chip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize, formatDuration } from "@/lib/format";
@@ -21,6 +23,12 @@ function formatResolution(resolution: string | null): string {
 }
 
 export default function MovieDetailPage() {
+  // The play-history card below reads the *stored* WatchHistory table, so it
+  // only changes when a sync or an import lands. These were the only two media
+  // detail pages with no subscription at all.
+  const [syncTick, setSyncTick] = useState(0);
+  useRealtime("sync:completed", () => setSyncTick((t) => t + 1));
+  useRealtime("watch-history:updated", () => setSyncTick((t) => t + 1));
   const { id } = useParams<{ id: string }>();
   const { getBadgeStyle } = useChipColors();
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
@@ -123,7 +131,14 @@ export default function MovieDetailPage() {
       backLabel="Movies"
       playServers={playServers}
     >
-      <MediaDetailContent item={item} />
+      <MediaDetailContent item={item} 
+        // The per-play list *is* this movie's Watch History card. It replaces the
+        // per-user aggregate card, which reads the same plays live from the
+        // server but without their timestamps, device, or any of the
+        // completion/transcode detail a Tracearr-sourced row carries — so the
+        // page shows the richer view rather than the same data twice.
+        historySection={<PlayHistory variant="card" mediaItemId={item.id} singleItem refreshKey={syncTick} />}
+      />
     </MediaDetailHero>
   );
 }

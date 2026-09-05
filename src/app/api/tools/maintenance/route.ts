@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { sendDiscordNotification, buildMaintenanceEmbed } from "@/lib/discord/client";
+import { eventBus } from "@/lib/events/event-bus";
 import { validateRequest, maintenanceSchema } from "@/lib/validation";
 
 export async function GET() {
@@ -77,6 +78,19 @@ export async function PUT(request: NextRequest) {
   // if configured. A new row (prior === null) counts as a transition when
   // enabled is true.
   const stateChanged = (prior?.maintenanceMode ?? false) !== enabled;
+
+  // Tell every open tab. The banner lives in the app shell on every page, and
+  // its only other update paths are a 30s poll and a same-tab window event —
+  // so before this, a second tab (and any change made from elsewhere) showed
+  // stale maintenance state for up to half a minute.
+  if (stateChanged) {
+    eventBus.emit({
+      type: "settings:changed",
+      userId: session.userId!,
+      meta: { maintenanceMode: enabled },
+    });
+  }
+
   if (stateChanged && settings.discordNotifyMaintenance && settings.discordWebhookUrl) {
     sendDiscordNotification(settings.discordWebhookUrl, {
       username: settings.discordWebhookUsername || "Librariarr",

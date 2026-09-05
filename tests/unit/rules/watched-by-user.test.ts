@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { getMatchedCriteriaForItems, hasArrRules, hasSeerrRules } from "@/lib/rules/lifecycle-engine";
 import { FIELD_HANDLERS } from "@/lib/conditions/where-builder";
+import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { getConditionField } from "@/lib/conditions/fields";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 
@@ -73,45 +74,45 @@ describe("watchedByUser Phase 1 WHERE clauses", () => {
   it("equals emits watchHistory.some with case-insensitive match", () => {
     const clause = handler("equals", "alice", "watchedByUser");
     expect(clause).toEqual({
-      watchHistory: { some: { serverUsername: { equals: "alice", mode: "insensitive" } } },
+      watchHistory: { some: { ...COMPLETED_PLAY_FILTER, serverUsername: { equals: "alice", mode: "insensitive" } } },
     });
   });
 
   it("notEquals emits watchHistory.none with case-insensitive match", () => {
     const clause = handler("notEquals", "alice", "watchedByUser");
     expect(clause).toEqual({
-      watchHistory: { none: { serverUsername: { equals: "alice", mode: "insensitive" } } },
+      watchHistory: { none: { ...COMPLETED_PLAY_FILTER, serverUsername: { equals: "alice", mode: "insensitive" } } },
     });
   });
 
   it("contains splits on pipe and emits watchHistory.some + in", () => {
     const clause = handler("contains", "alice|bob", "watchedByUser");
     expect(clause).toEqual({
-      watchHistory: { some: { serverUsername: { in: ["alice", "bob"], mode: "insensitive" } } },
+      watchHistory: { some: { ...COMPLETED_PLAY_FILTER, serverUsername: { in: ["alice", "bob"], mode: "insensitive" } } },
     });
   });
 
   it("notContains splits on pipe and emits watchHistory.none + in", () => {
     const clause = handler("notContains", "alice|bob", "watchedByUser");
     expect(clause).toEqual({
-      watchHistory: { none: { serverUsername: { in: ["alice", "bob"], mode: "insensitive" } } },
+      watchHistory: { none: { ...COMPLETED_PLAY_FILTER, serverUsername: { in: ["alice", "bob"], mode: "insensitive" } } },
     });
   });
 
   it("isNotNull emits watchHistory.some {}", () => {
     const clause = handler("isNotNull", "", "watchedByUser");
-    expect(clause).toEqual({ watchHistory: { some: {} } });
+    expect(clause).toEqual({ watchHistory: { some: { ...COMPLETED_PLAY_FILTER } } });
   });
 
   it("isNull emits watchHistory.none {}", () => {
     const clause = handler("isNull", "", "watchedByUser");
-    expect(clause).toEqual({ watchHistory: { none: {} } });
+    expect(clause).toEqual({ watchHistory: { none: { ...COMPLETED_PLAY_FILTER } } });
   });
 
   it("negate wraps the positive clause in NOT", () => {
     const clause = handler("equals", "alice", "watchedByUser", true);
     expect(clause).toEqual({
-      NOT: { watchHistory: { some: { serverUsername: { equals: "alice", mode: "insensitive" } } } },
+      NOT: { watchHistory: { some: { ...COMPLETED_PLAY_FILTER, serverUsername: { equals: "alice", mode: "insensitive" } } } },
     });
   });
 

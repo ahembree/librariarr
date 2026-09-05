@@ -9,8 +9,7 @@ Librariarr provides Unraid XML templates for easy installation through the Unrai
 
 ## Requirements
 
-- Unraid 6.11+
-- Community Applications plugin (recommended) or manual Docker template support
+- Unraid, with the Community Applications plugin (or manual Docker template support)
 
 <Aside type="danger" title="Internal network only">
   Librariarr is designed to run on your **local or internal network only**. Do not expose it directly to the public internet. If you need remote access, use a VPN (e.g., WireGuard, Tailscale) to reach your internal network securely.
@@ -84,7 +83,7 @@ See the [external database requirements](/docs/getting-started/installation/#dat
    CREATE DATABASE librariarr OWNER librariarr;
    ```
 
-   The user needs full privileges on the database (`CREATE`, `ALTER`, `DROP`, `INSERT`, `UPDATE`, `DELETE`). PostgreSQL 14 or later is required (17+ recommended). No extensions are needed.
+   The user needs full privileges on the database (`CREATE`, `ALTER`, `DROP`, `INSERT`, `UPDATE`, `DELETE`). Any currently-supported PostgreSQL release works. No extensions are needed.
 
 2. **Install only the Librariarr container**
 

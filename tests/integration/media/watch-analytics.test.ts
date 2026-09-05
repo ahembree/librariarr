@@ -82,6 +82,35 @@ describe("watch-analytics", () => {
     expect(show?.type).toBe("SERIES");
   });
 
+  it("ranks two same-titled shows separately by seriesKey", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+    // Two "The Office" shows, distinct seriesKeys. UK: 1 play, US: 3 plays.
+    const uk = await createTestMediaItem(lib.id, {
+      title: "Downsize", type: "SERIES", parentTitle: "The Office",
+      seriesKey: "tvdb:78107", seasonNumber: 1, episodeNumber: 1,
+    });
+    const usE1 = await createTestMediaItem(lib.id, {
+      title: "Pilot", type: "SERIES", parentTitle: "The Office",
+      seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 1,
+    });
+    const usE2 = await createTestMediaItem(lib.id, {
+      title: "Diversity Day", type: "SERIES", parentTitle: "The Office",
+      seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 2,
+    });
+    await play(uk.id, server.id, { watchedAt: new Date() });
+    await play(usE1.id, server.id, { watchedAt: new Date() });
+    await play(usE2.id, server.id, { watchedAt: new Date() });
+    await play(usE2.id, server.id, { watchedAt: new Date() });
+
+    const trends = await computeWatchTrends([server.id], { mediaType: "SERIES", days: 30, limit: 10 });
+    const offices = trends.filter((t) => t.title === "The Office");
+    // Two separate rows despite the shared title, with un-pooled play counts.
+    expect(offices).toHaveLength(2);
+    expect(offices.map((t) => t.plays).sort((a, b) => a - b)).toEqual([1, 3]);
+  });
+
   it("builds user/device leaderboards", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);

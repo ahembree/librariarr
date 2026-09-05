@@ -86,7 +86,7 @@ describe("dispatchScheduledJobs", () => {
     expect(enqueueJob).toHaveBeenCalledTimes(1);
     expect(enqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_SERVER,
-      { serverId: "server-1" },
+      { serverId: "server-1", trigger: "scheduled sync" },
       expect.objectContaining({ jobKey: "sync:server-1", queueName: MAIN_QUEUE }),
     );
   });

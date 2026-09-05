@@ -1,0 +1,48 @@
+[
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "2",
+    "itemID": "138167",
+    "type": 4,
+    "state": 5,
+    "metadataState": "processing"
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "2",
+    "itemID": "138167",
+    "type": 4,
+    "state": 4,
+    "metadataState": "loading"
+   }
+  ]
+ },
+ {
+  "type": "activity",
+  "ActivityNotification": [
+   {
+    "event": "ended",
+    "Activity": {
+     "type": "library.update.item.metadata"
+    }
+   }
+  ]
+ },
+ {
+  "type": "timeline",
+  "TimelineEntry": [
+   {
+    "sectionID": "2",
+    "itemID": "138167",
+    "type": 4,
+    "state": 5
+   }
+  ]
+ }
+]

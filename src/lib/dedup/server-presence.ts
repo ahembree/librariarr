@@ -67,12 +67,21 @@ export async function getServerPresenceByDedupKey(
 
 /**
  * Build a map of groupKey → ServerPresence[] for grouped routes.
- * Groups by a normalized parentTitle across all servers.
+ *
+ * SERIES groups by `seriesKey` (series identity — the same key the series
+ * listing groups on, so two same-titled shows with different TVDB ids get
+ * separate presence and the same show across servers merges). MUSIC still
+ * groups by normalized `parentTitle` (artist name — there is no artist
+ * identity column). The returned map is keyed accordingly: pass the row's
+ * `seriesKey` (SERIES) / normalized parentTitle (MUSIC) to look it up.
  */
 export async function getServerPresenceByGroup(
   type: "SERIES" | "MUSIC",
   serverIds: string[],
 ): Promise<Map<string, ServerPresence[]>> {
+  const groupKeyExpr =
+    type === "SERIES" ? `mi."seriesKey"` : `LOWER(TRIM(mi."parentTitle"))`;
+  const notNullCol = type === "SERIES" ? `mi."seriesKey"` : `mi."parentTitle"`;
   const items = await prisma.$queryRawUnsafe<
     {
       group_key: string;
@@ -82,16 +91,16 @@ export async function getServerPresenceByGroup(
       mediaItemId: string;
     }[]
   >(
-    `SELECT DISTINCT ON (LOWER(TRIM(mi."parentTitle")), ms.id)
-       LOWER(TRIM(mi."parentTitle")) as group_key,
+    `SELECT DISTINCT ON (${groupKeyExpr}, ms.id)
+       ${groupKeyExpr} as group_key,
        ms.id as "serverId", ms.name as "serverName", ms.type::text as "serverType",
        mi.id as "mediaItemId"
      FROM "MediaItem" mi
      JOIN "Library" l ON mi."libraryId" = l.id
      JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
-     WHERE mi.type = $1::"LibraryType" AND mi."parentTitle" IS NOT NULL
+     WHERE mi.type = $1::"LibraryType" AND ${notNullCol} IS NOT NULL
        AND l."mediaServerId" = ANY($2::text[])
-     ORDER BY LOWER(TRIM(mi."parentTitle")), ms.id, mi."createdAt" ASC`,
+     ORDER BY ${groupKeyExpr}, ms.id, mi."createdAt" ASC`,
     type,
     serverIds,
   );

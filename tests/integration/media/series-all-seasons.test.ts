@@ -274,4 +274,31 @@ describe("GET /api/media/series/all-seasons", () => {
     expect(typeof body.seasons[0].totalSize).toBe("string");
     expect(body.seasons[0].totalSize).toBe("10737418240");
   });
+
+  it("keeps two same-titled shows' seasons separate via seriesKey", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+
+    // Both shows have a "season 1", but they are different shows.
+    await createTestMediaItem(lib.id, {
+      title: "Downsize", type: "SERIES", parentTitle: "The Office",
+      seriesKey: "tvdb:78107", seasonNumber: 1, episodeNumber: 1,
+    });
+    await createTestMediaItem(lib.id, {
+      title: "Pilot", type: "SERIES", parentTitle: "The Office",
+      seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 1,
+    });
+
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const body = await expectJson<{
+      seasons: { parentTitle: string; seriesKey: string | null; seasonNumber: number }[];
+    }>(await callRoute(GET, { url: "/api/media/series/all-seasons" }), 200);
+
+    // Two season-1 rows — one per show — not one merged row.
+    const s1 = body.seasons.filter((x) => x.seasonNumber === 1);
+    expect(s1).toHaveLength(2);
+    expect(new Set(s1.map((x) => x.seriesKey))).toEqual(new Set(["tvdb:78107", "tvdb:73244"]));
+  });
 });

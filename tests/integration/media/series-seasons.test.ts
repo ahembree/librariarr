@@ -66,7 +66,7 @@ describe("GET /api/media/series/seasons", () => {
       url: "/api/media/series/seasons",
     });
     const body = await expectJson<{ error: string }>(response, 400);
-    expect(body.error).toBe("parentTitle is required");
+    expect(body.error).toBe("seriesKey or parentTitle is required");
   });
 
   it("returns empty seasons when user has no servers", async () => {
@@ -295,5 +295,47 @@ describe("GET /api/media/series/seasons", () => {
 
     expect(body.seasons).toHaveLength(1);
     expect(body.seasons[0].seasonNumber).toBe(0);
+  });
+
+  it("scopes seasons to one show by seriesKey (two same-titled shows stay separate)", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+
+    // The Office UK: only season 1. The Office US: seasons 1 and 9.
+    await createTestMediaItem(lib.id, {
+      title: "Downsize", type: "SERIES", parentTitle: "The Office",
+      seriesKey: "tvdb:78107", seasonNumber: 1, episodeNumber: 1,
+    });
+    await createTestMediaItem(lib.id, {
+      title: "Pilot", type: "SERIES", parentTitle: "The Office",
+      seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 1,
+    });
+    await createTestMediaItem(lib.id, {
+      title: "Finale", type: "SERIES", parentTitle: "The Office",
+      seriesKey: "tvdb:73244", seasonNumber: 9, episodeNumber: 23,
+    });
+
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const body = await expectJson<{ seasons: { seasonNumber: number }[] }>(
+      await callRoute(GET, {
+        url: "/api/media/series/seasons",
+        searchParams: { seriesKey: "tvdb:73244" },
+      }),
+      200,
+    );
+    // Only the US show's two seasons — the UK show's season 1 is not merged in.
+    expect(body.seasons.map((x) => x.seasonNumber).sort((a, b) => a - b)).toEqual([1, 9]);
+  });
+
+  it("returns 400 when neither seriesKey nor parentTitle is given", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    const body = await expectJson<{ error: string }>(
+      await callRoute(GET, { url: "/api/media/series/seasons" }),
+      400,
+    );
+    expect(body.error).toBe("seriesKey or parentTitle is required");
   });
 });

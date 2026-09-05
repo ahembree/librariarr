@@ -43,7 +43,7 @@ export async function dispatchScheduledJobs(): Promise<void> {
           if (!server.enabled) continue;
           const ok = await enqueueJob(
             TASK_SYNC_SERVER,
-            { serverId: server.id },
+            { serverId: server.id, trigger: "scheduled sync" },
             { jobKey: `sync:${server.id}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
           );
           if (!ok) allEnqueued = false;

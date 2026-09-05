@@ -10,6 +10,12 @@ export interface BatchableItem {
   /** Series name on episode-level rows; used to keep a show's episodes together. */
   parentTitle?: string | null;
   title?: string | null;
+  /**
+   * Series identity (see src/lib/media/series-key.ts). When present it groups a
+   * show's episodes by identity so two same-titled shows aren't batched as one;
+   * falls back to the title when absent.
+   */
+  seriesKey?: string | null;
 }
 
 /** The media family an ad-hoc action targets, derived from its action type
@@ -27,12 +33,15 @@ export function actionMediaType(actionType: string): BatchMediaType | null {
  *  collapsed-and-fired once per batch; every other item is its own group.
  *
  *  SERIES items ALWAYS group by show — including the blank-title case. The
- *  server's `showKey` (LOWER(TRIM(parentTitle))) collapses blank-title series
- *  under a single "" key, so giving them per-id groups here would split that
+ *  server groups a show's episodes by series identity (seriesKey, falling back
+ *  to LOWER(TRIM(parentTitle))) and collapses blank-title/keyless series under
+ *  a single fallback key, so giving them per-id groups here would split that
  *  server-group across batches and re-introduce the double-fire. */
 function groupKey(item: BatchableItem): string {
   if (item.type === "SERIES") {
-    return `series:${(item.parentTitle ?? item.title ?? "").trim().toLowerCase()}`;
+    const identity =
+      item.seriesKey ?? `title:${(item.parentTitle ?? item.title ?? "").trim().toLowerCase()}`;
+    return `series:${identity}`;
   }
   return `id:${item.id}`;
 }

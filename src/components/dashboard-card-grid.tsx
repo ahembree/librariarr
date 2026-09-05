@@ -130,6 +130,8 @@ interface DashboardCardGridProps {
   onArtistClick: (mediaItemId: string) => void;
   onEpisodeClick: (episodeId: string) => void;
   onTrackClick: (trackId: string) => void;
+  onSeasonClick?: (mediaItemId: string) => void;
+  onAlbumClick?: (mediaItemId: string) => void;
   onSyncComplete: () => void;
   onConfigChange?: (cardId: string, config: CustomCardConfig) => void;
 }
@@ -149,6 +151,8 @@ export function DashboardCardGrid({
   onArtistClick,
   onEpisodeClick,
   onTrackClick,
+  onSeasonClick,
+  onAlbumClick,
   onSyncComplete,
   onConfigChange,
 }: DashboardCardGridProps) {
@@ -373,6 +377,8 @@ export function DashboardCardGrid({
             onMovieClick={onMovieClick}
             onEpisodeClick={onEpisodeClick}
             onTrackClick={onTrackClick}
+            onSeasonClick={onSeasonClick}
+            onAlbumClick={onAlbumClick}
           />
         );
       case "seerr-requests":

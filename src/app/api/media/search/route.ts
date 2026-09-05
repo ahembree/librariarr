@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { resolveSeriesKey } from "@/lib/media/series-key";
 import type { Prisma } from "@/generated/prisma/client";
 
 export async function GET(request: NextRequest) {
@@ -148,6 +149,7 @@ export async function GET(request: NextRequest) {
       id: true,
       title: true,
       parentTitle: true,
+      seriesKey: true,
       year: true,
       thumbUrl: true,
       type: true,
@@ -161,7 +163,8 @@ export async function GET(request: NextRequest) {
   if (seriesScope && type !== "MOVIE") {
     const seen = new Map<string, { item: (typeof items)[0]; count: number }>();
     for (const item of items) {
-      const key = item.parentTitle ?? item.title;
+      // Group by series identity so two same-titled shows list separately.
+      const key = resolveSeriesKey(item) ?? item.parentTitle ?? item.title;
       const existing = seen.get(key);
       if (existing) {
         existing.count++;

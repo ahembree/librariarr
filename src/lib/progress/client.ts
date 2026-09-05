@@ -4,13 +4,26 @@ import type { ProgressUpdate } from "./types";
  * Consume an NDJSON progress stream produced by `progressStreamResponse`.
  *
  * Forwards each `plan`/`phase` event to `onProgress` and resolves with the
- * payload of the terminal `result` event. Throws if the stream emits an `error`
- * event or ends without a result.
+ * payload of the terminal `result` event. Throws if the response is non-OK, if
+ * the stream emits an `error` event, or if it ends without a result.
+ *
+ * The non-OK check is not optional politeness. Auth, validation and safety
+ * refusals (the lifecycle evaluability guard among them) are answered as plain
+ * JSON `{ error }` BEFORE the stream opens, so the body is not NDJSON at all:
+ * that single line parses as an event with no `type`, falls through every
+ * branch, and the reader then reports "Stream ended without a result" — the
+ * server's actual reason silently discarded and replaced by a generic parse
+ * complaint. Every caller would have to remember to pre-check `response.ok` to
+ * avoid it; reading the reason here means none of them can forget.
  */
 export async function consumeProgressStream<T>(
   response: Response,
   onProgress: (update: ProgressUpdate) => void,
 ): Promise<T> {
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(detail?.error ?? `Request failed with status ${response.status}`);
+  }
   if (!response.body) throw new Error("Response has no body");
 
   const reader = response.body.getReader();

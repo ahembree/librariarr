@@ -70,7 +70,7 @@ const plexConfig: RealtimeServerConfig = {
   type: "PLEX",
   url: "http://plex:32400",
   accessToken: "t",
-  tlsSkipVerify: false,
+  tlsSkipVerify: false, userId: "user-1",
 };
 const jfConfig: RealtimeServerConfig = {
   id: "s2",
@@ -78,7 +78,7 @@ const jfConfig: RealtimeServerConfig = {
   type: "JELLYFIN",
   url: "http://jf:8096",
   accessToken: "t",
-  tlsSkipVerify: false,
+  tlsSkipVerify: false, userId: "user-1",
 };
 
 describe("ServerRealtimeConnection", () => {

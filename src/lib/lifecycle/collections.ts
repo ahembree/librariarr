@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { PlexClient } from "@/lib/plex/client";
 import { describePlexError } from "@/lib/plex/errors";
 import { logger } from "@/lib/logger";
+import { markSelfWrites } from "@/lib/media-server/realtime/self-writes";
 
 /** A saved, reusable Plex collection definition. */
 export interface CollectionSettings {
@@ -167,6 +168,17 @@ export async function syncCollection(
   }
 
   for (const library of userLibraries) {
+    // Every ratingKey this pass writes on this server. Marked BEFORE the first
+    // write, so the echo Plex sends back over its notification socket — a
+    // timeline entry for the collection plus one per member it tags — is
+    // recognised by the realtime manager as librariarr's own doing rather than
+    // fetched again or, past 100 members, escalated to a whole-server sync.
+    const serverId = library.mediaServer?.id;
+    const touched = new Set<string>();
+    const remember = (keys: Iterable<string>) => {
+      for (const k of keys) touched.add(k);
+      if (serverId) markSelfWrites(serverId, keys);
+    };
     try {
       if (!library.mediaServer?.machineId) {
         // A Plex collection is written via a server://<machineId>/… URI, so a
@@ -255,6 +267,7 @@ export async function syncCollection(
       }
 
       if (!plexCollection) {
+        remember(desiredKeys);
         plexCollection = await client.createCollection(
           library.key,
           collectionName,
@@ -262,6 +275,7 @@ export async function syncCollection(
           desiredKeys,
           plexType
         );
+        remember([plexCollection.ratingKey]);
         logger.info(
           "Lifecycle",
           `Created Plex collection "${collectionName}" with ${desiredKeys.length} items`
@@ -272,6 +286,15 @@ export async function syncCollection(
 
         const toAdd = desiredKeys.filter((k) => !currentKeys.has(k));
         const toRemove = [...currentKeys].filter((k) => !desiredSet.has(k));
+
+        // Every current member is marked, not only the ones being added or
+        // removed: the collection itself is always written below (sort title,
+        // order, visibility) and the action-date ordering pass issues one
+        // `move` per member, and whether Plex echoes those as member updates is
+        // not something to rely on either way. Over-marking costs a real change
+        // to a member inside the window a wait for the scheduled sync;
+        // under-marking costs an off-schedule whole-server sync per detection.
+        remember([plexCollection.ratingKey, ...desiredKeys, ...toRemove]);
 
         if (toAdd.length > 0) {
           await client.addCollectionItems(plexCollection.ratingKey, server.machineId!, toAdd);
@@ -335,6 +358,11 @@ export async function syncCollection(
         `Failed to sync collection "${collectionName}" for library ${library.id}`,
         { error: describePlexError(error) }
       );
+    } finally {
+      // Refresh the window from the LAST write: action-date ordering is one
+      // `move` per item, and a big collection can outlast a mark placed before
+      // the first write.
+      if (serverId && touched.size > 0) markSelfWrites(serverId, touched);
     }
   }
 }
@@ -458,6 +486,7 @@ export async function removeItemFromCollections(
       const inCollection = currentItems.some((i) => i.ratingKey === ratingKeyToRemove);
       if (!inCollection) continue;
 
+      markSelfWrites(server.id, [collection.ratingKey, ratingKeyToRemove]);
       await client.removeCollectionItem(collection.ratingKey, ratingKeyToRemove);
 
       // Re-check emptiness AFTER removal — a stale pre-removal count of 1 could
@@ -519,6 +548,7 @@ export async function removePlexCollection(
       const collection = collections.find((c) => c.title === collectionName);
       if (!collection) continue;
 
+      markSelfWrites(server.id, [collection.ratingKey]);
       await client.deleteCollection(collection.ratingKey);
       logger.info(
         "Lifecycle",
@@ -565,6 +595,7 @@ export async function renameCollectionInPlex(
       const collection = collections.find((c) => c.title === oldName);
       if (!collection) continue;
 
+      markSelfWrites(server.id, [collection.ratingKey]);
       await client.renameCollection(library.key, collection.ratingKey, newName);
       logger.info(
         "Lifecycle",

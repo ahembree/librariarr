@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { QueryRule, QueryGroup, QueryDefinition, LifecycleRuleCondition } from "./types";
-import { GENRE_FIELD, LABELS_FIELD, COUNTRY_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules, hasStreamCountRules } from "./types";
+import { GENRE_FIELD, LABELS_FIELD, COUNTRY_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules, hasArrayFieldRules, hasStreamCountRules } from "./types";
 import {
   isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
@@ -23,6 +23,7 @@ import {
   wildcardToRegex,
   matchArrayField,
   matchExternalIdField,
+  matchNameListField,
   aggregateEpisodesIntoSeries,
   serializeSeriesAggregateForEval,
   type AggregableEpisode,
@@ -37,6 +38,7 @@ import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
 import { pushDownGroupNegation } from "@/lib/conditions/negation";
 import { nullValueResult } from "@/lib/conditions/helpers";
+import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 
 // Phase 1 rule → WHERE conversion is shared with the lifecycle rule engine via
 // `ruleToWhere` in where-builder.ts (the query and lifecycle dispatchers were
@@ -84,6 +86,7 @@ const ITEM_SELECT = {
   id: true,
   title: true,
   parentTitle: true,
+  seriesKey: true,
   year: true,
   type: true,
   seasonNumber: true,
@@ -161,7 +164,13 @@ function buildItemSelectFull(opts: { includeWatchHistory: boolean }) {
   if (!opts.includeWatchHistory) return ITEM_SELECT_FULL;
   return {
     ...ITEM_SELECT_FULL,
-    watchHistory: { select: { serverUsername: true } } as const,
+    watchHistory: {
+          // Phase 2 must see the same rows Phase 1 filtered on, or a
+          // `watchedByUser` rule matches a different set depending on
+          // whether something else forced in-memory re-evaluation.
+          where: COMPLETED_PLAY_FILTER,
+          select: { serverUsername: true },
+        } as const,
   };
 }
 
@@ -244,6 +253,7 @@ function sortCombinedResults(
 }
 
 interface SeriesGroupRow {
+  group_key: string;
   title: string;
   id: string;
   matchedEpisodes: number;
@@ -283,7 +293,7 @@ async function groupSeriesEpisodes(
     const seriesWhere: Prisma.MediaItemWhereInput = {
       ...where,
       type: "SERIES",
-      parentTitle: { not: null },
+      seriesKey: { not: null },
     };
 
     const matchingIds = await prisma.mediaItem.findMany({
@@ -300,6 +310,7 @@ async function groupSeriesEpisodes(
   // Step 2: Group by parentTitle via raw SQL
   const rows = await prisma.$queryRaw<SeriesGroupRow[]>`
     SELECT
+      mi."seriesKey" as group_key,
       MIN(mi."parentTitle") as title,
       (array_agg(mi.id ORDER BY mi."seasonNumber" NULLS LAST, mi."episodeNumber" NULLS LAST))[1] as id,
       COUNT(*)::int as "matchedEpisodes",
@@ -327,14 +338,18 @@ async function groupSeriesEpisodes(
     JOIN "Library" l ON mi."libraryId" = l.id
     JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
     WHERE mi.id = ANY(${ids})
-      AND mi."parentTitle" IS NOT NULL
-    GROUP BY LOWER(TRIM(mi."parentTitle"))
+      AND mi."seriesKey" IS NOT NULL
+    GROUP BY mi."seriesKey"
   `;
 
   return rows.map((r) => ({
     id: r.id,
     title: r.title,
     parentTitle: null,
+    // The group's series identity — carried so downstream consumers (the
+    // ad-hoc query-actions route) group a show's episodes by identity, not by
+    // the ambiguous title, and so two same-titled shows stay distinct.
+    seriesKey: r.group_key,
     year: r.year,
     type: "SERIES",
     seasonNumber: null,
@@ -401,7 +416,7 @@ export async function executeQuery(
   const willEvaluate = willFetchArr || willFetchSeerr || hasWildcardRules(groups) ||
     hasStreamQueryInMemoryRules(groups) || hasCrossSystemRules(groups) || hasArrRules(groups) ||
     hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) ||
-    hasStreamCountRules(groups);
+    hasArrayFieldRules(groups) || hasStreamCountRules(groups);
   const phases: ProgressPhase[] = [
     { key: "servers", label: "Resolving servers" },
     ...(willFetchArr ? [{ key: "arr", label: "Fetching Arr metadata" }] : []),
@@ -451,7 +466,7 @@ export async function executeQuery(
 
   // Determine if we need unified in-memory evaluation
   const hasCrossSystem = hasCrossSystemRules(groups);
-  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasStreamCountRules(groups);
+  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasArrayFieldRules(groups) || hasStreamCountRules(groups);
 
   // Build base WHERE (includes type filter + conditions). Built AFTER the
   // in-memory decision so pre-filter (superset) composition applies when
@@ -772,7 +787,7 @@ async function executeUngrouped(
 ): Promise<QueryResult> {
   // When any in-memory evaluation is needed (external rules, wildcards, stream query computed fields), fetch all items
   const hasCrossSystem = hasCrossSystemRules(groups);
-  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasStreamCountRules(groups);
+  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasArrayFieldRules(groups) || hasStreamCountRules(groups);
   const useInMemoryPagination = needsFullInMemoryEval;
   const selectToUse = needsFullInMemoryEval
     ? buildItemSelectFull({ includeWatchHistory: hasWatchedByUserRules(groups) })
@@ -903,6 +918,18 @@ function evaluateStreamRuleInMemory(
   const knownStreams = isLangField
     ? typeStreams.filter(s => isKnownValue(s[columnName]))
     : typeStreams.filter(s => s[columnName] !== null);
+
+  // An item with NO KNOWN language of this type must not match a language rule
+  // under ANY operator — "Unknown" != "English" must not read as true. The
+  // lifecycle engine has enforced this all along (its "unknown language
+  // filtering" tests pin it) and Phase 1 now does too; without it here, the two
+  // engines disagreed on every negated language operator, so converting a query
+  // into a lifecycle rule silently changed which items it covered.
+  // isNull / isNotNull are the questions ABOUT emptiness, so they run below.
+  if (isLangField && knownStreams.length === 0
+      && operator !== "isNull" && operator !== "isNotNull") {
+    return false; // bypasses negate, like every other dead-rule guard
+  }
 
   let result: boolean;
   switch (operator) {
@@ -1058,29 +1085,14 @@ function evaluateQueryRuleInMemory(
       return negate ? !result : result;
     }
     if (field === "matchedByRuleSet") {
-      const matchedSets = (item.matchedRuleSets as string[]) ?? [];
-      const matchedLower = matchedSets.map((s) => s.toLowerCase());
-      const strValue = String(value).toLowerCase();
-      let result: boolean;
-      switch (operator) {
-        case "equals": result = matchedLower.includes(strValue); break;
-        case "notEquals": result = !matchedLower.includes(strValue); break;
-        case "contains": {
-          // Enumerable multi-select — exact list membership against rule-set names.
-          const values = strValue.split("|").filter(Boolean);
-          result = values.some((v) => matchedLower.includes(v));
-          break;
-        }
-        case "notContains": {
-          const values = strValue.split("|").filter(Boolean);
-          result = !values.some((v) => matchedLower.includes(v));
-          break;
-        }
-        case "isNull": result = matchedSets.length === 0; break;
-        case "isNotNull": result = matchedSets.length > 0; break;
-        default: return false;
-      }
-      return negate ? !result : result;
+      // Rule-set names are an always-present list — same shared semantics as
+      // arrTag / seerrRequestedBy / watchedByUser. This branch previously had
+      // no wildcard cases (and was duplicated byte-for-byte in the query
+      // engine), so a "Matched By Rule Set matches …" rule silently matched
+      // nothing in both directions.
+      const setResult = matchNameListField(item.matchedRuleSets, operator, value);
+      if (setResult === null) return false; // unknown operator: bypass negate
+      return negate ? !setResult : setResult;
     }
     if (field === "hasPendingAction") {
       const hasPending = !!item.hasPendingAction;
@@ -1179,56 +1191,22 @@ function evaluateQueryRuleInMemory(
 
   // Watched By User — series aggregates flatten episode history into
   // `watchedByUsers: string[]`; individual items expose `watchHistory` directly.
+  // Operator semantics are shared with arrTag / seerrRequestedBy /
+  // matchedByRuleSet via `matchNameListField`.
   if (field === "watchedByUser") {
     const aggregated = Array.isArray(item.watchedByUsers)
-      ? (item.watchedByUsers as string[]).map((u) => u.toLowerCase())
+      ? (item.watchedByUsers as string[])
       : null;
     const users = aggregated ?? (
       Array.isArray(item.watchHistory)
         ? (item.watchHistory as Array<{ serverUsername: string | null }>)
-            .map((h) => (h.serverUsername ?? "").toLowerCase())
+            .map((h) => h.serverUsername ?? "")
             .filter(Boolean)
         : []
     );
-    const strVal = String(value).toLowerCase();
-    let result: boolean;
-    switch (operator) {
-      case "equals":
-        result = users.some((u) => u === strVal);
-        break;
-      case "notEquals":
-        result = !users.some((u) => u === strVal);
-        break;
-      case "contains": {
-        const values = strVal.split("|").filter(Boolean);
-        result = values.some((v) => users.some((u) => u === v));
-        break;
-      }
-      case "notContains": {
-        const values = strVal.split("|").filter(Boolean);
-        result = !values.some((v) => users.some((u) => u === v));
-        break;
-      }
-      case "matchesWildcard": {
-        const re = wildcardToRegex(strVal);
-        result = users.some((u) => re.test(u));
-        break;
-      }
-      case "notMatchesWildcard": {
-        const re = wildcardToRegex(strVal);
-        result = !users.some((u) => re.test(u));
-        break;
-      }
-      case "isNull":
-        result = users.length === 0;
-        break;
-      case "isNotNull":
-        result = users.length > 0;
-        break;
-      default:
-        return false;
-    }
-    return negate ? !result : result;
+    const userResult = matchNameListField(users, operator, value);
+    if (userResult === null) return false; // unknown operator: bypass negate
+    return negate ? !userResult : userResult;
   }
 
   // Date fields

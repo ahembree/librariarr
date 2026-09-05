@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { SeerrClient, type SeerrRequest } from "@/lib/seerr/seerr-client";
 import { appCache } from "@/lib/cache/memory-cache";
 import { logger } from "@/lib/logger";
+import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 
 const PAGE_SIZE = 100;
 const CACHE_TTL_MS = 60_000;
@@ -234,6 +235,12 @@ async function resolveUserRequests(
     if (allDedupKeys.length > 0) {
       const watched = await prisma.watchHistory.findMany({
         where: {
+          // Must match `request-stats.ts`, which computes the aggregate
+          // "watched" counts over this same table for this same user: without
+          // the predicate, a 4%-complete abandoned Tracearr play marks a request
+          // as watched here while the summary that sits beside it says it was
+          // not. Two views of one fact, disagreeing.
+          ...COMPLETED_PLAY_FILTER,
           serverUsername: plexUsername,
           mediaItem: { dedupKey: { in: allDedupKeys } },
         },

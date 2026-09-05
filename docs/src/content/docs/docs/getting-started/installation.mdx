@@ -9,7 +9,7 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
 
 ## Requirements
 
-- Docker and Docker Compose v2+
+- Docker and Docker Compose
 - A Plex, Jellyfin, or Emby media server
 
 <Aside type="danger" title="Internal network only">
@@ -156,7 +156,7 @@ If you already have a PostgreSQL server (e.g., a shared instance on your network
 
 ### Database Requirements
 
-- **PostgreSQL 14 or later** (17+ recommended)
+- **PostgreSQL** — any currently-supported release
 - A dedicated database for Librariarr (the app manages its own schema)
 - A user with full privileges on that database (`CREATE`, `ALTER`, `DROP`, `INSERT`, `UPDATE`, `DELETE`). The `CREATE` privilege is required: in addition to the application tables, Librariarr's background job queue ([Graphile Worker](https://worker.graphile.org/)) creates and manages a separate `graphile_worker` schema automatically on first start.
 - No PostgreSQL extensions are required

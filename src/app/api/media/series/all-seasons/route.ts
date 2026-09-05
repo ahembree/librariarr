@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
+import { resolveSeriesKey } from "@/lib/media/series-key";
 
 function getResolutionLabel(resolution: string | null): string {
   return normalizeResolutionLabel(resolution);
@@ -47,6 +48,7 @@ export async function GET(request: NextRequest) {
     select: {
       id: true,
       parentTitle: true,
+      seriesKey: true,
       seasonNumber: true,
       episodeNumber: true,
       resolution: true,
@@ -78,6 +80,7 @@ export async function GET(request: NextRequest) {
     string,
     {
       parentTitle: string;
+      seriesKey: string;
       seasonNumber: number;
       mediaItemId: string;
       episodeCount: number;
@@ -102,11 +105,16 @@ export async function GET(request: NextRequest) {
   for (const item of items) {
     const title = item.parentTitle!;
     const sn = item.seasonNumber ?? 0;
-    const key = `${title.toLowerCase().trim()}::${sn}`;
+    // Group by series identity + season, not the ambiguous title: two shows
+    // sharing a title keep separate seasons. Skip rows with no key.
+    const seriesKey = resolveSeriesKey(item);
+    if (!seriesKey) continue;
+    const key = `${seriesKey}::${sn}`;
     let season = seasonMap.get(key);
     if (!season) {
       season = {
         parentTitle: title,
+        seriesKey,
         seasonNumber: sn,
         mediaItemId: item.id,
         episodeCount: 0,
@@ -171,6 +179,7 @@ export async function GET(request: NextRequest) {
   const seasonsList = Array.from(seasonMap.values())
     .map((s) => ({
       parentTitle: s.parentTitle,
+      seriesKey: s.seriesKey,
       seasonNumber: s.seasonNumber,
       mediaItemId: s.mediaItemId,
       episodeCount: s.episodeCount,

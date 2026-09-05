@@ -1,13 +1,13 @@
 import { prisma } from "@/lib/db";
 import type { LifecycleRule, LifecycleRuleGroup, LifecycleRuleCondition, StreamQueryField } from "./types";
 import {
-  isArrField, isSeerrField, isExternalField, isStreamField, isSeriesAggregateField,
+  isArrField, isSeerrField, isExternalField, isStreamField, isSeriesAggregateField, isArrayField,
   isCrossSystemField,
   isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
   RULE_FIELDS, STREAM_QUERY_FIELDS, type RuleField,
 } from "./types";
-import { isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWatchedByUserRules as hasWatchedByUserGroupRules } from "@/lib/conditions/helpers";
+import { isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWatchedByUserRules as hasWatchedByUserGroupRules, hasPlayActivityRules as hasPlayActivityGroupRules, PLAY_ACTIVITY_FIELDS } from "@/lib/conditions/helpers";
 import { detectStreamAudioProfile, detectStreamDynamicRange } from "./stream-detection";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import {
@@ -18,6 +18,7 @@ import {
   wildcardToRegex,
   matchArrayField,
   matchExternalIdField,
+  matchNameListField,
 } from "@/lib/conditions";
 import {
   isUnconfiguredContainsRule,
@@ -29,6 +30,8 @@ import type { Condition } from "@/lib/conditions/types";
 import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
 import { Prisma } from "@/generated/prisma/client";
+import { resolveSeriesKey } from "@/lib/media/series-key";
+import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 
 const STREAM_LANG_CODEC_FIELDS = new Set(["audioLanguage", "subtitleLanguage", "streamAudioCodec"]);
 const STREAM_LANGUAGE_FIELDS = new Set(["audioLanguage", "subtitleLanguage"]);
@@ -227,6 +230,24 @@ function hasResolutionRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): bool
   return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "resolution");
 }
 
+/** JSON-array rules (`genre`, `labels`, `country`) always evaluate in-memory:
+ *  `matchArrayField` is case-insensitive and reads a stored `[]` as empty,
+ *  neither of which Prisma's case-sensitive `array_contains` / `DbNull`
+ *  filters can express — see genreLabelsHandler. Membership comes from the
+ *  shared `isArrayField` so this can't drift from the query engine's gate. */
+function hasArrayFieldRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+  if (rules.length === 0) return false;
+  if (isRuleGroups(rules)) {
+    for (const group of rules) {
+      if (group.enabled === false) continue;
+      if (group.rules.some((r) => r.enabled !== false && isArrayField(r.field))) return true;
+      if (hasArrayFieldRules(group.groups ?? [])) return true;
+    }
+    return false;
+  }
+  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isArrayField(r.field));
+}
+
 /** Check if any rule references a series-aggregate field (episodeCount,
  *  watchedEpisodePercentage, etc.). These can only be evaluated against an
  *  aggregated series record, never per-episode, so they force series-level
@@ -328,6 +349,22 @@ export function hasWatchedByUserRules(rules: LifecycleRule[] | LifecycleRuleGrou
 }
 
 /**
+ * Whether any rule reads play activity — `watchedByUser`, `playCount`,
+ * `lastPlayedAt`, or a series aggregate built on those. The trigger for the
+ * watch-history half of the evaluability guard; see `hasPlayActivityRules` in
+ * `conditions/helpers.ts` for why it is broader than `hasWatchedByUserRules`.
+ *
+ * Accepts both grouped and flat rule shapes, mirroring its sibling above.
+ */
+export function hasPlayActivityRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+  if (rules.length === 0) return false;
+  if (isRuleGroups(rules)) return hasPlayActivityGroupRules(rules as LifecycleRuleGroup[]);
+  return (rules as LifecycleRule[]).some(
+    (r) => r.enabled !== false && PLAY_ACTIVITY_FIELDS.has(r.field),
+  );
+}
+
+/**
  * Evaluate a single Arr rule against Arr metadata for an item (Phase 2).
  * Shared with the query builder (exported as `evaluateQueryArrRule`) — typed on
  * the engine-neutral `Condition` so both callers use this one canonical
@@ -372,47 +409,13 @@ export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined):
   // isNull/isNotNull (handled before each guard) intentionally match on null.
   switch (field) {
     case "arrTag": {
-      // Tags are a list that is always present (never null), so "is empty" /
-      // "is not empty" ask about LIST emptiness — an item that is in Arr but
-      // carries no tags. Same semantics as the shared JSON-array evaluator
-      // (`matchArrayField`) applies to genre/labels/country. Handled before
-      // the operator switch: falling through to its `default` returned false
-      // for BOTH operators, so neither "Tag Is Empty" nor "Tag Is Not Empty"
-      // could ever match anything.
-      if (operator === "isNull") { result = meta.tags.length === 0; break; }
-      if (operator === "isNotNull") { result = meta.tags.length > 0; break; }
-      const strVal = String(value).toLowerCase();
-      switch (operator) {
-        case "equals":
-          result = meta.tags.some((t) => t.toLowerCase() === strVal);
-          break;
-        case "notEquals":
-          result = !meta.tags.some((t) => t.toLowerCase() === strVal);
-          break;
-        case "contains": {
-          // Enumerable multi-select — exact list membership against tag set.
-          const values = strVal.split("|").filter(Boolean);
-          result = values.some((v) => meta.tags.some((t) => t.toLowerCase() === v));
-          break;
-        }
-        case "notContains": {
-          const values = strVal.split("|").filter(Boolean);
-          result = !values.some((v) => meta.tags.some((t) => t.toLowerCase() === v));
-          break;
-        }
-        case "matchesWildcard": {
-          const re = wildcardToRegex(strVal);
-          result = meta.tags.some((t) => re.test(t));
-          break;
-        }
-        case "notMatchesWildcard": {
-          const re = wildcardToRegex(strVal);
-          result = !meta.tags.some((t) => re.test(t));
-          break;
-        }
-        default:
-          return false;
-      }
+      // Tags are an always-present list — see `matchNameListField` for the
+      // operator semantics shared with seerrRequestedBy / watchedByUser /
+      // matchedByRuleSet (list-emptiness isNull, multi-select contains,
+      // case-insensitive wildcards).
+      const tagResult = matchNameListField(meta.tags, operator, value);
+      if (tagResult === null) return false; // unknown operator: bypass negate
+      result = tagResult;
       break;
     }
     case "arrQualityProfile": {
@@ -889,38 +892,14 @@ export function evaluateSeerrRule(rule: Condition, meta: SeerrMetadata | undefin
       break;
     }
     case "seerrRequestedBy": {
-      // Requesters are an always-present list, so "is empty" / "is not empty"
-      // ask about LIST emptiness (no requester recorded), matching arrTag and
-      // the shared JSON-array evaluator. Handled before the operator switch,
-      // whose `default` returned false for both operators.
-      if (operator === "isNull") { result = m.requestedBy.length === 0; break; }
-      if (operator === "isNotNull") { result = m.requestedBy.length > 0; break; }
-      const strVal = String(value).toLowerCase();
-      switch (operator) {
-        case "equals":
-          result = m.requestedBy.some((u) => u.toLowerCase() === strVal);
-          break;
-        case "notEquals":
-          result = !m.requestedBy.some((u) => u.toLowerCase() === strVal);
-          break;
-        case "contains": {
-          // Enumerable multi-select — exact list membership against requester usernames.
-          const values = strVal.split("|").filter(Boolean);
-          result = values.some((v) =>
-            m.requestedBy.some((u) => u.toLowerCase() === v)
-          );
-          break;
-        }
-        case "notContains": {
-          const values = strVal.split("|").filter(Boolean);
-          result = !values.some((v) =>
-            m.requestedBy.some((u) => u.toLowerCase() === v)
-          );
-          break;
-        }
-        default:
-          return false;
-      }
+      // Requesters are an always-present list — same shared semantics as
+      // arrTag / watchedByUser / matchedByRuleSet. This branch previously had
+      // no wildcard cases and fell through to `default`, so a "Requested By
+      // matches …" rule (an operator the builder offers on every text field)
+      // silently matched nothing in both directions.
+      const requesterResult = matchNameListField(m.requestedBy, operator, value);
+      if (requesterResult === null) return false; // unknown operator: bypass negate
+      result = requesterResult;
       break;
     }
     default:
@@ -1003,7 +982,13 @@ function evaluateRuleAgainstItem(
       return negate ? !result : result;
     }
 
-    // If all language streams were filtered out, the item has no known language — don't match
+    // An item with NO KNOWN language of this type must not match a language
+    // rule under ANY operator — "Unknown" != "English" must not read as true
+    // (see the "unknown language filtering" tests). Bypasses `negate`, like
+    // every other dead-rule guard. Phase 1 enforces the same thing by ANDing a
+    // "has a known language" conjunct onto the negated operators; without it
+    // the two phases disagreed and the same rule matched a different set
+    // depending on whether something else in the rule set forced Phase 2.
     if (isLangField && streamValues.length === 0) return false;
 
     const strValue = String(value).toLowerCase();
@@ -1115,56 +1100,22 @@ function evaluateRuleAgainstItem(
   // Either source produces the same `users` list, so the operator branches
   // are identical to the seerrRequestedBy handler above.
   if (field === "watchedByUser") {
+    // `watchedByUsers` is the aggregated (series/artist) shape; individual
+    // items carry the raw `watchHistory` rows instead. Operator semantics are
+    // shared with arrTag / seerrRequestedBy / matchedByRuleSet.
     const aggregated = Array.isArray(item.watchedByUsers)
-      ? (item.watchedByUsers as string[]).map((u) => u.toLowerCase())
+      ? (item.watchedByUsers as string[])
       : null;
     const users = aggregated ?? (
       Array.isArray(item.watchHistory)
         ? (item.watchHistory as Array<{ serverUsername: string | null }>)
-            .map((h) => (h.serverUsername ?? "").toLowerCase())
+            .map((h) => h.serverUsername ?? "")
             .filter(Boolean)
         : []
     );
-    const strVal = String(value).toLowerCase();
-    let result: boolean;
-    switch (operator) {
-      case "equals":
-        result = users.some((u) => u === strVal);
-        break;
-      case "notEquals":
-        result = !users.some((u) => u === strVal);
-        break;
-      case "contains": {
-        // Enumerable multi-select — exact list membership against usernames.
-        const values = strVal.split("|").filter(Boolean);
-        result = values.some((v) => users.some((u) => u === v));
-        break;
-      }
-      case "notContains": {
-        const values = strVal.split("|").filter(Boolean);
-        result = !values.some((v) => users.some((u) => u === v));
-        break;
-      }
-      case "matchesWildcard": {
-        const re = wildcardToRegex(strVal);
-        result = users.some((u) => re.test(u));
-        break;
-      }
-      case "notMatchesWildcard": {
-        const re = wildcardToRegex(strVal);
-        result = !users.some((u) => re.test(u));
-        break;
-      }
-      case "isNull":
-        result = users.length === 0;
-        break;
-      case "isNotNull":
-        result = users.length > 0;
-        break;
-      default:
-        return false;
-    }
-    return negate ? !result : result;
+    const userResult = matchNameListField(users, operator, value);
+    if (userResult === null) return false; // unknown operator: bypass negate
+    return negate ? !userResult : userResult;
   }
 
   // Cross-system fields — enriched by fetchCrossSystemData before Phase 2
@@ -1192,29 +1143,14 @@ function evaluateRuleAgainstItem(
       return negate ? !result : result;
     }
     if (field === "matchedByRuleSet") {
-      const matchedSets = (item.matchedRuleSets as string[]) ?? [];
-      const matchedLower = matchedSets.map((s) => s.toLowerCase());
-      const strValue = String(value).toLowerCase();
-      let result: boolean;
-      switch (operator) {
-        case "equals": result = matchedLower.includes(strValue); break;
-        case "notEquals": result = !matchedLower.includes(strValue); break;
-        case "contains": {
-          // Enumerable multi-select — exact list membership against rule-set names.
-          const values = strValue.split("|").filter(Boolean);
-          result = values.some((v) => matchedLower.includes(v));
-          break;
-        }
-        case "notContains": {
-          const values = strValue.split("|").filter(Boolean);
-          result = !values.some((v) => matchedLower.includes(v));
-          break;
-        }
-        case "isNull": result = matchedSets.length === 0; break;
-        case "isNotNull": result = matchedSets.length > 0; break;
-        default: return false;
-      }
-      return negate ? !result : result;
+      // Rule-set names are an always-present list — same shared semantics as
+      // arrTag / seerrRequestedBy / watchedByUser. This branch previously had
+      // no wildcard cases (and was duplicated byte-for-byte in the query
+      // engine), so a "Matched By Rule Set matches …" rule silently matched
+      // nothing in both directions.
+      const setResult = matchNameListField(item.matchedRuleSets, operator, value);
+      if (setResult === null) return false; // unknown operator: bypass negate
+      return negate ? !setResult : setResult;
     }
     if (field === "hasPendingAction") {
       const hasPending = !!item.hasPendingAction;
@@ -2134,7 +2070,13 @@ export async function evaluateSeriesScope(
     include: {
       externalIds: true,
       ...(needsStreams ? { streams: true } : {}),
-      ...(needsWatchHistory ? { watchHistory: { select: { serverUsername: true } } } : {}),
+      ...(needsWatchHistory ? { watchHistory: {
+          // Phase 2 must see the same rows Phase 1 filtered on, or a
+          // `watchedByUser` rule matches a different set depending on
+          // whether something else forced in-memory re-evaluation.
+          where: COMPLETED_PLAY_FILTER,
+          select: { serverUsername: true },
+        } } : {}),
       library: {
         select: {
           title: true,
@@ -2144,10 +2086,14 @@ export async function evaluateSeriesScope(
     },
   });
 
-  // Group episodes by series (parentTitle + libraryId)
+  // Group episodes by series identity within a library (libraryId + seriesKey).
+  // Keying on seriesKey (not the ambiguous parentTitle) splits two same-titled
+  // shows with different TVDB ids; keeping the libraryId prefix leaves the same
+  // show on two servers as two aggregates that detect-matches collapses by Arr
+  // id (merging here would double-count episodes).
   const seriesMap = new Map<string, typeof allEpisodes>();
   for (const ep of allEpisodes) {
-    const key = `${ep.libraryId}::${ep.parentTitle ?? ep.libraryId}`;
+    const key = `${ep.libraryId}::${resolveSeriesKey(ep) ?? ep.libraryId}`;
     const group = seriesMap.get(key);
     if (group) {
       group.push(ep);
@@ -2404,7 +2350,13 @@ export async function evaluateMusicScope(
     include: {
       externalIds: true,
       ...(needsStreams ? { streams: true } : {}),
-      ...(needsWatchHistory ? { watchHistory: { select: { serverUsername: true } } } : {}),
+      ...(needsWatchHistory ? { watchHistory: {
+          // Phase 2 must see the same rows Phase 1 filtered on, or a
+          // `watchedByUser` rule matches a different set depending on
+          // whether something else forced in-memory re-evaluation.
+          where: COMPLETED_PLAY_FILTER,
+          select: { serverUsername: true },
+        } } : {}),
       library: {
         select: {
           title: true,
@@ -2557,7 +2509,7 @@ export async function evaluateLifecycleRules(
   // re-eval, otherwise an aggregate conjunct AND-ed with a DB-expressible rule
   // is silently dropped. (Aggregate evaluation itself happens at the series
   // level — see detect-matches routing to evaluateSeriesScope.)
-  const needsInMemoryEval = hasWildcardRules(rules) || hasStreamCountRules(rules) || hasStreamQueryInMemoryRules(rules) || hasCrossSystem || hasResolutionRules(rules) || hasSeriesAggregateRules(rules);
+  const needsInMemoryEval = hasWildcardRules(rules) || hasStreamCountRules(rules) || hasStreamQueryInMemoryRules(rules) || hasCrossSystem || hasResolutionRules(rules) || hasArrayFieldRules(rules) || hasSeriesAggregateRules(rules);
   const needsFullReeval = needsInMemoryEval || !!hasExternal;
 
   let andConditions: Prisma.MediaItemWhereInput[];
@@ -2604,7 +2556,13 @@ export async function evaluateLifecycleRules(
     include: {
       ...(needsExternalIds ? { externalIds: true } : {}),
       ...(needsStreams ? { streams: true } : {}),
-      ...(needsWatchHistory ? { watchHistory: { select: { serverUsername: true } } } : {}),
+      ...(needsWatchHistory ? { watchHistory: {
+          // Phase 2 must see the same rows Phase 1 filtered on, or a
+          // `watchedByUser` rule matches a different set depending on
+          // whether something else forced in-memory re-evaluation.
+          where: COMPLETED_PLAY_FILTER,
+          select: { serverUsername: true },
+        } } : {}),
       library: {
         select: {
           title: true,
@@ -2665,12 +2623,13 @@ export async function evaluateLifecycleRules(
  * `matchedEpisodes` count.
  */
 export function groupSeriesResults<
-  T extends { id: string; title: string; parentTitle: string | null; libraryId: string; playCount: number; fileSize: string | null; lastPlayedAt?: string | Date | null; seasonNumber?: number | null; episodeNumber?: number | null }
+  T extends { id: string; title: string; parentTitle: string | null; seriesKey?: string | null; externalIds?: ReadonlyArray<{ source: string; externalId: string }> | null; libraryId: string; playCount: number; fileSize: string | null; lastPlayedAt?: string | Date | null; seasonNumber?: number | null; episodeNumber?: number | null }
 >(items: T[]): (T & { matchedEpisodes: number; memberIds: string[] })[] {
   const groups = new Map<string, { representative: T; count: number; totalPlays: number; totalSize: bigint; latestPlayed: Date | null; memberIds: string[] }>();
 
   for (const item of items) {
-    const key = `${item.libraryId}::${item.parentTitle ?? item.libraryId}`;
+    // Series identity per library — same rationale as evaluateSeriesScope.
+    const key = `${item.libraryId}::${resolveSeriesKey(item) ?? item.libraryId}`;
     const existing = groups.get(key);
     const playedDate = item.lastPlayedAt ? new Date(item.lastPlayedAt) : null;
     const size = item.fileSize ? BigInt(item.fileSize) : BigInt(0);

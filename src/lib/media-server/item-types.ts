@@ -90,3 +90,36 @@ export function partitionMediaItems<T extends { type?: string }>(
   const media = items.filter(isMediaItem);
   return { media, skipped: items.length - media.length };
 }
+
+/**
+ * Item types that can belong to a library librariarr actually syncs.
+ *
+ * `PlexClient.getLibraries()` keeps only `movie` / `show` / `artist` sections,
+ * so a Plex server's Photos or Home Videos section never gets a `Library` row —
+ * ever, by design. That matters because the incremental sync treats "this item
+ * names a library section we have no row for" as evidence a NEW library
+ * appeared and escalates to a full sync to create it. For a photo that
+ * escalation can never succeed: the full sync won't create the row either, so
+ * the next photo escalates again, forever — a full-server sync per photo, which
+ * is precisely the failure the incremental path exists to prevent.
+ *
+ * This is an ALLOW-list where the module's other guards are deny-lists, and the
+ * asymmetry is deliberate: it gates only ESCALATION, never syncing. An
+ * unknown-but-real type with an unknown section is counted `unresolved` and left
+ * for the scheduled full sync, which is the safe direction — the alternative
+ * failure mode is an unbounded sync loop.
+ */
+const SYNCABLE_ITEM_TYPES: ReadonlySet<string> = new Set([
+  "movie",
+  "show", "season", "episode",
+  "artist", "album", "track",
+]);
+
+/**
+ * True when an item could plausibly live in a MOVIE / SERIES / MUSIC library —
+ * i.e. when an unrecognized library section is worth a full sync to discover.
+ */
+export function canBelongToSyncedLibrary(item: { type?: string }): boolean {
+  if (!item.type) return true;
+  return SYNCABLE_ITEM_TYPES.has(item.type.toLowerCase());
+}

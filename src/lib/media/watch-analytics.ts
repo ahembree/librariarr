@@ -55,10 +55,19 @@ export async function computeWatchTrends(
   const since = cutoff(opts.days);
 
   if (opts.mediaType) {
-    // Movies key by title; series/music key by parentTitle.
-    const titleExpr = opts.mediaType === "MOVIE" ? "mi.title" : 'mi."parentTitle"';
+    // Group key = identity: movies by title, SERIES by seriesKey (so two
+    // same-titled shows rank separately), MUSIC by artist (parentTitle). The
+    // displayed title is still the show/artist name (or movie title), taken as a
+    // representative when the group key isn't itself the title.
+    const displayExpr = opts.mediaType === "MOVIE" ? "mi.title" : 'mi."parentTitle"';
+    const groupExpr =
+      opts.mediaType === "MOVIE"
+        ? "mi.title"
+        : opts.mediaType === "SERIES"
+          ? 'mi."seriesKey"'
+          : 'mi."parentTitle"';
     return prisma.$queryRawUnsafe<WatchTrendRow[]>(
-      `SELECT ${titleExpr} AS "title", mi.type::text AS "type",
+      `SELECT MIN(${displayExpr}) AS "title", mi.type::text AS "type",
          COUNT(*)::int AS "plays",
          COUNT(DISTINCT wh."serverUsername")::int AS "users",
          MAX(wh."watchedAt") AS "lastWatchedAt"
@@ -67,17 +76,21 @@ export async function computeWatchTrends(
        WHERE wh."mediaServerId" = ANY($1)
          AND wh."watchedAt" IS NOT NULL AND wh."watchedAt" >= $2
          AND mi.type::text = $3
-         AND ${titleExpr} IS NOT NULL
-       GROUP BY ${titleExpr}, mi.type
+         AND ${groupExpr} IS NOT NULL
+       GROUP BY ${groupExpr}, mi.type
        ORDER BY "plays" DESC
        LIMIT $4`,
       serverIds, since, opts.mediaType, limit,
     );
   }
 
+  // Combined: identity key per type (movie title / series seriesKey / music
+  // artist), display name resolved per group.
+  const groupExpr = `CASE WHEN mi.type = 'MOVIE' THEN mi.title WHEN mi.type = 'SERIES' THEN mi."seriesKey" ELSE mi."parentTitle" END`;
+  const displayExpr = `CASE WHEN mi.type = 'MOVIE' THEN mi.title ELSE mi."parentTitle" END`;
   return prisma.$queryRawUnsafe<WatchTrendRow[]>(
     `SELECT
-       CASE WHEN mi.type = 'MOVIE' THEN mi.title ELSE mi."parentTitle" END AS "title",
+       MIN(${displayExpr}) AS "title",
        mi.type::text AS "type",
        COUNT(*)::int AS "plays",
        COUNT(DISTINCT wh."serverUsername")::int AS "users",
@@ -86,8 +99,8 @@ export async function computeWatchTrends(
      JOIN "MediaItem" mi ON wh."mediaItemId" = mi.id
      WHERE wh."mediaServerId" = ANY($1)
        AND wh."watchedAt" IS NOT NULL AND wh."watchedAt" >= $2
-       AND (mi.type = 'MOVIE' OR mi."parentTitle" IS NOT NULL)
-     GROUP BY CASE WHEN mi.type = 'MOVIE' THEN mi.title ELSE mi."parentTitle" END, mi.type
+       AND ${groupExpr} IS NOT NULL
+     GROUP BY ${groupExpr}, mi.type
      ORDER BY "plays" DESC
      LIMIT $3`,
     serverIds, since, limit,

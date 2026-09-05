@@ -8,7 +8,7 @@ import { Aside } from "@astrojs/starlight/components";
 Lifecycle rules can delete media. This page explains, in plain language, every check that stands between a rule firing and a file being removed. If you're worried about handing your library over to an automated tool, read this end-to-end.
 
 <Aside type="tip">
-  Every safeguard described here is covered by automated tests — currently 1,694 unit tests and 1,124 integration tests. If you want to verify the claims yourself, the [For developers and reviewers](#for-developers-and-reviewers) section at the bottom links every claim to the exact source code and test files.
+  Every safeguard described here is covered by automated tests. If you hit a case where one of them failed, see [Reporting a safety failure](#reporting-a-safety-failure) at the bottom of this page.
 </Aside>
 
 ## What we're trying to prevent
@@ -103,9 +103,11 @@ Some rule fields can be checked directly in your library database — things lik
 
 Other rule fields need information from outside the database — for example, whether *arr considers an item "monitored", or whether someone requested it via Seerr, or whether a wildcard pattern matches a stream language. The engine can't translate those into a database query, so it has to fetch a list of candidates first and then check each one in memory.
 
-The danger here is subtle: if the engine had a bug where one of these "outside" fields produced no constraint at all, the database query could return your entire library, and a missing follow-up check could let everything through. The engine is built so this can't happen — when it sees a rule it can't translate to a database query, it explicitly marks it as "must be checked in memory" and propagates that marker through the rule's AND/OR logic. The result is that the database query is always at least as broad as the final answer, and the in-memory pass that follows always narrows it down. There is no path where an outside-system rule lets your whole library through.
+The danger here is subtle: a rule the engine can't translate into a database query contributes no constraint to that query, so on its own the query could return your whole library. The engine marks every such rule as "must be checked in memory" and carries that marker through the rule's AND/OR logic, so the database query is always at least as broad as the final answer and the in-memory pass always narrows it. There is no path where an outside-system rule lets your whole library through.
 
-There's a related trap on the outside-system side itself: fields like `foundInArr` and `seerrRequested` describe an item's **absence** from the external system, so if the external data simply isn't there — you disabled or deleted your only Radarr instance, or never connected Seerr — "not found in Arr" would be true for *everything*. Detection therefore refuses to evaluate a rule set whose *arr/Seerr fields have **no enabled instance** behind them: the rule set is skipped with a warning in System Logs, its existing matches are left untouched, and previews return an error instead of a whole-library match list. An unreachable (but still enabled) instance behaves the same way for a different reason — the metadata fetch fails and the rule set is skipped for that cycle. Seerr fields are additionally rejected outright on music rule sets, where no Seerr data can ever exist — and a legacy music rule set that already carries them is **disarmed**, not just skipped: its stale matches are cleared and pending actions cancelled (with an executor-side backstop), so a vacuous whole-library match armed before this guard existed can never execute.
+There's a related trap on the outside-system side itself: fields like `foundInArr` and `seerrRequested` describe an item's **absence** from the external system, so if that data simply isn't there — you disabled your only Radarr instance, or never connected Seerr — "not found in *arr" would be true for *everything*.
+
+Detection therefore refuses to evaluate a rule set whose *arr or Seerr fields have no enabled instance behind them. The rule set is skipped with a warning in System Logs, its existing matches are left untouched, and previews return an error rather than a whole-library match list. An unreachable instance is skipped for that cycle for the same reason. Seerr fields are rejected outright on music rule sets, where Seerr data can never exist; a music rule set that already carries them is **disarmed** — matches cleared, pending actions cancelled.
 
 The same refusal applies to ad-hoc **Query page actions**: running an action on results whose Arr/Seerr criteria couldn't actually be evaluated (no Arr server selected for the action's media type, no enabled Seerr instance selected, or Seerr criteria on music) is blocked with an explanatory error before anything runs.
 
@@ -279,34 +281,12 @@ If a deletion has already run, recovery depends on whether the *arr instance had
 
 This is exactly why the save flow forces the recycle bin acknowledgement (see [Layer 1](#layer-1--when-you-save)). If you skipped it, you skipped your safety net.
 
-## For developers and reviewers
+## Reporting a safety failure
 
-If you want to verify the safety claims above by reading the code, the codebase is open and every claim is anchored to a specific location.
+Every safeguard above is covered by automated tests, and the code is open if
+you want to verify a claim yourself.
 
-| Claim | Where to look |
-|-|-|
-| Empty / disabled rule sets can't match | `hasAnyActiveRules` in `src/lib/rules/lifecycle-engine.ts` (early return at the top of `evaluateLifecycleRules`, `evaluateSeriesScope`, `evaluateMusicScope`, and the `/api/lifecycle/rules/preview` route) |
-| External-field rules can't broaden the database query | `evaluateGroupPreFilter` and `combinePreFilter` in `src/lib/rules/lifecycle-engine.ts`. The `EXTERNAL_RULE` sentinel propagates through AND/OR; pre-filter is only used when `needsFullReeval=true` |
-| The empty-WHERE safety net | The block tagged `// Safety net: if all rules produced empty WHERE clauses` near the top of `evaluateLifecycleRules` in `src/lib/rules/lifecycle-engine.ts` |
-| Action scheduling skipped when actions disabled | `scheduleActionsForRuleSet` in `src/lib/lifecycle/processor.ts` (early-deletes pending actions when `actionEnabled=false` or no `actionType`) |
-| Stale matches cancelled at scheduling time | `scheduleActionsForRuleSet` in `src/lib/lifecycle/processor.ts` (after detection, deletes pending actions whose item isn't in the new match set) |
-| Stale matches cancelled at execute time | The pending-actions loop in `processLifecycleRules` in `src/lib/lifecycle/processor.ts` (re-checks `matchSet` immediately before `executeAction`) |
-| Lifecycle Exceptions honored before execution | The same loop — exception set built from `prisma.lifecycleException.findMany` and checked per action |
-| Title validation before deleting in *arr | `validateArrItem` and `normalizeTitle` in `src/lib/lifecycle/actions.ts`. Called from each `resolveRadarrMovie` / `resolveSonarrSeries` / `resolveLidarrArtist` helper |
-| Pending actions cannot be deleted directly | The DELETE handler in `src/app/api/lifecycle/actions/[id]/route.ts` (only `FAILED` is permitted; pending actions return HTTP 400) |
-| Saving wipes matches by default | The PUT handler in `src/app/api/lifecycle/rules/[id]/route.ts`. The `clearMatches` query param defaults to `"true"`. The frontend's `executeSave` defaults `clearMatches: true` and only opts out for collection-disable confirmations |
-| Schema and structure validation | `validateRuleStructure` in `src/lib/validation.ts`. Checks structural shape only — does not enforce known field/operator names |
-| Save-time recycle bin check | `isDestructiveAction` and the `recycleBinAcknowledgedRef` flow in `src/components/lifecycle-rule-page.tsx`. Reads from `/api/integrations/{type}/{id}/recycle-bin`. Tolerates fetch errors (proceeds with save) |
-| Action delay default | `actionDelayDays Int @default(7)` in `prisma/schema.prisma` |
-
-Tests asserting these invariants:
-
-- `tests/unit/rules/deletion-safety.test.ts` — the three Layer 2 defenses.
-- `tests/unit/rules/bug-regression.test.ts` — historical bug fixes anchored to this layer model.
-- `tests/unit/rules/group-logic.test.ts` — AND / OR / NOT / nested-group correctness.
-- `tests/integration/lifecycle/actions.test.ts` — Layer 4 end-to-end against a real database.
-- `tests/integration/lifecycle/exceptions.test.ts` — Layer 3 exception handling.
-- `tests/integration/lifecycle/rules-run.test.ts` — full pipeline.
-- `tests/integration/lifecycle/matches.test.ts` — match detection and stale cleanup.
-
-If you find a case where any of the safeguards above failed, please file an issue at https://github.com/ahembree/librariarr/issues with the rule set's JSON and a description of the unexpected behavior. Failures of these invariants are treated as the highest-priority class of bug.
+If you find a case where any of them failed, please file an issue at
+https://github.com/ahembree/librariarr/issues with the rule set's JSON and a
+description of what happened. Failures of these guarantees are treated as the
+highest-priority class of bug.

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
+import { useRealtime } from "@/hooks/use-realtime";
 import Link from "next/link";
 import { ChevronRight, Recycle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -60,15 +61,13 @@ export function LifecyclePipeline({ scheduleInfo }: { scheduleInfo: ScheduleInfo
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
+  const load = useCallback(async () => {
+    {
       const [rulesRes, matchesRes, statsRes] = await Promise.allSettled([
         fetch("/api/lifecycle/rules").then((r) => (r.ok ? r.json() : null)),
         fetch("/api/lifecycle/rules/matches").then((r) => (r.ok ? r.json() : null)),
         fetch("/api/lifecycle/stats").then((r) => (r.ok ? r.json() : null)),
       ]);
-      if (cancelled) return;
 
       // Rules are the source of truth for "no rules yet" — if that fetch
       // failed, don't show the create-your-first-rule CTA over an outage.
@@ -95,11 +94,18 @@ export function LifecyclePipeline({ scheduleInfo }: { scheduleInfo: ScheduleInfo
         reclaimedActions: stats?.actionCount ?? 0,
       });
       setLoading(false);
-    })();
-    return () => {
-      cancelled = true;
-    };
+    }
   }, []);
+
+  useEffect(() => {
+    void (async () => { await load(); })();
+  }, [load]);
+
+  // This zone renders rule, match and pending-action counts — every one of
+  // which the lifecycle events already announce. It was a mount-only fetch, so
+  // a detection or execution run left the dashboard showing pre-run figures.
+  useRealtime("lifecycle:detection-completed", load);
+  useRealtime("lifecycle:action-executed", load);
 
   if (loading) {
     return <Skeleton className="h-[92px] w-full rounded-[14px]" />;

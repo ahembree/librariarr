@@ -4,6 +4,11 @@ import fs from "fs/promises";
 import path from "path";
 import { gzipSync } from "zlib";
 
+// Runtime data directory: env-resolved and outside the project (under /config in
+// the container), so Turbopack's build-time tracer cannot resolve it statically and
+// falls back to tracing the WHOLE project into the standalone output ("Dynamic
+// filesystem access causes tracing of the whole project"). Nothing here is a build
+// input, so every fs/path call it flags carries `/* turbopackIgnore: true */`.
 const LOG_ARCHIVE_DIR = process.env.LOG_ARCHIVE_DIR || "/config/logs";
 
 /** Date string in YYYY-MM-DD format */
@@ -145,7 +150,7 @@ async function pruneArchives(retentionDays: number) {
 
   let files: string[];
   try {
-    files = await fs.readdir(LOG_ARCHIVE_DIR);
+    files = await fs.readdir(/* turbopackIgnore: true */ LOG_ARCHIVE_DIR);
   } catch {
     return;
   }
@@ -157,7 +162,7 @@ async function pruneArchives(retentionDays: number) {
     if (!match) continue;
 
     if (match[1] < cutoffStr) {
-      await fs.unlink(path.join(LOG_ARCHIVE_DIR, file));
+      await fs.unlink(path.join(/* turbopackIgnore: true */ LOG_ARCHIVE_DIR, file));
       logger.info("LogArchive", `Pruned old archive ${file}`);
     }
   }
@@ -175,7 +180,7 @@ export async function listArchives(): Promise<Array<{
 
   let files: string[];
   try {
-    files = await fs.readdir(LOG_ARCHIVE_DIR);
+    files = await fs.readdir(/* turbopackIgnore: true */ LOG_ARCHIVE_DIR);
   } catch {
     return [];
   }
@@ -187,7 +192,7 @@ export async function listArchives(): Promise<Array<{
     const match = file.match(archivePattern);
     if (!match) continue;
 
-    const stat = await fs.stat(path.join(LOG_ARCHIVE_DIR, file));
+    const stat = await fs.stat(/* turbopackIgnore: true */ path.join(/* turbopackIgnore: true */ LOG_ARCHIVE_DIR, file));
     archives.push({
       filename: file,
       date: match[1],
@@ -207,7 +212,7 @@ export async function getArchivePath(filename: string): Promise<string | null> {
     return null;
   }
 
-  const filePath = path.join(LOG_ARCHIVE_DIR, filename);
+  const filePath = path.join(/* turbopackIgnore: true */ LOG_ARCHIVE_DIR, filename);
   try {
     await fs.access(filePath);
     return filePath;
