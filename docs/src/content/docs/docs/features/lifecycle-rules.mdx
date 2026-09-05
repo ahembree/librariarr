@@ -345,6 +345,11 @@ Before executing any actions, use the **Preview** feature to see which media ite
 - Updates in real time as you modify rules
 - Shows a live progress bar through each phase (fetching *arr/Seerr metadata, evaluating rules, computing matched criteria) so large libraries don't just spin
 
+Preview is **refused** whenever the rules can't be evaluated faithfully, and the reason is shown as an error notification rather than an empty or stale result list. The same guard that pauses detection applies here, so a preview never shows matches that detection would refuse to produce:
+
+- *arr criteria with no enabled Sonarr/Radarr/Lidarr instance, or Seerr criteria with no enabled Seerr instance (Seerr criteria on a music rule set are refused permanently).
+- Criteria that read play activity — *Watched By User*, *Play Count*, *Last Played*, and the series rollups built on them — while any targeted server's play history isn't established yet: it has never synced, was recently cleared, or a [Tracearr](/docs/integrations/tracearr/) history import is still backfilling. Until the import reaches back far enough, every item looks never-watched, so *Play Count = 0* or *not played in N months* would match the entire library. Wait for the import to finish (Settings → Servers shows its progress) and preview again.
+
 ## Actions
 
 Actions determine what happens to matched media. Configure them in the **Actions** tab of a rule set.

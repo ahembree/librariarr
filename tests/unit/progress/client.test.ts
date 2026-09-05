@@ -71,6 +71,28 @@ describe("consumeProgressStream", () => {
   });
 
   it("throws when the response has no body", async () => {
-    await expect(consumeProgressStream({ body: null } as Response, () => {})).rejects.toThrow("no body");
+    await expect(
+      consumeProgressStream({ ok: true, body: null } as Response, () => {}),
+    ).rejects.toThrow("no body");
+  });
+
+  // A refusal answered BEFORE the stream opens (auth, validation, or the
+  // lifecycle evaluability guard) is plain JSON, not NDJSON. Parsed as an
+  // event it has no `type`, falls through every branch, and the reader ends
+  // "without a result" — which is how a rule-set Preview blocked by an
+  // in-progress Tracearr backfill reported nothing to the user at all.
+  it("throws with the server's error message on a non-OK response", async () => {
+    const response = new Response(JSON.stringify({ error: "Rules read play activity but 1 server(s) have no established play history yet" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+    await expect(consumeProgressStream(response, () => {})).rejects.toThrow(
+      "1 server(s) have no established play history yet",
+    );
+  });
+
+  it("throws with the status when a non-OK response carries no JSON error", async () => {
+    const response = new Response("<html>502</html>", { status: 502 });
+    await expect(consumeProgressStream(response, () => {})).rejects.toThrow("status 502");
   });
 });

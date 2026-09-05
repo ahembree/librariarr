@@ -1347,12 +1347,15 @@ export function LifecycleRulePage({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(previewBody),
       });
+      // `.catch` here, not at the await below: when the preview fails we return
+      // early without ever awaiting this one, and a bare rejected fetch promise
+      // then surfaces as an unhandled rejection.
       const diffPromise = activeRuleSetId
         ? fetch(`/api/lifecycle/rules/${activeRuleSetId}/diff`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(previewBody),
-          })
+          }).catch(() => null)
         : null;
 
       // Consume the preview stream live so its progress events drive the bar.
@@ -1410,6 +1413,18 @@ export function LifecycleRulePage({
       });
     } catch (error) {
       console.error("Failed to preview:", error);
+      // Only the latest Preview owns the UI — a superseded call reporting its
+      // failure would talk over the run the user is actually watching.
+      if (previewTokenRef.current !== token) return;
+      // The route refuses a preview it cannot answer faithfully: no active
+      // rules, or the evaluability guard (Arr/Seerr instance missing, or a
+      // server whose play history isn't established yet — e.g. a Tracearr
+      // backfill still importing). Those reasons are the whole point of the
+      // refusal, so show them instead of leaving the button to spin back to
+      // idle with an unchanged, stale result table on screen.
+      toast.error("Couldn't preview matches", {
+        description: error instanceof Error ? error.message : "Unknown error",
+      });
     } finally {
       // Only clear the previewing flag if this is still the latest call;
       // otherwise the newer call owns the spinner.
