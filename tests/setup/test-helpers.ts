@@ -208,10 +208,10 @@ export async function createTestMediaItem(
     playCount: number;
     lastPlayedAt: Date;
     addedAt: Date;
-    parentTitle: string;
+    parentTitle: string | null;
     seriesKey: string | null;
     albumTitle: string;
-    seasonNumber: number;
+    seasonNumber: number | null;
     episodeNumber: number;
     container: string;
     duration: number;
