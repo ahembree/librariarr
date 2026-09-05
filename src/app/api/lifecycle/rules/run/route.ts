@@ -108,9 +108,11 @@ export async function POST(request: NextRequest) {
 
   // A named rule set missing from the results was skipped. Report the reason so
   // the caller can say what happened instead of presenting the previous run's
-  // matches as this run's answer.
+  // matches as this run's answer. Optional-chained because this runs on EVERY
+  // manual run: an entry shaped unexpectedly must leave the reason unresolved,
+  // never throw and fail a detection run that already did its work.
   const skippedReason =
-    data.ruleSetId && !results.some((r) => r.ruleSet.id === data.ruleSetId)
+    data.ruleSetId && !results.some((r) => r.ruleSet?.id === data.ruleSetId)
       ? await explainSkippedRuleSet(session.userId!, data.ruleSetId)
       : null;
 
