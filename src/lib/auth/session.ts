@@ -1,4 +1,8 @@
-import { getIronSession, type SessionOptions } from "iron-session";
+import {
+  getIronSession,
+  type IronSession,
+  type SessionOptions,
+} from "iron-session";
 import { cookies } from "next/headers";
 import { randomBytes } from "crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
@@ -135,6 +139,27 @@ function resolveCookieSecure(): boolean {
 export async function getSession() {
   const cookieStore = await cookies();
   return getIronSession<SessionData>(cookieStore, getSessionOptions());
+}
+
+/**
+ * Start a brand-new session for a login, discarding whatever the visitor was
+ * carrying first. That discard is the session-fixation defence — a pre-seeded
+ * cookie must not survive into the authenticated session — and it is also what
+ * drops the transient OIDC handshake fields and any stale Plex token.
+ *
+ * The destroy and the write have to happen on two different session objects:
+ * iron-session refuses to save a session that was destroyed and then written
+ * back into ("saving these fields would restore the cookie you just cleared").
+ * Re-reading after the destroy yields an empty session over the same cookie
+ * store, which is the supported way to express "sign this visitor out, then
+ * sign this user in".
+ */
+export async function rotateSession(): Promise<IronSession<SessionData>> {
+  const cookieStore = await cookies();
+  const options = getSessionOptions();
+  const previous = await getIronSession<SessionData>(cookieStore, options);
+  previous.destroy();
+  return getIronSession<SessionData>(cookieStore, options);
 }
 
 /**
