@@ -5,6 +5,7 @@ import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { logger } from "@/lib/logger";
 import { normalizeTitle, executeAction, extractActionError } from "@/lib/lifecycle/actions";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
+import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
 import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
@@ -370,6 +371,40 @@ export async function processLifecycleRules(userId?: string) {
   }
 }
 
+/**
+ * Tell the operator their run was held, over Discord if it is configured.
+ *
+ * A ceiling that silently does nothing is worse than no ceiling: the actions
+ * stay PENDING and the user has no reason to go looking. Best-effort — the
+ * caller swallows failures, exactly like every other notification path here,
+ * because a webhook outage must not fail a lifecycle run.
+ */
+async function notifyDeleteCeilingReached(
+  userId: string,
+  verdict: { count: number; limit: number | null },
+): Promise<void> {
+  const settings = await prisma.appSettings.findFirst({
+    where: { userId },
+    select: { discordWebhookUrl: true },
+  });
+  if (!settings?.discordWebhookUrl) return;
+
+  await sendDiscordNotification(settings.discordWebhookUrl, {
+    embeds: [
+      {
+        title: "Lifecycle deletion held for review",
+        description:
+          `This run would have deleted **${verdict.count}** item(s), above the ` +
+          `configured limit of **${verdict.limit}**.\n\nNothing was deleted. The ` +
+          `actions are still pending — review them on the Pending page and execute ` +
+          `them there if they are correct, or raise the limit in Settings.`,
+        color: 0xf59e0b,
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  });
+}
+
 export async function executeLifecycleActions(userId?: string) {
   const pendingActions = await prisma.lifecycleAction.findMany({
     where: {
@@ -455,6 +490,37 @@ export async function executeLifecycleActions(userId?: string) {
     }
   }
 
+  // BLAST-RADIUS CEILING. Applied here — after the stale-match, exception and
+  // item-existence filtering above, so the number reflects what would ACTUALLY
+  // be destroyed rather than what was merely scheduled.
+  //
+  // Grouped per user because the ceiling is a per-user setting and this executor
+  // can run for all of them; one user's runaway rule set must not hold another's
+  // legitimate run. Blocked actions stay PENDING and untouched, so the Pending
+  // page's existing Execute button IS the manual approval — there is no separate
+  // approval queue to build or to get out of sync.
+  const blockedUserIds = new Set<string>();
+  {
+    const destructiveByUser = new Map<string, string[]>();
+    for (const a of pendingActions) {
+      if (!a.mediaItem || !a.mediaItemId) continue;
+      const list = destructiveByUser.get(a.userId) ?? [];
+      list.push(a.actionType);
+      destructiveByUser.set(a.userId, list);
+    }
+    for (const [uid, actionTypes] of destructiveByUser) {
+      const verdict = await checkDeleteCeiling(uid, actionTypes);
+      if (verdict.allowed) continue;
+      blockedUserIds.add(uid);
+      logger.warn(
+        "Lifecycle",
+        `Holding this run's destructive actions — ${verdict.reason} ` +
+          `They remain pending and can be executed from the Pending page.`,
+      );
+      await notifyDeleteCeilingReached(uid, verdict).catch(() => {});
+    }
+  }
+
   logger.info("Lifecycle", `Processing ${pendingActions.length} pending actions (${currentMatches.length} current matches across ${ruleSetIds.length} rule sets)`);
 
   // Track server/library pairs that need a sync after destructive actions
@@ -482,6 +548,13 @@ export async function executeLifecycleActions(userId?: string) {
     if (!action.mediaItem || !action.mediaItemId) {
       await prisma.lifecycleAction.delete({ where: { id: action.id } });
       logger.info("Lifecycle", `Deleted action ${action.id} — media item no longer exists`);
+      continue;
+    }
+
+    // Held by the ceiling: leave it PENDING and untouched so the Pending page
+    // can execute it after review. Only destructive actions are held — an
+    // unmonitor or a tag scheduled in the same run still applies.
+    if (blockedUserIds.has(action.userId) && isDestructiveActionType(action.actionType)) {
       continue;
     }
 

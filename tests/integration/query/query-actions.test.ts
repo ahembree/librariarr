@@ -865,6 +865,130 @@ describe("POST /api/query/actions", () => {
       expect(mockedExecuteAction).not.toHaveBeenCalled();
     });
   });
+
+  describe("deletion ceiling", () => {
+    // The Query page batches: the client chunks a large selection into
+    // sequential requests, so `MAX_QUERY_ACTION_ITEMS` is a per-REQUEST cap and
+    // not a limit on how much one action can destroy. The ceiling is, and it is
+    // checked per request against the same setting the automated executor
+    // reads — so a batched selection is refused on its first batch rather than
+    // after the first chunk is already gone.
+    async function withCeiling(userId: string, maxAutoDeleteItems: number | null) {
+      await getTestPrisma().appSettings.upsert({
+        where: { userId },
+        create: { userId, maxAutoDeleteItems },
+        update: { maxAutoDeleteItems },
+      });
+    }
+
+    it("refuses a destructive run over the configured limit", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      await withCeiling(user.id, 2);
+      const radarr = await createTestRadarrInstance(user.id);
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: BASE_QUERY,
+          mediaItemIds: ["m1", "m2", "m3"],
+          actionType: "DELETE_RADARR",
+          arrInstanceId: radarr.id,
+        },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/3 item\(s\)/);
+      expect(body.error).toMatch(/limit of 2/);
+      // Nothing ran: the refusal is before the query, not a partial batch.
+      expect(mockedExecuteQuery).not.toHaveBeenCalled();
+      expect(mockedExecuteAction).not.toHaveBeenCalled();
+    });
+
+    it("allows a run exactly at the limit", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      await withCeiling(user.id, 1);
+      const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+      const movie = await createTestMediaItem(library.id, { type: "MOVIE", title: "At Limit" });
+      const radarr = await createTestRadarrInstance(user.id);
+
+      mockedExecuteQuery.mockResolvedValue(
+        queryResult([{ id: movie.id, type: "MOVIE", title: "At Limit", parentTitle: null }]),
+      );
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: BASE_QUERY,
+          mediaItemIds: [movie.id],
+          actionType: "DELETE_RADARR",
+          arrInstanceId: radarr.id,
+        },
+      });
+
+      const { result: body } = await expectStreamResult<{ executed: number }>(response);
+      expect(body.executed).toBe(1);
+    });
+
+    it("does not count a non-destructive action against the limit", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      await withCeiling(user.id, 1);
+      const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+      const a = await createTestMediaItem(library.id, { type: "MOVIE", title: "A" });
+      const b = await createTestMediaItem(library.id, { type: "MOVIE", title: "B" });
+      const radarr = await createTestRadarrInstance(user.id);
+
+      mockedExecuteQuery.mockResolvedValue(
+        queryResult([
+          { id: a.id, type: "MOVIE", title: "A", parentTitle: null },
+          { id: b.id, type: "MOVIE", title: "B", parentTitle: null },
+        ]),
+      );
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: BASE_QUERY,
+          mediaItemIds: [a.id, b.id],
+          actionType: "UNMONITOR_RADARR",
+          arrInstanceId: radarr.id,
+        },
+      });
+
+      const { result: body } = await expectStreamResult<{ executed: number }>(response);
+      expect(body.executed).toBe(2);
+    });
+
+    it("is unlimited by default", async () => {
+      // The default has to stay unlimited: this application exists to delete
+      // media without supervision.
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+      const movie = await createTestMediaItem(library.id, { type: "MOVIE", title: "Unlimited" });
+      const radarr = await createTestRadarrInstance(user.id);
+
+      mockedExecuteQuery.mockResolvedValue(
+        queryResult([{ id: movie.id, type: "MOVIE", title: "Unlimited", parentTitle: null }]),
+      );
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: BASE_QUERY,
+          mediaItemIds: [movie.id],
+          actionType: "DELETE_RADARR",
+          arrInstanceId: radarr.id,
+        },
+      });
+
+      const { result: body } = await expectStreamResult<{ executed: number }>(response);
+      expect(body.executed).toBe(1);
+    });
+  });
+
   // MATCH-ALL SAFETY, third flavour: watch history. `watchedByUser` reads the
   // `WatchHistory` relation directly, so its negative forms compile to
   // `watchHistory: { none: … }` — trivially TRUE for every item while a

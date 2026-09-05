@@ -120,6 +120,23 @@ model AppSettings {
   // Retention
   actionHistoryRetentionDays      Int       @default(30)
   // Deletion stats
+  /// Ceiling on how many items ONE destructive run may act on before it needs a
+  /// human. `null` (the default) means no ceiling — Librariarr is meant to be
+  /// automated, and a user whose rules legitimately select thousands of items
+  /// should not be second-guessed for it.
+  ///
+  /// This is not a safety net against a rule being wrong; it is a blast-radius
+  /// limit for the case where something UPSTREAM of the rule is wrong. Every
+  /// vacuous-match guard refuses a known failure, and each one was written after
+  /// finding a way the engine could match a whole library on absent evidence.
+  /// A ceiling bounds the ones nobody has found yet, which is the only defence
+  /// that does not depend on having enumerated the hazards.
+  ///
+  /// Counted per RUN across every rule set, and only over destructive actions —
+  /// unmonitor, tag and search runs are unaffected. Exceeding it holds the whole
+  /// batch as PENDING rather than trimming it to the limit: acting on an
+  /// arbitrary subset of a suspect match set is not safer, just quieter.
+  maxAutoDeleteItems              Int?
   deletionStatsResetAt            DateTime?
   // AI analysis (read-only library assistant). Provider-neutral so any backend
   // works — "openai-compatible" covers OpenAI, Ollama, LM Studio, OpenRouter,

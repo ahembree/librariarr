@@ -82,6 +82,20 @@ export const logRetentionSchema = z.object({
   logRetentionDays: z.number().int().min(1).max(365),
 });
 
+/**
+ * `null` disables the ceiling (the default). A positive integer sets it; zero
+ * and negatives are rejected rather than silently meaning "block everything",
+ * which would disable lifecycle deletion entirely.
+ */
+export const deleteCeilingSchema = z.object({
+  maxAutoDeleteItems: z
+    .number()
+    .int()
+    .min(1, "The limit must be at least 1 — leave it empty to disable it")
+    .max(1_000_000)
+    .nullable(),
+});
+
 export const actionRetentionSchema = z.object({
   actionHistoryRetentionDays: z.number().int().min(0).max(365),
 });

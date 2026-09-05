@@ -10,6 +10,7 @@ import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@
 import { arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
 import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions/helpers";
 import { checkWatchHistoryCompleteness } from "@/lib/lifecycle/evaluability";
+import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
 import type { ConditionGroup } from "@/lib/conditions/types";
 import { validateRequest, queryActionSchema } from "@/lib/validation";
 import { progressStreamResponse } from "@/lib/progress/stream";
@@ -184,6 +185,22 @@ export async function POST(request: NextRequest) {
         { error: `The query uses play-activity criteria but ${watch.reason}` },
         { status: 400 },
       );
+    }
+  }
+
+  // BLAST-RADIUS CEILING. This route batches — the client chunks a large
+  // selection into sequential requests of at most MAX_QUERY_ACTION_ITEMS — so
+  // the per-request cap is not a limit on how much one action can destroy. The
+  // ceiling is, and it is checked per request against the same setting the
+  // automated executor uses, so a batched 5,000-item selection is refused on
+  // its first batch rather than after the first 1,000 are gone.
+  {
+    const verdict = await checkDeleteCeiling(
+      userId,
+      mediaItemIds.map(() => actionType),
+    );
+    if (!verdict.allowed) {
+      return NextResponse.json({ error: verdict.reason }, { status: 400 });
     }
   }
 
