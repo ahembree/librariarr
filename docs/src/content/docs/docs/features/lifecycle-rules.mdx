@@ -345,6 +345,17 @@ Before executing any actions, use the **Preview** feature to see which media ite
 - Updates in real time as you modify rules
 - Shows a live progress bar through each phase (fetching *arr/Seerr metadata, evaluating rules, computing matched criteria) so large libraries don't just spin
 
+Preview is **refused** whenever the rules can't be evaluated faithfully, and the reason is shown as an error notification rather than an empty or stale result list. The same guard that pauses detection applies here, so a preview never shows matches that detection would refuse to produce:
+
+- *arr criteria with no enabled Sonarr/Radarr/Lidarr instance, or Seerr criteria with no enabled Seerr instance (Seerr criteria on a music rule set are refused permanently).
+- Criteria that read play activity — *Watched By User*, *Play Count*, *Last Played*, and the series rollups built on them — while any targeted server's play history isn't established yet: it has never synced, was recently cleared, or a [Tracearr](/docs/integrations/tracearr/) history import is still backfilling. Until the import reaches back far enough, every item looks never-watched, so *Play Count = 0* or *not played in N months* would match the entire library. Wait for the import to finish (Settings → Servers shows its progress) and preview again.
+
+The last case also shows a **"Play history not established yet"** warning in the rule editor, naming the servers involved, so you can see a rule set is paused without having to run anything. It clears itself when the import finishes — no reload needed. The same warning pattern already covers a missing *arr or Seerr instance.
+
+Saving with **Run detection now** reports the same thing: if detection refuses the rule set, you stay on the editor with the reason rather than being sent to Matches, where the previous run's matches would otherwise look like the new result.
+
+**Run** and **Re-evaluate All** on the [Matches](/docs/features/lifecycle-rules/) page report it too. A refused rule set keeps the matches it already had — detection preserves them deliberately — so its row is left as it was and a notification names the rule set and the reason. It is not shown as having zero matches; that would be the opposite of what happened.
+
 ## Actions
 
 Actions determine what happens to matched media. Configure them in the **Actions** tab of a rule set.
