@@ -440,7 +440,9 @@ export class RealtimeManager {
         () => {
           void enqueueJob(
             TASK_SYNC_WATCH_HISTORY,
-            { serverId },
+            // One finished playback: append the new plays, never re-import
+            // the server's whole history (see `SyncWatchHistoryPayload`).
+            { serverId, incremental: true },
             { jobKey: `watch-history:${serverId}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
           ).then((ok) => {
             if (ok) {

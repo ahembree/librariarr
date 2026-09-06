@@ -125,7 +125,7 @@ const syncServer: Task = async (payload) => {
 const TRACEARR_BACKFILL_SLICE_MS = 5 * 60_000;
 
 const syncWatchHistoryTask: Task = async (payload) => {
-  const { serverId } = payload as SyncWatchHistoryPayload;
+  const { serverId, incremental = false } = payload as SyncWatchHistoryPayload;
 
   // A full sync already refreshes watch history — if one is running/queued for
   // this server, skip the standalone refresh to avoid redundant work.
@@ -138,10 +138,17 @@ const syncWatchHistoryTask: Task = async (payload) => {
     return;
   }
 
-  const { count } = await syncWatchHistory(serverId);
+  // The realtime manager enqueues this per finished playback with
+  // `incremental`, so it appends only the plays since the last one rather than
+  // re-importing the server's whole history (see `WatchHistorySyncOptions`).
+  // Without the flag — `/api/sync/by-type`'s deferred refresh — it is the full
+  // replace, which is what reconciles plays the server has since deleted.
+  const { count } = await syncWatchHistory(serverId, undefined, undefined, { incremental });
   // Watch-history-derived caches (filters, stats) must drop so listings reflect
-  // the fresh play data instead of waiting out the TTL.
-  invalidateMediaCaches();
+  // the fresh play data instead of waiting out the TTL. An incremental run that
+  // appended nothing changed nothing, and it fires per playback, so it keeps
+  // every cached listing; a full replace may have removed rows even at count 0.
+  if (count > 0 || !incremental) invalidateMediaCaches();
   logger.info("Jobs", `Watch-history refresh for server ${serverId} synced ${count} entries`);
 };
 

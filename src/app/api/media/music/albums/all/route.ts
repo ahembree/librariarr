@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
@@ -204,7 +205,7 @@ export async function GET(request: NextRequest) {
   const page = pageParam !== null ? Math.max(1, parseInt(pageParam, 10) || 1) : 1;
 
   if (limit === 0) {
-    return NextResponse.json({
+    return jsonResponse(request, {
       albums,
       pagination: { page: 1, limit: 0, hasMore: false },
     });
@@ -215,7 +216,7 @@ export async function GET(request: NextRequest) {
   const hasMore = fetched.length > limit;
   if (hasMore) fetched.pop();
 
-  return NextResponse.json({
+  return jsonResponse(request, {
     albums: fetched,
     pagination: { page, limit, hasMore },
   });

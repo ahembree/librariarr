@@ -23,6 +23,7 @@ const MEDIA_CACHE_PREFIXES = [
   "custom-stats:",
   "timeline:",
   "watch-history-filters:",
+  "recently-added:",
   // Per-item image metadata (server URL/token/thumb paths). A re-sync or server
   // URL/token change can alter these, so drop them here too rather than waiting
   // out the 5-min TTL.

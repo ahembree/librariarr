@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const session = await getSession();
   if (!session.isLoggedIn) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -58,5 +59,5 @@ export async function GET() {
       count: rs.ruleMatches.length,
     }));
 
-  return NextResponse.json({ ruleMatches });
+  return jsonResponse(request, { ruleMatches });
 }

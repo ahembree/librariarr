@@ -80,7 +80,22 @@ export interface MediaServerClient {
     ratingKey: string,
     itemDuration?: number
   ): Promise<WatchHistoryEntry[]>;
-  getDetailedWatchHistory(): Promise<DetailedWatchHistoryEntry[]>;
+  /**
+   * Every play on the server, for every user. `since` narrows the fetch to
+   * plays at or after that instant where the server can filter server-side
+   * (Plex); an implementation that cannot (Jellyfin/Emby report a per-user
+   * "played" set, not dated events) ignores it and returns everything, and the
+   * caller must treat the result as the full set.
+   */
+  getDetailedWatchHistory(options?: { since?: Date }): Promise<DetailedWatchHistoryEntry[]>;
+  /**
+   * True only when `getDetailedWatchHistory({ since })` really filters
+   * server-side. The incremental watch-history refresh appends whatever comes
+   * back as "the plays since `since`", so a client that ignored the option
+   * would have its whole history appended — the capability is asserted by the
+   * client, not inferred from its type by the caller.
+   */
+  readonly supportsHistorySince?: boolean;
 
   // Sessions
   getSessions(): Promise<MediaSession[]>;

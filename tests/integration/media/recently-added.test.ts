@@ -24,9 +24,13 @@ vi.mock("@/lib/logger", () => ({
 
 // Import route handler AFTER mocks
 import { GET } from "@/app/api/media/recently-added/route";
+import { appCache } from "@/lib/cache/memory-cache";
+import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 
 describe("GET /api/media/recently-added", () => {
   beforeEach(async () => {
+    // The route caches its aggregate; each test starts from a cold cache.
+    appCache.clear();
     await cleanDatabase();
     clearMockSession();
   });
@@ -697,5 +701,32 @@ describe("GET /api/media/recently-added", () => {
       await callRoute(GET, { url: "/api/media/recently-added" }), 200);
 
     expect(body.items[0].id).toBe(seasonArt.id);
+  });
+
+  it("serves the cached shelf until the media caches are invalidated", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "MOVIE" });
+    await createTestMediaItem(lib.id, { title: "First", type: "MOVIE", addedAt: new Date("2024-01-01T00:00:00Z") });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const first = await expectJson<{ items: { title: string }[] }>(
+      await callRoute(GET, { url: "/api/media/recently-added" }),
+    );
+    expect(first.items.map((i) => i.title)).toEqual(["First"]);
+
+    // A row added behind the cache's back is not visible yet…
+    await createTestMediaItem(lib.id, { title: "Second", type: "MOVIE", addedAt: new Date("2024-02-01T00:00:00Z") });
+    const cached = await expectJson<{ items: { title: string }[] }>(
+      await callRoute(GET, { url: "/api/media/recently-added" }),
+    );
+    expect(cached.items.map((i) => i.title)).toEqual(["First"]);
+
+    // …until the sync's invalidation drops the entry.
+    invalidateMediaCaches();
+    const fresh = await expectJson<{ items: { title: string }[] }>(
+      await callRoute(GET, { url: "/api/media/recently-added" }),
+    );
+    expect(fresh.items.map((i) => i.title)).toEqual(["Second", "First"]);
   });
 });

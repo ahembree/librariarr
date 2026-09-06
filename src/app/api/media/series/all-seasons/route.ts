@@ -1,13 +1,43 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
-import { normalizeResolutionLabel } from "@/lib/resolution";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
-import { resolveSeriesKey } from "@/lib/media/series-key";
+import { loadMissingSummaries } from "@/lib/media/group-summaries";
+import { escapeLike } from "@/lib/conditions/where-builder";
+import { firstNonNullSql, qualityCountsSql, resolutionLabelSql } from "@/lib/media/series-sql";
 
-function getResolutionLabel(resolution: string | null): string {
-  return normalizeResolutionLabel(resolution);
+interface SeasonRow {
+  seriesKey: string;
+  parentTitle: string;
+  seasonNumber: number;
+  episodeCount: number;
+  totalSize: string;
+  lastPlayed: Date | null;
+  addedAt: Date | null;
+  totalPlayCount: number;
+  qualityCounts: Record<string, number> | null;
+  servers: { serverId: string; serverName: string; serverType: string }[];
+  genres: unknown;
+  studio: string | null;
+  contentRating: string | null;
+  rating: number | null;
+  ratingImage: string | null;
+  audienceRating: number | null;
+  audienceRatingImage: string | null;
+  year: number | null;
+  summaryItemId: string | null;
 }
+
+interface SeasonRepresentativeRow {
+  seriesKey: string;
+  seasonNumber: number;
+  mediaItemId: string;
+  summary: string | null;
+}
+
+/** First non-null value in episode order — show-level metadata is the same on every episode. */
+const first = (col: string) => firstNonNullSql(col, `"episodeNumber", id`);
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -26,171 +56,129 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ seasons: [] });
   }
 
-  const whereClause: Record<string, unknown> = {
-    type: "SERIES" as const,
-    parentTitle: { not: null },
-    library: { mediaServerId: { in: sf.serverIds } },
-  };
-
+  // Aggregated in SQL rather than by loading every episode row (with its
+  // `summary` text) into Node and folding in JS: measured on a 28k-episode
+  // library that path took ~310 ms per request and shipped a paragraph per
+  // episode across the wire to keep one per season. Same shape as the series
+  // listing: a NARROW aggregate and a DISTINCT ON representative row, run in
+  // parallel — see /api/media/series/grouped for why they are not one query.
+  const filters: string[] = [];
+  const params: unknown[] = [sf.serverIds];
+  if (!sf.isSingleServer) filters.push(`AND mi."dedupCanonical" = true`);
   if (search) {
-    whereClause.OR = [
-      { parentTitle: { contains: search, mode: "insensitive", not: null } },
-    ];
+    // A LIKE pattern: a literal `%`, `_` or `\` in the search must not act as
+    // a wildcard (Prisma's `contains` escaped them).
+    params.push(escapeLike(search));
+    filters.push(`AND mi."parentTitle" ILIKE '%' || $${params.length} || '%'`);
   }
+  const scope = `
+      FROM "MediaItem" mi
+      JOIN "Library" l ON mi."libraryId" = l.id
+      JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
+      WHERE mi.type = 'SERIES'::"LibraryType"
+        AND mi."seriesKey" IS NOT NULL
+        AND mi."parentTitle" IS NOT NULL
+        AND l."mediaServerId" = ANY($1::text[])
+        ${filters.join("\n        ")}`;
 
-  // For multi-server, only fetch canonical items (pre-deduped)
-  if (!sf.isSingleServer) {
-    whereClause.dedupCanonical = true;
-  }
+  const [rows, representatives] = await Promise.all([
+    prisma.$queryRawUnsafe<SeasonRow[]>(
+      `SELECT
+        "seriesKey",
+        MIN("parentTitle") AS "parentTitle",
+        "seasonNumber",
+        COUNT(*)::int AS "episodeCount",
+        COALESCE(SUM("fileSize"), 0)::text AS "totalSize",
+        MAX("lastPlayedAt") AS "lastPlayed",
+        MAX("addedAt") AS "addedAt",
+        COALESCE(SUM("playCount"), 0)::int AS "totalPlayCount",
+        ${qualityCountsSql("resolution_label")} AS "qualityCounts",
+        jsonb_agg(DISTINCT jsonb_build_object('serverId', "serverId", 'serverName', "serverName", 'serverType', "serverType")) AS servers,
+        ${first(`"genres"`)} AS "genres",
+        ${first(`"studio"`)} AS "studio",
+        ${first(`"contentRating"`)} AS "contentRating",
+        ${first(`"rating"`)} AS "rating",
+        ${first(`"ratingImage"`)} AS "ratingImage",
+        ${first(`"audienceRating"`)} AS "audienceRating",
+        ${first(`"audienceRatingImage"`)} AS "audienceRatingImage",
+        ${first(`"year"`)} AS "year",
+        (array_agg(id ORDER BY "episodeNumber", id) FILTER (WHERE has_summary))[1] AS "summaryItemId"
+      FROM (
+        SELECT
+          mi."seriesKey",
+          mi."parentTitle",
+          mi.id,
+          (NULLIF(mi."summary", '') IS NOT NULL) AS has_summary,
+          COALESCE(mi."seasonNumber", 0) AS "seasonNumber",
+          mi."episodeNumber",
+          mi."fileSize",
+          mi."lastPlayedAt",
+          mi."addedAt",
+          mi."playCount",
+          mi."genres",
+          mi."studio",
+          mi."contentRating",
+          mi."rating",
+          mi."ratingImage",
+          mi."audienceRating",
+          mi."audienceRatingImage",
+          mi."year",
+          ms.id AS "serverId",
+          ms.name AS "serverName",
+          ms.type::text AS "serverType",
+          ${resolutionLabelSql("mi.resolution")} AS resolution_label
+        ${scope}
+        OFFSET 0
+      ) items
+      GROUP BY "seriesKey", "seasonNumber"`,
+      ...params,
+    ),
+    // One row per season: prefer a row that carries season art (the tile
+    // requests ?type=season), then one with a summary, else the first episode.
+    prisma.$queryRawUnsafe<SeasonRepresentativeRow[]>(
+      `SELECT DISTINCT ON (mi."seriesKey", COALESCE(mi."seasonNumber", 0))
+        mi."seriesKey",
+        COALESCE(mi."seasonNumber", 0) AS "seasonNumber",
+        mi.id AS "mediaItemId",
+        NULLIF(mi."summary", '') AS "summary"
+      ${scope}
+      ORDER BY mi."seriesKey", COALESCE(mi."seasonNumber", 0),
+        (mi."seasonThumbUrl" IS NOT NULL) DESC,
+        (NULLIF(mi."summary", '') IS NOT NULL) DESC,
+        mi."episodeNumber", mi.id`,
+      ...params,
+    ),
+  ]);
 
-  const items = await prisma.mediaItem.findMany({
-    where: whereClause,
-    select: {
-      id: true,
-      parentTitle: true,
-      seriesKey: true,
-      seasonNumber: true,
-      episodeNumber: true,
-      resolution: true,
-      fileSize: true,
-      lastPlayedAt: true,
-      addedAt: true,
-      playCount: true,
-      thumbUrl: true,
-      seasonThumbUrl: true,
-      summary: true,
-      genres: true,
-      studio: true,
-      contentRating: true,
-      rating: true,
-      ratingImage: true,
-      audienceRating: true,
-      audienceRatingImage: true,
-      year: true,
-      library: {
-        select: {
-          mediaServer: { select: { id: true, name: true, type: true } },
-        },
-      },
-    },
-  });
+  const repByKey = new Map(representatives.map((r) => [`${r.seriesKey}::${r.seasonNumber}`, r]));
+  // Season art and a blurb can live on different episodes; fetch the blurb
+  // for the few seasons whose art row has none (a PK lookup, usually for none).
+  const summaryByKey = await loadMissingSummaries(
+    rows
+      .filter((s) => !repByKey.get(`${s.seriesKey}::${s.seasonNumber}`)?.summary && s.summaryItemId)
+      .map((s) => [`${s.seriesKey}::${s.seasonNumber}`, s.summaryItemId!] as const),
+    "episode",
+  );
 
-  // Group by parentTitle + seasonNumber (canonical items are already deduped)
-  const seasonMap = new Map<
-    string,
-    {
-      parentTitle: string;
-      seriesKey: string;
-      seasonNumber: number;
-      mediaItemId: string;
-      episodeCount: number;
-      totalSize: bigint;
-      lastPlayed: Date | null;
-      addedAt: Date | null;
-      totalPlayCount: number;
-      qualityCounts: Record<string, number>;
-      servers: { serverId: string; serverName: string; serverType: string }[];
-      summary: string | null;
-      genres: string[] | null;
-      studio: string | null;
-      contentRating: string | null;
-      rating: number | null;
-      ratingImage: string | null;
-      audienceRating: number | null;
-      audienceRatingImage: string | null;
-      year: number | null;
-    }
-  >();
-
-  for (const item of items) {
-    const title = item.parentTitle!;
-    const sn = item.seasonNumber ?? 0;
-    // Group by series identity + season, not the ambiguous title: two shows
-    // sharing a title keep separate seasons. Skip rows with no key.
-    const seriesKey = resolveSeriesKey(item);
-    if (!seriesKey) continue;
-    const key = `${seriesKey}::${sn}`;
-    let season = seasonMap.get(key);
-    if (!season) {
-      season = {
-        parentTitle: title,
-        seriesKey,
-        seasonNumber: sn,
-        mediaItemId: item.id,
-        episodeCount: 0,
-        totalSize: BigInt(0),
-        lastPlayed: null,
-        addedAt: null,
-        totalPlayCount: 0,
-        qualityCounts: {},
-        servers: [],
-        summary: null,
-        genres: null,
-        studio: null,
-        contentRating: null,
-        rating: null,
-        ratingImage: null,
-        audienceRating: null,
-        audienceRatingImage: null,
-        year: null,
-      };
-      seasonMap.set(key, season);
-    }
-
-    season.episodeCount++;
-
-    if (item.fileSize) {
-      season.totalSize += item.fileSize;
-    }
-
-    if (item.lastPlayedAt && (!season.lastPlayed || item.lastPlayedAt > season.lastPlayed)) {
-      season.lastPlayed = item.lastPlayedAt;
-    }
-
-    if (item.addedAt && (!season.addedAt || item.addedAt > season.addedAt)) {
-      season.addedAt = item.addedAt;
-    }
-
-    season.totalPlayCount += item.playCount;
-
-    if (item.seasonThumbUrl) {
-      season.mediaItemId = item.id;
-    }
-
-    const label = getResolutionLabel(item.resolution);
-    season.qualityCounts[label] = (season.qualityCounts[label] || 0) + 1;
-
-    if (!season.summary && item.summary) season.summary = item.summary;
-    if (!season.genres && item.genres) season.genres = item.genres as string[];
-    if (!season.studio && item.studio) season.studio = item.studio;
-    if (!season.contentRating && item.contentRating) season.contentRating = item.contentRating;
-    if (season.rating == null && item.rating != null) season.rating = item.rating;
-    if (!season.ratingImage && item.ratingImage) season.ratingImage = item.ratingImage;
-    if (season.audienceRating == null && item.audienceRating != null) season.audienceRating = item.audienceRating;
-    if (!season.audienceRatingImage && item.audienceRatingImage) season.audienceRatingImage = item.audienceRatingImage;
-    if (season.year == null && item.year != null) season.year = item.year;
-
-    const server = item.library.mediaServer;
-    if (server && !season.servers.some((s) => s.serverId === server.id)) {
-      season.servers.push({ serverId: server.id, serverName: server.name, serverType: server.type });
-    }
-  }
-
-  const seasonsList = Array.from(seasonMap.values())
-    .map((s) => ({
+  const seasonsList = rows
+    .map((s) => {
+      // Both statements share `scope` and group on the same key, so every
+      // aggregate row has its representative.
+      const rep = repByKey.get(`${s.seriesKey}::${s.seasonNumber}`)!;
+      return {
       parentTitle: s.parentTitle,
       seriesKey: s.seriesKey,
       seasonNumber: s.seasonNumber,
-      mediaItemId: s.mediaItemId,
+      mediaItemId: rep.mediaItemId,
       episodeCount: s.episodeCount,
-      totalSize: s.totalSize.toString(),
+      totalSize: s.totalSize,
       lastPlayed: s.lastPlayed,
       addedAt: s.addedAt,
       totalPlayCount: s.totalPlayCount,
-      qualityCounts: s.qualityCounts,
-      servers: s.servers,
-      summary: s.summary,
-      genres: s.genres,
+      qualityCounts: (s.qualityCounts ?? {}) as Record<string, number>,
+      servers: [...(s.servers ?? [])].sort((a, b) => a.serverName.localeCompare(b.serverName)),
+      summary: rep.summary ?? summaryByKey.get(`${s.seriesKey}::${s.seasonNumber}`) ?? null,
+      genres: s.genres as string[] | null,
       studio: s.studio,
       contentRating: s.contentRating,
       rating: s.rating,
@@ -198,7 +186,8 @@ export async function GET(request: NextRequest) {
       audienceRating: s.audienceRating,
       audienceRatingImage: s.audienceRatingImage,
       year: s.year,
-    }))
+      };
+    })
     .sort((a, b) => {
       const dir = sortOrder === "desc" ? -1 : 1;
       switch (sortBy) {
@@ -223,5 +212,5 @@ export async function GET(request: NextRequest) {
       }
     });
 
-  return NextResponse.json({ seasons: seasonsList });
+  return jsonResponse(request, { seasons: seasonsList });
 }
