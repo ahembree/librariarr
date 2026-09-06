@@ -53,6 +53,7 @@ This is why the UI updates on its own. A sync finishing, a lifecycle rule matchi
 What that means in practice:
 
 - **Progress is pushed, not polled.** A running sync reports each committed batch, so progress bars advance without the page asking every couple of seconds. The same applies to a Tracearr history import, which can run for hours.
+- **A sync is announced the moment it is queued, and again when it ends.** Only one sync runs at a time, so pressing **Sync** on Settings → Servers can leave the job waiting its turn; it shows as **Pending** straight away rather than after the sync ahead of it finishes. Stopping a sync, or syncing a server that turns out to be disabled, clears the progress card immediately too.
 - **Changes reach every tab.** Toggling maintenance mode, adding a server, or executing a pending action updates every window you have open, not just the one you did it in.
 - **Only the affected data is refetched.** Events carry no figures of their own — a page receiving one re-reads the endpoint that owns the number. That keeps a single source of truth for every value on screen, and stops a play import from forcing a full re-read of your library.
 
