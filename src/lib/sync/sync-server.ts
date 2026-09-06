@@ -703,11 +703,28 @@ export interface SyncMediaServerOptions {
 export async function syncMediaServer(serverId: string, libraryKey?: string, options?: SyncMediaServerOptions) {
   // Create the job as PENDING immediately so the UI can show a "Pending" indicator
   // while the server waits for its turn (semaphore allows one sync at a time).
-  const syncJobRows = await prisma.$queryRawUnsafe<{ id: string }[]>(
-    `INSERT INTO "SyncJob" ("id","mediaServerId","status","startedAt") VALUES ($1,$2,$3,$4) RETURNING "id"`,
+  //
+  // The owning userId comes back with the row because the announcement below
+  // has to go out here, before the semaphore — see the emit for why.
+  const syncJobRows = await prisma.$queryRawUnsafe<{ id: string; userId: string | null }[]>(
+    `INSERT INTO "SyncJob" ("id","mediaServerId","status","startedAt") VALUES ($1,$2,$3,$4)
+     RETURNING "id", (SELECT "userId" FROM "MediaServer" WHERE "id"=$2) AS "userId"`,
     randomUUID(), serverId, "PENDING", new Date(),
   );
   const syncJob = syncJobRows[0];
+
+  // Announce the job the moment the PENDING row exists, NOT after the
+  // semaphore. Until an open tab knows a job exists it renders nothing for it
+  // AND arms no fallback poll (the settings page gates its 15s tick on
+  // `hasActiveSync`, derived from this very row) — so a sync that queued behind
+  // another one stayed completely invisible until something unrelated happened
+  // to emit. That was the whole point of inserting the row as PENDING before
+  // acquiring the slot; nothing was telling anyone about it.
+  if (syncJob.userId) {
+    // Before the first progress tick, so the window opened here can't swallow it.
+    clearSyncProgressThrottle(serverId);
+    eventBus.emit({ type: "sync:started", userId: syncJob.userId, meta: { serverId } });
+  }
 
   let syncUserId: string | undefined;
   // Hoisted to function scope so the inner finally can run cache invalidation
@@ -741,12 +758,22 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
         "CANCELLED", new Date(), syncJob.id,
       );
       logger.info("Sync", `Skipping sync for disabled server "${server.name}"`);
+      // The PENDING row was announced above, so an open tab is rendering a card
+      // for a job that is now over. Every other exit from this function emits a
+      // terminal event; this one must too, or the card sits there until the
+      // fallback poll notices. `sync:failed` rather than `sync:completed`: no
+      // items were touched, so nothing that listens for a re-scan should refetch.
+      clearSyncProgressThrottle(serverId);
+      eventBus.emit({ type: "sync:failed", userId: server.userId, meta: { serverId } });
       return;
     }
 
-    // Clear at the START, not only on the completed/failed paths: a cancelled
-    // sync (and a crashed one) exits elsewhere, and a leftover window would
-    // swallow the next run's first progress tick.
+    // Second announcement, for the PENDING → RUNNING flip: a sync that waited
+    // on the semaphore has already been announced above, and the card it is
+    // rendering still says "Pending". Cleared again at the START — not only on
+    // the completed/failed paths — because a cancelled sync (and a crashed one)
+    // exits elsewhere and a leftover window would swallow this run's first
+    // progress tick.
     clearSyncProgressThrottle(serverId);
     eventBus.emit({ type: "sync:started", userId: server.userId, meta: { serverId } });
 
@@ -871,6 +898,14 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
             "CANCELLED", new Date(), processedItems, syncJob.id,
           );
         }
+        // Terminal, so say so. Pressing "Stop Sync" otherwise left the progress
+        // card up until the next fallback poll, because the only paths that
+        // announce an ending are the completed and failed ones below.
+        // `sync:completed` because a cancelled run still wrote items — the
+        // `finally` recomputes canonical flags and drops the media caches for
+        // exactly that reason, so the listings really have changed.
+        clearSyncProgressThrottle(serverId);
+        eventBus.emit({ type: "sync:completed", userId: server.userId, meta: { serverId } });
         return;
       }
 
@@ -1140,6 +1175,14 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
             "CANCELLED", new Date(), processedItems, syncJob.id,
           );
         }
+        // Terminal, so say so. Pressing "Stop Sync" otherwise left the progress
+        // card up until the next fallback poll, because the only paths that
+        // announce an ending are the completed and failed ones below.
+        // `sync:completed` because a cancelled run still wrote items — the
+        // `finally` recomputes canonical flags and drops the media caches for
+        // exactly that reason, so the listings really have changed.
+        clearSyncProgressThrottle(serverId);
+        eventBus.emit({ type: "sync:completed", userId: server.userId, meta: { serverId } });
         return;
       }
 

@@ -152,7 +152,10 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>(getInitialSettingsTab);
   const [servers, setServers] = useState<MediaServer[]>([]);
   const [loading, setLoading] = useState(true);
-  const [syncingServer, setSyncingServer] = useState<string | null>(null);
+  // The server a sync was just requested for, plus the id of the newest SyncJob
+  // that existed at that moment. The job id is what tells "this request's run"
+  // apart from the previous run's leftover row — see `activeSyncingServer`.
+  const [syncRequest, setSyncRequest] = useState<{ serverId: string; priorJobId: string | null } | null>(null);
   const [testingServer, setTestingServer] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<ServerTestResult | null>(null);
   const [refreshingLibraries, setRefreshingLibraries] = useState<string | null>(null);
@@ -946,12 +949,24 @@ export default function SettingsPage() {
   // sync:* subscriptions above already keep `servers` current, so the finished
   // state is a pure function of it and storing it again would only add a
   // cascading render.
+  //
+  // It must compare the job's IDENTITY, not just its status. `syncJobs[0]` is
+  // the newest job for the server, which — for every sync after the first — is
+  // the COMPLETED row from the previous run at the instant the button is
+  // pressed. Reading the status alone therefore cleared the spinner immediately,
+  // before the worker had even created this run's row, so pressing Sync looked
+  // like it did nothing at all. Only a job that is NOT the one we saw before
+  // requesting can end this request.
   const activeSyncingServer = useMemo(() => {
-    if (!syncingServer) return null;
-    const latest = servers.find((s) => s.id === syncingServer)?.syncJobs[0];
-    if (latest?.status === "COMPLETED" || latest?.status === "FAILED") return null;
-    return syncingServer;
-  }, [servers, syncingServer]);
+    if (!syncRequest) return null;
+    const latest = servers.find((s) => s.id === syncRequest.serverId)?.syncJobs[0];
+    // No new job row yet: still queued, or the worker has not picked it up.
+    if (!latest || latest.id === syncRequest.priorJobId) return syncRequest.serverId;
+    if (latest.status === "COMPLETED" || latest.status === "FAILED" || latest.status === "CANCELLED") {
+      return null;
+    }
+    return syncRequest.serverId;
+  }, [servers, syncRequest]);
 
   // The import readout is PUSHED, not polled. The importer emits
   // `tracearr:import-progress` after each page commits (throttled there, since
@@ -1095,13 +1110,25 @@ export default function SettingsPage() {
   };
 
   const syncServer = async (serverId: string, libraryKey?: string) => {
-    setSyncingServer(serverId);
+    // Snapshot the newest job BEFORE requesting, so the run this request starts
+    // can be told apart from the one that already finished.
+    const priorJobId = servers.find((s) => s.id === serverId)?.syncJobs[0]?.id ?? null;
+    setSyncRequest({ serverId, priorJobId });
     try {
-      await fetch(`/api/servers/${serverId}/sync`, {
+      const res = await fetch(`/api/servers/${serverId}/sync`, {
         method: "POST",
         headers: libraryKey ? { "Content-Type": "application/json" } : undefined,
         body: libraryKey ? JSON.stringify({ libraryKey }) : undefined,
       });
+      // A rejected request (disabled server, 409 from a race) enqueues nothing,
+      // so no new job will ever appear to end this one. `fetch` does not throw
+      // on a non-2xx, so without this the spinner runs to the 5-minute timeout.
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        toast.error(body?.error ?? "Failed to start sync");
+        setSyncRequest((current) => (current?.serverId === serverId ? null : current));
+        return;
+      }
       // No completion poll here any more. `servers` is refreshed by the
       // sync:* subscriptions above, and the effect below clears the button
       // state when the freshly pushed list shows the job finished — so this
@@ -1111,11 +1138,11 @@ export default function SettingsPage() {
       // The safety timeout stays: if every event is missed AND the fallback
       // poll is also dead, the button must not spin forever.
       setTimeout(() => {
-        setSyncingServer((current) => (current === serverId ? null : current));
+        setSyncRequest((current) => (current?.serverId === serverId ? null : current));
       }, 300000);
     } catch {
       toast.error("Failed to start sync");
-      setSyncingServer(null);
+      setSyncRequest(null);
     }
   };
 

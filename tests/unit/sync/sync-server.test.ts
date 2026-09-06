@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 // --- Mocks ---
 
-const { mockPrisma, mockClient } = vi.hoisted(() => ({
+const { mockPrisma, mockClient, mockEmit } = vi.hoisted(() => ({
+  mockEmit: vi.fn(),
   mockPrisma: {
     $queryRawUnsafe: vi.fn(),
     lifecycleException: { count: vi.fn() },
@@ -82,6 +83,10 @@ vi.mock("@/lib/sync/watch-reconcile", () => ({
 
 vi.mock("@/lib/http-retry", () => ({
   configureRetry: vi.fn(),
+}));
+
+vi.mock("@/lib/events/event-bus", () => ({
+  eventBus: { emit: mockEmit },
 }));
 
 import {
@@ -999,5 +1004,105 @@ describe("syncMediaServer library and watchlist reconciliation", () => {
     await syncMediaServer("server-1");
 
     expect(upsertedWatchlistFlag()).toBe(false);
+  });
+});
+
+describe("syncMediaServer job lifecycle events", () => {
+  // Every exit from a sync has to announce itself. An open tab renders the
+  // progress card from the SyncJob row and — on the settings page — arms its
+  // fallback poll from that same row, so a job state nobody is told about is
+  // one the UI cannot show and cannot recover on its own.
+
+  function mockSyncDb(opts: { enabled?: boolean; cancelRequested?: boolean } = {}) {
+    mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string) => {
+      if (sql.includes('INSERT INTO "SyncJob"')) {
+        return [{ id: "sync-job-id", userId: "user-1" }];
+      }
+      if (sql.includes('SELECT "cancelRequested"')) {
+        return [{ cancelRequested: opts.cancelRequested ?? false }];
+      }
+      if (sql.includes('SELECT "id" FROM "SyncJob"')) return [{ id: "sync-job-id" }];
+      if (sql.includes('UPDATE "SyncJob"')) return [];
+      if (sql.includes("SELECT") && sql.includes('"MediaServer"')) {
+        return [{
+          id: "server-1", name: "Test Plex", url: "http://plex:32400",
+          accessToken: "token", type: "PLEX", userId: "user-1",
+          tlsSkipVerify: false, enabled: opts.enabled ?? true,
+        }];
+      }
+      if (sql.includes('INSERT INTO "Library"')) return [{ id: "lib-1", enabled: true }];
+      return [];
+    });
+  }
+
+  const emitsOfType = (type: string) =>
+    mockEmit.mock.calls.filter((args: unknown[]) => (args[0] as { type: string }).type === type);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSyncDb();
+    mockClient.testConnection.mockResolvedValue({ ok: true, serverName: "Test Plex" });
+    mockClient.getLibraries.mockResolvedValue([]);
+    mockClient.getWatchCounts.mockResolvedValue(new Map());
+  });
+
+  it("announces the PENDING job before waiting for the sync slot", async () => {
+    const { acquireSyncSlot } = await import("@/lib/sync/sync-semaphore");
+
+    await syncMediaServer("server-1");
+
+    const started = emitsOfType("sync:started");
+    expect(started.length).toBeGreaterThan(0);
+    expect(started[0][0]).toEqual({
+      type: "sync:started",
+      userId: "user-1",
+      meta: { serverId: "server-1" },
+    });
+    // Ordering is the point: a sync queued behind another one sits PENDING for
+    // as long as that one runs. Announcing only after the slot is acquired left
+    // it invisible for the whole wait — and the settings page gates its fallback
+    // poll on knowing a job exists, so nothing recovered it either.
+    expect(mockEmit.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(acquireSyncSlot).mock.invocationCallOrder[0],
+    );
+  });
+
+  it("announces the PENDING → RUNNING transition as well", async () => {
+    await syncMediaServer("server-1");
+
+    // Two announcements: the queued row, then the run actually starting. A tab
+    // that has been showing "Pending" needs the second one to move on.
+    expect(emitsOfType("sync:started").length).toBe(2);
+    expect(emitsOfType("sync:completed").length).toBe(1);
+  });
+
+  it("announces a terminal event when the server turns out to be disabled", async () => {
+    mockSyncDb({ enabled: false });
+
+    await syncMediaServer("server-1");
+
+    // The job was announced, so the card is on screen; the CANCELLED row that
+    // ends it has to be announced too. sync:failed rather than sync:completed —
+    // no items were touched, so nothing that refetches a listing should wake up.
+    expect(emitsOfType("sync:failed")).toEqual([
+      [{ type: "sync:failed", userId: "user-1", meta: { serverId: "server-1" } }],
+    ]);
+    expect(emitsOfType("sync:completed").length).toBe(0);
+  });
+
+  it("announces a terminal event when the sync is cancelled mid-run", async () => {
+    mockSyncDb({ cancelRequested: true });
+    mockClient.getLibraries.mockResolvedValue([
+      { key: "1", title: "Movies", type: "movie", agent: "", scanner: "" },
+    ]);
+
+    await syncMediaServer("server-1");
+
+    // Pressing "Stop Sync" used to leave the progress card up until the next
+    // fallback poll, because only the completed and failed paths emitted.
+    expect(emitsOfType("sync:completed")).toEqual([
+      [{ type: "sync:completed", userId: "user-1", meta: { serverId: "server-1" } }],
+    ]);
+    expect(findDbCalls('UPDATE "SyncJob"', "CANCELLED").length).toBeGreaterThan(0);
   });
 });
