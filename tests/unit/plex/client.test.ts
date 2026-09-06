@@ -1094,4 +1094,43 @@ describe("PlexClient", () => {
       expect(result.size).toBe(0);
     });
   });
+  describe("getDetailedWatchHistory", () => {
+    const page = (metadata: unknown[]) => ({
+      data: { MediaContainer: { Metadata: metadata, totalSize: metadata.length } },
+    });
+    const emptyContainer = { data: { MediaContainer: {} } };
+
+    it("fetches the whole history when no `since` is given", async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(emptyContainer) // /accounts
+        .mockResolvedValueOnce(emptyContainer) // /devices
+        .mockResolvedValueOnce(page([{ ratingKey: "1", viewedAt: 1700000000, accountID: 1 }]));
+
+      const entries = await client.getDetailedWatchHistory();
+
+      expect(entries).toHaveLength(1);
+      const historyCall = mockAxiosInstance.get.mock.calls.find((c) =>
+        String(c[0]).startsWith("/status/sessions/history/all"),
+      )!;
+      expect(historyCall[0]).toBe("/status/sessions/history/all");
+    });
+
+    it("puts the `viewedAt>=` filter in the URL verbatim for an incremental fetch", async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(emptyContainer)
+        .mockResolvedValueOnce(emptyContainer)
+        .mockResolvedValueOnce(page([{ ratingKey: "1", viewedAt: 1700000500, accountID: 1 }]));
+
+      await client.getDetailedWatchHistory({ since: new Date(1700000000 * 1000 + 999) });
+
+      const historyCall = mockAxiosInstance.get.mock.calls.find((c) =>
+        String(c[0]).startsWith("/status/sessions/history/all"),
+      )!;
+      // Epoch seconds, floored, and NOT in `params`: axios percent-encodes
+      // `>=` there and Plex then ignores the filter and returns everything.
+      expect(historyCall[0]).toBe("/status/sessions/history/all?viewedAt>=1700000000");
+      expect(historyCall[1].params).not.toHaveProperty("viewedAt>=");
+      expect(historyCall[1].params).toMatchObject({ sort: "viewedAt:desc" });
+    });
+  });
 });

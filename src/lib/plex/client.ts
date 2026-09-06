@@ -362,12 +362,23 @@ export class PlexClient implements MediaServerClient {
    */
   private async forEachHistoryPage(
     onPage: (metadata: Array<Record<string, unknown>>) => void,
+    since?: Date,
   ): Promise<void> {
     const PAGE_SIZE = 5000;
     let start = 0;
 
+    // `viewedAt>=` is Plex's server-side history filter (epoch seconds; the
+    // same parameter python-plexapi's `history(mindate=…)` sends). Verified
+    // against a live server: `viewedAt>` is rejected with a 400, and a
+    // percent-encoded key (`viewedAt%3E%3D`, which is what axios' params
+    // serializer emits) is silently IGNORED — the full history comes back as
+    // if no filter were sent. So it goes into the URL verbatim, not `params`.
+    const path = since
+      ? `/status/sessions/history/all?viewedAt>=${Math.floor(since.getTime() / 1000)}`
+      : "/status/sessions/history/all";
+
     while (true) {
-      const response = await this.client.get("/status/sessions/history/all", {
+      const response = await this.client.get(path, {
         params: {
           sort: "viewedAt:desc",
           "X-Plex-Container-Start": start,
@@ -450,7 +461,10 @@ export class PlexClient implements MediaServerClient {
     }
   }
 
-  async getDetailedWatchHistory(): Promise<
+  /** `getDetailedWatchHistory({ since })` filters server-side via `viewedAt>=`. */
+  readonly supportsHistorySince = true;
+
+  async getDetailedWatchHistory(options?: { since?: Date }): Promise<
     Array<{
       ratingKey: string;
       username: string;
@@ -506,7 +520,7 @@ export class PlexClient implements MediaServerClient {
             platform: device?.platform ?? null,
           });
         }
-      });
+      }, options?.since);
     } catch (error) {
       // Re-throw so the caller can tell a fetch failure apart from a genuinely
       // empty history. The watch-history sync does a destructive full-replace;

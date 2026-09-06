@@ -852,6 +852,10 @@ model WatchHistory {
   @@index([mediaServerId])
   @@index([serverUsername])
   @@index([watchedAt])
+  // The incremental native refresh resolves its window from MAX("watchedAt")
+  // per server and dedups against the rows at or after it; both are one index
+  // probe with this, and a scan of the server's whole history without it.
+  @@index([mediaServerId, watchedAt])
   @@index([deviceName])
   @@index([platform])
   @@index([source])

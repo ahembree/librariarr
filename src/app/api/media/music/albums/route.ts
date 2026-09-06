@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { applyCommonFilters } from "@/lib/filters/build-where";
@@ -176,5 +177,5 @@ export async function GET(request: NextRequest) {
     }))
     .sort((a, b) => a.albumTitle.localeCompare(b.albumTitle));
 
-  return NextResponse.json({ albums });
+  return jsonResponse(request, { albums });
 }

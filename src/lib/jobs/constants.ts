@@ -84,6 +84,14 @@ export interface SyncServerPayload {
 /** Payload for {@link TASK_SYNC_WATCH_HISTORY}. */
 export interface SyncWatchHistoryPayload {
   serverId: string;
+  /**
+   * Append only the plays since the newest stored one instead of the full
+   * replace. Set by the realtime manager (one finished playback), and ONLY
+   * there: `/api/sync/by-type` enqueues this same task as the deferred
+   * server-wide refresh for its per-library jobs, and that one must stay a
+   * full replace or the plays a server has since deleted are never reconciled.
+   */
+  incremental?: boolean;
 }
 
 /** Payload for {@link TASK_SYNC_INCREMENTAL}. */

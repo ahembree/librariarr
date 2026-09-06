@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
@@ -151,17 +152,17 @@ export async function GET(request: NextRequest) {
   const status = searchParams.get("status") || "PENDING";
 
   if (status === "PENDING") {
-    return handlePendingGrouped(session.userId!);
+    return handlePendingGrouped(request, session.userId!);
   }
 
-  return handleStatusGrouped(session.userId!, status);
+  return handleStatusGrouped(request, session.userId!, status);
 }
 
 /**
  * PENDING: merge actual LifecycleAction PENDING records with RuleMatch-based
  * upcoming items, grouped by rule set.
  */
-async function handlePendingGrouped(userId: string) {
+async function handlePendingGrouped(request: NextRequest, userId: string) {
   // 1. Fetch actual PENDING LifecycleAction records
   const pendingActions = await prisma.lifecycleAction.findMany({
     where: { userId, status: "PENDING", ruleSetId: { not: null } },
@@ -382,13 +383,13 @@ async function handlePendingGrouped(userId: string) {
     return aFirst.localeCompare(bFirst);
   });
 
-  return NextResponse.json({ groups });
+  return jsonResponse(request, { groups });
 }
 
 /**
  * COMPLETED / FAILED / CANCELLED / ALL: group LifecycleAction records by rule set.
  */
-async function handleStatusGrouped(userId: string, status: string) {
+async function handleStatusGrouped(request: NextRequest, userId: string, status: string) {
   const where: Record<string, unknown> = { userId };
   if (status !== "ALL") {
     where.status = status;
@@ -525,5 +526,5 @@ async function handleStatusGrouped(userId: string, status: string) {
 
   const groups = Array.from(groupMap.values());
 
-  return NextResponse.json({ groups });
+  return jsonResponse(request, { groups });
 }

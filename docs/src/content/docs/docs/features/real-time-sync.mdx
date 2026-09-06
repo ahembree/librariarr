@@ -16,11 +16,13 @@ This runs alongside — not instead of — the [scheduled sync](/docs/getting-st
 | Active sessions view | Refreshes every 5s | Pushes within ~2s of a play/pause/stop |
 | Maintenance / blackout / transcode enforcement | New streams seen up to 30s late | New streams seen within ~½s, so the termination delay starts promptly |
 | New / removed / updated media | Appears on the next scheduled sync | Syncs just the changed/removed items seconds after the server's scan settles |
-| Watch state (played / unplayed, last watched) | Refreshed on the next full sync | Refreshed shortly after a play finishes |
+| Watch state (played / unplayed, last watched) | Refreshed on the next full sync | Refreshed shortly after a play finishes — on Plex, by fetching only the plays since the last refresh |
 | Sidebar stream count | Polled every 30s | Pushed when a stream starts or stops |
 | Server-unreachable banner | Appeared when a 30s poll failed | Appears as soon as the connection drops |
 
 Watch state comes from your server's **server-wide** history, so a play by anyone in the household counts — not just the account Librariarr signs in as. Each refresh updates the **Play Count** and **Last Played** values that rules and queries read, so the [History page](/docs/features/library/) and your rules stay in agreement.
+
+On Plex the refresh is **incremental**: it asks the server only for plays recorded since the newest one already stored (with an hour of overlap, so nothing falls through the gap) and appends the new ones. The full import — which re-reads the whole history and is what removes plays the server has since deleted — still runs on the scheduled sync and when you press **Refresh** on the History page. Jellyfin and Emby report a per-user "played" set rather than dated play events, so their refresh always re-reads the full set.
 
 Real-time library changes carry the specific items that changed, so Librariarr fetches and updates **only those items** (and deletes the removed ones) instead of re-scanning the whole server. Adding one movie syncs one movie, and deleting one episode removes one row — typically in well under a second.
 

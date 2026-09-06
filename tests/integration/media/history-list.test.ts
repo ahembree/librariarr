@@ -44,6 +44,7 @@ import { GET } from "@/app/api/media/history/route";
 
 type HistoryResponse = {
   items: Array<{ mediaItem: { title: string; parentTitle: string | null } }>;
+  pagination: { page: number; limit: number; hasMore: boolean; totalCount: number };
 };
 
 describe("GET /api/media/history", () => {
@@ -164,5 +165,44 @@ describe("GET /api/media/history", () => {
     );
 
     expect(data.items).toHaveLength(0);
+  });
+
+  it("counts with the same filters the page applies, including item-side ones", async () => {
+    const lib2 = await createTestLibrary(serverId, { type: "MOVIE" });
+    const episode = await createTestMediaItem(libraryId, {
+      type: "SERIES",
+      title: "Pilot",
+      parentTitle: "Some Show",
+      seasonNumber: 1,
+      episodeNumber: 1,
+    });
+    const movie = await createTestMediaItem(lib2.id, { type: "MOVIE", title: "Some Film" });
+    await addWatch(episode.id);
+    await addWatch(movie.id);
+    await addWatch(movie.id);
+
+    const all = await expectJson<HistoryResponse>(
+      await callRoute(GET, { url: "/api/media/history" }),
+    );
+    expect(all.pagination.totalCount).toBe(3);
+
+    // `type` and `search` read MediaItem columns, so the count must join it.
+    const series = await expectJson<HistoryResponse>(
+      await callRoute(GET, { url: "/api/media/history", searchParams: { type: "SERIES" } }),
+    );
+    expect(series.items).toHaveLength(1);
+    expect(series.pagination.totalCount).toBe(1);
+
+    const film = await expectJson<HistoryResponse>(
+      await callRoute(GET, { url: "/api/media/history", searchParams: { search: "Film" } }),
+    );
+    expect(film.items).toHaveLength(2);
+    expect(film.pagination.totalCount).toBe(2);
+
+    // A play-side filter alone must not need the join.
+    const alice = await expectJson<HistoryResponse>(
+      await callRoute(GET, { url: "/api/media/history", searchParams: { username: "alice" } }),
+    );
+    expect(alice.pagination.totalCount).toBe(3);
   });
 });

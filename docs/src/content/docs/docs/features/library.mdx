@@ -183,6 +183,7 @@ Watch history data is synced from your media servers in two ways:
 
 - **Automatic** — During each scheduled library sync, detailed play events are fetched and stored
 - **On-demand** — Click the **Refresh** button on the history page to sync immediately
+- **Real-time** — With [real-time sync](/docs/features/real-time-sync/) on, a play finishing on Plex triggers a refresh that fetches **only the plays since the last one stored** and appends them, so a finished episode costs one small request rather than a re-import of the whole history. Jellyfin and Emby cannot filter their history by date, so their real-time refresh re-reads the full set like the scheduled sync does.
 
 The **Refresh** button streams live progress rather than spinning, with a phase for each server it is syncing. How that phase reads depends on the server's [watch-history source](#watch-history-sources): a **native** server shows a true percentage, because the server hands over its whole history in one response and the total is therefore known before the first row is written, while a [Tracearr](/docs/integrations/tracearr/) server shows a running count of plays imported instead — its history API is paginated by cursor and reports no total at any point, so Librariarr shows what it has actually imported rather than inventing a percentage. Leaving the page ends the sync early; a Tracearr import resumes from where it stopped on the next run.
 
@@ -194,7 +195,7 @@ Every server reads its plays from one of two sources, chosen per server under **
 |-|-|-|
 | Where plays come from | The server's own history API | A Tracearr instance monitoring that server |
 | Per-play timestamps | Plex only — Jellyfin and Emby report the most recent play of an item and nothing before it | Every play, on all three server types |
-| Sync behaviour | Full refresh — existing records are replaced with the server's current data on every sync | Incremental — new and changed plays are appended, resuming from a watermark |
+| Sync behaviour | Full refresh on the scheduled sync and on **Refresh** — existing records are replaced with the server's current data; the real-time refresh after a play on Plex appends only the new plays | Incremental — new and changed plays are appended, resuming from a watermark |
 | Extra detail per play | Device and platform (Plex only) | Completion %, direct play vs. transcode, player, product, resolution, bitrate, source and stream codecs, subtitle decision |
 | Partial plays | Not reported at all | Stored and shown, flagged as unwatched |
 

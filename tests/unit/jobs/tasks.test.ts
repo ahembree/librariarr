@@ -124,7 +124,37 @@ describe("taskList", () => {
       { serverId: "server-1" },
       helpers,
     );
-    expect(syncWatchHistory).toHaveBeenCalledWith("server-1");
+    // No flag (the by-type sync's deferred refresh): the full replace.
+    expect(syncWatchHistory).toHaveBeenCalledWith("server-1", undefined, undefined, { incremental: false });
+    expect(invalidateMediaCaches).toHaveBeenCalledOnce();
+  });
+
+  it("watch-history task appends incrementally when the realtime manager asks, and keeps caches when nothing landed", async () => {
+    syncWatchHistory.mockResolvedValue({ count: 0 });
+    await (taskList[TASK_SYNC_WATCH_HISTORY] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", incremental: true },
+      helpers,
+    );
+    expect(syncWatchHistory).toHaveBeenCalledWith("server-1", undefined, undefined, { incremental: true });
+    // Nothing appended means every cached listing is still right; this fires
+    // per finished playback, so dropping them here would be pure churn.
+    expect(invalidateMediaCaches).not.toHaveBeenCalled();
+
+    syncWatchHistory.mockResolvedValue({ count: 3 });
+    await (taskList[TASK_SYNC_WATCH_HISTORY] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", incremental: true },
+      helpers,
+    );
+    expect(invalidateMediaCaches).toHaveBeenCalledOnce();
+  });
+
+  it("watch-history task still drops caches after a full replace that stored nothing", async () => {
+    syncWatchHistory.mockResolvedValue({ count: 0 });
+    await (taskList[TASK_SYNC_WATCH_HISTORY] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1" },
+      helpers,
+    );
+    // A full replace may have removed rows even when it inserted none.
     expect(invalidateMediaCaches).toHaveBeenCalledOnce();
   });
 
