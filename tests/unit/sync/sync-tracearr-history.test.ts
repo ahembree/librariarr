@@ -2405,6 +2405,83 @@ describe("syncTracearrHistory", () => {
     });
   });
 
+  describe("a healthy run releases the marker it withdrew", () => {
+    /** Every write of `watchHistorySyncedAt` this run made. */
+    function markerWrites() {
+      return mockPrisma.mediaServer.updateMany.mock.calls
+        .map((call) => call[0] as { data: Record<string, unknown> })
+        .filter((call) => "watchHistorySyncedAt" in call.data);
+    }
+
+    it("re-establishes play history on a forward run once the account map is back", async () => {
+      // The withdrawal above has no counterpart on the Tracearr path unless
+      // this one exists. `watchHistorySyncedAt` was written in exactly one
+      // place — the run that walks the archive to its far end — and that run
+      // happens once in a server's life. Afterwards every run is forward-only,
+      // so a single sync that could not load the account map paused every
+      // play-activity rule set, preview and query action scoped to the server
+      // with nothing able to put the marker back. Settings → Servers went on
+      // reporting the import complete the whole time (it reads
+      // `tracearrBackfillComplete`, still true), so the user was told to wait
+      // for an import that had already finished.
+      storedRows({
+        min: new Date("2021-03-04T08:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: true,
+      });
+      mockGetServerAccountNames.mockResolvedValue(new Map([["srv-user-1", "weingart"]]));
+      mockGetHistoryPage.mockResolvedValue({ records: [], nextCursor: null });
+
+      await syncTracearrHistory("server-1", { passes: "forward" });
+
+      expect(mockInvalidateWatchHistoryEvidence).not.toHaveBeenCalled();
+      const writes = markerWrites();
+      expect(writes).toHaveLength(1);
+      expect(writes[0].data.watchHistorySyncedAt).toBeInstanceOf(Date);
+      // Guarded on the mapping this run walked, like every other write here: a
+      // server re-pointed mid-run must not have the old archive vouched for.
+      expect(writes[0]).toMatchObject({
+        where: { id: "server-1", tracearrServerId: TRACEARR_SERVER_ID },
+      });
+    });
+
+    it("does not release it while the account map is still unusable", async () => {
+      // Releasing on the same run that withdrew would make the withdrawal
+      // decorative: the rows just written still carry Tracearr's identity
+      // labels, and `watchedByUser` matches on that exact string.
+      storedRows({
+        min: new Date("2021-03-04T08:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: true,
+      });
+      mockGetServerAccountNames.mockResolvedValue(new Map());
+      mockGetHistoryPage.mockResolvedValue({ records: [], nextCursor: null });
+
+      await syncTracearrHistory("server-1", { passes: "forward" });
+
+      expect(mockInvalidateWatchHistoryEvidence).toHaveBeenCalledWith(["server-1"]);
+      expect(markerWrites()).toHaveLength(0);
+    });
+
+    it("does not vouch for a server whose archive walk is still owed", async () => {
+      // The other half of "established" for a Tracearr-sourced server. The
+      // walk runs newest-first, so until it reaches the far end an item last
+      // played years ago still looks never-watched — exactly what a
+      // "not played in N months" DELETE rule reads.
+      storedRows({
+        min: new Date("2025-07-01T08:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: false,
+      });
+      mockGetServerAccountNames.mockResolvedValue(new Map([["srv-user-1", "weingart"]]));
+      mockGetHistoryPage.mockResolvedValue({ records: [], nextCursor: null });
+
+      await syncTracearrHistory("server-1", { passes: "forward" });
+
+      expect(markerWrites()).toHaveLength(0);
+    });
+  });
+
 
   describe("progress is pushed, not waited for", () => {
     // The settings page and the History page both render an import readout, and
