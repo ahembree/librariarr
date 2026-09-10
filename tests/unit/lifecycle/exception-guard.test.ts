@@ -105,16 +105,16 @@ describe("findExceptionProtectedGroups", () => {
 
   it("does not let a same-titled DIFFERENT show block one", async () => {
     // The other direction, which the title key got wrong too: an exception on
-    // the 1978 Battlestar must not stop a delete of the 2004 one.
+    // the 1978 Battlestar must not stop a delete of the 2004 one. The lookup
+    // matches it by title, but it comes back under its OWN key.
     mockPrisma.lifecycleException.findMany.mockResolvedValue([
       { mediaItem: { parentTitle: "Battlestar Galactica", seriesKey: "tvdb:71173", type: "SERIES" } },
     ]);
+    const target = { parentTitle: "Battlestar Galactica", seriesKey: "tvdb:73545", type: "SERIES" };
 
-    const result = await findExceptionProtectedGroups("u1", [
-      { parentTitle: "Battlestar Galactica", seriesKey: "tvdb:73545", type: "SERIES" },
-    ]);
+    const result = await findExceptionProtectedGroups("u1", [target]);
 
-    expect(result.size).toBe(0);
+    expect(result.has(protectionKey(target)!)).toBe(false);
   });
 
   it("searches both columns so a keyless legacy exception still matches", async () => {

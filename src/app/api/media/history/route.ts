@@ -31,16 +31,10 @@ export async function GET(request: NextRequest) {
   const videoCodec = searchParams.get("videoCodec");
   const audioCodec = searchParams.get("audioCodec");
 
-  // Build WHERE conditions and params.
-  //
-  // Two buckets, not one: `itemConditions` holds every condition that reads the
-  // `MediaItem` join, so whether the join is needed is a property of WHERE a
-  // condition was pushed rather than of what its SQL text happens to contain.
-  // The count below skipped the join by sniffing the string for `mi.`, which is
-  // right for all of today's conditions and silently wrong for the first future
-  // one that needs the join without naming that alias. Ordering is free to
-  // differ from the order the params were bound, because each condition carries
-  // its own explicit `$n`.
+  // Build WHERE conditions and params. Conditions that read the `MediaItem`
+  // join go in `itemConditions`, so the count below can tell whether it needs
+  // that join without sniffing SQL text. Each condition carries its own `$n`,
+  // so the two buckets can be joined in any order.
   const conditions: string[] = ['ms."userId" = $1'];
   const itemConditions: string[] = [];
   const params: unknown[] = [session.userId];

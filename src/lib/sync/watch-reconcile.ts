@@ -74,20 +74,12 @@ export async function loadWatchCountsFromHistory(
   serverId: string,
   ratingKeys: string[],
   /**
-   * Restrict the aggregate to one library.
-   *
-   * `@@unique([libraryId, ratingKey])` makes a rating key unique WITHIN a
-   * library, not within a server — one server can hold the same key in two
-   * libraries (which is why `sync-incremental`'s `existingByRatingKey` maps to a
-   * list rather than a row). Grouped by rating key alone, both items' plays were
-   * summed and the total handed to BOTH, since the returned map is keyed by
-   * rating key and `processBatch` looks up by rating key. Callers write one
-   * library at a time, so they can and should say which.
-   *
-   * Optional only so the shape stays usable for a caller that genuinely has no
-   * library in hand; every current caller passes one.
+   * The library being written. Required because the map is keyed by rating
+   * key, and `@@unique([libraryId, ratingKey])` makes that unique only within a
+   * library — the same server can hold one key in two, and an unscoped
+   * aggregate summed both items' plays into both.
    */
-  libraryId?: string,
+  libraryId: string,
 ): Promise<Map<string, WatchCountEntry>> {
   const counts = new Map<string, WatchCountEntry>();
   if (ratingKeys.length === 0) return counts;
@@ -110,9 +102,11 @@ export async function loadWatchCountsFromHistory(
       WHERE wh."mediaServerId"=$1
         AND ${completedPlaySql("wh")}
         AND mi."ratingKey" = ANY($2)
-        ${libraryId ? `AND mi."libraryId" = $3` : ""}
+        AND mi."libraryId" = $3
       GROUP BY mi."ratingKey"`,
-    ...(libraryId ? [serverId, ratingKeys, libraryId] : [serverId, ratingKeys]),
+    serverId,
+    ratingKeys,
+    libraryId,
   );
 
   for (const row of rows) {

@@ -386,12 +386,9 @@ export async function syncMediaServerItems(
     // which is what made `lastPlayedAt`, and the `seriesLastPlayedAt` aggregate
     // built from it, disagree with the History page.
     //
-    // Loaded PER LIBRARY, not once for the whole run: the returned map is keyed
-    // by rating key, and a rating key is unique only within a library
-    // (`@@unique([libraryId, ratingKey])`) — the same server can hold one key in
-    // two libraries, which is exactly why `existingByRatingKey` above maps to a
-    // list. Unscoped, both items' plays were summed and the total written to
-    // both. One extra indexed query per group, and there are a handful of groups.
+    // Per library: the map is keyed by rating key, which is unique only within
+    // a library (the reason `existingByRatingKey` above is a list), so one
+    // server-wide aggregate summed two libraries' plays into both items.
     const watchCounts = await loadWatchCountsFromHistory(
       serverId,
       items.map((it) => it.ratingKey),

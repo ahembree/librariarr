@@ -1,18 +1,12 @@
 /**
- * E2E regression: a `watchedByUser` value is compared LITERALLY, and Phase 1
- * agrees with Phase 2 about what that means.
+ * E2E regression: a `watchedByUser` value is compared LITERALLY in Phase 1, as
+ * it always was in Phase 2.
  *
- * Prisma compiles `{ equals, mode: "insensitive" }` to Postgres `ILIKE $1`
- * (verified against the generated SQL), so `_` and `%` inside the value are
- * pattern metacharacters. Phase 2 (`matchNameListField`) compares with
- * `list.includes(value)` and treats them as ordinary characters. Un-escaped,
- * the SAME rule therefore selected a different set depending on whether
- * something unrelated beside it — an Arr/Seerr field, a genre rule, a
- * resolution rule — forced in-memory re-evaluation. On a DELETE rule set that
- * is a different set of files.
- *
- * `_` is not exotic in a username (`alice_smith`, `media_user`, `plex_admin`),
- * and `%` is the fail-open: `ILIKE '%'` matches every play there is.
+ * Prisma compiles `{ equals, mode: "insensitive" }` to `ILIKE $1`, so an
+ * un-escaped `_` (common in usernames) was a single-character wildcard in SQL
+ * and a literal in `matchNameListField` — the same rule matched different sets
+ * depending on whether anything else forced in-memory re-evaluation. `%` was
+ * the fail-open: `ILIKE '%'` matches every play.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";

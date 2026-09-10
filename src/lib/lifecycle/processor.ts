@@ -512,23 +512,15 @@ export async function executeLifecycleActions(userId?: string) {
     failures: { title: string; error: string }[];
   }>();
 
-  /**
-   * PASS 1 — decide what this run would actually act on.
-   *
-   * Every check below either CANCELS the action or narrows its member list, and
-   * each one runs before the ceiling is counted. That ordering is the whole
-   * point: the ceiling is a statement about how many items a run would destroy,
-   * and counting `pendingActions` instead counted actions that are about to be
-   * cancelled for being stale, excepted, identity-swapped, or protected by a
-   * sibling exception. A ceiling of 50 was tripped by 300 pending deletes of
-   * which 290 were already doomed — the run was held, the Discord notice quoted
-   * 300, and (because the held branch used to `continue` ahead of these checks)
-   * not one of the 290 was cleaned up either, so the next run counted them
-   * again.
-   */
+  // PASS 1 — cancel or narrow. Every check here runs BEFORE the ceiling is
+  // counted, so the count is what the run would actually destroy: counting the
+  // raw pending list included actions about to be cancelled as stale, excepted
+  // or identity-swapped, and a held run (which `continue`d ahead of these
+  // checks) cleaned none of them up, so the next run counted them again.
+  type Pending = (typeof pendingActions)[number];
   const executable: Array<{
-    action: (typeof pendingActions)[number] & { mediaItemId: string };
-    mediaItem: NonNullable<(typeof pendingActions)[number]["mediaItem"]>;
+    action: Pending;
+    mediaItem: NonNullable<Pending["mediaItem"]>;
     filteredMatchedIds: string[];
   }> = [];
 
@@ -660,17 +652,10 @@ export async function executeLifecycleActions(userId?: string) {
       continue;
     }
 
-    executable.push({
-      action: action as typeof action & { mediaItemId: string },
-      mediaItem,
-      filteredMatchedIds,
-    });
+    executable.push({ action, mediaItem, filteredMatchedIds });
   }
 
-  // BLAST-RADIUS CEILING. Counted over the PASS 1 survivors — after the
-  // stale-match, exception, identity-swap, member-set and whole-record
-  // filtering — so the number is what would ACTUALLY be destroyed rather than
-  // what was merely scheduled.
+  // BLAST-RADIUS CEILING, counted over the pass-1 survivors.
   //
   // Grouped per user because the ceiling is a per-user setting and this executor
   // can run for all of them; one user's runaway rule set must not hold another's
@@ -756,7 +741,7 @@ export async function executeLifecycleActions(userId?: string) {
           },
         }),
         prisma.ruleMatch.deleteMany({
-          where: { ruleSetId: action.ruleSetId!, mediaItemId: action.mediaItemId },
+          where: { ruleSetId: action.ruleSetId!, mediaItemId: mediaItem.id },
         }),
       ]);
 
