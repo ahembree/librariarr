@@ -185,7 +185,14 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const page = Math.max(1, parseInt(searchParams.get("page") ?? "1") || 1);
   const rawLimit = parseInt(searchParams.get("limit") ?? "50");
-  const limit = rawLimit === 0 ? 0 : Math.min(Number.isNaN(rawLimit) ? 50 : rawLimit, 200);
+  // Clamped to [1, 200] with 0 reserved for "all", matching `parseListPagination`.
+  // Without the lower bound a negative `limit` fell through the `limit > 0`
+  // branch below and returned the WHOLE grouped list with `hasMore: false` — an
+  // unpaginated full-library response reachable from a query string.
+  const limit =
+    rawLimit === 0
+      ? 0
+      : Math.max(1, Math.min(Number.isNaN(rawLimit) ? 50 : rawLimit, 200));
   const search = searchParams.get("search");
   const sortBy = searchParams.get("sortBy") || "parentTitle";
   const sortOrder = searchParams.get("sortOrder") || "asc";

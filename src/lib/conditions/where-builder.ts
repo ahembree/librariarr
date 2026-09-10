@@ -686,11 +686,16 @@ const watchedByUserHandler: FieldHandler = (operator, value, _field, negate) => 
   const strVal = String(value);
   let clause: Prisma.MediaItemWhereInput;
   switch (operator) {
+    // `escapeLike`, like every other insensitive `equals` here (see its doc):
+    // un-escaped, `_` in a username was a wildcard in SQL and a literal in
+    // Phase 2, so the same rule matched different sets depending on whether
+    // anything else forced in-memory re-evaluation. The `in:` branches below
+    // stay unescaped — Prisma compiles those to `LOWER(col) IN (LOWER(…))`.
     case "equals":
-      clause = { watchHistory: { some: { ...COMPLETED_PLAY_FILTER, serverUsername: { equals: strVal, mode: "insensitive" } } } };
+      clause = { watchHistory: { some: { ...COMPLETED_PLAY_FILTER, serverUsername: { equals: escapeLike(strVal), mode: "insensitive" } } } };
       break;
     case "notEquals":
-      clause = { watchHistory: { none: { ...COMPLETED_PLAY_FILTER, serverUsername: { equals: strVal, mode: "insensitive" } } } };
+      clause = { watchHistory: { none: { ...COMPLETED_PLAY_FILTER, serverUsername: { equals: escapeLike(strVal), mode: "insensitive" } } } };
       break;
     case "contains": {
       // Enumerable multi-select — exact list membership against any user.

@@ -255,14 +255,23 @@ interface MediaServer {
    *  targets with the enabled set before evaluating. */
   enabled: boolean;
   /**
-   * Mirrors `checkWatchHistoryCompleteness`: whether a sync has established what
-   * was played on this server (`watchHistorySyncedAt` set) AND, for a
-   * Tracearr-mapped server, whether the newest-first archive walk has finished
-   * (`tracearrBackfillComplete`). Held client-side only so the editor can WARN
-   * about a refusal before the user triggers one — the server-side guard stays
-   * the authority on whether the rule set is actually safe to evaluate.
+   * Mirrors `checkWatchHistoryCompleteness`: why this server's play history
+   * cannot answer play-activity criteria, or `null` when it can. Held
+   * client-side only so the editor can WARN about a refusal before the user
+   * triggers one — the server-side guard stays the authority on whether the
+   * rule set is actually safe to evaluate.
+   *
+   * The two faults are kept apart because their REMEDIES are opposites, and
+   * collapsing them to one boolean gave every refusal the wrong advice half the
+   * time. `"importing"` (`tracearrBackfillComplete` false) is resolved by
+   * waiting — the newest-first archive walk is still running. `"unsynced"`
+   * (`watchHistorySyncedAt` null) is not resolved by waiting at all: the marker
+   * was never set, or was withdrawn by a source change, a purge, a restore, or
+   * a sync that could not load Tracearr's account map — and on a server whose
+   * Tracearr import has long since finished, "watch the import progress" points
+   * the user at a bar that already reads done.
    */
-  playHistoryEstablished: boolean;
+  playHistoryFault: "unsynced" | "importing" | null;
 }
 
 interface ScopeConfig {
@@ -782,7 +791,7 @@ export function LifecycleRulePage({
     () =>
       serverIds
         .map((id) => servers.find((s) => s.id === id))
-        .filter((s): s is MediaServer => !!s && s.enabled && !s.playHistoryEstablished),
+        .filter((s): s is MediaServer => !!s && s.enabled && s.playHistoryFault !== null),
     [serverIds, servers],
   );
 
@@ -992,11 +1001,18 @@ export function LifecycleRulePage({
         // history is worse than no banner: the server-side guard still refuses
         // and now reports its reason, so the failure mode of guessing wrong
         // here is a missing hint, not a missed refusal.
-        playHistoryEstablished:
+        //
+        // `unsynced` is tested first, matching the server-side guard: a server
+        // can be both, and the marker being absent is the fault that waiting
+        // will not fix.
+        playHistoryFault:
           s.watchHistorySyncedAt === undefined
-            ? true
-            : s.watchHistorySyncedAt !== null &&
-              !(s.tracearrServerId != null && s.tracearrBackfillComplete === false),
+            ? null
+            : s.watchHistorySyncedAt === null
+              ? "unsynced"
+              : s.tracearrServerId != null && s.tracearrBackfillComplete === false
+                ? "importing"
+                : null,
       })));
     } catch (error) {
       console.error("Failed to fetch servers:", error);
@@ -2849,17 +2865,37 @@ export function LifecycleRulePage({
                 </p>
                 <p className="text-muted-foreground">
                   This rule set uses play-activity criteria (watched by, play count,
-                  last played) but {serversAwaitingPlayHistory.length === 1 ? "" : "these servers have "}
-                  <span className="text-foreground">
-                    {serversAwaitingPlayHistory.map((s) => s.name).join(", ")}
-                  </span>
-                  {serversAwaitingPlayHistory.length === 1 ? " has " : " "}
-                  no complete play history — it has never synced, was recently cleared,
-                  or a Tracearr import is still running. Until it finishes, every item
-                  looks never-watched, so Preview, Test Media, and detection are paused
-                  rather than matching your whole library. Watch the import progress
-                  under Settings &rarr; Servers; this clears itself when it completes.
+                  last played), and until every server it reads can answer them,
+                  Preview, Test Media, and detection are paused rather than matching
+                  your whole library.
                 </p>
+                {/* Per-server rather than one blended sentence: the two faults
+                    have opposite remedies, so a server that is merely still
+                    importing and one whose marker was withdrawn must not be
+                    described the same way. */}
+                <ul className="space-y-1">
+                  {serversAwaitingPlayHistory.map((s) => (
+                    <li key={s.id} className="text-muted-foreground">
+                      <span className="text-foreground">{s.name}</span>
+                      {s.playHistoryFault === "importing" ? (
+                        <>
+                          {" "}&mdash; its Tracearr history import is still walking back
+                          through the archive, so anything played before that point still
+                          looks never-watched. Watch the progress under Settings &rarr;
+                          Servers; this clears itself when the import completes.
+                        </>
+                      ) : (
+                        <>
+                          {" "}&mdash; no sync has established what was played there. It has
+                          never synced, or the history was cleared by a watch-history
+                          source change, a purge, or a backup restore. This clears on the
+                          next successful watch-history sync &mdash; run one from Library
+                          &rarr; History &rarr; Refresh, or wait for the scheduled sync.
+                        </>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               </div>
             </div>
           )}

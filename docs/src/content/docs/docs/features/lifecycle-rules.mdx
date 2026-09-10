@@ -60,6 +60,10 @@ Details worth knowing:
 
 - **Deletions only.** Unmonitor, tag and search actions never count toward it and are never held.
 - **Per run, across every rule set** — one number for the whole execution pass.
+- **Counted after the safety checks, not before.** The figure is what the run would actually
+  delete, so actions about to be cancelled anyway — the item stopped matching, it (or a
+  sibling) is on the exception list, the item's identity changed since it was scheduled —
+  are not counted, and they are still cleaned up even on a run the ceiling holds.
 - **All-or-nothing.** Exceeding the limit holds the entire batch rather than deleting up to
   the limit. Acting on an arbitrary slice of a match set you already have reason to distrust
   is not safer.
@@ -348,7 +352,7 @@ Before executing any actions, use the **Preview** feature to see which media ite
 Preview is **refused** whenever the rules can't be evaluated faithfully, and the reason is shown as an error notification rather than an empty or stale result list. The same guard that pauses detection applies here, so a preview never shows matches that detection would refuse to produce:
 
 - *arr criteria with no enabled Sonarr/Radarr/Lidarr instance, or Seerr criteria with no enabled Seerr instance (Seerr criteria on a music rule set are refused permanently).
-- Criteria that read play activity — *Watched By User*, *Play Count*, *Last Played*, and the series rollups built on them — while any targeted server's play history isn't established yet: it has never synced, was recently cleared, or a [Tracearr](/docs/integrations/tracearr/) history import is still backfilling. Until the import reaches back far enough, every item looks never-watched, so *Play Count = 0* or *not played in N months* would match the entire library. Wait for the import to finish (Settings → Servers shows its progress) and preview again.
+- Criteria that read play activity — *Watched By User*, *Play Count*, *Last Played*, and the series rollups built on them — while any targeted server's play history isn't established yet: it has never synced, was recently cleared, or a [Tracearr](/docs/integrations/tracearr/) history import is still backfilling. Until the history is known, every item looks never-watched, so *Play Count = 0* or *not played in N months* would match the entire library. The warning names the server and which of those applies: a server that is **still importing** clears itself when the import finishes (Settings → Servers shows its progress), while one where **no sync has established what was played** clears on the next successful watch-history sync — run one from **Library → History → Refresh**.
 
 The last case also shows a **"Play history not established yet"** warning in the rule editor, naming the servers involved, so you can see a rule set is paused without having to run anything. It clears itself when the import finishes — no reload needed. The same warning pattern already covers a missing *arr or Seerr instance.
 

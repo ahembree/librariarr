@@ -182,6 +182,8 @@ For series rules that target individual episodes, the system tracks each episode
 
 Whole-record actions get an extra check. *Delete from Sonarr* / *Delete from Lidarr* remove the **entire** series or artist — including episodes or tracks the rule never matched. Because a "surgical" exclusion is impossible for those, the action is refused outright when *any* episode of the series (or track of the artist) is on the exception list, even one that isn't part of the current match. This applies to scheduled execution, the manual **Execute** button, retries of failed actions, and ad-hoc Query-page actions alike, and every refusal is logged.
 
+The series is identified the same way it is everywhere else in Librariarr — by its TVDB/TMDB identity, not by its title. So an exception you placed on a copy of the show on one server still protects it when the action targets the copy on another, even if the two servers name the show differently ("The Office" and "The Office (US)"); and an exception on one show does not block a delete of a *different* show that happens to share its title. Artists are matched by name, since there is no equivalent artist identifier.
+
 ## Layer 4 — When the action runs
 
 Even after all the previous layers approve, there are still checks the moment before each individual deletion happens.

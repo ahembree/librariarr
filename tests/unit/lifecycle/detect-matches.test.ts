@@ -21,7 +21,9 @@ const mockPrisma = vi.hoisted(() => ({
   // Read by the real `checkLifecycleRuleEvaluability` when a rule set uses
   // `watchedByUser` — see the serverIds scoping test below.
   mediaServer: {
-    count: vi.fn().mockResolvedValue(0),
+    // `findMany`, not `count`: the guard reports WHICH server is unevidenced
+    // and why, so it has to read the rows rather than tally them.
+    findMany: vi.fn().mockResolvedValue([]),
   },
   // Detection runs its match writes inside a transaction in two shapes:
   //   - callback form: $transaction(async (tx) => { ... }) (full re-eval)
@@ -635,7 +637,7 @@ describe("runDetection", () => {
     // was happily running, with nothing in the UI to explain why.
     // The guard triggers on ANY play-activity field now, not just watchedByUser.
     mockHasPlayActivityRules.mockReturnValue(true);
-    mockPrisma.mediaServer.count.mockResolvedValue(0);
+    mockPrisma.mediaServer.findMany.mockResolvedValue([]);
     mockPrisma.ruleSet.findMany.mockResolvedValue([
       {
         id: "rs1",
@@ -665,7 +667,7 @@ describe("runDetection", () => {
 
     await runDetection("u1");
 
-    expect(mockPrisma.mediaServer.count).toHaveBeenCalledWith(
+    expect(mockPrisma.mediaServer.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ id: { in: ["s1"] } }),
       }),
