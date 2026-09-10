@@ -1163,6 +1163,8 @@ describe("executeLifecycleActions", () => {
           id: "ep1",
           title: "Show",
           parentTitle: "Show",
+          // The guard identifies a SERIES group by this, not by the title.
+          seriesKey: "tvdb:1",
           type: "SERIES",
           year: null,
           library: { key: "1", mediaServerId: "s1" },
@@ -1176,11 +1178,14 @@ describe("executeLifecycleActions", () => {
     ]);
     mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "ep1" }]);
     // First shape: the plain exceptionSet lookup (excepted sibling e9 — not a
-    // matched member). Second shape: the exception-guard's parentTitle lookup.
+    // matched member). Second shape: the exception-guard's group lookup, which
+    // selects `seriesKey` and `type` because a SERIES group is identified by
+    // `seriesKey` — the title alone cannot tell two same-named shows apart, and
+    // cannot recognise one show under two servers' titles.
     mockPrisma.lifecycleException.findMany.mockImplementation(
       async (args: { where?: { mediaItem?: unknown } }) =>
         args?.where?.mediaItem
-          ? [{ mediaItem: { parentTitle: "Show" } }]
+          ? [{ mediaItem: { parentTitle: "Show", seriesKey: "tvdb:1", type: "SERIES" } }]
           : [{ userId: "u1", mediaItemId: "e9" }],
     );
     mockPrisma.lifecycleAction.delete.mockResolvedValue({});
@@ -1204,6 +1209,8 @@ describe("executeLifecycleActions", () => {
           id: "ep1",
           title: "Show",
           parentTitle: "Show",
+          // The guard identifies a SERIES group by this, not by the title.
+          seriesKey: "tvdb:1",
           type: "SERIES",
           year: null,
           library: { key: "1", mediaServerId: "s1" },
@@ -1219,7 +1226,7 @@ describe("executeLifecycleActions", () => {
     mockPrisma.lifecycleException.findMany.mockImplementation(
       async (args: { where?: { mediaItem?: unknown } }) =>
         args?.where?.mediaItem
-          ? [{ mediaItem: { parentTitle: "Show" } }]
+          ? [{ mediaItem: { parentTitle: "Show", seriesKey: "tvdb:1", type: "SERIES" } }]
           : [{ userId: "u1", mediaItemId: "e9" }],
     );
     mockExecuteAction.mockResolvedValue(undefined);
@@ -1516,6 +1523,76 @@ describe("executeLifecycleActions", () => {
       await executeLifecycleActions();
 
       expect(mockExecuteAction).toHaveBeenCalledTimes(2);
+    });
+
+    // The count has to be what the run would ACTUALLY destroy. Counting the
+    // raw pending list instead counted actions that are about to be cancelled
+    // for being stale, excepted, identity-swapped or sibling-protected — so a
+    // ceiling of 1 was tripped by a batch whose real destructive count was 1,
+    // the run was held, the operator was told a number that was never true,
+    // and (because the held branch used to `continue` ahead of those checks)
+    // the doomed actions were not cleaned up either, so the next run counted
+    // them again.
+    it("does not count actions it is about to cancel as stale", async () => {
+      mockPrisma.appSettings.findFirst.mockResolvedValue({ maxAutoDeleteItems: 1 });
+      setupTwoPendingDeletes();
+      // item2 stopped matching, so its action is cancelled, not executed.
+      mockPrisma.ruleMatch.findMany.mockResolvedValue([
+        { ruleSetId: "rs1", mediaItemId: "item1" },
+      ]);
+      mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+
+      await executeLifecycleActions();
+
+      // One real destructive target, ceiling of 1 — under the limit, so it runs.
+      expect(mockExecuteAction).toHaveBeenCalledTimes(1);
+      // ...and the stale one is cleaned up rather than left to inflate the
+      // next run's count too.
+      expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a2" } });
+    });
+
+    it("cancels doomed actions even when the ceiling holds the run", async () => {
+      mockPrisma.appSettings.findFirst.mockResolvedValue({ maxAutoDeleteItems: 1 });
+      // Three pending deletes, one of which no longer matches: two survivors
+      // against a ceiling of one, so the run is held.
+      const ids = ["item1", "item2", "item3"];
+      mockPrisma.lifecycleAction.findMany.mockResolvedValue(
+        ids.map((id, i) => ({
+          id: `a${i + 1}`,
+          userId: "u1",
+          mediaItemId: id,
+          mediaItem: {
+            id,
+            title: `Movie ${id}`,
+            parentTitle: null,
+            year: 2024,
+            library: { key: "1", mediaServerId: "s1" },
+            externalIds: [],
+          },
+          ruleSetId: "rs1",
+          actionType: "DELETE_RADARR",
+          ruleSet: { name: "Test", discordNotifyOnAction: false, userId: "u1" },
+        })),
+      );
+      mockPrisma.ruleMatch.findMany.mockResolvedValue([
+        { ruleSetId: "rs1", mediaItemId: "item1" },
+        { ruleSetId: "rs1", mediaItemId: "item2" },
+      ]);
+      mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+      mockExecuteAction.mockResolvedValue(undefined);
+      mockPrisma.lifecycleAction.update.mockResolvedValue({});
+      mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+
+      await executeLifecycleActions();
+
+      // Held: nothing was destroyed...
+      expect(mockExecuteAction).not.toHaveBeenCalled();
+      // ...but the filtering still ran, so the stale action is gone and the
+      // hold cannot feed on its own leftovers.
+      expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a3" } });
+      // The surviving actions are untouched, waiting for the Pending page.
+      expect(mockPrisma.lifecycleAction.delete).not.toHaveBeenCalledWith({ where: { id: "a1" } });
+      expect(mockPrisma.lifecycleAction.delete).not.toHaveBeenCalledWith({ where: { id: "a2" } });
     });
 
     it("runs normally at exactly the ceiling", async () => {

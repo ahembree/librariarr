@@ -60,6 +60,10 @@ Details worth knowing:
 
 - **Deletions only.** Unmonitor, tag and search actions never count toward it and are never held.
 - **Per run, across every rule set** — one number for the whole execution pass.
+- **Counted after the safety checks, not before.** The figure is what the run would actually
+  delete, so actions about to be cancelled anyway — the item stopped matching, it (or a
+  sibling) is on the exception list, the item's identity changed since it was scheduled —
+  are not counted, and they are still cleaned up even on a run the ceiling holds.
 - **All-or-nothing.** Exceeding the limit holds the entire batch rather than deleting up to
   the limit. Acting on an arbitrary slice of a match set you already have reason to distrust
   is not safer.

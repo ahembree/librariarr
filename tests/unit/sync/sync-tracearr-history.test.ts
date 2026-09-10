@@ -2290,6 +2290,72 @@ describe("syncTracearrHistory", () => {
     });
   });
 
+  describe("the resume cursor belongs to the walk that measured it", () => {
+    // `passes: "both"` is the DEFAULT, and the two passes travel in opposite
+    // directions: the forward pass reads from `MAX(watchedAt) - 1h` toward now,
+    // the backfill from `MIN(watchedAt)` toward the start of history. The
+    // "oldest instant this run walked past" was tracked per RUN, so a backfill
+    // that recorded nothing of its own inherited the forward pass's value — an
+    // archive's width too NEW — and, with no cursor stored yet, wrote it as the
+    // resume point. The next slice then resumed at `until = MAX - 1h` and
+    // re-walked the whole already-imported archive: ~1,600 pages against a
+    // rate-limited API, every one of them an upsert of rows already held.
+    it("does not let the forward pass set the backfill's resume cursor", async () => {
+      storedRows({
+        min: new Date("2021-03-04T08:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: false,
+      });
+      mockGetHistoryPage
+        // Forward pass: one page of recent plays, then the keyset ends.
+        .mockResolvedValueOnce({
+          records: [historyRecord({ id: "chain-new", started_at: "2025-07-10T11:30:00.000Z" })],
+          nextCursor: null,
+        })
+        // Backfill pass: dies on its very first fetch, so it measured nothing.
+        .mockRejectedValueOnce(new Error("tracearr unreachable"));
+
+      await syncTracearrHistory("server-1", { passes: "both" });
+
+      const cursorWrites = mockPrisma.mediaServer.updateMany.mock.calls
+        .map((call) => call[0] as { data: Record<string, unknown> })
+        .filter((call) => "tracearrBackfillCursorAt" in call.data);
+      expect(cursorWrites).toHaveLength(0);
+    });
+
+    it("still records the cursor the backfill measured itself", async () => {
+      // The other side of the same change: scoping the measurement per walk
+      // must not stop a backfill that DID walk from recording where it reached,
+      // which is what keeps a stretch of unstorable history from being re-walked
+      // forever.
+      storedRows({
+        min: new Date("2021-03-04T08:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: false,
+      });
+      mockGetHistoryPage
+        .mockResolvedValueOnce({
+          records: [historyRecord({ id: "chain-new", started_at: "2025-07-10T11:30:00.000Z" })],
+          nextCursor: null,
+        })
+        .mockResolvedValueOnce({
+          records: [historyRecord({ id: "chain-old", started_at: "2019-01-02T03:00:00.000Z" })],
+          nextCursor: "more",
+        })
+        .mockRejectedValueOnce(new Error("tracearr unreachable"));
+
+      await syncTracearrHistory("server-1", { passes: "both" });
+
+      const cursorWrites = mockPrisma.mediaServer.updateMany.mock.calls
+        .map((call) => call[0] as { data: Record<string, unknown> })
+        .filter((call) => "tracearrBackfillCursorAt" in call.data);
+      expect(cursorWrites).toHaveLength(1);
+      expect(cursorWrites[0].data.tracearrBackfillCursorAt).toEqual(
+        new Date("2019-01-02T03:00:00.000Z"),
+      );
+    });
+  });
+
   describe("the account map is a precondition, and empty counts as missing", () => {
     it("refuses the archive walk on an EMPTY account map, not just a thrown one", async () => {
       // `getServerAccountNames` returns `new Map()` rather than throwing when

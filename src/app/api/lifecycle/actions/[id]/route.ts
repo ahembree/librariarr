@@ -3,7 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError } from "@/lib/lifecycle/actions";
-import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
+import { findExceptionProtectedGroups, protectionKey, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
 
 export async function DELETE(
   _request: NextRequest,
@@ -126,11 +126,12 @@ export async function POST(
   // Whole-record destructive actions destroy every episode/track of the
   // series/artist — refuse the retry if ANY sibling is excepted (mirrors the
   // scheduled executor and the manual execute route).
-  if (isWholeRecordDestructiveAction(action.actionType) && action.mediaItem.parentTitle) {
-    const protectedParents = await findExceptionProtectedParents(session.userId!, [
-      { parentTitle: action.mediaItem.parentTitle, type: action.mediaItem.type },
+  const retryGroupKey = protectionKey(action.mediaItem);
+  if (isWholeRecordDestructiveAction(action.actionType) && retryGroupKey) {
+    const protectedGroups = await findExceptionProtectedGroups(session.userId!, [
+      action.mediaItem,
     ]);
-    if (protectedParents.has(action.mediaItem.parentTitle)) {
+    if (protectedGroups.has(retryGroupKey)) {
       return NextResponse.json(
         { error: "An episode/track of this series/artist has a lifecycle exception — a whole-record delete cannot exclude it" },
         { status: 400 }

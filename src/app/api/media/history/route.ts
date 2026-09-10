@@ -31,8 +31,18 @@ export async function GET(request: NextRequest) {
   const videoCodec = searchParams.get("videoCodec");
   const audioCodec = searchParams.get("audioCodec");
 
-  // Build WHERE conditions and params
+  // Build WHERE conditions and params.
+  //
+  // Two buckets, not one: `itemConditions` holds every condition that reads the
+  // `MediaItem` join, so whether the join is needed is a property of WHERE a
+  // condition was pushed rather than of what its SQL text happens to contain.
+  // The count below skipped the join by sniffing the string for `mi.`, which is
+  // right for all of today's conditions and silently wrong for the first future
+  // one that needs the join without naming that alias. Ordering is free to
+  // differ from the order the params were bound, because each condition carries
+  // its own explicit `$n`.
   const conditions: string[] = ['ms."userId" = $1'];
+  const itemConditions: string[] = [];
   const params: unknown[] = [session.userId];
   let paramIdx = 2;
 
@@ -80,17 +90,17 @@ export async function GET(request: NextRequest) {
   if (typeFilter) {
     const vals = typeFilter.split("|").filter(Boolean);
     if (vals.length === 1) {
-      conditions.push(`mi."type" = $${paramIdx++}::"LibraryType"`);
+      itemConditions.push(`mi."type" = $${paramIdx++}::"LibraryType"`);
       params.push(vals[0]);
     } else if (vals.length > 1) {
       const placeholders = vals.map(() => `$${paramIdx++}::"LibraryType"`).join(",");
-      conditions.push(`mi."type" IN (${placeholders})`);
+      itemConditions.push(`mi."type" IN (${placeholders})`);
       params.push(...vals);
     }
   }
 
   if (search) {
-    conditions.push(`(mi."title" ILIKE $${paramIdx++} OR mi."parentTitle" ILIKE $${paramIdx++})`);
+    itemConditions.push(`(mi."title" ILIKE $${paramIdx++} OR mi."parentTitle" ILIKE $${paramIdx++})`);
     params.push(`%${search}%`, `%${search}%`);
   }
 
@@ -98,9 +108,9 @@ export async function GET(request: NextRequest) {
     // Both branches key off the same field (titleSort, falling back to title)
     // so the non-alpha "#" bucket and the A-Z buckets stay consistent.
     if (startsWith === "#") {
-      conditions.push(`COALESCE(mi."titleSort", mi."title") !~ '^[A-Za-z]'`);
+      itemConditions.push(`COALESCE(mi."titleSort", mi."title") !~ '^[A-Za-z]'`);
     } else {
-      conditions.push(`UPPER(LEFT(COALESCE(mi."titleSort", mi."title"), 1)) = $${paramIdx++}`);
+      itemConditions.push(`UPPER(LEFT(COALESCE(mi."titleSort", mi."title"), 1)) = $${paramIdx++}`);
       params.push(startsWith.toUpperCase());
     }
   }
@@ -117,11 +127,11 @@ export async function GET(request: NextRequest) {
     // Expand display labels to all matching DB values
     const dbVals = vals.flatMap((v) => RESOLUTION_DB_VALUES[v] ?? [v]);
     if (dbVals.length === 1) {
-      conditions.push(`LOWER(mi."resolution") = LOWER($${paramIdx++})`);
+      itemConditions.push(`LOWER(mi."resolution") = LOWER($${paramIdx++})`);
       params.push(dbVals[0]);
     } else if (dbVals.length > 1) {
       const placeholders = dbVals.map(() => `LOWER($${paramIdx++})`).join(",");
-      conditions.push(`LOWER(mi."resolution") IN (${placeholders})`);
+      itemConditions.push(`LOWER(mi."resolution") IN (${placeholders})`);
       params.push(...dbVals);
     }
   }
@@ -129,11 +139,11 @@ export async function GET(request: NextRequest) {
   if (dynamicRange) {
     const vals = dynamicRange.split("|").filter(Boolean);
     if (vals.length === 1) {
-      conditions.push(`mi."dynamicRange" = $${paramIdx++}`);
+      itemConditions.push(`mi."dynamicRange" = $${paramIdx++}`);
       params.push(vals[0]);
     } else if (vals.length > 1) {
       const placeholders = vals.map(() => `$${paramIdx++}`).join(",");
-      conditions.push(`mi."dynamicRange" IN (${placeholders})`);
+      itemConditions.push(`mi."dynamicRange" IN (${placeholders})`);
       params.push(...vals);
     }
   }
@@ -141,11 +151,11 @@ export async function GET(request: NextRequest) {
   if (videoCodec) {
     const vals = videoCodec.split("|").filter(Boolean);
     if (vals.length === 1) {
-      conditions.push(`mi."videoCodec" = $${paramIdx++}`);
+      itemConditions.push(`mi."videoCodec" = $${paramIdx++}`);
       params.push(vals[0]);
     } else if (vals.length > 1) {
       const placeholders = vals.map(() => `$${paramIdx++}`).join(",");
-      conditions.push(`mi."videoCodec" IN (${placeholders})`);
+      itemConditions.push(`mi."videoCodec" IN (${placeholders})`);
       params.push(...vals);
     }
   }
@@ -153,16 +163,16 @@ export async function GET(request: NextRequest) {
   if (audioCodec) {
     const vals = audioCodec.split("|").filter(Boolean);
     if (vals.length === 1) {
-      conditions.push(`mi."audioCodec" = $${paramIdx++}`);
+      itemConditions.push(`mi."audioCodec" = $${paramIdx++}`);
       params.push(vals[0]);
     } else if (vals.length > 1) {
       const placeholders = vals.map(() => `$${paramIdx++}`).join(",");
-      conditions.push(`mi."audioCodec" IN (${placeholders})`);
+      itemConditions.push(`mi."audioCodec" IN (${placeholders})`);
       params.push(...vals);
     }
   }
 
-  const whereClause = conditions.join(" AND ");
+  const whereClause = [...conditions, ...itemConditions].join(" AND ");
 
   // Build ORDER BY — always sort server-side for paginated results.
   // This is a strict whitelist: `sortBy` is interpolated into the SQL, so an
@@ -247,7 +257,7 @@ export async function GET(request: NextRequest) {
   // the join is one index probe per play, and without it the count is an
   // index-only scan. Measured at 141k plays: 65 ms → 9 ms for the unfiltered
   // page every History visit starts on.
-  const needsItemJoin = conditions.some((c) => c.includes("mi."));
+  const needsItemJoin = itemConditions.length > 0;
   const countP = prisma.$queryRawUnsafe<[{ count: bigint }]>(
     `SELECT COUNT(*) AS "count" FROM "WatchHistory" wh
     ${needsItemJoin ? `JOIN "MediaItem" mi ON mi."id" = wh."mediaItemId"` : ""}

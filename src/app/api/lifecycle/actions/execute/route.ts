@@ -6,7 +6,7 @@ import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
 import { validateRequest, actionExecuteSchema } from "@/lib/validation";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
-import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
+import { findExceptionProtectedGroups, protectionKey, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
 import { sendDiscordNotification, buildFailureSummaryEmbed } from "@/lib/discord/client";
 import { eventBus } from "@/lib/events/event-bus";
 
@@ -204,10 +204,16 @@ export async function POST(request: NextRequest) {
   // destroys the entire series/artist — including siblings the rule never
   // matched — so an exception on ANY item of the same parent must refuse it.
   if (isWholeRecordDestructiveAction(ruleSet.actionType ?? "")) {
-    const protectedParents = await findExceptionProtectedParents(session.userId!, items);
-    if (protectedParents.size > 0) {
+    const protectedGroups = await findExceptionProtectedGroups(session.userId!, items);
+    if (protectedGroups.size > 0) {
       const before = items.length;
-      items = items.filter((i) => !i.parentTitle || !protectedParents.has(i.parentTitle));
+      // `protectionKey` on both sides — see the guard: SERIES identity is
+      // `seriesKey`, so an exception filed under another server's title for the
+      // same show still protects this copy.
+      items = items.filter((i) => {
+        const key = protectionKey(i);
+        return !key || !protectedGroups.has(key);
+      });
       if (items.length < before) {
         logger.warn("Lifecycle", `Skipped ${before - items.length} whole-record ${ruleSet.actionType} target(s) for rule set "${ruleSet.id}" — an episode/track of the series/artist is excluded via lifecycle exception`);
       }

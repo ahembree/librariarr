@@ -686,11 +686,25 @@ const watchedByUserHandler: FieldHandler = (operator, value, _field, negate) => 
   const strVal = String(value);
   let clause: Prisma.MediaItemWhereInput;
   switch (operator) {
+    // `escapeLike`, exactly as every other insensitive `equals` in this file.
+    // Prisma compiles `{ equals, mode: "insensitive" }` to `ILIKE $1` (verified
+    // against the generated SQL), so `_` and `%` in the value are pattern
+    // metacharacters — and `_` is ordinary in a username (`john_doe`,
+    // `media_user`). Un-escaped, Phase 1 matched `johnXdoe` while Phase 2's
+    // `list.includes(rv)` matched only `john_doe`, so the SAME rule selected a
+    // different set depending on whether something unrelated beside it (an
+    // Arr/Seerr field, a genre rule, a resolution rule) forced in-memory
+    // re-evaluation. On a DELETE rule set that is a different set of files.
+    // `equals "%"` was the fail-open: `ILIKE '%'` matches every play.
+    //
+    // The `in:` branches below are deliberately NOT escaped — Prisma compiles
+    // `{ in, mode: "insensitive" }` to `LOWER(col) IN (LOWER($1),…)`, an exact
+    // comparison, so escaping there would look for literal backslashes.
     case "equals":
-      clause = { watchHistory: { some: { ...COMPLETED_PLAY_FILTER, serverUsername: { equals: strVal, mode: "insensitive" } } } };
+      clause = { watchHistory: { some: { ...COMPLETED_PLAY_FILTER, serverUsername: { equals: escapeLike(strVal), mode: "insensitive" } } } };
       break;
     case "notEquals":
-      clause = { watchHistory: { none: { ...COMPLETED_PLAY_FILTER, serverUsername: { equals: strVal, mode: "insensitive" } } } };
+      clause = { watchHistory: { none: { ...COMPLETED_PLAY_FILTER, serverUsername: { equals: escapeLike(strVal), mode: "insensitive" } } } };
       break;
     case "contains": {
       // Enumerable multi-select — exact list membership against any user.

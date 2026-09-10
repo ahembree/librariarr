@@ -338,17 +338,6 @@ export async function syncMediaServerItems(
     }
   }
 
-  // Play state for the items we're about to write, taken from the stored
-  // watch history (all users) rather than the fetched metadata (admin account
-  // only). `buildItemData` maxes the two, so this keeps a play by another
-  // household member from being overwritten with the admin's older view —
-  // which is what made `lastPlayedAt`, and the `seriesLastPlayedAt` aggregate
-  // built from it, disagree with the History page.
-  const watchCounts = await loadWatchCountsFromHistory(
-    serverId,
-    fetched.map((it) => it.ratingKey),
-  );
-
   // Episodes need series-level GUIDs/genres/summary — fetch the shows they
   // reference so Arr/Seerr correlation uses series ids, not episode ids. Done
   // for every SERIES group up front, before any write: a failure here has to
@@ -389,6 +378,25 @@ export async function syncMediaServerItems(
   let upserted = 0;
   for (const [libraryId, items] of groups) {
     const lib = libById.get(libraryId)!;
+
+    // Play state for the items we're about to write, taken from the stored
+    // watch history (all users) rather than the fetched metadata (admin account
+    // only). `buildItemData` maxes the two, so this keeps a play by another
+    // household member from being overwritten with the admin's older view —
+    // which is what made `lastPlayedAt`, and the `seriesLastPlayedAt` aggregate
+    // built from it, disagree with the History page.
+    //
+    // Loaded PER LIBRARY, not once for the whole run: the returned map is keyed
+    // by rating key, and a rating key is unique only within a library
+    // (`@@unique([libraryId, ratingKey])`) — the same server can hold one key in
+    // two libraries, which is exactly why `existingByRatingKey` above maps to a
+    // list. Unscoped, both items' plays were summed and the total written to
+    // both. One extra indexed query per group, and there are a handful of groups.
+    const watchCounts = await loadWatchCountsFromHistory(
+      serverId,
+      items.map((it) => it.ratingKey),
+      libraryId,
+    );
 
     const existingThumbUrls = new Map(
       items

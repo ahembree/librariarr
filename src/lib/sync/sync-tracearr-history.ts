@@ -698,6 +698,19 @@ export async function syncTracearrHistory(
     let cursor: string | undefined;
     /** Pages fetched by THIS walk — see the deadline guard below. */
     let pagesThisWalk = 0;
+    // Per WALK, like `seenCursors` below and for the same class of reason: the
+    // two passes travel in opposite directions, so a value carried from one to
+    // the other is not merely stale, it is pointing the wrong way. The backfill
+    // block reads this to advance `tracearrBackfillCursorAt`, and the FORWARD
+    // pass's oldest record sits at `MAX(watchedAt) - 1h` — an archive's width
+    // newer than anything a backfill walks. Left shared, a backfill whose very
+    // first fetch threw (so it recorded nothing of its own) handed that forward
+    // value to `cursorAdvanced`, which with no stored cursor accepted it: the
+    // next slice then resumed at `until = MAX - 1h` and re-walked the entire
+    // already-imported archive instead of continuing from `MIN(watchedAt)`.
+    // `sawAnyRecord` stays RUN-scoped on purpose — it answers "did this mapping
+    // return history at all", which a forward page answers just as well.
+    walked.oldestSeenAt = null;
     // Per-walk, NOT per-run. The two passes are independent walks whose windows
     // can overlap — `until = MIN(watchedAt)` sits inside `since = MAX - 1h`
     // whenever the stored history spans less than an hour, which is exactly the

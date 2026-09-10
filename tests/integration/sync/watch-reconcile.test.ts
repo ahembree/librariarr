@@ -271,6 +271,37 @@ describe("watch-reconcile", () => {
         Math.floor(daysAgo(100).getTime() / 1000),
       );
     });
+
+    it("keeps two libraries of the SAME server apart", async () => {
+      // `@@unique([libraryId, ratingKey])` makes a rating key unique within a
+      // library, not within a server — one server can hold the same key in two
+      // (a movie in "Movies" and in "Movies 4K"), which is why the incremental
+      // sync's `existingByRatingKey` maps to a LIST. The returned map is keyed
+      // by rating key and `processBatch` looks up by rating key, so without the
+      // library scope both items' plays were summed and the total written to
+      // both — inflating `playCount`, which is monotonic and never walked back.
+      const { user, server, library } = await setup();
+      const secondLibrary = await createTestLibrary(server.id, { type: "MOVIE" });
+      void user;
+      const inFirst = await createTestMediaItem(library.id, { ratingKey: "dup-rk" });
+      const inSecond = await createTestMediaItem(secondLibrary.id, { ratingKey: "dup-rk" });
+
+      await addPlay(inFirst.id, server.id, "admin", daysAgo(50));
+      await addPlay(inSecond.id, server.id, "roommate", daysAgo(1));
+      await addPlay(inSecond.id, server.id, "kid", daysAgo(2));
+
+      const first = await loadWatchCountsFromHistory(server.id, ["dup-rk"], library.id);
+      expect(first.get("dup-rk")?.count).toBe(1);
+      expect(first.get("dup-rk")?.lastWatchedAt).toBe(
+        Math.floor(daysAgo(50).getTime() / 1000),
+      );
+
+      const second = await loadWatchCountsFromHistory(server.id, ["dup-rk"], secondLibrary.id);
+      expect(second.get("dup-rk")?.count).toBe(2);
+      expect(second.get("dup-rk")?.lastWatchedAt).toBe(
+        Math.floor(daysAgo(1).getTime() / 1000),
+      );
+    });
   });
 
   // The correctness lynchpin of the Tracearr integration. A Tracearr history

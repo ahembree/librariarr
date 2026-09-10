@@ -6,7 +6,7 @@ import { logger } from "@/lib/logger";
 import { normalizeTitle, executeAction, extractActionError } from "@/lib/lifecycle/actions";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
-import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
+import { findExceptionProtectedGroups, protectionKey, isWholeRecordDestructiveAction, type ProtectionTarget } from "@/lib/lifecycle/exception-guard";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
@@ -474,54 +474,23 @@ export async function executeLifecycleActions(userId?: string) {
 
   // Batch the whole-record sibling-exception lookup (exception inviolability,
   // part 2 — see the per-action check below) once per run instead of once per
-  // action: findExceptionProtectedParents is batch-shaped, and when the user
-  // has no exceptions at all there is nothing to look up.
-  const wholeRecordTargetsByUser = new Map<string, Array<{ parentTitle: string; type: string }>>();
+  // action: findExceptionProtectedGroups is batch-shaped, and when the user
+  // has no exceptions at all there is nothing to look up. Targets are the
+  // mediaItem rows themselves so the guard can key on `seriesKey`.
+  const wholeRecordTargetsByUser = new Map<string, ProtectionTarget[]>();
   for (const a of pendingActions) {
-    if (!a.mediaItem?.parentTitle || !isWholeRecordDestructiveAction(a.actionType)) continue;
+    if (!a.mediaItem || !isWholeRecordDestructiveAction(a.actionType)) continue;
+    if (!protectionKey(a.mediaItem)) continue;
     const targets = wholeRecordTargetsByUser.get(a.userId) ?? [];
-    targets.push({ parentTitle: a.mediaItem.parentTitle, type: a.mediaItem.type });
+    targets.push(a.mediaItem);
     wholeRecordTargetsByUser.set(a.userId, targets);
   }
-  const protectedParentsByUser = new Map<string, Set<string>>();
+  const protectedGroupsByUser = new Map<string, Set<string>>();
   if (allExceptions.length > 0) {
     for (const [uid, targets] of wholeRecordTargetsByUser) {
-      protectedParentsByUser.set(uid, await findExceptionProtectedParents(uid, targets));
+      protectedGroupsByUser.set(uid, await findExceptionProtectedGroups(uid, targets));
     }
   }
-
-  // BLAST-RADIUS CEILING. Applied here — after the stale-match, exception and
-  // item-existence filtering above, so the number reflects what would ACTUALLY
-  // be destroyed rather than what was merely scheduled.
-  //
-  // Grouped per user because the ceiling is a per-user setting and this executor
-  // can run for all of them; one user's runaway rule set must not hold another's
-  // legitimate run. Blocked actions stay PENDING and untouched, so the Pending
-  // page's existing Execute button IS the manual approval — there is no separate
-  // approval queue to build or to get out of sync.
-  const blockedUserIds = new Set<string>();
-  {
-    const destructiveByUser = new Map<string, string[]>();
-    for (const a of pendingActions) {
-      if (!a.mediaItem || !a.mediaItemId) continue;
-      const list = destructiveByUser.get(a.userId) ?? [];
-      list.push(a.actionType);
-      destructiveByUser.set(a.userId, list);
-    }
-    for (const [uid, actionTypes] of destructiveByUser) {
-      const verdict = await checkDeleteCeiling(uid, actionTypes);
-      if (verdict.allowed) continue;
-      blockedUserIds.add(uid);
-      logger.warn(
-        "Lifecycle",
-        `Holding this run's destructive actions — ${verdict.reason} ` +
-          `They remain pending and can be executed from the Pending page.`,
-      );
-      await notifyDeleteCeilingReached(uid, verdict).catch(() => {});
-    }
-  }
-
-  logger.info("Lifecycle", `Processing ${pendingActions.length} pending actions (${currentMatches.length} current matches across ${ruleSetIds.length} rule sets)`);
 
   // Track server/library pairs that need a sync after destructive actions
   const librariesToSync = new Map<string, { serverId: string; libraryKey: string }>();
@@ -543,18 +512,31 @@ export async function executeLifecycleActions(userId?: string) {
     failures: { title: string; error: string }[];
   }>();
 
+  /**
+   * PASS 1 — decide what this run would actually act on.
+   *
+   * Every check below either CANCELS the action or narrows its member list, and
+   * each one runs before the ceiling is counted. That ordering is the whole
+   * point: the ceiling is a statement about how many items a run would destroy,
+   * and counting `pendingActions` instead counted actions that are about to be
+   * cancelled for being stale, excepted, identity-swapped, or protected by a
+   * sibling exception. A ceiling of 50 was tripped by 300 pending deletes of
+   * which 290 were already doomed — the run was held, the Discord notice quoted
+   * 300, and (because the held branch used to `continue` ahead of these checks)
+   * not one of the 290 was cleaned up either, so the next run counted them
+   * again.
+   */
+  const executable: Array<{
+    action: (typeof pendingActions)[number] & { mediaItemId: string };
+    mediaItem: NonNullable<(typeof pendingActions)[number]["mediaItem"]>;
+    filteredMatchedIds: string[];
+  }> = [];
+
   for (const action of pendingActions) {
     // Delete actions whose media item no longer exists
     if (!action.mediaItem || !action.mediaItemId) {
       await prisma.lifecycleAction.delete({ where: { id: action.id } });
       logger.info("Lifecycle", `Deleted action ${action.id} — media item no longer exists`);
-      continue;
-    }
-
-    // Held by the ceiling: leave it PENDING and untouched so the Pending page
-    // can execute it after review. Only destructive actions are held — an
-    // unmonitor or a tag scheduled in the same run still applies.
-    if (blockedUserIds.has(action.userId) && isDestructiveActionType(action.actionType)) {
       continue;
     }
 
@@ -663,15 +645,71 @@ export async function executeLifecycleActions(userId?: string) {
     // Exception inviolability, part 2: the member check above only sees the
     // MATCHED episodes/tracks. A whole-record destructive action destroys the
     // entire series/artist — including siblings the rule never matched — so an
-    // exception on ANY item of the same parent must also refuse the action.
-    // (Protected parents are batch-resolved before the loop.)
+    // exception on ANY item of the same group must also refuse the action.
+    // The group is `protectionKey` — `seriesKey` for a series, so an exception
+    // filed under another server's title for the same show still counts.
+    // (Protected groups are batch-resolved before the loop.)
+    const groupKey = protectionKey(mediaItem);
     if (
       isWholeRecordDestructiveAction(action.actionType) &&
-      mediaItem.parentTitle &&
-      protectedParentsByUser.get(action.userId)?.has(mediaItem.parentTitle)
+      groupKey &&
+      protectedGroupsByUser.get(action.userId)?.has(groupKey)
     ) {
       await prisma.lifecycleAction.delete({ where: { id: action.id } });
       logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${mediaItem.parentTitle}" — an episode/track of it is excluded via lifecycle exception and a ${action.actionType} cannot exclude it`);
+      continue;
+    }
+
+    executable.push({
+      action: action as typeof action & { mediaItemId: string },
+      mediaItem,
+      filteredMatchedIds,
+    });
+  }
+
+  // BLAST-RADIUS CEILING. Counted over the PASS 1 survivors — after the
+  // stale-match, exception, identity-swap, member-set and whole-record
+  // filtering — so the number is what would ACTUALLY be destroyed rather than
+  // what was merely scheduled.
+  //
+  // Grouped per user because the ceiling is a per-user setting and this executor
+  // can run for all of them; one user's runaway rule set must not hold another's
+  // legitimate run. Blocked actions stay PENDING and untouched, so the Pending
+  // page's existing Execute button IS the manual approval — there is no separate
+  // approval queue to build or to get out of sync.
+  const blockedUserIds = new Set<string>();
+  {
+    const destructiveByUser = new Map<string, string[]>();
+    for (const { action } of executable) {
+      const list = destructiveByUser.get(action.userId) ?? [];
+      list.push(action.actionType);
+      destructiveByUser.set(action.userId, list);
+    }
+    for (const [uid, actionTypes] of destructiveByUser) {
+      const verdict = await checkDeleteCeiling(uid, actionTypes);
+      if (verdict.allowed) continue;
+      blockedUserIds.add(uid);
+      logger.warn(
+        "Lifecycle",
+        `Holding this run's destructive actions — ${verdict.reason} ` +
+          `They remain pending and can be executed from the Pending page.`,
+      );
+      await notifyDeleteCeilingReached(uid, verdict).catch(() => {});
+    }
+  }
+
+  logger.info(
+    "Lifecycle",
+    `Executing ${executable.length} of ${pendingActions.length} pending action(s) ` +
+      `(${currentMatches.length} current matches across ${ruleSetIds.length} rule sets)`,
+  );
+
+  // PASS 2 — execute what survived.
+  for (const { action, mediaItem, filteredMatchedIds } of executable) {
+    // Held by the ceiling: leave it PENDING and untouched so the Pending page
+    // can execute it after review. Only destructive actions are held — an
+    // unmonitor or a tag scheduled in the same run still applies.
+    if (blockedUserIds.has(action.userId) && isDestructiveActionType(action.actionType)) {
       continue;
     }
 
