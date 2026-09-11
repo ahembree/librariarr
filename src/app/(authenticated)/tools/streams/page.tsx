@@ -97,6 +97,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatDurationClock } from "@/lib/format";
 import { hardwareEncoder, hardwareDecoder } from "@/lib/media-server/hardware-transcode";
+import { formatSessionMediaTitle } from "@/lib/media-server/session-title";
 import { cn } from "@/lib/utils";
 import {
   SERVER_TYPE_STYLES,
@@ -302,18 +303,6 @@ function formatBlackoutScheduleDescription(schedule: BlackoutSchedule): string {
   const start = schedule.startTime || "?";
   const end = schedule.endTime || "?";
   return `Every ${days} ${start} - ${end}`;
-}
-
-function formatMediaTitle(s: SessionWithServer): string {
-  if (s.type === "episode") {
-    const show = s.grandparentTitle || s.parentTitle || "";
-    return show ? `${show} \u00b7 ${s.title}` : s.title;
-  }
-  if (s.type === "track") {
-    const parts = [s.grandparentTitle, s.parentTitle, s.title].filter(Boolean);
-    return parts.join(" \u00b7 ");
-  }
-  return s.year ? `${s.title} (${s.year})` : s.title;
 }
 
 /** Split a session into a primary line (what to lead with) and a
@@ -2070,7 +2059,7 @@ export default function StreamManagerPage() {
           {sheetSession && (
             <>
               <SheetHeader>
-                <SheetTitle className="wrap-break-word">{formatMediaTitle(sheetSession)}</SheetTitle>
+                <SheetTitle className="wrap-break-word">{formatSessionMediaTitle(sheetSession)}</SheetTitle>
                 <SheetDescription>
                   {sheetSession.type === "episode" ? "TV Episode" : sheetSession.type === "movie" ? "Movie" : sheetSession.type === "track" ? "Track" : sheetSession.type}
                   {sheetSession.year ? ` (${sheetSession.year})` : ""}

@@ -1,6 +1,12 @@
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { isHardwareTranscode } from "@/lib/media-server/hardware-transcode";
+import { formatSessionMediaTitle } from "@/lib/media-server/session-title";
+import {
+  logTermination,
+  terminationFailureMessage,
+  TERMINATION_SOURCE,
+} from "@/lib/media-server/termination-log";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { logger } from "@/lib/logger";
 import type { MediaSession } from "@/lib/media-server/types";
@@ -404,11 +410,13 @@ export async function runEnforcerTick() {
                 let shouldTerminate = false;
                 let delay = 0;
                 let message = "";
+                let trigger = "";
 
                 if (maintenanceEnabled && !settings.maintenanceExcludedUsers.includes(session.username)) {
                   shouldTerminate = true;
                   delay = maintenanceDelayMs;
                   message = maintenanceMsg;
+                  trigger = "maintenance mode";
                 }
 
                 // A hardware encode costs the CPU little, so the admin can opt
@@ -455,6 +463,7 @@ export async function runEnforcerTick() {
                   if (!shouldTerminate || transcodeDelayMs < delay) {
                     delay = transcodeDelayMs;
                     message = transcodeMsg;
+                    trigger = "transcode manager";
                   }
                   shouldTerminate = true;
                 }
@@ -476,25 +485,28 @@ export async function runEnforcerTick() {
                   pendingTerminations.set(sessionKey, now);
                   logger.info(
                     "Enforcer",
-                    `Session "${session.username}" on "${server.name}" (${session.title}) pending termination (delay: ${delay / 1000}s)`
+                    `Session "${session.username}" on "${server.name}" (${formatSessionMediaTitle(session)}) pending termination (delay: ${delay / 1000}s)`
                   );
                 }
 
                 const firstSeen = pendingTerminations.get(sessionKey)!;
                 if (now - firstSeen >= delay) {
+                  const termination = {
+                    serverId: server.id,
+                    serverName: server.name,
+                    sessionId: session.sessionId,
+                    trigger,
+                    reason: message,
+                    session,
+                  };
                   try {
                     await client.terminateSession(session.sessionId, message);
-                    logger.info(
-                      "Enforcer",
-                      `Terminated session for "${session.username}" on "${server.name}" (${session.title})`
-                    );
+                    logTermination(termination);
                     pendingTerminations.delete(sessionKey);
                   } catch (error) {
-                    logger.error(
-                      "Enforcer",
-                      `Failed to terminate session ${session.sessionId} on "${server.name}"`,
-                      { error: String(error) }
-                    );
+                    logger.error(TERMINATION_SOURCE, terminationFailureMessage(termination, String(error)), {
+                      error: String(error),
+                    });
                   }
                 }
               }
@@ -576,18 +588,21 @@ export async function runEnforcerTick() {
                 if (schedule.action === "terminate_immediate") {
                   for (const session of sessions) {
                     if (blackoutExcluded.includes(session.username)) continue;
+                    const termination = {
+                      serverId: server.id,
+                      serverName: server.name,
+                      sessionId: session.sessionId,
+                      trigger: `blackout "${schedule.name}"`,
+                      reason: blackoutMsg,
+                      session,
+                    };
                     try {
                       await client.terminateSession(session.sessionId, blackoutMsg);
-                      logger.info(
-                        "Enforcer",
-                        `Blackout "${schedule.name}": terminated session for "${session.username}" (${session.title})`
-                      );
+                      logTermination(termination);
                     } catch (error) {
-                      logger.error(
-                        "Enforcer",
-                        `Blackout "${schedule.name}": failed to terminate session ${session.sessionId}`,
-                        { error: String(error) }
-                      );
+                      logger.error(TERMINATION_SOURCE, terminationFailureMessage(termination, String(error)), {
+                        error: String(error),
+                      });
                     }
                   }
                 } else if (schedule.action === "warn_then_terminate") {
@@ -603,7 +618,7 @@ export async function runEnforcerTick() {
                       pendingTerminations.set(sessionKey, blackoutNow);
                       logger.info(
                         "Enforcer",
-                        `Blackout "${schedule.name}": session "${session.username}" (${session.title}) pending termination (delay: ${blackoutDelayMs / 1000}s)`
+                        `Blackout "${schedule.name}": session "${session.username}" (${formatSessionMediaTitle(session)}) pending termination (delay: ${blackoutDelayMs / 1000}s)`
                       );
                       // Deliver the actual warning where the server can show one
                       // (Jellyfin/Emby). Without this, warn_then_terminate never
@@ -623,19 +638,22 @@ export async function runEnforcerTick() {
 
                     const firstSeen = pendingTerminations.get(sessionKey)!;
                     if (blackoutNow - firstSeen >= blackoutDelayMs) {
+                      const termination = {
+                        serverId: server.id,
+                        serverName: server.name,
+                        sessionId: session.sessionId,
+                        trigger: `blackout "${schedule.name}"`,
+                        reason: blackoutMsg,
+                        session,
+                      };
                       try {
                         await client.terminateSession(session.sessionId, blackoutMsg);
-                        logger.info(
-                          "Enforcer",
-                          `Blackout "${schedule.name}": terminated session for "${session.username}" (${session.title})`
-                        );
+                        logTermination(termination);
                         pendingTerminations.delete(sessionKey);
                       } catch (error) {
-                        logger.error(
-                          "Enforcer",
-                          `Blackout "${schedule.name}": failed to terminate session ${session.sessionId}`,
-                          { error: String(error) }
-                        );
+                        logger.error(TERMINATION_SOURCE, terminationFailureMessage(termination, String(error)), {
+                          error: String(error),
+                        });
                       }
                     }
                   }
@@ -658,18 +676,21 @@ export async function runEnforcerTick() {
                     for (const session of sessions) {
                       if (blackoutExcluded.includes(session.username)) continue;
                       if (!knownIds.has(blockNewIdentity(session))) {
+                        const termination = {
+                          serverId: server.id,
+                          serverName: server.name,
+                          sessionId: session.sessionId,
+                          trigger: `blackout "${schedule.name}"`,
+                          reason: blackoutMsg,
+                          session,
+                        };
                         try {
                           await client.terminateSession(session.sessionId, blackoutMsg);
-                          logger.info(
-                            "Enforcer",
-                            `Blackout "${schedule.name}": terminated new session for "${session.username}" (${session.title})`
-                          );
+                          logTermination(termination);
                         } catch (error) {
-                          logger.error(
-                            "Enforcer",
-                            `Blackout "${schedule.name}": failed to terminate session ${session.sessionId}`,
-                            { error: String(error) }
-                          );
+                          logger.error(TERMINATION_SOURCE, terminationFailureMessage(termination, String(error)), {
+                            error: String(error),
+                          });
                         }
                       }
                     }

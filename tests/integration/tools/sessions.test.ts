@@ -33,14 +33,29 @@ vi.mock("@/lib/plex/client", () => ({
 }));
 
 // Import route handlers AFTER mocks
+import { logger } from "@/lib/logger";
+import { _resetFirstSeen } from "@/lib/media-server/session-first-seen";
 import { GET } from "@/app/api/tools/sessions/route";
 import { POST } from "@/app/api/tools/sessions/terminate/route";
+
+/** Just the termination lines — other logger.info calls must not shift them. */
+function terminationLogLines(): string[] {
+  return vi
+    .mocked(logger.info)
+    .mock.calls.map((call) => call[1])
+    .filter((line) => line.startsWith("Terminated session for"));
+}
+
+function terminationLogMeta(sessionId: string): Record<string, unknown> | undefined {
+  return vi.mocked(logger.info).mock.calls.find((call) => call[2]?.sessionId === sessionId)?.[2];
+}
 
 describe("Tools sessions endpoints", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    _resetFirstSeen();
     mockGetSessions.mockResolvedValue([
       {
         sessionId: "s1",
@@ -242,7 +257,134 @@ describe("Tools sessions endpoints", () => {
 
       expect(body.terminated).toBe(0);
       expect(body.errors).toHaveLength(1);
-      expect(body.errors[0]).toContain("Failed to terminate session s1");
+      expect(body.errors[0]).toContain("(session s1)");
+    });
+
+    it("logs the username, media title and reason for each termination", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "My Plex" });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      mockGetSessions.mockResolvedValue([
+        { sessionId: "s1", userId: "u1", username: "alice", title: "Arrival", type: "movie", year: 2016 },
+        {
+          sessionId: "s2",
+          userId: "u2",
+          username: "bob",
+          title: "Pilot",
+          type: "episode",
+          parentTitle: "Season 1",
+          grandparentTitle: "Breaking Bad",
+        },
+      ]);
+      // The terminate route reads labels from what the listing routes saw — it
+      // must not fetch the session list itself (see session-first-seen.ts).
+      await callRoute(GET, { url: "/api/tools/sessions" });
+      mockGetSessions.mockClear();
+
+      const response = await callRoute(POST, {
+        url: "/api/tools/sessions/terminate",
+        method: "POST",
+        body: {
+          serverId: server.id,
+          sessionIds: ["s1", "s2"],
+          message: "Going down for maintenance",
+        },
+      });
+      await expectJson<{ terminated: number }>(response, 200);
+
+      expect(mockGetSessions).not.toHaveBeenCalled();
+
+      const lines = terminationLogLines();
+      expect(lines).toContain(
+        'Terminated session for "alice" on "My Plex" — Arrival (2016) (session s1) (trigger: manual, reason: Going down for maintenance)'
+      );
+      expect(lines).toContain(
+        'Terminated session for "bob" on "My Plex" — Breaking Bad · Pilot (session s2) (trigger: manual, reason: Going down for maintenance)'
+      );
+      expect(terminationLogMeta("s1")).toMatchObject({
+        sessionId: "s1",
+        serverId: server.id,
+        username: "alice",
+        mediaTitle: "Arrival (2016)",
+        trigger: "manual",
+        reason: "Going down for maintenance",
+      });
+    });
+
+    it("labels the terminate-all path from the sessions it fetched", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "My Plex" });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      mockGetSessions.mockResolvedValue([
+        {
+          sessionId: "s9",
+          userId: "u9",
+          username: "carol",
+          title: "Teardrop",
+          type: "track",
+          parentTitle: "Mezzanine",
+          grandparentTitle: "Massive Attack",
+        },
+      ]);
+
+      const response = await callRoute(POST, {
+        url: "/api/tools/sessions/terminate",
+        method: "POST",
+        body: { serverId: server.id, message: "Shutting down" },
+      });
+      await expectJson<{ terminated: number }>(response, 200);
+
+      expect(terminationLogLines()).toContain(
+        'Terminated session for "carol" on "My Plex" — Massive Attack · Mezzanine · Teardrop (session s9) (trigger: manual, reason: Shutting down)'
+      );
+    });
+
+    it("still terminates, naming the id, when the session was never listed", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "My Plex" });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      // A cold process: nothing has listed this server's sessions, so there is
+      // no label to be had. Termination must still happen.
+      const response = await callRoute(POST, {
+        url: "/api/tools/sessions/terminate",
+        method: "POST",
+        body: { serverId: server.id, sessionIds: ["s1"], message: "Bye" },
+      });
+      const body = await expectJson<{ terminated: number; errors: string[] }>(response, 200);
+
+      expect(body.terminated).toBe(1);
+      expect(body.errors).toEqual([]);
+      expect(mockGetSessions).not.toHaveBeenCalled();
+      expect(terminationLogLines()).toContain(
+        'Terminated session for "unknown user" on "My Plex" — unknown media (session s1) (trigger: manual, reason: Bye)'
+      );
+    });
+
+    it("names the viewer and media on a FAILED termination too", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "My Plex" });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      mockGetSessions.mockResolvedValue([
+        { sessionId: "s1", userId: "u1", username: "alice", title: "Arrival", type: "movie", year: 2016 },
+      ]);
+      await callRoute(GET, { url: "/api/tools/sessions" });
+      mockTerminateSession.mockRejectedValue(new Error("Network error"));
+
+      const response = await callRoute(POST, {
+        url: "/api/tools/sessions/terminate",
+        method: "POST",
+        body: { serverId: server.id, sessionIds: ["s1"], message: "Bye" },
+      });
+      const body = await expectJson<{ terminated: number; errors: string[] }>(response, 200);
+
+      expect(body.terminated).toBe(0);
+      expect(body.errors[0]).toContain(
+        'Failed to terminate session for "alice" on "My Plex" — Arrival (2016) (session s1)'
+      );
     });
 
     it("returns zero terminated when no servers match", async () => {
