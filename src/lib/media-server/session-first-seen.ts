@@ -16,28 +16,20 @@ import type { MediaSession } from "./types";
 const firstSeen = new Map<string, number>();
 
 /**
- * The last detail seen for each session, so a caller holding only a session id
- * can name the viewer and the media without a round-trip of its own.
- *
- * The terminate route is the consumer: a termination log has to say who was
- * watching what, and the ids it is given carry neither. Fetching the session
- * list there instead would be a network call whose FAILURE is the problem —
- * `configureRetry` opens the shared per-baseURL circuit breaker on the first
- * network error (`markUnreachable`), after which the termination request that
- * follows is rejected by the request interceptor without reaching the server.
- * Paying a round-trip for a log label must never cost the operator the ability
- * to stop a stream, so the label is read from what the listing routes already
- * fetched.
+ * The last detail seen for each session, so the terminate route can name the
+ * viewer and the media from a session id alone. Fetching the session list there
+ * instead would be a network call whose FAILURE is the problem: it opens the
+ * shared per-baseURL circuit breaker, after which the termination that follows
+ * is rejected without reaching the server. A log label must never cost the
+ * operator the ability to stop a stream.
  */
 const lastDetail = new Map<string, MediaSession>();
 
 /**
- * Bound on `lastDetail`. `pruneFirstSeen` runs only from the sessions SSE
- * stream, so a process where nobody opens the Stream Manager (the sidebar
- * polls the list route on its own) never prunes — and unlike `firstSeen`'s
- * numbers these entries are whole session objects. Far above any real
- * concurrent-stream count, so eviction only ever touches entries pruning
- * would have taken anyway.
+ * Bound on `lastDetail`. Only the SSE stream prunes, so a process where nobody
+ * opens the Stream Manager never does — and these entries are whole session
+ * objects, not `firstSeen`'s numbers. Far above any real concurrent-stream
+ * count.
  */
 const MAX_REMEMBERED = 500;
 
@@ -56,22 +48,15 @@ export function stampFirstSeen(serverId: string, sessionId: string, now: number)
 
 /** Record the latest detail seen for a session. */
 export function rememberSession(serverId: string, session: MediaSession): void {
-  const key = keyFor(serverId, session.sessionId);
-  // Re-insert so a live session is always the newest entry and can never be
-  // the one evicted below.
-  lastDetail.delete(key);
-  lastDetail.set(key, session);
-  while (lastDetail.size > MAX_REMEMBERED) {
+  lastDetail.set(keyFor(serverId, session.sessionId), session);
+  if (lastDetail.size > MAX_REMEMBERED) {
+    // Oldest first — an evicted live session is re-added by the next poll.
     const oldest = lastDetail.keys().next();
-    if (oldest.done) break;
-    lastDetail.delete(oldest.value);
+    if (!oldest.done) lastDetail.delete(oldest.value);
   }
 }
 
-/**
- * The last detail seen for a session, or undefined when neither listing route
- * has observed it (a cold process, or a caller that never listed).
- */
+/** The last detail seen for a session, or undefined if nothing has listed it. */
 export function getRememberedSession(
   serverId: string,
   sessionId: string,
@@ -95,8 +80,7 @@ export function pruneFirstSeen(
   knownServerIds: Set<string>,
   polledServerIds: Set<string>,
 ): void {
-  // Both maps are keyed and aged identically — an entry that is no longer a
-  // live session must not keep a stale label alive either.
+  // Both maps are keyed and aged identically.
   for (const key of new Set([...firstSeen.keys(), ...lastDetail.keys()])) {
     const serverId = key.slice(0, key.indexOf(":"));
     if (!knownServerIds.has(serverId)) {

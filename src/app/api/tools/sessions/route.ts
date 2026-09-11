@@ -40,9 +40,7 @@ export async function GET() {
       });
       const sessions = await client.getSessions();
       return sessions.map<SessionWithServer>((s) => {
-        // Keep the label the terminate route logs with current — it must not
-        // fetch the session list itself just to name a viewer (see
-        // session-first-seen.ts).
+        // Keeps the label the terminate route logs with current.
         rememberSession(server.id, s);
         return {
           ...s,

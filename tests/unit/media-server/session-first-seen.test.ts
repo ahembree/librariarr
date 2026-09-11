@@ -91,22 +91,12 @@ describe("session first-seen tracking", () => {
     expect(getRememberedSession("s1", "a")).toBeUndefined();
   });
 
-  it("bounds the remembered detail, evicting least-recently-seen first", () => {
+  it("bounds the remembered detail, evicting oldest first", () => {
     for (let i = 0; i < 520; i++) rememberSession("s1", session(`sess${i}`));
-    // The 20 oldest were evicted; the newest 500 survive.
+    // The oldest were evicted; the newest 500 survive.
     expect(getRememberedSession("s1", "sess0")).toBeUndefined();
     expect(getRememberedSession("s1", "sess19")).toBeUndefined();
     expect(getRememberedSession("s1", "sess20")).toBeDefined();
     expect(getRememberedSession("s1", "sess519")).toBeDefined();
-  });
-
-  it("keeps a re-seen session alive under pressure", () => {
-    rememberSession("s1", session("keeper"));
-    for (let i = 0; i < 499; i++) rememberSession("s1", session(`sess${i}`));
-    // Re-seeing "keeper" makes it the newest entry, so the next 499 inserts
-    // evict the others rather than it.
-    rememberSession("s1", session("keeper"));
-    for (let i = 500; i < 999; i++) rememberSession("s1", session(`sess${i}`));
-    expect(getRememberedSession("s1", "keeper")).toBeDefined();
   });
 });

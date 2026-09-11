@@ -33,23 +33,21 @@ vi.mock("@/lib/plex/client", () => ({
 }));
 
 // Import route handlers AFTER mocks
-import { apiLogger } from "@/lib/logger";
+import { logger } from "@/lib/logger";
 import { _resetFirstSeen } from "@/lib/media-server/session-first-seen";
 import { GET } from "@/app/api/tools/sessions/route";
 import { POST } from "@/app/api/tools/sessions/terminate/route";
 
-/** Just the termination lines — other apiLogger.info calls must not shift them. */
+/** Just the termination lines — other logger.info calls must not shift them. */
 function terminationLogLines(): string[] {
   return vi
-    .mocked(apiLogger.info)
+    .mocked(logger.info)
     .mock.calls.map((call) => call[1])
     .filter((line) => line.startsWith("Terminated session for"));
 }
 
 function terminationLogMeta(sessionId: string): Record<string, unknown> | undefined {
-  return vi
-    .mocked(apiLogger.info)
-    .mock.calls.find((call) => call[2]?.sessionId === sessionId)?.[2];
+  return vi.mocked(logger.info).mock.calls.find((call) => call[2]?.sessionId === sessionId)?.[2];
 }
 
 describe("Tools sessions endpoints", () => {
@@ -299,16 +297,17 @@ describe("Tools sessions endpoints", () => {
 
       const lines = terminationLogLines();
       expect(lines).toContain(
-        'Terminated session for "alice" on "My Plex" — Arrival (2016) (session s1) (reason: Going down for maintenance)'
+        'Terminated session for "alice" on "My Plex" — Arrival (2016) (session s1) (trigger: manual, reason: Going down for maintenance)'
       );
       expect(lines).toContain(
-        'Terminated session for "bob" on "My Plex" — Breaking Bad · Pilot (session s2) (reason: Going down for maintenance)'
+        'Terminated session for "bob" on "My Plex" — Breaking Bad · Pilot (session s2) (trigger: manual, reason: Going down for maintenance)'
       );
       expect(terminationLogMeta("s1")).toMatchObject({
         sessionId: "s1",
         serverId: server.id,
         username: "alice",
         mediaTitle: "Arrival (2016)",
+        trigger: "manual",
         reason: "Going down for maintenance",
       });
     });
@@ -338,7 +337,7 @@ describe("Tools sessions endpoints", () => {
       await expectJson<{ terminated: number }>(response, 200);
 
       expect(terminationLogLines()).toContain(
-        'Terminated session for "carol" on "My Plex" — Massive Attack · Mezzanine · Teardrop (session s9) (reason: Shutting down)'
+        'Terminated session for "carol" on "My Plex" — Massive Attack · Mezzanine · Teardrop (session s9) (trigger: manual, reason: Shutting down)'
       );
     });
 
@@ -360,7 +359,7 @@ describe("Tools sessions endpoints", () => {
       expect(body.errors).toEqual([]);
       expect(mockGetSessions).not.toHaveBeenCalled();
       expect(terminationLogLines()).toContain(
-        'Terminated session for "unknown user" on "My Plex" — unknown media (session s1) (reason: Bye)'
+        'Terminated session for "unknown user" on "My Plex" — unknown media (session s1) (trigger: manual, reason: Bye)'
       );
     });
 
