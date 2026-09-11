@@ -33,6 +33,7 @@ vi.mock("@/lib/plex/client", () => ({
 }));
 
 // Import route handlers AFTER mocks
+import { apiLogger } from "@/lib/logger";
 import { GET } from "@/app/api/tools/sessions/route";
 import { POST } from "@/app/api/tools/sessions/terminate/route";
 
@@ -243,6 +244,80 @@ describe("Tools sessions endpoints", () => {
       expect(body.terminated).toBe(0);
       expect(body.errors).toHaveLength(1);
       expect(body.errors[0]).toContain("Failed to terminate session s1");
+    });
+
+    it("logs the username, media title and reason for each termination", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "My Plex" });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      mockGetSessions.mockResolvedValue([
+        {
+          sessionId: "s1",
+          userId: "u1",
+          username: "alice",
+          title: "Arrival",
+          type: "movie",
+          year: 2016,
+        },
+        {
+          sessionId: "s2",
+          userId: "u2",
+          username: "bob",
+          title: "Pilot",
+          type: "episode",
+          parentTitle: "Season 1",
+          grandparentTitle: "Breaking Bad",
+        },
+      ]);
+
+      const response = await callRoute(POST, {
+        url: "/api/tools/sessions/terminate",
+        method: "POST",
+        body: {
+          serverId: server.id,
+          sessionIds: ["s1", "s2"],
+          message: "Going down for maintenance",
+        },
+      });
+      await expectJson<{ terminated: number }>(response, 200);
+
+      const lines = vi.mocked(apiLogger.info).mock.calls.map((call) => call[1]);
+      expect(lines).toContain(
+        'Terminated session for "alice" on "My Plex" \u2014 Arrival (2016) (reason: Going down for maintenance)'
+      );
+      expect(lines).toContain(
+        'Terminated session for "bob" on "My Plex" \u2014 Breaking Bad \u00b7 Pilot (reason: Going down for maintenance)'
+      );
+      expect(vi.mocked(apiLogger.info).mock.calls[0][2]).toMatchObject({
+        sessionId: "s1",
+        serverId: server.id,
+        username: "alice",
+        mediaTitle: "Arrival (2016)",
+        reason: "Going down for maintenance",
+      });
+    });
+
+    it("still terminates and logs when the session list cannot be read", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "My Plex" });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      mockGetSessions.mockRejectedValue(new Error("Network error"));
+
+      const response = await callRoute(POST, {
+        url: "/api/tools/sessions/terminate",
+        method: "POST",
+        body: { serverId: server.id, sessionIds: ["s1"], message: "Bye" },
+      });
+      const body = await expectJson<{ terminated: number; errors: string[] }>(response, 200);
+
+      expect(body.terminated).toBe(1);
+      expect(body.errors).toEqual([]);
+      const lines = vi.mocked(apiLogger.info).mock.calls.map((call) => call[1]);
+      expect(lines).toContain(
+        'Terminated session for "unknown user" on "My Plex" \u2014 unknown media (reason: Bye)'
+      );
     });
 
     it("returns zero terminated when no servers match", async () => {
