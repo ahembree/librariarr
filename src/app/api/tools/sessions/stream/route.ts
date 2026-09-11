@@ -2,7 +2,11 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
-import { stampFirstSeen, pruneFirstSeen } from "@/lib/media-server/session-first-seen";
+import {
+  stampFirstSeen,
+  pruneFirstSeen,
+  rememberSession,
+} from "@/lib/media-server/session-first-seen";
 import { realtimeBus } from "@/lib/media-server/realtime";
 import type { MediaSession } from "@/lib/media-server/types";
 import type { MediaServerType } from "@/generated/prisma/client";
@@ -41,13 +45,16 @@ async function fetchAllSessions(userId: string): Promise<SessionWithServer[]> {
       const sessions = await client.getSessions();
       return {
         serverId: server.id,
-        sessions: sessions.map<SessionWithServer>((s) => ({
-          ...s,
-          serverId: server.id,
-          serverName: server.name,
-          serverType: server.type,
-          startedAt: stampFirstSeen(server.id, s.sessionId, now),
-        })),
+        sessions: sessions.map<SessionWithServer>((s) => {
+          rememberSession(server.id, s);
+          return {
+            ...s,
+            serverId: server.id,
+            serverName: server.name,
+            serverType: server.type,
+            startedAt: stampFirstSeen(server.id, s.sessionId, now),
+          };
+        }),
       };
     }),
   );

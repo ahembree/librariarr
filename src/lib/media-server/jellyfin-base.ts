@@ -947,8 +947,11 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       username: s.UserName,
       userThumb: "",
       title: item.Name,
-      parentTitle: item.SeasonName,
-      grandparentTitle: item.SeriesName,
+      // Album/AlbumArtist for music, exactly as normalizeItem maps them —
+      // without the fallback a played track carries no artist or album and a
+      // termination log names a bare track title.
+      parentTitle: item.SeasonName ?? item.Album,
+      grandparentTitle: item.SeriesName ?? item.AlbumArtist,
       type: mapItemType(item.Type),
       year: item.ProductionYear,
       thumb: item.ImageTags?.Primary

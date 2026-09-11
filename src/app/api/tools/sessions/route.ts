@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
-import { stampFirstSeen } from "@/lib/media-server/session-first-seen";
+import { stampFirstSeen, rememberSession } from "@/lib/media-server/session-first-seen";
 import type { MediaSession } from "@/lib/media-server/types";
 import type { MediaServerType } from "@/generated/prisma/client";
 
@@ -39,15 +39,21 @@ export async function GET() {
         skipTlsVerify: server.tlsSkipVerify,
       });
       const sessions = await client.getSessions();
-      return sessions.map<SessionWithServer>((s) => ({
-        ...s,
-        serverId: server.id,
-        serverName: server.name,
-        serverType: server.type,
-        // Share the SSE stream's first-seen timing so a manual refresh here
-        // doesn't reset the displayed stream durations.
-        startedAt: stampFirstSeen(server.id, s.sessionId, now),
-      }));
+      return sessions.map<SessionWithServer>((s) => {
+        // Keep the label the terminate route logs with current — it must not
+        // fetch the session list itself just to name a viewer (see
+        // session-first-seen.ts).
+        rememberSession(server.id, s);
+        return {
+          ...s,
+          serverId: server.id,
+          serverName: server.name,
+          serverType: server.type,
+          // Share the SSE stream's first-seen timing so a manual refresh here
+          // doesn't reset the displayed stream durations.
+          startedAt: stampFirstSeen(server.id, s.sessionId, now),
+        };
+      });
     }),
   );
 

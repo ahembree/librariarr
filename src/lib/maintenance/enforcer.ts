@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { isHardwareTranscode } from "@/lib/media-server/hardware-transcode";
+import { formatSessionMediaTitle } from "@/lib/media-server/session-title";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { logger } from "@/lib/logger";
 import type { MediaSession } from "@/lib/media-server/types";
@@ -476,7 +477,7 @@ export async function runEnforcerTick() {
                   pendingTerminations.set(sessionKey, now);
                   logger.info(
                     "Enforcer",
-                    `Session "${session.username}" on "${server.name}" (${session.title}) pending termination (delay: ${delay / 1000}s)`
+                    `Session "${session.username}" on "${server.name}" (${formatSessionMediaTitle(session)}) pending termination (delay: ${delay / 1000}s)`
                   );
                 }
 
@@ -484,9 +485,17 @@ export async function runEnforcerTick() {
                 if (now - firstSeen >= delay) {
                   try {
                     await client.terminateSession(session.sessionId, message);
+                    const mediaTitle = formatSessionMediaTitle(session);
                     logger.info(
                       "Enforcer",
-                      `Terminated session for "${session.username}" on "${server.name}" (${session.title})`
+                      `Terminated session for "${session.username}" on "${server.name}" — ${mediaTitle} (reason: ${message})`,
+                      {
+                        sessionId: session.sessionId,
+                        serverId: server.id,
+                        username: session.username,
+                        mediaTitle,
+                        reason: message,
+                      }
                     );
                     pendingTerminations.delete(sessionKey);
                   } catch (error) {
@@ -578,9 +587,17 @@ export async function runEnforcerTick() {
                     if (blackoutExcluded.includes(session.username)) continue;
                     try {
                       await client.terminateSession(session.sessionId, blackoutMsg);
+                      const mediaTitle = formatSessionMediaTitle(session);
                       logger.info(
                         "Enforcer",
-                        `Blackout "${schedule.name}": terminated session for "${session.username}" (${session.title})`
+                        `Blackout "${schedule.name}": terminated session for "${session.username}" on "${server.name}" — ${mediaTitle} (reason: ${blackoutMsg})`,
+                        {
+                          sessionId: session.sessionId,
+                          serverId: server.id,
+                          username: session.username,
+                          mediaTitle,
+                          reason: blackoutMsg,
+                        }
                       );
                     } catch (error) {
                       logger.error(
@@ -625,9 +642,17 @@ export async function runEnforcerTick() {
                     if (blackoutNow - firstSeen >= blackoutDelayMs) {
                       try {
                         await client.terminateSession(session.sessionId, blackoutMsg);
+                        const mediaTitle = formatSessionMediaTitle(session);
                         logger.info(
                           "Enforcer",
-                          `Blackout "${schedule.name}": terminated session for "${session.username}" (${session.title})`
+                          `Blackout "${schedule.name}": terminated session for "${session.username}" on "${server.name}" — ${mediaTitle} (reason: ${blackoutMsg})`,
+                          {
+                            sessionId: session.sessionId,
+                            serverId: server.id,
+                            username: session.username,
+                            mediaTitle,
+                            reason: blackoutMsg,
+                          }
                         );
                         pendingTerminations.delete(sessionKey);
                       } catch (error) {
@@ -660,9 +685,17 @@ export async function runEnforcerTick() {
                       if (!knownIds.has(blockNewIdentity(session))) {
                         try {
                           await client.terminateSession(session.sessionId, blackoutMsg);
+                          const mediaTitle = formatSessionMediaTitle(session);
                           logger.info(
                             "Enforcer",
-                            `Blackout "${schedule.name}": terminated new session for "${session.username}" (${session.title})`
+                            `Blackout "${schedule.name}": terminated new session for "${session.username}" on "${server.name}" — ${mediaTitle} (reason: ${blackoutMsg})`,
+                            {
+                              sessionId: session.sessionId,
+                              serverId: server.id,
+                              username: session.username,
+                              mediaTitle,
+                              reason: blackoutMsg,
+                            }
                           );
                         } catch (error) {
                           logger.error(

@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { formatSessionMediaTitle } from "@/lib/media-server/session-title";
+import { getRememberedSession, rememberSession } from "@/lib/media-server/session-first-seen";
 import type { MediaSession } from "@/lib/media-server/types";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, terminateSessionSchema } from "@/lib/validation";
@@ -46,46 +47,57 @@ export async function POST(request: NextRequest) {
         skipTlsVerify: server.tlsSkipVerify,
       });
 
-      // The active sessions are read even when explicit ids were given: they
-      // are the only place the viewer and the media behind a session id exist,
-      // and the termination log has to name both. A failure here is NOT fatal —
-      // the ids are still actionable, so termination proceeds and the log falls
-      // back to the bare id rather than the whole request failing over a label.
-      let activeSessions: MediaSession[] = [];
-      try {
-        activeSessions = await client.getSessions();
-      } catch (error) {
-        // Without explicit ids there is nothing to terminate, so this really is
-        // a connection failure — rethrow to the per-server handler below.
-        if (!sessionIds) throw error;
-        apiLogger.warn(
-          "Tools",
-          `Could not read active sessions on "${server.name}" — terminating without session detail`,
-          { error: sanitizeErrorDetail(String(error)) }
-        );
-      }
-      const byId = new Map(activeSessions.map((s) => [s.sessionId, s]));
+      // A termination has to be accountable — who was watching what, and under
+      // which message — but the ids the caller sends carry none of that. The
+      // label is read from what the listing routes last saw (the Stream Manager
+      // lists sessions before you can select any, and its stream refreshes
+      // every few seconds), NOT by fetching the session list here: that call's
+      // failure mode is the problem. A network error on it opens the shared
+      // per-baseURL circuit breaker, and the termination that follows is then
+      // refused by the request interceptor for 45s without reaching the server.
+      // A log label must never cost the operator the ability to stop a stream.
+      let idsToTerminate: string[];
+      const byId = new Map<string, MediaSession>();
 
-      // If no explicit IDs were given, terminate all sessions on this server.
-      let idsToTerminate = sessionIds ?? activeSessions.map((s) => s.sessionId);
+      if (sessionIds) {
+        idsToTerminate = sessionIds;
+      } else {
+        // With no explicit ids, everything playing is the target — that listing
+        // is required regardless, so it also supplies the labels first-hand.
+        const activeSessions = await client.getSessions();
+        for (const s of activeSessions) {
+          rememberSession(server.id, s);
+          byId.set(s.sessionId, s);
+        }
+        idsToTerminate = activeSessions.map((s) => s.sessionId);
+      }
+
       // Drop empty ids — terminating "" is a no-op that some servers answer
       // 400 to, which would surface as a spurious error.
       idsToTerminate = idsToTerminate.filter((id) => id);
 
       for (const sid of idsToTerminate) {
-        const active = byId.get(sid);
-        const username = active?.username ?? "unknown user";
+        const active = byId.get(sid) ?? getRememberedSession(server.id, sid);
+        // `||`, not `??`: an empty username is as unusable as a missing one,
+        // and Jellyfin/Emby pass `UserName` through unfiltered.
+        const username = active?.username || "unknown user";
         const mediaTitle = active ? formatSessionMediaTitle(active) : "unknown media";
+        // The id stays in the text: without it two unlabelled terminations in
+        // one request log byte-identical lines, and `meta` is not covered by
+        // the System Logs search filter.
+        const who = `"${username}" on "${server.name}" — ${mediaTitle} (session ${sid})`;
         try {
           await client.terminateSession(sid, message);
           terminated++;
           apiLogger.info(
             "Tools",
-            `Terminated session for "${username}" on "${server.name}" — ${mediaTitle} (reason: ${message})`,
+            `Terminated session for ${who} (reason: ${message})`,
             { sessionId: sid, serverId: server.id, username, mediaTitle, reason: message }
           );
         } catch (error) {
-          errors.push(`Failed to terminate session ${sid} on "${server.name}": ${sanitizeErrorDetail(String(error))}`);
+          // A termination that was supposed to happen and did not is the case
+          // most needing accounting, so it names the viewer and media too.
+          errors.push(`Failed to terminate session for ${who}: ${sanitizeErrorDetail(String(error))}`);
         }
       }
     } catch (error) {
