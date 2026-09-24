@@ -17,7 +17,8 @@ const mockAppCache = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
-vi.mock("@/lib/seerr/seerr-client", () => ({
+vi.mock("@/lib/seerr/seerr-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/seerr/seerr-client")>()),
   SeerrClient: function () {
     return mockSeerrClient;
   },
@@ -33,6 +34,7 @@ interface SeerrUserStub {
   id: number;
   username: string;
   plexUsername?: string;
+  jellyfinUsername?: string;
 }
 
 function req(
@@ -53,6 +55,7 @@ function req(
       id: by.id,
       username: by.username,
       plexUsername: by.plexUsername,
+      jellyfinUsername: by.jellyfinUsername,
       email: `${by.username}@test.com`,
     },
   };
@@ -143,20 +146,24 @@ describe("getSeerrRequestStats", () => {
     mockPrisma.seerrInstance.findMany.mockResolvedValue([
       { id: "s1", url: "http://o", apiKey: "k", name: "Seerr" },
     ]);
-    const firstPage = Array.from({ length: 100 }, (_, i) =>
-      req(i + 1, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 1000 + i })
+    // Newest-first listing; pages overlap by 10 rows and are deduped by id.
+    const all = [
+      ...Array.from({ length: 100 }, (_, i) =>
+        req(500 - i, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 1000 + i })
+      ),
+      req(1, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tvdbId: 9 }),
+    ];
+    mockSeerrClient.getRequests.mockImplementation(({ take, skip }: { take: number; skip: number }) =>
+      Promise.resolve({ pageInfo: { page: 1, pages: 2, results: 101 }, results: all.slice(skip, skip + take) })
     );
-    const secondPage = [req(101, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tvdbId: 9 })];
-    mockSeerrClient.getRequests
-      .mockResolvedValueOnce({ pageInfo: { page: 1, pages: 2, results: 101 }, results: firstPage })
-      .mockResolvedValueOnce({ pageInfo: { page: 2, pages: 2, results: 101 }, results: secondPage });
 
     const result = await getSeerrRequestStats("user1");
 
     expect(mockSeerrClient.getRequests).toHaveBeenCalledTimes(2);
     expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(1, { take: 100, skip: 0 });
-    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(2, { take: 100, skip: 100 });
+    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(2, { take: 100, skip: 90 });
     expect(result.users[0].requestCount).toBe(101);
+    expect(result.partial).toBe(false);
   });
 
   it("continues processing remaining instances when one Seerr fetch fails", async () => {
@@ -174,8 +181,11 @@ describe("getSeerrRequestStats", () => {
     const result = await getSeerrRequestStats("user1");
 
     expect(result.configured).toBe(true);
+    expect(result.partial).toBe(true);
     expect(result.users).toHaveLength(1);
     expect(result.users[0].requestCount).toBe(1);
+    // A truncated result must not be served from cache.
+    expect(mockAppCache.invalidate).toHaveBeenCalledWith("seerr-request-stats:user1");
   });
 
   it("correlates movie watch history via shared dedupKey", async () => {
@@ -220,9 +230,9 @@ describe("getSeerrRequestStats", () => {
     });
     // Series 500 has 3 canonical episodes. Only the series query runs (no movie tmdbIds).
     mockPrisma.mediaItem.findMany.mockResolvedValueOnce([
-      { id: "ep1", dedupKey: "ep-1", externalIds: [{ externalId: "500" }] },
-      { id: "ep2", dedupKey: "ep-2", externalIds: [{ externalId: "500" }] },
-      { id: "ep3", dedupKey: "ep-3", externalIds: [{ externalId: "500" }] },
+      { id: "ep1", dedupKey: "ep-1", parentTitle: "Show", seriesKey: "tvdb:500", externalIds: [{ source: "TVDB", externalId: "500" }] },
+      { id: "ep2", dedupKey: "ep-2", parentTitle: "Show", seriesKey: "tvdb:500", externalIds: [{ source: "TVDB", externalId: "500" }] },
+      { id: "ep3", dedupKey: "ep-3", parentTitle: "Show", seriesKey: "tvdb:500", externalIds: [{ source: "TVDB", externalId: "500" }] },
     ]);
     // alice watched ep1 and ep2
     mockPrisma.watchHistory.findMany.mockResolvedValueOnce([
@@ -258,9 +268,9 @@ describe("getSeerrRequestStats", () => {
         { id: "m1", dedupKey: "m1-dedup", externalIds: [{ externalId: "100" }] },
       ])
       .mockResolvedValueOnce([
-        { id: "e1", dedupKey: "e1-dedup", externalIds: [{ externalId: "500" }] },
-        { id: "e2", dedupKey: "e2-dedup", externalIds: [{ externalId: "500" }] },
-        { id: "e3", dedupKey: "e3-dedup", externalIds: [{ externalId: "500" }] },
+        { id: "e1", dedupKey: "e1-dedup", parentTitle: "Show", seriesKey: "tvdb:500", externalIds: [{ source: "TVDB", externalId: "500" }] },
+        { id: "e2", dedupKey: "e2-dedup", parentTitle: "Show", seriesKey: "tvdb:500", externalIds: [{ source: "TVDB", externalId: "500" }] },
+        { id: "e3", dedupKey: "e3-dedup", parentTitle: "Show", seriesKey: "tvdb:500", externalIds: [{ source: "TVDB", externalId: "500" }] },
       ]);
     mockPrisma.watchHistory.findMany
       .mockResolvedValueOnce([
@@ -373,5 +383,124 @@ describe("getSeerrRequestStats", () => {
 
     expect(result.users[0].seerrUsername).toBe("bob");
     expect(result.users[1].seerrUsername).toBe("alice");
+  });
+  it("counts watched movies per request, matching the per-request denominator", async () => {
+    // An HD and a 4K request for one watched film: 2 of 2, not 1 of 2.
+    mockPrisma.seerrInstance.findMany.mockResolvedValue([
+      { id: "s1", url: "http://o", apiKey: "k", name: "Seerr" },
+    ]);
+    mockSeerrClient.getRequests.mockResolvedValueOnce({
+      pageInfo: { page: 1, pages: 1, results: 2 },
+      results: [
+        req(1, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 603 }),
+        req(2, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 603 }),
+      ],
+    });
+    mockPrisma.mediaItem.findMany.mockResolvedValueOnce([
+      { id: "m1", dedupKey: "matrix", externalIds: [{ externalId: "603" }] },
+    ]);
+    mockPrisma.watchHistory.findMany.mockResolvedValueOnce([
+      { serverUsername: "alice", mediaItem: { dedupKey: "matrix" } },
+    ]);
+
+    const result = await getSeerrRequestStats("user1");
+
+    expect(result.users[0].movieCount).toBe(2);
+    expect(result.users[0].moviesWatched).toBe(2);
+  });
+
+  it("correlates a Jellyfin-backed Seerr user through jellyfinUsername", async () => {
+    mockPrisma.seerrInstance.findMany.mockResolvedValue([
+      { id: "s1", url: "http://o", apiKey: "k", name: "Seerr" },
+    ]);
+    mockSeerrClient.getRequests.mockResolvedValueOnce({
+      pageInfo: { page: 1, pages: 1, results: 1 },
+      results: [req(1, "movie", { id: 1, username: "alice", jellyfinUsername: "Alice" }, { tmdbId: 100 })],
+    });
+    mockPrisma.mediaItem.findMany.mockResolvedValueOnce([
+      { id: "m1", dedupKey: "m-100", externalIds: [{ externalId: "100" }] },
+    ]);
+    mockPrisma.watchHistory.findMany.mockResolvedValueOnce([
+      { serverUsername: "Alice", mediaItem: { dedupKey: "m-100" } },
+    ]);
+
+    const result = await getSeerrRequestStats("user1");
+
+    expect(result.users[0].correlatable).toBe(true);
+    expect(result.users[0].moviesWatched).toBe(1);
+    expect(mockPrisma.watchHistory.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ serverUsername: { in: ["Alice"] } }) })
+    );
+  });
+
+  it("adopts a plexUsername from a later requester folded into the same key", async () => {
+    // Instance 1 knows "alice" only by email-derived key; instance 2 supplies
+    // the plexUsername. Order must not decide whether she is correlatable.
+    mockPrisma.seerrInstance.findMany.mockResolvedValue([
+      { id: "s1", url: "http://o1", apiKey: "k", name: "One" },
+      { id: "s2", url: "http://o2", apiKey: "k", name: "Two" },
+    ]);
+    mockSeerrClient.getRequests
+      .mockResolvedValueOnce({
+        pageInfo: { page: 1, pages: 1, results: 1 },
+        results: [{
+          ...req(1, "movie", { id: 1, username: "x" }, { tmdbId: 100 }),
+          requestedBy: { id: 1, username: null, email: "alice" },
+        }],
+      })
+      .mockResolvedValueOnce({
+        pageInfo: { page: 1, pages: 1, results: 1 },
+        results: [req(2, "movie", { id: 9, username: "", plexUsername: "alice" }, { tmdbId: 101 })],
+      });
+
+    const result = await getSeerrRequestStats("user1");
+
+    expect(result.users).toHaveLength(1);
+    expect(result.users[0].plexUsername).toBe("alice");
+    expect(result.users[0].correlatable).toBe(true);
+  });
+
+  it("matches a TV request to the library by TMDB when there is no TVDB id", async () => {
+    mockPrisma.seerrInstance.findMany.mockResolvedValue([
+      { id: "s1", url: "http://o", apiKey: "k", name: "Seerr" },
+    ]);
+    mockSeerrClient.getRequests.mockResolvedValueOnce({
+      pageInfo: { page: 1, pages: 1, results: 1 },
+      results: [req(1, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 12345, tvdbId: null })],
+    });
+    mockPrisma.mediaItem.findMany.mockResolvedValueOnce([
+      { id: "e1", dedupKey: "e1", parentTitle: "Show", seriesKey: "tmdb:12345", externalIds: [{ source: "TMDB", externalId: "12345" }] },
+      { id: "e2", dedupKey: "e2", parentTitle: "Show", seriesKey: "tmdb:12345", externalIds: [{ source: "TMDB", externalId: "12345" }] },
+    ]);
+    mockPrisma.watchHistory.findMany.mockResolvedValueOnce([
+      { serverUsername: "alice", mediaItem: { dedupKey: "e1" } },
+    ]);
+
+    const result = await getSeerrRequestStats("user1");
+
+    expect(result.users[0].episodesAvailable).toBe(2);
+    expect(result.users[0].episodesWatched).toBe(1);
+  });
+
+  it("counts a show requested twice (season batches) once", async () => {
+    mockPrisma.seerrInstance.findMany.mockResolvedValue([
+      { id: "s1", url: "http://o", apiKey: "k", name: "Seerr" },
+    ]);
+    mockSeerrClient.getRequests.mockResolvedValueOnce({
+      pageInfo: { page: 1, pages: 1, results: 2 },
+      results: [
+        req(1, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 7, tvdbId: 500 }),
+        req(2, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 7, tvdbId: 500 }),
+      ],
+    });
+    mockPrisma.mediaItem.findMany.mockResolvedValueOnce([
+      { id: "e1", dedupKey: "e1", parentTitle: "Show", seriesKey: "tvdb:500", externalIds: [{ source: "TVDB", externalId: "500" }, { source: "TMDB", externalId: "7" }] },
+    ]);
+
+    const result = await getSeerrRequestStats("user1");
+
+    expect(result.users[0].seriesCount).toBe(2);
+    expect(result.users[0].distinctSeriesCount).toBe(1);
+    expect(result.users[0].episodesAvailable).toBe(1);
   });
 });

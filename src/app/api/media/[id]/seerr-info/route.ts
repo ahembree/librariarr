@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { SeerrClient, type SeerrRequest } from "@/lib/seerr/seerr-client";
+import { walkSeerrRequests } from "@/lib/seerr/request-walk";
+import { seerrRequesterName } from "@/lib/seerr/seerr-data-map";
 import { apiLogger } from "@/lib/logger";
 
 interface SeerrRequestSummary {
@@ -27,18 +29,12 @@ interface SeerrInfoResponse {
   matches: SeerrMatch[];
 }
 
-const REQUEST_PAGE_SIZE = 100;
-
-function summarizeRequester(req: SeerrRequest): string {
-  return req.requestedBy?.plexUsername || req.requestedBy?.username || req.requestedBy?.email || "Unknown";
-}
-
 function toSummary(req: SeerrRequest): SeerrRequestSummary {
   return {
     id: req.id,
     status: req.status,
     is4k: req.is4k,
-    requestedBy: summarizeRequester(req),
+    requestedBy: seerrRequesterName(req),
     createdAt: req.createdAt,
     updatedAt: req.updatedAt,
   };
@@ -46,33 +42,28 @@ function toSummary(req: SeerrRequest): SeerrRequestSummary {
 
 /**
  * Paginated fallback used when no TMDB ID is available (rare: series with only TVDB).
- * Walks /api/v1/request in pages of 100 until exhausted, filtering by external IDs.
+ * Walks the instance's whole request list (bounded, shift-tolerant — see
+ * `walkSeerrRequests`), filtering by external IDs.
  */
 async function findRequestsByPagination(
   client: SeerrClient,
+  instanceName: string,
   mediaType: "movie" | "tv",
   tmdbId: string | null,
   tvdbId: string | null,
 ): Promise<{ requests: SeerrRequest[]; mediaStatus: number | null }> {
   const matching: SeerrRequest[] = [];
   let mediaStatus: number | null = null;
-  let skip = 0;
-  let hasMore = true;
 
-  while (hasMore) {
-    const response = await client.getRequests({ take: REQUEST_PAGE_SIZE, skip, mediaType });
-    for (const req of response.results) {
-      const tmdbMatch = tmdbId !== null && String(req.media.tmdbId) === tmdbId;
-      const tvdbMatch =
-        mediaType === "tv" && tvdbId !== null && req.media.tvdbId !== null && String(req.media.tvdbId) === tvdbId;
-      if (tmdbMatch || tvdbMatch) {
-        matching.push(req);
-        if (mediaStatus === null && req.media?.status != null) mediaStatus = req.media.status;
-      }
+  await walkSeerrRequests(client, { instanceName, mediaType }, (req) => {
+    const tmdbMatch = tmdbId !== null && String(req.media?.tmdbId) === tmdbId;
+    const tvdbMatch =
+      mediaType === "tv" && tvdbId !== null && req.media?.tvdbId != null && String(req.media.tvdbId) === tvdbId;
+    if (tmdbMatch || tvdbMatch) {
+      matching.push(req);
+      if (mediaStatus === null && req.media?.status != null) mediaStatus = req.media.status;
     }
-    hasMore = response.results.length === REQUEST_PAGE_SIZE;
-    skip += REQUEST_PAGE_SIZE;
-  }
+  });
 
   return { requests: matching, mediaStatus };
 }
@@ -123,6 +114,7 @@ export async function GET(
 
   const seerrInstances = await prisma.seerrInstance.findMany({
     where: { userId: session.userId!, enabled: true },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
 
   const matches: SeerrMatch[] = [];
@@ -149,7 +141,7 @@ export async function GET(
 
       // Fallback: TVDB-only series — walk /request to find matches.
       if (requests.length === 0 && !tmdbId && tvdbId) {
-        const result = await findRequestsByPagination(client, mediaType, tmdbId, tvdbId);
+        const result = await findRequestsByPagination(client, instance.name, mediaType, tmdbId, tvdbId);
         requests = result.requests;
         mediaStatus = result.mediaStatus;
       }

@@ -843,10 +843,12 @@ export function evaluateSeerrRule(rule: Condition, meta: SeerrMetadata | undefin
       const itemDate = dateStr ? new Date(dateStr) : null;
       if (operator === "isNull") { result = !itemDate || isNaN(itemDate.getTime()); break; }
       if (operator === "isNotNull") { result = !!itemDate && !isNaN(itemDate.getTime()); break; }
-      if (!itemDate || isNaN(itemDate.getTime())) {
-        result = false;
-        break;
-      }
+      // Fail-closed on a missing date, bypassing negate (mirrors the Arr date
+      // branch): no comparison — positive, negative or NOT-wrapped — matches an
+      // item with no date. Setting `result = false` let the trailing flip turn
+      // NOT(notEquals D), i.e. "equals D", into a match for every item never
+      // requested; a group-level NOT produces those forms automatically.
+      if (!itemDate || isNaN(itemDate.getTime())) return false;
       switch (operator) {
         case "before":
           result = itemDate < new Date(String(value));

@@ -960,19 +960,29 @@ export function LifecycleRulePage({
     try {
       const response = await fetch("/api/integrations/seerr");
       const data = await response.json();
-      const instances = data.instances || [];
+      // Lifecycle evaluation reads every ENABLED instance (fetchSeerrMetadata),
+      // so the editor must too: a disabled instance is not "connected", and
+      // the Requested By choices are the union across enabled instances.
+      const instances = ((data.instances || []) as Array<{ id: string; enabled?: boolean }>)
+        .filter((i) => i.enabled !== false);
       setSeerrConnected(instances.length > 0);
       if (instances.length > 0) {
-        try {
-          const metaRes = await fetch(`/api/integrations/seerr/${instances[0].id}/metadata`);
-          const metaData = await metaRes.json();
-          setDistinctValues((prev) => ({
-            ...prev,
-            seerrRequestedBy: metaData.users ?? [],
-          }));
-        } catch {
-          // Silent failure
-        }
+        const lists = await Promise.all(
+          instances.map(async (inst) => {
+            try {
+              const metaRes = await fetch(`/api/integrations/seerr/${inst.id}/metadata`);
+              if (!metaRes.ok) return [] as string[];
+              const metaData = await metaRes.json();
+              return (metaData.users ?? []) as string[];
+            } catch {
+              return [] as string[];
+            }
+          }),
+        );
+        setDistinctValues((prev) => ({
+          ...prev,
+          seerrRequestedBy: [...new Set(lists.flat())].sort((a, b) => a.localeCompare(b)),
+        }));
       }
     } catch {
       // Seerr not configured — leave as false

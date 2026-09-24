@@ -23,7 +23,8 @@ vi.mock("@/lib/logger", () => ({
 
 const mockTestConnection = vi.fn();
 
-vi.mock("@/lib/seerr/seerr-client", () => ({
+vi.mock("@/lib/seerr/seerr-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/seerr/seerr-client")>()),
   SeerrClient: vi.fn().mockImplementation(function () {
     return {
       testConnection: mockTestConnection,
@@ -35,6 +36,7 @@ vi.mock("@/lib/seerr/seerr-client", () => ({
 import { GET, POST } from "@/app/api/integrations/seerr/route";
 import { PUT, DELETE } from "@/app/api/integrations/seerr/[id]/route";
 import { POST as TEST_POST } from "@/app/api/integrations/seerr/test/route";
+import { appCache } from "@/lib/cache/memory-cache";
 
 describe("Seerr integration endpoints", () => {
   beforeEach(async () => {
@@ -311,6 +313,25 @@ describe("Seerr integration endpoints", () => {
       const listResponse = await callRoute(GET, { url: "/api/integrations/seerr" });
       const listBody = await expectJson<{ instances: unknown[] }>(listResponse, 200);
       expect(listBody.instances).toHaveLength(0);
+    });
+
+    it("drops cached Seerr-derived answers so a removed instance stops being reported", async () => {
+      const user = await createTestUser();
+      const instance = await createTestSeerrInstance(user.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      appCache.set(`seerr-request-stats:${user.id}`, { configured: true });
+      appCache.set(`seerr-user-requests:${user.id}:alice`, { requests: [] });
+      appCache.set(`integrations:health:${user.id}`, { ok: true });
+
+      await callRouteWithParams(
+        DELETE,
+        { id: instance.id },
+        { url: `/api/integrations/seerr/${instance.id}`, method: "DELETE" }
+      );
+
+      expect(appCache.get(`seerr-request-stats:${user.id}`)).toBeUndefined();
+      expect(appCache.get(`seerr-user-requests:${user.id}:alice`)).toBeUndefined();
+      expect(appCache.get(`integrations:health:${user.id}`)).toBeUndefined();
     });
   });
 

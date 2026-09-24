@@ -14,7 +14,12 @@ import { seriesKeySqlExpression } from "@/lib/media/series-key";
 
 /**
  * Recompute canonical flags for all items belonging to a user.
- * Picks one item per dedupKey group, preferring the given server.
+ * Picks one item per dedupKey group: a copy on an ENABLED server first, then
+ * the preferred title server, then the oldest. Disabling a server without
+ * deleting its data keeps its items; if one of them stayed canonical, every
+ * query that combines `dedupCanonical = true` with the enabled-server scope
+ * (the multi-server listings, the Seerr request stats) lost the title entirely.
+ * Groups that exist only on disabled servers still get a canonical copy.
  */
 export async function recomputeCanonical(userId: string): Promise<void> {
   const settings = await prisma.appSettings.findUnique({
@@ -37,6 +42,7 @@ export async function recomputeCanonical(userId: string): Promise<void> {
             JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
             WHERE ms."userId" = ${userId} AND mi."dedupKey" IS NOT NULL
             ORDER BY mi."dedupKey",
+              CASE WHEN ms."enabled" THEN 0 ELSE 1 END,
               CASE WHEN l."mediaServerId" = ${preferredServerId} THEN 0 ELSE 1 END,
               mi."createdAt" ASC
           )
@@ -58,7 +64,9 @@ export async function recomputeCanonical(userId: string): Promise<void> {
             JOIN "Library" l ON mi."libraryId" = l.id
             JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
             WHERE ms."userId" = ${userId} AND mi."dedupKey" IS NOT NULL
-            ORDER BY mi."dedupKey", mi."createdAt" ASC
+            ORDER BY mi."dedupKey",
+              CASE WHEN ms."enabled" THEN 0 ELSE 1 END,
+              mi."createdAt" ASC
           )
         )
         WHERE mi_outer."libraryId" IN (

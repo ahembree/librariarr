@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { SeerrClient } from "@/lib/seerr/seerr-client";
 import { validateRequest, seerrInstanceUpdateSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { invalidateSeerrCaches } from "@/lib/seerr/request-stats";
 
 export async function PUT(
   request: NextRequest,
@@ -50,6 +51,7 @@ export async function PUT(
       ...(enabled !== undefined && { enabled }),
     },
   });
+  invalidateSeerrCaches(session.userId!);
 
   return NextResponse.json({ instance: sanitize(instance) });
 }
@@ -73,6 +75,7 @@ export async function DELETE(
   }
 
   await prisma.seerrInstance.delete({ where: { id } });
+  invalidateSeerrCaches(session.userId!);
 
   return NextResponse.json({ success: true });
 }

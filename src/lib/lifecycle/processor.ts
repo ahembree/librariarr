@@ -214,6 +214,21 @@ export async function processLifecycleRules(userId?: string) {
 
   // Cache Plex library items across rule sets to avoid redundant API calls
   const plexItemsCache = new Map<string, Array<{ title: string; ratingKey: string }>>();
+  // Arr/Seerr metadata shared across rule sets of the same owner + type
+  // (mirrors runDetection). Each Seerr request page makes Seerr query every
+  // Arr instance it knows, so re-walking the whole request list once per rule
+  // set multiplied the cost — and let rule sets in one run read different
+  // snapshots. A failed fetch is cached too, so the remaining rule sets of that
+  // type skip immediately (each through its own catch below).
+  const metadataCache = new Map<string, Promise<ArrDataMap | SeerrDataMap>>();
+  const loadMetadata = <T extends ArrDataMap | SeerrDataMap>(key: string, load: () => Promise<T>): Promise<T> => {
+    let pending = metadataCache.get(key);
+    if (!pending) {
+      pending = load();
+      metadataCache.set(key, pending);
+    }
+    return pending as Promise<T>;
+  };
 
   for (const ruleSet of ruleSets) {
     try {
@@ -262,12 +277,18 @@ export async function processLifecycleRules(userId?: string) {
 
       let arrData: ArrDataMap | undefined;
       if (hasArrRules(rules)) {
-        arrData = await fetchArrMetadata(ruleSet.userId, ruleSet.type);
+        const type = ruleSet.type;
+        arrData = await loadMetadata(`arr:${ruleSet.userId}:${type}`, () =>
+          fetchArrMetadata(ruleSet.userId, type),
+        );
       }
 
       let seerrData: SeerrDataMap | undefined;
       if (hasSeerrRules(rules) && ruleSet.type !== "MUSIC") {
-        seerrData = await fetchSeerrMetadata(ruleSet.userId, ruleSet.type);
+        const type = ruleSet.type;
+        seerrData = await loadMetadata(`seerr:${ruleSet.userId}:${type}`, () =>
+          fetchSeerrMetadata(ruleSet.userId, type),
+        );
       }
 
       // Snapshot previous match IDs before detection writes new ones (for notifications)

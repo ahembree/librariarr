@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -2112,8 +2112,23 @@ export default function SettingsPage() {
     }
   };
 
+  // Per-form sequence for the edit-form connection test. Only the latest test
+  // may write its result: an auto-test still in flight for another instance
+  // (Edit A → Cancel → Edit B) or for credentials since edited used to land
+  // afterwards and overwrite the form's result — disabling Save on a healthy
+  // instance, or enabling it on one whose new credentials were never tested.
+  const editTestSeq = useRef<Record<"sonarr" | "radarr" | "lidarr" | "seerr", number>>({
+    sonarr: 0, radarr: 0, lidarr: 0, seerr: 0,
+  });
+  const invalidateEditTest = (type: "sonarr" | "radarr" | "lidarr" | "seerr", setTesting: (v: boolean) => void) => {
+    editTestSeq.current[type]++;
+    setTesting(false);
+  };
+
   // Test connection for existing instances (uses server-side stored credentials)
   const testEditArrConnection = async (type: "sonarr" | "radarr" | "lidarr" | "seerr", id: string, overrides: { url?: string; apiKey?: string }, setTesting: (v: boolean) => void, setResult: (v: TestResult | null) => void) => {
+    const seq = ++editTestSeq.current[type];
+    const current = () => editTestSeq.current[type] === seq;
     setTesting(true);
     setResult(null);
     try {
@@ -2126,11 +2141,11 @@ export default function SettingsPage() {
         body: JSON.stringify(body),
       });
       const data = await response.json();
-      setResult(data);
+      if (current()) setResult(data);
     } catch {
-      setResult({ ok: false, error: "Request failed" });
+      if (current()) setResult({ ok: false, error: "Request failed" });
     } finally {
-      setTesting(false);
+      if (current()) setTesting(false);
     }
   };
 
@@ -3052,9 +3067,15 @@ export default function SettingsPage() {
               onTest: () => testArrConnection("seerr", seerrForm.url, seerrForm.apiKey, setSeerrTesting, setSeerrTestResult),
               onStartEdit: startEditSeerr,
               onSaveEdit: saveEditSeerr,
-              onCancelEdit: () => setEditingSeerrId(null),
+              onCancelEdit: () => {
+                invalidateEditTest("seerr", setEditSeerrTesting);
+                setEditingSeerrId(null);
+              },
               onEditFormChange: (form) => {
-                if (form.url !== editSeerrForm.url || form.apiKey !== editSeerrForm.apiKey) setEditSeerrTestResult(null);
+                if (form.url !== editSeerrForm.url || form.apiKey !== editSeerrForm.apiKey) {
+                  invalidateEditTest("seerr", setEditSeerrTesting);
+                  setEditSeerrTestResult(null);
+                }
                 setEditSeerrForm(form);
               },
               onEditTest: () => testEditArrConnection("seerr", editingSeerrId!, { url: editSeerrForm.url, apiKey: editSeerrForm.apiKey }, setEditSeerrTesting, setEditSeerrTestResult),

@@ -12,6 +12,9 @@ const mockPrisma = vi.hoisted(() => ({
   mediaItem: {
     findMany: vi.fn(),
   },
+  mediaItemExternalId: {
+    findMany: vi.fn().mockResolvedValue([]),
+  },
   lifecycleException: {
     findMany: vi.fn(),
   },
@@ -322,6 +325,71 @@ describe("detectAndSaveMatches", () => {
     expect(servers.map((s) => s.serverId).sort()).toEqual(["s1", "s2"]);
   });
 
+  it("collapses cross-server duplicates by external id when no Arr metadata was fetched (armed action)", async () => {
+    // A Seerr- or play-count-only rule set fetches no Arr data, so every arrId
+    // is null — the two copies still resolve to ONE Radarr record.
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockEvaluateRules.mockResolvedValue([
+      {
+        id: "a", title: "Movie", parentTitle: null, titleSort: "movie",
+        library: { mediaServer: { id: "s1", name: "Plex", type: "PLEX" } },
+        externalIds: [{ source: "TMDB", externalId: "111" }],
+      },
+      {
+        // The engine omits externalIds when no rule needed them.
+        id: "b", title: "Movie", parentTitle: null, titleSort: "movie",
+        library: { mediaServer: { id: "s2", name: "Jellyfin", type: "JELLYFIN" } },
+      },
+    ]);
+    mockPrisma.mediaItemExternalId.findMany.mockResolvedValueOnce([{ mediaItemId: "b", externalId: "111" }]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
+    mockPrisma.ruleMatch.createMany.mockResolvedValue({ count: 1 });
+
+    const result = await detectAndSaveMatches(
+      makeRuleSetConfig({
+        type: "MOVIE",
+        serverIds: ["s1", "s2"],
+        actionEnabled: true,
+        actionType: "DELETE_RADARR",
+      }),
+      ["s1", "s2"],
+    );
+
+    expect(result.items).toHaveLength(1);
+    const servers = result.items[0].servers as Array<{ serverId: string }>;
+    expect(servers.map((s) => s.serverId).sort()).toEqual(["s1", "s2"]);
+    expect(mockPrisma.mediaItemExternalId.findMany).toHaveBeenCalledWith({
+      where: { mediaItemId: { in: ["b"] }, source: "TMDB" },
+      select: { mediaItemId: true, externalId: true },
+    });
+  });
+
+  it("keeps one match per server copy without Arr metadata when no action is armed", async () => {
+    // Collection-only rule sets feed a per-server Plex collection.
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockEvaluateRules.mockResolvedValue([
+      {
+        id: "a", title: "Movie", parentTitle: null, titleSort: "movie",
+        library: { mediaServer: { id: "s1", name: "Plex", type: "PLEX" } },
+        externalIds: [{ source: "TMDB", externalId: "111" }],
+      },
+      {
+        id: "b", title: "Movie", parentTitle: null, titleSort: "movie",
+        library: { mediaServer: { id: "s2", name: "Plex 2", type: "PLEX" } },
+        externalIds: [{ source: "TMDB", externalId: "111" }],
+      },
+    ]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
+    mockPrisma.ruleMatch.createMany.mockResolvedValue({ count: 2 });
+
+    const result = await detectAndSaveMatches(
+      makeRuleSetConfig({ type: "MOVIE", serverIds: ["s1", "s2"] }),
+      ["s1", "s2"],
+    );
+
+    expect(result.items).toHaveLength(2);
+  });
+
   it("filters out excluded items via LifecycleException", async () => {
     mockHasAnyActiveRules.mockReturnValue(true);
     mockEvaluateRules.mockResolvedValue([
@@ -541,6 +609,55 @@ describe("runDetection", () => {
 
     // fetchArrMetadata should only be called once for MOVIE type
     expect(mockFetchArrMetadata).toHaveBeenCalledTimes(1);
+  });
+
+  it("isolates a Seerr fetch failure to the rule sets that need it", async () => {
+    // One unreachable Seerr used to abort "Re-evaluate All" midway: later rule
+    // sets were never evaluated, even those with no Seerr criteria.
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasArrRules.mockReturnValue(false);
+    mockHasSeerrRules.mockImplementation((rules: Array<{ field: string }>) =>
+      rules.some((r) => r.field.startsWith("seerr")),
+    );
+    mockFetchSeerrMetadata.mockRejectedValue(new Error("Seerr unreachable"));
+    mockEvaluateRules.mockResolvedValue([]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
+    const base = {
+      userId: "u1", type: "MOVIE", seriesScope: false, serverIds: ["s1"], actionEnabled: false,
+      actionType: null, actionDelayDays: 0, arrInstanceId: null, addImportExclusion: false,
+      addArrTags: [], removeArrTags: [], collectionId: null, stickyMatches: false,
+      user: { mediaServers: [{ id: "s1" }] },
+    };
+    mockPrisma.ruleSet.findMany.mockResolvedValue([
+      { ...base, id: "rs1", name: "Seerr A", rules: [{ field: "seerrRequested", operator: "equals", value: "false", enabled: true }] },
+      { ...base, id: "rs2", name: "Seerr B", rules: [{ field: "seerrRequestCount", operator: "equals", value: "0", enabled: true }] },
+      { ...base, id: "rs3", name: "Plain", rules: [{ field: "title", operator: "contains", value: "x", enabled: true }] },
+    ]);
+
+    const results = await runDetection("u1");
+
+    expect(results.map((r) => r.ruleSet.id)).toEqual(["rs3"]);
+    // The failed fetch is remembered — the second Seerr rule set doesn't re-walk.
+    expect(mockFetchSeerrMetadata).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces a fetch failure when running a single rule set", async () => {
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasArrRules.mockReturnValue(false);
+    mockHasSeerrRules.mockReturnValue(true);
+    mockFetchSeerrMetadata.mockRejectedValue(new Error("Seerr unreachable"));
+    mockPrisma.ruleSet.findMany.mockResolvedValue([
+      {
+        id: "rs1", userId: "u1", name: "Seerr", type: "MOVIE",
+        rules: [{ field: "seerrRequested", operator: "equals", value: "false", enabled: true }],
+        seriesScope: false, serverIds: ["s1"], actionEnabled: false, actionType: null,
+        actionDelayDays: 0, arrInstanceId: null, addImportExclusion: false,
+        addArrTags: [], removeArrTags: [], collectionId: null, stickyMatches: false,
+        user: { mediaServers: [{ id: "s1" }] },
+      },
+    ]);
+
+    await expect(runDetection("u1", "rs1")).rejects.toThrow("Seerr unreachable");
   });
 
   it("skips rule sets with Arr rules when no enabled Arr instance exists (match-all guard)", async () => {

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { SeerrClient } from "@/lib/seerr/seerr-client";
 import { validateRequest, seerrInstanceCreateSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { invalidateSeerrCaches } from "@/lib/seerr/request-stats";
 
 export async function GET() {
   const session = await getSession();
@@ -46,6 +47,7 @@ export async function POST(request: NextRequest) {
       apiKey,
     },
   });
+  invalidateSeerrCaches(session.userId!);
 
   return NextResponse.json({ instance: sanitize(instance) }, { status: 201 });
 }

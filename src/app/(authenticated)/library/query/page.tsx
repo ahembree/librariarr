@@ -418,7 +418,11 @@ export default function QueryPage() {
     fetch("/api/integrations/seerr")
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
-        const instances = data?.instances ?? [];
+        // Only enabled instances can answer Seerr criteria — the query engine
+        // refuses a disabled one, and treating it as connected hid the
+        // "can't be evaluated" warning.
+        const instances = ((data?.instances ?? []) as Array<{ id: string; enabled?: boolean }>)
+          .filter((i) => i.enabled !== false);
         setSeerrConnected(instances.length > 0);
         setSeerrInstanceId(instances.length > 0 ? instances[0].id : null);
         if (instances.length > 0) {

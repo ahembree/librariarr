@@ -59,10 +59,20 @@ describe("SeerrClient", () => {
 
   describe("testConnection", () => {
     it("returns ok on successful connection", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: {} });
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: { applicationTitle: "Seerr" } });
       const result = await client.testConnection();
       expect(result).toEqual({ ok: true, appName: "Seerr" });
       expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/settings/main");
+    });
+
+    it("rejects a 2xx that is not Seerr settings (auth-proxy login page, other app)", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: "<!doctype html><title>Sign in</title>" });
+      const html = await client.testConnection();
+      expect(html.ok).toBe(false);
+      expect(html.error).toMatch(/did not return Seerr settings/);
+
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: { version: "4.0" } });
+      expect((await client.testConnection()).ok).toBe(false);
     });
 
     it("returns error on network failure", async () => {

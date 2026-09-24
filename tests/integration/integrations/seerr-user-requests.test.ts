@@ -27,7 +27,8 @@ const mockGetRequests = vi.fn();
 const mockGetMovie = vi.fn();
 const mockGetTvShow = vi.fn();
 
-vi.mock("@/lib/seerr/seerr-client", () => ({
+vi.mock("@/lib/seerr/seerr-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/seerr/seerr-client")>()),
   SeerrClient: vi.fn().mockImplementation(function () {
     return {
       getRequests: mockGetRequests,
@@ -43,8 +44,8 @@ import { appCache } from "@/lib/cache/memory-cache";
 function makeRequest(
   id: number,
   type: "movie" | "tv",
-  requestedBy: { id: number; username: string; plexUsername?: string | null },
-  media: { tmdbId?: number; tvdbId?: number | null; status?: number },
+  requestedBy: { id: number; username: string; plexUsername?: string | null; email?: string },
+  media: { tmdbId?: number; tvdbId?: number | null; status?: number; status4k?: number },
   overrides?: { createdAt?: string; status?: number; is4k?: boolean }
 ) {
   return {
@@ -56,6 +57,7 @@ function makeRequest(
       tmdbId: media.tmdbId ?? 0,
       tvdbId: media.tvdbId ?? null,
       status: media.status ?? 5,
+      status4k: media.status4k ?? 1,
       createdAt: "2024-01-01T00:00:00Z",
       updatedAt: "2024-01-01T00:00:00Z",
     },
@@ -63,7 +65,7 @@ function makeRequest(
     updatedAt: "2024-01-01T00:00:00Z",
     requestedBy: {
       id: requestedBy.id,
-      email: `${requestedBy.username}@test.com`,
+      email: requestedBy.email ?? `${requestedBy.username}@test.com`,
       username: requestedBy.username,
       plexUsername: requestedBy.plexUsername ?? undefined,
     },
@@ -525,7 +527,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
           1,
           "movie",
           { id: 1, username: "alice", plexUsername: "alice" },
-          { tmdbId: 100, status: 5 },
+          { tmdbId: 100, status: 5, status4k: 3 },
           { is4k: true, status: 2 }
         ),
       ],
@@ -537,6 +539,90 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
 
     expect(body.requests[0].is4k).toBe(true);
     expect(body.requests[0].status).toBe(2);
-    expect(body.requests[0].mediaStatus).toBe(5);
+    // A 4K request refers to the 4K copy — still processing, though HD is available.
+    expect(body.requests[0].mediaStatus).toBe(3);
+  });
+
+  it("accepts a userKey containing '%' (Next has already decoded the param)", async () => {
+    const user = await createTestUser();
+    await createTestSeerrInstance(user.id);
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    mockGetRequests.mockResolvedValueOnce({
+      pageInfo: { page: 1, pages: 1, results: 2 },
+      results: [
+        makeRequest(1, "movie", { id: 1, username: "100%Dad" }, { tmdbId: 100 }),
+        makeRequest(2, "movie", { id: 2, username: "a%41b" }, { tmdbId: 101 }),
+      ],
+    });
+
+    const body = await expectJson<{ requests: { seerrId: number }[] }>(
+      await callRouteWithParams(GET, { userKey: "100%Dad" }),
+      200
+    );
+    expect(body.requests.map((r) => r.seerrId)).toEqual([1]);
+
+    const literal = await expectJson<{ requests: { seerrId: number }[] }>(
+      await callRouteWithParams(GET, { userKey: "a%41b" }),
+      200
+    );
+    expect(literal.requests.map((r) => r.seerrId)).toEqual([2]);
+  });
+
+  it("resolves only the requester keyed by userKey, not one whose display name equals it", async () => {
+    const user = await createTestUser();
+    await createTestSeerrInstance(user.id);
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    mockGetRequests.mockResolvedValueOnce({
+      pageInfo: { page: 1, pages: 1, results: 2 },
+      results: [
+        // User A: keyed "jsmith", display name "John".
+        makeRequest(1, "movie", { id: 1, username: "John", plexUsername: "jsmith" }, { tmdbId: 100 }),
+        // User B: keyed "John".
+        makeRequest(2, "movie", { id: 2, username: "bee", plexUsername: "John" }, { tmdbId: 101 }),
+      ],
+    });
+
+    const body = await expectJson<{
+      user: { plexUsername: string };
+      requests: { seerrId: number }[];
+    }>(await callRouteWithParams(GET, { userKey: "John" }), 200);
+
+    expect(body.requests.map((r) => r.seerrId)).toEqual([2]);
+    expect(body.user.plexUsername).toBe("John");
+  });
+
+  it("resolves a TV request with no TVDB id through the show's TMDB id", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const ep = await createTestMediaItem(library.id, {
+      type: "SERIES",
+      title: "Pilot",
+      parentTitle: "Some Show",
+      seasonNumber: 1,
+      episodeNumber: 1,
+    });
+    await getTestPrisma().mediaItem.update({ where: { id: ep.id }, data: { dedupKey: "show-s01e01" } });
+    await createTestExternalId(ep.id, "TMDB", "12345");
+
+    await createTestSeerrInstance(user.id);
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    mockGetRequests.mockResolvedValueOnce({
+      pageInfo: { page: 1, pages: 1, results: 1 },
+      results: [
+        makeRequest(1, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 12345, tvdbId: null }),
+      ],
+    });
+
+    const body = await expectJson<{
+      requests: { mediaItem: { id: string } | null; watch: { episodesAvailable: number } }[];
+    }>(await callRouteWithParams(GET, { userKey: "alice" }), 200);
+
+    expect(body.requests[0].mediaItem).toEqual({ id: ep.id, route: "show" });
+    expect(body.requests[0].watch.episodesAvailable).toBe(1);
+    expect(mockGetTvShow).not.toHaveBeenCalled();
   });
 });

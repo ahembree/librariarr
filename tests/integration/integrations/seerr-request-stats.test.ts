@@ -26,7 +26,8 @@ vi.mock("@/lib/logger", () => ({
 const mockGetRequests = vi.fn();
 const mockGetUsers = vi.fn();
 
-vi.mock("@/lib/seerr/seerr-client", () => ({
+vi.mock("@/lib/seerr/seerr-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/seerr/seerr-client")>()),
   SeerrClient: vi.fn().mockImplementation(function () {
     return {
       getRequests: mockGetRequests,
@@ -36,7 +37,7 @@ vi.mock("@/lib/seerr/seerr-client", () => ({
 }));
 
 import { GET } from "@/app/api/seerr/request-stats/route";
-import { invalidateSeerrRequestStats } from "@/lib/seerr/request-stats";
+import { invalidateSeerrCaches } from "@/lib/seerr/request-stats";
 
 function makeRequest(
   id: number,
@@ -96,7 +97,7 @@ describe("GET /api/seerr/request-stats", () => {
   it("returns configured=false when user has no Seerr instances", async () => {
     const user = await createTestUser();
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrRequestStats(user.id);
+    invalidateSeerrCaches(user.id);
 
     const body = await expectJson<{ configured: boolean; users: unknown[] }>(
       await callRoute(GET),
@@ -110,7 +111,7 @@ describe("GET /api/seerr/request-stats", () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrRequestStats(user.id);
+    invalidateSeerrCaches(user.id);
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 3 },
@@ -147,7 +148,7 @@ describe("GET /api/seerr/request-stats", () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrRequestStats(user.id);
+    invalidateSeerrCaches(user.id);
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -186,7 +187,7 @@ describe("GET /api/seerr/request-stats", () => {
 
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrRequestStats(user.id);
+    invalidateSeerrCaches(user.id);
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 2 },
@@ -254,7 +255,7 @@ describe("GET /api/seerr/request-stats", () => {
 
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrRequestStats(user.id);
+    invalidateSeerrCaches(user.id);
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 2 },
@@ -321,7 +322,7 @@ describe("GET /api/seerr/request-stats", () => {
 
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrRequestStats(user.id);
+    invalidateSeerrCaches(user.id);
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -400,7 +401,7 @@ describe("GET /api/seerr/request-stats", () => {
 
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrRequestStats(user.id);
+    invalidateSeerrCaches(user.id);
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -431,7 +432,7 @@ describe("GET /api/seerr/request-stats", () => {
     await createTestSeerrInstance(userA.id);
     // userB has no Seerr instance
     setMockSession({ userId: userB.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrRequestStats(userB.id);
+    invalidateSeerrCaches(userB.id);
 
     mockGetRequests.mockResolvedValue({
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -450,18 +451,19 @@ describe("GET /api/seerr/request-stats", () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrRequestStats(user.id);
+    invalidateSeerrCaches(user.id);
 
-    // First page: 100 requests (full page). Second page: 1 request (partial, stop).
-    const firstPage = Array.from({ length: 100 }, (_, i) =>
-      makeRequest(i + 1, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 1000 + i })
-    );
-    const secondPage = [
-      makeRequest(101, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tvdbId: 999 }),
+    // Newest-first listing of 101 requests. Pages overlap by 10 rows (skip 0,
+    // then 90) and the overlap is deduped by request id.
+    const all = [
+      ...Array.from({ length: 100 }, (_, i) =>
+        makeRequest(500 - i, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 1000 + i })
+      ),
+      makeRequest(1, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tvdbId: 999 }),
     ];
-    mockGetRequests
-      .mockResolvedValueOnce({ pageInfo: { page: 1, pages: 2, results: 101 }, results: firstPage })
-      .mockResolvedValueOnce({ pageInfo: { page: 2, pages: 2, results: 101 }, results: secondPage });
+    mockGetRequests.mockImplementation(({ take, skip }: { take: number; skip: number }) =>
+      Promise.resolve({ pageInfo: { page: 1, pages: 2, results: 101 }, results: all.slice(skip, skip + take) })
+    );
 
     const body = await expectJson<{ users: { requestCount: number; movieCount: number; seriesCount: number }[] }>(
       await callRoute(GET),

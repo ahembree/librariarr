@@ -298,19 +298,43 @@ export async function detectAndSaveMatches(
   // (TMDB/TVDB/MBID), which is globally unique — NOT the internal `arrId`,
   // which is an instance-local auto-increment id that collides across two
   // different Arr instances (two unrelated series can both be id 5 on their
-  // respective Sonarr instances and would wrongly collapse into one match). We
-  // still gate on `arrId != null` so only items that actually resolved to an
-  // Arr record are collapsed (a rule set may target a server SUBSET whose
-  // dedupCanonical copy lives on a non-targeted server, so we can't key on
-  // dedupCanonical). Items with no Arr id are left as-is.
+  // respective Sonarr instances and would wrongly collapse into one match).
+  // When Arr metadata was fetched we still gate on `arrId != null`, so only
+  // items that actually resolved to an Arr record are collapsed (a rule set may
+  // target a server SUBSET whose dedupCanonical copy lives on a non-targeted
+  // server, so we can't key on dedupCanonical). Without Arr criteria no Arr
+  // metadata is fetched and every arrId is null — yet an armed action still
+  // resolves its Arr record by this same external id on the rule set's one Arr
+  // instance, so a Seerr- or play-count-only rule set scheduled one action per
+  // server copy: the second DELETE failed ("not found"), file deletes counted
+  // bytes twice, and the deletion ceiling counted every title twice. In that
+  // case collapse on the external id alone (only when an action is armed, so
+  // collection-only rule sets keep one match per server copy), loading the id
+  // for items the engine returned without external ids.
   if (ruleSet.serverIds.length > 1) {
+    const collapseWithoutArr = !arrData && ruleSet.actionEnabled && !!ruleSet.actionType;
+    const loadedKeys = new Map<string, string>();
+    if (collapseWithoutArr) {
+      const missing = enrichedItems
+        .filter((i) => !Array.isArray(i.externalIds))
+        .map((i) => i.id as string);
+      if (missing.length > 0) {
+        const rows = await prisma.mediaItemExternalId.findMany({
+          where: { mediaItemId: { in: missing }, source: arrIdSource },
+          select: { mediaItemId: true, externalId: true },
+        });
+        for (const r of rows) loadedKeys.set(r.mediaItemId, r.externalId);
+      }
+    }
     const byExternalId = new Map<string, Record<string, unknown>>();
     const deduped: Record<string, unknown>[] = [];
     for (const item of enrichedItems) {
       const arrId = item.arrId as number | null;
       const externalIds = (item.externalIds ?? []) as Array<{ source: string; externalId: string }>;
-      const externalKey = externalIds.find((e) => e.source === arrIdSource)?.externalId;
-      if (arrId == null || !externalKey) {
+      const externalKey =
+        externalIds.find((e) => e.source === arrIdSource)?.externalId ??
+        loadedKeys.get(item.id as string);
+      if ((arrId == null && !collapseWithoutArr) || !externalKey) {
         deduped.push(item);
         continue;
       }
@@ -527,12 +551,29 @@ export async function runDetection(userId: string, ruleSetId?: string, fullReEva
     },
   });
 
-  // Lazy metadata caches (shared across rule sets of the same type)
-  const movieArrCache: { fetched: boolean; data: ArrDataMap } = { fetched: false, data: {} };
-  const seriesArrCache: { fetched: boolean; data: ArrDataMap } = { fetched: false, data: {} };
-  const musicArrCache: { fetched: boolean; data: ArrDataMap } = { fetched: false, data: {} };
-  const movieSeerrCache: { fetched: boolean; data: SeerrDataMap } = { fetched: false, data: {} };
-  const seriesSeerrCache: { fetched: boolean; data: SeerrDataMap } = { fetched: false, data: {} };
+  // Lazy metadata caches (shared across rule sets of the same type). A failed
+  // fetch is remembered too, so later rule sets of that type skip at once
+  // instead of re-walking an instance that just failed — and never see the
+  // empty placeholder map as if it were data.
+  type MetaCache<T> = { fetched: boolean; data: T; error?: unknown };
+  const loadOnce = async <T,>(cache: MetaCache<T>, load: () => Promise<T>): Promise<T> => {
+    if (cache.error !== undefined) throw cache.error;
+    if (!cache.fetched) {
+      try {
+        cache.data = await load();
+      } catch (error) {
+        cache.error = error;
+        throw error;
+      }
+      cache.fetched = true;
+    }
+    return cache.data;
+  };
+  const movieArrCache: MetaCache<ArrDataMap> = { fetched: false, data: {} };
+  const seriesArrCache: MetaCache<ArrDataMap> = { fetched: false, data: {} };
+  const musicArrCache: MetaCache<ArrDataMap> = { fetched: false, data: {} };
+  const movieSeerrCache: MetaCache<SeerrDataMap> = { fetched: false, data: {} };
+  const seriesSeerrCache: MetaCache<SeerrDataMap> = { fetched: false, data: {} };
 
   const results: Array<{
     ruleSet: {
@@ -554,123 +595,110 @@ export async function runDetection(userId: string, ruleSetId?: string, fullReEva
   }> = [];
 
   for (const rs of ruleSets) {
-    const allServerIds = rs.user.mediaServers.map((s) => s.id);
-    const serverIds = rs.serverIds.filter((id) => allServerIds.includes(id));
-    if (serverIds.length === 0) continue;
+    // Per-rule-set isolation, mirroring processLifecycleRules: an Arr or Seerr
+    // fetch failure skips only the rule sets that need it. Without this one
+    // unreachable Seerr aborted "Re-evaluate All" midway — rule sets after it
+    // were never evaluated, and the route never scheduled actions or synced
+    // collections for the ones whose matches had already been rewritten. A
+    // single-rule-set run still surfaces the failure to its caller.
+    try {
+      const allServerIds = rs.user.mediaServers.map((s) => s.id);
+      const serverIds = rs.serverIds.filter((id) => allServerIds.includes(id));
+      if (serverIds.length === 0) continue;
 
-    const rules = rs.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
-    if (!hasAnyActiveRules(rules)) continue;
+      const rules = rs.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
+      if (!hasAnyActiveRules(rules)) continue;
 
-    // MATCH-ALL SAFETY: mirror processLifecycleRules — Arr/Seerr rules whose
-    // instances are unavailable skip the rule set instead of evaluating
-    // against an empty metadata map (which would make "foundInArr = false" /
-    // "seerrRequested = false" match the whole library). Permanent failures
-    // (Seerr on MUSIC) also disarm the rule set — see evaluability.ts.
-    // `serverIds` (the rule set's targets, intersected with enabled servers
-    // above) must be passed here exactly as `processLifecycleRules` passes it:
-    // the watch-history check is scoped by it, so omitting it makes this
-    // manual "Re-evaluate All" path refuse rule sets the scheduled path
-    // happily evaluates — the same rule set, a different answer depending on
-    // how it was triggered.
-    const evaluability = await checkLifecycleRuleEvaluability(userId, rs.type, rules, serverIds);
-    if (!evaluability.evaluable) {
-      logger.warn("Lifecycle", `Skipping rule set "${rs.name}" — ${evaluability.reason}`);
-      if (evaluability.permanent) {
-        const cancelled = await prisma.lifecycleAction.deleteMany({
-          where: { ruleSetId: rs.id, status: "PENDING" },
-        });
-        const cleared = await prisma.ruleMatch.deleteMany({ where: { ruleSetId: rs.id } });
-        if (cancelled.count > 0 || cleared.count > 0) {
-          logger.warn("Lifecycle", `Disarmed permanently unevaluable rule set "${rs.name}" — cancelled ${cancelled.count} pending action(s) and cleared ${cleared.count} stale match(es)`);
+      // MATCH-ALL SAFETY: mirror processLifecycleRules — Arr/Seerr rules whose
+      // instances are unavailable skip the rule set instead of evaluating
+      // against an empty metadata map (which would make "foundInArr = false" /
+      // "seerrRequested = false" match the whole library). Permanent failures
+      // (Seerr on MUSIC) also disarm the rule set — see evaluability.ts.
+      // `serverIds` (the rule set's targets, intersected with enabled servers
+      // above) must be passed here exactly as `processLifecycleRules` passes it:
+      // the watch-history check is scoped by it, so omitting it makes this
+      // manual "Re-evaluate All" path refuse rule sets the scheduled path
+      // happily evaluates — the same rule set, a different answer depending on
+      // how it was triggered.
+      const evaluability = await checkLifecycleRuleEvaluability(userId, rs.type, rules, serverIds);
+      if (!evaluability.evaluable) {
+        logger.warn("Lifecycle", `Skipping rule set "${rs.name}" — ${evaluability.reason}`);
+        if (evaluability.permanent) {
+          const cancelled = await prisma.lifecycleAction.deleteMany({
+            where: { ruleSetId: rs.id, status: "PENDING" },
+          });
+          const cleared = await prisma.ruleMatch.deleteMany({ where: { ruleSetId: rs.id } });
+          if (cancelled.count > 0 || cleared.count > 0) {
+            logger.warn("Lifecycle", `Disarmed permanently unevaluable rule set "${rs.name}" — cancelled ${cancelled.count} pending action(s) and cleared ${cleared.count} stale match(es)`);
+          }
         }
+        continue;
       }
-      continue;
-    }
 
-    // Resolve Arr metadata
-    let arrData: ArrDataMap | undefined;
-    if (hasArrRules(rules)) {
-      if (rs.type === "MOVIE") {
-        if (!movieArrCache.fetched) {
-          movieArrCache.data = await fetchArrMetadata(userId, "MOVIE");
-          movieArrCache.fetched = true;
-        }
-        arrData = movieArrCache.data;
-      } else if (rs.type === "MUSIC") {
-        if (!musicArrCache.fetched) {
-          musicArrCache.data = await fetchArrMetadata(userId, "MUSIC");
-          musicArrCache.fetched = true;
-        }
-        arrData = musicArrCache.data;
-      } else {
-        if (!seriesArrCache.fetched) {
-          seriesArrCache.data = await fetchArrMetadata(userId, "SERIES");
-          seriesArrCache.fetched = true;
-        }
-        arrData = seriesArrCache.data;
+      // Resolve Arr metadata
+      let arrData: ArrDataMap | undefined;
+      if (hasArrRules(rules)) {
+        const type = rs.type === "MOVIE" ? "MOVIE" : rs.type === "MUSIC" ? "MUSIC" : "SERIES";
+        const cache = type === "MOVIE" ? movieArrCache : type === "MUSIC" ? musicArrCache : seriesArrCache;
+        arrData = await loadOnce(cache, () => fetchArrMetadata(userId, type));
       }
-    }
 
-    // Resolve Seerr metadata (not applicable for MUSIC)
-    let seerrData: SeerrDataMap | undefined;
-    if (hasSeerrRules(rules) && rs.type !== "MUSIC") {
-      if (rs.type === "MOVIE") {
-        if (!movieSeerrCache.fetched) {
-          movieSeerrCache.data = await fetchSeerrMetadata(userId, "MOVIE");
-          movieSeerrCache.fetched = true;
-        }
-        seerrData = movieSeerrCache.data;
-      } else {
-        if (!seriesSeerrCache.fetched) {
-          seriesSeerrCache.data = await fetchSeerrMetadata(userId, "SERIES");
-          seriesSeerrCache.fetched = true;
-        }
-        seerrData = seriesSeerrCache.data;
+      // Resolve Seerr metadata (not applicable for MUSIC)
+      let seerrData: SeerrDataMap | undefined;
+      if (hasSeerrRules(rules) && rs.type !== "MUSIC") {
+        const type = rs.type === "MOVIE" ? "MOVIE" : "SERIES";
+        seerrData = await loadOnce(
+          type === "MOVIE" ? movieSeerrCache : seriesSeerrCache,
+          () => fetchSeerrMetadata(userId, type),
+        );
       }
-    }
 
-    const result = await detectAndSaveMatches(
-      {
-        id: rs.id,
-        name: rs.name,
-        userId: rs.userId,
-        type: rs.type,
-        rules: rs.rules,
-        seriesScope: rs.seriesScope,
+      const result = await detectAndSaveMatches(
+        {
+          id: rs.id,
+          name: rs.name,
+          userId: rs.userId,
+          type: rs.type,
+          rules: rs.rules,
+          seriesScope: rs.seriesScope,
+          serverIds,
+          actionEnabled: rs.actionEnabled,
+          actionType: rs.actionType,
+          actionDelayDays: rs.actionDelayDays,
+          arrInstanceId: rs.arrInstanceId,
+          addImportExclusion: rs.addImportExclusion,
+          addArrTags: rs.addArrTags,
+          removeArrTags: rs.removeArrTags,
+          stickyMatches: rs.stickyMatches,
+        },
         serverIds,
-        actionEnabled: rs.actionEnabled,
-        actionType: rs.actionType,
-        actionDelayDays: rs.actionDelayDays,
-        arrInstanceId: rs.arrInstanceId,
-        addImportExclusion: rs.addImportExclusion,
-        addArrTags: rs.addArrTags,
-        removeArrTags: rs.removeArrTags,
-        stickyMatches: rs.stickyMatches,
-      },
-      serverIds,
-      arrData,
-      seerrData,
-      fullReEval,
-    );
+        arrData,
+        seerrData,
+        fullReEval,
+      );
 
-    results.push({
-      ruleSet: {
-        id: rs.id,
-        name: rs.name,
-        type: rs.type,
-        actionEnabled: rs.actionEnabled,
-        actionType: rs.actionType,
-        actionDelayDays: rs.actionDelayDays,
-        arrInstanceId: rs.arrInstanceId,
-        addImportExclusion: rs.addImportExclusion,
-        addArrTags: rs.addArrTags,
-        removeArrTags: rs.removeArrTags,
-        collectionId: rs.collectionId,
-        stickyMatches: rs.stickyMatches,
-      },
-      items: result.items,
-      count: result.count,
-    });
+      results.push({
+        ruleSet: {
+          id: rs.id,
+          name: rs.name,
+          type: rs.type,
+          actionEnabled: rs.actionEnabled,
+          actionType: rs.actionType,
+          actionDelayDays: rs.actionDelayDays,
+          arrInstanceId: rs.arrInstanceId,
+          addImportExclusion: rs.addImportExclusion,
+          addArrTags: rs.addArrTags,
+          removeArrTags: rs.removeArrTags,
+          collectionId: rs.collectionId,
+          stickyMatches: rs.stickyMatches,
+        },
+        items: result.items,
+        count: result.count,
+      });
+    } catch (error) {
+      if (ruleSetId) throw error;
+      logger.error("Lifecycle", `Error detecting rule set "${rs.name}"`, { error: String(error) });
+    }
   }
 
   return results;

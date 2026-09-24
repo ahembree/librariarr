@@ -34,6 +34,7 @@ import { formatRelativeDate } from "@/lib/format";
 
 interface ResolvedRequest {
   seerrId: number;
+  seerrInstanceId: string;
   type: "movie" | "tv";
   status: number;
   mediaStatus: number;
@@ -45,6 +46,8 @@ interface ResolvedRequest {
   year: number | null;
   posterUrl: string | null;
   mediaItem: { id: string; route: "movie" | "show" } | null;
+  /** Library show identity for a TV request in the library. */
+  seriesKey: string | null;
   watch: {
     correlatable: boolean;
     watched: boolean;
@@ -71,7 +74,8 @@ interface MediaStatusInfo {
   icon: typeof Check;
 }
 
-// Seerr media status: 1=UNKNOWN, 2=PENDING, 3=PROCESSING, 4=PARTIAL, 5=AVAILABLE, 6=DELETED
+// Seerr MediaStatus: 1=UNKNOWN, 2=PENDING, 3=PROCESSING, 4=PARTIALLY_AVAILABLE,
+// 5=AVAILABLE, 6=BLOCKLISTED, 7=DELETED (legacy Overseerr used 6 for DELETED)
 function mediaStatusInfo(s: number): MediaStatusInfo {
   switch (s) {
     case 5:
@@ -104,6 +108,13 @@ function mediaStatusInfo(s: number): MediaStatusInfo {
       };
     case 6:
       return {
+        label: "Blocklisted",
+        chipClass: "text-zinc-300 bg-zinc-500/10 ring-zinc-500/20",
+        borderClass: "border-l-zinc-500/60",
+        icon: AlertCircle,
+      };
+    case 7:
+      return {
         label: "Deleted",
         chipClass: "text-rose-300 bg-rose-500/10 ring-rose-500/20",
         borderClass: "border-l-rose-500/60",
@@ -119,10 +130,11 @@ function mediaStatusInfo(s: number): MediaStatusInfo {
   }
 }
 
-// Seerr request status: 1=PENDING, 2=APPROVED, 3=DECLINED
+// Seerr MediaRequestStatus: 1=PENDING, 2=APPROVED, 3=DECLINED, 4=FAILED, 5=COMPLETED
 function requestStatusLabel(s: number): string | null {
   if (s === 1) return "Pending approval";
   if (s === 3) return "Declined";
+  if (s === 4) return "Failed";
   return null;
 }
 
@@ -264,6 +276,9 @@ function DialogBody({ userKey, onClose }: { userKey: string; onClose: () => void
     let missing = 0;
     let watchNum = 0;
     let watchDenom = 0;
+    // A show counts its episodes once however many requests point at it
+    // (season batches, HD + 4K, several instances) — same as the stats card.
+    const countedShows = new Set<string>();
     for (const r of data.requests) {
       if (r.type === "movie") {
         movies++;
@@ -273,7 +288,12 @@ function DialogBody({ userKey, onClose }: { userKey: string; onClose: () => void
         }
       } else {
         series++;
-        if (r.watch.correlatable && r.watch.episodesAvailable > 0) {
+        if (
+          r.watch.correlatable &&
+          r.watch.episodesAvailable > 0 &&
+          (r.seriesKey == null || !countedShows.has(r.seriesKey))
+        ) {
+          if (r.seriesKey != null) countedShows.add(r.seriesKey);
           watchDenom += r.watch.episodesAvailable;
           watchNum += r.watch.episodesWatched;
         }
@@ -354,10 +374,10 @@ function DialogBody({ userKey, onClose }: { userKey: string; onClose: () => void
                       watched
                     </span>
                   )}
-                  {data.user?.plexUsername == null && stats.total > 0 && (
+                  {stats.total > 0 && !data.requests.some((r) => r.watch.correlatable) && (
                     <span className="inline-flex items-center gap-1">
                       <EyeOff className="h-3 w-3" />
-                      no linked Plex username
+                      no linked media-server account
                     </span>
                   )}
                 </>
@@ -425,7 +445,7 @@ function DialogBody({ userKey, onClose }: { userKey: string; onClose: () => void
           <TooltipProvider delayDuration={200}>
             <ul className="space-y-2">
               {filtered.map((r) => (
-                <RequestRow key={r.seerrId} req={r} onClose={onClose} />
+                <RequestRow key={`${r.seerrInstanceId}:${r.seerrId}`} req={r} onClose={onClose} />
               ))}
             </ul>
           </TooltipProvider>

@@ -3,20 +3,91 @@ import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
 import { configureRetry } from "@/lib/http-retry";
 
+/**
+ * Seerr's `MediaStatus` (server/constants/media.ts). Legacy Overseerr used 6
+ * for DELETED; in Seerr 6 is BLOCKLISTED and DELETED moved to 7.
+ */
+export const SeerrMediaStatus = {
+  UNKNOWN: 1,
+  PENDING: 2,
+  PROCESSING: 3,
+  PARTIALLY_AVAILABLE: 4,
+  AVAILABLE: 5,
+  BLOCKLISTED: 6,
+  DELETED: 7,
+} as const;
+
+/**
+ * Seerr's `MediaRequestStatus`. Seerr moves an APPROVED (or FAILED) request to
+ * COMPLETED once its media becomes available, so nearly every request whose
+ * media is actually in the library reports COMPLETED, not APPROVED.
+ */
+export const SeerrRequestStatus = {
+  PENDING: 1,
+  APPROVED: 2,
+  DECLINED: 3,
+  FAILED: 4,
+  COMPLETED: 5,
+} as const;
+
+/**
+ * Whether a request was approved at some point. FAILED is only reachable after
+ * approval (the send to the Arr app failed), and COMPLETED is an approved
+ * request whose media has since arrived.
+ */
+export function isApprovedSeerrRequest(status: number): boolean {
+  return (
+    status === SeerrRequestStatus.APPROVED ||
+    status === SeerrRequestStatus.FAILED ||
+    status === SeerrRequestStatus.COMPLETED
+  );
+}
+
 export interface SeerrUser {
   id: number;
   email: string;
-  username: string;
-  plexUsername?: string;
+  username: string | null;
+  plexUsername?: string | null;
+  /** Set for users backed by a Jellyfin/Emby account (null otherwise). */
+  jellyfinUsername?: string | null;
   avatar?: string;
   requestCount?: number;
+}
+
+/**
+ * Identity of a Seerr requester: the name Seerr rules ("Requested By") are
+ * evaluated against and the rule editor offers, the key the request-stats card
+ * aggregates under, and the key the per-user drill-down resolves. All MUST use
+ * this one function:
+ * the drill-down used to accept a request whenever ANY of plexUsername /
+ * username / email equalled the key, so a user whose display name equalled
+ * another user's plexUsername had their requests (and watch state) folded
+ * into that other user's dialog.
+ */
+export function seerrRequesterKey(
+  r: Pick<SeerrUser, "plexUsername" | "username" | "email"> | null | undefined,
+): string | null {
+  return r?.plexUsername || r?.username || r?.email || null;
+}
+
+/**
+ * The media-server account name a requester's plays are recorded under
+ * (`WatchHistory.serverUsername`): the Plex username for a Plex-backed Seerr
+ * user, the Jellyfin/Emby user name for one backed by those servers.
+ */
+export function seerrMediaUsername(
+  r: Pick<SeerrUser, "plexUsername" | "jellyfinUsername"> | null | undefined,
+): string | null {
+  return r?.plexUsername || r?.jellyfinUsername || null;
 }
 
 export interface SeerrMediaInfo {
   id: number;
   tmdbId: number;
   tvdbId: number | null;
-  status: number; // 1=UNKNOWN,2=PENDING,3=PROCESSING,4=PARTIAL,5=AVAILABLE,6=DELETED
+  status: number; // SeerrMediaStatus
+  /** Status of the 4K copy — the one a request with `is4k` refers to. */
+  status4k?: number;
   requests?: SeerrRequest[];
   createdAt: string;
   updatedAt: string;
@@ -25,7 +96,7 @@ export interface SeerrMediaInfo {
 export interface SeerrRequest {
   id: number;
   type: "movie" | "tv";
-  status: number; // 1=PENDING,2=APPROVED,3=DECLINED
+  status: number; // SeerrRequestStatus
   media: SeerrMediaInfo;
   createdAt: string;
   updatedAt: string;
@@ -94,6 +165,12 @@ export class SeerrClient {
       return config;
     });
 
+    // Must be registered BEFORE the IntegrationError conversion below: axios
+    // runs response interceptors in registration order, and the retry handler
+    // needs the raw AxiosError (`config`/`response`). Registered after it, the
+    // retry only ever saw an IntegrationError and rethrew every failure.
+    configureRetry(this.client, "Seerr", logger);
+
     this.client.interceptors.response.use(
       (response) => response,
       (error) => {
@@ -110,13 +187,27 @@ export class SeerrClient {
         return Promise.reject(error);
       }
     );
-
-    configureRetry(this.client, "Seerr", logger);
   }
 
   async testConnection(): Promise<{ ok: boolean; error?: string; appName?: string }> {
     try {
-      await this.client.get("/api/v1/settings/main");
+      const { data } = await this.client.get<unknown>("/api/v1/settings/main");
+      // A forward-auth portal, an SPA fallback or another app can answer 2xx
+      // (often after a followed redirect) with HTML or unrelated JSON. Only a
+      // real Seerr settings object counts as connected — otherwise every later
+      // call crashes on a missing `results` array.
+      if (
+        !data ||
+        typeof data !== "object" ||
+        Array.isArray(data) ||
+        typeof (data as { applicationTitle?: unknown }).applicationTitle !== "string"
+      ) {
+        return {
+          ok: false,
+          error:
+            "The URL did not return Seerr settings — check the URL, and that any auth proxy lets /api through",
+        };
+      }
       return { ok: true, appName: "Seerr" };
     } catch (error: unknown) {
       const msg =

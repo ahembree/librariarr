@@ -730,6 +730,43 @@ describe("processLifecycleRules", () => {
     expect(mockDetectAndSaveMatches).toHaveBeenCalled();
   });
 
+  it("fetches Seerr metadata once per type across rule sets", async () => {
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasArrRules.mockReturnValue(false);
+    mockHasSeerrRules.mockReturnValue(true);
+    mockFetchSeerrMetadata.mockResolvedValue({});
+    mockDetectAndSaveMatches.mockResolvedValue({
+      items: [],
+      count: 0,
+      episodeIdMap: new Map(),
+      currentItems: [],
+    });
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([]);
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 0 });
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
+    const ruleSet = (id: string, type: string) => ({
+      id, userId: "u1", name: id, type,
+      rules: [{ field: "seerrRequested", operator: "equals", value: "false", enabled: true }],
+      seriesScope: false, serverIds: ["s1"], actionEnabled: false, actionType: null,
+      actionDelayDays: 0, arrInstanceId: null, targetQualityProfileId: null,
+      addImportExclusion: false, addArrTags: [], removeArrTags: [], collectionId: null,
+      discordNotifyOnMatch: false, stickyMatches: false, searchAfterAction: false,
+      user: { mediaServers: [{ id: "s1" }] },
+    });
+    mockPrisma.ruleSet.findMany.mockResolvedValueOnce([
+      ruleSet("m1", "MOVIE"),
+      ruleSet("m2", "MOVIE"),
+      ruleSet("s1", "SERIES"),
+    ]);
+
+    await processLifecycleRules("u1");
+
+    expect(mockFetchSeerrMetadata).toHaveBeenCalledTimes(2);
+    expect(mockFetchSeerrMetadata).toHaveBeenCalledWith("u1", "MOVIE");
+    expect(mockFetchSeerrMetadata).toHaveBeenCalledWith("u1", "SERIES");
+    expect(mockDetectAndSaveMatches).toHaveBeenCalledTimes(3);
+  });
+
   it("skips rule sets with Arr rules when no enabled Arr instance exists (match-all guard)", async () => {
     // With zero enabled instances fetchArrMetadata would return {}, and
     // "foundInArr = false" would then match the ENTIRE library — the rule set
