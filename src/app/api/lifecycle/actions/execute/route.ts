@@ -9,6 +9,8 @@ import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/
 import { findExceptionProtectedGroups, protectionKey, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
 import { sendDiscordNotification, buildFailureSummaryEmbed } from "@/lib/discord/client";
 import { eventBus } from "@/lib/events/event-bus";
+import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
+import type { LifecycleRuleGroup } from "@/lib/rules/types";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -36,6 +38,22 @@ export async function POST(request: NextRequest) {
   if (!ruleSet.enabled) {
     return NextResponse.json(
       { error: "Rule set is disabled — enable it before executing actions" },
+      { status: 400 }
+    );
+  }
+
+  // Permanent-invalidity backstop (mirrors executeLifecycleActions): Seerr
+  // criteria on a MUSIC rule set can never evaluate — Seerr has no music
+  // requests, so every artist reads "never requested" and the stored matches
+  // are a vacuous whole-library flood. Detection disarms such a rule set, but
+  // matches armed before it ran are still listed on the Pending page, whose
+  // Execute button calls this route. Disarm here too and refuse.
+  if (ruleSet.type === "MUSIC" && hasSeerrRules(ruleSet.rules as unknown as LifecycleRuleGroup[])) {
+    await prisma.lifecycleAction.deleteMany({ where: { ruleSetId: ruleSet.id, status: "PENDING" } });
+    await prisma.ruleMatch.deleteMany({ where: { ruleSetId: ruleSet.id } });
+    logger.warn("Lifecycle", `Refused manual execute for rule set "${ruleSet.name}" — Seerr criteria on a music library can never evaluate; cleared its vacuous matches`);
+    return NextResponse.json(
+      { error: "Seerr criteria are not supported on music rule sets — this rule set's matches were invalid and have been cleared" },
       { status: 400 }
     );
   }

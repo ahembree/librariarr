@@ -566,6 +566,46 @@ describe("Lifecycle Actions", () => {
       await expectJson(response, 404);
     });
 
+    it("refuses and disarms a music rule set with Seerr criteria (vacuous matches)", async () => {
+      // Seerr has no music requests, so every artist reads "never requested":
+      // the stored matches are the whole library and must never be executed.
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MUSIC" });
+      const track = await createTestMediaItem(library.id, { title: "Track", type: "MUSIC" });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Music Seerr",
+        type: "MUSIC",
+        actionEnabled: true,
+        actionType: "DELETE_LIDARR",
+        arrInstanceId: "lidarr-1",
+        rules: [
+          {
+            id: "g1",
+            condition: "AND",
+            operator: "AND",
+            rules: [{ id: "r1", field: "seerrRequested", operator: "equals", value: "false", condition: "AND", enabled: true }],
+            groups: [],
+          },
+        ],
+      });
+      await createTestRuleMatch(ruleSet.id, track.id);
+      await createTestAction(user.id, track.id, ruleSet.id, { actionType: "DELETE_LIDARR" });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/Seerr criteria are not supported on music/i);
+      const prisma = getTestPrisma();
+      expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
+      expect(await prisma.lifecycleAction.count({ where: { ruleSetId: ruleSet.id, status: "PENDING" } })).toBe(0);
+    });
+
     it("returns 404 for another user's rule set", async () => {
       const user1 = await createTestUser({ plexId: "owner" });
       const user2 = await createTestUser({ plexId: "intruder" });
@@ -875,6 +915,42 @@ describe("Lifecycle Actions", () => {
       });
       const body = await expectJson<{ error: string }>(response, 400);
       expect(body.error).toMatch(/disabled/i);
+
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
+    it("refuses to retry an action of a music rule set with Seerr criteria", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MUSIC" });
+      const track = await createTestMediaItem(library.id, { title: "Track", type: "MUSIC" });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Music Seerr",
+        type: "MUSIC",
+        rules: [
+          {
+            id: "g1",
+            condition: "AND",
+            operator: "AND",
+            rules: [{ id: "r1", field: "seerrRequested", operator: "equals", value: "false", condition: "AND", enabled: true }],
+            groups: [],
+          },
+        ],
+      });
+      const action = await createTestAction(user.id, track.id, ruleSet.id, {
+        status: "FAILED",
+        actionType: "DELETE_LIDARR",
+      });
+      await createTestRuleMatch(ruleSet.id, track.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRouteWithParams(actionRetry, { id: action.id }, {
+        url: `/api/lifecycle/actions/${action.id}`,
+        method: "POST",
+      });
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/Seerr criteria are not supported on music/i);
 
       const { executeAction } = await import("@/lib/lifecycle/actions");
       expect(executeAction).not.toHaveBeenCalled();

@@ -8,6 +8,7 @@ import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
 import { findExceptionProtectedGroups, protectionKey, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
 import { arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
+import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions/helpers";
 import { checkWatchHistoryCompleteness } from "@/lib/lifecycle/evaluability";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
@@ -130,8 +131,8 @@ export async function POST(request: NextRequest) {
   //    media type, and that instance must still exist (the engine fetches
   //    from the selected instance only — see fetchArrDataForQuery).
   //  - Seerr rules can never be evaluated for MUSIC (Seerr has no music
-  //    requests), and otherwise require the selected instance to exist and
-  //    be enabled (mirroring fetchSeerrDataForQuery's lookup).
+  //    requests), and otherwise require at least one enabled instance
+  //    (fetchSeerrDataForQuery reads all of them).
   const queryGroups = (query.groups ?? []) as unknown as ConditionGroup[];
   if (hasArrRules(queryGroups)) {
     const familyKey = resolvedType === "MOVIE" ? "radarr" : resolvedType === "SERIES" ? "sonarr" : "lidarr";
@@ -153,15 +154,10 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
-    const seerrAvailable = query.seerrInstanceId
-      ? await prisma.seerrInstance.findFirst({
-          where: { id: query.seerrInstanceId, userId, enabled: true },
-          select: { id: true },
-        })
-      : null;
-    if (!seerrAvailable) {
+    // The engine reads every enabled instance (fetchSeerrDataForQuery).
+    if (!(await hasEnabledSeerrInstances(userId))) {
       return NextResponse.json(
-        { error: 'The query uses Seerr criteria but no enabled Seerr instance is selected for it — rules like "Has Request = false" would match the entire library' },
+        { error: 'The query uses Seerr criteria but no Seerr instance is enabled — rules like "Has Request = false" would match the entire library' },
         { status: 400 },
       );
     }

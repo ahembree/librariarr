@@ -57,6 +57,11 @@ const REQUEST_STATUS_STYLES: Record<number, { label: string; classes: string }> 
   5: { label: "Completed", classes: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400" },
 };
 
+const MIXED_REQUEST_STATUS_STYLE = {
+  label: "Mixed",
+  classes: "border-muted-foreground/30 bg-muted/40 text-muted-foreground",
+};
+
 function formatDate(value: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -98,7 +103,12 @@ export function SeerrInstanceCard({ match }: { match: SeerrMatch }) {
   // If every request has the same status, show that single status. Otherwise show "Mixed".
   const statusValues = new Set(match.requests.map((r) => r.status));
   const aggregatedRequestStatus = statusValues.size === 1 ? [...statusValues][0] : null;
-  const requestStatusStyle = aggregatedRequestStatus !== null ? REQUEST_STATUS_STYLES[aggregatedRequestStatus] : null;
+  const requestStatusStyle =
+    statusValues.size > 1
+      ? MIXED_REQUEST_STATUS_STYLE
+      : aggregatedRequestStatus !== null
+        ? REQUEST_STATUS_STYLES[aggregatedRequestStatus] ?? null
+        : null;
 
   const mediaStatusStyle = match.mediaStatus !== null ? MEDIA_STATUS_STYLES[match.mediaStatus] : null;
 
@@ -136,12 +146,14 @@ export function SeerrInstanceCard({ match }: { match: SeerrMatch }) {
             value={<ColorChip className={cn("text-[10px] font-medium", mediaStatusStyle.classes)}>{mediaStatusStyle.label}</ColorChip>}
           />
         )}
-        {requestStatusStyle && (
+        {(requestStatusStyle || has4k) && (
           <SeerrDetailRow
             label="Request Status"
             value={
               <span className="flex items-center justify-end gap-1.5">
-                <ColorChip className={cn("text-[10px] font-medium", requestStatusStyle.classes)}>{requestStatusStyle.label}</ColorChip>
+                {requestStatusStyle && (
+                  <ColorChip className={cn("text-[10px] font-medium", requestStatusStyle.classes)}>{requestStatusStyle.label}</ColorChip>
+                )}
                 {has4k && (
                   <ColorChip className="border-fuchsia-500/30 bg-fuchsia-500/10 text-[10px] font-medium text-fuchsia-300">
                     4K

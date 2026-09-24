@@ -783,6 +783,16 @@ describe("POST /api/query/actions", () => {
         groups: [],
       },
     ];
+    const seerrRuleGroups = [
+      {
+        id: "g1",
+        condition: "AND" as const,
+        rules: [
+          { id: "r1", field: "seerrRequested", operator: "equals", value: "false", condition: "AND" as const },
+        ],
+        groups: [],
+      },
+    ];
 
     it("returns 400 when the query uses Arr criteria but no Arr server is selected for the action's type", async () => {
       const user = await createTestUser();
@@ -820,6 +830,58 @@ describe("POST /api/query/actions", () => {
         method: "POST",
         body: {
           query: { ...BASE_QUERY, groups: arrRuleGroups, arrServerIds: { radarr: radarr.id } },
+          mediaItemIds: [movie.id],
+          actionType: "DELETE_RADARR",
+          arrInstanceId: radarr.id,
+        },
+      });
+
+      const { result: body } = await expectStreamResult<{ executed: number }>(response);
+      expect(body.executed).toBe(1);
+    });
+
+    it("returns 400 for Seerr criteria when no Seerr instance is enabled", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const radarr = await createTestRadarrInstance(user.id);
+      await getTestPrisma().seerrInstance.create({
+        data: { userId: user.id, name: "Off", url: "http://seerr:5055", apiKey: "k", enabled: false },
+      });
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: { ...BASE_QUERY, groups: seerrRuleGroups },
+          mediaItemIds: ["m1"],
+          actionType: "DELETE_RADARR",
+          arrInstanceId: radarr.id,
+        },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/Seerr criteria.*no Seerr instance is enabled/i);
+      expect(mockedExecuteAction).not.toHaveBeenCalled();
+    });
+
+    it("proceeds for Seerr criteria with any enabled instance, without a selected one", async () => {
+      // The engine merges every enabled instance; a saved query's
+      // seerrInstanceId (or its absence) no longer decides anything.
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+      const movie = await createTestMediaItem(library.id, { type: "MOVIE", title: "Unrequested" });
+      const radarr = await createTestRadarrInstance(user.id);
+      await getTestPrisma().seerrInstance.create({
+        data: { userId: user.id, name: "On", url: "http://seerr:5055", apiKey: "k", enabled: true },
+      });
+      mockedExecuteQuery.mockResolvedValue(
+        queryResult([{ id: movie.id, type: "MOVIE", title: "Unrequested", parentTitle: null }]),
+      );
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: { ...BASE_QUERY, groups: seerrRuleGroups },
           mediaItemIds: [movie.id],
           actionType: "DELETE_RADARR",
           arrInstanceId: radarr.id,

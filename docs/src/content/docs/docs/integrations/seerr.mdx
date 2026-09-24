@@ -61,7 +61,7 @@ The card has two views: a compact top-5 leaderboard (default) and a full sortabl
 
 Click any user row to open a dialog with their full request history. Each entry shows:
 
-- Poster, title, and year (resolved from your library when available, or fetched from Seerr otherwise)
+- Poster, title, and year (resolved from your library when available, or fetched from the Seerr instance the request came from otherwise)
 - Media status badge (Available, Partial, Processing, Pending, Blocklisted, Deleted) — for a 4K request, the status of the 4K copy
 - 4K badge when applicable
 - Watch indicator (per-episode progress for series)
@@ -97,6 +97,8 @@ Seerr data is available as rule conditions in the [lifecycle engine](/docs/featu
 | `seerrRequestedBy` | Who requested | Filter by specific user |
 | `seerrApprovalDate` | When approved | Track time since approval |
 | `seerrDeclineDate` | When declined | Clean up declined requests |
+
+Lifecycle rules and the **Query** page both read every enabled Seerr instance and merge their requests, so a title requested on any of them counts as requested.
 
 ### Missing or unreadable data
 

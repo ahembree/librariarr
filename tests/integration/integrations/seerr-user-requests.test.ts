@@ -26,13 +26,17 @@ vi.mock("@/lib/logger", () => ({
 const mockGetRequests = vi.fn();
 const mockGetMovie = vi.fn();
 const mockGetTvShow = vi.fn();
+const detailLookupUrls: string[] = [];
 
 vi.mock("@/lib/seerr/seerr-client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/seerr/seerr-client")>()),
-  SeerrClient: vi.fn().mockImplementation(function () {
+  SeerrClient: vi.fn().mockImplementation(function (url: string) {
     return {
       getRequests: mockGetRequests,
-      getMovie: mockGetMovie,
+      getMovie: (id: number) => {
+        detailLookupUrls.push(url);
+        return mockGetMovie(id);
+      },
       getTvShow: mockGetTvShow,
     };
   }),
@@ -83,6 +87,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     clearMockSession();
     appCache.clear();
     vi.clearAllMocks();
+    detailLookupUrls.length = 0;
     mockGetRequests.mockResolvedValue({
       pageInfo: { page: 1, pages: 1, results: 0 },
       results: [],
@@ -541,6 +546,29 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     expect(body.requests[0].status).toBe(2);
     // A 4K request refers to the 4K copy — still processing, though HD is available.
     expect(body.requests[0].mediaStatus).toBe(3);
+  });
+
+  it("looks up a missing title on the instance the request came from, not a failed one", async () => {
+    const user = await createTestUser();
+    await createTestSeerrInstance(user.id, { name: "Down", url: "http://down:5055" });
+    await createTestSeerrInstance(user.id, { name: "Up", url: "http://up:5055" });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    mockGetRequests
+      .mockRejectedValueOnce(new Error("Seerr unreachable"))
+      .mockResolvedValueOnce({
+        pageInfo: { page: 1, pages: 1, results: 1 },
+        results: [makeRequest(1, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 603 })],
+      });
+
+    const body = await expectJson<{ partial: boolean; requests: { title: string }[] }>(
+      await callRouteWithParams(GET, { userKey: "alice" }),
+      200
+    );
+
+    expect(body.partial).toBe(true);
+    expect(body.requests[0].title).toBe("Mock Movie");
+    expect(detailLookupUrls).toEqual(["http://up:5055"]);
   });
 
   it("accepts a userKey containing '%' (Next has already decoded the param)", async () => {

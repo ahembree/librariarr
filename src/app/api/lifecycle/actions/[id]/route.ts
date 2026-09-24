@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError } from "@/lib/lifecycle/actions";
 import { findExceptionProtectedGroups, protectionKey, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
+import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
+import type { LifecycleRuleGroup } from "@/lib/rules/types";
 
 export async function DELETE(
   _request: NextRequest,
@@ -78,11 +80,19 @@ export async function POST(
   // enforce this gate; force-retry needs it too.
   const ruleSet = await prisma.ruleSet.findFirst({
     where: { id: action.ruleSetId, userId: session.userId },
-    select: { enabled: true },
+    select: { enabled: true, type: true, rules: true },
   });
   if (!ruleSet?.enabled) {
     return NextResponse.json(
       { error: "Rule set is disabled — enable it before retrying actions" },
+      { status: 400 }
+    );
+  }
+  // Seerr criteria on a MUSIC rule set can never evaluate, so its matches are
+  // vacuous (mirrors the scheduled executor and the manual execute route).
+  if (ruleSet.type === "MUSIC" && hasSeerrRules(ruleSet.rules as unknown as LifecycleRuleGroup[])) {
+    return NextResponse.json(
+      { error: "Seerr criteria are not supported on music rule sets — this action's match is invalid" },
       { status: 400 }
     );
   }

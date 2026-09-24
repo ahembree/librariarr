@@ -412,7 +412,7 @@ export async function executeQuery(
   // Announce the phases this run will execute so the UI can render a stepper.
   const willFetchArr = !!(hasArrRules(groups) && definition.arrServerIds &&
     (definition.arrServerIds.radarr || definition.arrServerIds.sonarr || definition.arrServerIds.lidarr));
-  const willFetchSeerr = !!(hasSeerrRules(groups) && definition.seerrInstanceId);
+  const willFetchSeerr = hasSeerrRules(groups);
   const willEvaluate = willFetchArr || willFetchSeerr || hasWildcardRules(groups) ||
     hasStreamQueryInMemoryRules(groups) || hasCrossSystemRules(groups) || hasArrRules(groups) ||
     hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) ||
@@ -456,12 +456,11 @@ export async function executeQuery(
     arrDataByType = await fetchArrDataForQuery(userId, definition.arrServerIds!, mediaTypes, phaseReporter("arr"));
   }
 
-  // Fetch Seerr data if query uses Seerr rules and instance is selected
-  const needsSeerr = hasSeerrRules(groups) && definition.seerrInstanceId;
+  // Fetch Seerr data (every enabled instance) if the query uses Seerr rules
   let seerrDataByType: Record<string, SeerrDataMap> | undefined;
-  if (needsSeerr) {
+  if (willFetchSeerr) {
     onProgress?.({ type: "phase", key: "seerr", fraction: 0 });
-    seerrDataByType = await fetchSeerrDataForQuery(userId, definition.seerrInstanceId!, mediaTypes, phaseReporter("seerr"));
+    seerrDataByType = await fetchSeerrDataForQuery(userId, mediaTypes, phaseReporter("seerr"));
   }
 
   // Determine if we need unified in-memory evaluation

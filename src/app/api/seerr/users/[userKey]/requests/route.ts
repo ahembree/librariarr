@@ -92,6 +92,9 @@ async function resolveUserRequests(
   let mediaUsername: string | null = null;
   let partial = false;
   const matched: { req: SeerrRequest; instanceId: string }[] = [];
+  // Clients for instances whose walk succeeded — title/poster lookups for
+  // requests not in the library go to the instance the request came from.
+  const clients = new Map<string, SeerrClient>();
 
   for (const inst of instances) {
     const client = new SeerrClient(inst.url, inst.apiKey);
@@ -110,6 +113,7 @@ async function resolveUserRequests(
       );
       continue;
     }
+    clients.set(inst.id, client);
     for (const req of fromInstance) {
       const r = req.requestedBy;
       matched.push({ req, instanceId: inst.id });
@@ -235,15 +239,19 @@ async function resolveUserRequests(
   // For requests not in the library, fetch title/poster from Seerr in parallel.
   // Keyed by TMDB id (always present on Seerr requests; TVDB can be null/0 for
   // shows Seerr couldn't match), so we still get titles for those edge cases.
-  const missingMovieTmdbs = new Set<number>();
-  const missingTvTmdbs = new Set<number>();
-  for (const { req } of matched) {
+  // tmdbId → the instance a request for it came from (its walk succeeded).
+  const missingMovieTmdbs = new Map<number, string>();
+  const missingTvTmdbs = new Map<number, string>();
+  for (const { req, instanceId } of matched) {
+    if (!req.media?.tmdbId) continue;
     if (req.type === "movie") {
-      if (!req.media?.tmdbId) continue;
-      if (!movieMap.has(req.media.tmdbId)) missingMovieTmdbs.add(req.media.tmdbId);
+      if (!movieMap.has(req.media.tmdbId) && !missingMovieTmdbs.has(req.media.tmdbId)) {
+        missingMovieTmdbs.set(req.media.tmdbId, instanceId);
+      }
     } else if (req.type === "tv") {
-      if (!req.media?.tmdbId) continue;
-      if (!shows.resolve(req.media)) missingTvTmdbs.add(req.media.tmdbId);
+      if (!shows.resolve(req.media) && !missingTvTmdbs.has(req.media.tmdbId)) {
+        missingTvTmdbs.set(req.media.tmdbId, instanceId);
+      }
     }
   }
 
@@ -257,9 +265,9 @@ async function resolveUserRequests(
   >();
 
   if (missingMovieTmdbs.size > 0 || missingTvTmdbs.size > 0) {
-    const firstInstance = instances[0];
-    const client = new SeerrClient(firstInstance.url, firstInstance.apiKey);
-    const movieFetches = Array.from(missingMovieTmdbs).map(async (tmdb) => {
+    const movieFetches = Array.from(missingMovieTmdbs).map(async ([tmdb, instanceId]) => {
+      const client = clients.get(instanceId);
+      if (!client) return;
       try {
         const detail = await client.getMovie(tmdb);
         const year = detail.releaseDate ? Number(detail.releaseDate.slice(0, 4)) : null;
@@ -272,7 +280,9 @@ async function resolveUserRequests(
         // ignore; fall back to placeholder label
       }
     });
-    const tvFetches = Array.from(missingTvTmdbs).map(async (tmdb) => {
+    const tvFetches = Array.from(missingTvTmdbs).map(async ([tmdb, instanceId]) => {
+      const client = clients.get(instanceId);
+      if (!client) return;
       try {
         const detail = await client.getTvShow(tmdb);
         const year = detail.firstAirDate ? Number(detail.firstAirDate.slice(0, 4)) : null;
