@@ -576,7 +576,8 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
-    mockGetRequests.mockResolvedValueOnce({
+    // Both lookups below walk the same request list.
+    mockGetRequests.mockResolvedValue({
       pageInfo: { page: 1, pages: 1, results: 2 },
       results: [
         makeRequest(1, "movie", { id: 1, username: "100%Dad" }, { tmdbId: 100 }),
