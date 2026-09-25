@@ -103,14 +103,14 @@ describe("configureRetry", () => {
     }
   });
 
-  // ── Timeouts on non-idempotent methods ───────────────────────────
+  // ── Transport errors on non-idempotent methods ───────────────────
   //
-  // A client/socket timeout may already have reached the server, so retrying a
-  // write could double-apply it. Timeouts are retried only for idempotent
-  // methods; connection-transport codes (ECONNRESET/EPIPE/…) still retry for any
-  // method because they indicate the connection dropped, not a possible success.
-  describe("timeout codes on non-idempotent methods do not retry", () => {
-    for (const code of ["ECONNABORTED", "ETIMEDOUT"]) {
+  // A timeout, reset, broken pipe or TLS failure mid-exchange may land after the
+  // server has already applied the request, so retrying a write could apply it
+  // twice. Those are retried only for idempotent methods; a write retries only a
+  // failure that provably preceded sending (EAI_AGAIN — the name never resolved).
+  describe("post-send transport errors on non-idempotent methods do not retry", () => {
+    for (const code of ["ECONNABORTED", "ETIMEDOUT", "ECONNRESET", "EPIPE", "EPROTO"]) {
       for (const method of ["post", "put", "patch", "delete"]) {
         it(`does not retry ${code} on ${method.toUpperCase()}`, async () => {
           const error = makeAxiosError({ code, method });
@@ -120,19 +120,27 @@ describe("configureRetry", () => {
       }
     }
 
+    it("does not retry a mid-exchange TLS failure on POST", async () => {
+      const error = makeAxiosError({ message: "bad record mac", method: "post" });
+      await expect(mockAxios.triggerError(error)).rejects.toBe(error);
+      expect(mockAxios.requestMock).not.toHaveBeenCalled();
+    });
+
     for (const method of ["get", "head"]) {
-      it(`still retries ECONNABORTED on ${method.toUpperCase()}`, async () => {
-        const error = makeAxiosError({ code: "ECONNABORTED", method });
-        mockAxios.requestMock.mockResolvedValue({ data: "ok" });
-        const promise = mockAxios.triggerError(error);
-        await vi.advanceTimersByTimeAsync(1000);
-        expect(await promise).toEqual({ data: "ok" });
-        expect(mockAxios.requestMock).toHaveBeenCalledTimes(1);
-      });
+      for (const code of ["ECONNABORTED", "ECONNRESET"]) {
+        it(`still retries ${code} on ${method.toUpperCase()}`, async () => {
+          const error = makeAxiosError({ code, method });
+          mockAxios.requestMock.mockResolvedValue({ data: "ok" });
+          const promise = mockAxios.triggerError(error);
+          await vi.advanceTimersByTimeAsync(1000);
+          expect(await promise).toEqual({ data: "ok" });
+          expect(mockAxios.requestMock).toHaveBeenCalledTimes(1);
+        });
+      }
     }
 
-    it("still retries a connection-transport code (ECONNRESET) on POST", async () => {
-      const error = makeAxiosError({ code: "ECONNRESET", method: "post" });
+    it("still retries a failure before sending (EAI_AGAIN) on POST", async () => {
+      const error = makeAxiosError({ code: "EAI_AGAIN", method: "post" });
       mockAxios.requestMock.mockResolvedValue({ data: "ok" });
       const promise = mockAxios.triggerError(error);
       await vi.advanceTimersByTimeAsync(1000);

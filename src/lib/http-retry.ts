@@ -11,12 +11,9 @@ const RETRYABLE_NETWORK_CODES = new Set([
   "EAI_AGAIN",
 ]);
 
-// Timeout-family codes: a client/socket timeout does NOT prove the request never
-// reached the server — it may already have been received and processed. Retrying
-// a non-idempotent method (POST/PUT/PATCH/DELETE) on one of these risks applying
-// the write twice (e.g. creating a duplicate Arr custom format), so we only retry
-// these for idempotent methods.
-const TIMEOUT_CODES = new Set(["ECONNABORTED", "ETIMEDOUT"]);
+// Failures that happen before a request can have reached the server (a DNS
+// lookup that did not resolve). Only these are safe to repeat for a write.
+const PRE_SEND_CODES = new Set(["EAI_AGAIN"]);
 
 function isIdempotent(error: AxiosError): boolean {
   const method = error.config?.method?.toUpperCase();
@@ -27,10 +24,15 @@ function isIdempotent(error: AxiosError): boolean {
 function isRetryable(error: AxiosError): boolean {
   // Network-level errors — no HTTP response was received.
   if (!error.response) {
+    // A timeout, reset, broken pipe or TLS failure mid-exchange does NOT prove
+    // the request never reached the server — it may already have been received
+    // and applied. Repeating a write then applies it twice: a second quality
+    // profile created under the same name (Sonarr does not refuse duplicates),
+    // or a bulk episode-file delete sent again after it succeeded, which Sonarr
+    // answers with a 500 and the action records as FAILED. So only reads retry
+    // these; a write retries only a failure that provably preceded sending.
     if (error.code && RETRYABLE_NETWORK_CODES.has(error.code)) {
-      // Timeouts are ambiguous: only retry them for idempotent methods.
-      if (TIMEOUT_CODES.has(error.code) && !isIdempotent(error)) return false;
-      return true;
+      return isIdempotent(error) || PRE_SEND_CODES.has(error.code);
     }
     // SSL/TLS mid-connection failures
     if (
@@ -38,7 +40,7 @@ function isRetryable(error: AxiosError): boolean {
       error.message?.includes("bad record mac") ||
       error.message?.includes("ssl3_get_record")
     )
-      return true;
+      return isIdempotent(error);
     return false;
   }
   // Server errors — only retry idempotent methods

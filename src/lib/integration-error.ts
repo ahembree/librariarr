@@ -22,6 +22,8 @@ export class IntegrationError extends Error {
   readonly code: string;
   /** Path being requested when it failed. */
   readonly url: string;
+  /** HTTP method of the failed request, upper-cased (null when unknown). */
+  readonly method: string | null;
 
   constructor(
     service: string,
@@ -59,5 +61,6 @@ export class IntegrationError extends Error {
     this.detail = detail;
     this.code = code;
     this.url = url;
+    this.method = error.config?.method?.toUpperCase() ?? null;
   }
 }

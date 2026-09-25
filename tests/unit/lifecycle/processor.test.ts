@@ -1411,7 +1411,7 @@ describe("executeLifecycleActions", () => {
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
     mockExecuteAction.mockImplementation(async (a: { arrInstanceId: string }) => {
       if (a.arrInstanceId === "radarr-down") {
-        throw new IntegrationError("Radarr", { config: { url: "/x" }, code: "ECONNABORTED" } as never);
+        throw new IntegrationError("Radarr", { config: { url: "/x", method: "get" }, code: "ECONNABORTED" } as never);
       }
     });
     mockExtractActionError.mockReturnValue("Radarr unreachable");

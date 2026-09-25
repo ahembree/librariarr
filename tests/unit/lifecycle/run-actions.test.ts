@@ -45,7 +45,9 @@ const item = (n: number) => ({
 
 function hostDown(status: number | null) {
   return new IntegrationError("Radarr", {
-    config: { url: "/api/v3/movie" },
+    // A read: only a read has been through the retries, so only a read's
+    // timeout says the host is down (see isHostLevelFailure).
+    config: { url: "/api/v3/movie", method: "get" },
     code: status === null ? "ECONNABORTED" : "ERR_BAD_RESPONSE",
     response: status === null ? undefined : { status, data: {} },
   } as never);
@@ -70,6 +72,21 @@ describe("executeActionsForItems", () => {
     // Every item still gets its FAILED history row, carrying the host error.
     expect(m.prisma.lifecycleAction.create).toHaveBeenCalledTimes(3);
     for (const f of result.failures) expect(f.error).toMatch(/Radarr unreachable/);
+  });
+
+  it("keeps going after a write times out — a slow write is not a dead host", async () => {
+    // A bulk episode-file delete into a recycle bin on another mount outlives
+    // the client timeout while the app is healthy; writes are never retried.
+    const slowDelete = new IntegrationError("Radarr", {
+      config: { url: "/api/v3/moviefile/1", method: "delete" },
+      code: "ECONNABORTED",
+    } as never);
+    m.executeAction.mockRejectedValueOnce(slowDelete).mockResolvedValue(undefined);
+
+    const result = await executeActionsForItems("u1", [item(1), item(2), item(3)], CONFIG, new Map(), HISTORY);
+
+    expect(m.executeAction).toHaveBeenCalledTimes(3);
+    expect(result).toMatchObject({ executed: 2, failed: 1 });
   });
 
   it("keeps going after an item-specific failure", async () => {
