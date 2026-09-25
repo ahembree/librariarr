@@ -27,8 +27,12 @@ export async function PUT(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Test connection if credentials changed (skip if just toggling enabled)
-  if ((url || apiKey) && enabled !== false) {
+  // Test the connection only when it changes — a new URL or API key (skip if
+  // just toggling enabled). The edit form sends its URL on every save, so
+  // testing on its mere presence refused a rename or a new external URL
+  // whenever the instance happened to be unreachable.
+  const urlChanged = url !== undefined && url.replace(/\/+$/, "") !== existing.url;
+  if ((urlChanged || apiKey) && enabled !== false) {
     const testUrl = url ?? existing.url;
     const testKey = apiKey ?? existing.apiKey;
     const client = new LidarrClient(testUrl, testKey);

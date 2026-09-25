@@ -2966,9 +2966,15 @@ export default function SettingsPage() {
               onTest: () => testArrConnection("sonarr", sonarrForm.url, sonarrForm.apiKey, setSonarrTesting, setSonarrTestResult),
               onStartEdit: startEditSonarr,
               onSaveEdit: saveEditSonarr,
-              onCancelEdit: () => setEditingSonarrId(null),
+              onCancelEdit: () => {
+                invalidateEditTest("sonarr", setEditSonarrTesting);
+                setEditingSonarrId(null);
+              },
               onEditFormChange: (form) => {
-                if (form.url !== editSonarrForm.url || form.apiKey !== editSonarrForm.apiKey) setEditSonarrTestResult(null);
+                if (form.url !== editSonarrForm.url || form.apiKey !== editSonarrForm.apiKey) {
+                  invalidateEditTest("sonarr", setEditSonarrTesting);
+                  setEditSonarrTestResult(null);
+                }
                 setEditSonarrForm(form);
               },
               onEditTest: () => testEditArrConnection("sonarr", editingSonarrId!, { url: editSonarrForm.url, apiKey: editSonarrForm.apiKey }, setEditSonarrTesting, setEditSonarrTestResult),
@@ -3000,9 +3006,15 @@ export default function SettingsPage() {
               onTest: () => testArrConnection("radarr", radarrForm.url, radarrForm.apiKey, setRadarrTesting, setRadarrTestResult),
               onStartEdit: startEditRadarr,
               onSaveEdit: saveEditRadarr,
-              onCancelEdit: () => setEditingRadarrId(null),
+              onCancelEdit: () => {
+                invalidateEditTest("radarr", setEditRadarrTesting);
+                setEditingRadarrId(null);
+              },
               onEditFormChange: (form) => {
-                if (form.url !== editRadarrForm.url || form.apiKey !== editRadarrForm.apiKey) setEditRadarrTestResult(null);
+                if (form.url !== editRadarrForm.url || form.apiKey !== editRadarrForm.apiKey) {
+                  invalidateEditTest("radarr", setEditRadarrTesting);
+                  setEditRadarrTestResult(null);
+                }
                 setEditRadarrForm(form);
               },
               onEditTest: () => testEditArrConnection("radarr", editingRadarrId!, { url: editRadarrForm.url, apiKey: editRadarrForm.apiKey }, setEditRadarrTesting, setEditRadarrTestResult),
@@ -3034,9 +3046,15 @@ export default function SettingsPage() {
               onTest: () => testArrConnection("lidarr", lidarrForm.url, lidarrForm.apiKey, setLidarrTesting, setLidarrTestResult),
               onStartEdit: startEditLidarr,
               onSaveEdit: saveEditLidarr,
-              onCancelEdit: () => setEditingLidarrId(null),
+              onCancelEdit: () => {
+                invalidateEditTest("lidarr", setEditLidarrTesting);
+                setEditingLidarrId(null);
+              },
               onEditFormChange: (form) => {
-                if (form.url !== editLidarrForm.url || form.apiKey !== editLidarrForm.apiKey) setEditLidarrTestResult(null);
+                if (form.url !== editLidarrForm.url || form.apiKey !== editLidarrForm.apiKey) {
+                  invalidateEditTest("lidarr", setEditLidarrTesting);
+                  setEditLidarrTestResult(null);
+                }
                 setEditLidarrForm(form);
               },
               onEditTest: () => testEditArrConnection("lidarr", editingLidarrId!, { url: editLidarrForm.url, apiKey: editLidarrForm.apiKey }, setEditLidarrTesting, setEditLidarrTestResult),

@@ -128,6 +128,17 @@ function ConfirmRemoveInstanceDialog({
   );
 }
 
+/**
+ * Whether an edit changes how the instance is reached: a new API key, or a URL
+ * other than the stored one. Only such an edit has to pass a connection test
+ * before it can be saved — a rename or a new external URL must stay possible
+ * while the instance is down.
+ */
+function changesConnection(form: { url: string; apiKey: string }, stored: { url: string }): boolean {
+  const norm = (u: string) => u.trim().replace(/\/+$/, "");
+  return form.apiKey !== "" || norm(form.url) !== norm(stored.url);
+}
+
 function TestResultBadge({ result }: { result: TestResult }) {
   const Icon = result.ok ? CheckCircle : AlertCircle;
   return (
@@ -622,7 +633,12 @@ function ArrSection({
                       <Button
                         size="sm"
                         onClick={onSaveEdit}
-                        disabled={editing.saving || !editing.form.name || !editing.form.url || !editing.testResult?.ok}
+                        disabled={
+                          editing.saving ||
+                          !editing.form.name ||
+                          !editing.form.url ||
+                          (changesConnection(editing.form, instance) && !editing.testResult?.ok)
+                        }
                       >
                         {editing.saving ? (
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -935,7 +951,12 @@ function SeerrSection({
                       <Button
                         size="sm"
                         onClick={onSaveEdit}
-                        disabled={editing.saving || !editing.form.name || !editing.form.url || !editing.testResult?.ok}
+                        disabled={
+                          editing.saving ||
+                          !editing.form.name ||
+                          !editing.form.url ||
+                          (changesConnection(editing.form, instance) && !editing.testResult?.ok)
+                        }
                       >
                         {editing.saving ? (
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />

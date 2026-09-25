@@ -309,6 +309,28 @@ describe("Seerr integration endpoints", () => {
       expect(cleared.instance.externalUrl).toBeNull();
     });
 
+    it("saves a rename and a new external URL while the instance is unreachable", async () => {
+      // The edit form sends its (unchanged) URL on every save; testing on its
+      // mere presence refused every edit while Seerr was down.
+      mockTestConnection.mockResolvedValue({ ok: false, error: "Timeout" });
+      const user = await createTestUser();
+      const instance = await createTestSeerrInstance(user.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const response = await callRouteWithParams(
+        PUT,
+        { id: instance.id },
+        {
+          url: `/api/integrations/seerr/${instance.id}`,
+          method: "PUT",
+          body: { name: "Renamed", url: `${instance.url}/`, externalUrl: "https://requests.example.com" },
+        }
+      );
+      const body = await expectJson<{ instance: { name: string; externalUrl: string } }>(response, 200);
+      expect(body.instance).toMatchObject({ name: "Renamed", externalUrl: "https://requests.example.com" });
+      expect(mockTestConnection).not.toHaveBeenCalled();
+    });
+
     it("returns error when connection test fails on update", async () => {
       mockTestConnection.mockResolvedValue({ ok: false, error: "Timeout" });
 
