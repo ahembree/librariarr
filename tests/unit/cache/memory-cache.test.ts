@@ -219,6 +219,34 @@ describe("MemoryCache", () => {
       expect(compute).toHaveBeenCalledTimes(1);
     });
 
+    // A compute that began before a mutation must not cache its pre-mutation
+    // result after the mutation's invalidation has already run.
+    for (const [label, invalidate] of [
+      ["invalidate", (c: MemoryCache) => c.invalidate("stats:k")],
+      ["invalidatePrefix", (c: MemoryCache) => c.invalidatePrefix("stats:")],
+      ["clear", (c: MemoryCache) => c.clear()],
+    ] as const) {
+      it(`${label} during an in-flight compute keeps its result out of the cache`, async () => {
+        let resolveOld!: (v: string) => void;
+        const oldCompute = vi.fn(() => new Promise<string>((r) => { resolveOld = r; }));
+        const waiting = cache.getOrSet("stats:k", oldCompute);
+
+        invalidate(cache);
+
+        // A caller arriving after the invalidation starts a fresh compute
+        // instead of joining the stale one.
+        const freshCompute = vi.fn(async () => "new");
+        await expect(cache.getOrSet("stats:k", freshCompute)).resolves.toBe("new");
+        expect(freshCompute).toHaveBeenCalledTimes(1);
+
+        // The stale compute still answers the caller that was waiting on it…
+        resolveOld("old");
+        await expect(waiting).resolves.toBe("old");
+        // …but never overwrites what the fresh compute cached.
+        expect(cache.get("stats:k")).toBe("new");
+      });
+    }
+
     it("does not cache a rejected compute (next call retries)", async () => {
       const compute = vi
         .fn()
