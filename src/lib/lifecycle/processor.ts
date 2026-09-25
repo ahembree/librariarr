@@ -4,6 +4,7 @@ import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifec
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { logger } from "@/lib/logger";
 import { normalizeTitle, executeAction, extractActionError } from "@/lib/lifecycle/actions";
+import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
 import { findExceptionProtectedGroups, protectionKey, isWholeRecordDestructiveAction, type ProtectionTarget } from "@/lib/lifecycle/exception-guard";
@@ -711,11 +712,20 @@ export async function executeLifecycleActions(userId?: string) {
   );
 
   // PASS 2 — execute what survived.
+  // Arr instances that failed at the host level this run: their remaining
+  // actions stay PENDING for the next run rather than each paying the client's
+  // retry budget against a dead instance on the serial MAIN_QUEUE.
+  const unreachable = new UnreachableInstances();
+  const deferredByInstance = new Map<string, number>();
   for (const { action, mediaItem, filteredMatchedIds } of executable) {
     // Held by the ceiling: leave it PENDING and untouched so the Pending page
     // can execute it after review. Only destructive actions are held — an
     // unmonitor or a tag scheduled in the same run still applies.
     if (blockedUserIds.has(action.userId) && isDestructiveActionType(action.actionType)) {
+      continue;
+    }
+    if (action.arrInstanceId && unreachable.get(action.arrInstanceId)) {
+      deferredByInstance.set(action.arrInstanceId, (deferredByInstance.get(action.arrInstanceId) ?? 0) + 1);
       continue;
     }
 
@@ -793,6 +803,7 @@ export async function executeLifecycleActions(userId?: string) {
       }
 
     } catch (error) {
+      unreachable.record(action.arrInstanceId, error);
       const msg = extractActionError(error);
       logger.error("Lifecycle", `Failed to execute action ${action.id}`, { error: msg });
       await prisma.lifecycleAction.update({
@@ -826,6 +837,14 @@ export async function executeLifecycleActions(userId?: string) {
       }
 
     }
+  }
+
+  for (const [instanceId, count] of deferredByInstance) {
+    logger.warn(
+      "Lifecycle",
+      `Left ${count} action(s) pending for Arr instance ${instanceId} — it is not answering ` +
+        `(${extractActionError(unreachable.get(instanceId))}); they run on the next execution`,
+    );
   }
 
   // Batch-load Discord webhook settings for every user with notifications to send

@@ -57,6 +57,7 @@ vi.mock("@/lib/tracearr/tracearr-client", () => ({
   },
 }));
 
+import { IntegrationError } from "@/lib/integration-error";
 import {
   recoverHistoryForNewItems,
   RECENT_ADDITION_WINDOW_MS,
@@ -427,6 +428,32 @@ describe("recoverHistoryForNewItems", () => {
         "WatchHistory",
         expect.stringContaining("Item 1"),
         expect.objectContaining({ error: expect.stringContaining("429") }),
+      );
+    });
+
+    it.each([
+      ["unreachable", null],
+      ["a 5xx", 503],
+      ["a 429 that outlasted its budget", 429],
+    ])("stops the pass when Tracearr itself fails (%s)", async (_label, status) => {
+      // Every remaining candidate would fail the same way, each paying the
+      // client's whole retry budget on the serial MAIN_QUEUE.
+      candidates = [candidate(1), candidate(2), candidate(3)];
+      const hostError = new IntegrationError("Tracearr", {
+        config: { url: "/api/v2/public/history" },
+        code: status === null ? "ECONNABORTED" : "ERR_BAD_RESPONSE",
+        response: status === null ? undefined : { status, data: {} },
+      } as never);
+      m.getHistoryForItem.mockRejectedValue(hostError);
+
+      const result = await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(m.getHistoryForItem).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ checked: 1, imported: 0 });
+      expect(m.logger.warn).toHaveBeenCalledWith(
+        "WatchHistory",
+        expect.stringContaining("Stopping Tracearr play recovery"),
+        expect.anything(),
       );
     });
 

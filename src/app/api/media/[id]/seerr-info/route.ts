@@ -5,6 +5,7 @@ import { SeerrClient, type SeerrMediaInfo, type SeerrRequest } from "@/lib/seerr
 import { walkSeerrRequests } from "@/lib/seerr/request-walk";
 import { seerrRequesterName } from "@/lib/seerr/seerr-data-map";
 import { apiLogger } from "@/lib/logger";
+import { withTimeout } from "@/lib/api/bounded";
 
 interface SeerrRequestSummary {
   id: number;
@@ -184,16 +185,11 @@ export async function GET(
   };
 
   const settled = await Promise.all(
-    seerrInstances.map((instance) => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const timeout = new Promise<null>((resolve) => {
-        timer = setTimeout(() => {
-          apiLogger.warn("Media", `Seerr instance ${instance.name} did not answer within ${PER_INSTANCE_TIMEOUT_MS / 1000}s`);
-          resolve(null);
-        }, PER_INSTANCE_TIMEOUT_MS);
-      });
-      return Promise.race([queryInstance(instance), timeout]).finally(() => clearTimeout(timer));
-    }),
+    seerrInstances.map((instance) =>
+      withTimeout(queryInstance(instance), PER_INSTANCE_TIMEOUT_MS, () =>
+        apiLogger.warn("Media", `Seerr instance ${instance.name} did not answer within ${PER_INSTANCE_TIMEOUT_MS / 1000}s`),
+      ),
+    ),
   );
   const matches = settled.filter((m): m is SeerrMatch => m !== null);
 

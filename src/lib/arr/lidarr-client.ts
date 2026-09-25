@@ -275,9 +275,15 @@ export class LidarrClient {
     });
   }
 
+  /**
+   * Only caller is the rule editor's recycle-bin check, which the Save button
+   * waits on — a probe, so it reports the first failure (NO_RETRY) instead of
+   * holding Save through four timeouts.
+   */
   async getMediaManagementConfig(): Promise<LidarrMediaManagementConfig> {
     const { data } = await this.client.get<LidarrMediaManagementConfig>(
-      "/api/v1/config/mediamanagement"
+      "/api/v1/config/mediamanagement",
+      { ...NO_RETRY },
     );
     return data;
   }

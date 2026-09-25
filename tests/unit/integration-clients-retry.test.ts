@@ -92,20 +92,25 @@ describe.each(CLIENTS)("$name client retry", ({ read, test }) => {
     expect(hits()).toBe(1);
   });
 
-  it("wraps the final failure once retries are exhausted", async () => {
-    const { url, hits } = await serve([{ status: 503 }]);
-    const error = await read(url).catch((e) => e);
-    expect(error).toBeInstanceOf(IntegrationError);
-    expect((error as IntegrationError).status).toBe(503);
-    expect(hits()).toBe(4); // 1 + 3 retries
-  }, 15_000);
-
   it("does not retry the connection test, so it reports the first failure promptly", async () => {
     const { url, hits } = await serve([{ status: 503 }, { status: 200 }]);
     const result = await test(url);
     expect(result.ok).toBe(false);
     expect(hits()).toBe(1);
   });
+});
+
+// Once is enough: the per-client "retries a transient 503" case above already
+// proves every client's interceptor order, and this one sleeps through the real
+// 1s + 2s + 3s backoff.
+describe("retry exhaustion", () => {
+  it("wraps the final failure once retries are exhausted", async () => {
+    const { url, hits } = await serve([{ status: 503 }]);
+    const error = await new RadarrClient(url, "k").getMovies().catch((e) => e);
+    expect(error).toBeInstanceOf(IntegrationError);
+    expect((error as IntegrationError).status).toBe(503);
+    expect(hits()).toBe(4); // 1 + 3 retries
+  }, 15_000);
 });
 
 describe("non-idempotent writes", () => {

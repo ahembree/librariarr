@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError } from "@/lib/lifecycle/actions";
+import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
 
 /**
  * Action configuration shared by rule-based and ad-hoc (query page) execution.
@@ -104,6 +105,9 @@ export async function executeActionsForItems(
   const total = items.length;
   let processed = 0;
   onProgress?.({ done: 0, total });
+  // Once the Arr instance fails at the host level, the remaining items fail
+  // with that same error instead of each paying the retry budget again.
+  const unreachable = new UnreachableInstances();
 
   for (const item of items) {
     const matchedMediaItemIds = episodeIdMap.get(item.id) ?? [];
@@ -113,6 +117,8 @@ export async function executeActionsForItems(
       : undefined;
     reportStep?.("Starting");
     try {
+      const hostDown = unreachable.get(config.arrInstanceId);
+      if (hostDown) throw hostDown;
       await executeAction({
         id: "immediate",
         actionType,
@@ -192,6 +198,7 @@ export async function executeActionsForItems(
 
       executed++;
     } catch (error) {
+      unreachable.record(config.arrInstanceId, error);
       const msg = extractActionError(error);
       errors.push(`${item.title}: ${msg}`);
       failures.push({ title: item.title, error: msg });

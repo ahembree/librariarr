@@ -305,9 +305,15 @@ export class RadarrClient {
     return data;
   }
 
+  /**
+   * Only caller is the rule editor's recycle-bin check, which the Save button
+   * waits on — a probe, so it reports the first failure (NO_RETRY) instead of
+   * holding Save through four timeouts.
+   */
   async getMediaManagementConfig(): Promise<RadarrMediaManagementConfig> {
     const { data } = await this.client.get<RadarrMediaManagementConfig>(
-      "/api/v3/config/mediamanagement"
+      "/api/v3/config/mediamanagement",
+      { ...NO_RETRY },
     );
     return data;
   }

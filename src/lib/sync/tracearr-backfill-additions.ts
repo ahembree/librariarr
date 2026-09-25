@@ -8,6 +8,7 @@ import {
   resolveInstanceForServer,
 } from "@/lib/sync/sync-tracearr-history";
 import { TracearrClient } from "@/lib/tracearr/tracearr-client";
+import { IntegrationError } from "@/lib/integration-error";
 
 /**
  * Recover the watch history of an item that left the library and came back.
@@ -263,6 +264,23 @@ export async function recoverHistoryForNewItems(
       // the item is still a candidate on the next run, because the query that
       // found it derives candidacy from the rows, not from a cursor.
       failed++;
+      // A failure of the HOST, not the item — unreachable, a 5xx, or a 429
+      // that outlasted its budget — will fail every remaining candidate the
+      // same way, and each of those would pay the client's whole retry budget
+      // (four 20s timeouts plus backoff) on the serial MAIN_QUEUE. Stop; the
+      // next run re-derives the same candidates from the rows.
+      if (
+        error instanceof IntegrationError &&
+        (error.status === null || error.status === 429 || error.status >= 500)
+      ) {
+        logger.warn(
+          "WatchHistory",
+          `Stopping Tracearr play recovery on "${server.name}" after ${checked} of ` +
+            `${candidates.length} candidate(s) — Tracearr is not answering; the rest are retried next run`,
+          { error: String(error) },
+        );
+        break;
+      }
       logger.warn(
         "WatchHistory",
         `Could not recover Tracearr history for "${candidate.title}" on ` +
