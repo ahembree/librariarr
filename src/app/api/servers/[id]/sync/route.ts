@@ -79,11 +79,18 @@ export async function POST(
   // full-server sync and distinct library-scoped syncs don't collide and
   // replace one another.
   const jobKey = libraryKey ? `sync:${server.id}:${libraryKey}` : `sync:${server.id}`;
+  // Returned so the caller can tell the run this request starts from the
+  // previous one: every SyncJob this enqueue produces is stamped `startedAt` by
+  // the worker afterwards, on this same process clock. Comparing job ids
+  // against the caller's last-seen list could not do that — a list that missed
+  // an event named an older job, and the newer finished one then read as this
+  // request's run and ended it before it began.
+  const requestedAt = new Date();
   await enqueueJob(
     TASK_SYNC_SERVER,
     { serverId: server.id, libraryKey, trigger: "manual sync request for this server" },
     { jobKey, queueName: MAIN_QUEUE, maxAttempts: 3 },
   );
 
-  return NextResponse.json({ message: "Sync started" });
+  return NextResponse.json({ message: "Sync started", requestedAt: requestedAt.toISOString() });
 }

@@ -2,8 +2,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 // --- Mocks ---
 
-const { mockPrisma, mockClient, mockEmit } = vi.hoisted(() => ({
+const { mockPrisma, mockClient, mockEmit, cancelWatch } = vi.hoisted(() => ({
   mockEmit: vi.fn(),
+  // The watch-history phase's cancel watch, replaced by one each test drives
+  // directly (the real poller is covered in cancel-watch.test.ts).
+  cancelWatch: {
+    controller: null as AbortController | null,
+    stopped: false,
+  },
   mockPrisma: {
     $queryRawUnsafe: vi.fn(),
     lifecycleException: { count: vi.fn() },
@@ -87,6 +93,15 @@ vi.mock("@/lib/http-retry", () => ({
 
 vi.mock("@/lib/events/event-bus", () => ({
   eventBus: { emit: mockEmit },
+}));
+
+vi.mock("@/lib/sync/cancel-watch", () => ({
+  watchForCancel: () => {
+    const controller = new AbortController();
+    cancelWatch.controller = controller;
+    cancelWatch.stopped = false;
+    return { signal: controller.signal, stop: () => { cancelWatch.stopped = true; } };
+  },
 }));
 
 import {
@@ -224,6 +239,9 @@ describe("syncMediaServer", () => {
       if (sql.includes('INSERT INTO "SyncJob"')) {
         return [{ id: "sync-job-id" }];
       }
+      if (sql.includes('SELECT "cancelRequested"')) {
+        return [{ cancelRequested: false }];
+      }
       if (sql.includes('UPDATE "SyncJob"')) {
         return [];
       }
@@ -268,7 +286,7 @@ describe("syncMediaServer", () => {
 
     await syncMediaServer("server-1");
 
-    expect(syncWatchHistory).toHaveBeenCalledWith("server-1");
+    expect(syncWatchHistory).toHaveBeenCalledWith("server-1", undefined, expect.any(AbortSignal));
     // syncWatchHistory reconciles internally, so the sync must not do it twice.
     expect(reconcileWatchStateFromHistory).not.toHaveBeenCalled();
   });
@@ -1008,20 +1026,33 @@ describe("syncMediaServer library and watchlist reconciliation", () => {
 });
 
 describe("syncMediaServer job lifecycle events", () => {
-  // Every exit from a sync has to announce itself. An open tab renders the
-  // progress card from the SyncJob row and — on the settings page — arms its
-  // fallback poll from that same row, so a job state nobody is told about is
-  // one the UI cannot show and cannot recover on its own.
+  // Every exit from a sync has to announce itself, and only AFTER the dataset
+  // is settled: an announcement is a refetch trigger for every open tab, so
+  // announcing early hands the listings stale caches, and not announcing leaves
+  // the progress card up until a fallback poll.
 
-  function mockSyncDb(opts: { enabled?: boolean; cancelRequested?: boolean } = {}) {
-    mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string) => {
-      if (sql.includes('INSERT INTO "SyncJob"')) {
-        return [{ id: "sync-job-id", userId: "user-1" }];
-      }
+  interface DbOpts {
+    enabled?: boolean;
+    /** Answer for the cancel flag; may depend on whether an item was written. */
+    cancel?: (state: { wroteItem: boolean }) => boolean;
+    /** Libraries in the DB that the server no longer lists. */
+    vanished?: { id: string; key: string; title: string }[];
+    disabledKeys?: string[];
+    failRunningUpdate?: boolean;
+  }
+
+  function mockSyncDb(opts: DbOpts = {}) {
+    const state = { wroteItem: false };
+    mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string, ...params: unknown[]) => {
+      // Carries the owner too, so a reintroduced announcement at the PENDING
+      // insert (which read it from here) would be caught by the tests below.
+      if (sql.includes('INSERT INTO "SyncJob"')) return [{ id: "sync-job-id", userId: "user-1" }];
       if (sql.includes('SELECT "cancelRequested"')) {
-        return [{ cancelRequested: opts.cancelRequested ?? false }];
+        return [{ cancelRequested: opts.cancel?.(state) ?? false }];
       }
-      if (sql.includes('SELECT "id" FROM "SyncJob"')) return [{ id: "sync-job-id" }];
+      if (sql.includes('UPDATE "SyncJob"') && params.includes("RUNNING") && opts.failRunningUpdate) {
+        throw new Error("connection reset");
+      }
       if (sql.includes('UPDATE "SyncJob"')) return [];
       if (sql.includes("SELECT") && sql.includes('"MediaServer"')) {
         return [{
@@ -1030,13 +1061,28 @@ describe("syncMediaServer job lifecycle events", () => {
           tlsSkipVerify: false, enabled: opts.enabled ?? true,
         }];
       }
+      if (sql.includes('NOT ("key" = ANY')) return opts.vanished ?? [];
+      if (sql.includes('FROM "LifecycleException"')) return [{ count: BigInt(0) }];
+      if (sql.includes('"enabled"=false')) return (opts.disabledKeys ?? []).map((key) => ({ key }));
       if (sql.includes('INSERT INTO "Library"')) return [{ id: "lib-1", enabled: true }];
+      if (sql.includes('INSERT INTO "MediaItem"')) {
+        state.wroteItem = true;
+        return [];
+      }
       return [];
     });
   }
 
+  const MOVIES = { key: "1", title: "Movies", type: "movie", agent: "", scanner: "" };
+
   const emitsOfType = (type: string) =>
     mockEmit.mock.calls.filter((args: unknown[]) => (args[0] as { type: string }).type === type);
+  const emitOrder = (type: string) => {
+    const index = mockEmit.mock.calls.findIndex(
+      (args: unknown[]) => (args[0] as { type: string }).type === type,
+    );
+    return mockEmit.mock.invocationCallOrder[index];
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1044,36 +1090,43 @@ describe("syncMediaServer job lifecycle events", () => {
     mockClient.testConnection.mockResolvedValue({ ok: true, serverName: "Test Plex" });
     mockClient.getLibraries.mockResolvedValue([]);
     mockClient.getWatchCounts.mockResolvedValue(new Map());
+    mockClient.getLibraryItemsPage.mockResolvedValue({
+      items: [{ ratingKey: "rk1", title: "Movie A", type: "movie" }],
+      total: 1,
+    });
+    mockPrisma.lifecycleException.count.mockResolvedValue(0);
   });
 
-  it("announces the PENDING job before waiting for the sync slot", async () => {
+  it("announces the start exactly once, after acquiring the sync slot", async () => {
     const { acquireSyncSlot } = await import("@/lib/sync/sync-semaphore");
 
     await syncMediaServer("server-1");
 
-    const started = emitsOfType("sync:started");
-    expect(started.length).toBeGreaterThan(0);
-    expect(started[0][0]).toEqual({
-      type: "sync:started",
-      userId: "user-1",
-      meta: { serverId: "server-1" },
-    });
-    // Ordering is the point: a sync queued behind another one sits PENDING for
-    // as long as that one runs. Announcing only after the slot is acquired left
-    // it invisible for the whole wait — and the settings page gates its fallback
-    // poll on knowing a job exists, so nothing recovered it either.
-    expect(mockEmit.mock.invocationCallOrder[0]).toBeLessThan(
+    // Every caller runs inside a serial MAIN_QUEUE job, so the slot never
+    // waits: a second, pre-slot announcement was pure duplicate refetching.
+    expect(emitsOfType("sync:started")).toEqual([
+      [{ type: "sync:started", userId: "user-1", meta: { serverId: "server-1" } }],
+    ]);
+    expect(emitOrder("sync:started")).toBeGreaterThan(
       vi.mocked(acquireSyncSlot).mock.invocationCallOrder[0],
     );
   });
 
-  it("announces the PENDING → RUNNING transition as well", async () => {
+  it("settles the dataset before announcing completion", async () => {
+    const { recomputeCanonical } = await import("@/lib/dedup/recompute-canonical");
+    const { appCache } = await import("@/lib/cache/memory-cache");
+    mockClient.getLibraries.mockResolvedValue([MOVIES]);
+
     await syncMediaServer("server-1");
 
-    // Two announcements: the queued row, then the run actually starting. A tab
-    // that has been showing "Pending" needs the second one to move on.
-    expect(emitsOfType("sync:started").length).toBe(2);
+    // The listing subscribers refetch the moment sync:completed lands; if the
+    // canonical flags and caches are still the old ones, that refetch is wasted
+    // and nothing corrects it.
     expect(emitsOfType("sync:completed").length).toBe(1);
+    expect(vi.mocked(recomputeCanonical).mock.invocationCallOrder[0]).toBeLessThan(emitOrder("sync:completed"));
+    expect(vi.mocked(appCache.invalidatePrefix).mock.invocationCallOrder[0]).toBeLessThan(emitOrder("sync:completed"));
+    // ...and exactly once: the `finally` backstop must not repeat it.
+    expect(recomputeCanonical).toHaveBeenCalledTimes(1);
   });
 
   it("announces a terminal event when the server turns out to be disabled", async () => {
@@ -1081,28 +1134,114 @@ describe("syncMediaServer job lifecycle events", () => {
 
     await syncMediaServer("server-1");
 
-    // The job was announced, so the card is on screen; the CANCELLED row that
-    // ends it has to be announced too. sync:failed rather than sync:completed —
-    // no items were touched, so nothing that refetches a listing should wake up.
+    // sync:failed rather than sync:completed — no items were touched, so
+    // nothing that re-pulls a listing should wake up.
     expect(emitsOfType("sync:failed")).toEqual([
       [{ type: "sync:failed", userId: "user-1", meta: { serverId: "server-1" } }],
     ]);
+    expect(emitsOfType("sync:started").length).toBe(0);
     expect(emitsOfType("sync:completed").length).toBe(0);
   });
 
-  it("announces a terminal event when the sync is cancelled mid-run", async () => {
-    mockSyncDb({ cancelRequested: true });
-    mockClient.getLibraries.mockResolvedValue([
-      { key: "1", title: "Movies", type: "movie", agent: "", scanner: "" },
-    ]);
+  it("honours a Stop before the play-count scan and announces sync:failed when nothing changed", async () => {
+    mockSyncDb({ cancel: () => true });
+    mockClient.getLibraries.mockResolvedValue([MOVIES]);
 
     await syncMediaServer("server-1");
 
-    // Pressing "Stop Sync" used to leave the progress card up until the next
-    // fallback poll, because only the completed and failed paths emitted.
-    expect(emitsOfType("sync:completed")).toEqual([
-      [{ type: "sync:completed", userId: "user-1", meta: { serverId: "server-1" } }],
-    ]);
-    expect(findDbCalls('UPDATE "SyncJob"', "CANCELLED").length).toBeGreaterThan(0);
+    // The scan pages a large server's whole history; a Stop pressed before it
+    // must not wait it out.
+    expect(mockClient.getWatchCounts).not.toHaveBeenCalled();
+    expect(findDbCalls('UPDATE "SyncJob"', "CANCELLED").length).toBe(1);
+    // Nothing was written, so no listing should re-pull its whole list.
+    expect(emitsOfType("sync:failed").length).toBe(1);
+    expect(emitsOfType("sync:completed").length).toBe(0);
+  });
+
+  it("settles and announces sync:completed when a Stop lands after items were written", async () => {
+    const { recomputeCanonical } = await import("@/lib/dedup/recompute-canonical");
+    mockSyncDb({ cancel: (state) => state.wroteItem });
+    mockClient.getLibraries.mockResolvedValue([MOVIES]);
+
+    await syncMediaServer("server-1");
+
+    // Caught by the check after the library loop, before watch history.
+    const { syncWatchHistory } = await import("@/lib/sync/sync-watch-history");
+    expect(syncWatchHistory).not.toHaveBeenCalled();
+    expect(findDbCalls('UPDATE "SyncJob"', "CANCELLED").length).toBe(1);
+    expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBe(0);
+    expect(emitsOfType("sync:completed").length).toBe(1);
+    expect(vi.mocked(recomputeCanonical).mock.invocationCallOrder[0]).toBeLessThan(emitOrder("sync:completed"));
+  });
+
+  it("checks for a Stop even when there is no library to sync", async () => {
+    // No target library means the per-library check never runs; the check
+    // after the loop is the only one that can see this Stop.
+    let calls = 0;
+    mockSyncDb({ cancel: () => ++calls > 1 });
+
+    await syncMediaServer("server-1");
+
+    expect(findDbCalls('UPDATE "SyncJob"', "CANCELLED").length).toBe(1);
+    expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBe(0);
+  });
+
+  it("aborts the watch-history phase on a Stop and ends the run CANCELLED", async () => {
+    const { syncWatchHistory } = await import("@/lib/sync/sync-watch-history");
+    const { logger } = await import("@/lib/logger");
+    vi.mocked(syncWatchHistory).mockImplementationOnce(async (_serverId, _onProgress, signal) => {
+      // What the native path does on abort: roll back and throw.
+      cancelWatch.controller!.abort();
+      expect(signal?.aborted).toBe(true);
+      throw new Error("Watch history sync cancelled");
+    });
+
+    await syncMediaServer("server-1");
+
+    // A Stop here used to be ignored: the run finished COMPLETED.
+    expect(findDbCalls('UPDATE "SyncJob"', "CANCELLED").length).toBe(1);
+    expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBe(0);
+    // A requested stop is not a failure worth an ERROR line.
+    expect(logger.error).not.toHaveBeenCalledWith("Sync", "Watch history sync failed", expect.anything());
+    expect(cancelWatch.stopped).toBe(true);
+  });
+
+  it("stops the cancel watch when the watch-history phase completes normally", async () => {
+    await syncMediaServer("server-1");
+
+    expect(cancelWatch.stopped).toBe(true);
+    expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBe(1);
+  });
+
+  it("settles the dataset for a run that only purged a vanished library", async () => {
+    const { recomputeCanonical } = await import("@/lib/dedup/recompute-canonical");
+    const { appCache } = await import("@/lib/cache/memory-cache");
+    // The server still lists one library (so the purge runs) but it is disabled
+    // here, so no item is processed — only the purge changed anything.
+    mockSyncDb({
+      vanished: [{ id: "lib-old", key: "9", title: "Old Movies" }],
+      disabledKeys: ["1"],
+    });
+    mockClient.getLibraries.mockResolvedValue([MOVIES]);
+
+    await syncMediaServer("server-1");
+
+    expect(findDbCalls('DELETE FROM "Library"').length).toBe(1);
+    // Gating on processedItems alone skipped both, leaving listings showing the
+    // deleted items and, across servers, the surviving copies non-canonical.
+    expect(recomputeCanonical).toHaveBeenCalledWith("user-1");
+    expect(appCache.invalidatePrefix).toHaveBeenCalled();
+  });
+
+  it("marks the job FAILED when the PENDING → RUNNING update fails, instead of stranding it PENDING", async () => {
+    mockSyncDb({ failRunningUpdate: true });
+
+    await expect(syncMediaServer("server-1")).rejects.toThrow("connection reset");
+
+    // A row left PENDING made the sync route answer 409 and the settings page
+    // disable every Sync button until a restart.
+    expect(findDbCalls('UPDATE "SyncJob"', "FAILED").length).toBe(1);
+    // Nothing was announced yet, so there is nothing to end.
+    expect(mockEmit).not.toHaveBeenCalled();
   });
 });

@@ -117,6 +117,32 @@ describe("POST /api/servers/[id]/sync", () => {
     );
   });
 
+  it("returns the enqueue time, taken before the job is enqueued", async () => {
+    // The settings page ends a Sync request only on a job stamped `startedAt`
+    // at or after this time. It must come from the server clock the worker
+    // stamps with, and precede the enqueue, or a fast job could read as older
+    // than the request that started it.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    let enqueuedAt = 0;
+    mockEnqueueJob.mockImplementationOnce(async () => {
+      enqueuedAt = Date.now();
+    });
+
+    const response = await callRouteWithParams(
+      POST,
+      { id: server.id },
+      { url: `/api/servers/${server.id}/sync`, method: "POST" },
+    );
+    const body = await expectJson<{ requestedAt: string }>(response, 200);
+
+    expect(typeof body.requestedAt).toBe("string");
+    expect(Number.isNaN(Date.parse(body.requestedAt))).toBe(false);
+    expect(Date.parse(body.requestedAt)).toBeLessThanOrEqual(enqueuedAt);
+  });
+
   it("returns 409 when a sync is already running for the server", async () => {
     const { getTestPrisma } = await import("../../setup/test-db");
     const testPrisma = getTestPrisma();
