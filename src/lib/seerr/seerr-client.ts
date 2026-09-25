@@ -1,7 +1,7 @@
 import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
-import { configureRetry } from "@/lib/http-retry";
+import { configureRetry, NO_RETRY } from "@/lib/http-retry";
 
 /**
  * Seerr's `MediaStatus` (server/constants/media.ts). Legacy Overseerr used 6
@@ -191,7 +191,7 @@ export class SeerrClient {
 
   async testConnection(): Promise<{ ok: boolean; error?: string; appName?: string }> {
     try {
-      const { data } = await this.client.get<unknown>("/api/v1/settings/main");
+      const { data } = await this.client.get<unknown>("/api/v1/settings/main", { ...NO_RETRY });
       // A forward-auth portal, an SPA fallback or another app can answer 2xx
       // (often after a followed redirect) with HTML or unrelated JSON. Only a
       // real Seerr settings object counts as connected — otherwise every later

@@ -1,7 +1,7 @@
 import axios, { AxiosInstance, isAxiosError } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
-import { configureRetry } from "@/lib/http-retry";
+import { configureRetry, NO_RETRY } from "@/lib/http-retry";
 
 /**
  * Client for Tracearr's read-only public REST API.
@@ -347,6 +347,12 @@ export class TracearrClient {
       return config;
     });
 
+    // Must be registered BEFORE the IntegrationError conversion below: axios
+    // runs response interceptors in registration order, and the retry handler
+    // needs the raw AxiosError (`config`/`response`). Registered after it, the
+    // retry only ever saw an IntegrationError and rethrew every failure.
+    configureRetry(this.client, "Tracearr", logger);
+
     this.client.interceptors.response.use(
       (response) => response,
       (error) => {
@@ -364,8 +370,6 @@ export class TracearrClient {
         return Promise.reject(error);
       },
     );
-
-    configureRetry(this.client, "Tracearr", logger);
   }
 
   /**
@@ -379,9 +383,11 @@ export class TracearrClient {
     version?: string;
     serverCount?: number;
   }> {
+    // A connection test reports the first failure promptly — no transport
+    // retries (see NO_RETRY); the 429 retry below still applies.
     let health: TracearrHealthResponse;
     try {
-      health = await this.getHealth();
+      health = await this.getHealth({ retry: false });
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : "Connection failed";
       return { ok: false, error: msg };
@@ -399,9 +405,11 @@ export class TracearrClient {
     // A server_id is required by our own paging helper but not by the API, so
     // probe unscoped — this is a capability check, not a data fetch.
     try {
-      await this.getWithRateLimitRetry("/api/v2/public/history", {
-        pageSize: 1,
-      });
+      await this.getWithRateLimitRetry(
+        "/api/v2/public/history",
+        { pageSize: 1 },
+        { retry: false },
+      );
     } catch (error: unknown) {
       const status = error instanceof IntegrationError ? error.status : null;
       if (status === 404 || status === 400) {
@@ -424,10 +432,10 @@ export class TracearrClient {
     };
   }
 
-  async getHealth(): Promise<TracearrHealthResponse> {
-    const { data } = await this.client.get<TracearrHealthResponse>(
-      "/api/v1/public/health",
-    );
+  async getHealth(options: { retry?: boolean } = {}): Promise<TracearrHealthResponse> {
+    const { data } = options.retry === false
+      ? await this.client.get<TracearrHealthResponse>("/api/v1/public/health", { ...NO_RETRY })
+      : await this.client.get<TracearrHealthResponse>("/api/v1/public/health");
     return data;
   }
 
@@ -625,7 +633,7 @@ export class TracearrClient {
   private async getWithRateLimitRetry<T>(
     url: string,
     params: Record<string, string | number>,
-    options: { maxRetries?: number; signal?: AbortSignal } = {},
+    options: { maxRetries?: number; signal?: AbortSignal; retry?: boolean } = {},
   ): Promise<T> {
     const maxRetries = options.maxRetries ?? RATE_LIMIT_MAX_RETRIES;
     for (let attempt = 0; ; attempt++) {
@@ -633,6 +641,8 @@ export class TracearrClient {
         const { data } = await this.client.get<T>(url, {
           params,
           signal: options.signal,
+          // `retry: false` skips the transport retries (5xx/network) only.
+          ...(options.retry === false ? NO_RETRY : {}),
         });
         return data;
       } catch (error: unknown) {

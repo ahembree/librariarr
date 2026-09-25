@@ -1,7 +1,7 @@
 import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
-import { configureRetry } from "@/lib/http-retry";
+import { configureRetry, NO_RETRY } from "@/lib/http-retry";
 
 // Tracked-download states that mean the item is NOT actively downloading.
 // Anything else (downloading, queued, warning, etc.) counts as an active download.
@@ -117,6 +117,12 @@ export class RadarrClient {
       return config;
     });
 
+    // Must be registered BEFORE the IntegrationError conversion below: axios
+    // runs response interceptors in registration order, and the retry handler
+    // needs the raw AxiosError (`config`/`response`). Registered after it, the
+    // retry only ever saw an IntegrationError and rethrew every failure.
+    configureRetry(this.client, "Radarr", logger);
+
     this.client.interceptors.response.use(
       (response) => response,
       (error) => {
@@ -131,13 +137,11 @@ export class RadarrClient {
         return Promise.reject(error);
       }
     );
-
-    configureRetry(this.client, "Radarr", logger);
   }
 
   async testConnection(): Promise<{ ok: boolean; error?: string; appName?: string; version?: string }> {
     try {
-      const response = await this.client.get("/api/v3/system/status");
+      const response = await this.client.get("/api/v3/system/status", { ...NO_RETRY });
       const { appName, version } = response.data;
       if (appName && appName !== "Radarr") {
         return { ok: false, error: `Expected Radarr but connected to ${appName}`, appName, version };

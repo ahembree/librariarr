@@ -62,7 +62,8 @@ describe("SeerrClient", () => {
       mockAxiosInstance.get.mockResolvedValueOnce({ data: { applicationTitle: "Seerr" } });
       const result = await client.testConnection();
       expect(result).toEqual({ ok: true, appName: "Seerr" });
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/settings/main");
+      // The connection test opts out of transport retries (NO_RETRY).
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/settings/main", { __noRetry: true });
     });
 
     it("rejects a 2xx that is not Seerr settings (auth-proxy login page, other app)", async () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from "axios";
-import { configureRetry } from "@/lib/http-retry";
+import { configureRetry, NO_RETRY } from "@/lib/http-retry";
 
 /**
  * Creates a minimal mock AxiosInstance with an interceptors registry.
@@ -206,6 +206,16 @@ describe("configureRetry", () => {
   // ── Non-retryable errors ──────────────────────────────────────────
 
   describe("non-retryable errors throw immediately", () => {
+    it("does not retry a request that opted out with NO_RETRY", async () => {
+      const error = makeAxiosError({ response: { status: 503 }, method: "get" });
+      Object.assign(error.config!, NO_RETRY);
+      await expect(mockAxios.triggerError(error)).rejects.toBe(error);
+      const network = makeAxiosError({ code: "ETIMEDOUT", method: "get" });
+      Object.assign(network.config!, NO_RETRY);
+      await expect(mockAxios.triggerError(network)).rejects.toBe(network);
+      expect(mockAxios.requestMock).not.toHaveBeenCalled();
+    });
+
     it("does not retry on 500 Internal Server Error", async () => {
       const error = makeAxiosError({
         response: { status: 500 },

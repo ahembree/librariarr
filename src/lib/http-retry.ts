@@ -53,6 +53,22 @@ function isNetworkError(error: AxiosError): boolean {
   return !error.response;
 }
 
+/**
+ * Per-request opt-out, spread into an axios request config:
+ * `client.get(url, { ...NO_RETRY })`. For interactive connection probes (the
+ * settings "Test" buttons), which must report the first failure promptly — a
+ * timing-out host would otherwise keep the user waiting through every retry
+ * (4 × the client timeout plus backoff) before hearing it failed.
+ */
+export const NO_RETRY = { __noRetry: true } as const;
+
+declare module "axios" {
+  interface AxiosRequestConfig {
+    /** Set via `NO_RETRY`: `configureRetry` rethrows this request's failure as-is. */
+    __noRetry?: boolean;
+  }
+}
+
 export interface ConfigureRetryOptions {
   /**
    * Called when a network-level error is final — either retries are exhausted,
@@ -86,7 +102,7 @@ export function configureRetry(
     if (isNetworkError(error)) options?.onTerminalNetworkError?.(error);
 
     const config = error.config;
-    if (!config || !isRetryable(error)) {
+    if (!config || config.__noRetry || !isRetryable(error)) {
       throw error;
     }
 
