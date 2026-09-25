@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRouteWithParams,
@@ -110,6 +110,26 @@ describe("GET /api/media/[id]/seerr-info", () => {
       mediaStatus: 5,
     });
     expect(body.matches[0].requests).toEqual([expect.objectContaining({ requestedBy: "alice", status: 5 })]);
+    expect(mockGetMovie).toHaveBeenCalledWith("http://seerr:5055", 603);
+  });
+
+  it("builds the Open-in-Seerr link from the external URL when one is set", async () => {
+    const user = await createTestUser();
+    const movie = await movieWith(user.id, [["TMDB", "603"]]);
+    const instance = await createTestSeerrInstance(user.id, { url: "http://seerr:5055" });
+    await getTestPrisma().seerrInstance.update({
+      where: { id: instance.id },
+      data: { externalUrl: "https://requests.example.com" },
+    });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    mockGetMovie.mockResolvedValue({ mediaInfo: { status: 5, requests: [seerrRequest(1)] } });
+
+    const body = await expectJson<{ matches: Array<{ seerrUrl: string }> }>(
+      await callRouteWithParams(GET, { id: movie.id }),
+      200,
+    );
+    expect(body.matches[0].seerrUrl).toBe("https://requests.example.com/movie/603");
+    // The API itself is still called on the connection URL.
     expect(mockGetMovie).toHaveBeenCalledWith("http://seerr:5055", 603);
   });
 

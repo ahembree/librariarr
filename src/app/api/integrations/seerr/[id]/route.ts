@@ -19,7 +19,7 @@ export async function PUT(
 
   const { data, error } = await validateRequest(request, seerrInstanceUpdateSchema);
   if (error) return error;
-  const { name, url, apiKey, enabled } = data;
+  const { name, url, apiKey, externalUrl, enabled } = data;
 
   const existing = await prisma.seerrInstance.findFirst({
     where: { id, userId: session.userId! },
@@ -48,6 +48,9 @@ export async function PUT(
       ...(name && { name }),
       ...(url && { url: url.replace(/\/+$/, "") }),
       ...(apiKey && { apiKey }),
+      ...(externalUrl !== undefined && {
+        externalUrl: externalUrl ? externalUrl.replace(/\/+$/, "") : null,
+      }),
       ...(enabled !== undefined && { enabled }),
     },
   });

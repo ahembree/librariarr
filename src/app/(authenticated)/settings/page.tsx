@@ -272,7 +272,7 @@ export default function SettingsPage() {
   // Seerr instances
   const [seerrInstances, setSeerrInstances] = useState<SeerrInstance[]>([]);
   const [showSeerrForm, setShowSeerrForm] = useState(false);
-  const [seerrForm, setSeerrForm] = useState({ name: "", url: "", apiKey: "" });
+  const [seerrForm, setSeerrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
   const [seerrSaving, setSeerrSaving] = useState(false);
   const [seerrError, setSeerrError] = useState("");
 
@@ -414,7 +414,7 @@ export default function SettingsPage() {
 
   // Seerr edit state
   const [editingSeerrId, setEditingSeerrId] = useState<string | null>(null);
-  const [editSeerrForm, setEditSeerrForm] = useState({ name: "", url: "", apiKey: "" });
+  const [editSeerrForm, setEditSeerrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
   const [editSeerrSaving, setEditSeerrSaving] = useState(false);
   const [editSeerrError, setEditSeerrError] = useState("");
   const [editSeerrTesting, setEditSeerrTesting] = useState(false);
@@ -2068,7 +2068,7 @@ export default function SettingsPage() {
         setSeerrError(data.error || "Failed to add Seerr instance");
         return;
       }
-      setSeerrForm({ name: "", url: "", apiKey: "" });
+      setSeerrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
       setShowSeerrForm(false);
       await fetchSeerrInstances();
       toast.success("Seerr instance added");
@@ -2269,7 +2269,7 @@ export default function SettingsPage() {
   // Seerr edit handlers
   const startEditSeerr = (instance: SeerrInstance) => {
     setEditingSeerrId(instance.id);
-    setEditSeerrForm({ name: instance.name, url: instance.url, apiKey: "" });
+    setEditSeerrForm({ name: instance.name, url: instance.url, apiKey: "", externalUrl: instance.externalUrl ?? "" });
     setEditSeerrError("");
     setEditSeerrTestResult(null);
     testEditArrConnection("seerr", instance.id, {}, setEditSeerrTesting, setEditSeerrTestResult);
@@ -2283,6 +2283,7 @@ export default function SettingsPage() {
       if (editSeerrForm.name) body.name = editSeerrForm.name;
       if (editSeerrForm.url) body.url = editSeerrForm.url;
       if (editSeerrForm.apiKey) body.apiKey = editSeerrForm.apiKey;
+      body.externalUrl = editSeerrForm.externalUrl;
 
       const response = await fetch(`/api/integrations/seerr/${editingSeerrId}`, {
         method: "PUT",

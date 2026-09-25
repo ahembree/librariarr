@@ -241,6 +241,7 @@ interface SeerrForm {
   name: string;
   url: string;
   apiKey: string;
+  externalUrl: string;
 }
 
 interface ArrEditing {
@@ -807,6 +808,20 @@ function SeerrSection({
                 />
               </div>
               <div>
+                <Label htmlFor="seerr-external-url">External URL</Label>
+                <Input
+                  id="seerr-external-url"
+                  placeholder="Browser-accessible URL (optional)"
+                  value={form.externalUrl}
+                  onChange={(e) =>
+                    onFormChange({ ...form, externalUrl: e.target.value })
+                  }
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Used for &quot;Open in Seerr&quot; links. Falls back to URL above if empty.
+                </p>
+              </div>
+              <div>
                 <Label htmlFor="seerr-key">API Key</Label>
                 <SecretInput
                   id="seerr-key"
@@ -894,6 +909,17 @@ function SeerrSection({
                         />
                       </div>
                       <div>
+                        <Label>External URL</Label>
+                        <Input
+                          placeholder="Browser-accessible URL (optional)"
+                          value={editing.form.externalUrl}
+                          onChange={(e) => onEditFormChange({ ...editing.form, externalUrl: e.target.value })}
+                        />
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Used for &quot;Open in Seerr&quot; links. Falls back to URL above if empty.
+                        </p>
+                      </div>
+                      <div>
                         <Label>API Key</Label>
                         <SecretInput
                           placeholder="Leave blank to keep current"
@@ -965,6 +991,12 @@ function SeerrSection({
                           <Link2 className="h-3 w-3 shrink-0" />
                           <span className="truncate font-mono text-xs">{instance.url}</span>
                         </p>
+                        {instance.externalUrl && (
+                          <p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground/70">
+                            <ExternalLink className="h-3 w-3 shrink-0" />
+                            <span className="truncate font-mono">{instance.externalUrl}</span>
+                          </p>
+                        )}
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-1">

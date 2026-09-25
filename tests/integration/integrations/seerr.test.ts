@@ -157,6 +157,38 @@ describe("Seerr integration endpoints", () => {
       expect(body.instance.id).toBeDefined();
     });
 
+    it("stores a normalized external URL, and none when blank", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const withExternal = await expectJson<{ instance: { externalUrl: string | null } }>(
+        await callRoute(POST, {
+          url: "/api/integrations/seerr",
+          method: "POST",
+          body: { name: "A", url: "http://seerr:5055", apiKey: "k", externalUrl: "https://requests.example.com/" },
+        }),
+        201,
+      );
+      expect(withExternal.instance.externalUrl).toBe("https://requests.example.com");
+
+      const blank = await expectJson<{ instance: { externalUrl: string | null } }>(
+        await callRoute(POST, {
+          url: "/api/integrations/seerr",
+          method: "POST",
+          body: { name: "B", url: "http://seerr2:5055", apiKey: "k", externalUrl: "" },
+        }),
+        201,
+      );
+      expect(blank.instance.externalUrl).toBeNull();
+
+      const invalid = await callRoute(POST, {
+        url: "/api/integrations/seerr",
+        method: "POST",
+        body: { name: "C", url: "http://seerr3:5055", apiKey: "k", externalUrl: "not a url" },
+      });
+      expect(invalid.status).toBe(400);
+    });
+
     it("returns error when connection test fails", async () => {
       mockTestConnection.mockResolvedValue({ ok: false, error: "Connection refused" });
 
@@ -244,6 +276,37 @@ describe("Seerr integration endpoints", () => {
       const body = await expectJson<{ instance: { name: string; url: string } }>(response, 200);
       expect(body.instance.name).toBe("Updated Seerr");
       expect(body.instance.url).toBe("http://new-seerr:5055");
+    });
+
+    it("sets and clears the external URL without touching other fields", async () => {
+      const user = await createTestUser();
+      const instance = await createTestSeerrInstance(user.id, { name: "Keep" });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      const put = (body: Record<string, unknown>) =>
+        callRouteWithParams(PUT, { id: instance.id }, {
+          url: `/api/integrations/seerr/${instance.id}`,
+          method: "PUT",
+          body,
+        });
+
+      const set = await expectJson<{ instance: { name: string; externalUrl: string | null } }>(
+        await put({ externalUrl: "https://requests.example.com//" }),
+        200,
+      );
+      expect(set.instance.externalUrl).toBe("https://requests.example.com");
+      expect(set.instance.name).toBe("Keep");
+
+      const untouched = await expectJson<{ instance: { externalUrl: string | null } }>(
+        await put({ name: "Renamed" }),
+        200,
+      );
+      expect(untouched.instance.externalUrl).toBe("https://requests.example.com");
+
+      const cleared = await expectJson<{ instance: { externalUrl: string | null } }>(
+        await put({ externalUrl: "" }),
+        200,
+      );
+      expect(cleared.instance.externalUrl).toBeNull();
     });
 
     it("returns error when connection test fails on update", async () => {

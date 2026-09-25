@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
 
   const { data, error } = await validateRequest(request, seerrInstanceCreateSchema);
   if (error) return error;
-  const { name, url, apiKey } = data;
+  const { name, url, apiKey, externalUrl } = data;
 
   const client = new SeerrClient(url, apiKey);
   const result = await client.testConnection();
@@ -45,6 +45,7 @@ export async function POST(request: NextRequest) {
       name,
       url: url.replace(/\/+$/, ""),
       apiKey,
+      externalUrl: externalUrl ? externalUrl.replace(/\/+$/, "") : null,
     },
   });
   invalidateSeerrCaches(session.userId!);

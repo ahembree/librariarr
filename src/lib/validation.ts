@@ -546,6 +546,10 @@ export const seerrInstanceCreateSchema = z.object({
     "URL must start with http:// or https://"
   ),
   apiKey: z.string().min(1, "API key is required"),
+  /** Browser-facing URL for "Open in Seerr" links; "" clears it. */
+  externalUrl: z
+    .union([z.url("Invalid URL format"), z.literal("")])
+    .optional(),
 });
 
 export const seerrInstanceUpdateSchema = z.object({
@@ -555,6 +559,9 @@ export const seerrInstanceUpdateSchema = z.object({
     "URL must start with http:// or https://"
   ).optional(),
   apiKey: z.string().optional(),
+  externalUrl: z
+    .union([z.url("Invalid URL format"), z.literal("")])
+    .optional(),
   enabled: z.boolean().optional(),
 });
 

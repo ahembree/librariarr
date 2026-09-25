@@ -164,7 +164,8 @@ export async function GET(
 
       if (requests.length === 0) return null;
 
-      const baseUrl = (instance.url || "").replace(/\/+$/, "");
+      // The browser follows this link, so prefer the browser-facing URL.
+      const baseUrl = (instance.externalUrl || instance.url || "").replace(/\/+$/, "");
       const seerrUrl = tmdbId ? `${baseUrl}/${mediaType}/${tmdbId}` : null;
 
       return {
