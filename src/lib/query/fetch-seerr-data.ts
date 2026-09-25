@@ -52,6 +52,9 @@ export async function fetchSeerrDataForQuery(
         instanceName: instance.name,
         mediaType: onlyType ? (onlyType === "MOVIE" ? "movie" : "tv") : undefined,
         onProgress: reporters[idx],
+        // Someone is waiting on the query page: an unreachable instance should
+        // fail the query after one timeout, not after the retry budget.
+        failFast: true,
       },
       (req) => {
         const type = req.type === "movie" ? "MOVIE" : req.type === "tv" ? "SERIES" : null;

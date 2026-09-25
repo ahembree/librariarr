@@ -62,6 +62,8 @@ interface ResolveResponse {
     plexUsername: string | null;
     avatar: string | null;
   } | null;
+  /** An instance's request list could not be read — the list covers the rest. */
+  partial?: boolean;
   requests: ResolvedRequest[];
 }
 
@@ -425,6 +427,12 @@ function DialogBody({ userKey, onClose }: { userKey: string; onClose: () => void
       )}
 
       <div className="max-h-[65vh] overflow-y-auto px-6 py-4">
+        {!loading && !error && data?.partial && data.requests.length > 0 && (
+          <p className="mb-3 flex items-center gap-2 rounded-md border border-amber/30 bg-amber/10 px-3 py-2 text-xs text-amber">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+            A Seerr instance could not be read — this list may be missing some of this user&apos;s requests.
+          </p>
+        )}
         {loading ? (
           <div className="flex items-center justify-center py-16">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -435,7 +443,9 @@ function DialogBody({ userKey, onClose }: { userKey: string; onClose: () => void
           </p>
         ) : !data || data.requests.length === 0 ? (
           <p className="py-12 text-center text-sm text-muted-foreground">
-            No requests found for this user.
+            {data?.partial
+              ? "Couldn't read Seerr's requests — an instance didn't answer. Try again shortly."
+              : "No requests found for this user."}
           </p>
         ) : filtered.length === 0 ? (
           <p className="py-12 text-center text-sm text-muted-foreground">

@@ -51,11 +51,12 @@ async function findRequestsByPagination(
   instanceName: string,
   tmdbId: string | null,
   tvdbId: string,
+  signal: AbortSignal,
 ): Promise<{ requests: SeerrRequest[]; media: SeerrMediaInfo | null }> {
   const matching: SeerrRequest[] = [];
   let media: SeerrMediaInfo | null = null;
 
-  await walkSeerrRequests(client, { instanceName, mediaType: "tv" }, (req) => {
+  await walkSeerrRequests(client, { instanceName, mediaType: "tv", failFast: true, signal }, (req) => {
     const tmdbMatch = tmdbId !== null && String(req.media?.tmdbId) === tmdbId;
     const tvdbMatch = req.media?.tvdbId != null && String(req.media.tvdbId) === tvdbId;
     if (tmdbMatch || tvdbMatch) {
@@ -134,7 +135,10 @@ export async function GET(
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
 
-  const queryInstance = async (instance: (typeof seerrInstances)[number]): Promise<SeerrMatch | null> => {
+  const queryInstance = async (
+    instance: (typeof seerrInstances)[number],
+    signal: AbortSignal,
+  ): Promise<SeerrMatch | null> => {
     try {
       const client = new SeerrClient(instance.url, instance.apiKey);
 
@@ -147,8 +151,8 @@ export async function GET(
         const tmdbNum = Number(tmdbId);
         if (Number.isFinite(tmdbNum)) {
           const details = mediaType === "movie"
-            ? await client.getMovie(tmdbNum)
-            : await client.getTvShow(tmdbNum);
+            ? await client.getMovie(tmdbNum, { signal })
+            : await client.getTvShow(tmdbNum, { signal });
           requests = details.mediaInfo?.requests ?? [];
           media = details.mediaInfo ?? null;
         }
@@ -158,16 +162,19 @@ export async function GET(
       // only: a movie request can be matched by TMDB id alone, so for a movie
       // without one the walk could never find anything.
       if (requests.length === 0 && !tmdbId && tvdbId && mediaType === "tv") {
-        const result = await findRequestsByPagination(client, instance.name, tmdbId, tvdbId);
+        const result = await findRequestsByPagination(client, instance.name, tmdbId, tvdbId, signal);
         requests = result.requests;
         media = result.media;
       }
 
       if (requests.length === 0) return null;
 
-      // The browser follows this link, so prefer the browser-facing URL.
+      // The browser follows this link, so prefer the browser-facing URL. Seerr
+      // pages are keyed by TMDB id; a series matched through its TVDB id alone
+      // still has one — on the Seerr media the requests belong to.
       const baseUrl = (instance.externalUrl || instance.url || "").replace(/\/+$/, "");
-      const seerrUrl = tmdbId ? `${baseUrl}/${mediaType}/${tmdbId}` : null;
+      const linkTmdbId = tmdbId ?? (media?.tmdbId != null ? String(media.tmdbId) : null);
+      const seerrUrl = linkTmdbId ? `${baseUrl}/${mediaType}/${linkTmdbId}` : null;
 
       return {
         instanceId: instance.id,
@@ -179,17 +186,24 @@ export async function GET(
         requests: requests.map(toSummary),
       };
     } catch (error) {
+      // Cancelled because the bound below already gave up on it (and said so).
+      if (signal.aborted) return null;
       apiLogger.error("Media", `Failed to query Seerr instance ${instance.name}`, { error: String(error) });
       return null;
     }
   };
 
   const settled = await Promise.all(
-    seerrInstances.map((instance) =>
-      withTimeout(queryInstance(instance), PER_INSTANCE_TIMEOUT_MS, () =>
-        apiLogger.warn("Media", `Seerr instance ${instance.name} did not answer within ${PER_INSTANCE_TIMEOUT_MS / 1000}s`),
-      ),
-    ),
+    seerrInstances.map((instance) => {
+      // Cancelled when the bound gives up, so an abandoned lookup — above all
+      // the TVDB-only walk of a whole request list — stops paging Seerr
+      // instead of running on in the background after every page view.
+      const controller = new AbortController();
+      return withTimeout(queryInstance(instance, controller.signal), PER_INSTANCE_TIMEOUT_MS, () => {
+        controller.abort();
+        apiLogger.warn("Media", `Seerr instance ${instance.name} did not answer within ${PER_INSTANCE_TIMEOUT_MS / 1000}s`);
+      });
+    }),
   );
   const matches = settled.filter((m): m is SeerrMatch => m !== null);
 

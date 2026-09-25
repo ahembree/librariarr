@@ -160,10 +160,40 @@ describe("getSeerrRequestStats", () => {
     const result = await getSeerrRequestStats("user1");
 
     expect(mockSeerrClient.getRequests).toHaveBeenCalledTimes(2);
-    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(1, { take: 100, skip: 0 });
-    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(2, { take: 100, skip: 90 });
+    // The dashboard fails fast on the first page only (see walkSeerrRequests).
+    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(1, { take: 100, skip: 0 }, { retry: false });
+    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(2, { take: 100, skip: 90 }, {});
     expect(result.users[0].requestCount).toBe(101);
     expect(result.partial).toBe(false);
+  });
+
+  it("walks every instance at once, so a slow or dead one does not hold the others back", async () => {
+    mockPrisma.seerrInstance.findMany.mockResolvedValue([
+      { id: "s1", url: "http://o1", apiKey: "k1", name: "Slow" },
+      { id: "s2", url: "http://o2", apiKey: "k2", name: "Fast" },
+    ]);
+    // The slow instance only gives up once the fast one has been asked — a
+    // one-at-a-time walk would wait on it forever.
+    let release!: () => void;
+    const asked = new Promise<void>((resolve) => { release = resolve; });
+    mockSeerrClient.getRequests
+      .mockImplementationOnce(async () => {
+        await asked;
+        throw new Error("timeout of 15000ms exceeded");
+      })
+      .mockImplementationOnce(async () => {
+        release();
+        return {
+          pageInfo: { page: 1, pages: 1, results: 1 },
+          results: [req(1, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 7 })],
+        };
+      });
+
+    const result = await getSeerrRequestStats("user1");
+
+    expect(result.partial).toBe(true);
+    expect(result.users).toHaveLength(1);
+    expect(result.users[0].requestCount).toBe(1);
   });
 
   it("continues processing remaining instances when one Seerr fetch fails", async () => {

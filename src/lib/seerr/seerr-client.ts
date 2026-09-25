@@ -1,4 +1,4 @@
-import axios, { AxiosInstance } from "axios";
+import axios, { type AxiosInstance, type AxiosRequestConfig } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
 import { configureRetry, NO_RETRY } from "@/lib/http-retry";
@@ -146,6 +146,22 @@ export interface SeerrTvDetails {
   mediaInfo?: SeerrMediaInfo;
 }
 
+/** Per-call options for the Seerr lookups interactive routes wait on. */
+export interface SeerrCallOptions {
+  /** `false` fails on the first transport error instead of retrying it. */
+  retry?: boolean;
+  /** Cancels the call once its caller has stopped waiting for the answer. */
+  signal?: AbortSignal;
+}
+
+function callConfig(options: SeerrCallOptions): AxiosRequestConfig | undefined {
+  if (options.retry !== false && !options.signal) return undefined;
+  return {
+    ...(options.retry === false ? NO_RETRY : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
+  };
+}
+
 export class SeerrClient {
   private client: AxiosInstance;
 
@@ -216,18 +232,21 @@ export class SeerrClient {
     }
   }
 
-  async getRequests(params?: {
-    take?: number;
-    skip?: number;
-    filter?: string;
-    sort?: string;
-    sortDirection?: string;
-    requestedBy?: number;
-    mediaType?: string;
-  }): Promise<SeerrRequestsResponse> {
+  async getRequests(
+    params?: {
+      take?: number;
+      skip?: number;
+      filter?: string;
+      sort?: string;
+      sortDirection?: string;
+      requestedBy?: number;
+      mediaType?: string;
+    },
+    options: SeerrCallOptions = {},
+  ): Promise<SeerrRequestsResponse> {
     const { data } = await this.client.get<SeerrRequestsResponse>(
       "/api/v1/request",
-      { params }
+      { params, ...callConfig(options) }
     );
     return data;
   }
@@ -239,17 +258,19 @@ export class SeerrClient {
     return data;
   }
 
-  async getMovie(tmdbId: number): Promise<SeerrMovieDetails> {
-    const { data } = await this.client.get<SeerrMovieDetails>(
-      `/api/v1/movie/${tmdbId}`
-    );
+  async getMovie(tmdbId: number, options: SeerrCallOptions = {}): Promise<SeerrMovieDetails> {
+    const config = callConfig(options);
+    const { data } = config
+      ? await this.client.get<SeerrMovieDetails>(`/api/v1/movie/${tmdbId}`, config)
+      : await this.client.get<SeerrMovieDetails>(`/api/v1/movie/${tmdbId}`);
     return data;
   }
 
-  async getTvShow(tmdbId: number): Promise<SeerrTvDetails> {
-    const { data } = await this.client.get<SeerrTvDetails>(
-      `/api/v1/tv/${tmdbId}`
-    );
+  async getTvShow(tmdbId: number, options: SeerrCallOptions = {}): Promise<SeerrTvDetails> {
+    const config = callConfig(options);
+    const { data } = config
+      ? await this.client.get<SeerrTvDetails>(`/api/v1/tv/${tmdbId}`, config)
+      : await this.client.get<SeerrTvDetails>(`/api/v1/tv/${tmdbId}`);
     return data;
   }
 

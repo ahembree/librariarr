@@ -20,7 +20,7 @@ Seerr integration brings media request data into Librariarr for use in lifecycle
 3. Enter:
    - **Name**: A label (e.g., "Seerr")
    - **URL**: Seerr base URL (e.g., `http://192.168.1.100:5055`) — the address Librariarr uses to reach Seerr
-   - **External URL** (optional): The address your browser uses for Seerr (e.g., `https://requests.example.com`). Used for the **Open in Seerr** link on media detail pages; falls back to **URL** when empty
+   - **External URL** (optional): The address your browser uses for Seerr (e.g., `https://requests.example.com`), starting with `http://` or `https://`. Used for the **Open in Seerr** link on media detail pages; falls back to **URL** when empty
    - **API Key**: Found in Seerr → Settings → General → API Key
 4. Click **Test Connection** to verify
 5. Save
@@ -124,6 +124,7 @@ Create a rule set to find media that was requested but never watched:
 
 - Seerr data is fetched live during rule evaluation, which can be slower for large match sets
 - Multiple Seerr instances are supported; the dashboard card aggregates requests across all of them per user (Plex username, otherwise Seerr username or email)
+- If an instance can't be read (it's down, or its request list changed faster than it could be paged), the card marks its figures **incomplete** and covers the instances that did answer; the per-user list says so too. Nothing is cached in that state, so the next load tries again
 - Request data availability depends on Seerr having been running when requests were made — historical data before Seerr was set up is not available
 - Watch correlation on the dashboard card relies on the Seerr user's `plexUsername` or `jellyfinUsername` matching the username in your media server's watch history
 

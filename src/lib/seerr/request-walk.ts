@@ -27,6 +27,16 @@ export interface WalkSeerrRequestsOptions {
   mediaType?: "movie" | "tv";
   /** Reports 0..1 completion of the walk. */
   onProgress?: (fraction: number) => void;
+  /**
+   * Request the FIRST page without transport retries. For callers a person
+   * is waiting on (the dashboard card, a drill-down, the query page): an
+   * unreachable instance then costs one timeout, not the retry budget — four
+   * 15s timeouts plus backoff, on every load, since a failed walk is never
+   * cached. Later pages keep their retries: the instance has just answered.
+   */
+  failFast?: boolean;
+  /** Stop paging (and cancel the page in flight) once the caller gives up. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -45,7 +55,7 @@ export async function walkSeerrRequests(
   options: WalkSeerrRequestsOptions,
   onRequest: (req: SeerrRequest) => void,
 ): Promise<void> {
-  const { instanceName, mediaType, onProgress } = options;
+  const { instanceName, mediaType, onProgress, failFast, signal } = options;
   const take = SEERR_REQUEST_PAGE_SIZE;
   const seen = new Set<number>();
   let sendMediaType = mediaType !== undefined;
@@ -59,14 +69,24 @@ export async function walkSeerrRequests(
       );
     }
 
+    if (signal?.aborted) {
+      throw new Error(`Seerr request walk on "${instanceName}" was cancelled`);
+    }
+
     let results: SeerrRequest[];
     let total: number | undefined;
     try {
-      const page = await client.getRequests({
-        take,
-        skip,
-        ...(sendMediaType ? { mediaType } : {}),
-      });
+      const page = await client.getRequests(
+        {
+          take,
+          skip,
+          ...(sendMediaType ? { mediaType } : {}),
+        },
+        {
+          ...(failFast && pages === 0 ? { retry: false } : {}),
+          ...(signal ? { signal } : {}),
+        },
+      );
       if (!page || !Array.isArray(page.results)) {
         throw new Error(
           `Seerr "${instanceName}" returned an unexpected response for its request list`,
@@ -113,14 +133,25 @@ export async function walkSeerrRequests(
       );
     }
 
-    if (results.length < take) break;
-    if (fresh === 0) {
+    // The end of the list. `pageInfo.results` is the server's count of matching
+    // requests in this same response, so a short page with rows still beyond
+    // it is a server (or a proxy) capping the page below `take`, not the end —
+    // stopping there made every later request read as never requested. Only a
+    // response without a count falls back to "a short page is the last one".
+    const reachedEnd =
+      total !== undefined && Number.isFinite(total)
+        ? skip + results.length >= total
+        : results.length < take;
+    if (reachedEnd) break;
+    // Advance by the page actually returned, keeping the overlap.
+    const step = results.length - PAGE_OVERLAP;
+    if (fresh === 0 || step <= 0) {
       throw new Error(
         `Seerr "${instanceName}" request list is not advancing — the server ignored the page offset`,
       );
     }
 
-    skip += take - PAGE_OVERLAP;
+    skip += step;
     if (onProgress && total && total > 0) {
       onProgress(Math.min(1, (skip + PAGE_OVERLAP) / total));
     }

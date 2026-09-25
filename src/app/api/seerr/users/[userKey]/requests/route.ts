@@ -96,23 +96,36 @@ async function resolveUserRequests(
   // requests not in the library go to the instance the request came from.
   const clients = new Map<string, SeerrClient>();
 
-  for (const inst of instances) {
-    const client = new SeerrClient(inst.url, inst.apiKey);
-    const fromInstance: SeerrRequest[] = [];
-    try {
-      await walkSeerrRequests(client, { instanceName: inst.name }, (req) => {
-        // Same identity the stats card keys its rows on — see seerrRequesterKey.
-        if (seerrRequesterKey(req.requestedBy) === userKey) fromInstance.push(req);
-      });
-    } catch (error) {
+  // Walked at once and failing fast, like the stats card this drills into (see
+  // computeSeerrRequestStats): a dead instance costs one timeout, not its
+  // retry budget, and does not hold the others back. Folded in instance order.
+  const walks = await Promise.all(
+    instances.map(async (inst) => {
+      const client = new SeerrClient(inst.url, inst.apiKey);
+      const fromInstance: SeerrRequest[] = [];
+      try {
+        await walkSeerrRequests(client, { instanceName: inst.name, failFast: true }, (req) => {
+          // Same identity the stats card keys its rows on — see seerrRequesterKey.
+          if (seerrRequesterKey(req.requestedBy) === userKey) fromInstance.push(req);
+        });
+        return { inst, client, fromInstance };
+      } catch (error) {
+        logger.warn(
+          "Seerr",
+          `Failed to fetch requests from ${inst.name} for user ${userKey}`,
+          { error: error instanceof Error ? error.message : String(error) }
+        );
+        return null;
+      }
+    }),
+  );
+
+  for (const walk of walks) {
+    if (!walk) {
       partial = true;
-      logger.warn(
-        "Seerr",
-        `Failed to fetch requests from ${inst.name} for user ${userKey}`,
-        { error: error instanceof Error ? error.message : String(error) }
-      );
       continue;
     }
+    const { inst, client, fromInstance } = walk;
     clients.set(inst.id, client);
     for (const req of fromInstance) {
       const r = req.requestedBy;

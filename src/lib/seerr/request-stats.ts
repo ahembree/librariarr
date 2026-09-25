@@ -120,20 +120,38 @@ async function computeSeerrRequestStats(
   const accumulators = new Map<string, UserAccumulator>();
   let partial = false;
 
-  for (const instance of instances) {
-    const client = new SeerrClient(instance.url, instance.apiKey);
-    // Buffer per instance: a walk that fails partway contributes nothing
-    // rather than an arbitrary prefix of its requests.
-    const requests: SeerrRequest[] = [];
-    try {
-      await walkSeerrRequests(client, { instanceName: instance.name }, (req) => requests.push(req));
-    } catch (error) {
+  // Every instance is walked at once — one that is down must not hold back
+  // the others — and fails fast: this is the dashboard, and a failed walk is
+  // never cached, so a dead instance's retry budget would be paid on every
+  // load. Results are then folded in instance order, so which requester's
+  // name and avatar a row shows does not depend on which walk finished first.
+  const walks = await Promise.all(
+    instances.map(async (instance) => {
+      const client = new SeerrClient(instance.url, instance.apiKey);
+      // Buffer per instance: a walk that fails partway contributes nothing
+      // rather than an arbitrary prefix of its requests.
+      const requests: SeerrRequest[] = [];
+      try {
+        await walkSeerrRequests(
+          client,
+          { instanceName: instance.name, failFast: true },
+          (req) => requests.push(req),
+        );
+        return requests;
+      } catch (error) {
+        logger.warn(
+          "Seerr",
+          `Failed to fetch requests from ${instance.name} for stats`,
+          { error: error instanceof Error ? error.message : String(error) }
+        );
+        return null;
+      }
+    }),
+  );
+
+  for (const requests of walks) {
+    if (!requests) {
       partial = true;
-      logger.warn(
-        "Seerr",
-        `Failed to fetch requests from ${instance.name} for stats`,
-        { error: error instanceof Error ? error.message : String(error) }
-      );
       continue;
     }
     for (const req of requests) {

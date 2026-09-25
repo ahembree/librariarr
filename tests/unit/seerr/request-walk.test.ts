@@ -19,7 +19,7 @@ function req(id: number, type: "movie" | "tv" = "movie"): SeerrRequest {
 function listClient(initial: SeerrRequest[], mutate?: (list: SeerrRequest[], call: number) => void) {
   const list = [...initial];
   let call = 0;
-  const getRequests = vi.fn(async ({ take, skip }: Params) => {
+  const getRequests = vi.fn(async ({ take, skip }: Params, _options?: unknown) => {
     mutate?.(list, call++);
     return { pageInfo: { page: 1, pages: 1, results: list.length }, results: list.slice(skip, skip + take) };
   });
@@ -36,6 +36,60 @@ describe("walkSeerrRequests", () => {
     expect(seen).toHaveLength(250);
     expect(new Set(seen).size).toBe(250);
     expect(getRequests.mock.calls.map((c) => c[0].skip)).toEqual([0, 90, 180]);
+  });
+
+  it("fails fast on the first page only when asked to", async () => {
+    // An interactive caller learns about a dead instance after one timeout;
+    // pages after the first keep their retries — the instance just answered.
+    const { client, getRequests } = listClient(newestFirst(150));
+    await walkSeerrRequests(client, { instanceName: "S", failFast: true }, () => {});
+    expect(getRequests.mock.calls.map((c) => c[1])).toEqual([{ retry: false }, {}]);
+
+    getRequests.mockClear();
+    await walkSeerrRequests(client, { instanceName: "S" }, () => {});
+    expect(getRequests.mock.calls.map((c) => c[1])).toEqual([{}, {}]);
+  });
+
+  it("stops paging once the caller's signal is aborted", async () => {
+    const controller = new AbortController();
+    const { client, getRequests } = listClient(newestFirst(250), (_list, call) => {
+      if (call === 0) controller.abort();
+    });
+    await expect(
+      walkSeerrRequests(client, { instanceName: "S", signal: controller.signal }, () => {}),
+    ).rejects.toThrow(/cancelled/);
+    expect(getRequests).toHaveBeenCalledTimes(1);
+    expect(getRequests.mock.calls[0][1]).toEqual({ signal: controller.signal });
+  });
+
+  it("keeps reading when the server caps the page below the size asked for", async () => {
+    // A short page is only the end when the server's own count agrees —
+    // otherwise every request past the first capped page reads as never requested.
+    const list = newestFirst(250);
+    const getRequests = vi.fn(async ({ skip }: Params) => ({
+      pageInfo: { page: 1, pages: 5, results: list.length },
+      results: list.slice(skip, skip + 50),
+    }));
+    const seen = new Set<number>();
+    await walkSeerrRequests({ getRequests } as unknown as SeerrClient, { instanceName: "S" }, (r) => seen.add(r.id));
+    expect(seen.size).toBe(250);
+  });
+
+  it("stops on a full last page when the count says nothing follows", async () => {
+    const { client, getRequests } = listClient(newestFirst(100));
+    const seen: number[] = [];
+    await walkSeerrRequests(client, { instanceName: "S" }, (r) => seen.push(r.id));
+    expect(seen).toHaveLength(100);
+    expect(getRequests).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to 'a short page is the last' when the response carries no count", async () => {
+    const list = newestFirst(150);
+    const getRequests = vi.fn(async ({ skip, take }: Params) => ({ results: list.slice(skip, skip + take) }));
+    const seen = new Set<number>();
+    await walkSeerrRequests({ getRequests } as unknown as SeerrClient, { instanceName: "S" }, (r) => seen.add(r.id));
+    expect(seen.size).toBe(150);
+    expect(getRequests.mock.calls.map((c) => c[0].skip)).toEqual([0, 90]);
   });
 
   it("does not double-count a row pushed down by a request created mid-walk", async () => {
@@ -117,7 +171,7 @@ describe("walkSeerrRequests", () => {
   it("sends mediaType to servers that accept it", async () => {
     const { client, getRequests } = listClient([req(1, "movie")]);
     await walkSeerrRequests(client, { instanceName: "S", mediaType: "movie" }, () => {});
-    expect(getRequests).toHaveBeenCalledWith({ take: 100, skip: 0, mediaType: "movie" });
+    expect(getRequests).toHaveBeenCalledWith({ take: 100, skip: 0, mediaType: "movie" }, {});
   });
 
   it("propagates other errors", async () => {

@@ -15,7 +15,9 @@ vi.mock("@/lib/seerr/seerr-client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/seerr/seerr-client")>()),
   SeerrClient: function (url: string) {
     constructedWith.push(url);
-    return { getRequests: (params: unknown) => mockGetRequests(url, params) };
+    return {
+      getRequests: (params: unknown, options?: unknown) => mockGetRequests(url, params, options),
+    };
   },
 }));
 
@@ -64,7 +66,8 @@ describe("fetchSeerrDataForQuery", () => {
     expect(result.MOVIE["TMDB:550"]).toBeDefined();
     expect(result.MOVIE["TMDB:550"].requestCount).toBe(1);
     expect(result.MOVIE["TMDB:550"].approvalDate).toBe("2024-01-16");
-    expect(mockGetRequests).toHaveBeenCalledWith("http://o", { take: 100, skip: 0, mediaType: "movie" });
+    // Someone is waiting on the query page: the first page fails fast.
+    expect(mockGetRequests).toHaveBeenCalledWith("http://o", { take: 100, skip: 0, mediaType: "movie" }, { retry: false });
   });
 
   it("merges every enabled instance, like lifecycle rules", async () => {
@@ -98,7 +101,7 @@ describe("fetchSeerrDataForQuery", () => {
     const result = await fetchSeerrDataForQuery("u1", ["MOVIE", "SERIES"]);
 
     expect(mockGetRequests).toHaveBeenCalledTimes(1);
-    expect(mockGetRequests).toHaveBeenCalledWith("http://o", { take: 100, skip: 0 });
+    expect(mockGetRequests).toHaveBeenCalledWith("http://o", { take: 100, skip: 0 }, { retry: false });
     expect(result.MOVIE["TMDB:550"].requestedBy).toEqual(["a"]);
     expect(result.SERIES["TMDB:550"].requestedBy).toEqual(["b"]);
     expect(result.SERIES["TVDB:77"]).toBe(result.SERIES["TMDB:550"]);

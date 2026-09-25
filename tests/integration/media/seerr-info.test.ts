@@ -172,7 +172,14 @@ describe("GET /api/media/[id]/seerr-info", () => {
     );
 
     expect(body.matches).toHaveLength(1);
-    expect(body.matches[0]).toMatchObject({ matchedVia: "TVDB", externalId: "81189", mediaStatus: 4, seerrUrl: null });
+    // Seerr pages are keyed by TMDB id; the matched Seerr media carries one
+    // even though the library copy only knows the TVDB id.
+    expect(body.matches[0]).toMatchObject({
+      matchedVia: "TVDB",
+      externalId: "81189",
+      mediaStatus: 4,
+      seerrUrl: "http://seerr.test:5055/tv/1396",
+    });
     expect(body.matches[0].requests).toHaveLength(1);
     expect(mockGetTvShow).not.toHaveBeenCalled();
   });

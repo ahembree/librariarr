@@ -283,8 +283,9 @@ describe("fetchSeerrMetadata", () => {
     const result = await fetchSeerrMetadata("u1", "MOVIE");
 
     expect(mockSeerrClient.getRequests).toHaveBeenCalledTimes(2);
-    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(1, { take: 100, skip: 0, mediaType: "movie" });
-    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(2, { take: 100, skip: 90, mediaType: "movie" });
+    // Background detection keeps transport retries on every page (no failFast).
+    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(1, { take: 100, skip: 0, mediaType: "movie" }, {});
+    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(2, { take: 100, skip: 90, mediaType: "movie" }, {});
     expect(Object.keys(result)).toHaveLength(101);
     // Overlapping rows are counted once.
     expect(Object.values(result).every((m) => m.requestCount === 1)).toBe(true);
@@ -312,6 +313,7 @@ describe("fetchSeerrMetadata", () => {
 
     expect(mockSeerrClient.getRequests).toHaveBeenCalledWith(
       expect.objectContaining({ mediaType: "tv" }),
+      {},
     );
   });
 

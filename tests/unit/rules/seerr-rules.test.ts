@@ -603,24 +603,45 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
       expect(result.get("item1")!).toHaveLength(1);
     });
 
-    it("never matches a missing Seerr date through negate (fail-closed)", () => {
-      // NOT(notEquals D) means "equals D"; it must not match an item that was
-      // never requested. A group-level NOT produces these forms automatically.
+    it("treats a missing Seerr date like a missing library date: only notEquals holds, and negate applies", () => {
+      // The same two-valued semantics as the DB date columns. NOT(notEquals D),
+      // i.e. "equals D", must not match an item never requested — while
+      // NOT(requested in the last N days) must keep matching one, or the usual
+      // "protect recently requested titles" clause silently drops every title
+      // nobody ever requested. A group-level NOT produces these forms too.
       const items = [makeItem("item1", "99")];
-      for (const [field, operator, value] of [
-        ["seerrRequestDate", "notEquals", "2024-01-01"],
-        ["seerrRequestDate", "after", "2020-01-01"],
-        ["seerrApprovalDate", "inLastDays", "30"],
-        ["seerrDeclineDate", "before", "2025-01-01"],
-      ] as const) {
-        const rules: LifecycleRule[] = [
-          { id: "r1", field, operator, value, condition: "AND", negate: true },
-        ];
-        // No Seerr record at all, and a record with no such date.
-        for (const seerrData of [{} as SeerrDataMap, makeSeerrData("99", { requestDate: null, approvalDate: null, declineDate: null })]) {
-          const result = getMatchedCriteriaForItems(items, rules, "MOVIE", undefined, seerrData);
-          expect(result.get("item1"), `${field} NOT ${operator}`).toEqual([]);
+      const cases = [
+        ["seerrRequestDate", "notEquals", "2024-01-01", true],
+        ["seerrRequestDate", "equals", "2024-01-01", false],
+        ["seerrRequestDate", "after", "2020-01-01", false],
+        ["seerrRequestDate", "notInLastDays", "30", false],
+        ["seerrApprovalDate", "inLastDays", "30", false],
+        ["seerrDeclineDate", "before", "2025-01-01", false],
+        ["seerrDeclineDate", "between", "2020-01-01,2025-01-01", false],
+      ] as const;
+      for (const [field, operator, value, positive] of cases) {
+        for (const negate of [false, true]) {
+          const rules: LifecycleRule[] = [
+            { id: "r1", field, operator, value, condition: "AND", negate },
+          ];
+          const expected = negate ? !positive : positive;
+          // No Seerr record at all, and a record with no such date.
+          for (const seerrData of [{} as SeerrDataMap, makeSeerrData("99", { requestDate: null, approvalDate: null, declineDate: null })]) {
+            const result = getMatchedCriteriaForItems(items, rules, "MOVIE", undefined, seerrData);
+            expect(result.get("item1")!.length > 0, `${negate ? "NOT " : ""}${field} ${operator}`).toBe(expected);
+          }
         }
+      }
+    });
+
+    it("matches nothing for an unknown operator on a missing Seerr date, negated or not", () => {
+      const items = [makeItem("item1", "99")];
+      for (const negate of [false, true]) {
+        const rules: LifecycleRule[] = [
+          { id: "r1", field: "seerrRequestDate", operator: "contains", value: "2024", condition: "AND", negate },
+        ];
+        const result = getMatchedCriteriaForItems(items, rules, "MOVIE", undefined, {} as SeerrDataMap);
+        expect(result.get("item1")).toEqual([]);
       }
     });
 

@@ -146,6 +146,26 @@ describe("SeerrClient", () => {
     });
   });
 
+  describe("per-call options", () => {
+    it("passes a cancel signal and a retry opt-out through to the request", async () => {
+      const controller = new AbortController();
+      mockAxiosInstance.get.mockResolvedValue({ data: {} });
+
+      await client.getMovie(1, { signal: controller.signal });
+      expect(mockAxiosInstance.get).toHaveBeenLastCalledWith("/api/v1/movie/1", { signal: controller.signal });
+
+      await client.getTvShow(2, { retry: false });
+      expect(mockAxiosInstance.get).toHaveBeenLastCalledWith("/api/v1/tv/2", { __noRetry: true });
+
+      await client.getRequests({ take: 5 }, { retry: false, signal: controller.signal });
+      expect(mockAxiosInstance.get).toHaveBeenLastCalledWith("/api/v1/request", {
+        params: { take: 5 },
+        __noRetry: true,
+        signal: controller.signal,
+      });
+    });
+  });
+
   describe("getTvShow", () => {
     it("fetches tv show details by tmdb id", async () => {
       const show = { id: 67890, name: "Test Show" };

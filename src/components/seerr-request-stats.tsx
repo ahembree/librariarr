@@ -55,6 +55,8 @@ interface UserStats {
 
 interface Response {
   configured: boolean;
+  /** An instance's request list could not be read — counts cover the rest. */
+  partial?: boolean;
   users: UserStats[];
   totals: {
     requestCount: number;
@@ -313,6 +315,17 @@ export function SeerrRequestStats() {
           </span>
         </>
       )}
+      {data.partial && (
+        <>
+          <span aria-hidden>·</span>
+          <span
+            className="text-amber"
+            title="A Seerr instance could not be read — these counts cover the others"
+          >
+            incomplete
+          </span>
+        </>
+      )}
     </div>
   ) : null;
 
@@ -402,7 +415,11 @@ export function SeerrRequestStats() {
       <Card className="h-full flex flex-col gap-3">
         {header}
         <CardContent className="flex-1 min-h-0 flex items-center justify-center py-8">
-          <p className="text-sm text-muted-foreground">No Seerr requests found yet.</p>
+          <p className="text-sm text-muted-foreground">
+            {data.partial
+              ? "Couldn't read Seerr's requests — an instance didn't answer. Try again shortly."
+              : "No Seerr requests found yet."}
+          </p>
         </CardContent>
       </Card>
     );
