@@ -16,15 +16,16 @@ where the risk is real, drive the actual installed package.
 
 ## Loop
 
-For each PR (simplest bumps first — patch/dev-only, then minor, then major; docs PRs last
-because `docs/package-lock.json` conflicts serialize them anyway):
+For each PR (simplest bumps first — patch/dev-only, then minor, then major; docs PRs last —
+they are isolated from the app lockfile, so they neither block nor are blocked by the rest,
+though they do conflict with each other):
 
 1. **Read what it actually changes.** `pull_request_read` (method `get`) for the changelog
    Dependabot embeds, and `git diff origin/main...origin/<branch> -- package.json` for the
    real bump. Do not trust the title — see "Titles lie" below.
 2. **Bring the branch up to main** (the ruleset requires it — see "Ruleset" below).
-3. **Validate locally** with `validate.sh` in this directory. It is the CI job set plus a
-   working Postgres, and it is the only place you can iterate quickly.
+3. **Check the branch out and validate locally** — `git checkout -B pr<n> origin/<branch>`
+   then `validate.sh` in this directory. Running it on `main` validates nothing.
 4. **Assess the runtime contract** for anything the mocks hide (below).
 5. **Fix if needed**, push to the Dependabot branch, re-validate.
 6. **Wait for CI on the final head**, confirm every check including Browser E2E, then
@@ -40,8 +41,16 @@ At the end, re-list open PRs to confirm nothing labelled `dependencies` is left,
 .claude/skills/merge-dep-prs/validate.sh --setup   # starts Postgres, creates the role/DB
 ```
 
-`validate.sh` (no args) then runs: `pnpm install --frozen-lockfile`, `prisma generate`,
-`pnpm lint`, `tsc --noEmit`, `pnpm test:unit`, integration tests, `pnpm build`.
+`validate.sh` (no args) then runs `pnpm install --frozen-lockfile`, `prisma generate`,
+`pnpm lint`, `tsc --noEmit`, `pnpm test:unit`, integration tests, `pnpm build`. `--quick`
+skips the integration tests and the build, for iterating on a fix.
+
+**That is four of the six required checks.** Docker Build and **Browser E2E** are not run
+locally: `pnpm e2e:docker` needs a Docker daemon and the cloud container has none (`docker`
+is on PATH, but `/var/run/docker.sock` does not exist). E2E is the job that catches what the
+mocks hide, so for anything touching auth, sessions or a runtime contract, push and read the
+Browser E2E result on the final head before merging — that is the check that failed on the
+unfixed iron-session branch while the other five passed.
 
 **Why integration tests need the wrapper.** `tests/setup/global-setup.ts` runs
 `prisma db push --accept-data-loss`, which Prisma refuses when it detects an AI agent. Do
@@ -49,8 +58,10 @@ not set `PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION` and do not edit the setup 
 `validate.sh` instead builds `librariarr_test` itself — `prisma migrate deploy` plus the
 `migrate diff` script for the schema-only columns `db push` would have added (migrations
 lag `schema.prisma` by design; see "Prisma and Database" in CLAUDE.md) — then runs vitest
-with `VITEST_SKIP_DB_SETUP=true`. It refuses to apply a diff containing `DROP`/`TRUNCATE`/
-`DELETE`, so a schema change that would destroy data stops the run instead of proceeding.
+with `VITEST_SKIP_DB_SETUP=true`. It refuses to apply a diff carrying a data-losing statement
+— `DROP TABLE`/`DROP COLUMN`, `TRUNCATE`, `DELETE FROM`, matched mid-line since Prisma writes
+column drops inside an `ALTER TABLE` — while letting the routine `ON DELETE CASCADE`,
+`DROP CONSTRAINT` and `DROP INDEX` through, so it stays a signal rather than noise.
 
 ## What the mocks hide — check these by hand
 
@@ -58,7 +69,7 @@ with `VITEST_SKIP_DB_SETUP=true`. It refuses to apply a diff containing `DROP`/`
 |---|---|---|
 | `iron-session` | `tests/setup/mock-session.ts` mocks the whole session module | Drive the real package over an in-memory cookie store. Every login path goes through `rotateSession()`; confirm destroy/re-read/save still works |
 | `axios` | every Arr/Plex/Seerr/Tracearr client is `vi.mock()`ed | Interceptors, error shape (`err.response.status`), timeout option names |
-| `zod` | nothing — but the error *string* contract is untested | `result.error.issues.map(i =>` `${i.path.join(".")}: ${i.message}`)` must still read the same; custom messages must survive |
+| `zod` | nothing — but the `details[]` *string* contract is untested | `validateRequest` joins each issue as path-dot-path + ": " + message. Parse a deliberately invalid body and confirm custom messages survive and nested paths still render as `a.b.0` |
 | `pg` / `graphile-worker` | integration tests do exercise these | Usually genuinely covered |
 | `lucide-react` | icons never render in vitest | Every imported name must still exist — the icon check below |
 | `next`, `react`, `prisma` | major bumps touch everything | Do not batch these with anything else |
@@ -73,15 +84,24 @@ import * as icons from "lucide-react";
 const files = execSync('grep -rl "lucide-react" --include=*.tsx --include=*.ts src', {encoding:"utf8"}).trim().split("\n");
 const names = new Set();
 for (const f of files)
-  for (const m of readFileSync(f,"utf8").matchAll(/import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*["']lucide-react["']/g))
-    for (let n of m[1].split(",")) { n = n.trim().split(/\s+as\s+/)[0]; if (n) names.add(n); }
-const missing = [...names].filter(n => !(n in icons) && !n.startsWith("type "));
-console.log(missing.length ? "MISSING: " + missing.join(", ") : `ok — ${names.size} names`);
+  // `import type { … }` is skipped wholesale and an inline `type X` specifier is dropped:
+  // both are erased at compile time, so a runtime `in` check always calls them missing.
+  for (const m of readFileSync(f,"utf8").matchAll(/import\s+(type\s+)?\{([^}]*)\}\s*from\s*["']lucide-react["']/g)) {
+    if (m[1]) continue;
+    for (let n of m[2].split(",")) {
+      n = n.trim().split(/\s+as\s+/)[0].trim();
+      if (n && !/^type\s/.test(n)) names.add(n);
+    }
+  }
+const missing = [...names].filter(n => !(n in icons));
+console.log(missing.length ? "MISSING: " + missing.join(", ") : `ok — ${names.size} icon names resolve`);
 EOF
 node .icon-check.mjs; rm .icon-check.mjs
 ```
 
-Type-only exports (`LucideIcon`) show as missing to a runtime check — `tsc` covers those.
+A clean run prints `ok — N icon names resolve`. If it ever prints `MISSING: LucideIcon` the
+type-import filtering has regressed, not the dependency — type-only exports do not exist at
+runtime, and `tsc --noEmit` is what covers them.
 
 ## Ruleset, and how branches move under you
 
@@ -120,8 +140,13 @@ git checkout origin/main -- docs/package-lock.json
 cd docs && npx -y npm@12 install --package-lock-only && npm ci && npm run build
 ```
 
-A docs PR is validated by that build: 31 pages, and MDX components (`sl-steps`,
-`starlight-aside`, `expressive-code`) present in `dist/`.
+If that `git diff origin/main -- docs/package-lock.json` strips `libc` lines as well as
+bumping the package, the pinned npm is older than the one that wrote main's lockfile — raise
+it and redo the relock.
+
+That build is the validation for a docs PR: every page builds, and the MDX components still
+render — grep `dist/` for `sl-steps`, `starlight-aside` and `expressive-code`, since a
+Starlight or Astro major can drop a component and still exit 0.
 
 ## Titles lie — fix them before squashing
 

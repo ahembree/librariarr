@@ -6,13 +6,18 @@
 #   validate.sh             install, prisma generate, lint, typecheck, unit, integration, build
 #   validate.sh --quick     skip the integration tests and the build (fast iteration)
 #
+# This is NOT the whole CI job set: Docker Build and Browser E2E are not run here. E2E is the
+# job that catches what the route tests' mocks hide, so it has to be confirmed on the pushed
+# branch before merging. `pnpm e2e:docker` runs the same stack locally but needs a Docker
+# daemon, which the cloud container does not have.
+#
 # Integration tests: tests/setup/global-setup.ts runs `prisma db push --accept-data-loss`,
 # which Prisma refuses when it detects an AI agent. Rather than bypassing that guard, this
 # script builds librariarr_test itself — `migrate deploy` for the migration files, plus the
 # `migrate diff` script for the schema-only columns db push would have added (migrations lag
 # schema.prisma by design; see "Prisma and Database" in CLAUDE.md) — and then runs vitest with
-# VITEST_SKIP_DB_SETUP=true. The diff is refused if it contains DROP/TRUNCATE/DELETE, so a
-# schema change that would destroy data stops the run instead of being applied.
+# VITEST_SKIP_DB_SETUP=true. The diff is refused if it contains a data-losing statement (DROP
+# TABLE/COLUMN, TRUNCATE, DELETE FROM) so a schema change that would destroy data stops the run.
 
 set -uo pipefail
 
@@ -30,6 +35,15 @@ TEST_URL="${BASE_URL}/librariarr_test"
 
 say() { printf '\n=== %s\n' "$*"; }
 
+# Run a psql/createdb command as the postgres superuser. `su` without a tty either prompts or
+# dies confusingly, so require root and say so plainly rather than hanging the run.
+as_postgres() {
+  if [ "$(id -u)" = 0 ]; then su postgres -c "$1"
+  elif command -v sudo >/dev/null 2>&1; then sudo -n -u postgres sh -c "$1"
+  else echo "need root (or passwordless sudo) to administer postgres"; return 1
+  fi
+}
+
 setup_postgres() {
   say "postgres"
   if ! pg_isready -h localhost -q 2>/dev/null; then
@@ -38,11 +52,12 @@ setup_postgres() {
   fi
   pg_isready -h localhost || { echo "postgres did not start"; exit 1; }
 
-  su postgres -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='${PGUSER_NAME}'\"" 2>/dev/null | grep -q 1 \
-    || su postgres -c "psql -q -c \"CREATE ROLE ${PGUSER_NAME} LOGIN SUPERUSER PASSWORD '${PGPASS}'\"" \
+  as_postgres "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='${PGUSER_NAME}'\"" 2>/dev/null | grep -q 1 \
+    || as_postgres "psql -q -c \"CREATE ROLE ${PGUSER_NAME} LOGIN SUPERUSER PASSWORD '${PGPASS}'\"" \
     || { echo "could not create the ${PGUSER_NAME} role"; exit 1; }
   psql -h localhost -U "$PGUSER_NAME" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='librariarr'" | grep -q 1 \
-    || createdb -h localhost -U "$PGUSER_NAME" librariarr
+    || createdb -h localhost -U "$PGUSER_NAME" librariarr \
+    || { echo "could not create the librariarr database"; exit 1; }
   echo "postgres ready"
 }
 
@@ -51,16 +66,28 @@ provision_test_db() {
   psql -h localhost -U "$PGUSER_NAME" -d postgres -q \
     -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='librariarr_test' AND pid <> pg_backend_pid()" >/dev/null
   psql -h localhost -U "$PGUSER_NAME" -d postgres -q -c "DROP DATABASE IF EXISTS librariarr_test" >/dev/null 2>&1
-  psql -h localhost -U "$PGUSER_NAME" -d postgres -q -c "CREATE DATABASE librariarr_test" >/dev/null
+  # If the drop above lost a race with a lingering connection, CREATE fails and the suite would
+  # otherwise run against the stale database that survived.
+  psql -h localhost -U "$PGUSER_NAME" -d postgres -q -c "CREATE DATABASE librariarr_test" >/dev/null \
+    || { echo "could not recreate librariarr_test"; return 1; }
 
   DATABASE_URL="$TEST_URL" pnpm exec prisma migrate deploy >/dev/null 2>&1 \
     || { echo "prisma migrate deploy failed"; return 1; }
 
-  DATABASE_URL="$TEST_URL" pnpm exec prisma migrate diff \
-    --from-config-datasource --to-schema prisma/schema.prisma --script > "$WORK/drift.sql" 2>/dev/null
+  # A failure here must not read as "no drift": that would run the suite against a DB missing
+  # the schema-only columns, failing in ways that look like the dependency bump's fault.
+  if ! DATABASE_URL="$TEST_URL" pnpm exec prisma migrate diff \
+      --from-config-datasource --to-schema prisma/schema.prisma --script > "$WORK/drift.sql" 2>"$WORK/drift.err"; then
+    echo "prisma migrate diff failed:"; tail -5 "$WORK/drift.err"; return 1
+  fi
 
-  if grep -qiE '^[[:space:]]*(DROP|TRUNCATE|DELETE)' "$WORK/drift.sql"; then
-    echo "REFUSING: schema drift contains destructive statements — inspect $WORK/drift.sql"
+  # Match the data-losing forms wherever they appear on the line, not just at its start:
+  # Prisma writes a column drop as `ALTER TABLE "x" DROP COLUMN "y"`, which an anchored ^DROP
+  # never sees. Matching a bare DROP/DELETE instead would be worse than useless — `ON DELETE
+  # CASCADE` appears in every foreign key Prisma emits, and DROP CONSTRAINT / DROP INDEX are
+  # routine and lose no rows — so a blunt guard would fire on safe diffs until it got ignored.
+  if grep -niE '\b(DROP[[:space:]]+(TABLE|COLUMN|DATABASE|SCHEMA)|TRUNCATE|DELETE[[:space:]]+FROM)\b' "$WORK/drift.sql"; then
+    echo "REFUSING: schema drift is destructive (lines above) — inspect $WORK/drift.sql"
     return 1
   fi
   if [ -s "$WORK/drift.sql" ]; then
