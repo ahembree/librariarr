@@ -96,3 +96,47 @@ export async function findExceptionProtectedGroups(
       .filter((k): k is string => !!k),
   );
 }
+
+/**
+ * The ids among `candidateIds` that a `LifecycleException` protects: one filed
+ * on the item itself, or on any other copy of it — the same `dedupKey` — on
+ * any of the user's servers or libraries.
+ *
+ * An action resolves its Arr record by external id, so it acts on the one
+ * record every copy of a title is backed by, and an exception filed on
+ * whichever copy the user happened to be looking at must hold for the others.
+ * Keyed on the id alone it did not: the Matches page shows a multi-server
+ * title as ONE row (detection collapses the copies onto one representative),
+ * excluding that row filed the exception on the representative, and the next
+ * run matched the other copy, scheduled a fresh action for it, and deleted the
+ * title the user had just excluded. `dedupKey` is the same identity the
+ * library already uses to present those copies as one title. Over-blocking on
+ * it only skips an action; under-blocking destroys protected media.
+ */
+export async function findExceptedItemIds(
+  userId: string,
+  candidateIds: Iterable<string>,
+): Promise<Set<string>> {
+  const candidates = new Set(candidateIds);
+  const excepted = new Set<string>();
+  if (candidates.size === 0) return excepted;
+
+  const exceptions = await prisma.lifecycleException.findMany({
+    where: { userId },
+    select: { mediaItemId: true, mediaItem: { select: { dedupKey: true } } },
+  });
+  const dedupKeys = new Set<string>();
+  for (const e of exceptions) {
+    if (candidates.has(e.mediaItemId)) excepted.add(e.mediaItemId);
+    const key = e.mediaItem?.dedupKey;
+    if (key) dedupKeys.add(key);
+  }
+  if (dedupKeys.size > 0) {
+    const copies = await prisma.mediaItem.findMany({
+      where: { dedupKey: { in: [...dedupKeys] }, library: { mediaServer: { userId } } },
+      select: { id: true },
+    });
+    for (const c of copies) if (candidates.has(c.id)) excepted.add(c.id);
+  }
+  return excepted;
+}

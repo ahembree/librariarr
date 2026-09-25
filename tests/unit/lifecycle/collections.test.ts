@@ -411,6 +411,51 @@ describe("syncCollectionById", () => {
     expect(mockPlexClient.createCollection).toHaveBeenCalledWith("1", "Test Collection", "machine1", ["rk1"], 1);
   });
 
+  it("puts another server's collapsed copy of a match into THAT server's collection", async () => {
+    // Detection stores a multi-server title on one copy; the others ride along
+    // in itemData.copies. Without expanding them, a rule set that both acts
+    // and feeds a collection dropped the title from server 2's collection.
+    const server2 = { ...defaultServer, id: "s2", machineId: "machine2" };
+    mockPrisma.collection.findUnique.mockResolvedValue(makeCollection({ sort: "ACTION_DATE" }));
+    mockPrisma.ruleSet.findMany.mockResolvedValue([
+      {
+        id: "rs1",
+        seriesScope: false,
+        ruleMatches: [
+          {
+            mediaItemId: "a",
+            itemData: {
+              libraryId: "lib1", ratingKey: "rk-a", title: "Movie", parentTitle: null,
+              copies: [{ id: "b", libraryId: "lib2", ratingKey: "rk-b", title: "Movie", parentTitle: null }],
+            },
+          },
+          { mediaItemId: "c", itemData: { libraryId: "lib2", ratingKey: "rk-c", title: "Other", parentTitle: null } },
+        ],
+      },
+    ]);
+    mockPrisma.library.findMany.mockResolvedValue([
+      ...oneMovieLibrary,
+      { id: "lib2", key: "2", title: "Movies 2", mediaServer: server2, mediaServerId: "s2" },
+    ]);
+    // The action sits on the kept copy "a"; server 2's copy sorts by its date.
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      { scheduledFor: new Date("2025-01-01"), ruleSetId: "rs1", mediaItemId: "a", mediaItem: { ratingKey: "rk-a", parentTitle: null, title: "Movie" } },
+      { scheduledFor: new Date("2025-02-01"), ruleSetId: "rs1", mediaItemId: "c", mediaItem: { ratingKey: "rk-c", parentTitle: null, title: "Other" } },
+    ]);
+    mockPlexClient.getCollections.mockResolvedValue([]);
+    mockPlexClient.createCollection.mockResolvedValue({ ratingKey: "col1", title: "Test Collection" });
+    mockPlexClient.moveCollectionItem.mockResolvedValue(undefined);
+    stubSortAndVisibility();
+
+    await syncCollectionById("col-def-1");
+
+    expect(mockPlexClient.createCollection).toHaveBeenCalledWith("1", "Test Collection", "machine1", ["rk-a"], 1);
+    expect(mockPlexClient.createCollection).toHaveBeenCalledWith("2", "Test Collection", "machine2", ["rk-b", "rk-c"], 1);
+    // Server 2: the copy inherits the kept copy's (earlier) action date.
+    expect(mockPlexClient.moveCollectionItem).toHaveBeenCalledWith("col1", "rk-b", undefined);
+    expect(mockPlexClient.moveCollectionItem).toHaveBeenCalledWith("col1", "rk-c", "rk-b");
+  });
+
   it("no-ops when the collection does not exist", async () => {
     mockPrisma.collection.findUnique.mockResolvedValue(null);
     await syncCollectionById("missing");

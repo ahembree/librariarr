@@ -5,6 +5,7 @@ const mockPrisma = vi.hoisted(() => ({
     findMany: vi.fn(),
     createMany: vi.fn(),
     deleteMany: vi.fn(),
+    update: vi.fn(),
   },
   ruleSet: {
     findMany: vi.fn(),
@@ -364,6 +365,139 @@ describe("detectAndSaveMatches", () => {
     });
   });
 
+  describe("cross-server collapse", () => {
+    const copy = (id: string, server: string, extra: Record<string, unknown> = {}) => ({
+      id, title: "Movie", parentTitle: null, titleSort: "movie",
+      libraryId: `lib-${server}`, ratingKey: `rk-${id}`,
+      library: { mediaServer: { id: server, name: server, type: "PLEX" } },
+      externalIds: [{ source: "TMDB", externalId: "111" }],
+      ...extra,
+    });
+    const armed = makeRuleSetConfig({
+      type: "MOVIE",
+      serverIds: ["s1", "s2"],
+      actionEnabled: true,
+      actionType: "DELETE_RADARR",
+    });
+
+    beforeEach(() => {
+      mockHasAnyActiveRules.mockReturnValue(true);
+      mockPrisma.ruleMatch.createMany.mockResolvedValue({ count: 1 });
+      mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 0 });
+      mockPrisma.ruleMatch.update.mockResolvedValue({});
+    });
+
+    it("keeps the copy that is already matched, whatever order the engine returns", async () => {
+      // An unordered query swaps the copies after a sync rewrites a row. Keyed
+      // on "first seen", the match flipped to the other copy: its PENDING
+      // action was cancelled and rescheduled, restarting the delay.
+      mockEvaluateRules.mockResolvedValue([copy("a", "s1"), copy("b", "s2")]);
+      mockPrisma.ruleMatch.findMany.mockResolvedValue([
+        { mediaItemId: "b", itemData: { id: "b", servers: [{ serverId: "s1" }, { serverId: "s2" }], copies: [{ id: "a", libraryId: "lib-s1", ratingKey: "rk-a" }] } },
+      ]);
+
+      const result = await detectAndSaveMatches(armed, ["s1", "s2"]);
+
+      expect(result.items.map((i) => i.id)).toEqual(["b"]);
+      expect(mockPrisma.ruleMatch.createMany).not.toHaveBeenCalled();
+      expect(mockPrisma.ruleMatch.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it("picks the lowest id when neither copy is matched yet", async () => {
+      mockEvaluateRules.mockResolvedValue([copy("b", "s2"), copy("a", "s1")]);
+      mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
+
+      const result = await detectAndSaveMatches(armed, ["s1", "s2"]);
+
+      expect(result.items.map((i) => i.id)).toEqual(["a"]);
+    });
+
+    it("records the collapsed copies so per-copy consumers can still see them", async () => {
+      // Plex collections are written per library from each match's
+      // libraryId/ratingKey: without the copy, server 2's collection lost it.
+      mockEvaluateRules.mockResolvedValue([copy("a", "s1"), copy("b", "s2")]);
+      mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
+
+      const result = await detectAndSaveMatches(armed, ["s1", "s2"]);
+
+      expect(result.items[0].copies).toEqual([
+        { id: "b", libraryId: "lib-s2", ratingKey: "rk-b", title: "Movie", parentTitle: null },
+      ]);
+      const saved = mockPrisma.ruleMatch.createMany.mock.calls[0][0].data[0].itemData;
+      expect(saved.copies).toHaveLength(1);
+    });
+
+    it("merges members as distinct episodes — the same episode on two servers is one file", async () => {
+      mockEvaluateRules.mockResolvedValue([
+        copy("a", "s1", { memberIds: ["a1", "a2"] }),
+        copy("b", "s2", { memberIds: ["b1", "b3"] }),
+      ]);
+      mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
+      mockPrisma.mediaItem.findMany.mockResolvedValueOnce([
+        { id: "a1", dedupKey: "series:tvdb:1:s1e1" },
+        { id: "a2", dedupKey: "series:tvdb:1:s1e2" },
+        { id: "b1", dedupKey: "series:tvdb:1:s1e1" },
+        { id: "b3", dedupKey: "series:tvdb:1:s1e3" },
+      ]);
+
+      const result = await detectAndSaveMatches(armed, ["s1", "s2"]);
+
+      expect(result.items[0].memberIds).toEqual(["a1", "a2", "b3"]);
+      expect(result.episodeIdMap.get("a")).toEqual(["a1", "a2", "b3"]);
+      expect(result.episodeIdMap.has("b")).toBe(false);
+    });
+
+    it("drops the whole title when an exception sits on ANY copy of it", async () => {
+      // Excluding the one merged row filed the exception on its representative;
+      // the next run matched the other copy and scheduled a fresh delete.
+      mockEvaluateRules.mockResolvedValue([copy("a", "s1"), copy("b", "s2")]);
+      mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
+      mockPrisma.lifecycleException.findMany.mockResolvedValue([
+        { mediaItemId: "a", mediaItem: { dedupKey: "movie:tmdb:111" } },
+      ]);
+      mockPrisma.mediaItem.findMany.mockResolvedValueOnce([{ id: "a" }, { id: "b" }]);
+
+      const result = await detectAndSaveMatches(armed, ["s1", "s2"]);
+
+      expect(result.items).toEqual([]);
+    });
+
+    it("rewrites a held match whose copies changed", async () => {
+      // The incremental run never touched a row it already held, so a match
+      // made before the second copy appeared never learned of it.
+      mockEvaluateRules.mockResolvedValue([copy("a", "s1"), copy("b", "s2")]);
+      mockPrisma.ruleMatch.findMany.mockResolvedValue([
+        { mediaItemId: "a", itemData: { id: "a", servers: [{ serverId: "s1" }] } },
+      ]);
+
+      await detectAndSaveMatches(armed, ["s1", "s2"]);
+
+      expect(mockPrisma.ruleMatch.update).toHaveBeenCalledTimes(1);
+      const arg = mockPrisma.ruleMatch.update.mock.calls[0][0];
+      expect(arg.where).toEqual({ ruleSetId_mediaItemId: { ruleSetId: "rs1", mediaItemId: "a" } });
+      expect(arg.data.itemData.copies).toHaveLength(1);
+      expect(mockPrisma.ruleMatch.createMany).not.toHaveBeenCalled();
+    });
+
+    it("leaves a held match alone when nothing it derives changed", async () => {
+      mockEvaluateRules.mockResolvedValue([copy("a", "s1"), copy("b", "s2")]);
+      mockPrisma.ruleMatch.findMany.mockResolvedValue([
+        {
+          mediaItemId: "a",
+          itemData: {
+            id: "a",
+            servers: [{ serverId: "s2" }, { serverId: "s1" }],
+            copies: [{ id: "b", libraryId: "lib-s2", ratingKey: "rk-b", title: "Movie", parentTitle: null }],
+          },
+        },
+      ]);
+
+      await detectAndSaveMatches(armed, ["s1", "s2"]);
+
+      expect(mockPrisma.ruleMatch.update).not.toHaveBeenCalled();
+    });
+  });
+
   it("keeps one match per server copy without Arr metadata when no action is armed", async () => {
     // Collection-only rule sets feed a per-server Plex collection.
     mockHasAnyActiveRules.mockReturnValue(true);
@@ -634,9 +768,15 @@ describe("runDetection", () => {
       { ...base, id: "rs3", name: "Plain", rules: [{ field: "title", operator: "contains", value: "x", enabled: true }] },
     ]);
 
-    const results = await runDetection("u1");
+    const failures: Array<{ ruleSetId: string; name: string; reason: string }> = [];
+    const results = await runDetection("u1", undefined, false, failures);
 
     expect(results.map((r) => r.ruleSet.id)).toEqual(["rs3"]);
+    // Both Seerr rule sets are reported, so the caller can say so.
+    expect(failures).toEqual([
+      { ruleSetId: "rs1", name: "Seerr A", reason: "Detection failed: Seerr unreachable" },
+      { ruleSetId: "rs2", name: "Seerr B", reason: "Detection failed: Seerr unreachable" },
+    ]);
     // The failed fetch is remembered — the second Seerr rule set doesn't re-walk.
     expect(mockFetchSeerrMetadata).toHaveBeenCalledTimes(1);
   });

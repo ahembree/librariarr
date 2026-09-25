@@ -235,6 +235,46 @@ describe("Lifecycle Exceptions API", () => {
       expect(action).toBeNull();
     });
 
+    it("clears the match and pending action held by another server's copy of the item", async () => {
+      // A multi-server title is matched once, on the copy detection kept.
+      // Excluding it from the OTHER copy's page must disarm that match too —
+      // the action acts on the one Arr record both copies are backed by.
+      const { user, mediaItem } = await createUserWithMediaItem();
+      const server2 = await createTestServer(user.id);
+      const library2 = await createTestLibrary(server2.id, { type: "MOVIE" });
+      const kept = await createTestMediaItem(library2.id, { type: "MOVIE" });
+      const unrelated = await createTestMediaItem(library2.id, { type: "MOVIE" });
+      await prisma.mediaItem.updateMany({
+        where: { id: { in: [mediaItem.id, kept.id] } },
+        data: { dedupKey: "movie:tmdb:603" },
+      });
+      await prisma.mediaItem.update({ where: { id: unrelated.id }, data: { dedupKey: "movie:tmdb:604" } });
+
+      const ruleSet = await createTestRuleSet(user.id, { type: "MOVIE" });
+      await createTestRuleMatch(ruleSet.id, kept.id, { copies: [{ id: mediaItem.id }] });
+      await createTestRuleMatch(ruleSet.id, unrelated.id);
+      for (const id of [kept.id, unrelated.id]) {
+        await prisma.lifecycleAction.create({
+          data: {
+            userId: user.id,
+            mediaItemId: id,
+            ruleSetId: ruleSet.id,
+            actionType: "DELETE_RADARR",
+            status: "PENDING",
+            scheduledFor: new Date(Date.now() + 86400000),
+          },
+        });
+      }
+
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } });
+
+      const matches = await prisma.ruleMatch.findMany({ where: { ruleSetId: ruleSet.id } });
+      expect(matches.map((m) => m.mediaItemId)).toEqual([unrelated.id]);
+      const pending = await prisma.lifecycleAction.findMany({ where: { userId: user.id, status: "PENDING" } });
+      expect(pending.map((a) => a.mediaItemId)).toEqual([unrelated.id]);
+    });
+
     it("does not delete COMPLETED LifecycleAction records", async () => {
       const { user, mediaItem } = await createUserWithMediaItem();
       const ruleSet = await createTestRuleSet(user.id, { type: "MOVIE" });

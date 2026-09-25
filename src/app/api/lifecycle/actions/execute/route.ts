@@ -6,7 +6,12 @@ import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
 import { validateRequest, actionExecuteSchema } from "@/lib/validation";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
-import { findExceptionProtectedGroups, protectionKey, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
+import {
+  findExceptedItemIds,
+  findExceptionProtectedGroups,
+  protectionKey,
+  isWholeRecordDestructiveAction,
+} from "@/lib/lifecycle/exception-guard";
 import { sendDiscordNotification, buildFailureSummaryEmbed } from "@/lib/discord/client";
 import { eventBus } from "@/lib/events/event-bus";
 import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
@@ -169,17 +174,10 @@ export async function POST(request: NextRequest) {
   // Filter out items that have a LifecycleException — both representative
   // items AND episode/track MEMBERS (member ids never appear in itemIds, so
   // they must be collected from episodeIdMap and checked too).
+  // An exception on another server's copy of an item (same dedupKey) counts.
   const memberIds = [...episodeIdMap.values()].flat();
-  const exceptionLookupIds = [...new Set([...itemIds, ...memberIds])];
-  const exceptions = await prisma.lifecycleException.findMany({
-    where: {
-      userId: session.userId!,
-      mediaItemId: { in: exceptionLookupIds },
-    },
-    select: { mediaItemId: true },
-  });
-  if (exceptions.length > 0) {
-    const excludedIds = new Set(exceptions.map((e) => e.mediaItemId));
+  const excludedIds = await findExceptedItemIds(session.userId!, [...itemIds, ...memberIds]);
+  if (excludedIds.size > 0) {
 
     // Drop excepted members from each item's member list; if a whole-record
     // destructive action would still touch an excepted member it cannot

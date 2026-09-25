@@ -12,6 +12,7 @@ const { mockPrisma } = vi.hoisted(() => ({
     lifecycleAction: {
       findMany: vi.fn(),
     },
+    $queryRaw: vi.fn(),
   },
 }));
 
@@ -29,6 +30,7 @@ describe("fetchCrossSystemData", () => {
     mockPrisma.mediaItem.groupBy.mockResolvedValue([]);
     mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
     mockPrisma.lifecycleAction.findMany.mockResolvedValue([]);
+    mockPrisma.$queryRaw.mockResolvedValue([]);
   });
 
   it("returns an empty map and queries nothing for empty input", async () => {
@@ -129,6 +131,20 @@ describe("fetchCrossSystemData", () => {
 
     expect(result.get("a")?.matchedRuleSets).toEqual(["Stale Movies", "Big Files"]);
     expect(result.get("b")?.matchedRuleSets).toEqual(["Big Files"]);
+  });
+
+  it("counts another server's collapsed copy of a match as matched too", async () => {
+    // Detection stores a multi-server title on one copy and lists the others in
+    // itemData.copies; the rule set matched "b" as well.
+    mockPrisma.ruleMatch.findMany.mockResolvedValueOnce([
+      { mediaItemId: "a", ruleSet: { name: "Leaving Soon" } },
+    ]);
+    mockPrisma.$queryRaw.mockResolvedValueOnce([{ mediaItemId: "b", name: "Leaving Soon" }]);
+
+    const result = await fetchCrossSystemData(["a", "b"]);
+
+    expect(result.get("a")?.matchedRuleSets).toEqual(["Leaving Soon"]);
+    expect(result.get("b")?.matchedRuleSets).toEqual(["Leaving Soon"]);
   });
 
   it("skips rule matches with empty rule set names", async () => {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
 import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
@@ -156,26 +157,30 @@ export async function POST(
     items = type === "SERIES" ? groupSeriesResults(rawItems) : rawItems;
   }
 
-  // Filter out excluded items
+  // Filter out excluded items — an exception on another server's copy of an
+  // item (same dedupKey) excludes it too, exactly as detection does.
   const candidateIds = items.map((item) => (item as Record<string, unknown>).id as string);
-  const excludedItems = await prisma.lifecycleException.findMany({
-    where: {
-      userId: session.userId,
-      mediaItemId: { in: candidateIds },
-    },
-    select: { mediaItemId: true },
-  });
-  const excludedIds = new Set(excludedItems.map((e) => e.mediaItemId));
+  const excludedIds = await findExceptedItemIds(session.userId!, candidateIds);
+
+  // Detection stores a title matched on several servers once, listing the
+  // other copies in `itemData.copies`. Such a copy matching again is that same
+  // match, retained — not a new one to add.
+  const copyOf = new Map<string, string>();
+  for (const [matchId, data] of existingById) {
+    const copies = Array.isArray(data.copies) ? (data.copies as Array<{ id?: unknown }>) : [];
+    for (const c of copies) if (typeof c.id === "string") copyOf.set(c.id, matchId);
+  }
 
   const newMatchIds = new Set<string>();
   const newMatchMap = new Map<string, Record<string, unknown>>();
   for (const item of items) {
     const rec = item as Record<string, unknown>;
     const itemId = rec.id as string;
-    if (!excludedIds.has(itemId)) {
-      newMatchIds.add(itemId);
-      newMatchMap.set(itemId, rec);
-    }
+    if (excludedIds.has(itemId)) continue;
+    const matchId = existingById.has(itemId) ? itemId : (copyOf.get(itemId) ?? itemId);
+    if (newMatchIds.has(matchId)) continue;
+    newMatchIds.add(matchId);
+    newMatchMap.set(matchId, rec);
   }
 
   // Compute diff

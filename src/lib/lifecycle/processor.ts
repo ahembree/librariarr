@@ -7,7 +7,13 @@ import { normalizeTitle, executeAction, extractActionError } from "@/lib/lifecyc
 import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
-import { findExceptionProtectedGroups, protectionKey, isWholeRecordDestructiveAction, type ProtectionTarget } from "@/lib/lifecycle/exception-guard";
+import {
+  findExceptedItemIds,
+  findExceptionProtectedGroups,
+  protectionKey,
+  isWholeRecordDestructiveAction,
+  type ProtectionTarget,
+} from "@/lib/lifecycle/exception-guard";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
@@ -493,6 +499,17 @@ export async function executeLifecycleActions(userId?: string) {
     select: { userId: true, mediaItemId: true },
   });
   const exceptionSet = new Set(allExceptions.map((e) => `${e.userId}:${e.mediaItemId}`));
+  // An exception on ANOTHER copy of an action's item or member — the same
+  // dedupKey on another server — protects it too: the action acts on the Arr
+  // record every copy is backed by. Excluding a title from the library page of
+  // the copy detection did not keep left the kept copy's action armed.
+  for (const uid of new Set(allExceptions.map((e) => e.userId))) {
+    const candidates = pendingActions
+      .filter((a) => a.userId === uid)
+      .flatMap((a) => [a.mediaItemId, ...(a.matchedMediaItemIds ?? [])])
+      .filter((id): id is string => !!id);
+    for (const id of await findExceptedItemIds(uid, candidates)) exceptionSet.add(`${uid}:${id}`);
+  }
 
   // Batch the whole-record sibling-exception lookup (exception inviolability,
   // part 2 — see the per-action check below) once per run instead of once per

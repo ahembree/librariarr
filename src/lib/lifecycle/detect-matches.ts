@@ -9,6 +9,7 @@ import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { logger } from "@/lib/logger";
 import { syncCollectionById, syncAllCollections } from "@/lib/lifecycle/collections";
 import { describePlexError } from "@/lib/plex/errors";
+import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
 
 interface RuleSetConfig {
   id: string;
@@ -38,6 +39,120 @@ function jsonSafe(value: unknown): string | number | boolean | object {
   return JSON.parse(JSON.stringify(value, (_, v) =>
     typeof v === "bigint" ? v.toString() : v,
   ));
+}
+
+/**
+ * Collapse each group of cross-server copies of one title onto a single
+ * representative, in place: afterwards `group[0]` is the copy that stays,
+ * carrying every copy's server, the union of their members, and a `copies`
+ * list naming the others.
+ *
+ * The representative is the copy already matched, else the lowest id — never
+ * whichever row the engine returned first. Its query is unordered, so the
+ * order changes whenever a sync rewrites a row, and each swap re-keyed the
+ * match: the incremental run deleted one copy's match and created the other's,
+ * which cancelled the PENDING action and scheduled a new one `actionDelayDays`
+ * out — restarting the countdown — while a sticky rule set kept both matches
+ * and armed two actions against one Arr record.
+ *
+ * `copies` exists because RuleMatch holds only the representative while some
+ * consumers work per copy: a Plex collection is written per library from the
+ * matches' `libraryId`/`ratingKey`, so a rule set that both acts and feeds a
+ * collection dropped the title from every other server's collection, and
+ * `matchedByRuleSet` read false for the other servers' copies.
+ *
+ * Members merge as the union of distinct items: the same episode on two
+ * servers (same dedupKey) is ONE file in the Arr app, so keeping both copies'
+ * ids doubled the size the Pending page and the deletion stats report. Only a
+ * later copy's member is dropped for a key an earlier copy already has — two
+ * members of one copy are never merged, even if their keys collide.
+ */
+async function collapseCopies(
+  ruleSetId: string,
+  groups: Record<string, unknown>[][],
+  episodeIdMap: Map<string, string[]>,
+): Promise<void> {
+  const existing = await prisma.ruleMatch.findMany({
+    where: { ruleSetId, mediaItemId: { in: groups.flat().map((i) => i.id as string) } },
+    select: { mediaItemId: true },
+  });
+  const alreadyMatched = new Set(existing.map((m) => m.mediaItemId));
+
+  const allMemberIds = [
+    ...new Set(groups.flat().flatMap((i) => (i.memberIds as string[] | undefined) ?? [])),
+  ];
+  const memberKeys = new Map<string, string | null>();
+  if (allMemberIds.length > 0) {
+    const rows = await prisma.mediaItem.findMany({
+      where: { id: { in: allMemberIds } },
+      select: { id: true, dedupKey: true },
+    });
+    for (const r of rows) memberKeys.set(r.id, r.dedupKey);
+  }
+
+  for (const group of groups) {
+    group.sort((a, b) => {
+      const byMatch =
+        (alreadyMatched.has(a.id as string) ? 0 : 1) - (alreadyMatched.has(b.id as string) ? 0 : 1);
+      if (byMatch !== 0) return byMatch;
+      const ida = String(a.id);
+      const idb = String(b.id);
+      return ida < idb ? -1 : ida > idb ? 1 : 0;
+    });
+    const [rep, ...others] = group;
+
+    const seenServers = new Set<string>();
+    rep.servers = group
+      .flatMap((i) => (i.servers as unknown[] | undefined) ?? [])
+      .filter((srv) => {
+        const sid = (srv as { serverId?: string }).serverId;
+        if (!sid) return true;
+        if (seenServers.has(sid)) return false;
+        seenServers.add(sid);
+        return true;
+      });
+
+    rep.copies = others.map((o) => ({
+      id: o.id,
+      libraryId: o.libraryId,
+      ratingKey: o.ratingKey,
+      title: o.title,
+      parentTitle: o.parentTitle ?? null,
+    }));
+
+    if (group.some((i) => ((i.memberIds as string[] | undefined) ?? []).length > 0)) {
+      const merged: string[] = [];
+      const seenIds = new Set<string>();
+      const earlierKeys = new Set<string>();
+      for (const copy of group) {
+        const keys: string[] = [];
+        for (const id of (copy.memberIds as string[] | undefined) ?? []) {
+          if (seenIds.has(id)) continue;
+          const key = memberKeys.get(id);
+          if (key && earlierKeys.has(key)) continue;
+          seenIds.add(id);
+          merged.push(id);
+          if (key) keys.push(key);
+        }
+        for (const k of keys) earlierKeys.add(k);
+      }
+      rep.memberIds = merged;
+      episodeIdMap.set(rep.id as string, merged);
+    }
+    for (const o of others) episodeIdMap.delete(o.id as string);
+  }
+}
+
+/** Order-insensitive fingerprint of the fields `collapseCopies` derives. */
+function collapseFingerprint(item: Record<string, unknown> | undefined): string {
+  const members = [...((item?.memberIds as string[] | undefined) ?? [])].sort();
+  const servers = ((item?.servers as Array<{ serverId?: string }> | undefined) ?? [])
+    .map((srv) => srv.serverId ?? "")
+    .sort();
+  const copies = ((item?.copies as Array<Record<string, unknown>> | undefined) ?? [])
+    .map((c) => `${c.id}|${c.libraryId}|${c.ratingKey}`)
+    .sort();
+  return JSON.stringify([members, servers, copies]);
 }
 
 /**
@@ -242,15 +357,10 @@ export async function detectAndSaveMatches(
       }
     }
 
-    const excludedItems = await prisma.lifecycleException.findMany({
-      where: {
-        userId: ruleSet.userId,
-        mediaItemId: { in: [...allIds] },
-      },
-      select: { mediaItemId: true },
-    });
-    if (excludedItems.length > 0) {
-      const excludedIds = new Set(excludedItems.map((e) => e.mediaItemId));
+    // An exception on ANY copy of an item (same dedupKey, any server) protects
+    // this one too — the action would act on the Arr record they share.
+    const excludedIds = await findExceptedItemIds(ruleSet.userId, allIds);
+    if (excludedIds.size > 0) {
       const beforeCount = enrichedItems.length;
       const filtered: Record<string, unknown>[] = [];
       for (const item of enrichedItems) {
@@ -326,57 +436,28 @@ export async function detectAndSaveMatches(
         for (const r of rows) loadedKeys.set(r.mediaItemId, r.externalId);
       }
     }
-    const byExternalId = new Map<string, Record<string, unknown>>();
-    const deduped: Record<string, unknown>[] = [];
+    const groups = new Map<string, Record<string, unknown>[]>();
     for (const item of enrichedItems) {
       const arrId = item.arrId as number | null;
       const externalIds = (item.externalIds ?? []) as Array<{ source: string; externalId: string }>;
       const externalKey =
         externalIds.find((e) => e.source === arrIdSource)?.externalId ??
         loadedKeys.get(item.id as string);
-      if ((arrId == null && !collapseWithoutArr) || !externalKey) {
-        deduped.push(item);
-        continue;
-      }
-      const existing = byExternalId.get(externalKey);
-      if (!existing) {
-        byExternalId.set(externalKey, item);
-        deduped.push(item);
-      } else {
-        // Merge server presence so the matches view still shows every server.
-        const merged = [
-          ...((existing.servers as unknown[]) ?? []),
-          ...((item.servers as unknown[]) ?? []),
-        ];
-        const seen = new Set<string>();
-        existing.servers = merged.filter((s) => {
-          const sid = (s as { serverId?: string }).serverId;
-          if (!sid) return true;
-          if (seen.has(sid)) return false;
-          seen.add(sid);
-          return true;
-        });
-        // Merge member ids (episode/track ids) so a member that exists only on
-        // the dropped server's copy is still acted on and still counted toward
-        // deletedBytes. Dropping the dropped copy's members (the old behavior)
-        // under-deleted and under-counted for multi-server series/music.
-        const existingMembers = (existing.memberIds as string[] | undefined) ?? [];
-        const itemMembers = (item.memberIds as string[] | undefined) ?? [];
-        if (existingMembers.length > 0 || itemMembers.length > 0) {
-          const mergedMembers = [...new Set([...existingMembers, ...itemMembers])];
-          existing.memberIds = mergedMembers;
-          // Keep the returned episodeIdMap in sync with the merged member set,
-          // and drop the now-removed duplicate's stale entry.
-          episodeIdMap.set(existing.id as string, mergedMembers);
-        }
-        episodeIdMap.delete(item.id as string);
-      }
+      if ((arrId == null && !collapseWithoutArr) || !externalKey) continue;
+      const group = groups.get(externalKey);
+      if (group) group.push(item);
+      else groups.set(externalKey, [item]);
     }
-    if (deduped.length < enrichedItems.length) {
+    const duplicated = [...groups.values()].filter((g) => g.length > 1);
+    if (duplicated.length > 0) {
+      await collapseCopies(ruleSet.id, duplicated, episodeIdMap);
+      const kept = new Set(duplicated.map((g) => g[0]));
+      const dropped = new Set(duplicated.flat().filter((i) => !kept.has(i)));
       logger.info(
         "Lifecycle",
-        `Collapsed ${enrichedItems.length - deduped.length} cross-server duplicate match(es) by external ID for rule set "${ruleSet.name}"`,
+        `Collapsed ${dropped.size} cross-server duplicate match(es) by external ID for rule set "${ruleSet.name}"`,
       );
+      const deduped = enrichedItems.filter((i) => !dropped.has(i));
       enrichedItems.length = 0;
       enrichedItems.push(...deduped);
     }
@@ -419,11 +500,30 @@ export async function detectAndSaveMatches(
   );
   const staleIds = [...existingIds].filter((id) => !currentIds.has(id));
 
+  // Matches this run already held whose derived members / servers / copies
+  // changed — a copy appeared on another server, episodes were added or
+  // dropped. Nothing else rewrites a row the incremental run keeps, so without
+  // this a collection never learned of a new copy, and the executor went on
+  // intersecting an action against the members of the day the match was made.
+  const refreshed = enrichedItems.filter((item) => {
+    const id = item.id as string;
+    return (
+      existingIds.has(id) &&
+      collapseFingerprint(existingDataMap.get(id)) !== collapseFingerprint(item)
+    );
+  });
+
   // Atomic create + delete: a partial failure must not leave a half-updated
   // match set (e.g. new matches written but stale ones never removed).
   const removeStale = !ruleSet.stickyMatches && staleIds.length > 0;
-  if (newItems.length > 0 || removeStale) {
+  if (newItems.length > 0 || removeStale || refreshed.length > 0) {
     await prisma.$transaction([
+      ...refreshed.map((item) =>
+        prisma.ruleMatch.update({
+          where: { ruleSetId_mediaItemId: { ruleSetId: ruleSet.id, mediaItemId: item.id as string } },
+          data: { itemData: jsonSafe(item) },
+        }),
+      ),
       ...(newItems.length > 0
         ? [
             prisma.ruleMatch.createMany({
@@ -512,8 +612,14 @@ export async function detectAndSaveMatches(
   }
 
   // When sticky, return all items (existing + new); otherwise return only current matches
+  const refreshedById = new Map(refreshed.map((item) => [item.id as string, item]));
   const returnItems = ruleSet.stickyMatches
-    ? [...existingMatches.map((m) => m.itemData as Record<string, unknown>), ...newItems]
+    ? [
+        ...existingMatches.map(
+          (m) => refreshedById.get(m.mediaItemId) ?? (m.itemData as Record<string, unknown>),
+        ),
+        ...newItems,
+      ]
     : enrichedItems;
 
   // Rebuild episodeIdMap from the returned set
@@ -533,11 +639,28 @@ export async function detectAndSaveMatches(
   return { items: returnItems, count: returnItems.length, episodeIdMap: fullEpisodeIdMap, currentItems: enrichedItems };
 }
 
+/** A rule set a detection run could not evaluate because something threw. */
+export interface DetectionFailure {
+  ruleSetId: string;
+  name: string;
+  reason: string;
+}
+
 /**
  * Run detection for one or all enabled rule sets.
  * Fetches metadata, evaluates rules, and saves matches.
+ *
+ * In a run over every rule set, one that throws (an unreachable Arr or Seerr
+ * instance) is logged, left out of the results — its existing matches are
+ * untouched — and, when `failures` is given, recorded there so the caller can
+ * tell the user rather than report the run as a clean success.
  */
-export async function runDetection(userId: string, ruleSetId?: string, fullReEval: boolean = false) {
+export async function runDetection(
+  userId: string,
+  ruleSetId?: string,
+  fullReEval: boolean = false,
+  failures?: DetectionFailure[],
+) {
   const ruleSets = await prisma.ruleSet.findMany({
     where: {
       userId,
@@ -698,6 +821,11 @@ export async function runDetection(userId: string, ruleSetId?: string, fullReEva
     } catch (error) {
       if (ruleSetId) throw error;
       logger.error("Lifecycle", `Error detecting rule set "${rs.name}"`, { error: String(error) });
+      failures?.push({
+        ruleSetId: rs.id,
+        name: rs.name,
+        reason: `Detection failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
     }
   }
 

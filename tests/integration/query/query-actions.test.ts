@@ -214,6 +214,30 @@ describe("POST /api/query/actions", () => {
     });
   });
 
+  it("skips a movie whose copy on another server carries a lifecycle exception", async () => {
+    // One Radarr record backs both copies — excluding either protects both.
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const movie = await createTestMediaItem((await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" })).id, { type: "MOVIE", title: "Dune" });
+    const copy = await createTestMediaItem((await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" })).id, { type: "MOVIE", title: "Dune" });
+    const prisma = getTestPrisma();
+    await prisma.mediaItem.updateMany({ where: { id: { in: [movie.id, copy.id] } }, data: { dedupKey: "movie:tmdb:12345" } });
+    await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: copy.id } });
+    const radarr = await createTestRadarrInstance(user.id);
+
+    mockedExecuteQuery.mockResolvedValue(queryResult([{ id: movie.id, type: "MOVIE", title: "Dune", parentTitle: null }]));
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { query: BASE_QUERY, mediaItemIds: [movie.id], actionType: "DELETE_RADARR", arrInstanceId: radarr.id },
+    });
+
+    const { result } = await expectStreamResult<{ executed: number; skipped: number; errors: string[] }>(response);
+    expect(result.executed).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(mockedExecuteAction).not.toHaveBeenCalled();
+  });
+
   it("streams phase progress events with determinate per-item execute progress", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });

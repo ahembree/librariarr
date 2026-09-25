@@ -55,10 +55,26 @@ export async function fetchCrossSystemData(itemIds: string[]): Promise<CrossSyst
     where: { mediaItemId: { in: itemIds } },
     select: { mediaItemId: true, ruleSet: { select: { name: true } } },
   });
-  for (const match of ruleMatches) {
+  // Detection stores a title matched on several servers ONCE, on one copy, and
+  // lists the others in `itemData.copies` — the rule set matched those copies
+  // too, so "Matched By Rule Set" must say so for them as well.
+  const copyMatches = await prisma.$queryRaw<Array<{ mediaItemId: string; name: string }>>`
+    SELECT c."id" AS "mediaItemId", rs."name" AS "name"
+    FROM "RuleMatch" rm
+    JOIN "RuleSet" rs ON rs."id" = rm."ruleSetId"
+    CROSS JOIN LATERAL jsonb_to_recordset(
+      CASE WHEN jsonb_typeof(rm."itemData"->'copies') = 'array'
+        THEN rm."itemData"->'copies' ELSE '[]'::jsonb END
+    ) AS c("id" text)
+    WHERE c."id" = ANY(${itemIds})
+  `;
+  for (const match of [
+    ...ruleMatches.map((m) => ({ mediaItemId: m.mediaItemId, name: m.ruleSet.name })),
+    ...copyMatches,
+  ]) {
     const entry = result.get(match.mediaItemId);
-    if (entry && match.ruleSet.name && !entry.matchedRuleSets.includes(match.ruleSet.name)) {
-      entry.matchedRuleSets.push(match.ruleSet.name);
+    if (entry && match.name && !entry.matchedRuleSets.includes(match.name)) {
+      entry.matchedRuleSets.push(match.name);
     }
   }
 

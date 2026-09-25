@@ -259,13 +259,31 @@ async function handleIndividualException(
     },
   });
 
+  // The exception covers every copy of the item — the same dedupKey on the
+  // user's other servers or libraries (see findExceptedItemIds) — so their
+  // matches and pending actions go too. A multi-server title is matched ONCE,
+  // on whichever copy detection kept, so excluding it from another copy's page
+  // otherwise left that match, and its armed action, in place.
+  const target = await prisma.mediaItem.findUnique({
+    where: { id: mediaItemId },
+    select: { dedupKey: true },
+  });
+  const copies = target?.dedupKey
+    ? await prisma.mediaItem.findMany({
+        where: { dedupKey: target.dedupKey, library: { mediaServer: { userId } } },
+        select: { id: true },
+      })
+    : [];
+  const affectedIds = [...new Set([mediaItemId, ...copies.map((c) => c.id)])];
+
   // Find rule matches before deleting (needed for collection removal)
   const matchedRuleSets = await prisma.ruleMatch.findMany({
     where: {
-      mediaItemId,
+      mediaItemId: { in: affectedIds },
       ruleSet: { userId },
     },
     select: {
+      mediaItemId: true,
       ruleSet: {
         select: {
           id: true,
@@ -277,26 +295,27 @@ async function handleIndividualException(
     },
   });
 
-  // Remove any existing RuleMatch records for this media item
+  // Remove any existing RuleMatch records for this media item and its copies
   await prisma.ruleMatch.deleteMany({
     where: {
-      mediaItemId,
+      mediaItemId: { in: affectedIds },
       ruleSet: { userId },
     },
   });
 
-  // Delete any PENDING LifecycleAction records for this media item
+  // Delete any PENDING LifecycleAction records for this media item and its copies
   await prisma.lifecycleAction.deleteMany({
     where: {
-      mediaItemId,
+      mediaItemId: { in: affectedIds },
       userId,
       status: "PENDING",
     },
   });
 
-  // Remove the item from any Plex collections it was synced to
+  // Remove the item from any Plex collections it was synced to. (A copy on
+  // another server leaves its collection on the next collection sync.)
   const collectionsToUpdate = matchedRuleSets
-    .filter((m) => m.ruleSet.collection)
+    .filter((m) => m.mediaItemId === mediaItemId && m.ruleSet.collection)
     .map((m) => m.ruleSet);
 
   if (collectionsToUpdate.length > 0) {

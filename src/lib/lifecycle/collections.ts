@@ -21,6 +21,11 @@ interface MatchedItem {
   ratingKey: string;
   title: string;
   parentTitle: string | null;
+  /**
+   * Set on another server's copy of a match (`itemData.copies`): the matched
+   * item it was collapsed onto, whose pending action orders it too.
+   */
+  copyOf?: string;
 }
 
 /**
@@ -35,6 +40,13 @@ export interface CollectionContribution {
 }
 
 const normTitle = (s: string) => s.trim().toLowerCase();
+
+interface PendingActionForOrder {
+  scheduledFor: Date;
+  ruleSetId: string | null;
+  mediaItemId: string | null;
+  mediaItem: { ratingKey: string; parentTitle: string | null; title: string } | null;
+}
 
 /**
  * Build a collection's contributions from the persisted RuleMatch rows of every
@@ -51,22 +63,29 @@ async function buildContributionsFromMatches(
     select: {
       id: true,
       seriesScope: true,
-      ruleMatches: { select: { itemData: true } },
+      ruleMatches: { select: { mediaItemId: true, itemData: true } },
     },
+  });
+
+  const toItem = (d: Record<string, unknown>, copyOf?: string): MatchedItem => ({
+    libraryId: d.libraryId as string,
+    ratingKey: d.ratingKey as string,
+    title: (d.title as string) ?? "",
+    parentTitle: (d.parentTitle as string | null) ?? null,
+    ...(copyOf ? { copyOf } : {}),
   });
 
   return ruleSets.map((rs) => ({
     ruleSetId: rs.id,
     seriesScope: rs.seriesScope,
     items: rs.ruleMatches
-      .map((m) => {
+      .flatMap((m) => {
         const d = m.itemData as Record<string, unknown>;
-        return {
-          libraryId: d.libraryId as string,
-          ratingKey: d.ratingKey as string,
-          title: (d.title as string) ?? "",
-          parentTitle: (d.parentTitle as string | null) ?? null,
-        };
+        // Detection stores a multi-server title once, on one copy; the other
+        // servers' copies ride along in `copies` and belong in THEIR servers'
+        // collections just the same.
+        const copies = Array.isArray(d.copies) ? (d.copies as Record<string, unknown>[]) : [];
+        return [toItem(d), ...copies.map((c) => toItem(c, m.mediaItemId))];
       })
       // Defensive: legacy match rows could lack a ratingKey/libraryId.
       .filter((i) => i.libraryId && i.ratingKey),
@@ -151,17 +170,14 @@ export async function syncCollection(
   // Preload pending actions across ALL contributing rule sets once, for
   // action-date ordering. Querying here (rather than per library) keeps the
   // cross-rule ordering consistent.
-  let pendingActions: Array<{
-    scheduledFor: Date;
-    ruleSetId: string | null;
-    mediaItem: { ratingKey: string; parentTitle: string | null; title: string } | null;
-  }> = [];
+  let pendingActions: PendingActionForOrder[] = [];
   if (collection.sort === "ACTION_DATE" && contributingRuleSetIds.length > 0) {
     pendingActions = await prisma.lifecycleAction.findMany({
       where: { ruleSetId: { in: contributingRuleSetIds }, status: "PENDING" },
       select: {
         scheduledFor: true,
         ruleSetId: true,
+        mediaItemId: true,
         mediaItem: { select: { ratingKey: true, parentTitle: true, title: true } },
       },
     });
@@ -215,11 +231,20 @@ export async function syncCollection(
 
       // Union of desired rating keys for THIS library across all contributions.
       const desiredSet = new Set<string>();
+      // A collapsed copy's rating key in this library, by the matched item
+      // whose pending action it shares (for action-date ordering).
+      const copyKeysByItemId = new Map<string, string[]>();
       let libItemCount = 0;
       for (const contrib of contributions) {
         const libItems = contrib.items.filter((i) => i.libraryId === library.id);
         if (libItems.length === 0) continue;
         libItemCount += libItems.length;
+        for (const it of libItems) {
+          if (!it.copyOf) continue;
+          const keys = copyKeysByItemId.get(it.copyOf) ?? [];
+          keys.push(it.ratingKey);
+          copyKeysByItemId.set(it.copyOf, keys);
+        }
         if (collection.type === "SERIES" && contrib.seriesScope && seriesKeyByTitle) {
           for (const it of libItems) {
             const key = seriesKeyByTitle.get(normTitle(it.parentTitle ?? it.title));
@@ -334,7 +359,8 @@ export async function syncCollection(
           desiredKeys,
           pendingActions,
           seriesScopeByRuleSet,
-          seriesKeyByTitle
+          seriesKeyByTitle,
+          copyKeysByItemId
         );
       } else {
         const sortMap: Record<string, number> = { RELEASE_DATE: 0, ALPHABETICAL: 1 };
@@ -377,13 +403,10 @@ async function applyActionDateOrder(
   client: PlexClient,
   collectionRatingKey: string,
   desiredKeys: string[],
-  pendingActions: Array<{
-    scheduledFor: Date;
-    ruleSetId: string | null;
-    mediaItem: { ratingKey: string; parentTitle: string | null; title: string } | null;
-  }>,
+  pendingActions: PendingActionForOrder[],
   seriesScopeByRuleSet: Map<string, boolean>,
-  seriesKeyByTitle: Map<string, string> | null
+  seriesKeyByTitle: Map<string, string> | null,
+  copyKeysByItemId: Map<string, string[]> = new Map()
 ): Promise<void> {
   if (desiredKeys.length <= 1) return;
 
@@ -393,19 +416,23 @@ async function applyActionDateOrder(
     if (!action.mediaItem || !action.ruleSetId) continue;
     const seriesScope = seriesScopeByRuleSet.get(action.ruleSetId) ?? false;
 
-    let key: string | undefined;
+    const keys: string[] = [];
     if (seriesScope && seriesKeyByTitle) {
       // Series-scope: action's episode maps to a series-level key via parentTitle.
       const title = action.mediaItem.parentTitle ?? action.mediaItem.title;
-      key = seriesKeyByTitle.get(normTitle(title));
+      const key = seriesKeyByTitle.get(normTitle(title));
+      if (key) keys.push(key);
     } else {
-      key = action.mediaItem.ratingKey;
+      keys.push(action.mediaItem.ratingKey);
+      // Another server's copy of the title shares this action's date.
+      if (action.mediaItemId) keys.push(...(copyKeysByItemId.get(action.mediaItemId) ?? []));
     }
-    if (!key) continue;
 
-    const existing = scheduledByKey.get(key);
-    if (!existing || action.scheduledFor < existing) {
-      scheduledByKey.set(key, action.scheduledFor);
+    for (const key of keys) {
+      const existing = scheduledByKey.get(key);
+      if (!existing || action.scheduledFor < existing) {
+        scheduledByKey.set(key, action.scheduledFor);
+      }
     }
   }
 

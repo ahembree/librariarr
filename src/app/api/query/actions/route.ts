@@ -6,7 +6,12 @@ import { executeQuery } from "@/lib/query/query-engine";
 import { appCache } from "@/lib/cache/memory-cache";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
-import { findExceptionProtectedGroups, protectionKey, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
+import {
+  findExceptedItemIds,
+  findExceptionProtectedGroups,
+  protectionKey,
+  isWholeRecordDestructiveAction,
+} from "@/lib/lifecycle/exception-guard";
 import { arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
 import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions/helpers";
@@ -383,11 +388,8 @@ export async function POST(request: NextRequest) {
       for (const members of episodeIdMap.values()) {
         for (const m of members) memberIds.add(m);
       }
-      const exceptions = await prisma.lifecycleException.findMany({
-        where: { userId, mediaItemId: { in: [...new Set([...actionUnitIds, ...memberIds])] } },
-        select: { mediaItemId: true },
-      });
-      const excluded = new Set(exceptions.map((e) => e.mediaItemId));
+      // An exception on another server's copy of an item (same dedupKey) counts.
+      const excluded = await findExceptedItemIds(userId, [...actionUnitIds, ...memberIds]);
       const actionableIds: string[] = [];
       for (const id of actionUnitIds) {
         if (excluded.has(id)) continue; // representative item is excepted

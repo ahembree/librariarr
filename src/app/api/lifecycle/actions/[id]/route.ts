@@ -3,7 +3,12 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError } from "@/lib/lifecycle/actions";
-import { findExceptionProtectedGroups, protectionKey, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
+import {
+  findExceptedItemIds,
+  findExceptionProtectedGroups,
+  protectionKey,
+  isWholeRecordDestructiveAction,
+} from "@/lib/lifecycle/exception-guard";
 import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 
@@ -122,11 +127,9 @@ export async function POST(
   // Exceptions added AFTER an action failed must still protect the item —
   // exception creation deletes PENDING actions, but FAILED rows survive and
   // could otherwise be force-retried against an excluded item.
-  const exception = await prisma.lifecycleException.findFirst({
-    where: { userId: session.userId, mediaItemId: action.mediaItemId },
-    select: { id: true },
-  });
-  if (exception) {
+  // An exception on another server's copy of the item (same dedupKey) counts.
+  const excepted = await findExceptedItemIds(session.userId!, [action.mediaItemId]);
+  if (excepted.size > 0) {
     return NextResponse.json(
       { error: "This item has a lifecycle exception and cannot be actioned" },
       { status: 400 }
