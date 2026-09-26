@@ -66,7 +66,10 @@ Configuration backups capture every column of the configuration tables, includin
 - **User accounts** — usernames, hashed passwords, Plex IDs/tokens, and SSO linkage (`ssoSubject`, `ssoProvider`, `ssoEnabled`)
 - **App settings** — schedules, notifications, theme, and the full SSO configuration (mode, OIDC issuer/client ID/client secret/scopes/username claim, forward-auth header names, master `ssoEnabled` toggle)
 - **Media servers, libraries, and integrations** (Sonarr, Radarr, Lidarr, Seerr)
-- **Lifecycle rule sets, blackout schedules, preroll presets and schedules, saved queries**
+- **Lifecycle rule sets and the Plex collections they feed, blackout schedules, preroll presets and schedules, saved queries**
+- **TRaSH Guide Sync assignments** (which custom formats, quality profiles, sizes and naming Librariarr manages on each Sonarr/Radarr instance)
+
+Backups made before collections and TRaSH assignments were included still restore: rule sets that were assigned to a collection come back without one (reassign it in the rule editor), and TRaSH assignments need to be made again.
 
 **API keys are never included** — not even their hashes — and restoring a backup deletes every existing API key, so a key you deleted can never be brought back by restoring an older backup. After a restore, create new keys under **Settings → Authentication → API Keys** for the applications that use the [public API](/docs/advanced/api/).
 
