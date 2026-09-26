@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { getTracearrImportActivity } from "@/lib/sync/tracearr-import-activity";
 import type { TracearrHistoryRecord } from "@/lib/tracearr/tracearr-client";
 import type { WatchHistoryProgress } from "@/lib/sync/watch-history-progress";
 
@@ -2589,6 +2590,72 @@ describe("syncTracearrHistory", () => {
     });
   });
 
+
+  describe("the run is reported as live while it imports", () => {
+    // Settings shows a running import beside the sync status: the stored rows
+    // say how much history is here, not that a job is importing now — and a
+    // queued sync can be waiting on exactly that job.
+    it("is live while paging, with the committed page's figures, and cleared at the end", async () => {
+      storedRows({
+        min: new Date("2021-01-01T00:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: false,
+      });
+      let seenDuring: ReturnType<typeof getTracearrImportActivity> = null;
+      mockGetHistoryPage
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "chain-1" })], nextCursor: "cursor-2" })
+        .mockImplementationOnce(async () => {
+          seenDuring = getTracearrImportActivity("server-1");
+          return { records: [], nextCursor: null };
+        });
+
+      await syncTracearrHistory("server-1", { passes: "backfill" });
+
+      expect(seenDuring).toMatchObject({ pass: "backfill", pages: 1, imported: 1 });
+      expect(getTracearrImportActivity("server-1")).toBeNull();
+    });
+
+    it("clears the live entry and tells the page when the run throws", async () => {
+      storedRows({
+        min: new Date("2021-01-01T00:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: false,
+      });
+      // Thrown after the run registered itself, from outside the walk's own
+      // catch (which would turn a page failure into a clean "errored" stop).
+      mockInvalidate.mockImplementationOnce(() => {
+        throw new Error("boom");
+      });
+      mockGetHistoryPage.mockResolvedValueOnce({ records: [historyRecord({ id: "chain-1" })], nextCursor: null });
+
+      await expect(syncTracearrHistory("server-1", { passes: "backfill" })).rejects.toThrow("boom");
+
+      // Left registered, the card would say an import is running until a restart.
+      expect(getTracearrImportActivity("server-1")).toBeNull();
+      expect(mockEventBus.emit).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: "tracearr:import-progress", meta: { serverId: "server-1" } }),
+      );
+    });
+
+    it("announces the run as soon as it starts, before any page", async () => {
+      storedRows({
+        min: new Date("2021-01-01T00:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: false,
+      });
+      let emitsBeforeFirstPage = 0;
+      mockGetHistoryPage.mockImplementationOnce(async () => {
+        emitsBeforeFirstPage = mockEventBus.emit.mock.calls.length;
+        return { records: [], nextCursor: null };
+      });
+
+      await syncTracearrHistory("server-1", { passes: "backfill" });
+
+      // The join index and the span measurement run first and can take a
+      // while; the card should appear when the run starts, not a page later.
+      expect(emitsBeforeFirstPage).toBeGreaterThan(0);
+    });
+  });
 
   describe("progress is pushed, not waited for", () => {
     // The settings page and the History page both render an import readout, and

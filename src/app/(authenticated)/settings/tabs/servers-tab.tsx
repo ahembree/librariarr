@@ -285,6 +285,79 @@ function watchSourceLabel(option: WatchSourceOption): string {
  * correlate to the minute. Locale-driven ("6 Mar 2024" / "Mar 6, 2024"),
  * matching how the system tab formats release dates.
  */
+/**
+ * A Tracearr import running for this server right now, shown where the sync
+ * status sits.
+ *
+ * The coverage line under "Watch history source" answers "how much history is
+ * here"; it cannot say that a job is importing at this moment, and once the
+ * backfill completes it reads "fully imported" even while a catch-up runs. The
+ * backfill runs on the same serial queue as syncs, so this is also the answer
+ * to "what is my queued sync waiting on".
+ *
+ * The bar is determinate only for the backfill pass with a measured span —
+ * the same time-coverage fraction as the coverage line. The catch-up pass and
+ * an unmeasured archive have no honest denominator, so they get the
+ * indeterminate slider, never an empty bar.
+ */
+function TracearrImportActivityCard({ status }: { status: TracearrImportStatus }) {
+  const activity = status.activeImport;
+  if (!activity) return null;
+
+  const percent =
+    activity.pass === "backfill" && status.backfillFraction !== null
+      ? Math.round(status.backfillFraction * 100)
+      : null;
+  const passLabel =
+    activity.pass === "backfill"
+      ? "Older plays"
+      : activity.pass === "forward"
+        ? "New plays"
+        : "Starting…";
+  const plays = `${activity.imported.toLocaleString()} ${activity.imported === 1 ? "play" : "plays"}`;
+  const pages = `${activity.pages.toLocaleString()} ${activity.pages === 1 ? "page" : "pages"}`;
+
+  return (
+    <div className="mb-2 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+          <span className="font-medium text-foreground">Importing Tracearr history</span>
+        </div>
+        <span className="text-xs text-muted-foreground">
+          {passLabel}
+          {percent !== null && <span className="ml-1.5 tabular-nums text-foreground">{percent}%</span>}
+        </span>
+      </div>
+      <div
+        className="relative mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent ?? undefined}
+        aria-label={`Tracearr history import for ${status.serverName}`}
+      >
+        {percent !== null ? (
+          <div
+            className="h-full rounded-full bg-primary transition-all duration-500"
+            style={{ width: `${percent}%` }}
+          />
+        ) : (
+          <div className="absolute inset-y-0 w-2/5 animate-progress-indeterminate rounded-full bg-primary/80" />
+        )}
+      </div>
+      <p className="mt-1.5 text-xs text-muted-foreground">
+        {activity.pages === 0
+          ? "Preparing…"
+          : `${plays} this run · ${pages}`}
+        {activity.pass === "backfill" && activity.oldestReached
+          ? ` · reached ${formatImportBoundaryDate(activity.oldestReached)}`
+          : ""}
+      </p>
+    </div>
+  );
+}
+
 function formatImportBoundaryDate(date: string): string {
   return new Date(date).toLocaleDateString(undefined, {
     day: "numeric",
@@ -828,6 +901,7 @@ export function ServersTab({
           <div className="space-y-4">
             {servers.map((server) => {
               const latestSync = server.syncJobs[0];
+              const serverImportStatus = tracearrImportStatus.find((s) => s.serverId === server.id);
               const isSyncing = syncingServer === server.id;
               const isEditing = editingServerId === server.id;
               const connections = isEditing ? getPlexConnectionsForServer(server) : [];
@@ -1052,7 +1126,7 @@ export function ServersTab({
                       server={server}
                       instances={tracearrInstances}
                       serverLists={tracearrServerLists}
-                      importStatus={tracearrImportStatus.find((s) => s.serverId === server.id)}
+                      importStatus={serverImportStatus}
                       saving={savingWatchHistorySource === server.id}
                       onSelect={(tracearrServerId, sourceLabel) => setWatchHistorySourceDialog({
                         open: true,
@@ -1105,6 +1179,7 @@ export function ServersTab({
                       </div>
                     </div>
 
+                    {serverImportStatus && <TracearrImportActivityCard status={serverImportStatus} />}
                     {latestSync && (latestSync.status === "RUNNING" || latestSync.status === "PENDING") ? (
                       <div className="space-y-2">
                         <SyncProgressBar job={latestSync} />

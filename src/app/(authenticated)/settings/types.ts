@@ -156,6 +156,20 @@ export interface TracearrImportStatus {
    * 0% progress when the truth is that progress is unknowable.
    */
   backfillFraction: number | null;
+  /**
+   * The import running for this server right now, or null. Live this-run
+   * figures the stored rows cannot express — the stored counts above say how
+   * much history is here, this says that a job is importing more at this
+   * moment (including a catch-up after the backfill has completed).
+   */
+  activeImport: {
+    /** The pass currently walking; null until its first page commits. */
+    pass: "forward" | "backfill" | null;
+    startedAt: string;
+    pages: number;
+    imported: number;
+    oldestReached: string | null;
+  } | null;
 }
 
 // ─── Schedule types ───

@@ -984,7 +984,12 @@ export default function SettingsPage() {
   // connection staying up. Deliberately slow: the push covers the live case, and
   // this only has to stop the number going stale for good. Runs while a backfill
   // is owed, which is the case that lasts long enough for a drop to matter.
-  const tracearrBackfillRunning = visibleTracearrImportStatus.some((s) => !s.backfillComplete);
+  // Also while any import is live: a catch-up on an already-backfilled server
+  // shows an import card too, and without this a dropped stream would leave
+  // that card up until the next pushed event.
+  const tracearrBackfillRunning = visibleTracearrImportStatus.some(
+    (s) => !s.backfillComplete || s.activeImport !== null,
+  );
   const pollTracearrImport = hasTracearrInstance && tracearrBackfillRunning;
   useEffect(() => {
     if (!pollTracearrImport) return;

@@ -20,6 +20,11 @@ import {
 } from "@/lib/tracearr/tracearr-client";
 import { invalidateWatchHistoryEvidence } from "@/lib/media/watch-evidence";
 import { eventBus } from "@/lib/events/event-bus";
+import {
+  beginTracearrImport,
+  endTracearrImport,
+  recordTracearrImportPage,
+} from "@/lib/sync/tracearr-import-activity";
 
 /**
  * Incremental import of Tracearr play history into `WatchHistory`.
@@ -508,6 +513,22 @@ export async function syncTracearrHistory(
   serverId: string,
   options: TracearrImportOptions = {},
 ): Promise<TracearrImportResult> {
+  try {
+    return await runTracearrImport(serverId, options);
+  } finally {
+    // A normal exit clears its activity entry itself, just before its final
+    // progress event. Anything still registered here left by a throw, and the
+    // Settings card would otherwise report an import running that is not —
+    // until a restart — so clear it and tell the page.
+    const orphaned = endTracearrImport(serverId);
+    if (orphaned) emitImportProgress(orphaned.userId, serverId, true);
+  }
+}
+
+async function runTracearrImport(
+  serverId: string,
+  options: TracearrImportOptions,
+): Promise<TracearrImportResult> {
   const { onProgress, signal, passes = "both", deadlineMs, yieldTo } = options;
   const server = await prisma.mediaServer.findFirst({
     where: { id: serverId },
@@ -587,6 +608,10 @@ export async function syncTracearrHistory(
   // Captured for the same reason as `serverName`: read inside the `walk`
   // closure, which TypeScript's control-flow analysis cannot see through.
   const ownerUserId = server.userId;
+  // From here the run is a real import, so Settings shows it as running. Forced
+  // so the card appears now, not a page and a throttle window later.
+  beginTracearrImport(serverId, ownerUserId);
+  emitImportProgress(ownerUserId, serverId, true);
   // Bound once so the paging closure keeps the narrowed, non-null value.
   const mappedServerId = tracearrServerId;
   const window = await resolveImportWindow(
@@ -880,7 +905,16 @@ export async function syncTracearrHistory(
 
         // Tell any watching client the readout moved. Emitted AFTER the page
         // commits, so a listener that refetches can never read a figure this
-        // run has not durably written.
+        // run has not durably written — and after the live counters are
+        // updated, for the same reason.
+        recordTracearrImportPage(serverId, {
+          pass,
+          pages,
+          imported: counters.inserted + counters.updated,
+          oldestReached: pageOldest && (!walked.oldestSeenAt || pageOldest < walked.oldestSeenAt)
+            ? pageOldest
+            : walked.oldestSeenAt,
+        });
         emitImportProgress(ownerUserId, serverId);
 
         // The page is committed, so its position is now safe to keep. Doing this
@@ -1207,7 +1241,9 @@ export async function syncTracearrHistory(
   // and this is the one that carries the terminal state — the final count, and
   // whether the backfill just finished. A readout stuck one page short of done
   // is exactly the "it never updates" complaint, arriving at the end instead of
-  // throughout.
+  // throughout. The activity entry is cleared first, so the refetch this
+  // triggers no longer reports the run as live.
+  endTracearrImport(serverId);
   emitImportProgress(ownerUserId, serverId, true);
 
   logger.info(
