@@ -9,6 +9,7 @@ vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
 import {
   arrIdSourceFor,
   copyIdsOf,
+  copyRank,
   crossServerCopyKeys,
 } from "@/lib/lifecycle/cross-server-copies";
 import type { ArrDataMap } from "@/lib/rules/lifecycle-engine";
@@ -98,5 +99,15 @@ describe("copyIdsOf", () => {
     expect(copyIdsOf(undefined)).toEqual([]);
     expect(copyIdsOf({})).toEqual([]);
     expect(copyIdsOf({ copies: "nope" })).toEqual([]);
+  });
+});
+
+describe("copyRank", () => {
+  it("ranks a held id, then a copy a held match lists, then any other copy", () => {
+    const held = new Set(["a"]);
+    const listed = new Map([["b", "a"]]);
+    expect(copyRank("a", held, listed)).toBe(0);
+    expect(copyRank("b", held, listed)).toBe(1);
+    expect(copyRank("c", held, listed)).toBe(2);
   });
 });

@@ -103,6 +103,8 @@ interface DiffItem {
   id: string;
   title: string;
   parentTitle: string | null;
+  /** Other preview rows (another server's copy) folded into this match. */
+  copyIds?: string[];
 }
 
 interface DiffData {
@@ -1476,8 +1478,16 @@ export function LifecycleRulePage({
       if (diffResponse?.ok) {
         const diff = await diffResponse.json() as DiffData & { removedItems?: PreviewItem[] };
         const statusMap = new Map<string, "added" | "removed" | "retained">();
-        for (const item of diff.added) statusMap.set(item.id, "added");
-        for (const item of diff.retained) statusMap.set(item.id, "retained");
+        // Another server's copy folded into a match shares its status — the
+        // preview lists every copy as a row, detection stores the title once.
+        for (const item of diff.added) {
+          statusMap.set(item.id, "added");
+          for (const c of item.copyIds ?? []) statusMap.set(c, "added");
+        }
+        for (const item of diff.retained) {
+          statusMap.set(item.id, "retained");
+          for (const c of item.copyIds ?? []) statusMap.set(c, "retained");
+        }
         for (const item of diff.removed) statusMap.set(item.id, "removed");
 
         // Append removed items (full MediaItem data from diff endpoint) to the preview list
@@ -2998,7 +3008,7 @@ export function LifecycleRulePage({
         <div className="mt-8">
           <div className="flex items-center gap-3 mb-4 flex-wrap">
             <h2 className="text-xl font-bold font-display">
-              Preview Results ({previewDiffCounts ? preview.length - (previewDiffCounts.removed) : preview.length} matches)
+              Preview Results ({previewDiffCounts ? previewDiffCounts.added + previewDiffCounts.retained : preview.length} matches)
             </h2>
             {previewDiffCounts && (previewDiffCounts.added > 0 || previewDiffCounts.removed > 0) && (
               <div className="flex items-center gap-2 text-sm">

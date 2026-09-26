@@ -134,16 +134,19 @@ export async function findExceptedItemIds(
   if (dedupKeys.size > 0) {
     // Only the candidates are looked up: materialising every copy of every
     // excepted key would cost a whole-library read per call when thousands of
-    // episodes are excepted and the caller asks about a handful of items.
-    const copies = await prisma.mediaItem.findMany({
+    // episodes are excepted and the caller asks about a handful of items. The
+    // keys are intersected here rather than sent as a second IN list: Prisma
+    // splits only one oversized list per query, so two large ones together
+    // overflow the bind-parameter limit (P2029) and fail the whole run.
+    const rows = await prisma.mediaItem.findMany({
       where: {
         id: { in: [...candidates] },
-        dedupKey: { in: [...dedupKeys] },
+        dedupKey: { not: null },
         library: { mediaServer: { userId } },
       },
-      select: { id: true },
+      select: { id: true, dedupKey: true },
     });
-    for (const c of copies) excepted.add(c.id);
+    for (const r of rows) if (r.dedupKey && dedupKeys.has(r.dedupKey)) excepted.add(r.id);
   }
   return excepted;
 }

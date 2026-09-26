@@ -154,6 +154,24 @@ describe("cross-server copies of one title", () => {
     expect(await prisma.lifecycleAction.count({ where: { ruleSetId: ruleSet.id, status: "PENDING" } })).toBe(1);
   });
 
+  it("carries the match over when the rule set is narrowed to the other copy's server", async () => {
+    const { user, a, b, s1, s2, ruleSet } = await twoServerMovie();
+    await processLifecycleRules(user.id);
+    const [match] = await prisma.ruleMatch.findMany({ where: { ruleSetId: ruleSet.id } });
+    const kept = match.mediaItemId === a.id ? a : b;
+    const other = kept === a ? b : a;
+    const [action] = await prisma.lifecycleAction.findMany({ where: { ruleSetId: ruleSet.id, status: "PENDING" } });
+
+    const otherServer = other.libraryId === (await prisma.library.findFirst({ where: { mediaServerId: s1.id } }))!.id ? s1 : s2;
+    await prisma.ruleSet.update({ where: { id: ruleSet.id }, data: { serverIds: [otherServer.id] } });
+    await processLifecycleRules(user.id);
+
+    const matches = await prisma.ruleMatch.findMany({ where: { ruleSetId: ruleSet.id } });
+    expect(matches.map((m) => m.mediaItemId)).toEqual([other.id]);
+    const pending = await prisma.lifecycleAction.findMany({ where: { ruleSetId: ruleSet.id, status: "PENDING" } });
+    expect(pending.map((p) => [p.id, p.mediaItemId])).toEqual([[action.id, other.id]]);
+  });
+
   it("an exception on the copy detection did not keep disarms the title", async () => {
     const { user, a, b, ruleSet } = await twoServerMovie();
     await processLifecycleRules(user.id);

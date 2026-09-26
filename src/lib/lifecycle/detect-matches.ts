@@ -11,7 +11,7 @@ import { syncCollectionById, syncAllCollections } from "@/lib/lifecycle/collecti
 import { describePlexError } from "@/lib/plex/errors";
 import { findExceptedItemIds, findExceptionProtectedGroups, protectionKey } from "@/lib/lifecycle/exception-guard";
 import type { Prisma } from "@/generated/prisma/client";
-import { arrIdSourceFor, copyIdsOf, crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
+import { arrIdSourceFor, copyIdsOf, copyRank, crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
 
 interface RuleSetConfig {
   id: string;
@@ -107,8 +107,11 @@ async function planActionCarryOver(
  * carrying every copy's server, the union of their members, and a `copies`
  * list naming the others.
  *
- * The representative is the copy already matched, else the lowest id — never
- * whichever row the engine returned first. Its query is unordered, so the
+ * The representative is the copy already matched, else a copy a held match
+ * lists in its `copies` (so the carry-over below moves that match onto it
+ * rather than a newly matching third copy taking over), else the lowest id —
+ * never whichever row the engine returned first. The rule diff ranks the same
+ * three tiers (`copyRank`) so its preview agrees. Its query is unordered, so the
  * order changes whenever a sync rewrites a row, and each swap re-keyed the
  * match: the incremental run deleted one copy's match and created the other's,
  * which cancelled the PENDING action and scheduled a new one `actionDelayDays`
@@ -129,6 +132,7 @@ async function planActionCarryOver(
  */
 async function collapseCopies(
   alreadyMatched: Set<string>,
+  heldCopies: Set<string>,
   groups: Record<string, unknown>[][],
   episodeIdMap: Map<string, string[]>,
 ): Promise<void> {
@@ -147,11 +151,10 @@ async function collapseCopies(
 
   for (const group of groups) {
     group.sort((a, b) => {
-      const byMatch =
-        (alreadyMatched.has(a.id as string) ? 0 : 1) - (alreadyMatched.has(b.id as string) ? 0 : 1);
-      if (byMatch !== 0) return byMatch;
       const ida = String(a.id);
       const idb = String(b.id);
+      const byRank = copyRank(ida, alreadyMatched, heldCopies) - copyRank(idb, alreadyMatched, heldCopies);
+      if (byRank !== 0) return byRank;
       return ida < idb ? -1 : ida > idb ? 1 : 0;
     });
     const [rep, ...others] = group;
@@ -485,6 +488,9 @@ export async function detectAndSaveMatches(
     select: { mediaItemId: true, itemData: true },
   });
   const heldIds = new Set(heldMatches.map((m) => m.mediaItemId));
+  const heldCopyIds = new Set(
+    heldMatches.flatMap((m) => copyIdsOf(m.itemData as Record<string, unknown>)),
+  );
 
   if (ruleSet.serverIds.length > 1) {
     const copyKeys = await crossServerCopyKeys(enrichedItems, {
@@ -503,7 +509,7 @@ export async function detectAndSaveMatches(
     }
     const duplicated = [...groups.values()].filter((g) => g.length > 1);
     if (duplicated.length > 0) {
-      await collapseCopies(heldIds, duplicated, episodeIdMap);
+      await collapseCopies(heldIds, heldCopyIds, duplicated, episodeIdMap);
       const kept = new Set(duplicated.map((g) => g[0]));
       const dropped = new Set(duplicated.flat().filter((i) => !kept.has(i)));
       logger.info(
@@ -523,8 +529,10 @@ export async function detectAndSaveMatches(
   // and scheduled a fresh one `actionDelayDays` out (restarting the countdown),
   // and a sticky rule set kept both and armed two actions against one Arr
   // record. The match and its PENDING action move to the copy instead.
+  // Not gated on the server count: a rule set narrowed to the copy's server
+  // alone still holds the same title (and the diff previews it as retained).
   const carried = new Map<string, Record<string, unknown>>();
-  if (ruleSet.serverIds.length > 1 && heldMatches.length > 0) {
+  if (heldMatches.length > 0) {
     const currentIds = new Set(enrichedItems.map((i) => i.id as string));
     const heldByCopy = new Map<string, string>();
     for (const m of heldMatches) {

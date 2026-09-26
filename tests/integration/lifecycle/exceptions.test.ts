@@ -280,18 +280,82 @@ describe("Lifecycle Exceptions API", () => {
       expect(pending.map((a) => a.mediaItemId)).toEqual([unrelated.id]);
     });
 
-    it("clears a match that lists the excluded item only as a copy (no dedupKey)", async () => {
-      const { user, mediaItem } = await createUserWithMediaItem();
-      const server2 = await createTestServer(user.id);
-      const library2 = await createTestLibrary(server2.id, { type: "MOVIE" });
-      const kept = await createTestMediaItem(library2.id, { type: "MOVIE" });
-      const ruleSet = await createTestRuleSet(user.id, { type: "MOVIE" });
-      await createTestRuleMatch(ruleSet.id, kept.id, { copies: [{ id: mediaItem.id }] });
+    it("leaves matches that only list the excluded episode as another server's copy", async () => {
+      // A per-episode rule set's group on server A lists server B's episode as
+      // its copy. Detection keeps that group (it only drops the excepted
+      // members), so deleting it here would just restart its countdown — in
+      // this rule set and in every other rule set sharing the representative.
+      const user = await createTestUser();
+      const s1 = await createTestServer(user.id);
+      const s2 = await createTestServer(user.id);
+      const l1 = await createTestLibrary(s1.id, { type: "SERIES" });
+      const l2 = await createTestLibrary(s2.id, { type: "SERIES" });
+      const a1 = await createTestMediaItem(l1.id, { type: "SERIES", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
+      const b7 = await createTestMediaItem(l2.id, { type: "SERIES", parentTitle: "Show", seasonNumber: 1, episodeNumber: 7 });
+      await prisma.mediaItem.update({ where: { id: a1.id }, data: { seriesKey: "tvdb:1", dedupKey: "ep:1:1:1" } });
+      await prisma.mediaItem.update({ where: { id: b7.id }, data: { seriesKey: "tvdb:1", dedupKey: "ep:1:1:7" } });
+      const r1 = await createTestRuleSet(user.id, { type: "SERIES", seriesScope: false });
+      const r2 = await createTestRuleSet(user.id, { type: "SERIES", seriesScope: false });
+      await createTestRuleMatch(r1.id, a1.id, { copies: [{ id: b7.id }] });
+      await createTestRuleMatch(r2.id, a1.id);
+      const action = await prisma.lifecycleAction.create({
+        data: {
+          userId: user.id,
+          mediaItemId: a1.id,
+          ruleSetId: r2.id,
+          actionType: "UNMONITOR_SONARR",
+          status: "PENDING",
+          scheduledFor: new Date(Date.now() + 86400000),
+        },
+      });
 
       setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-      await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } });
+      await callRoute(POST, { method: "POST", body: { mediaItemId: b7.id } });
 
-      expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
+      expect(await prisma.ruleMatch.count({ where: { ruleSetId: { in: [r1.id, r2.id] } } })).toBe(2);
+      expect(await prisma.lifecycleAction.findUnique({ where: { id: action.id } })).not.toBeNull();
+    });
+
+    it("disarms a series-scope match of the show on another server, and only that rule set's", async () => {
+      const user = await createTestUser();
+      const s1 = await createTestServer(user.id);
+      const s2 = await createTestServer(user.id);
+      const l1 = await createTestLibrary(s1.id, { type: "SERIES" });
+      const l2 = await createTestLibrary(s2.id, { type: "SERIES" });
+      const a1 = await createTestMediaItem(l1.id, { type: "SERIES", parentTitle: "The Office", seasonNumber: 1, episodeNumber: 1 });
+      const b7 = await createTestMediaItem(l2.id, { type: "SERIES", parentTitle: "The Office (US)", seasonNumber: 1, episodeNumber: 7 });
+      // A different show that happens to share server B's title.
+      const other = await createTestMediaItem(l1.id, { type: "SERIES", parentTitle: "The Office (US)", seasonNumber: 1, episodeNumber: 1 });
+      await prisma.mediaItem.update({ where: { id: a1.id }, data: { seriesKey: "tvdb:73244", dedupKey: "ep:73244:1:1" } });
+      await prisma.mediaItem.update({ where: { id: b7.id }, data: { seriesKey: "tvdb:73244", dedupKey: "ep:73244:1:7" } });
+      await prisma.mediaItem.update({ where: { id: other.id }, data: { seriesKey: "tvdb:999", dedupKey: "ep:999:1:1" } });
+      const grouped = await createTestRuleSet(user.id, { type: "SERIES", seriesScope: true });
+      const perEpisode = await createTestRuleSet(user.id, { type: "SERIES", seriesScope: false });
+      await createTestRuleMatch(grouped.id, a1.id);
+      await createTestRuleMatch(grouped.id, other.id);
+      await createTestRuleMatch(perEpisode.id, a1.id);
+      for (const [ruleSetId, mediaItemId] of [[grouped.id, a1.id], [perEpisode.id, a1.id]]) {
+        await prisma.lifecycleAction.create({
+          data: {
+            userId: user.id,
+            mediaItemId,
+            ruleSetId,
+            actionType: "DELETE_SONARR",
+            status: "PENDING",
+            scheduledFor: new Date(Date.now() + 86400000),
+          },
+        });
+      }
+
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      await callRoute(POST, { method: "POST", body: { mediaItemId: b7.id } });
+
+      const left = await prisma.ruleMatch.findMany({ where: { ruleSetId: { in: [grouped.id, perEpisode.id] } } });
+      expect(left.map((m) => [m.ruleSetId, m.mediaItemId]).sort()).toEqual(
+        [[grouped.id, other.id], [perEpisode.id, a1.id]].sort(),
+      );
+      const pending = await prisma.lifecycleAction.findMany({ where: { status: "PENDING" } });
+      expect(pending.map((a) => a.ruleSetId)).toEqual([perEpisode.id]);
     });
 
     it("takes the kept copy and every listed copy out of the collection, each in its own library", async () => {
@@ -299,6 +363,10 @@ describe("Lifecycle Exceptions API", () => {
       const server2 = await createTestServer(user.id);
       const library2 = await createTestLibrary(server2.id, { type: "MOVIE" });
       const kept = await createTestMediaItem(library2.id, { type: "MOVIE" });
+      await prisma.mediaItem.updateMany({
+        where: { id: { in: [mediaItem.id, kept.id] } },
+        data: { dedupKey: "movie:tmdb:603" },
+      });
       const collection = await prisma.collection.create({
         data: { userId: user.id, name: "Leaving Soon", type: "MOVIE" },
       });

@@ -381,7 +381,10 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
         { id: ruleSetId },
         { url: `/api/lifecycle/rules/${ruleSetId}/diff`, method: "POST", body },
       );
-      return expectJson<{ added: { id: string }[]; counts: { added: number; removed: number; retained: number } }>(
+      return expectJson<{
+        added: { id: string; copyIds?: string[] }[];
+        counts: { added: number; removed: number; retained: number };
+      }>(
         response,
         200,
       );
@@ -396,7 +399,34 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
       const body = await diff(ruleSet.id, { rules: validRules, type: "MOVIE", serverIds });
 
       expect(body.counts).toEqual({ added: 1, removed: 0, retained: 0 });
-      expect(body.added[0].id).toBe([a.id, b.id].sort()[0]);
+      const [kept, folded] = [a.id, b.id].sort();
+      expect(body.added[0].id).toBe(kept);
+      // The folded copy is named so the editor can mark its preview row too.
+      expect(body.added[0].copyIds).toEqual([folded]);
+    });
+
+    it("keep the copy a held match lists, as detection does, when a third copy with a lower id joins", async () => {
+      const user = await createTestUser();
+      const servers = [await createTestServer(user.id), await createTestServer(user.id), await createTestServer(user.id)];
+      const libs = await Promise.all(servers.map((srv) => createTestLibrary(srv.id, { type: "MOVIE" })));
+      const x = await createTestMediaItem(libs[0].id, { title: "Shared", type: "MOVIE" });
+      const p = await createTestMediaItem(libs[1].id, { title: "Shared", type: "MOVIE" });
+      const q = await createTestMediaItem(libs[2].id, { title: "Shared", type: "MOVIE" });
+      const [z, y] = [p, q].sort((m, n) => (m.id < n.id ? -1 : 1));
+      for (const item of [x, y, z]) await createTestExternalId(item.id, "TMDB", "603");
+      const ruleSet = await createTestRuleSet(user.id, { name: "Test", actionEnabled: true, actionType: "DELETE_RADARR" });
+      await createTestRuleMatch(ruleSet.id, x.id, { title: "Shared", parentTitle: null, copies: [{ id: y.id }] });
+      mockEvaluateRules.mockResolvedValue([
+        { id: z.id, title: "Shared", parentTitle: null },
+        { id: y.id, title: "Shared", parentTitle: null },
+      ]);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const body = await diff(ruleSet.id, {
+        rules: validRules, type: "MOVIE", serverIds: servers.map((srv) => srv.id),
+      });
+
+      expect(body.counts).toEqual({ added: 0, removed: 0, retained: 1 });
     });
 
     it("follow the action config being saved, not the stored one", async () => {

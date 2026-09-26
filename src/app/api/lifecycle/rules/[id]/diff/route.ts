@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
-import { crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
+import { copyRank, crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
 import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
@@ -17,6 +17,12 @@ interface DiffItem {
   id: string;
   title: string;
   parentTitle: string | null;
+  /**
+   * Other candidate ids folded into this match — another server's copy of the
+   * title. The preview lists every copy as its own row, so the editor gives
+   * these the match's status too.
+   */
+  copyIds?: string[];
 }
 
 // Serialize BigInt fields (fileSize) to strings for JSON response
@@ -188,27 +194,35 @@ export async function POST(
     actionArmed: (data.actionEnabled ?? ruleSet.actionEnabled) &&
       !!(data.actionType !== undefined ? data.actionType : ruleSet.actionType),
   });
+  // Ranked exactly as detection's collapse ranks them (`copyRank`).
   const keptForKey = new Map<string, string>();
   for (const rec of candidates) {
     const itemId = rec.id as string;
     const key = copyKeys.get(itemId);
     if (!key) continue;
-    const held = existingById.has(itemId) || copyOf.has(itemId);
     const current = keptForKey.get(key);
-    const currentHeld = current !== undefined && (existingById.has(current) || copyOf.has(current));
-    if (current === undefined || (held && !currentHeld) || (held === currentHeld && itemId < current)) {
+    if (current === undefined) {
       keptForKey.set(key, itemId);
+      continue;
     }
+    const byRank = copyRank(itemId, existingById, copyOf) - copyRank(current, existingById, copyOf);
+    if (byRank < 0 || (byRank === 0 && itemId < current)) keptForKey.set(key, itemId);
   }
 
   const candidateById = new Map(candidates.map((rec) => [rec.id as string, rec]));
   const newMatchIds = new Set<string>();
   const newMatchMap = new Map<string, Record<string, unknown>>();
+  const foldedIds = new Map<string, string[]>();
   for (const rec of candidates) {
     const itemId = rec.id as string;
     const key = copyKeys.get(itemId);
     const keptId = key ? (keptForKey.get(key) ?? itemId) : itemId;
     const matchId = existingById.has(keptId) ? keptId : (copyOf.get(keptId) ?? keptId);
+    if (itemId !== matchId) {
+      const folded = foldedIds.get(matchId);
+      if (folded) folded.push(itemId);
+      else foldedIds.set(matchId, [itemId]);
+    }
     if (newMatchIds.has(matchId)) continue;
     newMatchIds.add(matchId);
     newMatchMap.set(matchId, candidateById.get(keptId) ?? rec);
@@ -224,6 +238,7 @@ export async function POST(
       id: itemId,
       title: (rec.title as string) ?? (rec.parentTitle as string) ?? "Unknown",
       parentTitle: (rec.parentTitle as string | null) ?? null,
+      copyIds: foldedIds.get(itemId) ?? [],
     };
     if (existingById.has(itemId)) {
       retained.push(diffItem);

@@ -526,7 +526,10 @@ describe("detectAndSaveMatches", () => {
       mockPrisma.lifecycleException.findMany.mockResolvedValue([
         { mediaItemId: "a", mediaItem: { dedupKey: "movie:tmdb:111" } },
       ]);
-      mockPrisma.mediaItem.findMany.mockResolvedValueOnce([{ id: "a" }, { id: "b" }]);
+      mockPrisma.mediaItem.findMany.mockResolvedValueOnce([
+        { id: "a", dedupKey: "movie:tmdb:111" },
+        { id: "b", dedupKey: "movie:tmdb:111" },
+      ]);
 
       const result = await detectAndSaveMatches(armed, ["s1", "s2"]);
 
@@ -652,6 +655,54 @@ describe("detectAndSaveMatches", () => {
         expect(arg.data.mediaItemId).toBe("b");
         // Episode 3 was never scheduled; it is not added by the move.
         expect(arg.data.matchedMediaItemIds).toEqual(["b1", "b2"]);
+      });
+
+      it("keeps the copy the held match listed over a newly matching third copy with a lower id", async () => {
+        // "c" is listed on held "a"; "b" (lower id) matches for the first time
+        // in the same run. Keeping "b" left nothing to carry "a" onto.
+        mockEvaluateRules.mockResolvedValue([copy("b", "s3"), copy("c", "s2")]);
+        mockPrisma.ruleMatch.findMany.mockResolvedValue([
+          {
+            mediaItemId: "a",
+            itemData: { id: "a", servers: [{ serverId: "s1" }], copies: [{ id: "c", libraryId: "lib-s2", ratingKey: "rk-c" }] },
+          },
+        ]);
+        mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+          { id: "act1", mediaItemId: "a", matchedMediaItemIds: [] },
+        ]);
+
+        const result = await detectAndSaveMatches(
+          { ...armed, serverIds: ["s1", "s2", "s3"] },
+          ["s1", "s2", "s3"],
+        );
+
+        expect(result.items.map((i) => i.id)).toEqual(["c"]);
+        expect(mockPrisma.ruleMatch.createMany).not.toHaveBeenCalled();
+        expect(mockPrisma.ruleMatch.updateMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { ruleSetId: "rs1", mediaItemId: "a" },
+            data: expect.objectContaining({ mediaItemId: "c", copyIds: ["b"] }),
+          }),
+        );
+        expect(mockPrisma.lifecycleAction.updateMany).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { id: "act1", status: "PENDING" } }),
+        );
+      });
+
+      it("carries over when the rule set is narrowed to the copy's server alone", async () => {
+        mockEvaluateRules.mockResolvedValue([copy("b", "s2")]);
+        mockPrisma.ruleMatch.findMany.mockResolvedValue([held]);
+
+        await detectAndSaveMatches({ ...armed, serverIds: ["s2"] }, ["s2"]);
+
+        expect(mockPrisma.ruleMatch.createMany).not.toHaveBeenCalled();
+        expect(mockPrisma.ruleMatch.deleteMany).not.toHaveBeenCalled();
+        expect(mockPrisma.ruleMatch.updateMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { ruleSetId: "rs1", mediaItemId: "a" },
+            data: expect.objectContaining({ mediaItemId: "b" }),
+          }),
+        );
       });
 
       it("does not carry onto a copy that already holds its own match", async () => {

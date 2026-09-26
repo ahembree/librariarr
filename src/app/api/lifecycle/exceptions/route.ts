@@ -8,6 +8,7 @@ import {
   exceptionBulkUpdateSchema,
 } from "@/lib/validation";
 import { removeItemFromCollections } from "@/lib/lifecycle/collections";
+import { protectionKey } from "@/lib/lifecycle/exception-guard";
 import type { Prisma } from "@/generated/prisma/client";
 
 export async function GET(request: NextRequest) {
@@ -164,7 +165,7 @@ export async function POST(request: NextRequest) {
 
   const relatedItems = await prisma.mediaItem.findMany({
     where: bulkWhere,
-    select: { id: true, dedupKey: true },
+    select: { id: true, dedupKey: true, parentTitle: true, seriesKey: true, type: true },
   });
 
   const mediaItemIds = relatedItems.map((item) => item.id);
@@ -190,7 +191,7 @@ export async function POST(request: NextRequest) {
 
 async function handleIndividualException(
   userId: string,
-  item: { id: string; dedupKey: string | null },
+  item: ExcludedItem,
   reason: string | null
 ) {
   const mediaItemId = item.id;
@@ -215,24 +216,33 @@ async function handleIndividualException(
   return NextResponse.json({ exception }, { status: 201 });
 }
 
+interface ExcludedItem {
+  id: string;
+  dedupKey: string | null;
+  parentTitle: string | null;
+  seriesKey: string | null;
+  type: string;
+}
+
 /**
- * Disarm everything an exception on `items` now protects: the matches and
- * PENDING actions of the items themselves AND of every other copy of them —
- * the same `dedupKey` on the user's other servers or libraries, or a match
- * that collapsed them into its `copyIds` — and their entries in Plex
- * collections.
+ * Disarm now what the next detection run would drop because of an exception
+ * on `items` — no more, or a match detection keeps comes straight back with
+ * its countdown restarted:
  *
- * An exception covers every copy (see `findExceptedItemIds`), and a title on
- * several servers is matched ONCE, on whichever copy detection kept: clearing
- * only the excluded item's own rows left that match and its armed action in
- * place until the executor or the next detection happened to cancel them —
- * while the Matches and Pending pages, the pending-deletion stats and the
- * collection it was in went on presenting the title as leaving.
+ * - the matches and PENDING actions of the items themselves and of every
+ *   other copy of them (the same `dedupKey` on the user's other servers or
+ *   libraries — `findExceptedItemIds`). A title on several servers is matched
+ *   ONCE, on whichever copy detection kept, so clearing only the excluded
+ *   item's own rows left that match and its armed action in place;
+ * - in grouped-scope (seriesScope) rule sets, the match of the whole show or
+ *   artist, which detection drops when ANY of its items carries an exception,
+ *   on any server (`protectionKey`) — deleted in that rule set only;
+ * - their entries in Plex collections.
+ *
+ * A per-episode match whose group merely lists the item as another server's
+ * copy is left alone: detection only removes the excepted members from it.
  */
-async function disarmExcludedItems(
-  userId: string,
-  items: Array<{ id: string; dedupKey: string | null }>,
-): Promise<void> {
+async function disarmExcludedItems(userId: string, items: ExcludedItem[]): Promise<void> {
   const dedupKeys = [...new Set(items.map((i) => i.dedupKey).filter((k): k is string => !!k))];
   const twins =
     dedupKeys.length > 0
@@ -241,16 +251,41 @@ async function disarmExcludedItems(
           select: { id: true },
         })
       : [];
-  const affected = [...new Set([...items.map((i) => i.id), ...twins.map((t) => t.id)])];
+  const affected = new Set([...items.map((i) => i.id), ...twins.map((t) => t.id)]);
 
-  const matches = await prisma.ruleMatch.findMany({
+  const groupKeys = new Set(
+    items
+      .map((i) => protectionKey({ parentTitle: i.parentTitle, seriesKey: i.seriesKey, type: i.type }))
+      .filter((k): k is string => !!k),
+  );
+  const parents = [...new Set(items.map((i) => i.parentTitle).filter((t): t is string => !!t))];
+  const seriesKeys = [...new Set(items.map((i) => i.seriesKey).filter((k): k is string => !!k))];
+
+  const candidates = await prisma.ruleMatch.findMany({
     where: {
       ruleSet: { userId },
-      OR: [{ mediaItemId: { in: affected } }, { copyIds: { hasSome: affected } }],
+      OR: [
+        { mediaItemId: { in: [...affected] } },
+        ...(groupKeys.size > 0
+          ? [
+              {
+                ruleSet: { userId, seriesScope: true, type: { in: ["SERIES" as const, "MUSIC" as const] } },
+                mediaItem: {
+                  OR: [
+                    ...(parents.length > 0 ? [{ parentTitle: { in: parents } }] : []),
+                    ...(seriesKeys.length > 0 ? [{ seriesKey: { in: seriesKeys } }] : []),
+                  ],
+                },
+              },
+            ]
+          : []),
+      ],
     },
     select: {
+      ruleSetId: true,
       mediaItemId: true,
       itemData: true,
+      mediaItem: { select: { parentTitle: true, seriesKey: true } },
       ruleSet: {
         select: {
           type: true,
@@ -260,13 +295,28 @@ async function disarmExcludedItems(
       },
     },
   });
-  const disarmed = [...new Set([...affected, ...matches.map((m) => m.mediaItemId)])];
+  // Re-keyed through protectionKey: the title/seriesKey probe above also finds
+  // a same-titled DIFFERENT show, which the exception does not protect.
+  const groupHits = candidates.filter(
+    (m) =>
+      !affected.has(m.mediaItemId) &&
+      m.ruleSet.seriesScope &&
+      groupKeys.has(
+        protectionKey({
+          parentTitle: m.mediaItem.parentTitle,
+          seriesKey: m.mediaItem.seriesKey,
+          type: m.ruleSet.type,
+        }) ?? "",
+      ),
+  );
+  const matches = [...candidates.filter((m) => affected.has(m.mediaItemId)), ...groupHits];
+  const pairs = groupHits.map((m) => ({ ruleSetId: m.ruleSetId, mediaItemId: m.mediaItemId }));
 
   await prisma.ruleMatch.deleteMany({
-    where: { mediaItemId: { in: disarmed }, ruleSet: { userId } },
+    where: { ruleSet: { userId }, OR: [{ mediaItemId: { in: [...affected] } }, ...pairs] },
   });
   await prisma.lifecycleAction.deleteMany({
-    where: { mediaItemId: { in: disarmed }, userId, status: "PENDING" },
+    where: { userId, status: "PENDING", OR: [{ mediaItemId: { in: [...affected] } }, ...pairs] },
   });
 
   // Take each match's items out of its Plex collection: the kept copy and the

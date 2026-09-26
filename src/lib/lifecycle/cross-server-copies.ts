@@ -66,3 +66,17 @@ export function copyIdsOf(itemData: Record<string, unknown> | null | undefined):
     .filter((id): id is string => typeof id === "string");
 }
 
+
+/**
+ * Which copy of a collapsed title stays its representative, lowest first:
+ * 0 — already the match's own row; 1 — listed in a held match's `copies`
+ * (the match carries over onto it); 2 — any other copy (then lowest id).
+ * Shared by detection's collapse and the rule diff so both pick the same copy.
+ */
+export function copyRank(
+  id: string,
+  heldIds: { has(id: string): boolean },
+  heldCopies: { has(id: string): boolean },
+): 0 | 1 | 2 {
+  return heldIds.has(id) ? 0 : heldCopies.has(id) ? 1 : 2;
+}
