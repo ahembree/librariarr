@@ -17,6 +17,9 @@ import { sendDiscordNotification, buildFailureSummaryEmbed } from "@/lib/discord
 import { eventBus } from "@/lib/events/event-bus";
 import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
+import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
+import { getApiKeyPrincipal } from "@/lib/api-keys/principal";
+import { destructiveRefusalResponse, reserveApiDestructive } from "@/lib/api-keys/destructive-budget";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -27,7 +30,21 @@ export async function POST(request: NextRequest) {
   const { data, error } = await validateRequest(request, actionExecuteSchema);
   if (error) return error;
 
-  const { ruleSetId, mediaItemIds } = data;
+  const { ruleSetId } = data;
+  // Duplicates would only repeat one id; dropping them keeps every count below
+  // (the ceiling, the API budget, the log line) a count of distinct items.
+  const mediaItemIds = data.mediaItemIds ? [...new Set(data.mediaItemIds)] : undefined;
+
+  // Under an API key a missing `mediaItemIds` is refused, never read as "every
+  // match": `/api/v1` validates this before calling here, and this repeats it
+  // so the handler cannot be exposed to a key without it.
+  const apiKey = getApiKeyPrincipal();
+  if (apiKey && !mediaItemIds) {
+    return NextResponse.json(
+      { error: "mediaItemIds is required: name every item to act on" },
+      { status: 400 }
+    );
+  }
 
   const ruleSet = await prisma.ruleSet.findFirst({
     where: { id: ruleSetId, userId: session.userId },
@@ -148,6 +165,8 @@ async function executeRuleSet(
 
   // Track episode-level matched IDs for series with seriesScope=false
   const episodeIdMap = new Map<string, string[]>();
+  // What each match looked like when detection stored it, for the identity check.
+  const snapshots = new Map<string, unknown>();
 
   // SAFETY: Only act on items that are stored matches for this rule set.
   // Never re-evaluate rules — use the persisted RuleMatch records as the
@@ -170,6 +189,7 @@ async function executeRuleSet(
     }
 
     itemIds = storedMatches.map((m) => m.mediaItemId);
+    for (const m of storedMatches) snapshots.set(m.mediaItemId, m.itemData);
 
     // Extract episodeIdMap from stored match data for series episode-level tracking
     if (ruleSet.type === "SERIES" && !ruleSet.seriesScope) {
@@ -191,6 +211,7 @@ async function executeRuleSet(
     });
 
     const validIds = new Set(validMatches.map((m) => m.mediaItemId));
+    for (const m of validMatches) snapshots.set(m.mediaItemId, m.itemData);
     const invalidIds = mediaItemIds.filter((id) => !validIds.has(id));
 
     if (invalidIds.length > 0) {
@@ -265,6 +286,32 @@ async function executeRuleSet(
     include: { externalIds: true },
   });
 
+  // IDENTITY CHECK: a stored match names an item id, and a "Fix Match" on the
+  // server can rewrite that row to a different work between detection and now
+  // — the action would then resolve and act on the NEW work, which never
+  // matched (see matchIdentityChange). Refuse the whole request rather than
+  // run the rest: the stored match set is stale, and detection re-snapshots it.
+  {
+    const changed = items
+      .map((item) => ({ item, why: matchIdentityChange(snapshots.get(item.id), item, ruleSet.type) }))
+      .filter((c): c is { item: typeof items[number]; why: string } => c.why !== null);
+    if (changed.length > 0) {
+      const listed = changed
+        .slice(0, 5)
+        .map((c) => `${c.item.parentTitle ?? c.item.title} (${c.why})`)
+        .join("; ");
+      logger.warn("Lifecycle", `Refused manual execute for rule set "${ruleSet.id}" — ${changed.length} matched item(s) changed identity since detection: ${listed}`);
+      return NextResponse.json(
+        {
+          error:
+            `${changed.length} of the selected item(s) changed since the rules matched them: ${listed}` +
+            `${changed.length > 5 ? "; …" : ""}. Nothing was executed. Run detection again, then review the matches.`,
+        },
+        { status: 409 }
+      );
+    }
+  }
+
   // Exception inviolability, part 2: the member check above only sees MATCHED
   // episodes/tracks. A whole-record destructive action (e.g. DELETE_SONARR)
   // destroys the entire series/artist — including siblings the rule never
@@ -309,6 +356,19 @@ async function executeRuleSet(
     if (!verdict.allowed) {
       logger.warn("Lifecycle", `Refused manual execute for rule set "${ruleSet.id}" — ${verdict.reason}`);
       return NextResponse.json({ error: verdict.reason }, { status: 400 });
+    }
+  }
+
+  // PUBLIC API BUDGET: through an API key, a deleting action is charged — last,
+  // on the final count, so what is charged is what will be acted on — to the
+  // budget every key shares (at most 25 per request, 100 per hour). Refused
+  // whole, like the ceiling: nothing runs and nothing is charged.
+  const apiKey = getApiKeyPrincipal();
+  if (apiKey && isDestructiveActionType(ruleSet.actionType ?? "")) {
+    const reservation = reserveApiDestructive(items.length);
+    if (!reservation.ok) {
+      logger.warn("Lifecycle", `Refused API execute for rule set "${ruleSet.id}" by key "${apiKey.name}" — ${reservation.error}`);
+      return destructiveRefusalResponse(reservation);
     }
   }
 

@@ -77,7 +77,7 @@ export const API_SCOPE_INFO: Record<ApiScope, ApiScopeInfo> = {
     // delete it.
     label: "Execute lifecycle actions",
     description:
-      "Run pending lifecycle actions and remove exceptions. Either can lead to media being deleted through Sonarr, Radarr and Lidarr.",
+      "Run lifecycle actions on named matches and remove exceptions, at most 25 items a request and 100 an hour across all keys. Either can lead to media being deleted through Sonarr, Radarr and Lidarr.",
     access: "write",
     implies: ["lifecycle:read"],
     destructive: true,

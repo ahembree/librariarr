@@ -78,6 +78,29 @@ describe("OpenAPI document", () => {
     ]);
   });
 
+  it("documents the deletion limits where a key can delete", () => {
+    const doc = buildOpenApiDocument("http://localhost:3000", "0") as {
+      info: { description: string };
+      paths: Record<string, Record<string, {
+        description: string;
+        requestBody?: { content: { "application/json": { schema: { required: string[]; properties: Record<string, { maxItems?: number }> } } } };
+        responses: Record<string, { description: string }>;
+      }>>;
+    };
+    expect(doc.info.description).toMatch(/at most 25 items, and every key together at most 100 an hour/);
+
+    const execute = doc.paths["/lifecycle/actions/execute"].post;
+    const schema = execute.requestBody!.content["application/json"].schema;
+    expect(schema.required).toEqual(["ruleSetId", "mediaItemIds"]);
+    expect(schema.properties.mediaItemIds.maxItems).toBe(25);
+    expect(Object.keys(execute.responses)).toEqual(expect.arrayContaining(["200", "409", "429"]));
+
+    const removeMany = doc.paths["/lifecycle/exceptions"].delete;
+    expect(removeMany.requestBody!.content["application/json"].schema.properties.ids.maxItems).toBe(25);
+    expect(removeMany.responses["429"].description).toMatch(/100 items in the last hour/);
+    expect(doc.paths["/jobs/execution"].post.description).toMatch(/held/);
+  });
+
   it("gives every operation a unique operationId", () => {
     const doc = buildOpenApiDocument("http://localhost:3000", "0") as {
       paths: Record<string, Record<string, { operationId: string }>>;

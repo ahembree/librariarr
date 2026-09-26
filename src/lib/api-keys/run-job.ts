@@ -13,7 +13,9 @@ import { getApiKeyPrincipal } from "./principal";
  * Answers 202 with `jobs`, how many were queued: the job is queued on the
  * serial main queue and may wait behind whatever is running, and its outcome
  * is not part of this response. A sync queues one job per enabled server not
- * already syncing, so `jobs` is 0 when every server already is.
+ * already syncing, so `jobs` is 0 when every server already is. An execution
+ * run queued here is held — nothing deleted, everything left pending — when it
+ * would exceed the API's destructive limits (see `limits.ts`).
  */
 export async function runJobForApiKey(job: RunNowJob): Promise<Response> {
   const principal = getApiKeyPrincipal();
@@ -22,7 +24,9 @@ export async function runJobForApiKey(job: RunNowJob): Promise<Response> {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   try {
-    const result = await runJobNow(principal.userId, job, `via API key "${principal.name}"`);
+    const result = await runJobNow(principal.userId, job, `via API key "${principal.name}"`, {
+      viaApiKey: principal.name,
+    });
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: 500 });
     }

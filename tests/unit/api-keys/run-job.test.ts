@@ -34,7 +34,7 @@ describe("runJobForApiKey", () => {
     const res = await runAsApiKey(PRINCIPAL, () => runJobForApiKey("detection"));
     expect(res.status).toBe(202);
     expect(await res.json()).toEqual({ queued: true, jobs: 1 });
-    expect(m.runJobNow).toHaveBeenCalledWith("user-1", "detection", 'via API key "n8n"');
+    expect(m.runJobNow).toHaveBeenCalledWith("user-1", "detection", 'via API key "n8n"', { viaApiKey: "n8n" });
   });
 
   it("reports how many jobs a sync queued — 0 when every server is already syncing", async () => {

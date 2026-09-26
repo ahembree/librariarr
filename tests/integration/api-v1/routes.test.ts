@@ -347,11 +347,16 @@ describe("/api/v1 endpoints", () => {
       );
 
       await expectJson(await call(ROUTES.find((r) => r.label === "POST /jobs/execution")!, { authorization: `Bearer ${key}` }), 202);
+      // Its own job key and the key's name in the payload: the run is held by
+      // the API's destructive limits, and never rewrites a scheduled run.
       expect(mockEnqueueJob).toHaveBeenCalledWith(
         TASK_LIFECYCLE_EXECUTION,
-        { userId: user.id },
-        expect.objectContaining({ jobKey: `execution:${user.id}`, maxAttempts: 1 }),
+        { userId: user.id, viaApiKey: expect.any(String) },
+        expect.objectContaining({ jobKey: `execution-api:${user.id}`, maxAttempts: 1 }),
       );
+      // ...and it is not the scheduled run, so the schedule's watermark stays put.
+      const settings = await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } });
+      expect(settings.lastScheduledLifecycleExecution).toBeNull();
     });
 
     it("POST /jobs/sync reports a failed enqueue as 500 and leaves the watermark alone", async () => {

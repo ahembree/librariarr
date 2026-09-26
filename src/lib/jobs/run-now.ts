@@ -5,6 +5,7 @@ import {
   TASK_SYNC_SERVER,
   TASK_LIFECYCLE_DETECTION,
   TASK_LIFECYCLE_EXECUTION,
+  type LifecycleExecutionPayload,
 } from "@/lib/jobs/constants";
 import { logger } from "@/lib/logger";
 
@@ -27,6 +28,13 @@ export async function runJobNow(
    * Settings (Run now)". Logged, and part of every sync job's `trigger`.
    */
   source: string,
+  options: {
+    /**
+     * The API key queueing the job, for `/api/v1/jobs/*`. Only execution
+     * differs: see its branch below.
+     */
+    viaApiKey?: string;
+  } = {},
 ): Promise<RunNowResult> {
   if (job === "sync") {
     const user = await prisma.user.findUnique({
@@ -92,6 +100,24 @@ export async function runJobNow(
   }
 
   logger.info("Scheduler", `Manual lifecycle execution triggered ${source}`);
+
+  if (options.viaApiKey) {
+    // A run queued through the API is held by the API's destructive limits
+    // (`executeLifecycleActions` → `viaApiKey`), so it gets a job key of its
+    // own — the scheduled run's `execution:<userId>` would let the dispatcher
+    // replace this payload (dropping the limits) or let this one replace the
+    // dispatcher's (holding a scheduled run). And it leaves the schedule's
+    // watermark alone: a run the limits hold executes nothing, and counting it
+    // as the scheduled run would let a key postpone that run indefinitely.
+    const ok = await enqueueJob(
+      TASK_LIFECYCLE_EXECUTION,
+      { userId, viaApiKey: options.viaApiKey } satisfies LifecycleExecutionPayload,
+      { jobKey: `execution-api:${userId}`, queueName: MAIN_QUEUE, maxAttempts: 1 },
+    );
+    if (!ok) return { ok: false, error: "Failed to enqueue execution job" };
+    return { ok: true, jobs: 1 };
+  }
+
   // Same dedup guard as detection. maxAttempts: 1 mirrors the dispatcher —
   // execution applies destructive Arr actions and must not be retried as a
   // whole job.

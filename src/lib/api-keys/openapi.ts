@@ -1,4 +1,9 @@
 import { API_SCOPE_INFO, API_SCOPES, type ApiScope } from "./scopes";
+import { API_DESTRUCTIVE_PER_HOUR, API_DESTRUCTIVE_PER_REQUEST } from "./limits";
+
+const PER_REQUEST = API_DESTRUCTIVE_PER_REQUEST;
+const PER_HOUR = API_DESTRUCTIVE_PER_HOUR;
+const BUDGET_429 = `Every API key together has deleted or unprotected ${PER_HOUR} items in the last hour; wait \`Retry-After\` seconds`;
 
 /**
  * The OpenAPI 3.1 description of `/api/v1`, built from one operation table.
@@ -264,26 +269,47 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "lifecycle:execute",
     tag: "Lifecycle",
     summary: "Remove exceptions",
-    description: "Removing an exception lets the rules match the item again, which can lead to its deletion — hence the destructive scope.",
-    body: { description: "", required: true, schema: { type: "object", required: ["ids"], properties: { ids: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 1000 } } } },
+    description:
+      `Removing an exception lets the rules match the item again, which can lead to its deletion — hence the destructive scope. ` +
+      `At most ${PER_REQUEST} per request, and each removal counts against the API's ${PER_HOUR}-an-hour deletion budget.`,
+    body: { description: "", required: true, schema: { type: "object", required: ["ids"], additionalProperties: false, properties: { ids: { type: "array", items: { type: "string" }, minItems: 1, maxItems: PER_REQUEST } } } },
+    responses: { "429": BUDGET_429 },
   },
-  { method: "delete", path: "/lifecycle/exceptions/{id}", scope: "lifecycle:execute", tag: "Lifecycle", summary: "Remove one exception" },
+  {
+    method: "delete",
+    path: "/lifecycle/exceptions/{id}",
+    scope: "lifecycle:execute",
+    tag: "Lifecycle",
+    summary: "Remove one exception",
+    description: `Counts against the API's ${PER_HOUR}-an-hour deletion budget.`,
+    responses: { "429": BUDGET_429 },
+  },
   {
     method: "post",
     path: "/lifecycle/actions/execute",
     scope: "lifecycle:execute",
     tag: "Lifecycle",
-    summary: "Run a rule set's action now on its current matches",
-    description: "Omit `mediaItemIds` to act on every match. The rule set must be enabled with actions turned on. This can delete media through Sonarr, Radarr and Lidarr. One execution runs per rule set at a time: an overlapping call is refused rather than repeating the deletions.",
-    responses: { "409": "An execution is already running for this rule set" },
+    summary: "Run a rule set's action now on named matches",
+    description:
+      `Acts only on the listed items that are current matches of the rule set; name every item (there is no "every match"). ` +
+      `At most ${PER_REQUEST} items per request. When the action deletes (Sonarr, Radarr or Lidarr), the items count against the ` +
+      `${PER_HOUR}-an-hour deletion budget every key shares. The rule set must be enabled with actions turned on. ` +
+      `Refused whole — nothing runs — when an item is excepted, when an item changed identity since it matched (409: run detection again), ` +
+      `or when a limit would be exceeded. One execution runs per rule set at a time: an overlapping call is refused (409) rather than repeating the deletions.`,
     body: {
       description: "",
       required: true,
       schema: {
         type: "object",
-        required: ["ruleSetId"],
-        properties: { ruleSetId: { type: "string" }, mediaItemIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 1000 } },
+        required: ["ruleSetId", "mediaItemIds"],
+        additionalProperties: false,
+        properties: { ruleSetId: { type: "string" }, mediaItemIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: PER_REQUEST } },
       },
+    },
+    responses: {
+      "200": "`{ executed, failed, errors }`",
+      "409": "An execution is already running for this rule set, or an item changed identity since it matched (a re-match on the media server); nothing was executed",
+      "429": BUDGET_429,
     },
   },
   {
@@ -292,6 +318,9 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "lifecycle:execute",
     tag: "Lifecycle",
     summary: "Queue lifecycle execution of every due pending action",
+    description:
+      `A run queued here is held — nothing deleted, every action left pending for the schedule or the Pending page — ` +
+      `when it would delete more than ${PER_REQUEST} items or exceed the ${PER_HOUR}-an-hour deletion budget.`,
     responses: { "202": "Queued: `{ queued: true, jobs: 1 }`" },
   },
   { method: "get", path: "/tools/sessions", scope: "streams:read", tag: "Streams", summary: "Active playback sessions on every enabled server" },
@@ -439,6 +468,8 @@ export function buildOpenApiDocument(
         scopeTable,
         "",
         "Rate limits: 600 requests per minute per key (a `limit=0` listing counts as 20). Errors are `{ error }`, sometimes with `details`.",
+        "",
+        `Deletion limits: a request can delete (or remove the exception of) at most ${PER_REQUEST} items, and every key together at most ${PER_HOUR} an hour. Every item must be named; nothing acts on "all matches".`,
       ].join("\n"),
     },
     servers: [

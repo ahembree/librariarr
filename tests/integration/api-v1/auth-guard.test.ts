@@ -244,18 +244,21 @@ describe("/api/v1 authentication guard", () => {
   });
 
   describe("running the handler as the key's owner", () => {
-    it("serves the owner's data, with server tokens still masked", async () => {
+    it("serves the owner's data, without the server token at all", async () => {
       const user = await createTestUser();
       await createTestServer(user.id, { name: "Plex", accessToken: "secret-plex-token" });
       const { key } = await createTestApiKey(user.id, { scopes: ["servers:read"] });
 
       const res = await callRoute(serversGET, { headers: withKey(key) });
       expect(res.headers.get("cache-control")).toBe("no-store");
-      const body = await expectJson<{ servers: Array<{ name: string; accessToken: string }> }>(res, 200);
+      const body = await expectJson<{ servers: Array<{ name: string; accessToken?: string }> }>(res, 200);
       expect(body.servers).toHaveLength(1);
       expect(body.servers[0].name).toBe("Plex");
-      expect(body.servers[0].accessToken).toBe(MASKED_VALUE);
+      // The app's own route masks it; /api/v1 drops even the mask
+      // (`withoutServerInternals`).
+      expect(body.servers[0]).not.toHaveProperty("accessToken");
       expect(JSON.stringify(body)).not.toContain("secret-plex-token");
+      expect(JSON.stringify(body)).not.toContain(MASKED_VALUE);
     });
 
     it("gives a shared handler a session that is the key's owner and refuses cookie writes", async () => {

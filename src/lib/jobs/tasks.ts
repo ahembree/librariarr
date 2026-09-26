@@ -29,6 +29,7 @@ import {
   type SyncWatchHistoryPayload,
   type SyncIncrementalPayload,
   type UserPayload,
+  type LifecycleExecutionPayload,
 } from "@/lib/jobs/constants";
 import { syncTracearrHistory } from "@/lib/sync/sync-tracearr-history";
 import { recoverHistoryForNewItems } from "@/lib/sync/tracearr-backfill-additions";
@@ -317,8 +318,11 @@ const lifecycleDetection: Task = async (payload) => {
 };
 
 const lifecycleExecution: Task = async (payload) => {
-  const { userId } = payload as UserPayload;
-  await executeLifecycleActions(userId);
+  const { userId, viaApiKey } = payload as LifecycleExecutionPayload;
+  // A run queued through the public API carries the key's name, which holds
+  // it to the API's destructive limits (see executeLifecycleActions).
+  if (viaApiKey) await executeLifecycleActions(userId, { viaApiKey });
+  else await executeLifecycleActions(userId);
 };
 
 const scheduledBackup: Task = async () => {

@@ -115,6 +115,29 @@ describe("runJobNow", () => {
     });
   });
 
+  it("execution through an API key: its own job key, the key in the payload, no watermark", async () => {
+    // The payload flag is what holds the run to the API's destructive limits;
+    // a separate key keeps the dispatcher from replacing it (or it replacing a
+    // scheduled run), and skipping the watermark keeps a held run from
+    // postponing the scheduled one.
+    expect(await runJobNow("u1", "execution", SOURCE, { viaApiKey: "n8n" })).toEqual({ ok: true, jobs: 1 });
+    expect(m.enqueueJob).toHaveBeenCalledWith(
+      TASK_LIFECYCLE_EXECUTION,
+      { userId: "u1", viaApiKey: "n8n" },
+      { jobKey: "execution-api:u1", queueName: MAIN_QUEUE, maxAttempts: 1 },
+    );
+    expect(m.appSettingsUpdate).not.toHaveBeenCalled();
+  });
+
+  it("detection through an API key queues exactly what Settings does", async () => {
+    expect(await runJobNow("u1", "detection", SOURCE, { viaApiKey: "n8n" })).toEqual({ ok: true, jobs: 1 });
+    expect(m.enqueueJob).toHaveBeenCalledWith(
+      TASK_LIFECYCLE_DETECTION,
+      { userId: "u1" },
+      { jobKey: "detection:u1", queueName: MAIN_QUEUE, maxAttempts: 2 },
+    );
+  });
+
   it.each(["detection", "execution"] as const)("%s: reports a failed enqueue without stamping", async (job) => {
     m.enqueueJob.mockResolvedValue(false);
     const result = await runJobNow("u1", job, SOURCE);

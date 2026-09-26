@@ -7,6 +7,7 @@ import { normalizeTitle, executeAction, extractActionError, describeActionError 
 import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
+import { reserveApiDestructive } from "@/lib/api-keys/destructive-budget";
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
@@ -411,6 +412,16 @@ async function notifyDeleteCeilingReached(
   userId: string,
   verdict: { count: number; limit: number | null },
 ): Promise<void> {
+  await notifyDeletionHeld(
+    userId,
+    `This run would have deleted **${verdict.count}** item(s), above the ` +
+      `configured limit of **${verdict.limit}**.\n\nNothing was deleted. The ` +
+      `actions are still pending — review them on the Pending page and execute ` +
+      `them there if they are correct, or raise the limit in Settings.`,
+  );
+}
+
+async function notifyDeletionHeld(userId: string, description: string): Promise<void> {
   const settings = await prisma.appSettings.findFirst({
     where: { userId },
     select: { discordWebhookUrl: true },
@@ -421,11 +432,7 @@ async function notifyDeleteCeilingReached(
     embeds: [
       {
         title: "Lifecycle deletion held for review",
-        description:
-          `This run would have deleted **${verdict.count}** item(s), above the ` +
-          `configured limit of **${verdict.limit}**.\n\nNothing was deleted. The ` +
-          `actions are still pending — review them on the Pending page and execute ` +
-          `them there if they are correct, or raise the limit in Settings.`,
+        description,
         color: 0xf59e0b,
         timestamp: new Date().toISOString(),
       },
@@ -433,7 +440,28 @@ async function notifyDeleteCeilingReached(
   });
 }
 
-export async function executeLifecycleActions(userId?: string) {
+// A held API-queued run tells Discord at most once per 15 minutes: the run is
+// cheap to queue again, and a client doing so in a loop while the limits hold
+// it would otherwise post a message per call. Every hold is still logged.
+const API_HOLD_NOTICE_INTERVAL_MS = 15 * 60 * 1000;
+let lastApiHoldNoticeAt = Number.NEGATIVE_INFINITY;
+
+/** Forget when the last API hold was announced. Tests only. */
+export function resetApiHoldNotices(): void {
+  lastApiHoldNoticeAt = Number.NEGATIVE_INFINITY;
+}
+
+export interface ExecuteLifecycleOptions {
+  /**
+   * The name of the API key that queued this run (`POST /api/v1/jobs/execution`).
+   * Such a run is also held by the public API's destructive limits — see
+   * `src/lib/api-keys/limits.ts` — because a key must not be able to delete
+   * more through a queued run than it could by executing items directly.
+   */
+  viaApiKey?: string;
+}
+
+export async function executeLifecycleActions(userId?: string, options: ExecuteLifecycleOptions = {}) {
   const pendingActions = await prisma.lifecycleAction.findMany({
     where: {
       status: "PENDING",
@@ -719,6 +747,41 @@ export async function executeLifecycleActions(userId?: string) {
           `They remain pending and can be executed from the Pending page.`,
       );
       await notifyDeleteCeilingReached(uid, verdict).catch(() => {});
+    }
+  }
+
+  // PUBLIC API LIMITS, for a run queued through an API key: the same budget
+  // the execute endpoint charges (at most 25 items per request, 100 per hour
+  // across every key), counted over what the ceiling left runnable. Refused
+  // whole, like the ceiling — the actions stay pending for the schedule or the
+  // Pending page — and nothing is charged. Without this, queueing a run would
+  // be the way round the limits the execute endpoint enforces.
+  if (options.viaApiKey) {
+    const destructive = executable.filter(
+      ({ action }) => !blockedUserIds.has(action.userId) && isDestructiveActionType(action.actionType),
+    );
+    if (destructive.length > 0) {
+      const reservation = reserveApiDestructive(destructive.length);
+      if (!reservation.ok) {
+        const heldUsers = new Set(destructive.map(({ action }) => action.userId));
+        for (const uid of heldUsers) blockedUserIds.add(uid);
+        logger.warn(
+          "Lifecycle",
+          `Holding this run's destructive actions — it was queued through API key "${options.viaApiKey}": ` +
+            `${reservation.error} They remain pending for the scheduled run or the Pending page.`,
+        );
+        if (Date.now() - lastApiHoldNoticeAt >= API_HOLD_NOTICE_INTERVAL_MS) {
+          lastApiHoldNoticeAt = Date.now();
+          for (const uid of heldUsers) {
+            await notifyDeletionHeld(
+              uid,
+              `A lifecycle run queued through API key **${options.viaApiKey}** would have deleted ` +
+                `**${destructive.length}** item(s), more than the API may.\n\n${reservation.error}\n\n` +
+                `The actions are still pending: they run on the next scheduled execution, or from the Pending page.`,
+            ).catch(() => {});
+          }
+        }
+      }
     }
   }
 

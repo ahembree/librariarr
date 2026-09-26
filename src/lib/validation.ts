@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { API_SCOPES } from "@/lib/api-keys/scopes";
+import { API_DESTRUCTIVE_PER_REQUEST } from "@/lib/api-keys/limits";
 import { apiKeyNameProblem } from "@/lib/api-keys/name-rules";
 
 /**
@@ -575,6 +576,36 @@ export const apiMaintenanceSchema = z.strictObject({
   enabled: z.boolean(),
   message: z.string().max(500, "Message must be 500 characters or fewer").optional(),
   delay: z.number().int().min(0).max(3600).optional(),
+});
+
+/**
+ * `POST /api/v1/lifecycle/actions/execute` — a key must NAME every item it acts
+ * on. The app's own route reads a missing `mediaItemIds` as "every match" (the
+ * Pending page's Execute All, behind a confirmation dialog); through the API
+ * that one omission would run the rule set's action on its whole match list.
+ * At most `API_DESTRUCTIVE_PER_REQUEST` ids, whatever the action. Strict.
+ */
+export const apiActionExecuteSchema = z.strictObject({
+  ruleSetId: z.string().min(1, "Rule set ID is required").max(200),
+  mediaItemIds: z
+    .array(z.string().min(1).max(200), { error: "mediaItemIds is required: name every item to act on" })
+    .min(1, "mediaItemIds is required: name every item to act on")
+    .max(
+      API_DESTRUCTIVE_PER_REQUEST,
+      `At most ${API_DESTRUCTIVE_PER_REQUEST} media item ids per API request`,
+    ),
+});
+
+/**
+ * `DELETE /api/v1/lifecycle/exceptions` — removing an exception lets the rules
+ * match the item again, so a key may remove at most
+ * `API_DESTRUCTIVE_PER_REQUEST` per request (the app's own route takes 1,000).
+ */
+export const apiExceptionDeleteSchema = z.strictObject({
+  ids: z
+    .array(z.string().min(1).max(200))
+    .min(1, "At least one ID is required")
+    .max(API_DESTRUCTIVE_PER_REQUEST, `At most ${API_DESTRUCTIVE_PER_REQUEST} IDs per API request`),
 });
 
 // ─── SSO schemas ───
