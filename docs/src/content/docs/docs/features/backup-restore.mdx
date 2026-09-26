@@ -68,6 +68,8 @@ Configuration backups capture every column of the configuration tables, includin
 - **Media servers, libraries, and integrations** (Sonarr, Radarr, Lidarr, Seerr)
 - **Lifecycle rule sets, blackout schedules, preroll presets and schedules, saved queries**
 
+**API keys are never included** — not even their hashes — and restoring a backup deletes every existing API key, so a key you deleted can never be brought back by restoring an older backup. After a restore, create new keys under **Settings → Authentication → API Keys** for the applications that use the [public API](/docs/advanced/api/).
+
 After restoring, SSO is restored exactly as configured at backup time. If the restored backup has SSO enabled but you cannot reach the IdP from the new environment, use the [`SSO_DISABLE_OVERRIDE`](/docs/advanced/sso/#recovery--locked-out-of-sso) env var to recover access.
 
 ## Scheduling
@@ -167,4 +169,5 @@ From the **Available Backups** section:
 - Restoring replaces **all** data — there is no selective/partial restore
 - Encrypted backups require the exact passphrase used at creation time
 - The restore process logs out all sessions — plan accordingly
+- Restoring deletes every API key; applications using the public API need new keys
 - Full backups can be large for libraries with tens of thousands of items

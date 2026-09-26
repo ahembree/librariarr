@@ -9,6 +9,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { apiKeySession, getApiKeyPrincipal } from "@/lib/api-keys/principal";
 
 export interface SessionData {
   userId?: string;
@@ -180,6 +181,7 @@ function resolveCookieSecure(): boolean | null {
  * `getSession`, which is what enforces revocation.
  */
 export async function getRawSession(): Promise<IronSession<SessionData>> {
+  refuseUnderApiKey("getRawSession");
   const cookieStore = await cookies();
   return getIronSession<SessionData>(cookieStore, await getRequestSessionOptions());
 }
@@ -210,8 +212,15 @@ export async function getRawSession(): Promise<IronSession<SessionData>> {
  *
  * The DB lookup is a single primary-key read; a DB error is treated as
  * "not valid" (fail closed), matching what `isSessionValid` always did.
+ *
+ * Under an API key (a `/api/v1` handler, run by `withApiKey` after it has
+ * authenticated the key and checked its scope) the cookie is never read: the
+ * session is the key's owner, and it refuses every write. See
+ * `src/lib/api-keys/principal.ts`.
  */
 export async function getSession(): Promise<IronSession<SessionData>> {
+  const principal = getApiKeyPrincipal();
+  if (principal) return apiKeySession(principal);
   const session = await getRawSession();
   if (!session.isLoggedIn) return session;
   const valid = await isUserSessionCurrent(session.userId, session.sessionVersion);
@@ -254,11 +263,23 @@ async function isUserSessionCurrent(
  * sign this user in".
  */
 export async function rotateSession(): Promise<IronSession<SessionData>> {
+  refuseUnderApiKey("rotateSession");
   const cookieStore = await cookies();
   const options = await getRequestSessionOptions();
   const previous = await getIronSession<SessionData>(cookieStore, options);
   previous.destroy();
   return getIronSession<SessionData>(cookieStore, options);
+}
+
+/**
+ * The cookie-session primitives are for browser logins. An API key request
+ * reaching one means a login flow was exposed under `/api/v1` — fail loudly
+ * rather than read or write a cookie on its behalf.
+ */
+function refuseUnderApiKey(fn: string): void {
+  if (getApiKeyPrincipal()) {
+    throw new Error(`${fn}() is not available to API key requests`);
+  }
 }
 
 /**

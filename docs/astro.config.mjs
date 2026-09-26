@@ -141,6 +141,10 @@ export default defineConfig({
               label: "SSO Authentication",
               slug: "docs/advanced/sso",
             },
+            {
+              label: "API & API Keys",
+              slug: "docs/advanced/api",
+            },
           ],
         },
         {

@@ -33,6 +33,7 @@ These are always on and need no configuration; they are listed so you know what 
 | Rate limiting | Login, Plex PIN, SSO and password-change endpoints allow 10 attempts per 15 minutes per client, plus a global ceiling of 60 per 15 minutes across all clients that no forged header can escape. See `TRUST_PROXY_HEADERS`. |
 | Login timing | The local login spends the same bcrypt cost whether or not the username exists, so response time does not reveal which usernames are real. |
 | Secret masking | API keys, tokens, the OIDC client secret, the AI key and the Discord webhook URL are never returned by the API once saved; the UI shows a placeholder and saving the placeholder keeps the stored value. |
+| Public API keys | Keys for the [public API](/docs/advanced/api/) are shown once and stored only as a SHA-256 hash. Each is limited to the scopes it was issued with (read-only keys cannot change anything), can expire, and stops working on the next request once deleted. Keys are sent in a header only (a key in the URL is refused), work only on `/api/v1`, are never written to backups, and are all revoked by a restore. |
 | Content Security Policy | `frame-ancestors 'none'` and `X-Frame-Options: DENY` prevent clickjacking; scripts and connections are restricted to the app itself and plex.tv. The production build does not permit `eval`. |
 
 ## Hardened Compose template

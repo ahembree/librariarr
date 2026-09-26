@@ -103,6 +103,47 @@ describe("RateLimiter", () => {
   });
 });
 
+describe("RateLimiter.peek", () => {
+  it("reports the next check's verdict without counting", () => {
+    const limiter = new RateLimiter(3, 60_000);
+    for (let i = 0; i < 50; i++) expect(limiter.peek("k").limited).toBe(false);
+    // Fifty peeks charged nothing: the first check still has the full budget.
+    expect(limiter.check("k").remaining).toBe(2);
+  });
+
+  it("is limited exactly when the next check would be", () => {
+    const limiter = new RateLimiter(3, 60_000);
+    limiter.check("k");
+    limiter.check("k");
+    expect(limiter.peek("k").limited).toBe(false);
+    limiter.check("k");
+    const peeked = limiter.peek("k");
+    expect(peeked.limited).toBe(true);
+    expect(peeked.retryAfterMs).toBeGreaterThan(0);
+    expect(limiter.check("k").limited).toBe(true);
+  });
+
+  it("clears when the window expires", () => {
+    vi.useFakeTimers();
+    try {
+      const limiter = new RateLimiter(1, 60_000);
+      limiter.check("k");
+      expect(limiter.peek("k").limited).toBe(true);
+      vi.advanceTimersByTime(61_000);
+      expect(limiter.peek("k").limited).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps keys independent", () => {
+    const limiter = new RateLimiter(1, 60_000);
+    limiter.check("a");
+    expect(limiter.peek("a").limited).toBe(true);
+    expect(limiter.peek("b").limited).toBe(false);
+  });
+});
+
 describe("checkRateLimit", () => {
   it("returns null while under the limit", () => {
     const limiter = new RateLimiter(2, 60_000);

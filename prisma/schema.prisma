@@ -38,6 +38,7 @@ model User {
   prerollSchedules      PrerollSchedule[]
   savedQueries          SavedQuery[]
   trashManagedResources TrashManagedResource[]
+  apiKeys               ApiKey[]
 
   // SSO subjects are only unique per-issuer. Two users can have sub "abc" if
   // they came from different IdPs. This composite key prevents the cross-IdP
@@ -912,4 +913,36 @@ model TrashManagedResource {
   @@index([userId])
   @@index([sonarrInstanceId])
   @@index([radarrInstanceId])
+}
+
+/// A credential third-party applications use to call the public `/api/v1` API
+/// (see `src/lib/api-keys/`). Only a SHA-256 digest of the key is stored: the
+/// plaintext is returned once, by the create route, and cannot be recovered
+/// afterwards. Deleting the row revokes the key on its very next request —
+/// authentication reads this table on every call and caches nothing.
+///
+/// Deliberately NOT in the backup's `TABLE_ORDER`: a restore truncates `User`
+/// with CASCADE, so it wipes every key rather than resurrecting ones that were
+/// deleted after the backup was taken.
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  /// The key's leading characters (`lbr_` + 6), shown so a key can be told
+  /// apart in the list. Far too short to authenticate with.
+  prefix     String
+  /// SHA-256 (hex) of the full key — the authentication lookup.
+  keyHash    String    @unique
+  /// Granted scopes, stored explicitly (with implied read scopes expanded) so a
+  /// scope added in a later version never silently widens an existing key.
+  scopes     String[]
+  /// null = never expires.
+  expiresAt  DateTime?
+  lastUsedAt DateTime?
+  lastUsedIp String?
+  createdAt  DateTime  @default(now())
+
+  @@unique([userId, name])
+  @@index([userId])
 }

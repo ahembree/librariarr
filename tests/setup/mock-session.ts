@@ -77,15 +77,25 @@ function sessionProxy() {
   });
 }
 
-vi.mock("@/lib/auth/session", () => ({
-  getSession: vi.fn().mockImplementation(async () => sessionProxy()),
-  // Mirrors the real helper: whatever the visitor was carrying is discarded,
-  // and the caller gets an empty session to write the new login into.
-  rotateSession: vi.fn().mockImplementation(async () => {
-    currentSession = { isLoggedIn: false };
-    return sessionProxy();
-  }),
-  isSessionValid: vi.fn().mockImplementation(async () => {
-    return currentSession.isLoggedIn && !!currentSession.userId;
-  }),
-}));
+vi.mock("@/lib/auth/session", async () => {
+  // Mirrors the real `getSession`: under an API key (a `/api/v1` handler run
+  // by `withApiKey` after it authenticated the key) the session IS the key's
+  // owner and the cookie session is never consulted. The real branch is
+  // covered against the real module in tests/unit/auth/session-api-key.test.ts.
+  const { apiKeySession, getApiKeyPrincipal } = await import("@/lib/api-keys/principal");
+  return {
+    getSession: vi.fn().mockImplementation(async () => {
+      const principal = getApiKeyPrincipal();
+      return principal ? apiKeySession(principal) : sessionProxy();
+    }),
+    // Mirrors the real helper: whatever the visitor was carrying is discarded,
+    // and the caller gets an empty session to write the new login into.
+    rotateSession: vi.fn().mockImplementation(async () => {
+      currentSession = { isLoggedIn: false };
+      return sessionProxy();
+    }),
+    isSessionValid: vi.fn().mockImplementation(async () => {
+      return currentSession.isLoggedIn && !!currentSession.userId;
+    }),
+  };
+});

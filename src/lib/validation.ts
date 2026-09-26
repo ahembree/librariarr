@@ -2,6 +2,7 @@ import { z } from "zod/v4";
 import { NextResponse } from "next/server";
 import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
+import { API_SCOPES } from "@/lib/api-keys/scopes";
 
 /**
  * Parse and validate request JSON against a Zod schema.
@@ -507,6 +508,31 @@ export const plexLinkSchema = z.object({
   (data) => data.pinId !== undefined || data.authToken !== undefined,
   { message: "Either pinId or authToken must be provided" }
 );
+
+// ─── API key schemas ───
+
+/**
+ * Issue an API key for the public `/api/v1` API. `expiresAt` is an ISO
+ * timestamp, or null for a key that never expires; "in the future" is checked
+ * by the route, against the server clock. Implied read scopes are added by the
+ * route (`normalizeScopes`), so a client may send just the write scope.
+ */
+export const apiKeyCreateSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, "Name is required")
+    .max(64, "Name must be 64 characters or fewer")
+    // The name is written into audit log lines, where a newline would forge one.
+    .regex(/^[^\p{Cc}]+$/u, "Name cannot contain control characters"),
+  scopes: z
+    .array(z.enum(API_SCOPES))
+    .min(1, "Choose at least one scope")
+    .max(API_SCOPES.length, "Too many scopes"),
+  expiresAt: z.iso
+    .datetime({ offset: true, error: "Expiration must be an ISO 8601 date-time" })
+    .nullable(),
+});
 
 // ─── SSO schemas ───
 

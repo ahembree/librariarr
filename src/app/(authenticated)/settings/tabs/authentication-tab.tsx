@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import type { AuthInfo } from "../types";
 import { SsoSection } from "./sso-section";
+import { ApiKeysSection } from "./api-keys-section";
 
 export interface CredentialsForm {
   currentPassword: string;
@@ -92,7 +93,8 @@ export function AuthenticationTab({
       <div className="space-y-1">
         <h2 className="text-xl font-semibold">Authentication</h2>
         <p className="text-sm text-muted-foreground">
-          Manage how you sign into Librariarr — Plex OAuth, local username/password, or both.
+          Manage how you sign into Librariarr — Plex OAuth, local username/password, or both —
+          and the API keys other applications use.
         </p>
       </div>
 
@@ -311,6 +313,9 @@ export function AuthenticationTab({
 
       {/* SSO (OIDC + Forward Auth) */}
       <SsoSection />
+
+      {/* API keys for the public /api/v1 API */}
+      <ApiKeysSection />
 
       {/* Create Credentials Dialog -- shown when enabling local auth without existing credentials */}
       <Dialog open={showCredentialPrompt} onOpenChange={(open) => { if (!open) onSetShowCredentialPrompt(false); }}>

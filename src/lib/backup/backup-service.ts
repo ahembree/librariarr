@@ -94,7 +94,13 @@ function reviver(_key: string, value: unknown): unknown {
   return value;
 }
 
-// Table export/import order respecting FK dependencies
+// Table export/import order respecting FK dependencies.
+//
+// `apiKey` is left out ON PURPOSE. Restore truncates `User` with CASCADE, so a
+// restore wipes every API key instead of restoring the set the backup captured
+// — which would bring back any key deleted since, silently undoing a
+// revocation. Third-party apps need new keys after a restore; a backup file
+// never carries key material, not even the hashes.
 const TABLE_ORDER = [
   "systemConfig",
   "user",

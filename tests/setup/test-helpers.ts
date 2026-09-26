@@ -2,6 +2,8 @@ import { NextRequest } from "next/server";
 import { expect } from "vitest";
 import { getTestPrisma } from "./test-db";
 import { computeSeriesKey } from "@/lib/media/series-key";
+import { generateApiKey } from "@/lib/api-keys/keys";
+import { normalizeScopes, type ApiScope } from "@/lib/api-keys/scopes";
 
 // ---- Route Handler Invocation ----
 
@@ -76,6 +78,7 @@ export async function callRouteWithParams<
     method?: string;
     body?: unknown;
     searchParams?: Record<string, string>;
+    headers?: Record<string, string>;
   }
 ): Promise<Response> {
   const request = createTestRequest(options?.url ?? "/api/test", options);
@@ -528,4 +531,31 @@ export async function createTestLogEntry(
       message: overrides?.message ?? "test log message",
     },
   });
+}
+
+/**
+ * An API key row plus the plaintext key the tests authenticate with. Scopes go
+ * through `normalizeScopes` exactly as the create route stores them.
+ */
+export async function createTestApiKey(
+  userId: string,
+  overrides?: Partial<{
+    name: string;
+    scopes: ApiScope[];
+    expiresAt: Date | null;
+  }>
+) {
+  const prisma = getTestPrisma();
+  const { key, prefix, keyHash } = generateApiKey();
+  const row = await prisma.apiKey.create({
+    data: {
+      userId,
+      name: overrides?.name ?? `Test key ${unique()}`,
+      prefix,
+      keyHash,
+      scopes: normalizeScopes(overrides?.scopes ?? ["media:read"]),
+      expiresAt: overrides?.expiresAt ?? null,
+    },
+  });
+  return { key, row };
 }
