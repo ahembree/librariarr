@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -24,6 +24,7 @@ import {
 import { cn } from "@/lib/utils";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { SettingsSkeleton } from "@/components/skeletons";
+import { isSyncRequestSettled, type PendingSyncRequest } from "@/lib/sync/sync-request";
 
 // ─── Tab components ───
 import { GeneralTab } from "./tabs/general-tab";
@@ -152,7 +153,10 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>(getInitialSettingsTab);
   const [servers, setServers] = useState<MediaServer[]>([]);
   const [loading, setLoading] = useState(true);
-  const [syncingServer, setSyncingServer] = useState<string | null>(null);
+  // The manual sync this page last requested, until its own run ends — see
+  // `isSyncRequestSettled` for how that run is told apart from the previous one.
+  const [syncRequest, setSyncRequest] = useState<PendingSyncRequest | null>(null);
+  const syncRequestSeq = useRef(0);
   const [testingServer, setTestingServer] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<ServerTestResult | null>(null);
   const [refreshingLibraries, setRefreshingLibraries] = useState<string | null>(null);
@@ -445,6 +449,11 @@ export default function SettingsPage() {
       const data = await response.json();
       const fresh: MediaServer[] = data.servers || [];
       setServers(fresh);
+      // Drop a request whose run has ended. Deriving that during render is not
+      // enough on its own: a request left stored after its run finished would
+      // light the spinner again for the next scheduled or realtime sync of the
+      // same server.
+      setSyncRequest((current) => (current && isSyncRequestSettled(current, fresh) ? null : current));
       return fresh;
     } catch (error) {
       console.error("Failed to fetch servers:", error);
@@ -934,24 +943,24 @@ export default function SettingsPage() {
   useRealtime("sync:failed", fetchServers);
   useRealtime("server:changed", fetchServers);
 
-  // Fallback only, for a dropped stream.
+  // The per-server "syncing" button state, reconciled against the pushed server
+  // list during render. `fetchServers` also drops a settled request from state;
+  // this covers the render in between.
+  const activeSyncingServer = useMemo(
+    () => (syncRequest && !isSyncRequestSettled(syncRequest, servers) ? syncRequest.serverId : null),
+    [servers, syncRequest],
+  );
+
+  // Fallback only, for a dropped stream. Armed by a pending request as well as
+  // by a job row: between pressing Sync and the first refetch that sees the
+  // new row, `hasActiveSync` is still false, so with the stream down nothing
+  // refetched at all and the button spun to its 5-minute timeout.
+  const pollServers = hasActiveSync || activeSyncingServer !== null;
   useEffect(() => {
-    if (!hasActiveSync) return;
+    if (!pollServers) return;
     const interval = setInterval(fetchServers, 15000);
     return () => clearInterval(interval);
-  }, [hasActiveSync, fetchServers]);
-
-  // The per-server "syncing" button state, reconciled against the pushed server
-  // list. Derived during render rather than written back from an effect: the
-  // sync:* subscriptions above already keep `servers` current, so the finished
-  // state is a pure function of it and storing it again would only add a
-  // cascading render.
-  const activeSyncingServer = useMemo(() => {
-    if (!syncingServer) return null;
-    const latest = servers.find((s) => s.id === syncingServer)?.syncJobs[0];
-    if (latest?.status === "COMPLETED" || latest?.status === "FAILED") return null;
-    return syncingServer;
-  }, [servers, syncingServer]);
+  }, [pollServers, fetchServers]);
 
   // The import readout is PUSHED, not polled. The importer emits
   // `tracearr:import-progress` after each page commits (throttled there, since
@@ -975,7 +984,12 @@ export default function SettingsPage() {
   // connection staying up. Deliberately slow: the push covers the live case, and
   // this only has to stop the number going stale for good. Runs while a backfill
   // is owed, which is the case that lasts long enough for a drop to matter.
-  const tracearrBackfillRunning = visibleTracearrImportStatus.some((s) => !s.backfillComplete);
+  // Also while any import is live: a catch-up on an already-backfilled server
+  // shows an import card too, and without this a dropped stream would leave
+  // that card up until the next pushed event.
+  const tracearrBackfillRunning = visibleTracearrImportStatus.some(
+    (s) => !s.backfillComplete || s.activeImport !== null,
+  );
   const pollTracearrImport = hasTracearrInstance && tracearrBackfillRunning;
   useEffect(() => {
     if (!pollTracearrImport) return;
@@ -1095,27 +1109,43 @@ export default function SettingsPage() {
   };
 
   const syncServer = async (serverId: string, libraryKey?: string) => {
-    setSyncingServer(serverId);
+    const id = ++syncRequestSeq.current;
+    setSyncRequest({ id, serverId, requestedAt: null });
+    // Every exit ends THIS request only. Matching on the server id let the
+    // first press's 5-minute timer cancel a second press on the same server,
+    // and an error on one request cleared whichever request was current.
+    const release = () => setSyncRequest((current) => (current?.id === id ? null : current));
     try {
-      await fetch(`/api/servers/${serverId}/sync`, {
+      const res = await fetch(`/api/servers/${serverId}/sync`, {
         method: "POST",
         headers: libraryKey ? { "Content-Type": "application/json" } : undefined,
         body: libraryKey ? JSON.stringify({ libraryKey }) : undefined,
       });
-      // No completion poll here any more. `servers` is refreshed by the
-      // sync:* subscriptions above, and the effect below clears the button
-      // state when the freshly pushed list shows the job finished — so this
-      // path no longer runs its own 3s /api/servers loop for up to 5 minutes
-      // alongside the one the page already had.
-      //
-      // The safety timeout stays: if every event is missed AND the fallback
-      // poll is also dead, the button must not spin forever.
-      setTimeout(() => {
-        setSyncingServer((current) => (current === serverId ? null : current));
-      }, 300000);
+      // A rejected request (disabled server, 409 from a race) enqueues nothing,
+      // so no new job will ever appear to end this one. `fetch` does not throw
+      // on a non-2xx, so without this the spinner runs to the 5-minute timeout.
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        toast.error(body?.error ?? "Failed to start sync");
+        release();
+        return;
+      }
+      const body = await res.json().catch(() => null);
+      // The route always sends it; the client clock is only a fallback.
+      const requestedAt: string =
+        typeof body?.requestedAt === "string" ? body.requestedAt : new Date().toISOString();
+      setSyncRequest((current) => (current?.id === id ? { ...current, requestedAt } : current));
+      // A short sync can finish before this response is read, and the events
+      // it sent were checked against a request that could not be matched yet.
+      // One refetch now settles it rather than leaving the request stored.
+      void fetchServers();
+      // No completion poll here: `servers` is refreshed by the sync:*
+      // subscriptions and the fallback poll above. The safety timeout stays so
+      // the button cannot spin forever if every refresh is missed.
+      setTimeout(release, 300000);
     } catch {
       toast.error("Failed to start sync");
-      setSyncingServer(null);
+      release();
     }
   };
 

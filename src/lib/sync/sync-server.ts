@@ -17,6 +17,7 @@ import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { normalizeResolutionFromDimensions } from "@/lib/resolution";
 import { eventBus } from "@/lib/events/event-bus";
 import { emitSyncProgress, clearSyncProgressThrottle } from "./sync-progress";
+import { watchForCancel } from "./cancel-watch";
 import { acquireSyncSlot, releaseSyncSlot } from "@/lib/sync/sync-semaphore";
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 import { reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
@@ -698,32 +699,136 @@ export interface SyncMediaServerOptions {
    * sync in the logs points at a caller that forgot, not at a mystery.
    */
   trigger?: string;
+  /** The PENDING row the requester created at enqueue time; see `claimSyncJob`. */
+  syncJobId?: string;
 }
 
-export async function syncMediaServer(serverId: string, libraryKey?: string, options?: SyncMediaServerOptions) {
-  // Create the job as PENDING immediately so the UI can show a "Pending" indicator
-  // while the server waits for its turn (semaphore allows one sync at a time).
-  const syncJobRows = await prisma.$queryRawUnsafe<{ id: string }[]>(
+/**
+ * The SyncJob row this run reports into, or `null` when the sync it was queued
+ * for was stopped before it started.
+ *
+ * The per-server sync route creates the row the moment the sync is asked for,
+ * so a job waiting on the serial MAIN_QUEUE is visible as Pending instead of
+ * invisible until it runs. The run must claim that row, not insert a second:
+ * a second PENDING row would sit there unclaimed and make the route answer 409
+ * forever. So, in order:
+ *  - the requested row, while still PENDING;
+ *  - nothing, if that row was CANCELLED — Stop was pressed while it queued;
+ *  - any other PENDING row for the server, because a jobKey collision (the
+ *    dispatcher or realtime layer enqueuing `sync:<id>` while a manual one
+ *    waits) replaces the payload and drops `syncJobId`, and this run is then
+ *    the one that row was waiting for;
+ *  - a fresh row. A requested row that is FAILED lands here too: a previous
+ *    attempt of this job threw, or a restart's cleanup closed it, and the
+ *    retry should still run.
+ */
+async function claimSyncJob(serverId: string, requestedId: string | undefined): Promise<{ id: string } | null> {
+  if (requestedId) {
+    const requested = await prisma.$queryRawUnsafe<{ id: string; status: string }[]>(
+      `SELECT "id","status"::text AS "status" FROM "SyncJob" WHERE "id"=$1`, requestedId,
+    );
+    if (requested[0]?.status === "PENDING") return { id: requested[0].id };
+    if (requested[0]?.status === "CANCELLED") {
+      logger.info("Sync", `Sync for server ${serverId} was stopped before it started — skipping`);
+      return null;
+    }
+  }
+  const unclaimed = await prisma.$queryRawUnsafe<{ id: string; status: string }[]>(
+    `SELECT "id","status"::text AS "status" FROM "SyncJob"
+      WHERE "mediaServerId"=$1 AND "status"='PENDING' ORDER BY "startedAt" ASC LIMIT 1`,
+    serverId,
+  );
+  if (unclaimed[0]) return { id: unclaimed[0].id };
+  const inserted = await prisma.$queryRawUnsafe<{ id: string }[]>(
     `INSERT INTO "SyncJob" ("id","mediaServerId","status","startedAt") VALUES ($1,$2,$3,$4) RETURNING "id"`,
     randomUUID(), serverId, "PENDING", new Date(),
   );
-  const syncJob = syncJobRows[0];
+  return inserted[0];
+}
+
+export async function syncMediaServer(serverId: string, libraryKey?: string, options?: SyncMediaServerOptions) {
+  const syncJob = await claimSyncJob(serverId, options?.syncJobId);
+  if (!syncJob) return;
 
   let syncUserId: string | undefined;
-  // Hoisted to function scope so the inner finally can run cache invalidation
-  // and canonical recomputation even on the cancel/fail paths (which return or
-  // throw before reaching the success-path cleanup), as long as work was done.
+  // Hoisted to function scope so every exit — completed, cancelled or failed —
+  // can settle the dataset, as long as work was done.
   let processedItems = 0;
+  // The run changed the dataset without processing an item: a vanished library
+  // was purged. Gating on `processedItems` alone skipped the canonical
+  // recompute and cache drop for a run that purged and then synced nothing, so
+  // listings kept showing the deleted items and, across servers, the surviving
+  // copies stayed non-canonical and vanished.
+  let datasetChanged = false;
+  let settled = false;
+
+  // Recompute canonical flags and drop the media caches — once, and BEFORE any
+  // terminal event goes out. `sync:completed` wakes every listing subscriber on
+  // every open tab and they refetch immediately; with this work parked in the
+  // `finally` (after the announcement) they were handed the old cache entries
+  // and the old `dedupCanonical` flags, and no later event came to correct
+  // them. The incremental sync already had this order.
+  const settleDataset = async () => {
+    if (settled) return;
+    settled = true;
+    if (!syncUserId || (processedItems === 0 && !datasetChanged)) return;
+    try {
+      await recomputeCanonical(syncUserId);
+    } catch (recomputeError) {
+      logger.error("Sync", "recomputeCanonical failed", { error: String(recomputeError) });
+    }
+    invalidateMediaCaches();
+  };
+
+  // Cleared on every announcement: at the start so a leftover window cannot
+  // swallow this run's first progress tick, at the end so it cannot swallow
+  // the next run's.
+  const announce = (type: "sync:started" | "sync:completed" | "sync:failed", userId: string) => {
+    clearSyncProgressThrottle(serverId);
+    eventBus.emit({ type, userId, meta: { serverId } });
+  };
+
+  const cancelRequested = async (): Promise<boolean> => {
+    const rows = await prisma.$queryRawUnsafe<{ cancelRequested: boolean }[]>(
+      `SELECT "cancelRequested" FROM "SyncJob" WHERE "id"=$1`, syncJob.id,
+    );
+    // A row deleted out from under the run reads as cancelled.
+    return !rows[0] || rows[0].cancelRequested;
+  };
+
+  const finishCancelled = async (userId: string) => {
+    logger.info("Sync", `Sync cancelled for server (${processedItems} items processed before cancel)`);
+    await prisma.$queryRawUnsafe(
+      `UPDATE "SyncJob" SET "status"=$1,"completedAt"=$2,"itemsProcessed"=$3,"currentLibrary"=NULL WHERE "id"=$4`,
+      "CANCELLED", new Date(), processedItems, syncJob.id,
+    );
+    await settleDataset();
+    // `sync:completed` only when the run changed something — it makes every
+    // listing on every open tab re-pull its whole list. A Stop before the first
+    // batch changed nothing; `sync:failed` refreshes only the status surfaces.
+    announce(processedItems > 0 || datasetChanged ? "sync:completed" : "sync:failed", userId);
+  };
 
   await acquireSyncSlot();
   try {
-  // Transition from PENDING → RUNNING now that we have the slot
-  await prisma.$queryRawUnsafe(
-    `UPDATE "SyncJob" SET "status"=$1,"startedAt"=$2 WHERE "id"=$3`,
-    "RUNNING", new Date(), syncJob.id,
-  );
-
   try {
+    // Transition from PENDING → RUNNING now that we have the slot. Inside the
+    // try so a failure lands in the catch and marks the row FAILED: outside it,
+    // the row stayed PENDING forever — and a PENDING row makes the sync route
+    // answer 409 and the settings page disable every Sync button until a
+    // restart ran `cleanupOrphanedSyncJobs`. Conditional on PENDING: the cancel
+    // route ends a still-queued row directly, and can do so between the claim
+    // above and this update; overwriting its CANCELLED would run a sync the
+    // user already stopped.
+    const started = await prisma.$queryRawUnsafe<{ id: string }[]>(
+      `UPDATE "SyncJob" SET "status"=$1,"startedAt"=$2 WHERE "id"=$3 AND "status"='PENDING' RETURNING "id"`,
+      "RUNNING", new Date(), syncJob.id,
+    );
+    if (started.length === 0) {
+      logger.info("Sync", `Sync for server ${serverId} was stopped before it started — skipping`);
+      return;
+    }
+
     const serverRows = await prisma.$queryRawUnsafe<
       { id: string; name: string; url: string; accessToken: string; type: string; userId: string; tlsSkipVerify: boolean; enabled: boolean }[]
     >(
@@ -741,14 +846,14 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
         "CANCELLED", new Date(), syncJob.id,
       );
       logger.info("Sync", `Skipping sync for disabled server "${server.name}"`);
+      // Nothing was announced yet, but the row reached a terminal state and a
+      // status refetch is cheap. `sync:failed` rather than `sync:completed`:
+      // nothing was touched, so no listing should re-pull.
+      announce("sync:failed", server.userId);
       return;
     }
 
-    // Clear at the START, not only on the completed/failed paths: a cancelled
-    // sync (and a crashed one) exits elsewhere, and a leftover window would
-    // swallow the next run's first progress tick.
-    clearSyncProgressThrottle(serverId);
-    eventBus.emit({ type: "sync:started", userId: server.userId, meta: { serverId } });
+    announce("sync:started", server.userId);
 
     const client = createMediaServerClient(server.type as import("@/generated/prisma/client").MediaServerType, server.url, server.accessToken, {
       skipTlsVerify: server.tlsSkipVerify,
@@ -799,7 +904,9 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
     // likely a bad answer than "delete everything" — the same fail-toward-
     // keeping stance as the item purge.
     if (!libraryKey && libraries.length > 0) {
-      await purgeVanishedLibraries(serverId, libraries.map((l) => l.key));
+      if (await purgeVanishedLibraries(serverId, libraries.map((l) => l.key)) > 0) {
+        datasetChanged = true;
+      }
     }
 
     // Look up which libraries are disabled in the DB so we can skip them early
@@ -818,6 +925,14 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       if (libraryKey && lib.key !== libraryKey) return false;
       return true;
     });
+
+    // Honour a Stop pressed during the connection test, the library listing or
+    // the purge before starting the play-count scan, which pages a large Plex
+    // server's entire history (tens of seconds).
+    if (await cancelRequested()) {
+      await finishCancelled(server.userId);
+      return;
+    }
 
     // Fetch play counts (one Map kept in memory for the whole sync)
     await prisma.$queryRawUnsafe(
@@ -860,17 +975,8 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
 
     for (const lib of targetLibraries) {
       // Check for cancellation between libraries
-      const cancelRows1 = await prisma.$queryRawUnsafe<{ cancelRequested: boolean }[]>(
-        `SELECT "cancelRequested" FROM "SyncJob" WHERE "id"=$1`, syncJob.id,
-      );
-      if (!cancelRows1[0] || cancelRows1[0].cancelRequested) {
-        logger.info("Sync", `Sync cancelled for server (${processedItems} items processed before cancel)`);
-        if (cancelRows1[0]) {
-          await prisma.$queryRawUnsafe(
-            `UPDATE "SyncJob" SET "status"=$1,"completedAt"=$2,"itemsProcessed"=$3,"currentLibrary"=NULL WHERE "id"=$4`,
-            "CANCELLED", new Date(), processedItems, syncJob.id,
-          );
-        }
+      if (await cancelRequested()) {
+        await finishCancelled(server.userId);
         return;
       }
 
@@ -1019,10 +1125,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
         for (let i = 0; i < pageItems.length; i += UPSERT_BATCH_SIZE) {
           // Check for cancellation between batches
           if (processedItems > 0 && i % (UPSERT_BATCH_SIZE * 5) === 0) {
-            const cancelRows = await prisma.$queryRawUnsafe<{ cancelRequested: boolean }[]>(
-              `SELECT "cancelRequested" FROM "SyncJob" WHERE "id"=$1`, syncJob.id,
-            );
-            if (!cancelRows[0] || cancelRows[0].cancelRequested) {
+            if (await cancelRequested()) {
               cancelled = true;
               break;
             }
@@ -1130,16 +1233,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       }
 
       if (cancelled) {
-        logger.info("Sync", `Sync cancelled for server (${processedItems} items processed before cancel)`);
-        const jobExists = await prisma.$queryRawUnsafe<{ id: string }[]>(
-          `SELECT "id" FROM "SyncJob" WHERE "id"=$1`, syncJob.id,
-        );
-        if (jobExists.length > 0) {
-          await prisma.$queryRawUnsafe(
-            `UPDATE "SyncJob" SET "status"=$1,"completedAt"=$2,"itemsProcessed"=$3,"currentLibrary"=NULL WHERE "id"=$4`,
-            "CANCELLED", new Date(), processedItems, syncJob.id,
-          );
-        }
+        await finishCancelled(server.userId);
         return;
       }
 
@@ -1294,6 +1388,13 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
     watchCounts.clear();
     watchlistGuids?.clear();
 
+    // Covers a Stop during the last library's post-processing, and a run with
+    // no target library at all, which never reached the per-library check.
+    if (await cancelRequested()) {
+      await finishCancelled(server.userId);
+      return;
+    }
+
     // Sync detailed watch history (per-user, per-play events)
     if (!options?.skipWatchHistory) {
       await prisma.$queryRawUnsafe(
@@ -1301,14 +1402,29 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
         syncStatus("Syncing detailed watch history..."), syncJob.id,
       );
       const whStart = Date.now();
+      // Stop has to reach this phase too: it can run for minutes, and nothing
+      // else checks the flag while it does, so a Stop pressed here used to be
+      // ignored outright and the run finished COMPLETED. The Tracearr importer
+      // stops at its next page, keeping what it wrote; the native path rolls
+      // its full-replace transaction back at its next write batch (its fetch
+      // cannot be interrupted), so the previous history stays intact.
+      const cancelWatch = watchForCancel(cancelRequested);
       try {
-        const { count: whCount } = await syncWatchHistory(serverId);
+        const { count: whCount } = await syncWatchHistory(serverId, undefined, cancelWatch.signal);
         completedOps.push(`Watch history: ${whCount} plays (${formatDuration(Date.now() - whStart)})`);
         logger.info("Sync", `Watch history sync completed: ${whCount} play events`);
       } catch (whError) {
-        // Non-fatal: don't fail the entire sync if watch history fails
-        logger.error("Sync", "Watch history sync failed", { error: String(whError) });
-        completedOps.push(`Watch history: failed (${formatDuration(Date.now() - whStart)})`);
+        if (!cancelWatch.signal.aborted) {
+          // Non-fatal: don't fail the entire sync if watch history fails
+          logger.error("Sync", "Watch history sync failed", { error: String(whError) });
+          completedOps.push(`Watch history: failed (${formatDuration(Date.now() - whStart)})`);
+        }
+      } finally {
+        cancelWatch.stop();
+      }
+      if (cancelWatch.signal.aborted) {
+        await finishCancelled(server.userId);
+        return;
       }
     } else {
       // The item upserts above wrote `playCount`/`lastPlayedAt` from
@@ -1338,8 +1454,8 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
     );
 
     logger.info("Sync", `Sync completed for server (${processedItems} items processed)`);
-    clearSyncProgressThrottle(serverId);
-    eventBus.emit({ type: "sync:completed", userId: server.userId, meta: { serverId } });
+    await settleDataset();
+    announce("sync:completed", server.userId);
     logHeapAndCollect("sync complete");
   } catch (error) {
     let errorMessage = "Unknown error";
@@ -1363,22 +1479,15 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       `UPDATE "SyncJob" SET "status"=$1,"completedAt"=$2,"error"=$3,"currentLibrary"=NULL WHERE "id"=$4`,
       "FAILED", new Date(), errorMessage, syncJob.id,
     );
-    clearSyncProgressThrottle(serverId);
-    if (syncUserId) eventBus.emit({ type: "sync:failed", userId: syncUserId, meta: { serverId } });
+    // A partial run still changed the dataset — settle it before the
+    // announcement for the same reason as the success path.
+    await settleDataset();
+    if (syncUserId) announce("sync:failed", syncUserId);
     throw error;
   } finally {
-    // Run dedup canonical recompute + media cache invalidation regardless of how
-    // the sync ended (success, cancel, or failure) as long as items were
-    // processed — a partial sync still changes the dataset, so leaving canonical
-    // flags / read caches stale would surface duplicate or missing items.
-    if (syncUserId && processedItems > 0) {
-      try {
-        await recomputeCanonical(syncUserId);
-      } catch (recomputeError) {
-        logger.error("Sync", "recomputeCanonical failed", { error: String(recomputeError) });
-      }
-      invalidateMediaCaches();
-    }
+    // Backstop for an exit that threw before settling (the FAILED update
+    // itself, say). A no-op after any exit that already settled.
+    await settleDataset();
   }
   } finally {
     releaseSyncSlot();
@@ -1391,9 +1500,10 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
  * reports. See the call site in `syncMediaServer` for why leaving them was a
  * lifecycle hazard. Logs each removal at WARN with the cascaded exception
  * count, as the stale-item purge does — that protection does not come back if
- * the media reappears under another library.
+ * the media reappears under another library. Returns how many it removed, so
+ * the caller knows the dataset changed.
  */
-async function purgeVanishedLibraries(serverId: string, serverKeys: string[]): Promise<void> {
+async function purgeVanishedLibraries(serverId: string, serverKeys: string[]): Promise<number> {
   const vanished = await prisma.$queryRawUnsafe<{ id: string; key: string; title: string }[]>(
     `SELECT "id","key","title" FROM "Library" WHERE "mediaServerId"=$1 AND NOT ("key" = ANY($2::text[]))`,
     serverId, serverKeys,
@@ -1422,6 +1532,7 @@ async function purgeVanishedLibraries(serverId: string, serverKeys: string[]): P
         (exceptions > 0 ? `, deleting ${exceptions} lifecycle exception(s) attached to them` : ""),
     );
   }
+  return vanished.length;
 }
 
 /**

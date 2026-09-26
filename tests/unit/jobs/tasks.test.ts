@@ -205,6 +205,19 @@ describe("taskList", () => {
     );
   });
 
+  it("sync task does not count a PENDING row as a running sync", async () => {
+    // The sync route creates this job's own row as PENDING at enqueue time;
+    // counting it made every manually requested sync skip itself.
+    await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", syncJobId: "route-row" },
+      helpers,
+    );
+    expect(syncJob.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { mediaServerId: "server-1", status: "RUNNING" } }),
+    );
+    expect(syncMediaServer).toHaveBeenCalledWith("server-1", undefined, { syncJobId: "route-row" });
+  });
+
   it("sync task skips when a sync is already running", async () => {
     syncJob.findFirst.mockResolvedValue({ id: "running" });
     await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
