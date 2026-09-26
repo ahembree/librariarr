@@ -285,52 +285,58 @@ function watchSourceLabel(option: WatchSourceOption): string {
  * correlate to the minute. Locale-driven ("6 Mar 2024" / "Mar 6, 2024"),
  * matching how the system tab formats release dates.
  */
+function formatImportBoundaryDate(date: string): string {
+  return new Date(date).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
 /**
- * A Tracearr import running for this server right now, shown where the sync
- * status sits.
+ * The import status line while a Tracearr import is running right now.
  *
- * The coverage line under "Watch history source" answers "how much history is
- * here"; it cannot say that a job is importing at this moment, and once the
- * backfill completes it reads "fully imported" even while a catch-up runs. The
- * backfill runs on the same serial queue as syncs, so this is also the answer
- * to "what is my queued sync waiting on".
+ * The stored rows can say how much history is here, but not that a job is
+ * importing at this moment — once the backfill completes they read "fully
+ * imported" even while a catch-up runs — so a live run replaces the stored
+ * readout rather than sitting beside it.
  *
  * The bar is determinate only for the backfill pass with a measured span —
- * the same time-coverage fraction as the coverage line. The catch-up pass and
+ * the same time-coverage fraction the idle line shows. The catch-up pass and
  * an unmeasured archive have no honest denominator, so they get the
  * indeterminate slider, never an empty bar.
  */
-function TracearrImportActivityCard({ status }: { status: TracearrImportStatus }) {
-  const activity = status.activeImport;
-  if (!activity) return null;
-
+function TracearrLiveImportLine({
+  status,
+  activity,
+}: {
+  status: TracearrImportStatus;
+  activity: NonNullable<TracearrImportStatus["activeImport"]>;
+}) {
   const percent =
     activity.pass === "backfill" && status.backfillFraction !== null
       ? Math.round(status.backfillFraction * 100)
       : null;
-  const passLabel =
+  const label =
     activity.pass === "backfill"
-      ? "Older plays"
+      ? "Importing older plays"
       : activity.pass === "forward"
-        ? "New plays"
-        : "Starting…";
+        ? "Importing new plays"
+        : "Starting import…";
   const plays = `${activity.imported.toLocaleString()} ${activity.imported === 1 ? "play" : "plays"}`;
   const pages = `${activity.pages.toLocaleString()} ${activity.pages === 1 ? "page" : "pages"}`;
 
   return (
-    <div className="mb-2 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-          <span className="font-medium text-foreground">Importing Tracearr history</span>
-        </div>
-        <span className="text-xs text-muted-foreground">
-          {passLabel}
-          {percent !== null && <span className="ml-1.5 tabular-nums text-foreground">{percent}%</span>}
+    <div className="mt-2 space-y-1.5">
+      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-primary" />
+          <span>{label}</span>
         </span>
+        {percent !== null && <span className="tabular-nums text-foreground">{percent}%</span>}
       </div>
       <div
-        className="relative mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted"
+        className="relative h-1.5 w-full overflow-hidden rounded-full bg-muted"
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={100}
@@ -346,24 +352,17 @@ function TracearrImportActivityCard({ status }: { status: TracearrImportStatus }
           <div className="absolute inset-y-0 w-2/5 animate-progress-indeterminate rounded-full bg-primary/80" />
         )}
       </div>
-      <p className="mt-1.5 text-xs text-muted-foreground">
-        {activity.pages === 0
-          ? "Preparing…"
-          : `${plays} this run · ${pages}`}
+      <p className="text-xs text-muted-foreground">
+        {activity.pages === 0 ? "Preparing…" : `${plays} this run · ${pages}`}
         {activity.pass === "backfill" && activity.oldestReached
           ? ` · reached ${formatImportBoundaryDate(activity.oldestReached)}`
+          : ""}
+        {activity.pass === "backfill" && status.oldestPlayAt
+          ? ` · history starts ${formatImportBoundaryDate(status.oldestPlayAt)}`
           : ""}
       </p>
     </div>
   );
-}
-
-function formatImportBoundaryDate(date: string): string {
-  return new Date(date).toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
 }
 
 /**
@@ -378,7 +377,10 @@ function formatImportBoundaryDate(date: string): string {
  * whether it is nearly done or barely started, only the persisted completion
  * flag can.
  *
- * Four distinct renderings, because collapsing any two of them lies:
+ * A run in progress takes precedence over all of these (`TracearrLiveImportLine`),
+ * so the server shows one import readout, never two.
+ *
+ * Otherwise, four distinct renderings, because collapsing any two of them lies:
  *   - complete            → the finished line (a count, no bar)
  *   - no rows yet         → "waiting", not "0 plays imported"
  *   - fraction is a number→ a determinate bar at that percentage
@@ -394,6 +396,7 @@ function formatImportBoundaryDate(date: string): string {
  */
 function TracearrImportStatusLine({ status }: { status: TracearrImportStatus | undefined }) {
   if (!status) return null;
+  if (status.activeImport) return <TracearrLiveImportLine status={status} activity={status.activeImport} />;
 
   const rowClass = "mt-2 flex items-start gap-1.5 text-xs text-muted-foreground";
 
@@ -1179,7 +1182,6 @@ export function ServersTab({
                       </div>
                     </div>
 
-                    {serverImportStatus && <TracearrImportActivityCard status={serverImportStatus} />}
                     {latestSync && (latestSync.status === "RUNNING" || latestSync.status === "PENDING") ? (
                       <div className="space-y-2">
                         <SyncProgressBar job={latestSync} />
