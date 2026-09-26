@@ -102,9 +102,9 @@ function SyncProgressBar({ job }: { job: MediaServer["syncJobs"][0] }) {
       <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
         <div className="flex items-center gap-2">
           <Clock className="h-3.5 w-3.5 text-amber-400" />
-          <span className="font-medium text-amber-300">Pending</span>
+          <span className="font-medium text-amber-300">Queued</span>
         </div>
-        <p className="mt-1 text-xs text-muted-foreground">Waiting for another sync to finish...</p>
+        <p className="mt-1 text-xs text-muted-foreground">Starts when the background work ahead of it finishes...</p>
       </div>
     );
   }

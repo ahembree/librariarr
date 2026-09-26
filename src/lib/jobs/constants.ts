@@ -79,6 +79,15 @@ export interface SyncServerPayload {
    * a bug from a legitimate trigger is for the sync to say which one it was.
    */
   trigger?: string;
+  /**
+   * The PENDING `SyncJob` row the requester created at enqueue time, so the
+   * settings page can show the sync as queued the moment it is asked for
+   * instead of only once the serial MAIN_QUEUE reaches it. The run claims
+   * this row rather than inserting its own. Optional: a jobKey collision can
+   * replace the payload with one that lacks it, which is why an unclaimed
+   * PENDING row for the server is adopted as well (see `claimSyncJob`).
+   */
+  syncJobId?: string;
 }
 
 /** Payload for {@link TASK_SYNC_WATCH_HISTORY}. */

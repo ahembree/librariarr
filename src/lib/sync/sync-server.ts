@@ -699,18 +699,56 @@ export interface SyncMediaServerOptions {
    * sync in the logs points at a caller that forgot, not at a mystery.
    */
   trigger?: string;
+  /** The PENDING row the requester created at enqueue time; see `claimSyncJob`. */
+  syncJobId?: string;
 }
 
-export async function syncMediaServer(serverId: string, libraryKey?: string, options?: SyncMediaServerOptions) {
-  // Created as PENDING before the semaphore. That state is only observable to
-  // a caller outside MAIN_QUEUE — and there is none today: every call runs
-  // inside a serial MAIN_QUEUE job, so a sync queued behind another one has no
-  // row at all until its job starts, and this one flips to RUNNING at once.
-  const syncJobRows = await prisma.$queryRawUnsafe<{ id: string }[]>(
+/**
+ * The SyncJob row this run reports into, or `null` when the sync it was queued
+ * for was stopped before it started.
+ *
+ * The per-server sync route creates the row the moment the sync is asked for,
+ * so a job waiting on the serial MAIN_QUEUE is visible as Pending instead of
+ * invisible until it runs. The run must claim that row, not insert a second:
+ * a second PENDING row would sit there unclaimed and make the route answer 409
+ * forever. So, in order:
+ *  - the requested row, while still PENDING;
+ *  - nothing, if that row was CANCELLED — Stop was pressed while it queued;
+ *  - any other PENDING row for the server, because a jobKey collision (the
+ *    dispatcher or realtime layer enqueuing `sync:<id>` while a manual one
+ *    waits) replaces the payload and drops `syncJobId`, and this run is then
+ *    the one that row was waiting for;
+ *  - a fresh row. A requested row that is FAILED lands here too: a previous
+ *    attempt of this job threw, or a restart's cleanup closed it, and the
+ *    retry should still run.
+ */
+async function claimSyncJob(serverId: string, requestedId: string | undefined): Promise<{ id: string } | null> {
+  if (requestedId) {
+    const requested = await prisma.$queryRawUnsafe<{ id: string; status: string }[]>(
+      `SELECT "id","status"::text AS "status" FROM "SyncJob" WHERE "id"=$1`, requestedId,
+    );
+    if (requested[0]?.status === "PENDING") return { id: requested[0].id };
+    if (requested[0]?.status === "CANCELLED") {
+      logger.info("Sync", `Sync for server ${serverId} was stopped before it started — skipping`);
+      return null;
+    }
+  }
+  const unclaimed = await prisma.$queryRawUnsafe<{ id: string; status: string }[]>(
+    `SELECT "id","status"::text AS "status" FROM "SyncJob"
+      WHERE "mediaServerId"=$1 AND "status"='PENDING' ORDER BY "startedAt" ASC LIMIT 1`,
+    serverId,
+  );
+  if (unclaimed[0]) return { id: unclaimed[0].id };
+  const inserted = await prisma.$queryRawUnsafe<{ id: string }[]>(
     `INSERT INTO "SyncJob" ("id","mediaServerId","status","startedAt") VALUES ($1,$2,$3,$4) RETURNING "id"`,
     randomUUID(), serverId, "PENDING", new Date(),
   );
-  const syncJob = syncJobRows[0];
+  return inserted[0];
+}
+
+export async function syncMediaServer(serverId: string, libraryKey?: string, options?: SyncMediaServerOptions) {
+  const syncJob = await claimSyncJob(serverId, options?.syncJobId);
+  if (!syncJob) return;
 
   let syncUserId: string | undefined;
   // Hoisted to function scope so every exit — completed, cancelled or failed —
@@ -778,11 +816,18 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
     // try so a failure lands in the catch and marks the row FAILED: outside it,
     // the row stayed PENDING forever — and a PENDING row makes the sync route
     // answer 409 and the settings page disable every Sync button until a
-    // restart ran `cleanupOrphanedSyncJobs`.
-    await prisma.$queryRawUnsafe(
-      `UPDATE "SyncJob" SET "status"=$1,"startedAt"=$2 WHERE "id"=$3`,
+    // restart ran `cleanupOrphanedSyncJobs`. Conditional on PENDING: the cancel
+    // route ends a still-queued row directly, and can do so between the claim
+    // above and this update; overwriting its CANCELLED would run a sync the
+    // user already stopped.
+    const started = await prisma.$queryRawUnsafe<{ id: string }[]>(
+      `UPDATE "SyncJob" SET "status"=$1,"startedAt"=$2 WHERE "id"=$3 AND "status"='PENDING' RETURNING "id"`,
       "RUNNING", new Date(), syncJob.id,
     );
+    if (started.length === 0) {
+      logger.info("Sync", `Sync for server ${serverId} was stopped before it started — skipping`);
+      return;
+    }
 
     const serverRows = await prisma.$queryRawUnsafe<
       { id: string; name: string; url: string; accessToken: string; type: string; userId: string; tlsSkipVerify: boolean; enabled: boolean }[]

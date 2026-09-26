@@ -243,7 +243,8 @@ describe("syncMediaServer", () => {
         return [{ cancelRequested: false }];
       }
       if (sql.includes('UPDATE "SyncJob"')) {
-        return [];
+        // The PENDING → RUNNING flip is conditional and reads its RETURNING row.
+        return [{ id: "sync-job-id" }];
       }
       if (sql.includes('SELECT') && sql.includes('"MediaServer"')) {
         return [{
@@ -345,7 +346,7 @@ describe("syncMediaServer", () => {
   it("throws when server not found", async () => {
     mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string) => {
       if (sql.includes('INSERT INTO "SyncJob"')) return [{ id: "sync-job-id" }];
-      if (sql.includes('UPDATE "SyncJob"')) return [];
+      if (sql.includes('UPDATE "SyncJob"')) return [{ id: "sync-job-id" }];
       if (sql.includes('SELECT') && sql.includes('"MediaServer"')) return [];
       return [];
     });
@@ -356,7 +357,7 @@ describe("syncMediaServer", () => {
   it("cancels sync for disabled server", async () => {
     mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string) => {
       if (sql.includes('INSERT INTO "SyncJob"')) return [{ id: "sync-job-id" }];
-      if (sql.includes('UPDATE "SyncJob"')) return [];
+      if (sql.includes('UPDATE "SyncJob"')) return [{ id: "sync-job-id" }];
       if (sql.includes('SELECT') && sql.includes('"MediaServer"')) {
         return [{
           id: "server-1",
@@ -397,7 +398,7 @@ describe("syncMediaServer", () => {
 
     mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string) => {
       if (sql.includes('INSERT INTO "SyncJob"')) return [{ id: "sync-job-id" }];
-      if (sql.includes('UPDATE "SyncJob"')) return [];
+      if (sql.includes('UPDATE "SyncJob"')) return [{ id: "sync-job-id" }];
       if (sql.includes('SELECT') && sql.includes('"MediaServer"')) {
         return [{
           id: "server-1",
@@ -441,7 +442,7 @@ describe("syncMediaServer", () => {
 
     mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string) => {
       if (sql.includes('INSERT INTO "SyncJob"')) return [{ id: "sync-job-id" }];
-      if (sql.includes('UPDATE "SyncJob"')) return [];
+      if (sql.includes('UPDATE "SyncJob"')) return [{ id: "sync-job-id" }];
       if (sql.includes('SELECT') && sql.includes('"MediaServer"')) {
         throw new Error("DB error");
       }
@@ -474,7 +475,7 @@ describe("syncMediaServer stale-item purge guard", () => {
       if (sql.includes('INSERT INTO "SyncJob"')) return [{ id: "sync-job-id" }];
       if (sql.includes('SELECT "cancelRequested"')) return [{ cancelRequested: false }];
       if (sql.includes('SELECT "id" FROM "SyncJob"')) return [{ id: "sync-job-id" }];
-      if (sql.includes('UPDATE "SyncJob"')) return [];
+      if (sql.includes('UPDATE "SyncJob"')) return [{ id: "sync-job-id" }];
       if (sql.includes('SELECT') && sql.includes('"MediaServer"')) {
         return [{
           id: "server-1", name: "Test Plex", url: "http://plex:32400",
@@ -724,7 +725,7 @@ describe("syncMediaServer per-item enrichment resilience", () => {
       if (sql.includes('INSERT INTO "SyncJob"')) return [{ id: "sync-job-id" }];
       if (sql.includes('SELECT "cancelRequested"')) return [{ cancelRequested: false }];
       if (sql.includes('SELECT "id" FROM "SyncJob"')) return [{ id: "sync-job-id" }];
-      if (sql.includes('UPDATE "SyncJob"')) return [];
+      if (sql.includes('UPDATE "SyncJob"')) return [{ id: "sync-job-id" }];
       if (sql.includes("SELECT") && sql.includes('"MediaServer"')) {
         return [{
           id: "server-1", name: "Test Plex", url: "http://plex:32400",
@@ -833,7 +834,7 @@ describe("syncMediaServer library and watchlist reconciliation", () => {
       if (sql.includes('INSERT INTO "SyncJob"')) return [{ id: "sync-job-id" }];
       if (sql.includes('SELECT "cancelRequested"')) return [{ cancelRequested: false }];
       if (sql.includes('SELECT "id" FROM "SyncJob"')) return [{ id: "sync-job-id" }];
-      if (sql.includes('UPDATE "SyncJob"')) return [];
+      if (sql.includes('UPDATE "SyncJob"')) return [{ id: "sync-job-id" }];
       if (sql.includes('SELECT') && sql.includes('"MediaServer"')) return [SERVER_ROW];
       // Vanished-library purge: the libraries, their items, their exceptions.
       if (sql.includes('NOT ("key" = ANY')) return opts.vanished ?? [];
@@ -1053,7 +1054,7 @@ describe("syncMediaServer job lifecycle events", () => {
       if (sql.includes('UPDATE "SyncJob"') && params.includes("RUNNING") && opts.failRunningUpdate) {
         throw new Error("connection reset");
       }
-      if (sql.includes('UPDATE "SyncJob"')) return [];
+      if (sql.includes('UPDATE "SyncJob"')) return [{ id: "sync-job-id" }];
       if (sql.includes("SELECT") && sql.includes('"MediaServer"')) {
         return [{
           id: "server-1", name: "Test Plex", url: "http://plex:32400",
@@ -1242,6 +1243,108 @@ describe("syncMediaServer job lifecycle events", () => {
     // disable every Sync button until a restart.
     expect(findDbCalls('UPDATE "SyncJob"', "FAILED").length).toBe(1);
     // Nothing was announced yet, so there is nothing to end.
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+
+describe("syncMediaServer claims the row created at request time", () => {
+  // The sync route creates a PENDING row the moment Sync is pressed so a job
+  // waiting on the serial MAIN_QUEUE is visible. The run must report into that
+  // row — a second PENDING row would sit unclaimed and make the route answer
+  // 409 forever — and must not run at all if Stop ended it while queued.
+
+  interface ClaimOpts {
+    requested?: { id: string; status: string } | null;
+    unclaimed?: { id: string; status: string } | null;
+    runningFlipSucceeds?: boolean;
+  }
+
+  function mockClaimDb(opts: ClaimOpts) {
+    mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string, ...params: unknown[]) => {
+      if (sql.includes('FROM "SyncJob" WHERE "id"=$1')) return opts.requested ? [opts.requested] : [];
+      if (sql.includes('"status"=\'PENDING\' ORDER BY')) return opts.unclaimed ? [opts.unclaimed] : [];
+      if (sql.includes('INSERT INTO "SyncJob"')) return [{ id: "inserted-job" }];
+      if (sql.includes('SELECT "cancelRequested"')) return [{ cancelRequested: false }];
+      if (sql.includes('UPDATE "SyncJob"') && params.includes("RUNNING")) {
+        return opts.runningFlipSucceeds === false ? [] : [{ id: params[2] }];
+      }
+      if (sql.includes('UPDATE "SyncJob"')) return [{ id: "any" }];
+      if (sql.includes("SELECT") && sql.includes('"MediaServer"')) {
+        return [{
+          id: "server-1", name: "Test Plex", url: "http://plex:32400",
+          accessToken: "token", type: "PLEX", userId: "user-1",
+          tlsSkipVerify: false, enabled: true,
+        }];
+      }
+      return [];
+    });
+  }
+
+  const runningFlip = () =>
+    mockPrisma.$queryRawUnsafe.mock.calls.find(
+      (args: unknown[]) => String(args[0]).includes('UPDATE "SyncJob"') && args.includes("RUNNING"),
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockClient.testConnection.mockResolvedValue({ ok: true, serverName: "Test Plex" });
+    mockClient.getLibraries.mockResolvedValue([]);
+    mockClient.getWatchCounts.mockResolvedValue(new Map());
+  });
+
+  it("reports into the requested row while it is still PENDING", async () => {
+    mockClaimDb({ requested: { id: "route-row", status: "PENDING" } });
+
+    await syncMediaServer("server-1", undefined, { syncJobId: "route-row" });
+
+    expect(findDbCalls('INSERT INTO "SyncJob"').length).toBe(0);
+    expect(runningFlip()?.[3]).toBe("route-row");
+    expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBe(1);
+  });
+
+  it("does nothing when the requested row was stopped while queued", async () => {
+    mockClaimDb({ requested: { id: "route-row", status: "CANCELLED" } });
+
+    await syncMediaServer("server-1", undefined, { syncJobId: "route-row" });
+
+    expect(findDbCalls('INSERT INTO "SyncJob"').length).toBe(0);
+    expect(runningFlip()).toBeUndefined();
+    expect(mockClient.testConnection).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("adopts the server's unclaimed PENDING row when the payload lost its id", async () => {
+    // A jobKey collision (dispatcher or realtime enqueuing `sync:<id>` while a
+    // manual sync waits) replaces the payload; this run is the one the row
+    // was waiting for.
+    mockClaimDb({ unclaimed: { id: "route-row", status: "PENDING" } });
+
+    await syncMediaServer("server-1");
+
+    expect(findDbCalls('INSERT INTO "SyncJob"').length).toBe(0);
+    expect(runningFlip()?.[3]).toBe("route-row");
+  });
+
+  it("still runs a retry whose requested row a previous attempt marked FAILED", async () => {
+    mockClaimDb({ requested: { id: "route-row", status: "FAILED" } });
+
+    await syncMediaServer("server-1", undefined, { syncJobId: "route-row" });
+
+    expect(findDbCalls('INSERT INTO "SyncJob"').length).toBe(1);
+    expect(runningFlip()?.[3]).toBe("inserted-job");
+    expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBe(1);
+  });
+
+  it("does no work when Stop ends the row between the claim and the RUNNING flip", async () => {
+    mockClaimDb({ requested: { id: "route-row", status: "PENDING" }, runningFlipSucceeds: false });
+
+    await syncMediaServer("server-1", undefined, { syncJobId: "route-row" });
+
+    // Overwriting the CANCELLED row with RUNNING would run a sync the user
+    // already stopped.
+    expect(mockClient.testConnection).not.toHaveBeenCalled();
+    expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBe(0);
+    expect(findDbCalls('UPDATE "SyncJob"', "FAILED").length).toBe(0);
     expect(mockEmit).not.toHaveBeenCalled();
   });
 });

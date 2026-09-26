@@ -89,12 +89,15 @@ const dispatch: Task = async () => {
 };
 
 const syncServer: Task = async (payload) => {
-  const { serverId, libraryKey, skipWatchHistory, trigger } = payload as SyncServerPayload;
+  const { serverId, libraryKey, skipWatchHistory, trigger, syncJobId } = payload as SyncServerPayload;
 
   // Skip if a sync is already in progress for this server (belt-and-suspenders
   // alongside the queue serialization and the sync engine's own semaphore).
+  // RUNNING only: a PENDING row is a queued sync waiting for its job — usually
+  // this very job, whose row the sync route created at enqueue time — and the
+  // run below claims it. Counting PENDING here made every such job skip itself.
   const running = await prisma.syncJob.findFirst({
-    where: { mediaServerId: serverId, status: { in: ["RUNNING", "PENDING"] } },
+    where: { mediaServerId: serverId, status: "RUNNING" },
     select: { id: true },
   });
   if (running) {
@@ -111,6 +114,7 @@ const syncServer: Task = async (payload) => {
   await syncMediaServer(serverId, libraryKey, {
     ...(skipWatchHistory ? { skipWatchHistory: true } : {}),
     ...(trigger ? { trigger } : {}),
+    ...(syncJobId ? { syncJobId } : {}),
   });
 };
 
