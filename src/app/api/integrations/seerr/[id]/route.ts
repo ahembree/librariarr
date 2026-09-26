@@ -58,7 +58,7 @@ export async function PUT(
       ...(enabled !== undefined && { enabled }),
     },
   });
-  invalidateSeerrCaches(session.userId!);
+  invalidateSeerrCaches();
 
   return NextResponse.json({ instance: sanitize(instance) });
 }
@@ -82,7 +82,7 @@ export async function DELETE(
   }
 
   await prisma.seerrInstance.delete({ where: { id } });
-  invalidateSeerrCaches(session.userId!);
+  invalidateSeerrCaches();
 
   return NextResponse.json({ success: true });
 }

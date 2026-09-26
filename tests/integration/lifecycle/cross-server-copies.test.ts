@@ -107,12 +107,51 @@ describe("cross-server copies of one title", () => {
     expect(copies).toEqual([
       expect.objectContaining({ id: other.id, libraryId: other.libraryId, ratingKey: other.ratingKey }),
     ]);
+    expect(matches[0].copyIds).toEqual([other.id]);
     expect(await prisma.lifecycleAction.count({ where: { ruleSetId: ruleSet.id, status: "PENDING" } })).toBe(1);
 
     // "Matched By Rule Set" holds for the copy that was not kept, too.
     const cross = await fetchCrossSystemData([a.id, b.id]);
     expect(cross.get(a.id)?.matchedRuleSets).toEqual(["Unwatched"]);
     expect(cross.get(b.id)?.matchedRuleSets).toEqual(["Unwatched"]);
+  });
+
+  it("carries the match and its pending action over when the kept copy stops matching", async () => {
+    const { user, a, b, ruleSet } = await twoServerMovie();
+    await processLifecycleRules(user.id);
+    const [match] = await prisma.ruleMatch.findMany({ where: { ruleSetId: ruleSet.id } });
+    const kept = match.mediaItemId === a.id ? a : b;
+    const other = kept === a ? b : a;
+    const [action] = await prisma.lifecycleAction.findMany({ where: { ruleSetId: ruleSet.id, status: "PENDING" } });
+    expect(action.mediaItemId).toBe(kept.id);
+
+    // Played on its own server: the kept copy no longer matches, the other does.
+    await prisma.mediaItem.update({ where: { id: kept.id }, data: { playCount: 1 } });
+    await processLifecycleRules(user.id);
+
+    const matches = await prisma.ruleMatch.findMany({ where: { ruleSetId: ruleSet.id } });
+    expect(matches.map((m) => m.mediaItemId)).toEqual([other.id]);
+    expect(matches[0].copyIds).toEqual([]);
+    const pending = await prisma.lifecycleAction.findMany({ where: { ruleSetId: ruleSet.id, status: "PENDING" } });
+    // The same action, moved — not cancelled and rescheduled.
+    expect(pending.map((p) => [p.id, p.mediaItemId])).toEqual([[action.id, other.id]]);
+    expect(pending[0].scheduledFor.getTime()).toBe(action.scheduledFor.getTime());
+  });
+
+  it("carries over on a sticky rule set without arming a second action", async () => {
+    const { user, a, b, ruleSet } = await twoServerMovie();
+    await prisma.ruleSet.update({ where: { id: ruleSet.id }, data: { stickyMatches: true } });
+    await processLifecycleRules(user.id);
+    const [match] = await prisma.ruleMatch.findMany({ where: { ruleSetId: ruleSet.id } });
+    const kept = match.mediaItemId === a.id ? a : b;
+    const other = kept === a ? b : a;
+
+    await prisma.mediaItem.update({ where: { id: kept.id }, data: { playCount: 1 } });
+    await processLifecycleRules(user.id);
+
+    const matches = await prisma.ruleMatch.findMany({ where: { ruleSetId: ruleSet.id } });
+    expect(matches.map((m) => m.mediaItemId)).toEqual([other.id]);
+    expect(await prisma.lifecycleAction.count({ where: { ruleSetId: ruleSet.id, status: "PENDING" } })).toBe(1);
   });
 
   it("an exception on the copy detection did not keep disarms the title", async () => {

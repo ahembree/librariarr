@@ -12,6 +12,7 @@ import {
   countShowEpisodes,
   loadLocalShows,
 } from "@/lib/seerr/library-match";
+import { USER_REQUESTS_CACHE_PREFIX } from "@/lib/seerr/request-stats";
 import { appCache } from "@/lib/cache/memory-cache";
 import { logger } from "@/lib/logger";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
@@ -66,13 +67,13 @@ export async function GET(
   // "%41" to "A", resolving a different user.
   const { userKey } = await params;
 
-  const cacheKey = `seerr-user-requests:${session.userId}:${userKey}`;
+  // Never cache a truncated walk — the next load retries it.
   const result = await appCache.getOrSet(
-    cacheKey,
+    `${USER_REQUESTS_CACHE_PREFIX}${userKey}`,
     () => resolveUserRequests(session.userId!, userKey),
-    CACHE_TTL_MS
+    CACHE_TTL_MS,
+    { shouldCache: (r) => !r.partial }
   );
-  if (result.partial) appCache.invalidate(cacheKey);
   return NextResponse.json(result);
 }
 

@@ -433,9 +433,10 @@ export class TracearrClient {
   }
 
   async getHealth(options: { retry?: boolean } = {}): Promise<TracearrHealthResponse> {
-    const { data } = options.retry === false
-      ? await this.client.get<TracearrHealthResponse>("/api/v1/public/health", { ...NO_RETRY })
-      : await this.client.get<TracearrHealthResponse>("/api/v1/public/health");
+    const { data } = await this.client.get<TracearrHealthResponse>(
+      "/api/v1/public/health",
+      options.retry === false ? { ...NO_RETRY } : undefined,
+    );
     return data;
   }
 

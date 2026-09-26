@@ -247,6 +247,20 @@ describe("MemoryCache", () => {
       });
     }
 
+    it("does not cache a result shouldCache rejects (next call recomputes)", async () => {
+      const compute = vi
+        .fn()
+        .mockResolvedValueOnce({ partial: true })
+        .mockResolvedValueOnce({ partial: false });
+      const opts = { shouldCache: (v: { partial: boolean }) => !v.partial };
+
+      await expect(cache.getOrSet("k", compute, undefined, opts)).resolves.toEqual({ partial: true });
+      expect(cache.get("k")).toBeUndefined();
+      await expect(cache.getOrSet("k", compute, undefined, opts)).resolves.toEqual({ partial: false });
+      expect(cache.get("k")).toEqual({ partial: false });
+      expect(compute).toHaveBeenCalledTimes(2);
+    });
+
     it("does not cache a rejected compute (next call retries)", async () => {
       const compute = vi
         .fn()

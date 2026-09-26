@@ -12,7 +12,6 @@ const { mockPrisma } = vi.hoisted(() => ({
     lifecycleAction: {
       findMany: vi.fn(),
     },
-    $queryRaw: vi.fn(),
   },
 }));
 
@@ -30,7 +29,6 @@ describe("fetchCrossSystemData", () => {
     mockPrisma.mediaItem.groupBy.mockResolvedValue([]);
     mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
     mockPrisma.lifecycleAction.findMany.mockResolvedValue([]);
-    mockPrisma.$queryRaw.mockResolvedValue([]);
   });
 
   it("returns an empty map and queries nothing for empty input", async () => {
@@ -136,10 +134,9 @@ describe("fetchCrossSystemData", () => {
   it("counts another server's collapsed copy of a match as matched too", async () => {
     // Detection stores a multi-server title on one copy and lists the others in
     // itemData.copies; the rule set matched "b" as well.
-    mockPrisma.ruleMatch.findMany.mockResolvedValueOnce([
-      { mediaItemId: "a", ruleSet: { name: "Leaving Soon" } },
-    ]);
-    mockPrisma.$queryRaw.mockResolvedValueOnce([{ mediaItemId: "b", name: "Leaving Soon" }]);
+    mockPrisma.ruleMatch.findMany
+      .mockResolvedValueOnce([{ mediaItemId: "a", ruleSet: { name: "Leaving Soon" } }])
+      .mockResolvedValueOnce([{ copyIds: ["b", "x"], ruleSet: { name: "Leaving Soon" } }]);
 
     const result = await fetchCrossSystemData(["a", "b"]);
 

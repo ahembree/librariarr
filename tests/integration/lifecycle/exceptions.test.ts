@@ -26,6 +26,11 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+const mockRemoveItemFromCollections = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("@/lib/lifecycle/collections", () => ({
+  removeItemFromCollections: mockRemoveItemFromCollections,
+}));
+
 // Route imports — MUST come AFTER vi.mock() calls
 import { GET, POST } from "@/app/api/lifecycle/exceptions/route";
 import { DELETE } from "@/app/api/lifecycle/exceptions/[id]/route";
@@ -273,6 +278,85 @@ describe("Lifecycle Exceptions API", () => {
       expect(matches.map((m) => m.mediaItemId)).toEqual([unrelated.id]);
       const pending = await prisma.lifecycleAction.findMany({ where: { userId: user.id, status: "PENDING" } });
       expect(pending.map((a) => a.mediaItemId)).toEqual([unrelated.id]);
+    });
+
+    it("clears a match that lists the excluded item only as a copy (no dedupKey)", async () => {
+      const { user, mediaItem } = await createUserWithMediaItem();
+      const server2 = await createTestServer(user.id);
+      const library2 = await createTestLibrary(server2.id, { type: "MOVIE" });
+      const kept = await createTestMediaItem(library2.id, { type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, { type: "MOVIE" });
+      await createTestRuleMatch(ruleSet.id, kept.id, { copies: [{ id: mediaItem.id }] });
+
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } });
+
+      expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
+    });
+
+    it("takes the kept copy and every listed copy out of the collection, each in its own library", async () => {
+      const { user, library, mediaItem } = await createUserWithMediaItem();
+      const server2 = await createTestServer(user.id);
+      const library2 = await createTestLibrary(server2.id, { type: "MOVIE" });
+      const kept = await createTestMediaItem(library2.id, { type: "MOVIE" });
+      const collection = await prisma.collection.create({
+        data: { userId: user.id, name: "Leaving Soon", type: "MOVIE" },
+      });
+      const ruleSet = await createTestRuleSet(user.id, { type: "MOVIE" });
+      await prisma.ruleSet.update({ where: { id: ruleSet.id }, data: { collectionId: collection.id } });
+      await createTestRuleMatch(ruleSet.id, kept.id, {
+        copies: [{ id: mediaItem.id, libraryId: library.id, ratingKey: mediaItem.ratingKey, title: mediaItem.title }],
+      });
+
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } });
+
+      const calls = mockRemoveItemFromCollections.mock.calls.map((c) => [c[3], c[5]]);
+      expect(calls).toEqual(
+        expect.arrayContaining([
+          [kept.ratingKey, library2.id],
+          [mediaItem.ratingKey, library.id],
+        ]),
+      );
+      expect(calls).toHaveLength(2);
+      expect(mockRemoveItemFromCollections.mock.calls[0].slice(0, 3)).toEqual([user.id, "MOVIE", "Leaving Soon"]);
+    });
+
+    it("a series-scope exception disarms another server's copy of the show", async () => {
+      const user = await createTestUser();
+      const s1 = await createTestServer(user.id);
+      const s2 = await createTestServer(user.id);
+      const l1 = await createTestLibrary(s1.id, { type: "SERIES" });
+      const l2 = await createTestLibrary(s2.id, { type: "SERIES" });
+      const ep = await createTestMediaItem(l1.id, {
+        type: "SERIES", parentTitle: "The Office (US)", seasonNumber: 1, episodeNumber: 1,
+      });
+      const otherEp = await createTestMediaItem(l2.id, {
+        type: "SERIES", parentTitle: "The Office", seasonNumber: 1, episodeNumber: 1,
+      });
+      await prisma.mediaItem.update({ where: { id: ep.id }, data: { seriesKey: "tvdb:73244", dedupKey: "ep:73244:1:1" } });
+      await prisma.mediaItem.update({ where: { id: otherEp.id }, data: { seriesKey: "tvdb:73244", dedupKey: "ep:73244:1:1b" } });
+      const ruleSet = await createTestRuleSet(user.id, { type: "SERIES" });
+      await createTestRuleMatch(ruleSet.id, otherEp.id);
+      await prisma.lifecycleAction.create({
+        data: {
+          userId: user.id,
+          mediaItemId: otherEp.id,
+          ruleSetId: ruleSet.id,
+          actionType: "DELETE_SONARR",
+          status: "PENDING",
+          scheduledFor: new Date(Date.now() + 86400000),
+        },
+      });
+
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      const res = await callRoute(POST, { method: "POST", body: { mediaItemId: ep.id, scope: "series" } });
+      const body = await expectJson<{ count: number }>(res, 201);
+
+      // Both servers' episodes are excepted — the other one through seriesKey.
+      expect(body.count).toBe(2);
+      expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
+      expect(await prisma.lifecycleAction.count({ where: { status: "PENDING" } })).toBe(0);
     });
 
     it("does not delete COMPLETED LifecycleAction records", async () => {

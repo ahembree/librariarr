@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
+import { crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
 import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
@@ -77,7 +78,7 @@ export async function POST(
   // Verify ownership
   const ruleSet = await prisma.ruleSet.findFirst({
     where: { id, userId: session.userId },
-    select: { id: true },
+    select: { id: true, actionEnabled: true, actionType: true },
   });
   if (!ruleSet) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -171,16 +172,46 @@ export async function POST(
     for (const c of copies) if (typeof c.id === "string") copyOf.set(c.id, matchId);
   }
 
+  // Copies of one title that newly match together are ONE match too:
+  // detection collapses them by the same external id (`crossServerCopyKeys`),
+  // so each is folded onto the copy detection would keep — one already
+  // matched, else the lowest id.
+  const candidates = (items as unknown as Record<string, unknown>[]).filter(
+    (rec) => !excludedIds.has(rec.id as string),
+  );
+  const copyKeys = await crossServerCopyKeys(candidates, {
+    type,
+    serverCount: serverIds.length,
+    arrData,
+    // The config being saved, not the stored one: arming an action in the
+    // same edit is what makes detection collapse copies without Arr data.
+    actionArmed: (data.actionEnabled ?? ruleSet.actionEnabled) &&
+      !!(data.actionType !== undefined ? data.actionType : ruleSet.actionType),
+  });
+  const keptForKey = new Map<string, string>();
+  for (const rec of candidates) {
+    const itemId = rec.id as string;
+    const key = copyKeys.get(itemId);
+    if (!key) continue;
+    const held = existingById.has(itemId) || copyOf.has(itemId);
+    const current = keptForKey.get(key);
+    const currentHeld = current !== undefined && (existingById.has(current) || copyOf.has(current));
+    if (current === undefined || (held && !currentHeld) || (held === currentHeld && itemId < current)) {
+      keptForKey.set(key, itemId);
+    }
+  }
+
+  const candidateById = new Map(candidates.map((rec) => [rec.id as string, rec]));
   const newMatchIds = new Set<string>();
   const newMatchMap = new Map<string, Record<string, unknown>>();
-  for (const item of items) {
-    const rec = item as Record<string, unknown>;
+  for (const rec of candidates) {
     const itemId = rec.id as string;
-    if (excludedIds.has(itemId)) continue;
-    const matchId = existingById.has(itemId) ? itemId : (copyOf.get(itemId) ?? itemId);
+    const key = copyKeys.get(itemId);
+    const keptId = key ? (keptForKey.get(key) ?? itemId) : itemId;
+    const matchId = existingById.has(keptId) ? keptId : (copyOf.get(keptId) ?? keptId);
     if (newMatchIds.has(matchId)) continue;
     newMatchIds.add(matchId);
-    newMatchMap.set(matchId, rec);
+    newMatchMap.set(matchId, candidateById.get(keptId) ?? rec);
   }
 
   // Compute diff

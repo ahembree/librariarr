@@ -12,7 +12,9 @@ const mockSeerrClient = vi.hoisted(() => ({
 }));
 
 const mockAppCache = vi.hoisted(() => ({
-  getOrSet: vi.fn(<T>(_key: string, compute: () => Promise<T>) => compute()),
+  getOrSet: vi.fn(
+    <T>(_key: string, compute: () => Promise<T>, _ttl?: number, _opts?: unknown) => compute()
+  ),
   invalidate: vi.fn(),
 }));
 
@@ -215,7 +217,11 @@ describe("getSeerrRequestStats", () => {
     expect(result.users).toHaveLength(1);
     expect(result.users[0].requestCount).toBe(1);
     // A truncated result must not be served from cache.
-    expect(mockAppCache.invalidate).toHaveBeenCalledWith("seerr-request-stats:user1");
+    const opts = mockAppCache.getOrSet.mock.calls.at(-1)?.[3] as
+      | { shouldCache?: (value: unknown) => boolean }
+      | undefined;
+    expect(opts?.shouldCache?.(result)).toBe(false);
+    expect(opts?.shouldCache?.({ ...result, partial: false })).toBe(true);
   });
 
   it("correlates movie watch history via shared dedupKey", async () => {

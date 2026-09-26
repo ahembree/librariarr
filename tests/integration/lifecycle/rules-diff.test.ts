@@ -10,6 +10,7 @@ import {
   createTestMediaItem,
   createTestRuleSet,
   createTestRuleMatch,
+  createTestExternalId,
 } from "../../setup/test-helpers";
 
 // Critical: redirect prisma to test database
@@ -351,6 +352,65 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
 
     expect(body.counts).toEqual({ added: 0, removed: 0, retained: 1 });
     expect(body.retained[0].id).toBe(kept.id);
+  });
+
+  describe("two copies of a title that newly match together", () => {
+    async function twoNewCopies(ruleSetOverrides: Parameters<typeof createTestRuleSet>[1] = {}) {
+      const user = await createTestUser();
+      const s1 = await createTestServer(user.id);
+      const s2 = await createTestServer(user.id);
+      const l1 = await createTestLibrary(s1.id, { type: "MOVIE" });
+      const l2 = await createTestLibrary(s2.id, { type: "MOVIE" });
+      const a = await createTestMediaItem(l1.id, { title: "Shared", type: "MOVIE" });
+      const b = await createTestMediaItem(l2.id, { title: "Shared", type: "MOVIE" });
+      await createTestExternalId(a.id, "TMDB", "603");
+      await createTestExternalId(b.id, "TMDB", "603");
+      const ruleSet = await createTestRuleSet(user.id, { name: "Test", ...ruleSetOverrides });
+      // The engine returns rows without external ids; the route loads them.
+      mockEvaluateRules.mockResolvedValue([
+        { id: b.id, title: "Shared", parentTitle: null },
+        { id: a.id, title: "Shared", parentTitle: null },
+      ]);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      return { a, b, ruleSet, serverIds: [s1.id, s2.id] };
+    }
+
+    async function diff(ruleSetId: string, body: Record<string, unknown>) {
+      const response = await callRouteWithParams(
+        POST,
+        { id: ruleSetId },
+        { url: `/api/lifecycle/rules/${ruleSetId}/diff`, method: "POST", body },
+      );
+      return expectJson<{ added: { id: string }[]; counts: { added: number; removed: number; retained: number } }>(
+        response,
+        200,
+      );
+    }
+
+    it("are added once, on the copy detection would keep, when an action is armed", async () => {
+      const { a, b, ruleSet, serverIds } = await twoNewCopies({
+        actionEnabled: true,
+        actionType: "DELETE_RADARR",
+      });
+
+      const body = await diff(ruleSet.id, { rules: validRules, type: "MOVIE", serverIds });
+
+      expect(body.counts).toEqual({ added: 1, removed: 0, retained: 0 });
+      expect(body.added[0].id).toBe([a.id, b.id].sort()[0]);
+    });
+
+    it("follow the action config being saved, not the stored one", async () => {
+      const { ruleSet, serverIds } = await twoNewCopies({ actionEnabled: false });
+
+      const armed = await diff(ruleSet.id, {
+        rules: validRules, type: "MOVIE", serverIds, actionEnabled: true, actionType: "DELETE_RADARR",
+      });
+      expect(armed.counts.added).toBe(1);
+
+      // A collection-only rule set keeps one match per server copy.
+      const unarmed = await diff(ruleSet.id, { rules: validRules, type: "MOVIE", serverIds });
+      expect(unarmed.counts.added).toBe(2);
+    });
   });
 
   it("computes full diff with added, removed, and retained", async () => {

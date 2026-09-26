@@ -87,6 +87,26 @@ const VALID_SETTINGS_TABS = new Set<string>(SETTINGS_TABS.map((t) => t.value));
  */
 const TRACEARR_IMPORT_POLL_MS = 30_000;
 
+/**
+ * The message to show for a failed integration save. A validation failure
+ * answers `{ error: "Validation failed", details: ["field: why", …] }`, and
+ * the bare `error` names neither the field nor the problem.
+ */
+function integrationSaveError(
+  data: { error?: string; detail?: string; details?: unknown } | null,
+  fallback: string,
+): string {
+  const first = Array.isArray(data?.details) ? data.details[0] : undefined;
+  const detail =
+    typeof first === "string"
+      ? first
+      : typeof (first as { message?: unknown } | undefined)?.message === "string"
+        ? (first as { message: string }).message
+        : data?.detail;
+  const error = data?.error || fallback;
+  return detail ? `${error} — ${detail}` : error;
+}
+
 
 function getInitialSettingsTab(): SettingsTab {
   if (typeof window === "undefined") return "general";
@@ -1975,7 +1995,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setSonarrError(data.error || "Failed to add Sonarr instance");
+        setSonarrError(integrationSaveError(data, "Failed to add Sonarr instance"));
         return;
       }
       setSonarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
@@ -2015,7 +2035,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setRadarrError(data.error || "Failed to add Radarr instance");
+        setRadarrError(integrationSaveError(data, "Failed to add Radarr instance"));
         return;
       }
       setRadarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
@@ -2055,7 +2075,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setLidarrError(data.error || "Failed to add Lidarr instance");
+        setLidarrError(integrationSaveError(data, "Failed to add Lidarr instance"));
         return;
       }
       setLidarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
@@ -2095,7 +2115,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setSeerrError(data.error || "Failed to add Seerr instance");
+        setSeerrError(integrationSaveError(data, "Failed to add Seerr instance"));
         return;
       }
       setSeerrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
@@ -2196,7 +2216,10 @@ export default function SettingsPage() {
       if (editSonarrForm.name) body.name = editSonarrForm.name;
       if (editSonarrForm.url) body.url = editSonarrForm.url;
       if (editSonarrForm.apiKey) body.apiKey = editSonarrForm.apiKey;
-      body.externalUrl = editSonarrForm.externalUrl;
+      // Only when changed: an External URL stored under an older, looser rule
+      // must not make every rename or re-point of the instance fail validation.
+      const storedSonarrExternalUrl = sonarrInstances.find((i) => i.id === editingSonarrId)?.externalUrl ?? "";
+      if (editSonarrForm.externalUrl !== storedSonarrExternalUrl) body.externalUrl = editSonarrForm.externalUrl;
 
       const response = await fetch(`/api/integrations/sonarr/${editingSonarrId}`, {
         method: "PUT",
@@ -2205,7 +2228,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setEditSonarrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to update"));
+        setEditSonarrError(integrationSaveError(data, "Failed to update"));
         return;
       }
       setEditingSonarrId(null);
@@ -2235,7 +2258,10 @@ export default function SettingsPage() {
       if (editRadarrForm.name) body.name = editRadarrForm.name;
       if (editRadarrForm.url) body.url = editRadarrForm.url;
       if (editRadarrForm.apiKey) body.apiKey = editRadarrForm.apiKey;
-      body.externalUrl = editRadarrForm.externalUrl;
+      // Only when changed: an External URL stored under an older, looser rule
+      // must not make every rename or re-point of the instance fail validation.
+      const storedRadarrExternalUrl = radarrInstances.find((i) => i.id === editingRadarrId)?.externalUrl ?? "";
+      if (editRadarrForm.externalUrl !== storedRadarrExternalUrl) body.externalUrl = editRadarrForm.externalUrl;
 
       const response = await fetch(`/api/integrations/radarr/${editingRadarrId}`, {
         method: "PUT",
@@ -2244,7 +2270,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setEditRadarrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to update"));
+        setEditRadarrError(integrationSaveError(data, "Failed to update"));
         return;
       }
       setEditingRadarrId(null);
@@ -2274,7 +2300,10 @@ export default function SettingsPage() {
       if (editLidarrForm.name) body.name = editLidarrForm.name;
       if (editLidarrForm.url) body.url = editLidarrForm.url;
       if (editLidarrForm.apiKey) body.apiKey = editLidarrForm.apiKey;
-      body.externalUrl = editLidarrForm.externalUrl;
+      // Only when changed: an External URL stored under an older, looser rule
+      // must not make every rename or re-point of the instance fail validation.
+      const storedLidarrExternalUrl = lidarrInstances.find((i) => i.id === editingLidarrId)?.externalUrl ?? "";
+      if (editLidarrForm.externalUrl !== storedLidarrExternalUrl) body.externalUrl = editLidarrForm.externalUrl;
 
       const response = await fetch(`/api/integrations/lidarr/${editingLidarrId}`, {
         method: "PUT",
@@ -2283,7 +2312,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setEditLidarrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to update"));
+        setEditLidarrError(integrationSaveError(data, "Failed to update"));
         return;
       }
       setEditingLidarrId(null);
@@ -2313,7 +2342,10 @@ export default function SettingsPage() {
       if (editSeerrForm.name) body.name = editSeerrForm.name;
       if (editSeerrForm.url) body.url = editSeerrForm.url;
       if (editSeerrForm.apiKey) body.apiKey = editSeerrForm.apiKey;
-      body.externalUrl = editSeerrForm.externalUrl;
+      // Only when changed: an External URL stored under an older, looser rule
+      // must not make every rename or re-point of the instance fail validation.
+      const storedSeerrExternalUrl = seerrInstances.find((i) => i.id === editingSeerrId)?.externalUrl ?? "";
+      if (editSeerrForm.externalUrl !== storedSeerrExternalUrl) body.externalUrl = editSeerrForm.externalUrl;
 
       const response = await fetch(`/api/integrations/seerr/${editingSeerrId}`, {
         method: "PUT",
@@ -2322,7 +2354,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setEditSeerrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to update"));
+        setEditSeerrError(integrationSaveError(data, "Failed to update"));
         return;
       }
       setEditingSeerrId(null);

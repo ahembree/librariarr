@@ -59,8 +59,19 @@ export class MemoryCache {
   /**
    * Get cached value or compute and cache it. Concurrent callers that miss the
    * same key await a single shared `compute()` invocation (single-flight).
+   *
+   * `shouldCache` keeps a result the caller must not reuse out of the cache
+   * (a partial answer, say) while still handing it to every caller already
+   * waiting on the compute. Evicting such a result after the fact instead left
+   * a window in which other callers were served it, and the eviction also
+   * abandoned any fresh compute another caller had started meanwhile.
    */
-  async getOrSet<T>(key: string, compute: () => Promise<T>, ttlMs?: number): Promise<T> {
+  async getOrSet<T>(
+    key: string,
+    compute: () => Promise<T>,
+    ttlMs?: number,
+    options?: { shouldCache?: (value: T) => boolean },
+  ): Promise<T> {
     const cached = this.get<T>(key);
     if (cached !== undefined) return cached;
 
@@ -71,7 +82,7 @@ export class MemoryCache {
     const promise = (async () => {
       try {
         const data = await compute();
-        if (!flight.stale) this.set(key, data, ttlMs);
+        if (!flight.stale && (options?.shouldCache?.(data) ?? true)) this.set(key, data, ttlMs);
         return data;
       } finally {
         // An invalidation may already have replaced this flight with a newer one.

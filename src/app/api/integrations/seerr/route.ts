@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
       externalUrl: externalUrl ? externalUrl.replace(/\/+$/, "") : null,
     },
   });
-  invalidateSeerrCaches(session.userId!);
+  invalidateSeerrCaches();
 
   return NextResponse.json({ instance: sanitize(instance) }, { status: 201 });
 }

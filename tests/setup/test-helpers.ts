@@ -494,11 +494,18 @@ export async function createTestRuleMatch(
   itemData: Record<string, unknown> = {},
 ) {
   const prisma = getTestPrisma();
+  // `copyIds` mirrors `itemData.copies`, as detection writes it.
+  const copyIds = Array.isArray(itemData.copies)
+    ? (itemData.copies as Array<{ id?: unknown } | null>)
+        .map((c) => c?.id)
+        .filter((id): id is string => typeof id === "string")
+    : [];
   return prisma.ruleMatch.create({
     data: {
       ruleSetId,
       mediaItemId,
       itemData: itemData as object,
+      copyIds,
       detectedAt: new Date(),
     },
   });

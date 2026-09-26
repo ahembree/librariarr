@@ -452,6 +452,9 @@ export const ruleDiffSchema = z.object({
   type: z.enum(["MOVIE", "SERIES", "MUSIC"]),
   seriesScope: z.boolean().optional(),
   serverIds: z.array(z.string()).min(1, "At least one server is required"),
+  /** The editor's unsaved action config; the stored one when absent. */
+  actionEnabled: z.boolean().optional(),
+  actionType: z.string().nullable().optional(),
 });
 
 export const ruleRunSchema = z.object({

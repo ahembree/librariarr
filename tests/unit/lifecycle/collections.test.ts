@@ -653,6 +653,29 @@ describe("self-write marks (realtime echo suppression)", () => {
     expect(isSelfWrite("s1", "rk2")).toBe(false);
   });
 
+  it("scopes removal to the item's own library when one is given", async () => {
+    mockPrisma.library.findMany.mockResolvedValue([]);
+
+    await removeItemFromCollections("u1", "MOVIE", "Test Collection", "rk1", null, "lib-s2");
+
+    expect(mockPrisma.library.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { mediaServer: { userId: "u1", type: "PLEX" }, type: "MOVIE", id: "lib-s2" },
+      }),
+    );
+  });
+
+  it("searches every Plex library of the type when no library is given", async () => {
+    mockPrisma.library.findMany.mockResolvedValue([]);
+
+    await removeItemFromCollections("u1", "MOVIE", "Test Collection", "rk1", null);
+
+    expect(mockPrisma.library.findMany.mock.calls.at(-1)?.[0].where).toEqual({
+      mediaServer: { userId: "u1", type: "PLEX" },
+      type: "MOVIE",
+    });
+  });
+
   it("marks the collection on rename and on removal", async () => {
     mockPrisma.library.findMany.mockResolvedValue(oneMovieLibrary);
     mockPlexClient.getCollections.mockResolvedValue([{ ratingKey: "col1", title: "Test Collection" }]);

@@ -1450,7 +1450,7 @@ export function LifecycleRulePage({
         ? fetch(`/api/lifecycle/rules/${activeRuleSetId}/diff`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(previewBody),
+            body: JSON.stringify({ ...previewBody, actionEnabled, actionType }),
           }).catch(() => null)
         : null;
 
@@ -3443,7 +3443,7 @@ export function LifecycleRulePage({
                 if (!activeRuleSetId) return;
                 setLoadingDiff(true);
                 try {
-                  const diffBody: Record<string, unknown> = { rules: groups, type: mediaType, serverIds };
+                  const diffBody: Record<string, unknown> = { rules: groups, type: mediaType, serverIds, actionEnabled, actionType };
                   if (scopeConfig) diffBody.seriesScope = seriesScope;
                   const res = await fetch(`/api/lifecycle/rules/${activeRuleSetId}/diff`, {
                     method: "POST",

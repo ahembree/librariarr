@@ -473,13 +473,20 @@ export async function removeItemFromCollections(
   type: string,
   collectionName: string,
   itemRatingKey: string,
-  seriesTitle: string | null
+  seriesTitle: string | null,
+  /**
+   * The item's own library. A rating key identifies an item only within one
+   * server — applied to every library, the same key on another server named a
+   * different title, which this then removed from its collection.
+   */
+  libraryId?: string
 ) {
   const libraryType = type as "MOVIE" | "SERIES" | "MUSIC";
   const userLibraries = await prisma.library.findMany({
     where: {
       mediaServer: { userId, type: "PLEX" },
       type: libraryType,
+      ...(libraryId ? { id: libraryId } : {}),
     },
     include: { mediaServer: true },
   });

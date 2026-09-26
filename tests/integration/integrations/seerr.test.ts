@@ -404,8 +404,8 @@ describe("Seerr integration endpoints", () => {
       const user = await createTestUser();
       const instance = await createTestSeerrInstance(user.id);
       setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-      appCache.set(`seerr-request-stats:${user.id}`, { configured: true });
-      appCache.set(`seerr-user-requests:${user.id}:alice`, { requests: [] });
+      appCache.set("seerr-request-stats", { configured: true });
+      appCache.set("seerr-user-requests:alice", { requests: [] });
       appCache.set(`integrations:health:${user.id}`, { ok: true });
 
       await callRouteWithParams(
@@ -414,8 +414,8 @@ describe("Seerr integration endpoints", () => {
         { url: `/api/integrations/seerr/${instance.id}`, method: "DELETE" }
       );
 
-      expect(appCache.get(`seerr-request-stats:${user.id}`)).toBeUndefined();
-      expect(appCache.get(`seerr-user-requests:${user.id}:alice`)).toBeUndefined();
+      expect(appCache.get("seerr-request-stats")).toBeUndefined();
+      expect(appCache.get("seerr-user-requests:alice")).toBeUndefined();
       expect(appCache.get(`integrations:health:${user.id}`)).toBeUndefined();
     });
   });

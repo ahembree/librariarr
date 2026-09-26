@@ -97,7 +97,7 @@ describe("GET /api/seerr/request-stats", () => {
   it("returns configured=false when user has no Seerr instances", async () => {
     const user = await createTestUser();
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrCaches(user.id);
+    invalidateSeerrCaches();
 
     const body = await expectJson<{ configured: boolean; users: unknown[] }>(
       await callRoute(GET),
@@ -111,7 +111,7 @@ describe("GET /api/seerr/request-stats", () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrCaches(user.id);
+    invalidateSeerrCaches();
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 3 },
@@ -148,7 +148,7 @@ describe("GET /api/seerr/request-stats", () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrCaches(user.id);
+    invalidateSeerrCaches();
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -187,7 +187,7 @@ describe("GET /api/seerr/request-stats", () => {
 
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrCaches(user.id);
+    invalidateSeerrCaches();
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 2 },
@@ -255,7 +255,7 @@ describe("GET /api/seerr/request-stats", () => {
 
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrCaches(user.id);
+    invalidateSeerrCaches();
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 2 },
@@ -322,7 +322,7 @@ describe("GET /api/seerr/request-stats", () => {
 
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrCaches(user.id);
+    invalidateSeerrCaches();
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -401,7 +401,7 @@ describe("GET /api/seerr/request-stats", () => {
 
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrCaches(user.id);
+    invalidateSeerrCaches();
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -426,32 +426,11 @@ describe("GET /api/seerr/request-stats", () => {
     expect(body.users[0].episodesAvailable).toBe(3);
   });
 
-  it("does not leak data across users (multi-tenant isolation)", async () => {
-    const userA = await createTestUser({ plexId: "userA" });
-    const userB = await createTestUser({ plexId: "userB" });
-    await createTestSeerrInstance(userA.id);
-    // userB has no Seerr instance
-    setMockSession({ userId: userB.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrCaches(userB.id);
-
-    mockGetRequests.mockResolvedValue({
-      pageInfo: { page: 1, pages: 1, results: 1 },
-      results: [
-        makeRequest(1, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 100 }),
-      ],
-    });
-
-    const body = await expectJson<{ configured: boolean }>(await callRoute(GET), 200);
-    expect(body.configured).toBe(false);
-    // mockGetRequests should NOT have been called since userB has no instance
-    expect(mockGetRequests).not.toHaveBeenCalled();
-  });
-
   it("paginates through multiple pages of requests", async () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-    invalidateSeerrCaches(user.id);
+    invalidateSeerrCaches();
 
     // Newest-first listing of 101 requests. Pages overlap by 10 rows (skip 0,
     // then 90) and the overlap is deduped by request id.

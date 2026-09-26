@@ -142,7 +142,7 @@ describe("SeerrClient", () => {
       mockAxiosInstance.get.mockResolvedValueOnce({ data: movie });
       const result = await client.getMovie(12345);
       expect(result).toEqual(movie);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/movie/12345");
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/movie/12345", undefined);
     });
   });
 
@@ -172,7 +172,7 @@ describe("SeerrClient", () => {
       mockAxiosInstance.get.mockResolvedValueOnce({ data: show });
       const result = await client.getTvShow(67890);
       expect(result).toEqual(show);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/tv/67890");
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/tv/67890", undefined);
     });
   });
 

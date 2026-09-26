@@ -9,7 +9,9 @@ import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { logger } from "@/lib/logger";
 import { syncCollectionById, syncAllCollections } from "@/lib/lifecycle/collections";
 import { describePlexError } from "@/lib/plex/errors";
-import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
+import { findExceptedItemIds, findExceptionProtectedGroups, protectionKey } from "@/lib/lifecycle/exception-guard";
+import type { Prisma } from "@/generated/prisma/client";
+import { arrIdSourceFor, copyIdsOf, crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
 
 interface RuleSetConfig {
   id: string;
@@ -42,6 +44,64 @@ function jsonSafe(value: unknown): string | number | boolean | object {
 }
 
 /**
+ * The PENDING action updates that move a held title from the copy it was
+ * matched on to the copy that carries it now (see the carry-over in
+ * `detectAndSaveMatches`). A member-scoped action keeps the same episodes /
+ * tracks, re-expressed as the new copy's members of the same `dedupKey`;
+ * `mediaItemTitle` follows the new copy, exactly as a freshly scheduled action
+ * would record it.
+ */
+async function planActionCarryOver(
+  ruleSetId: string,
+  carried: Map<string, Record<string, unknown>>,
+): Promise<Array<{ id: string; data: Prisma.LifecycleActionUncheckedUpdateManyInput }>> {
+  if (carried.size === 0) return [];
+  const actions = await prisma.lifecycleAction.findMany({
+    where: { ruleSetId, status: "PENDING", mediaItemId: { in: [...carried.keys()] } },
+    select: { id: true, mediaItemId: true, matchedMediaItemIds: true },
+  });
+  if (actions.length === 0) return [];
+
+  const memberIds = new Set<string>();
+  for (const a of actions) {
+    for (const m of a.matchedMediaItemIds ?? []) memberIds.add(m);
+    const to = carried.get(a.mediaItemId!);
+    for (const m of (to?.memberIds as string[] | undefined) ?? []) memberIds.add(m);
+  }
+  const keyOf = new Map<string, string | null>();
+  if (memberIds.size > 0) {
+    const rows = await prisma.mediaItem.findMany({
+      where: { id: { in: [...memberIds] } },
+      select: { id: true, dedupKey: true },
+    });
+    for (const r of rows) keyOf.set(r.id, r.dedupKey);
+  }
+
+  return actions.map((a) => {
+    const to = carried.get(a.mediaItemId!)!;
+    const scheduled = a.matchedMediaItemIds ?? [];
+    let members = scheduled;
+    if (scheduled.length > 0) {
+      const ids = new Set(scheduled);
+      const keys = new Set(scheduled.map((m) => keyOf.get(m)).filter((k): k is string => !!k));
+      members = ((to.memberIds as string[] | undefined) ?? []).filter((m) => {
+        const key = keyOf.get(m);
+        return ids.has(m) || (!!key && keys.has(key));
+      });
+    }
+    return {
+      id: a.id,
+      data: {
+        mediaItemId: to.id as string,
+        mediaItemTitle: (to.title as string) ?? null,
+        mediaItemParentTitle: (to.parentTitle as string | null) ?? null,
+        matchedMediaItemIds: members,
+      },
+    };
+  });
+}
+
+/**
  * Collapse each group of cross-server copies of one title onto a single
  * representative, in place: afterwards `group[0]` is the copy that stays,
  * carrying every copy's server, the union of their members, and a `copies`
@@ -68,15 +128,10 @@ function jsonSafe(value: unknown): string | number | boolean | object {
  * members of one copy are never merged, even if their keys collide.
  */
 async function collapseCopies(
-  ruleSetId: string,
+  alreadyMatched: Set<string>,
   groups: Record<string, unknown>[][],
   episodeIdMap: Map<string, string[]>,
 ): Promise<void> {
-  const existing = await prisma.ruleMatch.findMany({
-    where: { ruleSetId, mediaItemId: { in: groups.flat().map((i) => i.id as string) } },
-    select: { mediaItemId: true },
-  });
-  const alreadyMatched = new Set(existing.map((m) => m.mediaItemId));
 
   const allMemberIds = [
     ...new Set(groups.flat().flatMap((i) => (i.memberIds as string[] | undefined) ?? [])),
@@ -267,7 +322,7 @@ export async function detectAndSaveMatches(
   const actualValuesMap = getActualValuesForAllRules(records, rules, ruleSet.type, arrData, seerrData);
 
   // Build arrId lookup: resolve each item's external ID → arrData entry → arrId
-  const arrIdSource = ruleSet.type === "MOVIE" ? "TMDB" : ruleSet.type === "MUSIC" ? "MUSICBRAINZ" : "TVDB";
+  const arrIdSource = arrIdSourceFor(ruleSet.type);
 
   const enrichedItems: Record<string, unknown>[] = matched
     .map((item) => {
@@ -310,35 +365,35 @@ export async function detectAndSaveMatches(
     (ruleSet.type === "SERIES" || ruleSet.type === "MUSIC") && ruleSet.seriesScope;
 
   if (isGroupedScope) {
-    // For series/music scope rules, the enriched items are aggregated (representative
-    // episode/track ID).  Exceptions are stored against individual episode/track IDs,
-    // so we must look up by parentTitle (the series/artist name, stored as `title` on
-    // the aggregated item since the engine swaps title/parentTitle).
-    const groupTitles = enrichedItems
-      .map((item) => item.title as string)
-      .filter(Boolean);
-    if (groupTitles.length > 0) {
-      const excludedTitles = await prisma.lifecycleException.findMany({
-        where: {
-          userId: ruleSet.userId,
-          mediaItem: {
-            parentTitle: { in: groupTitles },
-            type: ruleSet.type,
-            library: { mediaServerId: { in: ruleSet.serverIds } },
-          },
-        },
-        select: {
-          mediaItem: { select: { parentTitle: true } },
-        },
-      });
-      if (excludedTitles.length > 0) {
-        const excludedSet = new Set(
-          excludedTitles.map((e) => e.mediaItem.parentTitle)
-        );
-        const beforeCount = enrichedItems.length;
-        const filtered = enrichedItems.filter(
-          (item) => !excludedSet.has(item.title as string)
-        );
+    // For series/music scope rules, the enriched items are aggregated
+    // (representative episode/track id, `title` = the series/artist name).
+    // Exceptions are stored against individual episodes/tracks, so the group
+    // is excluded when ANY of its episodes/tracks carries one — on any server,
+    // keyed through `protectionKey` (the series' `seriesKey`, the normalized
+    // artist name). Matching the exact `parentTitle` on the rule set's servers
+    // missed an exception filed on another server's copy of the show whenever
+    // the two servers titled it differently ("The Office" vs "The Office (US)").
+    const targets = enrichedItems.map((item) => ({
+      item,
+      target: {
+        parentTitle: (item.title as string | null) ?? null,
+        seriesKey: (item.seriesKey as string | null | undefined) ?? null,
+        type: ruleSet.type,
+      },
+    }));
+    const protectedGroups = await findExceptionProtectedGroups(
+      ruleSet.userId,
+      targets.map((t) => t.target),
+    );
+    if (protectedGroups.size > 0) {
+      const beforeCount = enrichedItems.length;
+      const filtered = targets
+        .filter(({ target }) => {
+          const key = protectionKey(target);
+          return !key || !protectedGroups.has(key);
+        })
+        .map(({ item }) => item);
+      if (filtered.length < beforeCount) {
         logger.info("Lifecycle", `Filtered ${beforeCount - filtered.length} excluded items from rule set "${ruleSet.name}"`);
         enrichedItems.length = 0;
         enrichedItems.push(...filtered);
@@ -421,36 +476,34 @@ export async function detectAndSaveMatches(
   // case collapse on the external id alone (only when an action is armed, so
   // collection-only rule sets keep one match per server copy), loading the id
   // for items the engine returned without external ids.
+  // Every match the rule set held before this run: the copy already matched
+  // stays a title's representative, a title carries over to another copy when
+  // the kept one stops matching (below), and the incremental write tells new,
+  // stale and refreshed matches apart from it.
+  const heldMatches = await prisma.ruleMatch.findMany({
+    where: { ruleSetId: ruleSet.id },
+    select: { mediaItemId: true, itemData: true },
+  });
+  const heldIds = new Set(heldMatches.map((m) => m.mediaItemId));
+
   if (ruleSet.serverIds.length > 1) {
-    const collapseWithoutArr = !arrData && ruleSet.actionEnabled && !!ruleSet.actionType;
-    const loadedKeys = new Map<string, string>();
-    if (collapseWithoutArr) {
-      const missing = enrichedItems
-        .filter((i) => !Array.isArray(i.externalIds))
-        .map((i) => i.id as string);
-      if (missing.length > 0) {
-        const rows = await prisma.mediaItemExternalId.findMany({
-          where: { mediaItemId: { in: missing }, source: arrIdSource },
-          select: { mediaItemId: true, externalId: true },
-        });
-        for (const r of rows) loadedKeys.set(r.mediaItemId, r.externalId);
-      }
-    }
+    const copyKeys = await crossServerCopyKeys(enrichedItems, {
+      type: ruleSet.type,
+      serverCount: ruleSet.serverIds.length,
+      arrData,
+      actionArmed: ruleSet.actionEnabled && !!ruleSet.actionType,
+    });
     const groups = new Map<string, Record<string, unknown>[]>();
     for (const item of enrichedItems) {
-      const arrId = item.arrId as number | null;
-      const externalIds = (item.externalIds ?? []) as Array<{ source: string; externalId: string }>;
-      const externalKey =
-        externalIds.find((e) => e.source === arrIdSource)?.externalId ??
-        loadedKeys.get(item.id as string);
-      if ((arrId == null && !collapseWithoutArr) || !externalKey) continue;
-      const group = groups.get(externalKey);
+      const key = copyKeys.get(item.id as string);
+      if (!key) continue;
+      const group = groups.get(key);
       if (group) group.push(item);
-      else groups.set(externalKey, [item]);
+      else groups.set(key, [item]);
     }
     const duplicated = [...groups.values()].filter((g) => g.length > 1);
     if (duplicated.length > 0) {
-      await collapseCopies(ruleSet.id, duplicated, episodeIdMap);
+      await collapseCopies(heldIds, duplicated, episodeIdMap);
       const kept = new Set(duplicated.map((g) => g[0]));
       const dropped = new Set(duplicated.flat().filter((i) => !kept.has(i)));
       logger.info(
@@ -462,6 +515,38 @@ export async function detectAndSaveMatches(
       enrichedItems.push(...deduped);
     }
   }
+
+  // Carry-over. A held match whose kept copy no longer matches, while a copy
+  // it had absorbed (`itemData.copies`) still does, is the SAME title still
+  // matching — the collapse above only sees copies that match in this run.
+  // Treated as a stale match plus a new one, it cancelled the pending action
+  // and scheduled a fresh one `actionDelayDays` out (restarting the countdown),
+  // and a sticky rule set kept both and armed two actions against one Arr
+  // record. The match and its PENDING action move to the copy instead.
+  const carried = new Map<string, Record<string, unknown>>();
+  if (ruleSet.serverIds.length > 1 && heldMatches.length > 0) {
+    const currentIds = new Set(enrichedItems.map((i) => i.id as string));
+    const heldByCopy = new Map<string, string>();
+    for (const m of heldMatches) {
+      if (currentIds.has(m.mediaItemId)) continue;
+      for (const copyId of copyIdsOf(m.itemData as Record<string, unknown>)) {
+        if (!heldByCopy.has(copyId)) heldByCopy.set(copyId, m.mediaItemId);
+      }
+    }
+    for (const item of enrichedItems) {
+      const id = item.id as string;
+      const from = heldByCopy.get(id);
+      if (!from || heldIds.has(id) || carried.has(from)) continue;
+      carried.set(from, item);
+    }
+    for (const [from, item] of carried) {
+      logger.info(
+        "Lifecycle",
+        `Carried match "${item.parentTitle ?? item.title}" in rule set "${ruleSet.name}" over from item ${from} to its copy ${item.id as string}, which still matches`,
+      );
+    }
+  }
+  const actionCarryOver = await planActionCarryOver(ruleSet.id, carried);
 
   const now = new Date();
 
@@ -476,9 +561,13 @@ export async function detectAndSaveMatches(
             ruleSetId: ruleSet.id,
             mediaItemId: item.id as string,
             itemData: jsonSafe(item),
+            copyIds: copyIdsOf(item),
             detectedAt: now,
           })),
         });
+      }
+      for (const { id, data } of actionCarryOver) {
+        await tx.lifecycleAction.updateMany({ where: { id, status: "PENDING" }, data });
       }
     });
 
@@ -487,18 +576,16 @@ export async function detectAndSaveMatches(
   }
 
   // Incremental: add new matches and remove stale ones
-  const existingMatches = await prisma.ruleMatch.findMany({
-    where: { ruleSetId: ruleSet.id },
-    select: { mediaItemId: true, itemData: true },
-  });
-  const existingIds = new Set(existingMatches.map((m) => m.mediaItemId));
+  const existingMatches = heldMatches;
+  const existingIds = heldIds;
   const existingDataMap = new Map(existingMatches.map((m) => [m.mediaItemId, m.itemData as Record<string, unknown>]));
   const currentIds = new Set(enrichedItems.map((item) => item.id as string));
+  const carriedTo = new Set([...carried.values()].map((item) => item.id as string));
 
   const newItems = enrichedItems.filter(
-    (item) => !existingIds.has(item.id as string)
+    (item) => !existingIds.has(item.id as string) && !carriedTo.has(item.id as string)
   );
-  const staleIds = [...existingIds].filter((id) => !currentIds.has(id));
+  const staleIds = [...existingIds].filter((id) => !currentIds.has(id) && !carried.has(id));
 
   // Matches this run already held whose derived members / servers / copies
   // changed — a copy appeared on another server, episodes were added or
@@ -516,13 +603,25 @@ export async function detectAndSaveMatches(
   // Atomic create + delete: a partial failure must not leave a half-updated
   // match set (e.g. new matches written but stale ones never removed).
   const removeStale = !ruleSet.stickyMatches && staleIds.length > 0;
-  if (newItems.length > 0 || removeStale || refreshed.length > 0) {
+  if (newItems.length > 0 || removeStale || refreshed.length > 0 || carried.size > 0) {
+    // updateMany, not update: a row removed since `heldMatches` was read (an
+    // exception filed, a manual Execute's cleanup) is simply skipped, where a
+    // P2025 would roll back every new match and stale removal in the batch.
     await prisma.$transaction([
       ...refreshed.map((item) =>
-        prisma.ruleMatch.update({
-          where: { ruleSetId_mediaItemId: { ruleSetId: ruleSet.id, mediaItemId: item.id as string } },
-          data: { itemData: jsonSafe(item) },
+        prisma.ruleMatch.updateMany({
+          where: { ruleSetId: ruleSet.id, mediaItemId: item.id as string },
+          data: { itemData: jsonSafe(item), copyIds: copyIdsOf(item) },
         }),
+      ),
+      ...[...carried].map(([from, item]) =>
+        prisma.ruleMatch.updateMany({
+          where: { ruleSetId: ruleSet.id, mediaItemId: from },
+          data: { mediaItemId: item.id as string, itemData: jsonSafe(item), copyIds: copyIdsOf(item) },
+        }),
+      ),
+      ...actionCarryOver.map(({ id, data }) =>
+        prisma.lifecycleAction.updateMany({ where: { id, status: "PENDING" }, data }),
       ),
       ...(newItems.length > 0
         ? [
@@ -531,6 +630,7 @@ export async function detectAndSaveMatches(
                 ruleSetId: ruleSet.id,
                 mediaItemId: item.id as string,
                 itemData: jsonSafe(item),
+                copyIds: copyIdsOf(item),
                 detectedAt: now,
               })),
               skipDuplicates: true,
@@ -616,7 +716,10 @@ export async function detectAndSaveMatches(
   const returnItems = ruleSet.stickyMatches
     ? [
         ...existingMatches.map(
-          (m) => refreshedById.get(m.mediaItemId) ?? (m.itemData as Record<string, unknown>),
+          (m) =>
+            carried.get(m.mediaItemId) ??
+            refreshedById.get(m.mediaItemId) ??
+            (m.itemData as Record<string, unknown>),
         ),
         ...newItems,
       ]

@@ -259,18 +259,12 @@ export class SeerrClient {
   }
 
   async getMovie(tmdbId: number, options: SeerrCallOptions = {}): Promise<SeerrMovieDetails> {
-    const config = callConfig(options);
-    const { data } = config
-      ? await this.client.get<SeerrMovieDetails>(`/api/v1/movie/${tmdbId}`, config)
-      : await this.client.get<SeerrMovieDetails>(`/api/v1/movie/${tmdbId}`);
+    const { data } = await this.client.get<SeerrMovieDetails>(`/api/v1/movie/${tmdbId}`, callConfig(options));
     return data;
   }
 
   async getTvShow(tmdbId: number, options: SeerrCallOptions = {}): Promise<SeerrTvDetails> {
-    const config = callConfig(options);
-    const { data } = config
-      ? await this.client.get<SeerrTvDetails>(`/api/v1/tv/${tmdbId}`, config)
-      : await this.client.get<SeerrTvDetails>(`/api/v1/tv/${tmdbId}`);
+    const { data } = await this.client.get<SeerrTvDetails>(`/api/v1/tv/${tmdbId}`, callConfig(options));
     return data;
   }
 
