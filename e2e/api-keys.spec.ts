@@ -18,6 +18,18 @@ test.describe("API keys", () => {
     await expect(page.getByRole("heading", { name: "API Keys" })).toBeVisible();
     await expect(page.getByText(/no api keys yet/i)).toBeVisible();
 
+    // ── OpenAPI document: viewable, downloadable, built for this address ──
+    const specHref = await page.getByRole("link", { name: /view openapi spec/i }).getAttribute("href");
+    const spec = await page.request.get(specHref!);
+    expect(spec.status()).toBe(200);
+    const doc = await spec.json();
+    expect(doc.openapi).toBe("3.1.0");
+    expect(doc.servers[0].url).toBe(`${baseURL}/api/v1`);
+    expect(doc.paths["/me"].get["x-scope"]).toBeNull();
+    const downloadHref = await page.getByRole("link", { name: /^download$/i }).getAttribute("href");
+    const file = await page.request.get(downloadHref!);
+    expect(file.headers()["content-disposition"]).toContain("librariarr-openapi.json");
+
     // ── Create ──
     await page.getByRole("button", { name: /create api key/i }).click();
     const dialog = page.getByRole("dialog");

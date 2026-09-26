@@ -33,6 +33,7 @@ vi.mock("@/lib/version/update-checker", () => ({
 }));
 
 import * as me from "@/app/api/v1/me/route";
+import * as openapi from "@/app/api/v1/openapi.json/route";
 import * as systemInfo from "@/app/api/v1/system/info/route";
 import * as servers from "@/app/api/v1/servers/route";
 import * as serverSync from "@/app/api/v1/servers/[id]/sync/route";
@@ -90,6 +91,7 @@ interface RouteCase {
 // 401/403.
 const ROUTES: RouteCase[] = [
   { label: "GET /me", handler: me.GET, method: "GET", scope: null, status: 200 },
+  { label: "GET /openapi.json", handler: openapi.GET, method: "GET", scope: null, status: 200 },
   { label: "GET /system/info", handler: systemInfo.GET, method: "GET", scope: "system:read", status: 200 },
   { label: "GET /servers", handler: servers.GET, method: "GET", scope: "servers:read", status: 200 },
   { label: "POST /servers/[id]/sync", handler: serverSync.POST, method: "POST", scope: "sync:write", params: { id: "missing" }, status: 404 },

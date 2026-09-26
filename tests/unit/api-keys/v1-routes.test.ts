@@ -35,6 +35,7 @@ const EXPECTED = [
   "POST /api/v1/jobs/execution lifecycle:execute",
   "POST /api/v1/jobs/sync sync:write",
   "GET /api/v1/me (any valid key)",
+  "GET /api/v1/openapi.json (any valid key)",
   "GET /api/v1/media/[id] media:read",
   "GET /api/v1/media/[id]/image media:read",
   "GET /api/v1/media/[id]/plays media:read",

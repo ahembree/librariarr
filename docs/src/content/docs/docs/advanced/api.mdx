@@ -79,6 +79,10 @@ A **read-only** key has every `:read` scope. Every `GET` endpoint needs a read s
   Only grant `lifecycle:execute` to an application you trust to delete media. `POST /api/v1/lifecycle/actions/execute` runs a rule set's action straight away, like the **Execute** button on the **Pending** page, without waiting for the scheduled date. The [deletion ceiling](/docs/features/deletion-safety/) is counted per request, so it limits each call but not a client that makes many. Removing an exception needs this scope too: an exception is what stops your rules from matching an item, so removing one can lead to that item being deleted.
 </Aside>
 
+## OpenAPI document
+
+Librariarr describes this API in an OpenAPI 3.1 document, generated from the running version — it is never a file that can fall behind the code. Under **Settings → Authentication → API Keys**, **View OpenAPI spec** opens it and **Download** saves it as `librariarr-openapi.json`, for Swagger UI, Postman, Insomnia or a client generator. Applications can fetch the same document with any valid key from `GET /api/v1/openapi.json`. Every operation carries an `x-scope` naming the scope its key needs, and the `servers` URL is the address you fetched it from.
+
 ## Endpoints
 
 Most endpoints are the same routes the web app uses, served under `/api/v1`: they take the same query parameters and bodies and return the same JSON. Paths with `{id}` take a Librariarr id, as returned by the listing endpoints.
@@ -88,6 +92,7 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
 | `GET` | `/api/v1/me` | any valid key | The calling key: `id`, `name`, `prefix`, `scopes`, `expiresAt`, `createdAt`, `lastUsedAt` |
+| `GET` | `/api/v1/openapi.json` | any valid key | This API's OpenAPI 3.1 document |
 
 ### Library (`media:read`)
 

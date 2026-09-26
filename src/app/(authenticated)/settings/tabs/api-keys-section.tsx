@@ -7,7 +7,9 @@ import {
   AlertTriangle,
   Check,
   Copy,
+  Download,
   Eye,
+  FileJson,
   KeySquare,
   Loader2,
   Plus,
@@ -251,10 +253,25 @@ export function ApiKeysSection({ hasPassword }: { hasPassword: boolean }) {
         </>
       }
       action={
-        <Button ref={createButtonRef} size="sm" onClick={openCreate} disabled={keys === null && !loadError}>
-          <Plus className="mr-1.5 h-4 w-4" />
-          Create API Key
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Built per request from the route table, so it is never stale. */}
+          <Button variant="outline" size="sm" asChild>
+            <a href="/api/settings/api-keys/openapi" target="_blank" rel="noopener noreferrer">
+              <FileJson className="mr-1.5 h-4 w-4" />
+              View OpenAPI spec
+            </a>
+          </Button>
+          <Button variant="outline" size="sm" asChild>
+            <a href="/api/settings/api-keys/openapi?download=1" download="librariarr-openapi.json">
+              <Download className="mr-1.5 h-4 w-4" />
+              Download
+            </a>
+          </Button>
+          <Button ref={createButtonRef} size="sm" onClick={openCreate} disabled={keys === null && !loadError}>
+            <Plus className="mr-1.5 h-4 w-4" />
+            Create API Key
+          </Button>
+        </div>
       }
       contentClassName="space-y-3"
     >
