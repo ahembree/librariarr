@@ -112,7 +112,7 @@ Users can choose from 7 accent colors in Settings. Each overrides `--primary`, `
 
 ## Typography
 
-Three font families, each serving a distinct role. They are Google Fonts families, but the app ships its own copies (`src/app/fonts/`, loaded with `next/font/local`) — `next build` never contacts Google, so a change or outage there cannot break a build. To add a weight or a family, add the variable font file there and a `localFont()` call in `src/app/layout.tsx`; see `src/app/fonts/README.md` for how the files are produced.
+Three font families, each serving a distinct role. They are Google Fonts families, but the app ships its own copies (`src/app/fonts/`, loaded with `next/font/local`) — `next build` never contacts Google, so a change or outage there cannot break a build. Each file is the family's variable font, so a weight within its axis needs no new file — widen that family's `weight` range in `src/app/layout.tsx`. A new family needs its variable font file there and its own `localFont()` call; see `src/app/fonts/README.md` for how the files are produced.
 
 ### Sora (Display)
 
@@ -139,7 +139,7 @@ A geometric humanist sans-serif — warm, readable at small sizes, and well-suit
 ### JetBrains Mono (Monospace)
 
 **Usage:** System log messages, code blocks, technical data.
-**Weights:** 400, 500
+**Weights:** 400, 500, 600
 **CSS variable:** `--font-mono`
 **Tailwind class:** `font-mono`
 
