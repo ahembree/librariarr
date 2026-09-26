@@ -84,7 +84,8 @@ export const API_SCOPE_INFO: Record<ApiScope, ApiScopeInfo> = {
   },
   "streams:read": {
     label: "Read streams",
-    description: "Active playback sessions and maintenance mode status.",
+    description:
+      "Active playback sessions — who is watching, on which device and from which address — and maintenance mode status.",
     access: "read",
   },
   "streams:write": {

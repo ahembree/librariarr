@@ -413,6 +413,17 @@ describe("/api/v1 authentication guard", () => {
       }
     });
 
+    it("counts a limit=0 listing as twenty requests against the key's budget", async () => {
+      const user = await createTestUser();
+      const { key } = await createTestApiKey(user.id, { scopes: ["servers:read"] });
+      // 600 a minute at 20 apiece: thirty full listings, then nothing.
+      for (let i = 0; i < 30; i++) {
+        await expectJson(await callRoute(serversGET, { url: "/api/v1/servers?limit=0", headers: withKey(key) }), 200);
+      }
+      await expectJson(await callRoute(serversGET, { url: "/api/v1/servers?limit=0", headers: withKey(key) }), 429);
+      await expectJson(await callRoute(serversGET, { headers: withKey(key) }), 429);
+    });
+
     it("never logs the presented key", async () => {
       const deadKey = generateApiKey().key;
       await callRoute(meGET, { headers: withKey(deadKey) });

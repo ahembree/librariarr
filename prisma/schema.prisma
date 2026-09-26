@@ -78,6 +78,9 @@ model AppSettings {
   discordWebhookUsername          String?
   discordWebhookAvatarUrl         String?
   discordNotifyMaintenance        Boolean   @default(false)
+  /// Tell Discord when an API key is created or deleted — a stolen browser
+  /// session can mint one, so on by default wherever a webhook is set.
+  discordNotifyApiKeys            Boolean   @default(true)
   localAuthEnabled                Boolean   @default(false)
   // Allow signing in with Plex from the login page. When false, the Plex
   // button is hidden and /api/auth/plex/token rejects logins — but the

@@ -132,7 +132,7 @@ function isExpired(key: ApiKeyRow): boolean {
   return !!key.expiresAt && new Date(key.expiresAt).getTime() <= Date.now();
 }
 
-export function ApiKeysSection() {
+export function ApiKeysSection({ hasPassword }: { hasPassword: boolean }) {
   const [keys, setKeys] = useState<ApiKeyRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
@@ -295,6 +295,7 @@ export function ApiKeysSection() {
         open={createOpen}
         onOpenChange={setCreateOpen}
         existingNames={keys?.map((k) => k.name) ?? []}
+        hasPassword={hasPassword}
         returnFocusTo={createButtonRef}
         onCreated={(created) => {
           // Shown at once; the refresh then fills in anything this list was
@@ -379,9 +380,24 @@ function ApiKeyListItem({ apiKey, onDelete }: { apiKey: ApiKeyRow; onDelete: () 
             ? `${expired ? "Expired" : "Expires"} ${formatDate(apiKey.expiresAt)}`
             : "Never expires"}
           {" · "}
-          {apiKey.lastUsedAt
-            ? `Last used ${formatRelativeDate(apiKey.lastUsedAt)}${apiKey.lastUsedIp ? ` from ${apiKey.lastUsedIp}` : ""}`
-            : "Never used"}
+          {apiKey.lastUsedAt ? (
+            <>
+              Last used {formatRelativeDate(apiKey.lastUsedAt)}
+              {apiKey.lastUsedIp && (
+                <>
+                  {" from "}
+                  <span
+                    className="cursor-help underline decoration-dotted underline-offset-2"
+                    title="The address your reverse proxy reported for the last request. Without a trusted proxy in front of Librariarr this is whatever the client claimed — see TRUST_PROXY_HEADERS."
+                  >
+                    {apiKey.lastUsedIp}
+                  </span>
+                </>
+              )}
+            </>
+          ) : (
+            "Never used"
+          )}
         </p>
         <div className="flex flex-wrap gap-1">
           {apiKey.scopes.map((scope) => (
@@ -435,6 +451,7 @@ function CreateApiKeyDialog({
   open,
   onOpenChange,
   existingNames,
+  hasPassword,
   returnFocusTo,
   onCreated,
   onListStale,
@@ -442,6 +459,8 @@ function CreateApiKeyDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   existingNames: string[];
+  /** The account has a local password, which creating a key must confirm. */
+  hasPassword: boolean;
   /** Focused once the dialog has closed. */
   returnFocusTo: RefObject<HTMLButtonElement | null>;
   onCreated: (apiKey: ApiKeyRow) => void;
@@ -453,6 +472,8 @@ function CreateApiKeyDialog({
   const [selected, setSelected] = useState<Set<ApiScope>>(new Set());
   const [expiry, setExpiry] = useState<ExpiryChoice>("90");
   const [customDate, setCustomDate] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [passwordError, setPasswordError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The plaintext key, held only while the reveal step is on screen.
@@ -480,6 +501,8 @@ function CreateApiKeyDialog({
     setSelected(new Set());
     setExpiry("90");
     setCustomDate("");
+    setCurrentPassword("");
+    setPasswordError(null);
     setSaving(false);
     setError(null);
     setRevealedKey(null);
@@ -519,7 +542,12 @@ function CreateApiKeyDialog({
       : null;
   const expiresAt = resolveExpiry(expiry, customDate);
   const canCreate =
-    nameProblem === null && !duplicateName && scopes.length > 0 && expiresAt !== undefined && !saving;
+    nameProblem === null &&
+    !duplicateName &&
+    scopes.length > 0 &&
+    expiresAt !== undefined &&
+    (!hasPassword || currentPassword.length > 0) &&
+    !saving;
 
   const toggleScope = (scope: ApiScope, checked: boolean) => {
     setError(null);
@@ -563,7 +591,12 @@ function CreateApiKeyDialog({
       const res = await fetch("/api/settings/api-keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: trimmedName, scopes, expiresAt: expiresAtNow }),
+        body: JSON.stringify({
+          name: trimmedName,
+          scopes,
+          expiresAt: expiresAtNow,
+          ...(hasPassword && { currentPassword }),
+        }),
       });
       const data = await res.json().catch(() => null);
       if (res.ok && typeof data?.key === "string" && data?.apiKey) {
@@ -582,6 +615,16 @@ function CreateApiKeyDialog({
       }
       // A clash with a key this list has not seen (made in another tab).
       if (res.status === 409) onListStale();
+      if (data?.code === "password_incorrect") {
+        setCurrentPassword("");
+        setPasswordError("That password is not correct.");
+        return;
+      }
+      if (data?.code === "password_required") {
+        // A password was set since this page loaded.
+        setError("This account now has a password. Reload the page, then enter it here to create the key.");
+        return;
+      }
       setError(saveErrorMessage(data, "Failed to create API key"));
     } catch {
       setError(
@@ -871,6 +914,34 @@ function CreateApiKeyDialog({
                   )
                 )}
               </div>
+
+              {hasPassword && (
+                <div className="space-y-1">
+                  <Label htmlFor="api-key-current-password">Current password</Label>
+                  <Input
+                    id="api-key-current-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={currentPassword}
+                    onChange={(e) => {
+                      setPasswordError(null);
+                      setError(null);
+                      setCurrentPassword(e.target.value);
+                    }}
+                    aria-invalid={passwordError ? true : undefined}
+                    aria-describedby={passwordError ? "api-key-current-password-error" : "api-key-current-password-hint"}
+                  />
+                  {passwordError ? (
+                    <p id="api-key-current-password-error" className="text-xs text-destructive">
+                      {passwordError}
+                    </p>
+                  ) : (
+                    <p id="api-key-current-password-hint" className="text-xs text-muted-foreground">
+                      A key keeps working after you sign out, so creating one confirms it is you.
+                    </p>
+                  )}
+                </div>
+              )}
 
               {error && (
                 <div role="alert" className="flex items-start gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">

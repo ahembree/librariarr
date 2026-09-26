@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { notifyApiKeyChange } from "@/lib/api-keys/notify";
 
 /**
  * Delete (revoke) an API key. The `/api/v1` guard looks keys up on every
@@ -21,7 +22,7 @@ export async function DELETE(
 
   const apiKey = await prisma.apiKey.findFirst({
     where: { id, userId: session.userId! },
-    select: { id: true, name: true, prefix: true },
+    select: { id: true, name: true, prefix: true, scopes: true, expiresAt: true },
   });
   if (!apiKey) {
     return NextResponse.json({ error: "API key not found" }, { status: 404 });
@@ -37,6 +38,7 @@ export async function DELETE(
   }
 
   logger.info("Auth", `API key "${apiKey.name}" (${apiKey.prefix}…) deleted — access revoked`);
+  void notifyApiKeyChange(session.userId!, "deleted", apiKey);
 
   return NextResponse.json({ success: true });
 }

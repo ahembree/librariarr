@@ -16,6 +16,12 @@ export interface SessionData {
   plexToken?: string;
   isLoggedIn: boolean;
   sessionVersion?: number;
+  /**
+   * When this login happened (epoch ms), stamped by `rotateSession()` and so
+   * by every login path. Read by actions that want a RECENT login rather than
+   * any login — creating an API key on an account with no local password.
+   */
+  authenticatedAt?: number;
   // Transient SSO OIDC handshake state — present only between the redirect to
   // the IdP and the callback. Cleared once the callback consumes them.
   oidcState?: string;
@@ -268,7 +274,9 @@ export async function rotateSession(): Promise<IronSession<SessionData>> {
   const options = await getRequestSessionOptions();
   const previous = await getIronSession<SessionData>(cookieStore, options);
   previous.destroy();
-  return getIronSession<SessionData>(cookieStore, options);
+  const fresh = await getIronSession<SessionData>(cookieStore, options);
+  fresh.authenticatedAt = Date.now();
+  return fresh;
 }
 
 /**

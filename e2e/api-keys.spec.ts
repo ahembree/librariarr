@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { ADMIN } from "./constants";
 
 /**
  * API keys, end to end: issued from Settings → Authentication, shown exactly
@@ -22,7 +23,16 @@ test.describe("API keys", () => {
     const dialog = page.getByRole("dialog");
     await dialog.getByLabel("Name").fill("E2E dashboard");
     await expect(dialog.getByRole("radio", { name: /read-only/i })).toHaveAttribute("aria-checked", "true");
-    await dialog.getByRole("button", { name: /create key/i }).click();
+    // Creating a key is a step up from being signed in: the admin has a
+    // password, so the dialog asks for it, and a wrong one is refused.
+    const createButton = dialog.getByRole("button", { name: /create key/i });
+    await expect(createButton).toBeDisabled();
+    await dialog.getByLabel("Current password").fill("not-the-password");
+    await createButton.click();
+    await expect(dialog.getByText(/that password is not correct/i)).toBeVisible();
+    await expect(page.locator("body")).not.toContainText(/lbr_[0-9A-Za-z]{43}/);
+    await dialog.getByLabel("Current password").fill(ADMIN.password);
+    await createButton.click();
 
     // ── Shown once ──
     const keyField = dialog.getByRole("textbox", { name: "API key", exact: true });
@@ -80,6 +90,7 @@ test.describe("API keys", () => {
     await expect(dialog.getByLabel(/read servers/i)).toBeDisabled();
     await dialog.getByLabel("Expiration").click();
     await page.getByRole("option", { name: "7 days" }).click();
+    await dialog.getByLabel("Current password").fill(ADMIN.password);
     await dialog.getByRole("button", { name: /create key/i }).click();
 
     const key = await dialog.getByRole("textbox", { name: "API key", exact: true }).inputValue();

@@ -178,6 +178,7 @@ export const discordSettingsSchema = z.object({
   webhookUsername: z.string().max(80).optional(),
   webhookAvatarUrl: z.string().optional().transform((v) => v || undefined).pipe(z.string().url().optional()),
   notifyMaintenance: z.boolean().optional(),
+  notifyApiKeys: z.boolean().optional(),
 });
 
 export const discordTestSchema = z.object({
@@ -250,10 +251,15 @@ export const transcodeManagerSchema = z.object({
   exemptHardware: z.boolean().optional(),
 });
 
+// Bounded because the public API reaches this: the message is pushed to every
+// targeted player, and an unbounded list is an unbounded amount of work.
 export const terminateSessionSchema = z.object({
   serverId: z.string().min(1, "Server ID is required"),
-  sessionIds: z.array(z.string()).optional(),
-  message: z.string().min(1, "Message is required"),
+  sessionIds: z.array(z.string()).max(200, "At most 200 sessions per request").optional(),
+  message: z
+    .string()
+    .min(1, "Message is required")
+    .max(500, "Message must be 500 characters or fewer"),
 });
 
 // Note: cross-field rules (one_time needs dates; recurring needs days + HH:mm
@@ -452,6 +458,7 @@ export const actionExecuteSchema = z.object({
   mediaItemIds: z
     .array(z.string().min(1))
     .min(1, "Pass at least one media item id, or omit mediaItemIds to execute every match")
+    .max(1000, "At most 1000 media item ids per request; omit mediaItemIds to execute every match")
     .optional(),
 });
 
@@ -475,25 +482,33 @@ export const collectionSyncSchema = z.object({
   collectionId: z.string().min(1, "Collection ID is required"),
 });
 
+// Bounded because the public API reaches these: a reason is free text stored
+// per row, and an id list is one query per id.
+const exceptionReasonSchema = z.string().max(1000, "Reason must be 1000 characters or fewer");
+const exceptionIdsSchema = z
+  .array(z.string().min(1))
+  .min(1, "At least one ID is required")
+  .max(1000, "At most 1000 IDs per request");
+
 export const exceptionCreateSchema = z.object({
   mediaItemId: z.string().min(1, "Media item ID is required"),
-  reason: z.string().optional(),
+  reason: exceptionReasonSchema.optional(),
   scope: z
     .enum(["individual", "series", "artist", "album"])
     .default("individual"),
 });
 
 export const exceptionUpdateSchema = z.object({
-  reason: z.string().optional(),
+  reason: exceptionReasonSchema.optional(),
 });
 
 export const exceptionBulkDeleteSchema = z.object({
-  ids: z.array(z.string().min(1)).min(1, "At least one ID is required"),
+  ids: exceptionIdsSchema,
 });
 
 export const exceptionBulkUpdateSchema = z.object({
-  ids: z.array(z.string().min(1)).min(1, "At least one ID is required"),
-  reason: z.string().optional(),
+  ids: exceptionIdsSchema,
+  reason: exceptionReasonSchema.optional(),
 });
 
 // ─── Auth schemas ───
@@ -540,6 +555,13 @@ export const apiKeyCreateSchema = z.object({
   expiresAt: z.iso
     .datetime({ offset: true, error: "Expiration must be an ISO 8601 date-time" })
     .nullable(),
+  /**
+   * The account's current password, required by the route when the account
+   * has one: a key outlives the browser session that mints it, so minting is
+   * confirmed by something a stolen cookie does not carry. Bounded like a
+   * login password; never trimmed.
+   */
+  currentPassword: z.string().max(200).optional(),
 });
 
 /**

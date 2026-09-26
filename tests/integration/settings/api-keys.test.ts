@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { createHash } from "node:crypto";
+import bcrypt from "bcryptjs";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
@@ -21,11 +22,18 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+const { mockSendDiscord } = vi.hoisted(() => ({ mockSendDiscord: vi.fn() }));
+vi.mock("@/lib/discord/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/discord/client")>()),
+  sendDiscordNotification: mockSendDiscord,
+}));
+
 import { GET, POST } from "@/app/api/settings/api-keys/route";
 import { DELETE } from "@/app/api/settings/api-keys/[id]/route";
 import { GET as meGET } from "@/app/api/v1/me/route";
 import { API_KEY_PATTERN } from "@/lib/api-keys/keys";
-import { MAX_API_KEYS } from "@/lib/api-keys/manage";
+import { API_KEY_CREATE_REAUTH_WINDOW_MS, MAX_API_KEYS } from "@/lib/api-keys/manage";
+import { authGlobalRateLimiter, authRateLimiter } from "@/lib/rate-limit/rate-limiter";
 import { READ_ONLY_SCOPES } from "@/lib/api-keys/scopes";
 
 const prisma = getTestPrisma();
@@ -43,9 +51,12 @@ interface ApiKeyDto {
 
 const inDays = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString();
 
-async function login() {
+// A Plex-only account (no local password) signed in just now — the state in
+// which creating a key needs nothing more. Password and stale-login cases are
+// under "step-up" below.
+async function login(authenticatedAt: number | undefined = Date.now()) {
   const user = await createTestUser();
-  setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+  setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok", authenticatedAt });
   return user;
 }
 
@@ -310,6 +321,147 @@ describe("/api/settings/api-keys", () => {
       const kept = await createTestApiKey(user.id, { name: "kept" });
       await expectJson(await callRouteWithParams(DELETE, { id: doomed.row.id }, { method: "DELETE" }), 200);
       await expectJson(await callMe(kept.key), 200);
+    });
+  });
+
+  describe("POST — step-up", () => {
+    const PASSWORD = "correct horse battery staple";
+    const stores = () =>
+      [authRateLimiter, authGlobalRateLimiter].map(
+        (l) => (l as unknown as { store: Map<string, unknown> }).store,
+      );
+
+    afterEach(() => {
+      for (const store of stores()) store.clear();
+    });
+
+    async function loginWithPassword() {
+      const user = await login(Date.now() - 2 * API_KEY_CREATE_REAUTH_WINDOW_MS);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { passwordHash: bcrypt.hashSync(PASSWORD, 4) },
+      });
+      return user;
+    }
+
+    const body = (extra: Record<string, unknown> = {}) => ({
+      name: "Dash",
+      scopes: ["media:read"],
+      expiresAt: null,
+      ...extra,
+    });
+
+    it("an account with a password must give it, and a wrong one creates nothing", async () => {
+      await loginWithPassword();
+      const missing = await expectJson<{ code: string }>(await create(body()), 400);
+      expect(missing.code).toBe("password_required");
+      const wrong = await expectJson<{ code: string }>(await create(body({ currentPassword: "nope" })), 403);
+      expect(wrong.code).toBe("password_incorrect");
+      expect(await prisma.apiKey.count()).toBe(0);
+      await expectJson(await create(body({ currentPassword: PASSWORD })), 201);
+      expect(await prisma.apiKey.count()).toBe(1);
+    });
+
+    it("a wrong password costs what a failed login does — even the right one is refused after ten", async () => {
+      await loginWithPassword();
+      for (let i = 0; i < 10; i++) {
+        await expectJson(await create(body({ currentPassword: "nope" })), 403);
+      }
+      const limited = await create(body({ currentPassword: PASSWORD }));
+      expect(limited.status).toBe(429);
+      expect(limited.headers.get("retry-after")).toBeTruthy();
+      expect(await prisma.apiKey.count()).toBe(0);
+    });
+
+    it("correct passwords are never counted against the budget", async () => {
+      await loginWithPassword();
+      for (let i = 0; i < 12; i++) {
+        await expectJson(await create(body({ name: `k${i}`, currentPassword: PASSWORD })), 201);
+      }
+    });
+
+    it("an account without a password needs a login from the last window", async () => {
+      await login(Date.now() - API_KEY_CREATE_REAUTH_WINDOW_MS - 1000);
+      const stale = await expectJson<{ code: string; error: string }>(await create(body()), 403);
+      expect(stale.code).toBe("reauth_required");
+      expect(stale.error).toMatch(/sign out, sign back in/i);
+      expect(await prisma.apiKey.count()).toBe(0);
+
+      // A session with no login stamp at all (one from before the stamp existed).
+      const unstamped = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: unstamped.id, plexToken: "tok" });
+      expect((await create(body())).status).toBe(403);
+
+      await login(Date.now() - 1000);
+      await expectJson(await create(body()), 201);
+    });
+
+    it("ignores a password sent for an account that has none", async () => {
+      await login();
+      await expectJson(await create(body({ currentPassword: "anything" })), 201);
+    });
+  });
+
+  describe("Discord notifications", () => {
+    beforeEach(() => {
+      mockSendDiscord.mockReset();
+      mockSendDiscord.mockResolvedValue({ ok: true });
+    });
+
+    async function loginWithWebhook(notifyApiKeys = true) {
+      const user = await login();
+      await prisma.appSettings.create({
+        data: {
+          userId: user.id,
+          discordWebhookUrl: "https://discord.com/api/webhooks/1/abc",
+          discordWebhookUsername: "Bot",
+          discordNotifyApiKeys: notifyApiKeys,
+        },
+      });
+      return user;
+    }
+
+    it("announces a created key — name, prefix, scopes and expiry, never the key", async () => {
+      await loginWithWebhook();
+      const res = await create({ name: "n8n", scopes: ["sync:write"], expiresAt: null });
+      const { key, apiKey } = await expectJson<{ key: string; apiKey: ApiKeyDto }>(res, 201);
+
+      await vi.waitFor(() => expect(mockSendDiscord).toHaveBeenCalledTimes(1));
+      const [url, payload] = mockSendDiscord.mock.calls[0] as [string, { username: string; embeds: Array<Record<string, unknown>> }];
+      expect(url).toBe("https://discord.com/api/webhooks/1/abc");
+      expect(payload.username).toBe("Bot");
+      expect(payload.embeds[0].title).toBe("API Key Created");
+      const text = JSON.stringify(payload);
+      expect(text).toContain("n8n");
+      expect(text).toContain(`${apiKey.prefix}…`);
+      expect(text).toContain("servers:read, sync:write");
+      expect(text).not.toContain(key);
+    });
+
+    it("announces a deleted key", async () => {
+      const user = await loginWithWebhook();
+      const { row } = await createTestApiKey(user.id, { name: "Old bot" });
+      await expectJson(await callRouteWithParams(DELETE, { id: row.id }, { method: "DELETE" }), 200);
+      await vi.waitFor(() => expect(mockSendDiscord).toHaveBeenCalledTimes(1));
+      const [, payload] = mockSendDiscord.mock.calls[0] as [string, { embeds: Array<Record<string, unknown>> }];
+      expect(payload.embeds[0].title).toBe("API Key Deleted");
+      expect(JSON.stringify(payload)).toContain("Old bot");
+    });
+
+    it("stays quiet when the toggle is off, or no webhook is set", async () => {
+      await loginWithWebhook(false);
+      await expectJson(await create({ name: "quiet", scopes: ["media:read"], expiresAt: null }), 201);
+      await login();
+      await expectJson(await create({ name: "no webhook", scopes: ["media:read"], expiresAt: null }), 201);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(mockSendDiscord).not.toHaveBeenCalled();
+    });
+
+    it("a failing webhook never fails the request", async () => {
+      await loginWithWebhook();
+      mockSendDiscord.mockRejectedValue(new Error("discord down"));
+      await expectJson(await create({ name: "still made", scopes: ["media:read"], expiresAt: null }), 201);
+      await vi.waitFor(() => expect(mockSendDiscord).toHaveBeenCalled());
     });
   });
 });

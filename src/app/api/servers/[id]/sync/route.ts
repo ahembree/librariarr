@@ -41,6 +41,11 @@ export async function POST(
   } catch {
     // No body or invalid JSON — sync all enabled libraries
   }
+  // A library key is a short server-side id; anything longer is not one, and
+  // this route is reachable by API key.
+  if (libraryKey && libraryKey.length > 200) {
+    return NextResponse.json({ error: "Invalid libraryKey" }, { status: 400 });
+  }
 
   if (libraryKey) {
     const library = await prisma.library.findFirst({

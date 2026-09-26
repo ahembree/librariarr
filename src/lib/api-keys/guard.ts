@@ -6,6 +6,7 @@ import {
   apiKeyCredentialFailureLimiter,
   apiKeyFailureLogLimiter,
   apiKeyRequestLimiter,
+  apiKeyUnknownLookupFloor,
   getClientIp,
 } from "@/lib/rate-limit/rate-limiter";
 import {
@@ -27,7 +28,10 @@ import { isApiScope, type ApiScope } from "./scopes";
  *      a cookie, so a logged-in browser cannot be made to call the API (no
  *      ambient credential means no CSRF);
  *   3. looks it up by SHA-256 hash, on every request — nothing is cached, so a
- *      deleted key stops working on its very next request;
+ *      deleted key stops working on its very next request (a credential that
+ *      has NOT authenticated recently is looked up only while the unknown-key
+ *      floor has budget, so a flood of random keys cannot turn into a flood
+ *      of lookups);
  *   4. rejects an expired key, then a key lacking the handler's scope;
  *   5. runs the handler as the key's owner (`runAsApiKey`), which is how a
  *      handler shared with the app's own UI sees an authenticated user.
@@ -49,6 +53,27 @@ const KEY_QUERY_PARAMS = new Set(["api_key", "apikey", "api-key", "x-api-key", "
 
 /** How stale `lastUsedAt` may get before a request refreshes it. */
 const LAST_USED_WRITE_INTERVAL_MS = 60 * 1000;
+
+/**
+ * Credentials that authenticated in the last 15 minutes, by hash. This is NOT
+ * an authentication cache — every request still looks its key up, so deleting
+ * a key still revokes it on the next one. It only exempts a key in active use
+ * from `apiKeyUnknownLookupFloor`, so that a flood of random keys can shut out
+ * at most keys that have been idle longer, and only while the flood lasts.
+ * Bounded far above the 50 keys that can exist.
+ */
+const RECENTLY_VALID_TTL_MS = 15 * 60 * 1000;
+const MAX_RECENTLY_VALID = 1000;
+const recentlyValid = new Map<string, number>();
+const UNKNOWN_LOOKUPS = "unknown-lookups";
+
+/**
+ * What one `limit=0` listing costs against the per-key request budget. It
+ * returns a whole library — tens of MB, gzipped — where an ordinary page is
+ * 50 rows, so counted as one request a leaked read-only key could pull the
+ * library 600 times a minute.
+ */
+export const FULL_LISTING_REQUEST_COST = 20;
 
 /**
  * A valid key refused for its scope or its request budget is logged at WARN —
@@ -154,6 +179,11 @@ export async function authenticateApiKey(
 
   if (!isWellFormedApiKey(credential.key)) return invalid("not a Librariarr API key");
 
+  if (!isRecentlyValid(keyHash)) {
+    const floor = apiKeyUnknownLookupFloor.peek(UNKNOWN_LOOKUPS);
+    if (floor.limited) return tooManyRequests(floor.retryAfterMs);
+  }
+
   let row: {
     id: string;
     userId: string;
@@ -183,6 +213,13 @@ export async function authenticateApiKey(
   }
 
   if (!row) {
+    // The budget's last lookup; every later unknown key is refused above.
+    if (apiKeyUnknownLookupFloor.check(UNKNOWN_LOOKUPS).remaining === 0) {
+      warnOnce(
+        UNKNOWN_LOOKUPS,
+        `${apiKeyUnknownLookupFloor.maxAttempts} unrecognised API keys were presented within a minute — refusing any further key not used successfully in the last 15 minutes until the minute is up`,
+      );
+    }
     return invalid(
       `unknown key ${credential.key.slice(0, API_KEY_DISPLAY_PREFIX_LENGTH)}… (deleted, or never issued)`,
     );
@@ -192,8 +229,9 @@ export async function authenticateApiKey(
   if (row.expiresAt && row.expiresAt.getTime() <= now.getTime()) {
     return invalid(`API key "${row.name}" (${row.prefix}…) has expired`, "API key has expired");
   }
+  rememberValid(keyHash);
 
-  const rate = apiKeyRequestLimiter.check(row.id);
+  const rate = apiKeyRequestLimiter.check(row.id, requestCost(request));
   if (rate.limited) {
     warnOnce(
       `rate:${row.id}`,
@@ -229,6 +267,36 @@ export async function authenticateApiKey(
       scopes,
     },
   };
+}
+
+function isRecentlyValid(keyHash: string): boolean {
+  const until = recentlyValid.get(keyHash);
+  if (until === undefined) return false;
+  if (until <= Date.now()) {
+    recentlyValid.delete(keyHash);
+    return false;
+  }
+  return true;
+}
+
+function rememberValid(keyHash: string): void {
+  const now = Date.now();
+  if (!recentlyValid.has(keyHash) && recentlyValid.size >= MAX_RECENTLY_VALID) {
+    for (const [hash, until] of recentlyValid) if (until <= now) recentlyValid.delete(hash);
+    if (recentlyValid.size >= MAX_RECENTLY_VALID) {
+      const oldest = recentlyValid.keys().next().value;
+      if (oldest !== undefined) recentlyValid.delete(oldest);
+    }
+  }
+  // Re-inserted so insertion order is last-use order for the eviction above.
+  recentlyValid.delete(keyHash);
+  recentlyValid.set(keyHash, now + RECENTLY_VALID_TTL_MS);
+}
+
+/** Charged against the per-key budget: 1, or `FULL_LISTING_REQUEST_COST` for a `limit=0` read. */
+function requestCost(request: NextRequest): number {
+  if (request.method !== "GET" && request.method !== "HEAD") return 1;
+  return request.nextUrl.searchParams.get("limit") === "0" ? FULL_LISTING_REQUEST_COST : 1;
 }
 
 function urlCarriesKey(url: URL): boolean {

@@ -5,6 +5,9 @@ import {
   checkRateLimit,
   checkAuthRateLimit,
   authGlobalRateLimiter,
+  authRateLimiter,
+  peekAuthRateLimit,
+  recordAuthFailure,
 } from "@/lib/rate-limit/rate-limiter";
 
 describe("RateLimiter", () => {
@@ -352,5 +355,67 @@ describe("checkAuthRateLimit — global floor", () => {
     const res = checkAuthRateLimit(again, "bucket-a");
     expect(res?.status).toBe(429);
     expect(res?.headers.get("Retry-After")).toBeTruthy();
+  });
+});
+
+describe("RateLimiter.check with a cost", () => {
+  it("charges one call as several attempts", () => {
+    const limiter = new RateLimiter(10, 60_000);
+    expect(limiter.check("k", 4)).toEqual({ limited: false, remaining: 6 });
+    expect(limiter.check("k", 4)).toEqual({ limited: false, remaining: 2 });
+    expect(limiter.check("k", 4).limited).toBe(true);
+    expect(limiter.check("k").limited).toBe(true);
+  });
+
+  it("refuses a single call that costs more than the whole budget", () => {
+    const limiter = new RateLimiter(3, 60_000);
+    const res = limiter.check("k", 4);
+    expect(res.limited).toBe(true);
+    expect(res.retryAfterMs).toBe(60_000);
+  });
+
+  it("costs one attempt by default", () => {
+    const limiter = new RateLimiter(2, 60_000);
+    expect(limiter.check("k").remaining).toBe(1);
+    expect(limiter.check("k").remaining).toBe(0);
+  });
+});
+
+describe("peekAuthRateLimit / recordAuthFailure", () => {
+  const stores = () =>
+    [authRateLimiter, authGlobalRateLimiter].map(
+      (l) => (l as unknown as { store: Map<string, unknown> }).store,
+    );
+  const originalValue = process.env.TRUST_PROXY_HEADERS;
+
+  afterEach(() => {
+    if (originalValue === undefined) delete process.env.TRUST_PROXY_HEADERS;
+    else process.env.TRUST_PROXY_HEADERS = originalValue;
+    for (const store of stores()) store.clear();
+  });
+
+  const from = (ip: string) =>
+    new Request("http://localhost/api/settings/api-keys", {
+      method: "POST",
+      headers: { "x-forwarded-for": ip },
+    });
+
+  it("charges nothing until a failure is recorded, then refuses that address like a failed login", () => {
+    delete process.env.TRUST_PROXY_HEADERS;
+    for (let i = 0; i < 50; i++) expect(peekAuthRateLimit(from("10.9.0.1"), "peek-test")).toBeNull();
+    for (let i = 0; i < 10; i++) recordAuthFailure(from("10.9.0.1"), "peek-test");
+    const res = peekAuthRateLimit(from("10.9.0.1"), "peek-test");
+    expect(res?.status).toBe(429);
+    expect(res?.headers.get("Retry-After")).toBeTruthy();
+    // Another address is unaffected.
+    expect(peekAuthRateLimit(from("10.9.0.2"), "peek-test")).toBeNull();
+  });
+
+  it("applies the global floor no address can escape", () => {
+    delete process.env.TRUST_PROXY_HEADERS;
+    for (let i = 0; i < 60; i++) recordAuthFailure(from(`10.10.${Math.floor(i / 250)}.${i % 250}`), "peek-global");
+    expect(peekAuthRateLimit(from("10.11.0.1"), "peek-global")?.status).toBe(429);
+    // Other buckets keep their own floor.
+    expect(peekAuthRateLimit(from("10.11.0.1"), "peek-other")).toBeNull();
   });
 });

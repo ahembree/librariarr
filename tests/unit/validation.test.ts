@@ -13,6 +13,11 @@ import {
   logRetentionSchema,
   terminateSessionSchema,
   apiKeyCreateSchema,
+  actionExecuteSchema,
+  exceptionCreateSchema,
+  exceptionBulkDeleteSchema,
+  exceptionBulkUpdateSchema,
+  discordSettingsSchema,
 } from "@/lib/validation";
 
 /**
@@ -562,5 +567,54 @@ describe("apiKeyCreateSchema", () => {
     expect(
       apiKeyCreateSchema.safeParse({ ...valid, scopes: ["lifecycle:execute", "streams:write"] }).success,
     ).toBe(true);
+  });
+});
+
+describe("bounds on write inputs the public API reaches", () => {
+  it("terminateSessionSchema caps the message and the session list", () => {
+    const base = { serverId: "s1", message: "x".repeat(500) };
+    expect(terminateSessionSchema.safeParse(base).success).toBe(true);
+    expect(terminateSessionSchema.safeParse({ ...base, message: "x".repeat(501) }).success).toBe(false);
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => `sess-${i}`);
+    expect(terminateSessionSchema.safeParse({ ...base, sessionIds: ids(200) }).success).toBe(true);
+    expect(terminateSessionSchema.safeParse({ ...base, sessionIds: ids(201) }).success).toBe(false);
+  });
+
+  it("exception schemas cap the reason and the id list", () => {
+    expect(exceptionCreateSchema.safeParse({ mediaItemId: "m1", reason: "x".repeat(1000) }).success).toBe(true);
+    expect(exceptionCreateSchema.safeParse({ mediaItemId: "m1", reason: "x".repeat(1001) }).success).toBe(false);
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => `e-${i}`);
+    expect(exceptionBulkDeleteSchema.safeParse({ ids: ids(1000) }).success).toBe(true);
+    expect(exceptionBulkDeleteSchema.safeParse({ ids: ids(1001) }).success).toBe(false);
+    expect(exceptionBulkUpdateSchema.safeParse({ ids: ids(1001), reason: "r" }).success).toBe(false);
+    expect(exceptionBulkUpdateSchema.safeParse({ ids: ids(2), reason: "x".repeat(1001) }).success).toBe(false);
+  });
+
+  it("actionExecuteSchema caps the media item list, leaving omission as execute-all", () => {
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => `m-${i}`);
+    expect(actionExecuteSchema.safeParse({ ruleSetId: "r1", mediaItemIds: ids(1000) }).success).toBe(true);
+    expect(actionExecuteSchema.safeParse({ ruleSetId: "r1", mediaItemIds: ids(1001) }).success).toBe(false);
+    expect(actionExecuteSchema.safeParse({ ruleSetId: "r1" }).success).toBe(true);
+  });
+});
+
+describe("apiKeyCreateSchema.currentPassword", () => {
+  const valid = { name: "Home Assistant", scopes: ["media:read"], expiresAt: null };
+
+  it("is optional, bounded like a login password, and never trimmed", () => {
+    expect(apiKeyCreateSchema.safeParse(valid).success).toBe(true);
+    const parsed = apiKeyCreateSchema.safeParse({ ...valid, currentPassword: " hunter2 " });
+    expect(parsed.success && parsed.data.currentPassword).toBe(" hunter2 ");
+    expect(apiKeyCreateSchema.safeParse({ ...valid, currentPassword: "x".repeat(200) }).success).toBe(true);
+    expect(apiKeyCreateSchema.safeParse({ ...valid, currentPassword: "x".repeat(201) }).success).toBe(false);
+    expect(apiKeyCreateSchema.safeParse({ ...valid, currentPassword: 123 }).success).toBe(false);
+  });
+});
+
+describe("discordSettingsSchema.notifyApiKeys", () => {
+  it("is an optional boolean", () => {
+    expect(discordSettingsSchema.safeParse({}).success).toBe(true);
+    expect(discordSettingsSchema.safeParse({ notifyApiKeys: false }).success).toBe(true);
+    expect(discordSettingsSchema.safeParse({ notifyApiKeys: "no" }).success).toBe(false);
   });
 });

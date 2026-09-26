@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { NextRequest, NextResponse } from "next/server";
 
 const m = vi.hoisted(() => ({
@@ -16,8 +16,14 @@ vi.mock("@/lib/logger", () => ({
   apiLogger: { debug: m.debug, info: m.info, warn: m.warn, error: vi.fn() },
 }));
 
-import { authenticateApiKey, getApiKeyGuard, withApiKey } from "@/lib/api-keys/guard";
+import {
+  FULL_LISTING_REQUEST_COST,
+  authenticateApiKey,
+  getApiKeyGuard,
+  withApiKey,
+} from "@/lib/api-keys/guard";
 import { generateApiKey, hashApiKey } from "@/lib/api-keys/keys";
+import { apiKeyRequestLimiter, apiKeyUnknownLookupFloor } from "@/lib/rate-limit/rate-limiter";
 import { getApiKeyPrincipal } from "@/lib/api-keys/principal";
 import type { ApiScope } from "@/lib/api-keys/scopes";
 
@@ -272,5 +278,101 @@ describe("authenticateApiKey", () => {
     const logged = JSON.stringify(m.warn.mock.calls);
     expect(logged).toContain("an unknown address");
     expect(logged).not.toContain("FAKE");
+  });
+});
+
+describe("authenticateApiKey — unknown-key floor", () => {
+  const floorStore = () => (apiKeyUnknownLookupFloor as unknown as { store: Map<string, unknown> }).store;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    m.updateMany.mockResolvedValue({ count: 1 });
+    floorStore().clear();
+  });
+
+  afterEach(() => {
+    floorStore().clear();
+  });
+
+  it("stops looking up keys nobody has used once a minute's worth of unknown ones went by — never a key in use", async () => {
+    const active = generateApiKey();
+    const idle = generateApiKey();
+    const rowFor = (generated: ReturnType<typeof generateApiKey>) => ({
+      id: `key-${generated.prefix}`,
+      userId: "user-1",
+      name: "Dashboard",
+      prefix: generated.prefix,
+      scopes: ["media:read"],
+      expiresAt: null,
+      lastUsedAt: new Date(),
+    });
+    m.findUnique.mockImplementation(async ({ where }: { where: { keyHash: string } }) =>
+      where.keyHash === active.keyHash ? rowFor(active) : where.keyHash === idle.keyHash ? rowFor(idle) : null,
+    );
+    const auth = (key: string) => authenticateApiKey(request({ authorization: `Bearer ${key}` }), "media:read");
+
+    // The active key authenticates once before the flood, so it is remembered.
+    expect((await auth(active.key)).ok).toBe(true);
+
+    const lookupsBefore = m.findUnique.mock.calls.length;
+    for (let i = 0; i < apiKeyUnknownLookupFloor.maxAttempts; i++) {
+      const res = await auth(generateApiKey().key);
+      expect(res.ok).toBe(false);
+      if (res.ok === false) expect(res.response.status).toBe(401);
+    }
+    // Every one of those was a real lookup, and the budget's end was logged once.
+    expect(m.findUnique.mock.calls.length).toBe(lookupsBefore + apiKeyUnknownLookupFloor.maxAttempts);
+    const warnings = m.warn.mock.calls.filter(([, msg]) => String(msg).includes("unrecognised API keys"));
+    expect(warnings).toHaveLength(1);
+
+    // Past the floor: an unknown key is refused without a lookup…
+    const lookupsAtFloor = m.findUnique.mock.calls.length;
+    const refused = await auth(generateApiKey().key);
+    expect(refused.ok === false && refused.response.status).toBe(429);
+    // …and so is a valid key that has not been used lately (idle integrations
+    // wait the minute out)…
+    const idleRefused = await auth(idle.key);
+    expect(idleRefused.ok === false && idleRefused.response.status).toBe(429);
+    expect(m.findUnique.mock.calls.length).toBe(lookupsAtFloor);
+    // …but the key in use is still looked up (so deleting it would still
+    // revoke it) and still works.
+    expect((await auth(active.key)).ok).toBe(true);
+    expect(m.findUnique.mock.calls.length).toBe(lookupsAtFloor + 1);
+    // A malformed key never reached the database before and still does not.
+    const malformed = await auth("lbr_not-a-key");
+    expect(malformed.ok === false && malformed.response.status).toBe(401);
+    expect(m.findUnique.mock.calls.length).toBe(lookupsAtFloor + 1);
+
+    // The minute passes.
+    floorStore().clear();
+    expect((await auth(idle.key)).ok).toBe(true);
+  });
+});
+
+describe("authenticateApiKey — request cost", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    m.updateMany.mockResolvedValue({ count: 1 });
+  });
+
+  it("charges a limit=0 listing as several requests, everything else as one", async () => {
+    const key = storedKey();
+    const spy = vi.spyOn(apiKeyRequestLimiter, "check");
+    try {
+      await authenticateApiKey(request({ "x-api-key": key }, "http://localhost/api/v1/media/movies?limit=0"), "media:read");
+      expect(spy).toHaveBeenLastCalledWith("key-1", FULL_LISTING_REQUEST_COST);
+      await authenticateApiKey(request({ "x-api-key": key }, "http://localhost/api/v1/media/movies?limit=50"), "media:read");
+      expect(spy).toHaveBeenLastCalledWith("key-1", 1);
+      await authenticateApiKey(request({ "x-api-key": key }, "http://localhost/api/v1/media/movies"), "media:read");
+      expect(spy).toHaveBeenLastCalledWith("key-1", 1);
+      // Only reads page; a write carrying the parameter is still one request.
+      await authenticateApiKey(
+        request({ "x-api-key": key }, "http://localhost/api/v1/sync/cancel?limit=0", "POST"),
+        "media:read",
+      );
+      expect(spy).toHaveBeenLastCalledWith("key-1", 1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

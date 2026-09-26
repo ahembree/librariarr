@@ -17,7 +17,8 @@ Librariarr has a public REST API at `/api/v1` for dashboards, home automation, s
    - **Read-only**: every read scope. The key can read everything the API exposes and cannot change anything.
    - **Custom scopes**: pick exactly what the key may read and do (see [Scopes](#scopes)). Choosing a write scope also adds the read scope it depends on.
 4. Choose when the key **expires**: 7 days, 30 days, 90 days (the default), 1 year, a custom date (the key works until the end of that day), or never.
-5. Click **Create Key**, then copy the key and give it to the application.
+5. If your account has a password, enter it. A key keeps working after you sign out, so creating one is confirmed by something a signed-in browser alone does not have. An account that signs in only with Plex or SSO has no password to enter; it must instead have signed in within the last 15 minutes — sign out and back in if it has been longer.
+6. Click **Create Key**, then copy the key and give it to the application.
 
 </Steps>
 
@@ -25,7 +26,9 @@ Librariarr has a public REST API at `/api/v1` for dashboards, home automation, s
   Librariarr stores only a one-way hash of each key, so the key is displayed exactly once, when you create it. If you lose it, delete the key and create a new one.
 </Aside>
 
-The list of keys shows each key's name, the first characters of the key (`lbr_Ab3xYz…`, enough to tell keys apart), its access, when it was created, when it expires, and when and from which address it was last used. Create one key per application so each can be revoked on its own.
+The list of keys shows each key's name, the first characters of the key (`lbr_Ab3xYz…`, enough to tell keys apart), its access, when it was created, when it expires, and when and from which address it was last used. The address is the one your reverse proxy reported (`X-Forwarded-For`); without a trusted proxy in front of Librariarr it is whatever the client claimed, so treat it as a hint rather than evidence — see `TRUST_PROXY_HEADERS` in [Installation](/docs/getting-started/installation/). Create one key per application so each can be revoked on its own.
+
+When a [Discord webhook](/docs/features/notifications/) is configured, Librariarr posts a notification every time a key is created or deleted (**Settings → Notifications → API keys**, on by default). A key you did not create means someone else used your login: delete the key, then change your password or review your SSO account.
 
 ### Deleting (revoking) a key
 
@@ -66,7 +69,7 @@ curl -H "X-Api-Key: lbr_YOUR_KEY" https://librariarr.example.com/api/v1/me
 | `lifecycle:read` | Rule sets, matches, pending and completed actions, exceptions and deletion stats |
 | `lifecycle:write` | Queue lifecycle detection; add exceptions that protect items (includes `lifecycle:read`) |
 | `lifecycle:execute` | Run pending lifecycle actions and remove exceptions, **either of which can lead to media being deleted** through Sonarr, Radarr and Lidarr (includes `lifecycle:read`) |
-| `streams:read` | Active playback sessions and maintenance mode status |
+| `streams:read` | Active playback sessions — who is watching, on which device and from which address, as the media server reports them — and maintenance mode status |
 | `streams:write` | Terminate playback sessions; turn maintenance mode on or off (includes `streams:read`) |
 | `system:read` | App version, database size and library counts |
 
@@ -188,11 +191,13 @@ Errors are JSON: `{ "error": "…" }`, sometimes with a `details` array (validat
 
 ## Rate limits
 
-- **Per key:** 600 requests per minute. Past that, the key's requests are answered `429` until the minute is up.
+- **Per key:** 600 requests per minute. Past that, the key's requests are answered `429` until the minute is up. A request with `limit=0` returns a whole library rather than a page, so it counts as 20 requests — thirty full listings a minute.
+- **Unrecognised keys:** at most 1,000 keys that turn out not to exist are looked up per minute, across every client. Past that, until the minute is up, a key that has not been used successfully in the last 15 minutes is answered `429` without being looked up; keys in use are unaffected. This bounds what a flood of random keys can cost, at the price of an idle integration waiting out the minute while such a flood lasts.
 - **Failing keys:** a key that fails 20 times within 15 minutes (deleted, expired, mistyped) is answered `429` for the rest of that window without being looked up, so an application still using a deleted key stops costing anything. Failures are counted per key, not per address, so they never lock out a key that works, even when every client reaches Librariarr from the same address (containers on one Docker host, or `TRUST_PROXY_HEADERS=false`).
 
 ## How keys are protected
 
+- **Creating a key is a step up from being signed in.** It needs your password — or, on an account with no password, a sign-in from the last 15 minutes — and each creation and deletion is posted to Discord when a webhook is set. A stolen browser session could otherwise turn itself into a key that outlives it, since logging out or changing the password revokes sessions, not keys. Wrong passwords here count against the same limit as failed logins.
 - **Only a hash is stored.** A key is `lbr_` followed by 43 random characters (about 256 bits). Librariarr stores only its SHA-256 hash and the first 10 characters for display, so neither the database nor a leaked database dump contains a usable key.
 - **Immediate revocation.** Keys are checked against the database on every request, so deleting or expiring a key takes effect on the next request.
 - **Not in backups.** API keys are never written to backups, not even their hashes. Restoring a backup deletes every API key, so a key you deleted cannot come back from an older backup. After a restore, create new keys for your applications.

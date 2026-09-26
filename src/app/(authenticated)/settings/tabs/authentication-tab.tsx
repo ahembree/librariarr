@@ -315,7 +315,7 @@ export function AuthenticationTab({
       <SsoSection />
 
       {/* API keys for the public /api/v1 API */}
-      <ApiKeysSection />
+      <ApiKeysSection hasPassword={authInfo?.hasPassword ?? false} />
 
       {/* Create Credentials Dialog -- shown when enabling local auth without existing credentials */}
       <Dialog open={showCredentialPrompt} onOpenChange={(open) => { if (!open) onSetShowCredentialPrompt(false); }}>

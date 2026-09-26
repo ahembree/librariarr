@@ -7,6 +7,8 @@ export interface MockSessionData {
   plexToken?: string;
   isLoggedIn: boolean;
   sessionVersion?: number;
+  /** Epoch ms of the login; `rotateSession` stamps it like the real one does. */
+  authenticatedAt?: number;
   // Transient OIDC handshake fields. The callback reads these to validate
   // state and tell login vs link flows apart, so integration tests for the
   // callback need to seed them. The session object returned by getSession
@@ -91,7 +93,7 @@ vi.mock("@/lib/auth/session", async () => {
     // Mirrors the real helper: whatever the visitor was carrying is discarded,
     // and the caller gets an empty session to write the new login into.
     rotateSession: vi.fn().mockImplementation(async () => {
-      currentSession = { isLoggedIn: false };
+      currentSession = { isLoggedIn: false, authenticatedAt: Date.now() };
       return sessionProxy();
     }),
     isSessionValid: vi.fn().mockImplementation(async () => {

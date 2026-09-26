@@ -398,6 +398,7 @@ export default function SettingsPage() {
   const [discordWebhookUrl, setDiscordWebhookUrl] = useState("");
   const [discordWebhookUsername, setDiscordWebhookUsername] = useState("");
   const [discordWebhookAvatarUrl, setDiscordWebhookAvatarUrl] = useState("");
+  const [discordNotifyApiKeys, setDiscordNotifyApiKeys] = useState(true);
   const [discordSaving, setDiscordSaving] = useState(false);
   const [discordTesting, setDiscordTesting] = useState(false);
   const [discordTestResult, setDiscordTestResult] = useState<TestResult | null>(null);
@@ -852,6 +853,7 @@ export default function SettingsPage() {
       setDiscordWebhookUrl(data.webhookUrl ?? "");
       setDiscordWebhookUsername(data.webhookUsername ?? "");
       setDiscordWebhookAvatarUrl(data.webhookAvatarUrl ?? "");
+      setDiscordNotifyApiKeys(data.notifyApiKeys ?? true);
     } catch (error) {
       console.error("Failed to fetch Discord settings:", error);
     }
@@ -2498,6 +2500,7 @@ export default function SettingsPage() {
           webhookUrl: discordWebhookUrl,
           webhookUsername: discordWebhookUsername,
           webhookAvatarUrl: discordWebhookAvatarUrl,
+          notifyApiKeys: discordNotifyApiKeys,
         }),
       });
       if (!res.ok) {
@@ -3198,12 +3201,14 @@ export default function SettingsPage() {
             discordWebhookUrl={discordWebhookUrl}
             discordWebhookUsername={discordWebhookUsername}
             discordWebhookAvatarUrl={discordWebhookAvatarUrl}
+            discordNotifyApiKeys={discordNotifyApiKeys}
             discordSaving={discordSaving}
             discordTesting={discordTesting}
             discordTestResult={discordTestResult}
             onDiscordWebhookUrlChange={setDiscordWebhookUrl}
             onDiscordWebhookUsernameChange={setDiscordWebhookUsername}
             onDiscordWebhookAvatarUrlChange={setDiscordWebhookAvatarUrl}
+            onDiscordNotifyApiKeysChange={setDiscordNotifyApiKeys}
             onSaveDiscordSettings={saveDiscordSettings}
             onTestDiscordWebhook={testDiscordWebhook}
           />
