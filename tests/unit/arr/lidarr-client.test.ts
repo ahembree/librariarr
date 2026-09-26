@@ -52,7 +52,8 @@ describe("LidarrClient", () => {
       });
       const result = await client.testConnection();
       expect(result).toEqual({ ok: true, appName: "Lidarr", version: "2.0.0" });
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/system/status");
+      // The connection test opts out of transport retries (NO_RETRY).
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/system/status", { __noRetry: true });
     });
 
     it("returns error when appName is wrong", async () => {

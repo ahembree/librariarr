@@ -23,7 +23,8 @@ vi.mock("@/lib/logger", () => ({
 
 const mockTestConnection = vi.fn();
 
-vi.mock("@/lib/seerr/seerr-client", () => ({
+vi.mock("@/lib/seerr/seerr-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/seerr/seerr-client")>()),
   SeerrClient: vi.fn().mockImplementation(function () {
     return {
       testConnection: mockTestConnection,
@@ -35,6 +36,7 @@ vi.mock("@/lib/seerr/seerr-client", () => ({
 import { GET, POST } from "@/app/api/integrations/seerr/route";
 import { PUT, DELETE } from "@/app/api/integrations/seerr/[id]/route";
 import { POST as TEST_POST } from "@/app/api/integrations/seerr/test/route";
+import { appCache } from "@/lib/cache/memory-cache";
 
 describe("Seerr integration endpoints", () => {
   beforeEach(async () => {
@@ -155,6 +157,38 @@ describe("Seerr integration endpoints", () => {
       expect(body.instance.id).toBeDefined();
     });
 
+    it("stores a normalized external URL, and none when blank", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const withExternal = await expectJson<{ instance: { externalUrl: string | null } }>(
+        await callRoute(POST, {
+          url: "/api/integrations/seerr",
+          method: "POST",
+          body: { name: "A", url: "http://seerr:5055", apiKey: "k", externalUrl: "https://requests.example.com/" },
+        }),
+        201,
+      );
+      expect(withExternal.instance.externalUrl).toBe("https://requests.example.com");
+
+      const blank = await expectJson<{ instance: { externalUrl: string | null } }>(
+        await callRoute(POST, {
+          url: "/api/integrations/seerr",
+          method: "POST",
+          body: { name: "B", url: "http://seerr2:5055", apiKey: "k", externalUrl: "" },
+        }),
+        201,
+      );
+      expect(blank.instance.externalUrl).toBeNull();
+
+      const invalid = await callRoute(POST, {
+        url: "/api/integrations/seerr",
+        method: "POST",
+        body: { name: "C", url: "http://seerr3:5055", apiKey: "k", externalUrl: "not a url" },
+      });
+      expect(invalid.status).toBe(400);
+    });
+
     it("returns error when connection test fails", async () => {
       mockTestConnection.mockResolvedValue({ ok: false, error: "Connection refused" });
 
@@ -244,6 +278,59 @@ describe("Seerr integration endpoints", () => {
       expect(body.instance.url).toBe("http://new-seerr:5055");
     });
 
+    it("sets and clears the external URL without touching other fields", async () => {
+      const user = await createTestUser();
+      const instance = await createTestSeerrInstance(user.id, { name: "Keep" });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      const put = (body: Record<string, unknown>) =>
+        callRouteWithParams(PUT, { id: instance.id }, {
+          url: `/api/integrations/seerr/${instance.id}`,
+          method: "PUT",
+          body,
+        });
+
+      const set = await expectJson<{ instance: { name: string; externalUrl: string | null } }>(
+        await put({ externalUrl: "https://requests.example.com//" }),
+        200,
+      );
+      expect(set.instance.externalUrl).toBe("https://requests.example.com");
+      expect(set.instance.name).toBe("Keep");
+
+      const untouched = await expectJson<{ instance: { externalUrl: string | null } }>(
+        await put({ name: "Renamed" }),
+        200,
+      );
+      expect(untouched.instance.externalUrl).toBe("https://requests.example.com");
+
+      const cleared = await expectJson<{ instance: { externalUrl: string | null } }>(
+        await put({ externalUrl: "" }),
+        200,
+      );
+      expect(cleared.instance.externalUrl).toBeNull();
+    });
+
+    it("saves a rename and a new external URL while the instance is unreachable", async () => {
+      // The edit form sends its (unchanged) URL on every save; testing on its
+      // mere presence refused every edit while Seerr was down.
+      mockTestConnection.mockResolvedValue({ ok: false, error: "Timeout" });
+      const user = await createTestUser();
+      const instance = await createTestSeerrInstance(user.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const response = await callRouteWithParams(
+        PUT,
+        { id: instance.id },
+        {
+          url: `/api/integrations/seerr/${instance.id}`,
+          method: "PUT",
+          body: { name: "Renamed", url: `${instance.url}/`, externalUrl: "https://requests.example.com" },
+        }
+      );
+      const body = await expectJson<{ instance: { name: string; externalUrl: string } }>(response, 200);
+      expect(body.instance).toMatchObject({ name: "Renamed", externalUrl: "https://requests.example.com" });
+      expect(mockTestConnection).not.toHaveBeenCalled();
+    });
+
     it("returns error when connection test fails on update", async () => {
       mockTestConnection.mockResolvedValue({ ok: false, error: "Timeout" });
 
@@ -311,6 +398,25 @@ describe("Seerr integration endpoints", () => {
       const listResponse = await callRoute(GET, { url: "/api/integrations/seerr" });
       const listBody = await expectJson<{ instances: unknown[] }>(listResponse, 200);
       expect(listBody.instances).toHaveLength(0);
+    });
+
+    it("drops cached Seerr-derived answers so a removed instance stops being reported", async () => {
+      const user = await createTestUser();
+      const instance = await createTestSeerrInstance(user.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      appCache.set("seerr-request-stats", { configured: true });
+      appCache.set("seerr-user-requests:alice", { requests: [] });
+      appCache.set(`integrations:health:${user.id}`, { ok: true });
+
+      await callRouteWithParams(
+        DELETE,
+        { id: instance.id },
+        { url: `/api/integrations/seerr/${instance.id}`, method: "DELETE" }
+      );
+
+      expect(appCache.get("seerr-request-stats")).toBeUndefined();
+      expect(appCache.get("seerr-user-requests:alice")).toBeUndefined();
+      expect(appCache.get(`integrations:health:${user.id}`)).toBeUndefined();
     });
   });
 

@@ -87,6 +87,26 @@ const VALID_SETTINGS_TABS = new Set<string>(SETTINGS_TABS.map((t) => t.value));
  */
 const TRACEARR_IMPORT_POLL_MS = 30_000;
 
+/**
+ * The message to show for a failed integration save. A validation failure
+ * answers `{ error: "Validation failed", details: ["field: why", …] }`, and
+ * the bare `error` names neither the field nor the problem.
+ */
+function integrationSaveError(
+  data: { error?: string; detail?: string; details?: unknown } | null,
+  fallback: string,
+): string {
+  const first = Array.isArray(data?.details) ? data.details[0] : undefined;
+  const detail =
+    typeof first === "string"
+      ? first
+      : typeof (first as { message?: unknown } | undefined)?.message === "string"
+        ? (first as { message: string }).message
+        : data?.detail;
+  const error = data?.error || fallback;
+  return detail ? `${error} — ${detail}` : error;
+}
+
 
 function getInitialSettingsTab(): SettingsTab {
   if (typeof window === "undefined") return "general";
@@ -276,7 +296,7 @@ export default function SettingsPage() {
   // Seerr instances
   const [seerrInstances, setSeerrInstances] = useState<SeerrInstance[]>([]);
   const [showSeerrForm, setShowSeerrForm] = useState(false);
-  const [seerrForm, setSeerrForm] = useState({ name: "", url: "", apiKey: "" });
+  const [seerrForm, setSeerrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
   const [seerrSaving, setSeerrSaving] = useState(false);
   const [seerrError, setSeerrError] = useState("");
 
@@ -418,7 +438,7 @@ export default function SettingsPage() {
 
   // Seerr edit state
   const [editingSeerrId, setEditingSeerrId] = useState<string | null>(null);
-  const [editSeerrForm, setEditSeerrForm] = useState({ name: "", url: "", apiKey: "" });
+  const [editSeerrForm, setEditSeerrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
   const [editSeerrSaving, setEditSeerrSaving] = useState(false);
   const [editSeerrError, setEditSeerrError] = useState("");
   const [editSeerrTesting, setEditSeerrTesting] = useState(false);
@@ -1975,7 +1995,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setSonarrError(data.error || "Failed to add Sonarr instance");
+        setSonarrError(integrationSaveError(data, "Failed to add Sonarr instance"));
         return;
       }
       setSonarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
@@ -2015,7 +2035,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setRadarrError(data.error || "Failed to add Radarr instance");
+        setRadarrError(integrationSaveError(data, "Failed to add Radarr instance"));
         return;
       }
       setRadarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
@@ -2055,7 +2075,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setLidarrError(data.error || "Failed to add Lidarr instance");
+        setLidarrError(integrationSaveError(data, "Failed to add Lidarr instance"));
         return;
       }
       setLidarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
@@ -2095,10 +2115,10 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setSeerrError(data.error || "Failed to add Seerr instance");
+        setSeerrError(integrationSaveError(data, "Failed to add Seerr instance"));
         return;
       }
-      setSeerrForm({ name: "", url: "", apiKey: "" });
+      setSeerrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
       setShowSeerrForm(false);
       await fetchSeerrInstances();
       toast.success("Seerr instance added");
@@ -2142,8 +2162,23 @@ export default function SettingsPage() {
     }
   };
 
+  // Per-form sequence for the edit-form connection test. Only the latest test
+  // may write its result: an auto-test still in flight for another instance
+  // (Edit A → Cancel → Edit B) or for credentials since edited used to land
+  // afterwards and overwrite the form's result — disabling Save on a healthy
+  // instance, or enabling it on one whose new credentials were never tested.
+  const editTestSeq = useRef<Record<"sonarr" | "radarr" | "lidarr" | "seerr", number>>({
+    sonarr: 0, radarr: 0, lidarr: 0, seerr: 0,
+  });
+  const invalidateEditTest = (type: "sonarr" | "radarr" | "lidarr" | "seerr", setTesting: (v: boolean) => void) => {
+    editTestSeq.current[type]++;
+    setTesting(false);
+  };
+
   // Test connection for existing instances (uses server-side stored credentials)
   const testEditArrConnection = async (type: "sonarr" | "radarr" | "lidarr" | "seerr", id: string, overrides: { url?: string; apiKey?: string }, setTesting: (v: boolean) => void, setResult: (v: TestResult | null) => void) => {
+    const seq = ++editTestSeq.current[type];
+    const current = () => editTestSeq.current[type] === seq;
     setTesting(true);
     setResult(null);
     try {
@@ -2156,11 +2191,11 @@ export default function SettingsPage() {
         body: JSON.stringify(body),
       });
       const data = await response.json();
-      setResult(data);
+      if (current()) setResult(data);
     } catch {
-      setResult({ ok: false, error: "Request failed" });
+      if (current()) setResult({ ok: false, error: "Request failed" });
     } finally {
-      setTesting(false);
+      if (current()) setTesting(false);
     }
   };
 
@@ -2181,7 +2216,10 @@ export default function SettingsPage() {
       if (editSonarrForm.name) body.name = editSonarrForm.name;
       if (editSonarrForm.url) body.url = editSonarrForm.url;
       if (editSonarrForm.apiKey) body.apiKey = editSonarrForm.apiKey;
-      body.externalUrl = editSonarrForm.externalUrl;
+      // Only when changed: an External URL stored under an older, looser rule
+      // must not make every rename or re-point of the instance fail validation.
+      const storedSonarrExternalUrl = sonarrInstances.find((i) => i.id === editingSonarrId)?.externalUrl ?? "";
+      if (editSonarrForm.externalUrl !== storedSonarrExternalUrl) body.externalUrl = editSonarrForm.externalUrl;
 
       const response = await fetch(`/api/integrations/sonarr/${editingSonarrId}`, {
         method: "PUT",
@@ -2190,7 +2228,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setEditSonarrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to update"));
+        setEditSonarrError(integrationSaveError(data, "Failed to update"));
         return;
       }
       setEditingSonarrId(null);
@@ -2220,7 +2258,10 @@ export default function SettingsPage() {
       if (editRadarrForm.name) body.name = editRadarrForm.name;
       if (editRadarrForm.url) body.url = editRadarrForm.url;
       if (editRadarrForm.apiKey) body.apiKey = editRadarrForm.apiKey;
-      body.externalUrl = editRadarrForm.externalUrl;
+      // Only when changed: an External URL stored under an older, looser rule
+      // must not make every rename or re-point of the instance fail validation.
+      const storedRadarrExternalUrl = radarrInstances.find((i) => i.id === editingRadarrId)?.externalUrl ?? "";
+      if (editRadarrForm.externalUrl !== storedRadarrExternalUrl) body.externalUrl = editRadarrForm.externalUrl;
 
       const response = await fetch(`/api/integrations/radarr/${editingRadarrId}`, {
         method: "PUT",
@@ -2229,7 +2270,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setEditRadarrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to update"));
+        setEditRadarrError(integrationSaveError(data, "Failed to update"));
         return;
       }
       setEditingRadarrId(null);
@@ -2259,7 +2300,10 @@ export default function SettingsPage() {
       if (editLidarrForm.name) body.name = editLidarrForm.name;
       if (editLidarrForm.url) body.url = editLidarrForm.url;
       if (editLidarrForm.apiKey) body.apiKey = editLidarrForm.apiKey;
-      body.externalUrl = editLidarrForm.externalUrl;
+      // Only when changed: an External URL stored under an older, looser rule
+      // must not make every rename or re-point of the instance fail validation.
+      const storedLidarrExternalUrl = lidarrInstances.find((i) => i.id === editingLidarrId)?.externalUrl ?? "";
+      if (editLidarrForm.externalUrl !== storedLidarrExternalUrl) body.externalUrl = editLidarrForm.externalUrl;
 
       const response = await fetch(`/api/integrations/lidarr/${editingLidarrId}`, {
         method: "PUT",
@@ -2268,7 +2312,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setEditLidarrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to update"));
+        setEditLidarrError(integrationSaveError(data, "Failed to update"));
         return;
       }
       setEditingLidarrId(null);
@@ -2284,7 +2328,7 @@ export default function SettingsPage() {
   // Seerr edit handlers
   const startEditSeerr = (instance: SeerrInstance) => {
     setEditingSeerrId(instance.id);
-    setEditSeerrForm({ name: instance.name, url: instance.url, apiKey: "" });
+    setEditSeerrForm({ name: instance.name, url: instance.url, apiKey: "", externalUrl: instance.externalUrl ?? "" });
     setEditSeerrError("");
     setEditSeerrTestResult(null);
     testEditArrConnection("seerr", instance.id, {}, setEditSeerrTesting, setEditSeerrTestResult);
@@ -2298,6 +2342,10 @@ export default function SettingsPage() {
       if (editSeerrForm.name) body.name = editSeerrForm.name;
       if (editSeerrForm.url) body.url = editSeerrForm.url;
       if (editSeerrForm.apiKey) body.apiKey = editSeerrForm.apiKey;
+      // Only when changed: an External URL stored under an older, looser rule
+      // must not make every rename or re-point of the instance fail validation.
+      const storedSeerrExternalUrl = seerrInstances.find((i) => i.id === editingSeerrId)?.externalUrl ?? "";
+      if (editSeerrForm.externalUrl !== storedSeerrExternalUrl) body.externalUrl = editSeerrForm.externalUrl;
 
       const response = await fetch(`/api/integrations/seerr/${editingSeerrId}`, {
         method: "PUT",
@@ -2306,7 +2354,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setEditSeerrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to update"));
+        setEditSeerrError(integrationSaveError(data, "Failed to update"));
         return;
       }
       setEditingSeerrId(null);
@@ -2980,9 +3028,15 @@ export default function SettingsPage() {
               onTest: () => testArrConnection("sonarr", sonarrForm.url, sonarrForm.apiKey, setSonarrTesting, setSonarrTestResult),
               onStartEdit: startEditSonarr,
               onSaveEdit: saveEditSonarr,
-              onCancelEdit: () => setEditingSonarrId(null),
+              onCancelEdit: () => {
+                invalidateEditTest("sonarr", setEditSonarrTesting);
+                setEditingSonarrId(null);
+              },
               onEditFormChange: (form) => {
-                if (form.url !== editSonarrForm.url || form.apiKey !== editSonarrForm.apiKey) setEditSonarrTestResult(null);
+                if (form.url !== editSonarrForm.url || form.apiKey !== editSonarrForm.apiKey) {
+                  invalidateEditTest("sonarr", setEditSonarrTesting);
+                  setEditSonarrTestResult(null);
+                }
                 setEditSonarrForm(form);
               },
               onEditTest: () => testEditArrConnection("sonarr", editingSonarrId!, { url: editSonarrForm.url, apiKey: editSonarrForm.apiKey }, setEditSonarrTesting, setEditSonarrTestResult),
@@ -3014,9 +3068,15 @@ export default function SettingsPage() {
               onTest: () => testArrConnection("radarr", radarrForm.url, radarrForm.apiKey, setRadarrTesting, setRadarrTestResult),
               onStartEdit: startEditRadarr,
               onSaveEdit: saveEditRadarr,
-              onCancelEdit: () => setEditingRadarrId(null),
+              onCancelEdit: () => {
+                invalidateEditTest("radarr", setEditRadarrTesting);
+                setEditingRadarrId(null);
+              },
               onEditFormChange: (form) => {
-                if (form.url !== editRadarrForm.url || form.apiKey !== editRadarrForm.apiKey) setEditRadarrTestResult(null);
+                if (form.url !== editRadarrForm.url || form.apiKey !== editRadarrForm.apiKey) {
+                  invalidateEditTest("radarr", setEditRadarrTesting);
+                  setEditRadarrTestResult(null);
+                }
                 setEditRadarrForm(form);
               },
               onEditTest: () => testEditArrConnection("radarr", editingRadarrId!, { url: editRadarrForm.url, apiKey: editRadarrForm.apiKey }, setEditRadarrTesting, setEditRadarrTestResult),
@@ -3048,9 +3108,15 @@ export default function SettingsPage() {
               onTest: () => testArrConnection("lidarr", lidarrForm.url, lidarrForm.apiKey, setLidarrTesting, setLidarrTestResult),
               onStartEdit: startEditLidarr,
               onSaveEdit: saveEditLidarr,
-              onCancelEdit: () => setEditingLidarrId(null),
+              onCancelEdit: () => {
+                invalidateEditTest("lidarr", setEditLidarrTesting);
+                setEditingLidarrId(null);
+              },
               onEditFormChange: (form) => {
-                if (form.url !== editLidarrForm.url || form.apiKey !== editLidarrForm.apiKey) setEditLidarrTestResult(null);
+                if (form.url !== editLidarrForm.url || form.apiKey !== editLidarrForm.apiKey) {
+                  invalidateEditTest("lidarr", setEditLidarrTesting);
+                  setEditLidarrTestResult(null);
+                }
                 setEditLidarrForm(form);
               },
               onEditTest: () => testEditArrConnection("lidarr", editingLidarrId!, { url: editLidarrForm.url, apiKey: editLidarrForm.apiKey }, setEditLidarrTesting, setEditLidarrTestResult),
@@ -3082,9 +3148,15 @@ export default function SettingsPage() {
               onTest: () => testArrConnection("seerr", seerrForm.url, seerrForm.apiKey, setSeerrTesting, setSeerrTestResult),
               onStartEdit: startEditSeerr,
               onSaveEdit: saveEditSeerr,
-              onCancelEdit: () => setEditingSeerrId(null),
+              onCancelEdit: () => {
+                invalidateEditTest("seerr", setEditSeerrTesting);
+                setEditingSeerrId(null);
+              },
               onEditFormChange: (form) => {
-                if (form.url !== editSeerrForm.url || form.apiKey !== editSeerrForm.apiKey) setEditSeerrTestResult(null);
+                if (form.url !== editSeerrForm.url || form.apiKey !== editSeerrForm.apiKey) {
+                  invalidateEditTest("seerr", setEditSeerrTesting);
+                  setEditSeerrTestResult(null);
+                }
                 setEditSeerrForm(form);
               },
               onEditTest: () => testEditArrConnection("seerr", editingSeerrId!, { url: editSeerrForm.url, apiKey: editSeerrForm.apiKey }, setEditSeerrTesting, setEditSeerrTestResult),

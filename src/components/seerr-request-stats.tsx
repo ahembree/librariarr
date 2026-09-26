@@ -45,6 +45,7 @@ interface UserStats {
   requestCount: number;
   movieCount: number;
   seriesCount: number;
+  distinctSeriesCount: number;
   moviesWatched: number;
   seriesWithAnyEpisodeWatched: number;
   episodesWatched: number;
@@ -54,6 +55,8 @@ interface UserStats {
 
 interface Response {
   configured: boolean;
+  /** An instance's request list could not be read — counts cover the rest. */
+  partial?: boolean;
   users: UserStats[];
   totals: {
     requestCount: number;
@@ -81,6 +84,11 @@ interface Scores {
 }
 
 function watchedScores(u: UserStats): Scores {
+  // A user whose plays can't be matched has no measurable watch rate — '—',
+  // never 0% (which also sorted them among users who watched nothing).
+  if (!u.correlatable) {
+    return { moviePct: null, seriesPct: null, overallPct: null, overallNum: 0, overallDenom: 0 };
+  }
   const overallNum = u.moviesWatched + u.episodesWatched;
   const overallDenom = u.movieCount + u.episodesAvailable;
   return {
@@ -266,10 +274,18 @@ export function SeerrRequestStats() {
     return arr;
   }, [data, sortColumn, sortDir]);
 
+  // Only users whose watch history can be matched: the totals include every
+  // requester's movies, so an unmatchable user's requests counted as unwatched.
   const overallAvgPct = useMemo(() => {
     if (!data) return null;
-    const denom = data.totals.movieCount + data.totals.episodesAvailable;
-    return pct(data.totals.moviesWatched + data.totals.episodesWatched, denom);
+    let num = 0;
+    let denom = 0;
+    for (const u of data.users) {
+      const s = watchedScores(u);
+      num += s.overallNum;
+      denom += s.overallDenom;
+    }
+    return pct(num, denom);
   }, [data]);
 
   function toggleSort(col: SortColumn) {
@@ -296,6 +312,17 @@ export function SeerrRequestStats() {
           <span aria-hidden>·</span>
           <span>
             <span className={cn(pctTone(overallAvgPct))}>{overallAvgPct}%</span> watched
+          </span>
+        </>
+      )}
+      {data.partial && (
+        <>
+          <span aria-hidden>·</span>
+          <span
+            className="text-amber"
+            title="A Seerr instance could not be read — these counts cover the others"
+          >
+            incomplete
           </span>
         </>
       )}
@@ -388,7 +415,11 @@ export function SeerrRequestStats() {
       <Card className="h-full flex flex-col gap-3">
         {header}
         <CardContent className="flex-1 min-h-0 flex items-center justify-center py-8">
-          <p className="text-sm text-muted-foreground">No Seerr requests found yet.</p>
+          <p className="text-sm text-muted-foreground">
+            {data.partial
+              ? "Couldn't read Seerr's requests — an instance didn't answer. Try again shortly."
+              : "No Seerr requests found yet."}
+          </p>
         </CardContent>
       </Card>
     );
@@ -476,7 +507,7 @@ export function SeerrRequestStats() {
                                 <EyeOff className="h-3 w-3 text-muted-foreground shrink-0" />
                               </TooltipTrigger>
                               <TooltipContent>
-                                No linked Plex username — watch history can&apos;t be correlated.
+                                No linked Plex or Jellyfin account — watch history can&apos;t be correlated.
                               </TooltipContent>
                             </Tooltip>
                           )}
@@ -514,7 +545,7 @@ export function SeerrRequestStats() {
                             <TooltipContent>
                               {u.episodesWatched} of {u.episodesAvailable} requested episodes watched
                               {u.seriesWithAnyEpisodeWatched > 0 &&
-                                ` · ${u.seriesWithAnyEpisodeWatched} of ${u.seriesCount} series started`}
+                                ` · ${u.seriesWithAnyEpisodeWatched} of ${u.distinctSeriesCount} series started`}
                             </TooltipContent>
                           </Tooltip>
                         ) : (
@@ -588,7 +619,7 @@ export function SeerrRequestStats() {
                             <EyeOff className="h-3 w-3 text-muted-foreground shrink-0" />
                           </TooltipTrigger>
                           <TooltipContent>
-                            No linked Plex username — watch history can&apos;t be correlated.
+                            No linked Plex or Jellyfin account — watch history can&apos;t be correlated.
                           </TooltipContent>
                         </Tooltip>
                       )}

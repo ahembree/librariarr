@@ -730,6 +730,43 @@ describe("processLifecycleRules", () => {
     expect(mockDetectAndSaveMatches).toHaveBeenCalled();
   });
 
+  it("fetches Seerr metadata once per type across rule sets", async () => {
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasArrRules.mockReturnValue(false);
+    mockHasSeerrRules.mockReturnValue(true);
+    mockFetchSeerrMetadata.mockResolvedValue({});
+    mockDetectAndSaveMatches.mockResolvedValue({
+      items: [],
+      count: 0,
+      episodeIdMap: new Map(),
+      currentItems: [],
+    });
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([]);
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 0 });
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
+    const ruleSet = (id: string, type: string) => ({
+      id, userId: "u1", name: id, type,
+      rules: [{ field: "seerrRequested", operator: "equals", value: "false", enabled: true }],
+      seriesScope: false, serverIds: ["s1"], actionEnabled: false, actionType: null,
+      actionDelayDays: 0, arrInstanceId: null, targetQualityProfileId: null,
+      addImportExclusion: false, addArrTags: [], removeArrTags: [], collectionId: null,
+      discordNotifyOnMatch: false, stickyMatches: false, searchAfterAction: false,
+      user: { mediaServers: [{ id: "s1" }] },
+    });
+    mockPrisma.ruleSet.findMany.mockResolvedValueOnce([
+      ruleSet("m1", "MOVIE"),
+      ruleSet("m2", "MOVIE"),
+      ruleSet("s1", "SERIES"),
+    ]);
+
+    await processLifecycleRules("u1");
+
+    expect(mockFetchSeerrMetadata).toHaveBeenCalledTimes(2);
+    expect(mockFetchSeerrMetadata).toHaveBeenCalledWith("u1", "MOVIE");
+    expect(mockFetchSeerrMetadata).toHaveBeenCalledWith("u1", "SERIES");
+    expect(mockDetectAndSaveMatches).toHaveBeenCalledTimes(3);
+  });
+
   it("skips rule sets with Arr rules when no enabled Arr instance exists (match-all guard)", async () => {
     // With zero enabled instances fetchArrMetadata would return {}, and
     // "foundInArr = false" would then match the ENTIRE library — the rule set
@@ -1341,6 +1378,54 @@ describe("executeLifecycleActions", () => {
         data: expect.objectContaining({ status: "FAILED", error: "Radarr failed" }),
       }),
     );
+  });
+
+  it("leaves the remaining actions PENDING once their Arr instance fails at the host level", async () => {
+    // A dead instance would otherwise cost the client's whole retry budget per
+    // action on the serial MAIN_QUEUE, to reach the same failure.
+    const { IntegrationError } = await import("@/lib/integration-error");
+    const mediaItem = (n: number) => ({
+      id: `item${n}`,
+      title: `Movie ${n}`,
+      parentTitle: null,
+      year: 2024,
+      library: { key: "1", mediaServerId: "s1" },
+      externalIds: [],
+    });
+    const action = (n: number, arrInstanceId: string) => ({
+      id: `a${n}`,
+      userId: "u1",
+      mediaItemId: `item${n}`,
+      mediaItem: mediaItem(n),
+      ruleSetId: "rs1",
+      actionType: "UNMONITOR_RADARR",
+      arrInstanceId,
+      ruleSet: { name: "Test", discordNotifyOnAction: false, userId: "u1" },
+    });
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      action(1, "radarr-down"),
+      action(2, "radarr-down"),
+      action(3, "radarr-ok"),
+    ]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([1, 2, 3].map((n) => ({ ruleSetId: "rs1", mediaItemId: `item${n}` })));
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+    mockExecuteAction.mockImplementation(async (a: { arrInstanceId: string }) => {
+      if (a.arrInstanceId === "radarr-down") {
+        throw new IntegrationError("Radarr", { config: { url: "/x", method: "get" }, code: "ECONNABORTED" } as never);
+      }
+    });
+    mockExtractActionError.mockReturnValue("Radarr unreachable");
+    mockPrisma.lifecycleAction.update.mockResolvedValue({});
+    mockPrisma.$transaction.mockResolvedValue([]);
+
+    await executeLifecycleActions("u1");
+
+    const executedIds = mockExecuteAction.mock.calls.map((c) => (c[0] as { id: string }).id);
+    expect(executedIds).toEqual(["a1", "a3"]);
+    // a1 failed; a2 was neither executed nor touched — it stays PENDING.
+    const updatedIds = mockPrisma.lifecycleAction.update.mock.calls.map((c) => (c[0] as { where: { id: string } }).where.id);
+    expect(updatedIds).toContain("a1");
+    expect(updatedIds).not.toContain("a2");
   });
 
   it("triggers library sync after destructive DELETE actions", async () => {

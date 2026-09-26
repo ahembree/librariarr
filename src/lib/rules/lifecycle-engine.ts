@@ -750,6 +750,17 @@ export function evaluateArrRule(rule: Condition, meta: ArrMetadata | undefined):
   return negate ? !result : result;
 }
 
+/** Comparison operators a Seerr date field supports (isNull/isNotNull aside). */
+const SEERR_DATE_OPERATORS = new Set([
+  "before",
+  "after",
+  "inLastDays",
+  "notInLastDays",
+  "equals",
+  "notEquals",
+  "between",
+]);
+
 /** Evaluate a single seerr rule against seerr metadata for an item */
 /**
  * Evaluate a single Seerr rule against Seerr metadata (Phase 2). Shared with
@@ -843,8 +854,16 @@ export function evaluateSeerrRule(rule: Condition, meta: SeerrMetadata | undefin
       const itemDate = dateStr ? new Date(dateStr) : null;
       if (operator === "isNull") { result = !itemDate || isNaN(itemDate.getTime()); break; }
       if (operator === "isNotNull") { result = !!itemDate && !isNaN(itemDate.getTime()); break; }
+      if (!SEERR_DATE_OPERATORS.has(operator)) return false; // unknown operator: bypass negate
+      // No such date (never requested / approved / declined). Every comparison
+      // is false except notEquals — an item with no request date certainly was
+      // not requested on D — and negate then applies as usual: the same
+      // two-valued semantics the library's own date columns use
+      // (nullValueResult + applyNegateNullable). NOT(notEquals D), i.e.
+      // "equals D", therefore never matches a never-requested item, while
+      // NOT(requested in the last 90 days) keeps matching one.
       if (!itemDate || isNaN(itemDate.getTime())) {
-        result = false;
+        result = operator === "notEquals";
         break;
       }
       switch (operator) {

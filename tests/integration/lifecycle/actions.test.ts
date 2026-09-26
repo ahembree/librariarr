@@ -566,6 +566,46 @@ describe("Lifecycle Actions", () => {
       await expectJson(response, 404);
     });
 
+    it("refuses and disarms a music rule set with Seerr criteria (vacuous matches)", async () => {
+      // Seerr has no music requests, so every artist reads "never requested":
+      // the stored matches are the whole library and must never be executed.
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MUSIC" });
+      const track = await createTestMediaItem(library.id, { title: "Track", type: "MUSIC" });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Music Seerr",
+        type: "MUSIC",
+        actionEnabled: true,
+        actionType: "DELETE_LIDARR",
+        arrInstanceId: "lidarr-1",
+        rules: [
+          {
+            id: "g1",
+            condition: "AND",
+            operator: "AND",
+            rules: [{ id: "r1", field: "seerrRequested", operator: "equals", value: "false", condition: "AND", enabled: true }],
+            groups: [],
+          },
+        ],
+      });
+      await createTestRuleMatch(ruleSet.id, track.id);
+      await createTestAction(user.id, track.id, ruleSet.id, { actionType: "DELETE_LIDARR" });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/Seerr criteria are not supported on music/i);
+      const prisma = getTestPrisma();
+      expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
+      expect(await prisma.lifecycleAction.count({ where: { ruleSetId: ruleSet.id, status: "PENDING" } })).toBe(0);
+    });
+
     it("returns 404 for another user's rule set", async () => {
       const user1 = await createTestUser({ plexId: "owner" });
       const user2 = await createTestUser({ plexId: "intruder" });
@@ -835,6 +875,28 @@ describe("Lifecycle Actions", () => {
       expect(executeAction).not.toHaveBeenCalled();
     });
 
+    it("refuses to retry when a copy of the item on another server has an exception", async () => {
+      const user = await createTestUser();
+      const item = await createTestMediaItem((await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" })).id, { title: "Shared", type: "MOVIE" });
+      const copy = await createTestMediaItem((await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" })).id, { title: "Shared", type: "MOVIE" });
+      const prisma = getTestPrisma();
+      await prisma.mediaItem.updateMany({ where: { id: { in: [item.id, copy.id] } }, data: { dedupKey: "movie:tmdb:77" } });
+      await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: copy.id } });
+      const ruleSet = await createTestRuleSet(user.id, { name: "Retry Rule" });
+      const action = await createTestAction(user.id, item.id, ruleSet.id, { status: "FAILED" });
+      await createTestRuleMatch(ruleSet.id, item.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRouteWithParams(actionRetry, { id: action.id }, {
+        url: `/api/lifecycle/actions/${action.id}`,
+        method: "POST",
+      });
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/exception/i);
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
     it("retries a FAILED action when no exception exists", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
@@ -875,6 +937,42 @@ describe("Lifecycle Actions", () => {
       });
       const body = await expectJson<{ error: string }>(response, 400);
       expect(body.error).toMatch(/disabled/i);
+
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
+    it("refuses to retry an action of a music rule set with Seerr criteria", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MUSIC" });
+      const track = await createTestMediaItem(library.id, { title: "Track", type: "MUSIC" });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Music Seerr",
+        type: "MUSIC",
+        rules: [
+          {
+            id: "g1",
+            condition: "AND",
+            operator: "AND",
+            rules: [{ id: "r1", field: "seerrRequested", operator: "equals", value: "false", condition: "AND", enabled: true }],
+            groups: [],
+          },
+        ],
+      });
+      const action = await createTestAction(user.id, track.id, ruleSet.id, {
+        status: "FAILED",
+        actionType: "DELETE_LIDARR",
+      });
+      await createTestRuleMatch(ruleSet.id, track.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRouteWithParams(actionRetry, { id: action.id }, {
+        url: `/api/lifecycle/actions/${action.id}`,
+        method: "POST",
+      });
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/Seerr criteria are not supported on music/i);
 
       const { executeAction } = await import("@/lib/lifecycle/actions");
       expect(executeAction).not.toHaveBeenCalled();
@@ -949,6 +1047,37 @@ describe("Lifecycle Actions", () => {
       });
       const body = await expectJson<{ error: string }>(response, 400);
       expect(body.error).toMatch(/exclude/i);
+
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
+    it("refuses a movie whose copy on another server is excepted", async () => {
+      // One Radarr record backs both copies; excluding either protects both.
+      const user = await createTestUser();
+      const s1 = await createTestServer(user.id);
+      const s2 = await createTestServer(user.id);
+      const movie = await createTestMediaItem((await createTestLibrary(s1.id, { type: "MOVIE" })).id, { title: "Shared", type: "MOVIE" });
+      const copy = await createTestMediaItem((await createTestLibrary(s2.id, { type: "MOVIE" })).id, { title: "Shared", type: "MOVIE" });
+      const prisma = getTestPrisma();
+      await prisma.mediaItem.updateMany({ where: { id: { in: [movie.id, copy.id] } }, data: { dedupKey: "movie:tmdb:42" } });
+      await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: copy.id } });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Movie delete",
+        type: "MOVIE",
+        actionType: "DELETE_RADARR",
+        arrInstanceId: "arr-1",
+      });
+      await createTestRuleMatch(ruleSet.id, movie.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id },
+      });
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/excluded/i);
 
       const { executeAction } = await import("@/lib/lifecycle/actions");
       expect(executeAction).not.toHaveBeenCalled();

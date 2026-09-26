@@ -44,13 +44,24 @@ export async function validateRequest<T extends z.ZodType>(
 
 // ─── Reusable schemas ───
 
+/**
+ * A browser-facing base URL for an integration's "Open in …" links; "" clears
+ * it. Restricted to http(s): a bare `z.url()` accepts `seerr.lan:5055` (it
+ * parses with `seerr.lan:` as the scheme), and the stored value then builds a
+ * link the browser cannot open — nothing tests it the way a connection URL is.
+ */
+const externalLinkUrlSchema = z
+  .union([
+    z.url({ protocol: /^https?$/, error: "External URL must start with http:// or https://" }),
+    z.literal(""),
+  ])
+  .optional();
+
 export const arrInstanceCreateSchema = z.object({
   name: z.string().min(1, "Name is required"),
   url: z.url("Invalid URL format"),
   apiKey: z.string().min(1, "API key is required"),
-  externalUrl: z
-    .union([z.url("Invalid URL format"), z.literal("")])
-    .optional(),
+  externalUrl: externalLinkUrlSchema,
 });
 
 export const arrInstanceUpdateSchema = arrInstanceCreateSchema.partial().extend({
@@ -441,6 +452,9 @@ export const ruleDiffSchema = z.object({
   type: z.enum(["MOVIE", "SERIES", "MUSIC"]),
   seriesScope: z.boolean().optional(),
   serverIds: z.array(z.string()).min(1, "At least one server is required"),
+  /** The editor's unsaved action config; the stored one when absent. */
+  actionEnabled: z.boolean().optional(),
+  actionType: z.string().nullable().optional(),
 });
 
 export const ruleRunSchema = z.object({
@@ -546,6 +560,8 @@ export const seerrInstanceCreateSchema = z.object({
     "URL must start with http:// or https://"
   ),
   apiKey: z.string().min(1, "API key is required"),
+  /** Browser-facing URL for "Open in Seerr" links; "" clears it. */
+  externalUrl: externalLinkUrlSchema,
 });
 
 export const seerrInstanceUpdateSchema = z.object({
@@ -555,6 +571,7 @@ export const seerrInstanceUpdateSchema = z.object({
     "URL must start with http:// or https://"
   ).optional(),
   apiKey: z.string().optional(),
+  externalUrl: externalLinkUrlSchema,
   enabled: z.boolean().optional(),
 });
 

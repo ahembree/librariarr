@@ -10,6 +10,7 @@ import {
   createTestMediaItem,
   createTestRuleSet,
   createTestRuleMatch,
+  createTestExternalId,
 } from "../../setup/test-helpers";
 
 // Critical: redirect prisma to test database
@@ -316,6 +317,132 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
     expect(body.retained[0].id).toBe(item.id);
   });
 
+  it("counts another server's copy of an existing match as that match retained, not added", async () => {
+    // Detection stores a multi-server title once and lists the other copies in
+    // itemData.copies; the engine still returns both copies.
+    const user = await createTestUser();
+    const s1 = await createTestServer(user.id);
+    const s2 = await createTestServer(user.id);
+    const l1 = await createTestLibrary(s1.id, { type: "MOVIE" });
+    const l2 = await createTestLibrary(s2.id, { type: "MOVIE" });
+    const kept = await createTestMediaItem(l1.id, { title: "Shared", type: "MOVIE" });
+    const copy = await createTestMediaItem(l2.id, { title: "Shared", type: "MOVIE" });
+    const ruleSet = await createTestRuleSet(user.id, { name: "Test" });
+    await createTestRuleMatch(ruleSet.id, kept.id, { title: "Shared", parentTitle: null, copies: [{ id: copy.id }] });
+
+    mockEvaluateRules.mockResolvedValue([
+      { id: copy.id, title: "Shared", parentTitle: null },
+      { id: kept.id, title: "Shared", parentTitle: null },
+    ]);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    const response = await callRouteWithParams(
+      POST,
+      { id: ruleSet.id },
+      {
+        url: `/api/lifecycle/rules/${ruleSet.id}/diff`,
+        method: "POST",
+        body: { rules: validRules, type: "MOVIE", serverIds: [s1.id, s2.id] },
+      }
+    );
+    const body = await expectJson<{
+      retained: { id: string }[];
+      counts: { added: number; removed: number; retained: number };
+    }>(response, 200);
+
+    expect(body.counts).toEqual({ added: 0, removed: 0, retained: 1 });
+    expect(body.retained[0].id).toBe(kept.id);
+  });
+
+  describe("two copies of a title that newly match together", () => {
+    async function twoNewCopies(ruleSetOverrides: Parameters<typeof createTestRuleSet>[1] = {}) {
+      const user = await createTestUser();
+      const s1 = await createTestServer(user.id);
+      const s2 = await createTestServer(user.id);
+      const l1 = await createTestLibrary(s1.id, { type: "MOVIE" });
+      const l2 = await createTestLibrary(s2.id, { type: "MOVIE" });
+      const a = await createTestMediaItem(l1.id, { title: "Shared", type: "MOVIE" });
+      const b = await createTestMediaItem(l2.id, { title: "Shared", type: "MOVIE" });
+      await createTestExternalId(a.id, "TMDB", "603");
+      await createTestExternalId(b.id, "TMDB", "603");
+      const ruleSet = await createTestRuleSet(user.id, { name: "Test", ...ruleSetOverrides });
+      // The engine returns rows without external ids; the route loads them.
+      mockEvaluateRules.mockResolvedValue([
+        { id: b.id, title: "Shared", parentTitle: null },
+        { id: a.id, title: "Shared", parentTitle: null },
+      ]);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      return { a, b, ruleSet, serverIds: [s1.id, s2.id] };
+    }
+
+    async function diff(ruleSetId: string, body: Record<string, unknown>) {
+      const response = await callRouteWithParams(
+        POST,
+        { id: ruleSetId },
+        { url: `/api/lifecycle/rules/${ruleSetId}/diff`, method: "POST", body },
+      );
+      return expectJson<{
+        added: { id: string; copyIds?: string[] }[];
+        counts: { added: number; removed: number; retained: number };
+      }>(
+        response,
+        200,
+      );
+    }
+
+    it("are added once, on the copy detection would keep, when an action is armed", async () => {
+      const { a, b, ruleSet, serverIds } = await twoNewCopies({
+        actionEnabled: true,
+        actionType: "DELETE_RADARR",
+      });
+
+      const body = await diff(ruleSet.id, { rules: validRules, type: "MOVIE", serverIds });
+
+      expect(body.counts).toEqual({ added: 1, removed: 0, retained: 0 });
+      const [kept, folded] = [a.id, b.id].sort();
+      expect(body.added[0].id).toBe(kept);
+      // The folded copy is named so the editor can mark its preview row too.
+      expect(body.added[0].copyIds).toEqual([folded]);
+    });
+
+    it("keep the copy a held match lists, as detection does, when a third copy with a lower id joins", async () => {
+      const user = await createTestUser();
+      const servers = [await createTestServer(user.id), await createTestServer(user.id), await createTestServer(user.id)];
+      const libs = await Promise.all(servers.map((srv) => createTestLibrary(srv.id, { type: "MOVIE" })));
+      const x = await createTestMediaItem(libs[0].id, { title: "Shared", type: "MOVIE" });
+      const p = await createTestMediaItem(libs[1].id, { title: "Shared", type: "MOVIE" });
+      const q = await createTestMediaItem(libs[2].id, { title: "Shared", type: "MOVIE" });
+      const [z, y] = [p, q].sort((m, n) => (m.id < n.id ? -1 : 1));
+      for (const item of [x, y, z]) await createTestExternalId(item.id, "TMDB", "603");
+      const ruleSet = await createTestRuleSet(user.id, { name: "Test", actionEnabled: true, actionType: "DELETE_RADARR" });
+      await createTestRuleMatch(ruleSet.id, x.id, { title: "Shared", parentTitle: null, copies: [{ id: y.id }] });
+      mockEvaluateRules.mockResolvedValue([
+        { id: z.id, title: "Shared", parentTitle: null },
+        { id: y.id, title: "Shared", parentTitle: null },
+      ]);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const body = await diff(ruleSet.id, {
+        rules: validRules, type: "MOVIE", serverIds: servers.map((srv) => srv.id),
+      });
+
+      expect(body.counts).toEqual({ added: 0, removed: 0, retained: 1 });
+    });
+
+    it("follow the action config being saved, not the stored one", async () => {
+      const { ruleSet, serverIds } = await twoNewCopies({ actionEnabled: false });
+
+      const armed = await diff(ruleSet.id, {
+        rules: validRules, type: "MOVIE", serverIds, actionEnabled: true, actionType: "DELETE_RADARR",
+      });
+      expect(armed.counts.added).toBe(1);
+
+      // A collection-only rule set keeps one match per server copy.
+      const unarmed = await diff(ruleSet.id, { rules: validRules, type: "MOVIE", serverIds });
+      expect(unarmed.counts.added).toBe(2);
+    });
+  });
+
   it("computes full diff with added, removed, and retained", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
@@ -495,6 +622,34 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
       added: unknown[];
       counts: { added: number; removed: number; retained: number };
     }>(response, 200);
+
+    expect(body.counts.added).toBe(0);
+  });
+
+  it("excludes an item whose copy on another server carries the exception", async () => {
+    const user = await createTestUser();
+    const s1 = await createTestServer(user.id);
+    const s2 = await createTestServer(user.id);
+    const item = await createTestMediaItem((await createTestLibrary(s1.id, { type: "MOVIE" })).id, { title: "Kept", type: "MOVIE" });
+    const copy = await createTestMediaItem((await createTestLibrary(s2.id, { type: "MOVIE" })).id, { title: "Kept", type: "MOVIE" });
+    const prisma = getTestPrisma();
+    await prisma.mediaItem.updateMany({ where: { id: { in: [item.id, copy.id] } }, data: { dedupKey: "movie:tmdb:1" } });
+    await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: copy.id } });
+    const ruleSet = await createTestRuleSet(user.id, { name: "Test" });
+
+    mockEvaluateRules.mockResolvedValue([{ id: item.id, title: "Kept", parentTitle: null }]);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    const response = await callRouteWithParams(
+      POST,
+      { id: ruleSet.id },
+      {
+        url: `/api/lifecycle/rules/${ruleSet.id}/diff`,
+        method: "POST",
+        body: { rules: validRules, type: "MOVIE", serverIds: [s1.id] },
+      }
+    );
+    const body = await expectJson<{ counts: { added: number } }>(response, 200);
 
     expect(body.counts.added).toBe(0);
   });

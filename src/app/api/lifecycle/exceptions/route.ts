@@ -8,6 +8,7 @@ import {
   exceptionBulkUpdateSchema,
 } from "@/lib/validation";
 import { removeItemFromCollections } from "@/lib/lifecycle/collections";
+import { protectionKey } from "@/lib/lifecycle/exception-guard";
 import type { Prisma } from "@/generated/prisma/client";
 
 export async function GET(request: NextRequest) {
@@ -108,6 +109,8 @@ export async function POST(request: NextRequest) {
       parentTitle: true,
       albumTitle: true,
       type: true,
+      seriesKey: true,
+      dedupKey: true,
     },
   });
 
@@ -117,7 +120,7 @@ export async function POST(request: NextRequest) {
 
   // Individual scope: original single-item behavior
   if (scope === "individual") {
-    return handleIndividualException(session.userId!, mediaItemId, reason ?? null);
+    return handleIndividualException(session.userId!, mediaItem, reason ?? null);
   }
 
   // Bulk scopes: resolve all related media item IDs
@@ -132,7 +135,12 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    bulkWhere.parentTitle = mediaItem.parentTitle;
+    // The show on every server: by title, and by series identity for another
+    // server's copy titled differently ("The Office" vs "The Office (US)").
+    bulkWhere.OR = [
+      { parentTitle: mediaItem.parentTitle },
+      ...(mediaItem.seriesKey ? [{ seriesKey: mediaItem.seriesKey }] : []),
+    ];
     bulkWhere.type = "SERIES";
   } else if (scope === "artist") {
     if (!mediaItem.parentTitle) {
@@ -157,7 +165,7 @@ export async function POST(request: NextRequest) {
 
   const relatedItems = await prisma.mediaItem.findMany({
     where: bulkWhere,
-    select: { id: true, ratingKey: true, title: true, parentTitle: true, type: true },
+    select: { id: true, dedupKey: true, parentTitle: true, seriesKey: true, type: true },
   });
 
   const mediaItemIds = relatedItems.map((item) => item.id);
@@ -176,73 +184,17 @@ export async function POST(request: NextRequest) {
     skipDuplicates: true,
   });
 
-  // Find rule matches before deleting (needed for collection removal)
-  const matchedRuleSets = await prisma.ruleMatch.findMany({
-    where: {
-      mediaItemId: { in: mediaItemIds },
-      ruleSet: { userId: session.userId },
-    },
-    select: {
-      mediaItemId: true,
-      ruleSet: {
-        select: {
-          id: true,
-          type: true,
-          collection: { select: { name: true } },
-          seriesScope: true,
-        },
-      },
-    },
-  });
-
-  // Bulk-delete RuleMatch records
-  await prisma.ruleMatch.deleteMany({
-    where: {
-      mediaItemId: { in: mediaItemIds },
-      ruleSet: { userId: session.userId },
-    },
-  });
-
-  // Bulk-delete PENDING LifecycleAction records
-  await prisma.lifecycleAction.deleteMany({
-    where: {
-      mediaItemId: { in: mediaItemIds },
-      userId: session.userId!,
-      status: "PENDING",
-    },
-  });
-
-  // Remove items from Plex collections (best-effort)
-  const collectionsToUpdate = matchedRuleSets
-    .filter((m) => m.ruleSet.collection);
-
-  if (collectionsToUpdate.length > 0) {
-    const itemMap = new Map(relatedItems.map((i) => [i.id, i]));
-    for (const match of collectionsToUpdate) {
-      const item = itemMap.get(match.mediaItemId);
-      if (!item) continue;
-      await removeItemFromCollections(
-        session.userId!,
-        match.ruleSet.type,
-        match.ruleSet.collection!.name,
-        item.ratingKey,
-        match.ruleSet.seriesScope && match.ruleSet.type === "SERIES"
-          ? (item.parentTitle ?? item.title)
-          : null
-      ).catch(() => {
-        // Collection removal is best-effort
-      });
-    }
-  }
+  await disarmExcludedItems(session.userId!, relatedItems);
 
   return NextResponse.json({ count: mediaItemIds.length, scope }, { status: 201 });
 }
 
 async function handleIndividualException(
   userId: string,
-  mediaItemId: string,
+  item: ExcludedItem,
   reason: string | null
 ) {
+  const mediaItemId = item.id;
   // Upsert to handle duplicates gracefully
   const exception = await prisma.lifecycleException.upsert({
     where: {
@@ -259,16 +211,83 @@ async function handleIndividualException(
     },
   });
 
-  // Find rule matches before deleting (needed for collection removal)
-  const matchedRuleSets = await prisma.ruleMatch.findMany({
+  await disarmExcludedItems(userId, [item]);
+
+  return NextResponse.json({ exception }, { status: 201 });
+}
+
+interface ExcludedItem {
+  id: string;
+  dedupKey: string | null;
+  parentTitle: string | null;
+  seriesKey: string | null;
+  type: string;
+}
+
+/**
+ * Disarm now what the next detection run would drop because of an exception
+ * on `items` — no more, or a match detection keeps comes straight back with
+ * its countdown restarted:
+ *
+ * - the matches and PENDING actions of the items themselves and of every
+ *   other copy of them (the same `dedupKey` on the user's other servers or
+ *   libraries — `findExceptedItemIds`). A title on several servers is matched
+ *   ONCE, on whichever copy detection kept, so clearing only the excluded
+ *   item's own rows left that match and its armed action in place;
+ * - in grouped-scope (seriesScope) rule sets, the match of the whole show or
+ *   artist, which detection drops when ANY of its items carries an exception,
+ *   on any server (`protectionKey`) — deleted in that rule set only;
+ * - their entries in Plex collections.
+ *
+ * A per-episode match whose group merely lists the item as another server's
+ * copy is left alone: detection only removes the excepted members from it.
+ */
+async function disarmExcludedItems(userId: string, items: ExcludedItem[]): Promise<void> {
+  const dedupKeys = [...new Set(items.map((i) => i.dedupKey).filter((k): k is string => !!k))];
+  const twins =
+    dedupKeys.length > 0
+      ? await prisma.mediaItem.findMany({
+          where: { dedupKey: { in: dedupKeys }, library: { mediaServer: { userId } } },
+          select: { id: true },
+        })
+      : [];
+  const affected = new Set([...items.map((i) => i.id), ...twins.map((t) => t.id)]);
+
+  const groupKeys = new Set(
+    items
+      .map((i) => protectionKey({ parentTitle: i.parentTitle, seriesKey: i.seriesKey, type: i.type }))
+      .filter((k): k is string => !!k),
+  );
+  const parents = [...new Set(items.map((i) => i.parentTitle).filter((t): t is string => !!t))];
+  const seriesKeys = [...new Set(items.map((i) => i.seriesKey).filter((k): k is string => !!k))];
+
+  const candidates = await prisma.ruleMatch.findMany({
     where: {
-      mediaItemId,
       ruleSet: { userId },
+      OR: [
+        { mediaItemId: { in: [...affected] } },
+        ...(groupKeys.size > 0
+          ? [
+              {
+                ruleSet: { userId, seriesScope: true, type: { in: ["SERIES" as const, "MUSIC" as const] } },
+                mediaItem: {
+                  OR: [
+                    ...(parents.length > 0 ? [{ parentTitle: { in: parents } }] : []),
+                    ...(seriesKeys.length > 0 ? [{ seriesKey: { in: seriesKeys } }] : []),
+                  ],
+                },
+              },
+            ]
+          : []),
+      ],
     },
     select: {
+      ruleSetId: true,
+      mediaItemId: true,
+      itemData: true,
+      mediaItem: { select: { parentTitle: true, seriesKey: true } },
       ruleSet: {
         select: {
-          id: true,
           type: true,
           collection: { select: { name: true } },
           seriesScope: true,
@@ -276,59 +295,71 @@ async function handleIndividualException(
       },
     },
   });
+  // Re-keyed through protectionKey: the title/seriesKey probe above also finds
+  // a same-titled DIFFERENT show, which the exception does not protect.
+  const groupHits = candidates.filter(
+    (m) =>
+      !affected.has(m.mediaItemId) &&
+      m.ruleSet.seriesScope &&
+      groupKeys.has(
+        protectionKey({
+          parentTitle: m.mediaItem.parentTitle,
+          seriesKey: m.mediaItem.seriesKey,
+          type: m.ruleSet.type,
+        }) ?? "",
+      ),
+  );
+  const matches = [...candidates.filter((m) => affected.has(m.mediaItemId)), ...groupHits];
+  const pairs = groupHits.map((m) => ({ ruleSetId: m.ruleSetId, mediaItemId: m.mediaItemId }));
 
-  // Remove any existing RuleMatch records for this media item
   await prisma.ruleMatch.deleteMany({
-    where: {
-      mediaItemId,
-      ruleSet: { userId },
-    },
+    where: { ruleSet: { userId }, OR: [{ mediaItemId: { in: [...affected] } }, ...pairs] },
   });
-
-  // Delete any PENDING LifecycleAction records for this media item
   await prisma.lifecycleAction.deleteMany({
-    where: {
-      mediaItemId,
-      userId,
-      status: "PENDING",
-    },
+    where: { userId, status: "PENDING", OR: [{ mediaItemId: { in: [...affected] } }, ...pairs] },
   });
 
-  // Remove the item from any Plex collections it was synced to
-  const collectionsToUpdate = matchedRuleSets
-    .filter((m) => m.ruleSet.collection)
-    .map((m) => m.ruleSet);
-
-  if (collectionsToUpdate.length > 0) {
-    const fullItem = await prisma.mediaItem.findUnique({
-      where: { id: mediaItemId },
-      select: {
-        ratingKey: true,
-        title: true,
-        parentTitle: true,
-        type: true,
-        libraryId: true,
-      },
-    });
-
-    if (fullItem) {
-      for (const ruleSet of collectionsToUpdate) {
-        await removeItemFromCollections(
-          userId,
-          ruleSet.type,
-          ruleSet.collection!.name,
-          fullItem.ratingKey,
-          ruleSet.seriesScope && ruleSet.type === "SERIES"
-            ? (fullItem.parentTitle ?? fullItem.title)
-            : null
-        ).catch(() => {
-          // Collection removal is best-effort; don't fail the exclusion
-        });
-      }
+  // Take each match's items out of its Plex collection: the kept copy and the
+  // copies it listed — each from its OWN library, since a rating key only
+  // identifies an item within one server.
+  const withCollection = matches.filter((m) => m.ruleSet.collection);
+  if (withCollection.length === 0) return;
+  const reps = await prisma.mediaItem.findMany({
+    where: { id: { in: withCollection.map((m) => m.mediaItemId) } },
+    select: { id: true, ratingKey: true, libraryId: true, title: true, parentTitle: true },
+  });
+  const repById = new Map(reps.map((r) => [r.id, r]));
+  for (const match of withCollection) {
+    const rep = repById.get(match.mediaItemId);
+    const data = match.itemData as Record<string, unknown> | null;
+    const copies = Array.isArray(data?.copies)
+      ? (data.copies as Array<{ libraryId?: unknown; ratingKey?: unknown; title?: unknown; parentTitle?: unknown }>)
+      : [];
+    const entries = [
+      ...(rep ? [rep] : []),
+      ...copies
+        .filter((c) => typeof c.libraryId === "string" && typeof c.ratingKey === "string")
+        .map((c) => ({
+          libraryId: c.libraryId as string,
+          ratingKey: c.ratingKey as string,
+          title: typeof c.title === "string" ? c.title : "",
+          parentTitle: typeof c.parentTitle === "string" ? c.parentTitle : null,
+        })),
+    ];
+    const { type, collection, seriesScope } = match.ruleSet;
+    for (const entry of entries) {
+      await removeItemFromCollections(
+        userId,
+        type,
+        collection!.name,
+        entry.ratingKey,
+        seriesScope && type === "SERIES" ? (entry.parentTitle ?? entry.title) : null,
+        entry.libraryId,
+      ).catch(() => {
+        // Collection removal is best-effort; don't fail the exclusion
+      });
     }
   }
-
-  return NextResponse.json({ exception }, { status: 201 });
 }
 
 export async function DELETE(request: NextRequest) {

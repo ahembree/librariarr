@@ -7,6 +7,8 @@ import {
   maintenanceSchema,
   authSetupSchema,
   arrInstanceCreateSchema,
+  seerrInstanceCreateSchema,
+  seerrInstanceUpdateSchema,
   syncScheduleSchema,
   logRetentionSchema,
   terminateSessionSchema,
@@ -266,6 +268,30 @@ describe("arrInstanceCreateSchema", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  // A bare URL check accepts "radarr.lan:7878" (scheme "radarr.lan:"), which
+  // stores a link the browser cannot open — nothing tests an external URL.
+  it.each(["radarr.lan:7878", "localhost:7878", "ftp://radarr.lan"])(
+    "rejects an external URL without http(s): %s",
+    (externalUrl) => {
+      for (const schema of [arrInstanceCreateSchema, seerrInstanceCreateSchema]) {
+        const result = schema.safeParse({ name: "X", url: "http://x:1", apiKey: "k", externalUrl });
+        expect(result.success).toBe(false);
+      }
+      expect(seerrInstanceUpdateSchema.safeParse({ externalUrl }).success).toBe(false);
+    },
+  );
+
+  it.each(["https://radarr.example.com", "http://10.0.0.5:7878/", ""])(
+    "accepts an http(s) external URL, or empty to clear it: %s",
+    (externalUrl) => {
+      for (const schema of [arrInstanceCreateSchema, seerrInstanceCreateSchema]) {
+        const result = schema.safeParse({ name: "X", url: "http://x:1", apiKey: "k", externalUrl });
+        expect(result.success).toBe(true);
+      }
+      expect(seerrInstanceUpdateSchema.safeParse({ externalUrl }).success).toBe(true);
+    },
+  );
 });
 
 describe("maintenanceSchema", () => {

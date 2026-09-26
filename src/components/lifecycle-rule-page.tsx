@@ -103,6 +103,8 @@ interface DiffItem {
   id: string;
   title: string;
   parentTitle: string | null;
+  /** Other preview rows (another server's copy) folded into this match. */
+  copyIds?: string[];
 }
 
 interface DiffData {
@@ -960,19 +962,29 @@ export function LifecycleRulePage({
     try {
       const response = await fetch("/api/integrations/seerr");
       const data = await response.json();
-      const instances = data.instances || [];
+      // Lifecycle evaluation reads every ENABLED instance (fetchSeerrMetadata),
+      // so the editor must too: a disabled instance is not "connected", and
+      // the Requested By choices are the union across enabled instances.
+      const instances = ((data.instances || []) as Array<{ id: string; enabled?: boolean }>)
+        .filter((i) => i.enabled !== false);
       setSeerrConnected(instances.length > 0);
       if (instances.length > 0) {
-        try {
-          const metaRes = await fetch(`/api/integrations/seerr/${instances[0].id}/metadata`);
-          const metaData = await metaRes.json();
-          setDistinctValues((prev) => ({
-            ...prev,
-            seerrRequestedBy: metaData.users ?? [],
-          }));
-        } catch {
-          // Silent failure
-        }
+        const lists = await Promise.all(
+          instances.map(async (inst) => {
+            try {
+              const metaRes = await fetch(`/api/integrations/seerr/${inst.id}/metadata`);
+              if (!metaRes.ok) return [] as string[];
+              const metaData = await metaRes.json();
+              return (metaData.users ?? []) as string[];
+            } catch {
+              return [] as string[];
+            }
+          }),
+        );
+        setDistinctValues((prev) => ({
+          ...prev,
+          seerrRequestedBy: [...new Set(lists.flat())].sort((a, b) => a.localeCompare(b)),
+        }));
       }
     } catch {
       // Seerr not configured — leave as false
@@ -1440,7 +1452,7 @@ export function LifecycleRulePage({
         ? fetch(`/api/lifecycle/rules/${activeRuleSetId}/diff`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(previewBody),
+            body: JSON.stringify({ ...previewBody, actionEnabled, actionType }),
           }).catch(() => null)
         : null;
 
@@ -1466,8 +1478,16 @@ export function LifecycleRulePage({
       if (diffResponse?.ok) {
         const diff = await diffResponse.json() as DiffData & { removedItems?: PreviewItem[] };
         const statusMap = new Map<string, "added" | "removed" | "retained">();
-        for (const item of diff.added) statusMap.set(item.id, "added");
-        for (const item of diff.retained) statusMap.set(item.id, "retained");
+        // Another server's copy folded into a match shares its status — the
+        // preview lists every copy as a row, detection stores the title once.
+        for (const item of diff.added) {
+          statusMap.set(item.id, "added");
+          for (const c of item.copyIds ?? []) statusMap.set(c, "added");
+        }
+        for (const item of diff.retained) {
+          statusMap.set(item.id, "retained");
+          for (const c of item.copyIds ?? []) statusMap.set(c, "retained");
+        }
         for (const item of diff.removed) statusMap.set(item.id, "removed");
 
         // Append removed items (full MediaItem data from diff endpoint) to the preview list
@@ -2988,7 +3008,7 @@ export function LifecycleRulePage({
         <div className="mt-8">
           <div className="flex items-center gap-3 mb-4 flex-wrap">
             <h2 className="text-xl font-bold font-display">
-              Preview Results ({previewDiffCounts ? preview.length - (previewDiffCounts.removed) : preview.length} matches)
+              Preview Results ({previewDiffCounts ? previewDiffCounts.added + previewDiffCounts.retained : preview.length} matches)
             </h2>
             {previewDiffCounts && (previewDiffCounts.added > 0 || previewDiffCounts.removed > 0) && (
               <div className="flex items-center gap-2 text-sm">
@@ -3433,7 +3453,7 @@ export function LifecycleRulePage({
                 if (!activeRuleSetId) return;
                 setLoadingDiff(true);
                 try {
-                  const diffBody: Record<string, unknown> = { rules: groups, type: mediaType, serverIds };
+                  const diffBody: Record<string, unknown> = { rules: groups, type: mediaType, serverIds, actionEnabled, actionType };
                   if (scopeConfig) diffBody.seriesScope = seriesScope;
                   const res = await fetch(`/api/lifecycle/rules/${activeRuleSetId}/diff`, {
                     method: "POST",

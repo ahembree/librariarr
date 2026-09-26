@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { SeerrClient } from "@/lib/seerr/seerr-client";
+import { SeerrClient, seerrRequesterKey } from "@/lib/seerr/seerr-client";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { logger } from "@/lib/logger";
 
@@ -45,7 +45,8 @@ export async function GET(
       }
       const response = await client.getUsers({ take, skip });
       for (const user of response.results) {
-        const name = user.plexUsername || user.username || user.email;
+        // Same name the rule engine evaluates "Requested By" against.
+        const name = seerrRequesterKey(user);
         if (name) users.push(name);
       }
       skip += take;

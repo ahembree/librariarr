@@ -1,7 +1,7 @@
 import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
-import { configureRetry } from "@/lib/http-retry";
+import { configureRetry, NO_RETRY } from "@/lib/http-retry";
 
 // Tracked-download states that mean the item is NOT actively downloading.
 // Anything else (downloading, queued, warning, etc.) counts as an active download.
@@ -115,6 +115,12 @@ export class SonarrClient {
       return config;
     });
 
+    // Must be registered BEFORE the IntegrationError conversion below: axios
+    // runs response interceptors in registration order, and the retry handler
+    // needs the raw AxiosError (`config`/`response`). Registered after it, the
+    // retry only ever saw an IntegrationError and rethrew every failure.
+    configureRetry(this.client, "Sonarr", logger);
+
     this.client.interceptors.response.use(
       (response) => response,
       (error) => {
@@ -133,13 +139,11 @@ export class SonarrClient {
         return Promise.reject(error);
       }
     );
-
-    configureRetry(this.client, "Sonarr", logger);
   }
 
   async testConnection(): Promise<{ ok: boolean; error?: string; appName?: string; version?: string }> {
     try {
-      const response = await this.client.get("/api/v3/system/status");
+      const response = await this.client.get("/api/v3/system/status", { ...NO_RETRY });
       const { appName, version } = response.data;
       if (appName && appName !== "Sonarr") {
         return { ok: false, error: `Expected Sonarr but connected to ${appName}`, appName, version };
@@ -276,9 +280,15 @@ export class SonarrClient {
     return data;
   }
 
+  /**
+   * Only caller is the rule editor's recycle-bin check, which the Save button
+   * waits on — a probe, so it reports the first failure (NO_RETRY) instead of
+   * holding Save through four timeouts.
+   */
   async getMediaManagementConfig(): Promise<SonarrMediaManagementConfig> {
     const { data } = await this.client.get<SonarrMediaManagementConfig>(
-      "/api/v3/config/mediamanagement"
+      "/api/v3/config/mediamanagement",
+      { ...NO_RETRY },
     );
     return data;
   }

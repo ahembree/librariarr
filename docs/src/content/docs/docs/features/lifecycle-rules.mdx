@@ -188,11 +188,13 @@ These fields require a configured [Seerr](/docs/integrations/seerr/) integration
 | Field | Description |
 |-------|-------------|
 | `seerrRequested` | Whether requested in Seerr |
-| `seerrRequestDate` | When the request was made |
+| `seerrRequestDate` | When the most recent request was made |
 | `seerrRequestCount` | Number of requests |
 | `seerrRequestedBy` | Who requested it |
-| `seerrApprovalDate` | When approved |
-| `seerrDeclineDate` | When declined |
+| `seerrApprovalDate` | When the most recent request was approved (including requests Seerr has since marked Completed or Failed) |
+| `seerrDeclineDate` | When the most recent request was declined |
+
+An item with no such date (never requested, never approved, never declined) fails every date comparison except **Not Equals**, exactly like the library's own date fields, and **Not** then applies as usual — so NOT (Request Date in the last 90 days) includes titles nobody ever requested, while NOT (Request Date not equal to a date) does not. Use **Is Empty** / **Is Not Empty** to target them directly. If Seerr's request list can't be read in full, rule sets using Seerr fields are skipped for that run rather than evaluated against a partial list.
 
 :::caution[Seerr criteria need a connected Seerr instance]
 With no Seerr instance connected — after **importing** a rule set, say — the rule builder shows a **"Seerr instance required"** warning and disables Preview, Test Media, and Save until you connect one under Settings → Integrations. Detection skips such rule sets too, for the same reason as *arr fields above.

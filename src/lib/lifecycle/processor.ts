@@ -4,9 +4,16 @@ import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifec
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { logger } from "@/lib/logger";
 import { normalizeTitle, executeAction, extractActionError } from "@/lib/lifecycle/actions";
+import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
-import { findExceptionProtectedGroups, protectionKey, isWholeRecordDestructiveAction, type ProtectionTarget } from "@/lib/lifecycle/exception-guard";
+import {
+  findExceptedItemIds,
+  findExceptionProtectedGroups,
+  protectionKey,
+  isWholeRecordDestructiveAction,
+  type ProtectionTarget,
+} from "@/lib/lifecycle/exception-guard";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
@@ -214,6 +221,21 @@ export async function processLifecycleRules(userId?: string) {
 
   // Cache Plex library items across rule sets to avoid redundant API calls
   const plexItemsCache = new Map<string, Array<{ title: string; ratingKey: string }>>();
+  // Arr/Seerr metadata shared across rule sets of the same owner + type
+  // (mirrors runDetection). Each Seerr request page makes Seerr query every
+  // Arr instance it knows, so re-walking the whole request list once per rule
+  // set multiplied the cost — and let rule sets in one run read different
+  // snapshots. A failed fetch is cached too, so the remaining rule sets of that
+  // type skip immediately (each through its own catch below).
+  const metadataCache = new Map<string, Promise<ArrDataMap | SeerrDataMap>>();
+  const loadMetadata = <T extends ArrDataMap | SeerrDataMap>(key: string, load: () => Promise<T>): Promise<T> => {
+    let pending = metadataCache.get(key);
+    if (!pending) {
+      pending = load();
+      metadataCache.set(key, pending);
+    }
+    return pending as Promise<T>;
+  };
 
   for (const ruleSet of ruleSets) {
     try {
@@ -262,12 +284,18 @@ export async function processLifecycleRules(userId?: string) {
 
       let arrData: ArrDataMap | undefined;
       if (hasArrRules(rules)) {
-        arrData = await fetchArrMetadata(ruleSet.userId, ruleSet.type);
+        const type = ruleSet.type;
+        arrData = await loadMetadata(`arr:${ruleSet.userId}:${type}`, () =>
+          fetchArrMetadata(ruleSet.userId, type),
+        );
       }
 
       let seerrData: SeerrDataMap | undefined;
       if (hasSeerrRules(rules) && ruleSet.type !== "MUSIC") {
-        seerrData = await fetchSeerrMetadata(ruleSet.userId, ruleSet.type);
+        const type = ruleSet.type;
+        seerrData = await loadMetadata(`seerr:${ruleSet.userId}:${type}`, () =>
+          fetchSeerrMetadata(ruleSet.userId, type),
+        );
       }
 
       // Snapshot previous match IDs before detection writes new ones (for notifications)
@@ -471,6 +499,17 @@ export async function executeLifecycleActions(userId?: string) {
     select: { userId: true, mediaItemId: true },
   });
   const exceptionSet = new Set(allExceptions.map((e) => `${e.userId}:${e.mediaItemId}`));
+  // An exception on ANOTHER copy of an action's item or member — the same
+  // dedupKey on another server — protects it too: the action acts on the Arr
+  // record every copy is backed by. Excluding a title from the library page of
+  // the copy detection did not keep left the kept copy's action armed.
+  for (const uid of new Set(allExceptions.map((e) => e.userId))) {
+    const candidates = pendingActions
+      .filter((a) => a.userId === uid)
+      .flatMap((a) => [a.mediaItemId, ...(a.matchedMediaItemIds ?? [])])
+      .filter((id): id is string => !!id);
+    for (const id of await findExceptedItemIds(uid, candidates)) exceptionSet.add(`${uid}:${id}`);
+  }
 
   // Batch the whole-record sibling-exception lookup (exception inviolability,
   // part 2 — see the per-action check below) once per run instead of once per
@@ -690,11 +729,20 @@ export async function executeLifecycleActions(userId?: string) {
   );
 
   // PASS 2 — execute what survived.
+  // Arr instances that failed at the host level this run: their remaining
+  // actions stay PENDING for the next run rather than each paying the client's
+  // retry budget against a dead instance on the serial MAIN_QUEUE.
+  const unreachable = new UnreachableInstances();
+  const deferredByInstance = new Map<string, number>();
   for (const { action, mediaItem, filteredMatchedIds } of executable) {
     // Held by the ceiling: leave it PENDING and untouched so the Pending page
     // can execute it after review. Only destructive actions are held — an
     // unmonitor or a tag scheduled in the same run still applies.
     if (blockedUserIds.has(action.userId) && isDestructiveActionType(action.actionType)) {
+      continue;
+    }
+    if (action.arrInstanceId && unreachable.get(action.arrInstanceId)) {
+      deferredByInstance.set(action.arrInstanceId, (deferredByInstance.get(action.arrInstanceId) ?? 0) + 1);
       continue;
     }
 
@@ -772,6 +820,7 @@ export async function executeLifecycleActions(userId?: string) {
       }
 
     } catch (error) {
+      unreachable.record(action.arrInstanceId, error);
       const msg = extractActionError(error);
       logger.error("Lifecycle", `Failed to execute action ${action.id}`, { error: msg });
       await prisma.lifecycleAction.update({
@@ -805,6 +854,14 @@ export async function executeLifecycleActions(userId?: string) {
       }
 
     }
+  }
+
+  for (const [instanceId, count] of deferredByInstance) {
+    logger.warn(
+      "Lifecycle",
+      `Left ${count} action(s) pending for Arr instance ${instanceId} — it is not answering ` +
+        `(${extractActionError(unreachable.get(instanceId))}); they run on the next execution`,
+    );
   }
 
   // Batch-load Discord webhook settings for every user with notifications to send

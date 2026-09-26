@@ -298,6 +298,8 @@ model SeerrInstance {
   name      String
   url       String
   apiKey    String
+  /// Browser-facing base URL for "Open in Seerr" links; `url` is used when null.
+  externalUrl String?
   enabled   Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -640,10 +642,15 @@ model RuleMatch {
   mediaItemId String
   mediaItem   MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
   itemData    Json
+  /// Other servers' copies of the title this match was collapsed from (the ids
+  /// in itemData.copies), as a column so "is this item matched as a copy" is
+  /// an index probe rather than a scan over every match's JSON.
+  copyIds     String[]  @default([])
   detectedAt  DateTime  @default(now())
 
   // [ruleSetId] alone is covered by the composite unique's leading column.
   @@unique([ruleSetId, mediaItemId])
+  @@index([copyIds], type: Gin)
 }
 
 model LifecycleException {

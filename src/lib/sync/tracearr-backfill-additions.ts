@@ -8,6 +8,8 @@ import {
   resolveInstanceForServer,
 } from "@/lib/sync/sync-tracearr-history";
 import { TracearrClient } from "@/lib/tracearr/tracearr-client";
+import { IntegrationError } from "@/lib/integration-error";
+import { isHostLevelFailure } from "@/lib/lifecycle/unreachable-instances";
 
 /**
  * Recover the watch history of an item that left the library and came back.
@@ -262,7 +264,25 @@ export async function recoverHistoryForNewItems(
       // query and the write, so the required media FK rejects it) — either way
       // the item is still a candidate on the next run, because the query that
       // found it derives candidacy from the rows, not from a cursor.
+      // Cancelled: not this item's failure, and not the host's either.
+      if (signal?.aborted) break;
       failed++;
+      // A failure of the HOST, not the item, will fail every remaining
+      // candidate the same way, and each of those would pay the client's whole
+      // retry budget (four 20s timeouts plus backoff) on the serial MAIN_QUEUE.
+      // Stop; the next run re-derives the same candidates from the rows. Host
+      // level is the shared `isHostLevelFailure` (refused connection, or a
+      // read unanswered / 502-504 after its retries) plus a 429 that outlasted
+      // the client's own retry — an item-specific 500 is not one of them.
+      if (isHostLevelFailure(error) || (error instanceof IntegrationError && error.status === 429)) {
+        logger.warn(
+          "WatchHistory",
+          `Stopping Tracearr play recovery on "${server.name}" after ${checked} of ` +
+            `${candidates.length} candidate(s) — Tracearr is not answering; the rest are retried next run`,
+          { error: String(error) },
+        );
+        break;
+      }
       logger.warn(
         "WatchHistory",
         `Could not recover Tracearr history for "${candidate.title}" on ` +

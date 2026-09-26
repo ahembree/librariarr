@@ -312,7 +312,8 @@ export default function QueryPage() {
 
   // Seerr integration status
   const [seerrConnected, setSeerrConnected] = useState(false);
-  const [seerrInstanceId, setSeerrInstanceId] = useState<string | null>(null);
+  // Every enabled instance — the query engine merges them all, like lifecycle rules.
+  const [seerrInstanceIds, setSeerrInstanceIds] = useState<readonly string[]>([]);
 
   // Integration reachability (configured but currently online?)
   const { health: integrationsHealth } = useIntegrationsHealth();
@@ -326,10 +327,6 @@ export default function QueryPage() {
       (id): id is string => Boolean(id),
     ),
     [arrServerIds.radarr, arrServerIds.sonarr, arrServerIds.lidarr],
-  );
-  const seerrInstanceIds = useMemo<readonly string[]>(
-    () => (seerrInstanceId ? [seerrInstanceId] : []),
-    [seerrInstanceId],
   );
   const integrationsStatus = useMemo(
     () => deriveIntegrationsStatus(integrationsHealth, {
@@ -418,18 +415,25 @@ export default function QueryPage() {
     fetch("/api/integrations/seerr")
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
-        const instances = data?.instances ?? [];
+        // Only enabled instances answer Seerr criteria (the engine merges every
+        // enabled one); treating a disabled one as connected hid the
+        // "can't be evaluated" warning.
+        const instances = ((data?.instances ?? []) as Array<{ id: string; enabled?: boolean }>)
+          .filter((i) => i.enabled !== false);
         setSeerrConnected(instances.length > 0);
-        setSeerrInstanceId(instances.length > 0 ? instances[0].id : null);
+        setSeerrInstanceIds(instances.map((i) => i.id));
         if (instances.length > 0) {
-          fetch(`/api/integrations/seerr/${instances[0].id}/metadata`)
-            .then((r) => r.ok ? r.json() : null)
-            .then((metaData) => {
-              if (metaData?.users) {
-                setDistinctValues((prev) => ({ ...prev, seerrRequestedBy: metaData.users }));
-              }
-            })
-            .catch(() => {});
+          Promise.all(
+            instances.map((inst) =>
+              fetch(`/api/integrations/seerr/${inst.id}/metadata`)
+                .then((r) => (r.ok ? r.json() : null))
+                .then((metaData) => (metaData?.users ?? []) as string[])
+                .catch(() => [] as string[]),
+            ),
+          ).then((lists) => {
+            const users = [...new Set(lists.flat())].sort((a, b) => a.localeCompare(b));
+            setDistinctValues((prev) => ({ ...prev, seerrRequestedBy: users }));
+          });
         }
       })
       .catch(() => {});
@@ -763,9 +767,8 @@ export default function QueryPage() {
       sortOrder,
       includeEpisodes,
       ...(Object.keys(cleanedArrServerIds).length > 0 && { arrServerIds: cleanedArrServerIds }),
-      ...(seerrInstanceId && { seerrInstanceId }),
     };
-  }, [mediaTypes, selectedServerIds, groups, sortBy, sortOrder, includeEpisodes, arrServerIds, seerrInstanceId]);
+  }, [mediaTypes, selectedServerIds, groups, sortBy, sortOrder, includeEpisodes, arrServerIds]);
 
   // Inverse of buildDefinition: load a QueryDefinition into the builder. Shared
   // by saved-query loads, draft restore, and New, so the field list lives once.

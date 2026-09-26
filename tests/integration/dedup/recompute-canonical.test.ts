@@ -182,6 +182,42 @@ describe("recomputeCanonical", () => {
     expect(updated2!.dedupCanonical).toBe(false);
   });
 
+  it("prefers a copy on an enabled server over an older or preferred copy on a disabled one", async () => {
+    // A disabled server keeps its items; if one stayed canonical, every query
+    // combining dedupCanonical with the enabled-server scope lost the title.
+    const user = await createTestUser();
+    const disabled = await createTestServer(user.id, { name: "Disabled" });
+    const enabled = await createTestServer(user.id, { name: "Enabled" });
+    const libOff = await createTestLibrary(disabled.id, { type: "MOVIE" });
+    const libOn = await createTestLibrary(enabled.id, { type: "MOVIE" });
+    const onDisabled = await createTestMediaItem(libOff.id, { title: "Dune", type: "MOVIE" });
+    const onEnabled = await createTestMediaItem(libOn.id, { title: "Dune", type: "MOVIE" });
+    await testPrisma.mediaItem.update({
+      where: { id: onEnabled.id },
+      data: { createdAt: new Date(Date.now() + 1000) },
+    });
+    for (const id of [onDisabled.id, onEnabled.id]) {
+      await testPrisma.mediaItem.update({ where: { id }, data: { dedupKey: "movie:tmdb:438631" } });
+    }
+    await testPrisma.mediaServer.update({ where: { id: disabled.id }, data: { enabled: false } });
+
+    for (const preferred of [null, disabled.id]) {
+      await testPrisma.appSettings.deleteMany({ where: { userId: user.id } });
+      if (preferred) {
+        await testPrisma.appSettings.create({ data: { userId: user.id, preferredTitleServerId: preferred } });
+      }
+      await recomputeCanonical(user.id);
+
+      const [a, b] = await Promise.all(
+        [onDisabled.id, onEnabled.id].map((id) =>
+          testPrisma.mediaItem.findUnique({ where: { id }, select: { dedupCanonical: true } })
+        )
+      );
+      expect(b!.dedupCanonical).toBe(true);
+      expect(a!.dedupCanonical).toBe(false);
+    }
+  });
+
   it("items without dedupKey remain canonical", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id, { name: "Server 1" });
