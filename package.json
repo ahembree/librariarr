@@ -94,6 +94,7 @@
     "recharts": "^3.10.1",
     "sharp": "^0.35.3",
     "sonner": "^2.0.8",
+    "swagger-ui-dist": "^5.33.0",
     "tailwind-merge": "^3.6.0",
     "ws": "^8.21.1",
     "zod": "^4.5.4"
@@ -108,6 +109,7 @@
     "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/swagger-ui-dist": "^3.30.6",
     "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^10.8.0",

@@ -1,0 +1,129 @@
+/*
+ * Swagger UI ships a light theme; the app is dark. These overrides map its
+ * palette onto the app's OKLCH tokens. Scoped to `.api-docs` so nothing leaks.
+ */
+.api-docs .swagger-ui,
+.api-docs .swagger-ui .info .title,
+.api-docs .swagger-ui .info p,
+.api-docs .swagger-ui .info li,
+.api-docs .swagger-ui .info a,
+.api-docs .swagger-ui .opblock-tag,
+.api-docs .swagger-ui .opblock .opblock-summary-description,
+.api-docs .swagger-ui .opblock .opblock-section-header h4,
+.api-docs .swagger-ui .opblock-description-wrapper p,
+.api-docs .swagger-ui .parameter__name,
+.api-docs .swagger-ui .parameter__type,
+.api-docs .swagger-ui .parameter__in,
+.api-docs .swagger-ui table thead tr th,
+.api-docs .swagger-ui table thead tr td,
+.api-docs .swagger-ui .response-col_status,
+.api-docs .swagger-ui .response-col_description,
+.api-docs .swagger-ui .responses-inner h4,
+.api-docs .swagger-ui .responses-inner h5,
+.api-docs .swagger-ui .model-title,
+.api-docs .swagger-ui .model,
+.api-docs .swagger-ui .prop-type,
+.api-docs .swagger-ui .tab li,
+.api-docs .swagger-ui .btn,
+.api-docs .swagger-ui label,
+.api-docs .swagger-ui .dialog-ux .modal-ux-header h3,
+.api-docs .swagger-ui .dialog-ux .modal-ux-content p,
+.api-docs .swagger-ui .dialog-ux .modal-ux-content h4,
+.api-docs .swagger-ui .scheme-container .schemes-title,
+.api-docs .swagger-ui .markdown p,
+.api-docs .swagger-ui .markdown li,
+.api-docs .swagger-ui .markdown code,
+.api-docs .swagger-ui .renderedMarkdown p,
+.api-docs .swagger-ui .renderedMarkdown code,
+.api-docs .swagger-ui .opblock-summary-path,
+.api-docs .swagger-ui .opblock-summary-path__deprecated,
+.api-docs .swagger-ui .auth-container .wrapper p,
+.api-docs .swagger-ui .auth-container code,
+.api-docs .swagger-ui .response-control-media-type__title,
+.api-docs .swagger-ui .servers-title,
+.api-docs .swagger-ui .servers > label {
+  color: var(--foreground);
+}
+
+.api-docs .swagger-ui .info .title small pre,
+.api-docs .swagger-ui .info hgroup.main a {
+  color: var(--muted-foreground);
+}
+
+.api-docs .swagger-ui .scheme-container,
+.api-docs .swagger-ui .dialog-ux .modal-ux,
+.api-docs .swagger-ui .opblock .opblock-section-header,
+.api-docs .swagger-ui section.models,
+.api-docs .swagger-ui section.models .model-container {
+  background: var(--card);
+  box-shadow: none;
+  border-color: var(--border);
+}
+
+.api-docs .swagger-ui .opblock {
+  border-color: var(--border);
+  background: color-mix(in oklch, var(--card) 85%, var(--primary));
+  box-shadow: none;
+}
+
+.api-docs .swagger-ui .opblock .opblock-summary {
+  border-color: var(--border);
+}
+
+.api-docs .swagger-ui .opblock.opblock-get { background: color-mix(in oklch, var(--card) 88%, #3b82f6); border-color: color-mix(in oklch, var(--border) 60%, #3b82f6); }
+.api-docs .swagger-ui .opblock.opblock-post { background: color-mix(in oklch, var(--card) 88%, #22c55e); border-color: color-mix(in oklch, var(--border) 60%, #22c55e); }
+.api-docs .swagger-ui .opblock.opblock-put { background: color-mix(in oklch, var(--card) 88%, #f59e0b); border-color: color-mix(in oklch, var(--border) 60%, #f59e0b); }
+.api-docs .swagger-ui .opblock.opblock-delete { background: color-mix(in oklch, var(--card) 88%, #ef4444); border-color: color-mix(in oklch, var(--border) 60%, #ef4444); }
+
+.api-docs .swagger-ui input[type="text"],
+.api-docs .swagger-ui input[type="password"],
+.api-docs .swagger-ui input[type="search"],
+.api-docs .swagger-ui select,
+.api-docs .swagger-ui textarea {
+  background: var(--background);
+  color: var(--foreground);
+  border-color: var(--border);
+}
+
+.api-docs .swagger-ui .btn {
+  border-color: var(--border);
+  box-shadow: none;
+}
+
+.api-docs .swagger-ui .btn.authorize,
+.api-docs .swagger-ui .btn.authorize svg {
+  color: var(--primary);
+  fill: var(--primary);
+  border-color: var(--primary);
+}
+
+.api-docs .swagger-ui .btn.execute {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--primary);
+}
+
+.api-docs .swagger-ui .opblock-body pre.microlight,
+.api-docs .swagger-ui .highlight-code > .microlight,
+.api-docs .swagger-ui .curl-command .curl,
+.api-docs .swagger-ui .model-box,
+.api-docs .swagger-ui .responses-inner .highlight-code {
+  background: var(--muted) !important;
+  color: var(--foreground) !important;
+}
+
+.api-docs .swagger-ui .tab li button.tablinks,
+.api-docs .swagger-ui .opblock-summary-control:focus,
+.api-docs .swagger-ui .expand-operation svg,
+.api-docs .swagger-ui .arrow,
+.api-docs .swagger-ui .authorization__btn svg,
+.api-docs .swagger-ui .opblock-summary .view-line-link {
+  color: var(--foreground);
+  fill: var(--foreground);
+}
+
+.api-docs .swagger-ui .opblock-tag { border-bottom-color: var(--border); }
+.api-docs .swagger-ui table tbody tr td { border-color: var(--border); }
+.api-docs .swagger-ui .loading-container .loading::after { color: var(--muted-foreground); }
+.api-docs .swagger-ui .dialog-ux .backdrop-ux { background: rgba(0, 0, 0, 0.7); }
+.api-docs .swagger-ui .auth-btn-wrapper .btn-done { color: var(--foreground); }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import {
   AlertCircle,
@@ -254,12 +255,12 @@ export function ApiKeysSection({ hasPassword }: { hasPassword: boolean }) {
       }
       action={
         <div className="flex flex-wrap items-center gap-2">
-          {/* Built per request from the route table, so it is never stale. */}
+          {/* Swagger UI over the document built per request from the route table. */}
           <Button variant="outline" size="sm" asChild>
-            <a href="/api/settings/api-keys/openapi" target="_blank" rel="noopener noreferrer">
+            <Link href="/settings/api-docs">
               <FileJson className="mr-1.5 h-4 w-4" />
-              View OpenAPI spec
-            </a>
+              API docs
+            </Link>
           </Button>
           <Button variant="outline" size="sm" asChild>
             <a href="/api/settings/api-keys/openapi?download=1" download="librariarr-openapi.json">
