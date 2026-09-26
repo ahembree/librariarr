@@ -1,0 +1,125 @@
+---
+/**
+ * Swagger UI over `/openapi.json`, which the docs build generates from the
+ * app's own OpenAPI source (`scripts/generate-openapi.ts`) — so this page
+ * describes the version the docs were built from, never a hand-kept file.
+ * The viewer is bundled from `swagger-ui-dist`, not loaded from a CDN.
+ */
+---
+
+<div id="api-reference" class="api-reference not-content"></div>
+
+<script>
+  import SwaggerUI from "swagger-ui-dist/swagger-ui-es-bundle.js";
+  import "swagger-ui-dist/swagger-ui.css";
+
+  const node = document.getElementById("api-reference");
+  if (node) {
+    SwaggerUI({
+      url: `${import.meta.env.BASE_URL.replace(/\/$/, "")}/openapi.json`,
+      domNode: node,
+      docExpansion: "list",
+      defaultModelsExpandDepth: -1,
+      displayRequestDuration: true,
+      persistAuthorization: false,
+    });
+  }
+</script>
+
+<style is:global>
+  /* Swagger UI ships a light theme; Starlight has both. Map its palette onto
+     Starlight's tokens so the reference follows the reader's theme. */
+  .api-reference .swagger-ui,
+  .api-reference .swagger-ui .info .title,
+  .api-reference .swagger-ui .info p,
+  .api-reference .swagger-ui .info li,
+  .api-reference .swagger-ui .opblock-tag,
+  .api-reference .swagger-ui .opblock .opblock-summary-description,
+  .api-reference .swagger-ui .opblock .opblock-section-header h4,
+  .api-reference .swagger-ui .opblock-description-wrapper p,
+  .api-reference .swagger-ui .parameter__name,
+  .api-reference .swagger-ui .parameter__type,
+  .api-reference .swagger-ui .parameter__in,
+  .api-reference .swagger-ui table thead tr th,
+  .api-reference .swagger-ui table thead tr td,
+  .api-reference .swagger-ui .response-col_status,
+  .api-reference .swagger-ui .response-col_description,
+  .api-reference .swagger-ui .responses-inner h4,
+  .api-reference .swagger-ui .responses-inner h5,
+  .api-reference .swagger-ui .tab li,
+  .api-reference .swagger-ui .btn,
+  .api-reference .swagger-ui label,
+  .api-reference .swagger-ui .dialog-ux .modal-ux-header h3,
+  .api-reference .swagger-ui .dialog-ux .modal-ux-content p,
+  .api-reference .swagger-ui .dialog-ux .modal-ux-content h4,
+  .api-reference .swagger-ui .scheme-container .schemes-title,
+  .api-reference .swagger-ui .markdown p,
+  .api-reference .swagger-ui .markdown li,
+  .api-reference .swagger-ui .markdown code,
+  .api-reference .swagger-ui .renderedMarkdown p,
+  .api-reference .swagger-ui .renderedMarkdown code,
+  .api-reference .swagger-ui .opblock-summary-path,
+  .api-reference .swagger-ui .auth-container .wrapper p,
+  .api-reference .swagger-ui .auth-container code,
+  .api-reference .swagger-ui .servers-title,
+  .api-reference .swagger-ui .servers > label,
+  .api-reference .swagger-ui .expand-operation svg,
+  .api-reference .swagger-ui .arrow,
+  .api-reference .swagger-ui .authorization__btn svg {
+    color: var(--sl-color-white);
+    fill: var(--sl-color-white);
+  }
+
+  .api-reference .swagger-ui .info .title small pre,
+  .api-reference .swagger-ui .info hgroup.main a {
+    color: var(--sl-color-gray-2);
+  }
+
+  .api-reference .swagger-ui .scheme-container,
+  .api-reference .swagger-ui .dialog-ux .modal-ux,
+  .api-reference .swagger-ui .opblock .opblock-section-header,
+  .api-reference .swagger-ui section.models {
+    background: var(--sl-color-gray-6);
+    box-shadow: none;
+    border-color: var(--sl-color-gray-5);
+  }
+
+  .api-reference .swagger-ui .opblock {
+    box-shadow: none;
+    border-color: var(--sl-color-gray-5);
+  }
+  .api-reference .swagger-ui .opblock.opblock-get { background: color-mix(in srgb, var(--sl-color-gray-6) 85%, #3b82f6); }
+  .api-reference .swagger-ui .opblock.opblock-post { background: color-mix(in srgb, var(--sl-color-gray-6) 85%, #22c55e); }
+  .api-reference .swagger-ui .opblock.opblock-put { background: color-mix(in srgb, var(--sl-color-gray-6) 85%, #f59e0b); }
+  .api-reference .swagger-ui .opblock.opblock-delete { background: color-mix(in srgb, var(--sl-color-gray-6) 85%, #ef4444); }
+
+  .api-reference .swagger-ui input[type="text"],
+  .api-reference .swagger-ui input[type="password"],
+  .api-reference .swagger-ui input[type="search"],
+  .api-reference .swagger-ui select,
+  .api-reference .swagger-ui textarea {
+    background: var(--sl-color-black);
+    color: var(--sl-color-white);
+    border-color: var(--sl-color-gray-5);
+  }
+
+  .api-reference .swagger-ui .btn { border-color: var(--sl-color-gray-4); box-shadow: none; }
+  .api-reference .swagger-ui .btn.authorize,
+  .api-reference .swagger-ui .btn.authorize svg { color: var(--sl-color-accent); fill: var(--sl-color-accent); border-color: var(--sl-color-accent); }
+  .api-reference .swagger-ui .btn.execute { background: var(--sl-color-accent); color: var(--sl-color-black); border-color: var(--sl-color-accent); }
+
+  .api-reference .swagger-ui .opblock-body pre.microlight,
+  .api-reference .swagger-ui .highlight-code > .microlight,
+  .api-reference .swagger-ui .curl-command .curl,
+  .api-reference .swagger-ui .model-box,
+  .api-reference .swagger-ui .responses-inner .highlight-code {
+    background: var(--sl-color-gray-6) !important;
+    color: var(--sl-color-white) !important;
+  }
+
+  .api-reference .swagger-ui .opblock-tag { border-bottom-color: var(--sl-color-gray-5); }
+  .api-reference .swagger-ui table tbody tr td { border-color: var(--sl-color-gray-5); }
+  .api-reference .swagger-ui .dialog-ux .backdrop-ux { background: rgba(0, 0, 0, 0.7); }
+  /* The page's own title and intro already say what this is. */
+  .api-reference .swagger-ui .information-container { display: none; }
+</style>

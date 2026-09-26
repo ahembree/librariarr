@@ -362,8 +362,21 @@ function pathParams(path: string) {
   }));
 }
 
+export interface OpenApiDocumentOptions {
+  /**
+   * Make `baseUrl` a template the reader fills in (`{baseUrl}` with a default),
+   * for a document published away from any instance — the docs site — where
+   * "Try it out" should run against whatever address the reader types.
+   */
+  serverVariables?: Record<string, { default: string; description?: string }>;
+}
+
 /** The OpenAPI document for `/api/v1`, served at `baseUrl`. */
-export function buildOpenApiDocument(baseUrl: string, version: string): Record<string, unknown> {
+export function buildOpenApiDocument(
+  baseUrl: string,
+  version: string,
+  options: OpenApiDocumentOptions = {},
+): Record<string, unknown> {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const op of API_OPERATIONS) {
     const responses: Record<string, unknown> = {};
@@ -427,7 +440,12 @@ export function buildOpenApiDocument(baseUrl: string, version: string): Record<s
         "Rate limits: 600 requests per minute per key (a `limit=0` listing counts as 20). Errors are `{ error }`, sometimes with `details`.",
       ].join("\n"),
     },
-    servers: [{ url: `${baseUrl}/api/v1` }],
+    servers: [
+      {
+        url: `${baseUrl}/api/v1`,
+        ...(options.serverVariables && { variables: options.serverVariables }),
+      },
+    ],
     tags: ["Key", "Library", "Servers and syncs", "Lifecycle", "Streams", "System"].map((name) => ({ name })),
     paths,
     components: {

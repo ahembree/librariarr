@@ -26,6 +26,8 @@ verifyDepsBeforeRun: false
 
 allowBuilds:
   "@prisma/engines": true
+  # swagger-ui-dist's install-time telemetry; never run it.
+  "@scarf/scarf": false
   msw: false
   prisma: true
   sharp: true

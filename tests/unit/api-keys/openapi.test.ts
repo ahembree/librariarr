@@ -69,6 +69,15 @@ describe("OpenAPI document", () => {
     expect(Object.keys(doc.paths["/lifecycle/exceptions"]).sort()).toEqual(["delete", "get", "post"]);
   });
 
+  it("can publish the server as a template the reader fills in (the docs site)", () => {
+    const doc = buildOpenApiDocument("{baseUrl}", "1.0.0", {
+      serverVariables: { baseUrl: { default: "https://librariarr.example.com" } },
+    }) as { servers: unknown[] };
+    expect(doc.servers).toEqual([
+      { url: "{baseUrl}/api/v1", variables: { baseUrl: { default: "https://librariarr.example.com" } } },
+    ]);
+  });
+
   it("gives every operation a unique operationId", () => {
     const doc = buildOpenApiDocument("http://localhost:3000", "0") as {
       paths: Record<string, Record<string, { operationId: string }>>;
