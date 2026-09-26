@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
+import { tryBeginExecute, endExecute } from "@/lib/lifecycle/execute-in-flight";
 import { validateRequest, actionExecuteSchema } from "@/lib/validation";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import {
@@ -36,6 +37,42 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Rule set not found" }, { status: 404 });
   }
 
+  // SINGLE-FLIGHT — a live security review of the public API found that this
+  // route (mirrored as `POST /api/v1/lifecycle/actions/execute`) ran the Arr
+  // deletions inline with nothing serialising it: N overlapping POSTs for the
+  // same rule set each loaded the same matches, each sent the same delete,
+  // each recorded its own `deletedBytes` and each fired the Discord failure
+  // summary — trivially from a script holding a key, or a double-clicked
+  // Execute button. Claimed here, right after the rule set is loaded and
+  // ownership-checked and BEFORE any side effect (the MUSIC+Seerr refusal
+  // below disarms the rule set), and released in the `finally` whatever the
+  // exit. A collision is answered, not queued: the work the second caller
+  // asked for is already being done. See `execute-in-flight.ts`.
+  if (!tryBeginExecute(ruleSet.id)) {
+    return NextResponse.json(
+      { error: "An execution is already running for this rule set" },
+      { status: 409 }
+    );
+  }
+  try {
+    return await executeRuleSet(session, ruleSet, mediaItemIds);
+  } finally {
+    endExecute(ruleSet.id);
+  }
+}
+
+type RuleSetRow = NonNullable<Awaited<ReturnType<typeof prisma.ruleSet.findFirst>>>;
+
+/**
+ * The execution proper. Runs under the rule set's execute lock (see `POST`);
+ * every early return here is a refusal the lock must still cover, because a
+ * few of them (the MUSIC+Seerr disarm) write before they refuse.
+ */
+async function executeRuleSet(
+  session: Awaited<ReturnType<typeof getSession>>,
+  ruleSet: RuleSetRow,
+  mediaItemIds: string[] | undefined,
+): Promise<NextResponse> {
   // A disabled rule set must not fire destructive actions, even manually — the
   // scheduled execution path enforces this via its enabled filter, and a
   // disabled rule set can still hold matches (PUT with clearMatches=false), so

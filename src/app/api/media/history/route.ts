@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { escapeLike } from "@/lib/filters/escape-like";
 import { appCache } from "@/lib/cache/memory-cache";
 import { jsonResponse } from "@/lib/api/json-response";
+import { clampSkip } from "@/lib/api/pagination";
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -14,7 +16,9 @@ export async function GET(request: NextRequest) {
   const page = Math.max(1, parseInt(searchParams.get("page") ?? "1") || 1);
   const rawLimit = parseInt(searchParams.get("limit") ?? "50");
   // Floor at 1 and cap at 200 — a negative/zero limit produced LIMIT 0 or a
-  // negative OFFSET (Postgres rejects negative OFFSET → 500).
+  // negative OFFSET (Postgres rejects negative OFFSET → 500). The OFFSET below
+  // goes through `clampSkip` for the other end: `page=99999999999999999999`
+  // was a 500 (`ValueOutOfRange`) where it should be an empty page.
   const limit = Math.max(1, Math.min(Number.isNaN(rawLimit) ? 50 : rawLimit, 200));
   const search = searchParams.get("search");
   const sortBy = searchParams.get("sortBy") ?? "watchedAt";
@@ -101,8 +105,12 @@ export async function GET(request: NextRequest) {
   }
 
   if (search) {
+    // `escapeLike`: `search` is spliced into an ILIKE pattern. Live,
+    // `?search=%` matched every play and a `%_%_%_…` pattern cost ~10× the
+    // CPU of a plain search on this route (see escape-like.ts).
+    const pattern = `%${escapeLike(search)}%`;
     itemConditions.push(`(mi."title" ILIKE $${paramIdx++} OR mi."parentTitle" ILIKE $${paramIdx++})`);
-    params.push(`%${search}%`, `%${search}%`);
+    params.push(pattern, pattern);
   }
 
   if (startsWith) {
@@ -345,7 +353,7 @@ export async function GET(request: NextRequest) {
       ms."id" AS "ms_id", ms."name" AS "ms_name", ms."type" AS "ms_type"
     ${fromClause}
     ORDER BY ${orderCol} ${orderDir} NULLS LAST, wh."id" ASC
-    LIMIT ${limit + 1} OFFSET ${(page - 1) * limit}`,
+    LIMIT ${limit + 1} OFFSET ${clampSkip((page - 1) * limit)}`,
     ...params,
   );
 

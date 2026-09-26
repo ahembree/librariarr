@@ -144,6 +144,12 @@ describe("authenticateApiKey — keys in the URL", () => {
     ["a key among other parameters", `?limit=5&q=${encodeURIComponent(`find ${key} please`)}`],
     ["a key in the path", `/${key}`],
     ["a named parameter with no value", `?apikey=`],
+    // The URL parser decodes once, so a doubly-encoded key reaches the check
+    // as `lbr%5F…` — live, the one spelling that passed where every other
+    // encoding was refused.
+    ["a doubly-encoded key in a value", `?q=${encodeURIComponent(encodeURIComponent(key))}`],
+    ["a doubly-encoded key as the parameter name", `?${encodeURIComponent(encodeURIComponent(key))}`],
+    ["a doubly-encoded key in the path", `/${encodeURIComponent(encodeURIComponent(key))}`],
   ])("refuses %s with 400 and never looks the key up", async (_label, suffix) => {
     const url = suffix.startsWith("/")
       ? `http://localhost/api/v1/media${suffix}`
@@ -161,6 +167,9 @@ describe("authenticateApiKey — keys in the URL", () => {
     ["a short lbr_ value", "?q=lbr_short"],
     ["a longer run than a key", `?q=${key}X`],
     ["a key-like run inside a longer word", `?q=X${key}`],
+    // A search term with a stray `%` is not valid percent-encoding; the
+    // decode must hand the raw value back rather than throw.
+    ["an undecodable value", "?q=100%25%zz"],
   ])("does not mistake %s for a key", async (_label, suffix) => {
     storedKey();
     const result = await authenticateApiKey(
@@ -370,6 +379,46 @@ describe("authenticateApiKey — request cost", () => {
         request({ "x-api-key": key }, "http://localhost/api/v1/sync/cancel?limit=0", "POST"),
         "media:read",
       );
+      expect(spy).toHaveBeenLastCalledWith("key-1", 1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // The handlers `parseInt` the limit, so every spelling of zero they accept
+  // is a full listing and must cost one. `0x` is the one that is NOT:
+  // `parseInt("0x")` is NaN, and the handlers serve a default page for it.
+  it.each([
+    ["00", FULL_LISTING_REQUEST_COST],
+    ["+0", FULL_LISTING_REQUEST_COST],
+    ["-0", FULL_LISTING_REQUEST_COST],
+    ["0.0", FULL_LISTING_REQUEST_COST],
+    ["0e0", FULL_LISTING_REQUEST_COST],
+    [" 0", FULL_LISTING_REQUEST_COST],
+    ["0abc", FULL_LISTING_REQUEST_COST],
+    ["0x0", FULL_LISTING_REQUEST_COST],
+    ["0x", 1],
+    ["1", 1],
+    ["50", 1],
+    ["abc", 1],
+    ["", 1],
+  ])("charges limit=%j the same as the handler reads it (%i)", async (raw, cost) => {
+    const key = storedKey();
+    const spy = vi.spyOn(apiKeyRequestLimiter, "check");
+    try {
+      const url = `http://localhost/api/v1/media/movies?limit=${encodeURIComponent(raw)}`;
+      await authenticateApiKey(request({ "x-api-key": key }, url), "media:read");
+      expect(spy).toHaveBeenLastCalledWith("key-1", cost);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("charges a read with no limit as one request", async () => {
+    const key = storedKey();
+    const spy = vi.spyOn(apiKeyRequestLimiter, "check");
+    try {
+      await authenticateApiKey(request({ "x-api-key": key }, "http://localhost/api/v1/media/movies?page=2"), "media:read");
       expect(spy).toHaveBeenLastCalledWith("key-1", 1);
     } finally {
       spy.mockRestore();

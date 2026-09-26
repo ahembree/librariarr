@@ -424,6 +424,18 @@ describe("/api/v1 authentication guard", () => {
       await expectJson(await callRoute(serversGET, { headers: withKey(key) }), 429);
     });
 
+    it("counts limit=00 the same — the handlers parseInt it, so it IS a full listing", async () => {
+      // Live: `limit=00` (and `+0`, `0.0`, `0e0`, `0abc`) returned the whole
+      // library charged as one request while `limit=0` cost twenty.
+      const user = await createTestUser();
+      const { key } = await createTestApiKey(user.id, { scopes: ["servers:read"] });
+      for (let i = 0; i < 30; i++) {
+        await expectJson(await callRoute(serversGET, { url: "/api/v1/servers?limit=00", headers: withKey(key) }), 200);
+      }
+      await expectJson(await callRoute(serversGET, { url: "/api/v1/servers?limit=00", headers: withKey(key) }), 429);
+      await expectJson(await callRoute(serversGET, { headers: withKey(key) }), 429);
+    });
+
     it("never logs the presented key", async () => {
       const deadKey = generateApiKey().key;
       await callRoute(meGET, { headers: withKey(deadKey) });

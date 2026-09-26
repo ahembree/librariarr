@@ -73,6 +73,7 @@ vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
     normalizeTitle: actual.normalizeTitle,
     executeAction: mockExecuteAction,
     extractActionError: mockExtractActionError,
+    describeActionError: actual.describeActionError,
   };
 });
 vi.mock("@/lib/lifecycle/collections", () => ({

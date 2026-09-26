@@ -109,7 +109,7 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 | `GET` | `/api/v1/media/recently-added` | Newest additions: `limit` (1–50, default 10), `type`, `serverId` |
 | `GET` | `/api/v1/media/stats` | Library totals: counts, size, and resolution, codec and other breakdowns. `serverId` optional |
 | `GET` | `/api/v1/media/history` | Play history: `page`, `limit` (≤ 200), `search`, `username`, `type` (`MOVIE`, `SERIES` or `MUSIC`; several separated by `\|`), `serverId`, `sortBy`, `sortOrder` |
-| `GET` | `/api/v1/media/{id}` | One item with its streams, external ids and file details |
+| `GET` | `/api/v1/media/{id}` | One item with its streams, external ids and file details. Unlike the app's own view, it omits the file path and its servers' addresses and machine ids |
 | `GET` | `/api/v1/media/{id}/plays` | That item's plays (user, date and time, device): `page`, `limit` (≤ 200, default 50), `serverId` |
 | `GET` | `/api/v1/media/{id}/image` | Artwork (an image, not JSON). `type` (`art`, `parent`, `season`; poster by default) and `w` (`400`, `640` or `800`) |
 
@@ -117,8 +117,8 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
-| `GET` | `/api/v1/servers` | `servers:read` | Media servers with their libraries and latest sync (tokens masked) |
-| `GET` | `/api/v1/sync/status` | `servers:read` | Running and recent sync jobs |
+| `GET` | `/api/v1/servers` | `servers:read` | Media servers with their libraries and latest sync. Tokens, the servers' addresses, machine ids and owner are omitted |
+| `GET` | `/api/v1/sync/status` | `servers:read` | Running and recent sync jobs. Server addresses and machine ids are omitted, and a failed job's error has internal paths and addresses redacted |
 | `POST` | `/api/v1/servers/{id}/sync` | `sync:write` | Sync one server. Optional body `{ "libraryKey": "…" }` to sync one library. `409` if a sync is already running |
 | `POST` | `/api/v1/sync/cancel` | `sync:write` | Stop a server's running or queued sync: `{ "serverId": "…" }` |
 | `POST` | `/api/v1/jobs/sync` | `sync:write` | Queue a sync of every enabled server, the same as **Run now** under Settings → Scheduling. Answers `202` with `{ "queued": true, "jobs": 2 }`, `jobs` being the number of servers queued (a server already syncing is skipped, so `0` is possible). `500` if a sync could not be queued |
@@ -136,7 +136,7 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 | `POST` | `/api/v1/jobs/detection` | `lifecycle:write` | Queue lifecycle detection for every enabled rule set, like **Run now**. Answers `202` with `{ "queued": true, "jobs": 1 }`; read the result from `/api/v1/lifecycle/rules/matches` once the job has run |
 | `DELETE` | `/api/v1/lifecycle/exceptions` | `lifecycle:execute` | Remove exceptions: `{ "ids": ["…"] }` |
 | `DELETE` | `/api/v1/lifecycle/exceptions/{id}` | `lifecycle:execute` | Remove one exception |
-| `POST` | `/api/v1/lifecycle/actions/execute` | `lifecycle:execute` | Run a rule set's action now on its current matches: `{ "ruleSetId": "…", "mediaItemIds": ["…"] }`. Leave out `mediaItemIds` to act on every match; if sent, it must list at least one id. The rule set must be enabled, with actions turned on (`400` otherwise) |
+| `POST` | `/api/v1/lifecycle/actions/execute` | `lifecycle:execute` | Run a rule set's action now on its current matches: `{ "ruleSetId": "…", "mediaItemIds": ["…"] }`. Leave out `mediaItemIds` to act on every match; if sent, it must list at least one id. The rule set must be enabled, with actions turned on (`400` otherwise). `409` while an execution of the same rule set is already running — one runs at a time, so an overlapping call never repeats its deletions |
 | `POST` | `/api/v1/jobs/execution` | `lifecycle:execute` | Queue lifecycle execution (every due pending action), like **Run now**. Answers `202` with `{ "queued": true, "jobs": 1 }` |
 
 ### Streams
@@ -196,7 +196,7 @@ Errors are JSON: `{ "error": "…" }`, sometimes with a `details` array (validat
 
 ## Rate limits
 
-- **Per key:** 600 requests per minute. Past that, the key's requests are answered `429` until the minute is up. A request with `limit=0` returns a whole library rather than a page, so it counts as 20 requests — thirty full listings a minute.
+- **Per key:** 600 requests per minute. Past that, the key's requests are answered `429` until the minute is up. A request with `limit=0` returns a whole library rather than a page, so it counts as 20 requests — thirty full listings a minute. `limit` is read as a number, so every spelling of zero (`00`, `+0`, `0.0`) is a full listing and costs the same.
 - **Unrecognised keys:** at most 1,000 keys that turn out not to exist are looked up per minute, across every client. Past that, until the minute is up, a key that has not been used successfully in the last 15 minutes is answered `429` without being looked up; keys in use are unaffected. This bounds what a flood of random keys can cost, at the price of an idle integration waiting out the minute while such a flood lasts.
 - **Failing keys:** a key that fails 20 times within 15 minutes (deleted, expired, mistyped) is answered `429` for the rest of that window without being looked up, so an application still using a deleted key stops costing anything. Failures are counted per key, not per address, so they never lock out a key that works, even when every client reaches Librariarr from the same address (containers on one Docker host, or `TRUST_PROXY_HEADERS=false`).
 

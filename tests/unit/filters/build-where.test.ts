@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { applyCommonFilters } from "@/lib/filters/build-where";
+import { applyCommonFilters, applyStartsWithFilter } from "@/lib/filters/build-where";
+import { escapeLike } from "@/lib/filters/escape-like";
+import { escapeLike as reExportedEscapeLike } from "@/lib/conditions/where-builder";
 import type { Prisma } from "@/generated/prisma/client";
 
 function buildWhere(params: Record<string, string>): Prisma.MediaItemWhereInput {
@@ -47,6 +49,59 @@ describe("applyCommonFilters", () => {
       const andClauses = where.AND as Prisma.MediaItemWhereInput[];
       const orClause = andClauses.find((c) => "OR" in c);
       expect(orClause).toBeDefined();
+    });
+  });
+
+  describe("LIKE metacharacter escaping", () => {
+    // Prisma's `contains` / `startsWith` compile to LIKE without escaping,
+    // so live `?search=1_ Things` matched "10 Things…" and `?search=%`
+    // matched everything. The escaped value must be what reaches Prisma.
+    it("escapes % _ and \\ in a single contains filter", () => {
+      const where = buildWhere({ videoCodec: "h_264%\\" });
+      expect(where.videoCodec).toEqual({ contains: "h\\_264\\%\\\\", mode: "insensitive" });
+    });
+
+    it("escapes every value of a multi-select contains filter", () => {
+      const where = buildWhere({ videoCodec: "h_264|%" });
+      const andClauses = where.AND as Prisma.MediaItemWhereInput[];
+      const orClause = andClauses.find((c) => "OR" in c);
+      expect(orClause).toEqual({
+        OR: [
+          { videoCodec: { contains: "h\\_264", mode: "insensitive" } },
+          { videoCodec: { contains: "\\%", mode: "insensitive" } },
+        ],
+      });
+    });
+
+    it("escapes the stream audio codec contains filter", () => {
+      const where = buildWhere({ streamAudioCodec: "a_c%" });
+      const andClauses = where.AND as Prisma.MediaItemWhereInput[];
+      expect(andClauses).toContainEqual({
+        streams: { some: { streamType: 2, codec: { contains: "a\\_c\\%", mode: "insensitive" } } },
+      });
+    });
+
+    it("escapes a startsWith value and leaves A-Z untouched", () => {
+      const where: Prisma.MediaItemWhereInput = {};
+      applyStartsWithFilter(where, "title", "%");
+      expect(where.title).toEqual({ startsWith: "\\%", mode: "insensitive" });
+
+      const letter: Prisma.MediaItemWhereInput = {};
+      applyStartsWithFilter(letter, "title", "A");
+      expect(letter.title).toEqual({ startsWith: "A", mode: "insensitive" });
+
+      const merged: Prisma.MediaItemWhereInput = { parentTitle: { not: null } };
+      applyStartsWithFilter(merged, "parentTitle", "_");
+      expect(merged.parentTitle).toEqual({ not: null, startsWith: "\\_", mode: "insensitive" });
+    });
+
+    it("escapeLike escapes exactly the three LIKE metacharacters", () => {
+      expect(escapeLike("1_ Things")).toBe("1\\_ Things");
+      expect(escapeLike("%Things%Hate")).toBe("\\%Things\\%Hate");
+      expect(escapeLike("a\\b")).toBe("a\\\\b");
+      expect(escapeLike("plain title")).toBe("plain title");
+      // The rule engine's import path is a re-export of the same function.
+      expect(reExportedEscapeLike).toBe(escapeLike);
     });
   });
 

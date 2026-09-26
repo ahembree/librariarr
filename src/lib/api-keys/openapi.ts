@@ -86,8 +86,8 @@ export const API_OPERATIONS: readonly Operation[] = [
     tag: "System",
     summary: "App version, database size and counts",
   },
-  { method: "get", path: "/servers", scope: "servers:read", tag: "Servers and syncs", summary: "Media servers with their libraries and latest sync (tokens masked)" },
-  { method: "get", path: "/sync/status", scope: "servers:read", tag: "Servers and syncs", summary: "Running and recent sync jobs" },
+  { method: "get", path: "/servers", scope: "servers:read", tag: "Servers and syncs", summary: "Media servers with their libraries and latest sync (tokens masked; addresses, machine ids and owner omitted)" },
+  { method: "get", path: "/sync/status", scope: "servers:read", tag: "Servers and syncs", summary: "Running and recent sync jobs (server addresses and machine ids omitted, errors redacted)" },
   {
     method: "post",
     path: "/servers/{id}/sync",
@@ -193,7 +193,7 @@ export const API_OPERATIONS: readonly Operation[] = [
       { name: "sortOrder", description: "Sort direction.", schema: { type: "string", enum: ["asc", "desc"] } },
     ],
   },
-  { method: "get", path: "/media/{id}", scope: "media:read", tag: "Library", summary: "One item with streams, external ids and file details" },
+  { method: "get", path: "/media/{id}", scope: "media:read", tag: "Library", summary: "One item with streams, external ids and file details (file path and server addresses omitted)" },
   {
     method: "get",
     path: "/media/{id}/plays",
@@ -274,7 +274,8 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "lifecycle:execute",
     tag: "Lifecycle",
     summary: "Run a rule set's action now on its current matches",
-    description: "Omit `mediaItemIds` to act on every match. The rule set must be enabled with actions turned on. This can delete media through Sonarr, Radarr and Lidarr.",
+    description: "Omit `mediaItemIds` to act on every match. The rule set must be enabled with actions turned on. This can delete media through Sonarr, Radarr and Lidarr. One execution runs per rule set at a time: an overlapping call is refused rather than repeating the deletions.",
+    responses: { "409": "An execution is already running for this rule set" },
     body: {
       description: "",
       required: true,

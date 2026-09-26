@@ -67,6 +67,9 @@ import * as sessions from "@/app/api/v1/tools/sessions/route";
 import * as terminate from "@/app/api/v1/tools/sessions/terminate/route";
 import * as maintenance from "@/app/api/v1/tools/maintenance/route";
 import { GET as appMoviesGET } from "@/app/api/media/movies/route";
+import { GET as appServersGET } from "@/app/api/servers/route";
+import { GET as appMediaItemGET } from "@/app/api/media/[id]/route";
+import { GET as appSyncStatusGET } from "@/app/api/sync/status/route";
 import { API_SCOPES, API_SCOPE_INFO, type ApiScope } from "@/lib/api-keys/scopes";
 import { TASK_LIFECYCLE_DETECTION, TASK_LIFECYCLE_EXECUTION, TASK_SYNC_SERVER } from "@/lib/jobs/constants";
 
@@ -211,6 +214,106 @@ describe("/api/v1 endpoints", () => {
         200,
       );
       expect(viaApi).toEqual(viaApp);
+    });
+
+    it("GET /servers omits each server's address, machine id and owner that the app's own route returns", async () => {
+      const user = await setupUser();
+      const server = await createTestServer(user.id, {
+        name: "Home",
+        url: "https://192-168-1-5.0123abcd.plex.direct:32400",
+        machineId: "machine-home",
+      });
+      await createTestLibrary(server.id, { type: "MOVIE" });
+      await prisma.syncJob.create({
+        data: {
+          mediaServerId: server.id,
+          status: "FAILED",
+          completedAt: new Date(),
+          error: "HTTP 500 (GET https://192-168-1-5.0123abcd.plex.direct:32400/library/sections): boom",
+        },
+      });
+      const { key } = await createTestApiKey(user.id, { scopes: ["servers:read"] });
+
+      type ServerRow = Record<string, unknown> & { libraries: unknown[]; syncJobs: Array<{ error: string | null }> };
+      const viaApi = await expectJson<{ servers: ServerRow[] }>(
+        await call(ROUTES.find((r) => r.label === "GET /servers")!, { authorization: `Bearer ${key}` }),
+        200,
+      );
+      expect(viaApi.servers).toHaveLength(1);
+      const [row] = viaApi.servers;
+      expect(row.name).toBe("Home");
+      expect(row.libraries).toHaveLength(1);
+      for (const k of ["url", "externalUrl", "machineId", "userId", "accessToken"]) expect(row).not.toHaveProperty(k);
+      expect(row.syncJobs[0].error).toBe("HTTP 500 (GET https://[internal]:32400/library/sections): boom");
+      expect(JSON.stringify(viaApi)).not.toContain("plex.direct");
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const viaApp = await expectJson<{ servers: ServerRow[] }>(await callRoute(appServersGET), 200);
+      expect(viaApp.servers[0].url).toBe("https://192-168-1-5.0123abcd.plex.direct:32400");
+      expect(viaApp.servers[0].machineId).toBe("machine-home");
+      expect(viaApp.servers[0].userId).toBe(user.id);
+    });
+
+    it("GET /media/{id} omits the file path and the servers' addresses that the app's own route returns", async () => {
+      const user = await setupUser();
+      const server = await createTestServer(user.id, { url: "http://10.0.0.5:32400", machineId: "machine-a" });
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, {
+        title: "Arrival",
+        year: 2016,
+        filePath: "/data/movies/Arrival (2016)/Arrival.mkv",
+      });
+      const { key } = await createTestApiKey(user.id, { scopes: ["media:read"] });
+
+      type Detail = {
+        item: Record<string, unknown> & { library: { mediaServer: Record<string, unknown> } };
+        playServers: Array<Record<string, unknown>>;
+      };
+      const route = { ...ROUTES.find((r) => r.label === "GET /media/[id]")!, params: { id: item.id } };
+      const viaApi = await expectJson<Detail>(await call(route, { authorization: `Bearer ${key}` }), 200);
+      expect(viaApi.item.title).toBe("Arrival");
+      expect(viaApi.item).not.toHaveProperty("filePath");
+      expect(viaApi.item.library.mediaServer).toEqual({ id: server.id, name: server.name, type: "PLEX" });
+      expect(viaApi.playServers).toHaveLength(1);
+      for (const k of ["serverUrl", "externalUrl", "machineId"]) expect(viaApi.playServers[0]).not.toHaveProperty(k);
+      expect(viaApi.playServers[0].ratingKey).toBe(item.ratingKey);
+      expect(JSON.stringify(viaApi)).not.toContain("10.0.0.5");
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const viaApp = await expectJson<Detail>(await callRouteWithParams(appMediaItemGET, { id: item.id }), 200);
+      expect(viaApp.item.filePath).toBe("/data/movies/Arrival (2016)/Arrival.mkv");
+      expect(viaApp.item.library.mediaServer.url).toBe("http://10.0.0.5:32400");
+      expect(viaApp.item.library.mediaServer.machineId).toBe("machine-a");
+      expect(viaApp.playServers[0].serverUrl).toBe("http://10.0.0.5:32400");
+      expect(viaApp.playServers[0].machineId).toBe("machine-a");
+    });
+
+    it("GET /sync/status sanitizes a job's stored error while the app's own route returns it raw", async () => {
+      const user = await setupUser();
+      const server = await createTestServer(user.id);
+      // A row written before the sync engine sanitized on write.
+      await prisma.syncJob.create({
+        data: {
+          mediaServerId: server.id,
+          status: "FAILED",
+          completedAt: new Date(),
+          error: "connect ECONNREFUSED 192.168.1.20:32400",
+        },
+      });
+      const { key } = await createTestApiKey(user.id, { scopes: ["servers:read"] });
+
+      type Status = { jobs: Array<{ error: string | null; mediaServer: Record<string, unknown> }> };
+      const viaApi = await expectJson<Status>(
+        await call(ROUTES.find((r) => r.label === "GET /sync/status")!, { authorization: `Bearer ${key}` }),
+        200,
+      );
+      expect(viaApi.jobs).toHaveLength(1);
+      expect(viaApi.jobs[0].error).toBe("connect ECONNREFUSED [internal]:32400");
+      expect(viaApi.jobs[0].mediaServer).toEqual({ name: server.name, type: "PLEX" });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const viaApp = await expectJson<Status>(await callRoute(appSyncStatusGET), 200);
+      expect(viaApp.jobs[0].error).toBe("connect ECONNREFUSED 192.168.1.20:32400");
     });
 
     it("POST /jobs/sync queues a sync per enabled server, attributed to the key", async () => {

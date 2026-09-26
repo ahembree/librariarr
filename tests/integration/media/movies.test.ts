@@ -167,6 +167,67 @@ describe("GET /api/media/movies", () => {
     expect(body.items[0].title).toBe("The Matrix");
   });
 
+  it("treats LIKE metacharacters in search literally", async () => {
+    // Live (public API review): `?search=1_ Things` matched "10 Things I Hate
+    // About You" — `_` was a single-character wildcard — and `?search=%`
+    // matched every movie. Prisma's `contains` does not escape `%` / `_`.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id);
+
+    await createTestMediaItem(lib.id, { title: "10 Things I Hate About You", type: "MOVIE" });
+    await createTestMediaItem(lib.id, { title: "1_ Things", type: "MOVIE" });
+    await createTestMediaItem(lib.id, { title: "Inception", type: "MOVIE" });
+
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const literal = await expectJson<{ items: { title: string }[] }>(
+      await callRoute(GET, { url: "/api/media/movies", searchParams: { search: "1_ Things" } }),
+      200,
+    );
+    expect(literal.items.map((i) => i.title)).toEqual(["1_ Things"]);
+
+    // A lone `_` is a literal underscore too: one title has one.
+    const underscore = await expectJson<{ items: { title: string }[] }>(
+      await callRoute(GET, { url: "/api/media/movies", searchParams: { search: "_" } }),
+      200,
+    );
+    expect(underscore.items.map((i) => i.title)).toEqual(["1_ Things"]);
+
+    for (const search of ["%", "%Things%Hate", "%_%_%_%_%"]) {
+      const body = await expectJson<{ items: { title: string }[] }>(
+        await callRoute(GET, { url: "/api/media/movies", searchParams: { search } }),
+        200,
+      );
+      expect(body.items, `search=${search}`).toEqual([]);
+    }
+  });
+
+  it("treats LIKE metacharacters in startsWith literally", async () => {
+    // The UI only sends A-Z or `#`, but the public API can send `%` or `_`,
+    // which unescaped is a prefix every title has.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id);
+
+    await createTestMediaItem(lib.id, { title: "Alpha", type: "MOVIE" });
+    await createTestMediaItem(lib.id, { title: "%Percent", type: "MOVIE" });
+
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const percent = await expectJson<{ items: { title: string }[] }>(
+      await callRoute(GET, { url: "/api/media/movies", searchParams: { startsWith: "%" } }),
+      200,
+    );
+    expect(percent.items.map((i) => i.title)).toEqual(["%Percent"]);
+
+    const underscore = await expectJson<{ items: { title: string }[] }>(
+      await callRoute(GET, { url: "/api/media/movies", searchParams: { startsWith: "_" } }),
+      200,
+    );
+    expect(underscore.items).toEqual([]);
+  });
+
   it("supports sorting by title descending", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
@@ -453,6 +514,18 @@ describe("GET /api/media/movies", () => {
       });
       const body = await expectJson<{ items: unknown[] }>(response, 200);
       expect(body.items).toHaveLength(5);
+    });
+
+    it.each(["page", "offset"])("answers an absurd %s with an empty page, not a 500", async (param) => {
+      // Live: a 500 (`PrismaClientValidationError` — `skip` was no longer an
+      // integer) for a page number that should simply be past the end.
+      const response = await callRoute(GET, {
+        url: "/api/media/movies",
+        searchParams: { [param]: "99999999999999999999" },
+      });
+      const body = await expectJson<{ items: unknown[]; pagination: { hasMore: boolean } }>(response, 200);
+      expect(body.items).toEqual([]);
+      expect(body.pagination.hasMore).toBe(false);
     });
   });
 

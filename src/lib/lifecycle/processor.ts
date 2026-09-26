@@ -3,7 +3,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { logger } from "@/lib/logger";
-import { normalizeTitle, executeAction, extractActionError } from "@/lib/lifecycle/actions";
+import { normalizeTitle, executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
 import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
@@ -822,7 +822,7 @@ export async function executeLifecycleActions(userId?: string) {
     } catch (error) {
       unreachable.record(action.arrInstanceId, error);
       const msg = extractActionError(error);
-      logger.error("Lifecycle", `Failed to execute action ${action.id}`, { error: msg });
+      logger.error("Lifecycle", `Failed to execute action ${action.id}`, { error: describeActionError(error) });
       await prisma.lifecycleAction.update({
         where: { id: action.id },
         data: {
@@ -860,7 +860,7 @@ export async function executeLifecycleActions(userId?: string) {
     logger.warn(
       "Lifecycle",
       `Left ${count} action(s) pending for Arr instance ${instanceId} — it is not answering ` +
-        `(${extractActionError(unreachable.get(instanceId))}); they run on the next execution`,
+        `(${describeActionError(unreachable.get(instanceId))}); they run on the next execution`,
     );
   }
 

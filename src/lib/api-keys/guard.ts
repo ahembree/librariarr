@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { apiLogger } from "@/lib/logger";
+import { isFullListingLimit } from "@/lib/api/pagination";
 import {
   RateLimiter,
   apiKeyCredentialFailureLimiter,
@@ -293,17 +294,51 @@ function rememberValid(keyHash: string): void {
   recentlyValid.set(keyHash, now + RECENTLY_VALID_TTL_MS);
 }
 
-/** Charged against the per-key budget: 1, or `FULL_LISTING_REQUEST_COST` for a `limit=0` read. */
+/**
+ * Charged against the per-key budget: 1, or `FULL_LISTING_REQUEST_COST` for a
+ * full-listing read. "Full listing" is decided by `isFullListingLimit`, the
+ * same rule the handlers apply, never by comparing the raw string to `"0"`:
+ * the handlers `parseInt` the value, so `limit=00`, `+0`, `0.0`, `0e0` and
+ * `0abc` all returned the whole library — verified live — while a string
+ * comparison charged each as one ordinary request.
+ */
 function requestCost(request: NextRequest): number {
   if (request.method !== "GET" && request.method !== "HEAD") return 1;
-  return request.nextUrl.searchParams.get("limit") === "0" ? FULL_LISTING_REQUEST_COST : 1;
+  return isFullListingLimit(request.nextUrl.searchParams.get("limit")) ? FULL_LISTING_REQUEST_COST : 1;
+}
+
+/**
+ * `decodeURIComponent` that hands back the input when it is not valid
+ * percent-encoding, so a stray `%` in a search term cannot turn the guard
+ * into a 400 or a throw.
+ */
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * The URL parser decodes the query string once, so a key percent-encoded
+ * TWICE — `?q=lbr%255F<43 chars>` — reaches this check as `lbr%5F…`, which
+ * the pattern does not match. Verified live: that spelling was a 200 where
+ * every other encoding was a 400. The URL is logged everywhere it passes, and
+ * a proxy or client that decodes one more layer than we do reveals the key,
+ * so each part is tested raw and decoded one more time. One extra pass is
+ * enough: the pattern only ever meets `_` after `lbr`, and a third layer
+ * (`%25255F`) decodes to `%255F`, which is still not a key when it is logged.
+ */
+function carriesKey(part: string): boolean {
+  return containsApiKey(part) || containsApiKey(safeDecode(part));
 }
 
 function urlCarriesKey(url: URL): boolean {
-  if (containsApiKey(url.pathname)) return true;
+  if (carriesKey(url.pathname)) return true;
   for (const [name, value] of url.searchParams) {
     if (KEY_QUERY_PARAMS.has(name.toLowerCase())) return true;
-    if (containsApiKey(name) || containsApiKey(value)) return true;
+    if (carriesKey(name) || carriesKey(value)) return true;
   }
   return false;
 }

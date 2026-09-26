@@ -67,6 +67,16 @@ vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
   };
 });
 
+// Pass-through spy on the inline action runner so the single-flight tests can
+// hold one call open on a deferred promise while a second request arrives.
+vi.mock("@/lib/lifecycle/run-actions", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/lifecycle/run-actions")>();
+  return {
+    ...actual,
+    executeActionsForItems: vi.fn(actual.executeActionsForItems),
+  };
+});
+
 // Import AFTER mocks
 import { GET } from "@/app/api/lifecycle/actions/route";
 import { DELETE as actionDelete, POST as actionRetry } from "@/app/api/lifecycle/actions/[id]/route";
@@ -1085,6 +1095,142 @@ describe("Lifecycle Actions", () => {
 
       const { executeAction } = await import("@/lib/lifecycle/actions");
       expect(executeAction).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---- POST /api/lifecycle/actions/execute — single-flight ----
+
+  describe("POST /api/lifecycle/actions/execute — single-flight per rule set", () => {
+    // A live security review of the public API found that this route ran the
+    // Arr deletions inline with nothing serialising it, so N overlapping POSTs
+    // for one rule set each sent the same delete. The lock is per rule set,
+    // answered with 409, and released whatever the outcome.
+    async function seedExecutable() {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { title: "Locked Movie", type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
+        name: "Single-flight Rule",
+        type: "MOVIE",
+        actionType: "DO_NOTHING",
+      });
+      await createTestRuleMatch(ruleSet.id, item.id);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      return { user, item, ruleSet };
+    }
+
+    const execute = (ruleSetId: string, mediaItemIds: string[]) =>
+      callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId, mediaItemIds },
+      });
+
+    /** Hold the next `executeActionsForItems` call open until `release()`. */
+    async function holdNextRun() {
+      const { executeActionsForItems } = await import("@/lib/lifecycle/run-actions");
+      const runner = vi.mocked(executeActionsForItems);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      runner.mockImplementationOnce(async () => {
+        await gate;
+        return { executed: 1, failed: 0, errors: [], failures: [] };
+      });
+      return { runner, release };
+    }
+
+    it("answers 409 to an overlapping execute of the same rule set and 200 to the one that got there first", async () => {
+      const { item, ruleSet } = await seedExecutable();
+      const { runner, release } = await holdNextRun();
+
+      const first = execute(ruleSet.id, [item.id]);
+      // Wait until the first request is inside the (held) action run — i.e.
+      // past every validation and holding the lock — before racing it.
+      await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(1));
+
+      const second = await execute(ruleSet.id, [item.id]);
+      const collided = await expectJson<{ error: string }>(second, 409);
+      expect(collided.error).toMatch(/already running for this rule set/i);
+      // The second request never reached the runner: no duplicate Arr call.
+      expect(runner).toHaveBeenCalledTimes(1);
+
+      release();
+      const body = await expectJson<{ executed: number; failed: number }>(await first, 200);
+      expect(body.executed).toBe(1);
+    });
+
+    it("does not block a different rule set", async () => {
+      const { user, item, ruleSet } = await seedExecutable();
+      const other = await createTestRuleSet(user.id, {
+        actionEnabled: true,
+        name: "Other Rule",
+        type: "MOVIE",
+        actionType: "DO_NOTHING",
+      });
+      await createTestRuleMatch(other.id, item.id);
+      const { runner, release } = await holdNextRun();
+
+      const first = execute(ruleSet.id, [item.id]);
+      await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(1));
+
+      const otherResponse = await execute(other.id, [item.id]);
+      expect(otherResponse.status).toBe(200);
+
+      release();
+      expect((await first).status).toBe(200);
+    });
+
+    it("releases the lock once the run completes, so a later execute succeeds", async () => {
+      const { item, ruleSet } = await seedExecutable();
+      const { runner, release } = await holdNextRun();
+
+      const first = execute(ruleSet.id, [item.id]);
+      await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(1));
+      expect((await execute(ruleSet.id, [item.id])).status).toBe(409);
+
+      release();
+      expect((await first).status).toBe(200);
+
+      // The held (mocked) run skipped the real cleanup, so the match is still
+      // there for the real runner to act on.
+      const third = await execute(ruleSet.id, [item.id]);
+      const body = await expectJson<{ executed: number }>(third, 200);
+      expect(body.executed).toBe(1);
+      expect(runner).toHaveBeenCalledTimes(2);
+    });
+
+    it("releases the lock when the run throws", async () => {
+      const { item, ruleSet } = await seedExecutable();
+      const { executeActionsForItems } = await import("@/lib/lifecycle/run-actions");
+      vi.mocked(executeActionsForItems).mockRejectedValueOnce(new Error("Arr exploded"));
+
+      await expect(execute(ruleSet.id, [item.id])).rejects.toThrow("Arr exploded");
+
+      const again = await execute(ruleSet.id, [item.id]);
+      expect(again.status).toBe(200);
+    });
+
+    it("refuses a force-retry of the same rule set while an execute holds the lock", async () => {
+      const { user, item, ruleSet } = await seedExecutable();
+      const failedAction = await createTestAction(user.id, item.id, ruleSet.id, { status: "FAILED" });
+      const { runner, release } = await holdNextRun();
+
+      const first = execute(ruleSet.id, [item.id]);
+      await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(1));
+
+      const retry = await callRouteWithParams(actionRetry, { id: failedAction.id }, {
+        url: `/api/lifecycle/actions/${failedAction.id}`,
+        method: "POST",
+      });
+      const body = await expectJson<{ error: string }>(retry, 409);
+      expect(body.error).toMatch(/already running for this rule set/i);
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+
+      release();
+      expect((await first).status).toBe(200);
     });
   });
 

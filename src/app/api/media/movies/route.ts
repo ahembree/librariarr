@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
+import { escapeLike } from "@/lib/filters/escape-like";
 import type { Prisma } from "@/generated/prisma/client";
 import { applyCommonFilters, applyStartsWithFilter } from "@/lib/filters/build-where";
 import { applyStreamCountFilters } from "@/lib/filters/stream-count";
@@ -51,7 +52,10 @@ export async function GET(request: NextRequest) {
     type: "MOVIE",
   };
 
-  if (search) where.title = { contains: search, mode: "insensitive" };
+  // `escapeLike`: `search` becomes a LIKE pattern, and nothing else escapes
+  // `%` / `_` / `\` — live, `?search=1_ Things` matched "10 Things I Hate
+  // About You" and `?search=%` matched everything (see escape-like.ts).
+  if (search) where.title = { contains: escapeLike(search), mode: "insensitive" };
   if (startsWith) applyStartsWithFilter(where, "title", startsWith);
   applyCommonFilters(where, searchParams);
 
