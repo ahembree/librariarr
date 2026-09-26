@@ -30,11 +30,18 @@ describe("runJobForApiKey", () => {
   });
 
   it("queues the job for the key's owner, attributed to the key, and answers 202", async () => {
-    m.runJobNow.mockResolvedValue({ ok: true });
+    m.runJobNow.mockResolvedValue({ ok: true, jobs: 1 });
     const res = await runAsApiKey(PRINCIPAL, () => runJobForApiKey("detection"));
     expect(res.status).toBe(202);
-    expect(await res.json()).toEqual({ queued: true });
+    expect(await res.json()).toEqual({ queued: true, jobs: 1 });
     expect(m.runJobNow).toHaveBeenCalledWith("user-1", "detection", 'via API key "n8n"');
+  });
+
+  it("reports how many jobs a sync queued — 0 when every server is already syncing", async () => {
+    m.runJobNow.mockResolvedValue({ ok: true, jobs: 0 });
+    const res = await runAsApiKey(PRINCIPAL, () => runJobForApiKey("sync"));
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ queued: true, jobs: 0 });
   });
 
   it("passes a failed enqueue through as 500", async () => {

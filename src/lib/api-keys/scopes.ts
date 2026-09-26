@@ -67,14 +67,17 @@ export const API_SCOPE_INFO: Record<ApiScope, ApiScopeInfo> = {
   },
   "lifecycle:write": {
     label: "Manage lifecycle",
-    description: "Run lifecycle detection and add or remove exceptions.",
+    description: "Queue lifecycle detection and add exceptions that protect items.",
     access: "write",
     implies: ["lifecycle:read"],
   },
   "lifecycle:execute": {
+    // Removing an exception belongs here, not under lifecycle:write: it lifts
+    // a protection, after which the rules can match the item and the executor
+    // delete it.
     label: "Execute lifecycle actions",
     description:
-      "Run pending lifecycle actions. This can delete media through Sonarr, Radarr and Lidarr.",
+      "Run pending lifecycle actions and remove exceptions. Either can lead to media being deleted through Sonarr, Radarr and Lidarr.",
     access: "write",
     implies: ["lifecycle:read"],
     destructive: true,

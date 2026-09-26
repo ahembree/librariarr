@@ -144,6 +144,29 @@ describe("RateLimiter.peek", () => {
   });
 });
 
+describe("RateLimiter maxEntries", () => {
+  it("drops the oldest key to admit a new one once full", () => {
+    const limiter = new RateLimiter(1, 60_000, 2);
+    limiter.check("a");
+    limiter.check("b");
+    expect(limiter.peek("a").limited).toBe(true);
+    limiter.check("c"); // evicts "a", the oldest
+    expect(limiter.peek("a").limited).toBe(false);
+    expect(limiter.peek("b").limited).toBe(true);
+    expect(limiter.peek("c").limited).toBe(true);
+  });
+
+  it("does not evict when an existing key is counted again", () => {
+    const limiter = new RateLimiter(5, 60_000, 2);
+    limiter.check("a");
+    limiter.check("b");
+    limiter.check("a");
+    limiter.check("b");
+    expect(limiter.check("a").remaining).toBe(2);
+    expect(limiter.check("b").remaining).toBe(2);
+  });
+});
+
 describe("checkRateLimit", () => {
   it("returns null while under the limit", () => {
     const limiter = new RateLimiter(2, 60_000);

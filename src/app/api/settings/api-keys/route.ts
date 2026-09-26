@@ -47,22 +47,24 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const existing = await prisma.apiKey.count({ where: { userId: session.userId! } });
-  if (existing >= MAX_API_KEYS) {
-    return NextResponse.json(
-      { error: `You can have at most ${MAX_API_KEYS} API keys. Delete one you no longer use first.` },
-      { status: 400 },
-    );
-  }
-
   const scopes = normalizeScopes(data.scopes);
   const { key, prefix, keyHash } = generateApiKey();
 
+  // Counted and inserted under one lock, or concurrent requests each pass the
+  // count and together create more than MAX_API_KEYS.
   let apiKey;
   try {
-    apiKey = await prisma.apiKey.create({
-      data: { userId: session.userId!, name: data.name, prefix, keyHash, scopes, expiresAt },
-      select: API_KEY_PUBLIC_SELECT,
+    apiKey = await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(
+        `SELECT pg_advisory_xact_lock(hashtext('api-key-create:' || $1))`,
+        session.userId!,
+      );
+      const existing = await tx.apiKey.count({ where: { userId: session.userId! } });
+      if (existing >= MAX_API_KEYS) return null;
+      return tx.apiKey.create({
+        data: { userId: session.userId!, name: data.name, prefix, keyHash, scopes, expiresAt },
+        select: API_KEY_PUBLIC_SELECT,
+      });
     });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
@@ -72,6 +74,12 @@ export async function POST(request: NextRequest) {
       );
     }
     throw err;
+  }
+  if (!apiKey) {
+    return NextResponse.json(
+      { error: `You can have at most ${MAX_API_KEYS} API keys. Delete one you no longer use first.` },
+      { status: 400 },
+    );
   }
 
   logger.info(

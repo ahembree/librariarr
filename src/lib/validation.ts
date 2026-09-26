@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { API_SCOPES } from "@/lib/api-keys/scopes";
+import { apiKeyNameProblem } from "@/lib/api-keys/name-rules";
 
 /**
  * Parse and validate request JSON against a Zod schema.
@@ -445,7 +446,13 @@ export const ruleTestItemSchema = z.object({
 
 export const actionExecuteSchema = z.object({
   ruleSetId: z.string().min(1, "Rule set ID is required"),
-  mediaItemIds: z.array(z.string()).optional(),
+  // Omitted = execute every match. An EMPTY list is refused rather than read the
+  // same way: a caller mapping an empty selection to ids would otherwise run
+  // the rule set's action against every match it holds.
+  mediaItemIds: z
+    .array(z.string().min(1))
+    .min(1, "Pass at least one media item id, or omit mediaItemIds to execute every match")
+    .optional(),
 });
 
 export const ruleDiffSchema = z.object({
@@ -518,13 +525,14 @@ export const plexLinkSchema = z.object({
  * route (`normalizeScopes`), so a client may send just the write scope.
  */
 export const apiKeyCreateSchema = z.object({
+  // Rules shared with the settings form (see `name-rules.ts`).
   name: z
     .string()
     .trim()
-    .min(1, "Name is required")
-    .max(64, "Name must be 64 characters or fewer")
-    // The name is written into audit log lines, where a newline would forge one.
-    .regex(/^[^\p{Cc}]+$/u, "Name cannot contain control characters"),
+    .superRefine((name, ctx) => {
+      const problem = apiKeyNameProblem(name);
+      if (problem) ctx.addIssue({ code: "custom", message: problem });
+    }),
   scopes: z
     .array(z.enum(API_SCOPES))
     .min(1, "Choose at least one scope")
@@ -532,6 +540,19 @@ export const apiKeyCreateSchema = z.object({
   expiresAt: z.iso
     .datetime({ offset: true, error: "Expiration must be an ISO 8601 date-time" })
     .nullable(),
+});
+
+/**
+ * `PUT /api/v1/tools/maintenance` — what a `streams:write` key may change:
+ * maintenance on or off, its message and its delay. Who is exempt and whether
+ * Discord is told stay Settings-only (`maintenanceSchema`), so a leaked key
+ * cannot silence the notification that would reveal it. Strict, so a client
+ * sending those fields gets a 400 rather than a silent partial update.
+ */
+export const apiMaintenanceSchema = z.strictObject({
+  enabled: z.boolean(),
+  message: z.string().max(500, "Message must be 500 characters or fewer").optional(),
+  delay: z.number().int().min(0).max(3600).optional(),
 });
 
 // ─── SSO schemas ───

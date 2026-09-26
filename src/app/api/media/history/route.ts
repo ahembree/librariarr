@@ -31,6 +31,16 @@ export async function GET(request: NextRequest) {
   const videoCodec = searchParams.get("videoCodec");
   const audioCodec = searchParams.get("audioCodec");
 
+  // Cast to "LibraryType" in SQL, so an unknown value would fail the query
+  // (500) rather than simply match nothing.
+  const typeValues = typeFilter?.split("|").filter(Boolean) ?? [];
+  if (typeValues.some((t) => !["MOVIE", "SERIES", "MUSIC"].includes(t))) {
+    return NextResponse.json(
+      { error: "Invalid type. Must be MOVIE, SERIES, or MUSIC (pipe-separated)" },
+      { status: 400 }
+    );
+  }
+
   // Build WHERE conditions and params. Conditions that read the `MediaItem`
   // join go in `itemConditions`, so the count below can tell whether it needs
   // that join without sniffing SQL text. Each condition carries its own `$n`,
@@ -81,16 +91,13 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  if (typeFilter) {
-    const vals = typeFilter.split("|").filter(Boolean);
-    if (vals.length === 1) {
-      itemConditions.push(`mi."type" = $${paramIdx++}::"LibraryType"`);
-      params.push(vals[0]);
-    } else if (vals.length > 1) {
-      const placeholders = vals.map(() => `$${paramIdx++}::"LibraryType"`).join(",");
-      itemConditions.push(`mi."type" IN (${placeholders})`);
-      params.push(...vals);
-    }
+  if (typeValues.length === 1) {
+    itemConditions.push(`mi."type" = $${paramIdx++}::"LibraryType"`);
+    params.push(typeValues[0]);
+  } else if (typeValues.length > 1) {
+    const placeholders = typeValues.map(() => `$${paramIdx++}::"LibraryType"`).join(",");
+    itemConditions.push(`mi."type" IN (${placeholders})`);
+    params.push(...typeValues);
   }
 
   if (search) {

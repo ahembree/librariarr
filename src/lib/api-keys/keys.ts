@@ -18,6 +18,9 @@ const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 export const API_KEY_PATTERN = /^lbr_[0-9A-Za-z]{43}$/;
 
+/** A key anywhere inside a longer string (a URL, a query value). */
+const API_KEY_IN_TEXT = /(?<![0-9A-Za-z])lbr_[0-9A-Za-z]{43}(?![0-9A-Za-z])/;
+
 /** `lbr_` plus the first 6 secret characters — what the settings list shows. */
 export const API_KEY_DISPLAY_PREFIX_LENGTH = API_KEY_PREFIX.length + 6;
 
@@ -60,4 +63,8 @@ export function hashApiKey(key: string): string {
 
 export function isWellFormedApiKey(value: string): boolean {
   return API_KEY_PATTERN.test(value);
+}
+
+export function containsApiKey(text: string): boolean {
+  return API_KEY_IN_TEXT.test(text);
 }

@@ -4,6 +4,7 @@ import {
   API_KEY_DISPLAY_PREFIX_LENGTH,
   API_KEY_PATTERN,
   API_KEY_PREFIX,
+  containsApiKey,
   generateApiKey,
   hashApiKey,
   isWellFormedApiKey,
@@ -66,5 +67,23 @@ describe("isWellFormedApiKey", () => {
     ["empty", ""],
   ])("rejects %s", (_label, value) => {
     expect(isWellFormedApiKey(value)).toBe(false);
+  });
+});
+
+describe("containsApiKey", () => {
+  const key = generateApiKey().key;
+
+  it("finds a key anywhere in a string", () => {
+    expect(containsApiKey(key)).toBe(true);
+    expect(containsApiKey(`/api/v1/media/${key}`)).toBe(true);
+    expect(containsApiKey(`token=${key}&x=1`)).toBe(true);
+    expect(containsApiKey(`_${key}`)).toBe(true);
+  });
+
+  it("ignores strings that only resemble one", () => {
+    expect(containsApiKey("lbr_")).toBe(false);
+    expect(containsApiKey(key.slice(0, -1))).toBe(false);
+    expect(containsApiKey(`${key}Z`)).toBe(false);
+    expect(containsApiKey(`a${key}`)).toBe(false);
   });
 });

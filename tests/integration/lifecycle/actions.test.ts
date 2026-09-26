@@ -296,6 +296,18 @@ describe("Lifecycle Actions", () => {
       expect(body.groups[0].items[0].status).toBe("COMPLETED");
     });
 
+    it("rejects an unknown status with 400 instead of failing the query", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      for (const status of ["CANCELLED", "pending"]) {
+        const body = await expectJson<{ error: string }>(
+          await callRoute(GET, { url: "/api/lifecycle/actions", searchParams: { status } }),
+          400,
+        );
+        expect(body.error).toMatch(/Invalid status/);
+      }
+    });
+
     it("returns ALL statuses when status=ALL", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
@@ -628,6 +640,7 @@ describe("Lifecycle Actions", () => {
     it("returns 400 when rule set has no action configured", async () => {
       const user = await createTestUser();
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "No Action",
         actionType: undefined as unknown as string,
       });
@@ -647,6 +660,7 @@ describe("Lifecycle Actions", () => {
     it("returns 400 when non-DO_NOTHING action has no arrInstanceId", async () => {
       const user = await createTestUser();
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Missing Arr",
         actionType: "DELETE_RADARR",
         arrInstanceId: undefined as unknown as string,
@@ -667,6 +681,7 @@ describe("Lifecycle Actions", () => {
     it("returns 400 fast-fail when CHANGE_QUALITY_PROFILE action lacks a target profile", async () => {
       const user = await createTestUser();
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Missing Target",
         actionType: "CHANGE_QUALITY_PROFILE_RADARR",
         arrInstanceId: "arr1",
@@ -694,6 +709,7 @@ describe("Lifecycle Actions", () => {
         type: "MOVIE",
       });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Do Nothing Rule",
         type: "MOVIE",
         actionType: "DO_NOTHING",
@@ -720,6 +736,60 @@ describe("Lifecycle Actions", () => {
       expect(body.errors).toHaveLength(0);
     });
 
+    it("refuses to execute a rule set whose actions are turned off", async () => {
+      // The editor keeps actionType when actions are switched off, and detection
+      // keeps filling matches — "off" must still mean nothing runs.
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { title: "Under Review", type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Paused Rule",
+        actionEnabled: false,
+        actionType: "DELETE_RADARR",
+        arrInstanceId: "radarr-1",
+      });
+      await createTestRuleMatch(ruleSet.id, item.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/Actions are turned off/);
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+      expect(await getTestPrisma().ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(1);
+    });
+
+    it("refuses an empty mediaItemIds list instead of executing every match", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { title: "Not Selected", type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Armed Rule",
+        actionEnabled: true,
+        actionType: "DO_NOTHING",
+      });
+      await createTestRuleMatch(ruleSet.id, item.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id, mediaItemIds: [] },
+      });
+
+      const body = await expectJson<{ error: string; details: string[] }>(response, 400);
+      expect(body.details.join(" ")).toMatch(/at least one media item id/);
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
     it("creates COMPLETED lifecycle action records after execution", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
@@ -729,6 +799,7 @@ describe("Lifecycle Actions", () => {
         type: "MOVIE",
       });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Record Rule",
         type: "MOVIE",
         actionType: "DO_NOTHING",
@@ -770,6 +841,7 @@ describe("Lifecycle Actions", () => {
         type: "SERIES",
       });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Series Rule",
         type: "SERIES",
         actionType: "DO_NOTHING",
@@ -807,6 +879,7 @@ describe("Lifecycle Actions", () => {
         type: "MOVIE",
       });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Failing Rule",
         type: "MOVIE",
         actionType: "DO_NOTHING",
@@ -1027,6 +1100,7 @@ describe("Lifecycle Actions", () => {
         title: "Ep 2", type: "SERIES", parentTitle: "Guarded Show", seasonNumber: 1, episodeNumber: 2,
       });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Whole Record Rule",
         type: "SERIES",
         actionType: "DELETE_SONARR",
@@ -1063,6 +1137,7 @@ describe("Lifecycle Actions", () => {
       await prisma.mediaItem.updateMany({ where: { id: { in: [movie.id, copy.id] } }, data: { dedupKey: "movie:tmdb:42" } });
       await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: copy.id } });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Movie delete",
         type: "MOVIE",
         actionType: "DELETE_RADARR",
@@ -1091,6 +1166,7 @@ describe("Lifecycle Actions", () => {
         title: "Ep 1", type: "SERIES", parentTitle: "Free Show", seasonNumber: 1, episodeNumber: 1,
       });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Whole Record Rule 2",
         type: "SERIES",
         actionType: "DELETE_SONARR",

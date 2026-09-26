@@ -5,13 +5,15 @@ const m = vi.hoisted(() => ({
   findUnique: vi.fn(),
   updateMany: vi.fn(),
   warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
   prisma: { apiKey: { findUnique: m.findUnique, updateMany: m.updateMany } },
 }));
 vi.mock("@/lib/logger", () => ({
-  apiLogger: { debug: vi.fn(), info: vi.fn(), warn: m.warn, error: vi.fn() },
+  apiLogger: { debug: m.debug, info: m.info, warn: m.warn, error: vi.fn() },
 }));
 
 import { authenticateApiKey, getApiKeyGuard, withApiKey } from "@/lib/api-keys/guard";
@@ -20,8 +22,15 @@ import { getApiKeyPrincipal } from "@/lib/api-keys/principal";
 import type { ApiScope } from "@/lib/api-keys/scopes";
 
 let ipCounter = 0;
-function request(headers: Record<string, string> = {}, url = "http://localhost/api/v1/me") {
-  return new NextRequest(url, { headers: { "x-forwarded-for": `172.16.0.${++ipCounter}`, ...headers } });
+function request(
+  headers: Record<string, string> = {},
+  url = "http://localhost/api/v1/me",
+  method = "GET",
+) {
+  return new NextRequest(url, {
+    method,
+    headers: { "x-forwarded-for": `172.16.0.${++ipCounter}`, ...headers },
+  });
 }
 
 function storedKey(overrides: Partial<{ scopes: string[]; expiresAt: Date | null; lastUsedAt: Date | null }> = {}) {
@@ -82,6 +91,82 @@ describe("withApiKey", () => {
   });
 });
 
+describe("withApiKey — response handling", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    m.updateMany.mockResolvedValue({ count: 1 });
+  });
+
+  it("returns a response with immutable headers untouched instead of failing", async () => {
+    const key = storedKey();
+    const handler = withApiKey("media:read", async () => Response.redirect("http://localhost/elsewhere", 302));
+    const res = await handler(request({ "x-api-key": key }));
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("http://localhost/elsewhere");
+  });
+
+  it("keeps a handler's own non-public Cache-Control", async () => {
+    const key = storedKey();
+    const handler = withApiKey("media:read", async () =>
+      NextResponse.json({}, { headers: { "Cache-Control": "private, max-age=60" } }),
+    );
+    const res = await handler(request({ "x-api-key": key }));
+    expect(res.headers.get("cache-control")).toBe("private, max-age=60");
+  });
+
+  it("audits HEAD like GET — at DEBUG, not INFO", async () => {
+    const key = storedKey();
+    const handler = withApiKey("media:read", async () => new Response(null, { status: 200 }));
+    await handler(request({ "x-api-key": key }, "http://localhost/api/v1/media/movies", "HEAD"));
+    expect(m.debug).toHaveBeenCalledWith("API", expect.stringMatching(/^HEAD \/api\/v1\/media\/movies → 200/));
+    expect(m.info).not.toHaveBeenCalled();
+  });
+});
+
+describe("authenticateApiKey — keys in the URL", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const key = generateApiKey().key;
+
+  it.each([
+    ["an upper-case parameter name", `?API_KEY=${key}`],
+    ["a hyphenated parameter name", `?x-api-key=${key}`],
+    ["any parameter holding a key", `?token=${key}`],
+    ["a key as the parameter name", `?${key}`],
+    ["a key among other parameters", `?limit=5&q=${encodeURIComponent(`find ${key} please`)}`],
+    ["a key in the path", `/${key}`],
+    ["a named parameter with no value", `?apikey=`],
+  ])("refuses %s with 400 and never looks the key up", async (_label, suffix) => {
+    const url = suffix.startsWith("/")
+      ? `http://localhost/api/v1/media${suffix}`
+      : `http://localhost/api/v1/media/movies${suffix}`;
+    const result = await authenticateApiKey(request({ authorization: `Bearer ${key}` }, url), null);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.response.status).toBe(400);
+      expect(((await result.response.json()) as { error: string }).error).toMatch(/never in the URL/);
+    }
+    expect(m.findUnique).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a short lbr_ value", "?q=lbr_short"],
+    ["a longer run than a key", `?q=${key}X`],
+    ["a key-like run inside a longer word", `?q=X${key}`],
+  ])("does not mistake %s for a key", async (_label, suffix) => {
+    storedKey();
+    const result = await authenticateApiKey(
+      request({}, `http://localhost/api/v1/media/movies${suffix}`),
+      null,
+    );
+    // No key in any header: the answer is "key required", not "key in URL".
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.response.status).toBe(401);
+  });
+});
+
 describe("authenticateApiKey", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -106,6 +191,20 @@ describe("authenticateApiKey", () => {
     const key = storedKey();
     expect((await authenticateApiKey(request({ "x-api-key": `  ${key}  ` }), null)).ok).toBe(true);
     expect((await authenticateApiKey(request({ authorization: `Bearer   ${key}  ` }), null)).ok).toBe(true);
+  });
+
+  it("prefers the lbr_ key when the other header holds something else", async () => {
+    const key = storedKey();
+    const viaApiKeyHeader = await authenticateApiKey(
+      request({ authorization: "Bearer some-proxy-jwt", "x-api-key": key }),
+      null,
+    );
+    expect(viaApiKeyHeader.ok).toBe(true);
+    const viaBearer = await authenticateApiKey(
+      request({ authorization: `Bearer ${key}`, "x-api-key": "not-a-key" }),
+      null,
+    );
+    expect(viaBearer.ok).toBe(true);
   });
 
   it("accepts the same key in both headers", async () => {

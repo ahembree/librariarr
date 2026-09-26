@@ -239,6 +239,11 @@ describe("formatRelativeDate", () => {
     expect(formatRelativeDate("2024-06-15T11:59:30.000Z")).toBe("just now");
   });
 
+  it("returns 'just now' for a date slightly in the future (server clock ahead)", () => {
+    expect(formatRelativeDate("2024-06-15T12:00:03.000Z")).toBe("just now");
+    expect(formatRelativeDate("2024-06-16T12:00:00.000Z")).toBe("just now");
+  });
+
   it("returns minutes ago", () => {
     // 5 minutes ago
     expect(formatRelativeDate("2024-06-15T11:55:00.000Z")).toBe("5m ago");

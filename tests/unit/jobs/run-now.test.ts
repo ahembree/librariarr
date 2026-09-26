@@ -49,7 +49,7 @@ describe("runJobNow", () => {
         where.mediaServerId === "s3" ? { id: "busy" } : null,
       );
 
-      expect(await runJobNow("u1", "sync", SOURCE)).toEqual({ ok: true });
+      expect(await runJobNow("u1", "sync", SOURCE)).toEqual({ ok: true, jobs: 1 });
 
       expect(m.enqueueJob).toHaveBeenCalledTimes(1);
       expect(m.enqueueJob).toHaveBeenCalledWith(
@@ -63,11 +63,43 @@ describe("runJobNow", () => {
       });
     });
 
-    it("leaves the watermark alone when an enqueue fails", async () => {
+    it("reports a failed enqueue, and leaves the watermark alone", async () => {
       m.userFindUnique.mockResolvedValue({ mediaServers: [{ id: "s1", name: "One", enabled: true }] });
       m.enqueueJob.mockResolvedValue(false);
-      expect(await runJobNow("u1", "sync", SOURCE)).toEqual({ ok: true });
+      expect(await runJobNow("u1", "sync", SOURCE)).toEqual({
+        ok: false,
+        error: "Failed to enqueue the sync for 1 of 1 server",
+      });
       expect(m.appSettingsUpdate).not.toHaveBeenCalled();
+    });
+
+    it("still queues the other servers when one enqueue fails, and says how many failed", async () => {
+      m.userFindUnique.mockResolvedValue({
+        mediaServers: [
+          { id: "s1", name: "One", enabled: true },
+          { id: "s2", name: "Two", enabled: true },
+          { id: "s3", name: "Three", enabled: true },
+        ],
+      });
+      m.enqueueJob.mockImplementation(async (_task: string, payload: { serverId: string }) => payload.serverId !== "s2");
+      expect(await runJobNow("u1", "sync", SOURCE)).toEqual({
+        ok: false,
+        error: "Failed to enqueue the sync for 1 of 3 servers",
+      });
+      expect(m.enqueueJob).toHaveBeenCalledTimes(3);
+      expect(m.appSettingsUpdate).not.toHaveBeenCalled();
+    });
+
+    it("queues nothing, successfully, when every server is already syncing or none is enabled", async () => {
+      m.userFindUnique.mockResolvedValue({
+        mediaServers: [
+          { id: "s1", name: "One", enabled: true },
+          { id: "s2", name: "Two", enabled: false },
+        ],
+      });
+      m.syncJobFindFirst.mockResolvedValue({ id: "busy" });
+      expect(await runJobNow("u1", "sync", SOURCE)).toEqual({ ok: true, jobs: 0 });
+      expect(m.enqueueJob).not.toHaveBeenCalled();
     });
   });
 
@@ -75,7 +107,7 @@ describe("runJobNow", () => {
     ["detection", TASK_LIFECYCLE_DETECTION, "detection:u1", 2, "lastScheduledLifecycleDetection"],
     ["execution", TASK_LIFECYCLE_EXECUTION, "execution:u1", 1, "lastScheduledLifecycleExecution"],
   ] as const)("%s: queues one deduplicated job and stamps the watermark", async (job, task, jobKey, maxAttempts, field) => {
-    expect(await runJobNow("u1", job, SOURCE)).toEqual({ ok: true });
+    expect(await runJobNow("u1", job, SOURCE)).toEqual({ ok: true, jobs: 1 });
     expect(m.enqueueJob).toHaveBeenCalledWith(task, { userId: "u1" }, { jobKey, queueName: MAIN_QUEUE, maxAttempts });
     expect(m.appSettingsUpdate).toHaveBeenCalledWith({
       where: { userId: "u1" },

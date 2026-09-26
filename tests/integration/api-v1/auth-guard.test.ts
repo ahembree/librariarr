@@ -111,6 +111,21 @@ describe("/api/v1 authentication guard", () => {
       );
     });
 
+    it("uses X-Api-Key when an auth proxy's own Bearer token occupies Authorization", async () => {
+      const user = await createTestUser();
+      const { key } = await createTestApiKey(user.id);
+      await expectJson(
+        await callRoute(meGET, {
+          headers: {
+            authorization: "Bearer eyJhbGciOiJSUzI1NiJ9.proxy-session.sig",
+            "x-api-key": key,
+            "x-forwarded-for": freshIp(),
+          },
+        }),
+        200,
+      );
+    });
+
     it("400 when the two headers carry different keys", async () => {
       const user = await createTestUser();
       const a = await createTestApiKey(user.id, { name: "a" });
@@ -173,6 +188,17 @@ describe("/api/v1 authentication guard", () => {
       expect(body.requiredScope).toBe("servers:read");
     });
 
+    it("logs a scope refusal at WARN once per key and scope, not on every retry", async () => {
+      const user = await createTestUser();
+      const { key } = await createTestApiKey(user.id, { name: "Probe", scopes: ["media:read"] });
+      for (let i = 0; i < 3; i++) {
+        await expectJson(await callRoute(serversGET, { url: "/api/v1/servers", headers: withKey(key) }), 403);
+      }
+      const warnings = apiLogger.warn.mock.calls.filter(([, msg]) => String(msg).includes('"Probe"'));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0][1]).toMatch(/was refused GET \/api\/v1\/servers: it does not have the "servers:read" scope/);
+    });
+
     it("a read-only key cannot reach a write endpoint", async () => {
       const user = await createTestUser();
       const { key } = await createTestApiKey(user.id, {
@@ -191,6 +217,17 @@ describe("/api/v1 authentication guard", () => {
       const { key, row } = await createTestApiKey(user.id);
       await prisma.apiKey.update({ where: { id: row.id }, data: { scopes: ["servers:*"] } });
       await expectJson(await callRoute(serversGET, { headers: withKey(key) }), 403);
+    });
+
+    it("reports only the scopes it grants — never one this version does not know", async () => {
+      const user = await createTestUser();
+      const { key, row } = await createTestApiKey(user.id);
+      await prisma.apiKey.update({ where: { id: row.id }, data: { scopes: ["media:read", "servers:*"] } });
+      const body = await expectJson<{ apiKey: { scopes: string[] } }>(
+        await callRoute(meGET, { headers: withKey(key) }),
+        200,
+      );
+      expect(body.apiKey.scopes).toEqual(["media:read"]);
     });
 
     it("fails closed with 503 when the key lookup errors", async () => {
@@ -300,6 +337,24 @@ describe("/api/v1 authentication guard", () => {
     });
   });
 
+  describe("GET /api/v1/me", () => {
+    it("answers 401 when the key is deleted between authentication and the read", async () => {
+      const user = await createTestUser();
+      const { key } = await createTestApiKey(user.id);
+      const findUnique = prisma.apiKey.findUnique.bind(prisma.apiKey);
+      const spy = vi
+        .spyOn(prisma.apiKey, "findUnique")
+        .mockImplementation(((args: { where: { id?: string } }) =>
+          args.where.id ? Promise.resolve(null) : findUnique(args as never)) as never);
+      try {
+        const body = await expectJson<{ error: string }>(await callRoute(meGET, { headers: withKey(key) }), 401);
+        expect(body.error).toBe("Invalid API key");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
   describe("rate limiting", () => {
     it("stops answering a credential that keeps failing, without touching other keys", async () => {
       const user = await createTestUser();
@@ -321,18 +376,41 @@ describe("/api/v1 authentication guard", () => {
       expect(warnings).toHaveLength(1);
     });
 
-    it("cuts off an address flooding distinct bad keys — valid keys included", async () => {
+    it("never lets a flood of bad keys lock a valid key out, and bounds its logging", async () => {
       const user = await createTestUser();
       const { key: goodKey } = await createTestApiKey(user.id);
       const ip = freshIp();
 
-      for (let i = 0; i < 500; i++) {
-        await callRoute(meGET, { headers: withKey(`lbr_bad-${i}`, ip) });
+      for (let i = 0; i < 600; i++) {
+        await expectJson(await callRoute(meGET, { headers: withKey(`lbr_bad-${i}`, ip) }), 401);
       }
-      expect(apiLogger.warn).toHaveBeenCalledWith("API", expect.stringMatching(/Too many failed API key attempts/));
-      await expectJson(await callRoute(meGET, { headers: withKey(goodKey, ip) }), 429);
-      // Another address is not affected.
-      await expectJson(await callRoute(meGET, { headers: withKey(goodKey) }), 200);
+      // The same address, straight after the flood.
+      await expectJson(await callRoute(meGET, { headers: withKey(goodKey, ip) }), 200);
+
+      // 600 distinct failures, but at most the window's WARN budget reaches the
+      // log table; the rest are DEBUG (not persisted unless LOG_DEBUG=true).
+      const warnings = apiLogger.warn.mock.calls.filter(([, msg]) => String(msg).includes("Rejected an API request"));
+      expect(warnings.length).toBeLessThanOrEqual(50);
+      expect(warnings.some(([, msg]) => String(msg).includes("go to DEBUG"))).toBe(true);
+    });
+
+    it("keeps valid keys working for everyone when every client shares one address", async () => {
+      // TRUST_PROXY_HEADERS=false puts every client in the "unknown" address —
+      // an address-wide lockout would let one junk sender shut out every
+      // integration.
+      const previous = process.env.TRUST_PROXY_HEADERS;
+      process.env.TRUST_PROXY_HEADERS = "false";
+      try {
+        const user = await createTestUser();
+        const { key: goodKey } = await createTestApiKey(user.id);
+        for (let i = 0; i < 600; i++) {
+          await callRoute(meGET, { headers: { authorization: `Bearer lbr_junk-${i}` } });
+        }
+        await expectJson(await callRoute(meGET, { headers: { authorization: `Bearer ${goodKey}` } }), 200);
+      } finally {
+        if (previous === undefined) delete process.env.TRUST_PROXY_HEADERS;
+        else process.env.TRUST_PROXY_HEADERS = previous;
+      }
     });
 
     it("never logs the presented key", async () => {
@@ -343,19 +421,23 @@ describe("/api/v1 authentication guard", () => {
       expect(logged).toContain(deadKey.slice(0, 10));
     });
 
-    it("429 once a key exceeds its request budget", async () => {
+    it("429 once a key exceeds its request budget, logged once", async () => {
       const user = await createTestUser();
-      const { key } = await createTestApiKey(user.id);
+      const { key } = await createTestApiKey(user.id, { name: "Busy" });
       const spy = vi
         .spyOn(apiKeyRequestLimiter, "check")
-        .mockReturnValueOnce({ limited: true, remaining: 0, retryAfterMs: 12_000 });
+        .mockReturnValue({ limited: true, remaining: 0, retryAfterMs: 12_000 });
       try {
         const res = await callRoute(meGET, { headers: withKey(key) });
         expect(res.headers.get("retry-after")).toBe("12");
         await expectJson(res, 429);
+        await expectJson(await callRoute(meGET, { headers: withKey(key) }), 429);
       } finally {
         spy.mockRestore();
       }
+      const warnings = apiLogger.warn.mock.calls.filter(([, msg]) => String(msg).includes('"Busy"'));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0][1]).toMatch(/went over 600 requests a minute/);
     });
   });
 });

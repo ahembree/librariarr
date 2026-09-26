@@ -2,12 +2,19 @@ import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { apiLogger } from "@/lib/logger";
 import {
-  apiKeyAddressFailureLimiter,
+  RateLimiter,
   apiKeyCredentialFailureLimiter,
+  apiKeyFailureLogLimiter,
   apiKeyRequestLimiter,
   getClientIp,
 } from "@/lib/rate-limit/rate-limiter";
-import { API_KEY_DISPLAY_PREFIX_LENGTH, hashApiKey, isWellFormedApiKey } from "./keys";
+import {
+  API_KEY_DISPLAY_PREFIX_LENGTH,
+  API_KEY_PREFIX,
+  containsApiKey,
+  hashApiKey,
+  isWellFormedApiKey,
+} from "./keys";
 import { runAsApiKey, type ApiKeyPrincipal } from "./principal";
 import { isApiScope, type ApiScope } from "./scopes";
 
@@ -32,14 +39,28 @@ import { isApiScope, type ApiScope } from "./scopes";
 const REALM = 'Bearer realm="Librariarr"';
 
 /**
- * Query parameters a client might put a key in. Refused outright rather than
- * ignored: a URL is written to proxy logs, browser history and `Referer`
- * headers, so the key is already exposed and the caller needs to hear it.
+ * Query parameters a client might put a key in (compared case-insensitively).
+ * A URL carrying one — or carrying anything shaped like a key, under any name
+ * or in the path — is refused outright rather than ignored: a URL is written to
+ * proxy logs, browser history and `Referer` headers, so the key is already
+ * exposed and the caller needs to hear it.
  */
-const KEY_QUERY_PARAMS = ["api_key", "apikey", "apiKey", "access_token"];
+const KEY_QUERY_PARAMS = new Set(["api_key", "apikey", "api-key", "x-api-key", "access_token"]);
 
 /** How stale `lastUsedAt` may get before a request refreshes it. */
 const LAST_USED_WRITE_INTERVAL_MS = 60 * 1000;
+
+/**
+ * A valid key refused for its scope or its request budget is logged at WARN —
+ * a read-only key probing write endpoints is exactly what an audit log is for —
+ * but once per key and reason per 15 minutes, so a misconfigured client
+ * retrying every few seconds cannot bury System Logs. Bounded by keys × scopes.
+ */
+const refusalLogThrottle = new RateLimiter(1, 15 * 60 * 1000);
+
+function warnOnce(throttleKey: string, message: string): void {
+  if (!refusalLogThrottle.check(throttleKey).limited) apiLogger.warn("API", message);
+}
 
 const API_KEY_GUARD = Symbol.for("librariarr.apiKeyGuard");
 
@@ -102,13 +123,11 @@ export async function authenticateApiKey(
   request: NextRequest,
   scope: ApiScope | null,
 ): Promise<ApiKeyAuthResult> {
-  for (const param of KEY_QUERY_PARAMS) {
-    if (request.nextUrl.searchParams.has(param)) {
-      return refuse(
-        400,
-        "Send the API key in the Authorization or X-Api-Key header, never in the URL, where it is written to logs and browser history. If a real key was sent this way, delete it and create a new one.",
-      );
-    }
+  if (urlCarriesKey(request.nextUrl)) {
+    return refuse(
+      400,
+      "Send the API key in the Authorization or X-Api-Key header, never in the URL, where it is written to logs and browser history. If a real key was sent this way, delete it and create a new one.",
+    );
   }
 
   const credential = readCredential(request);
@@ -121,18 +140,15 @@ export async function authenticateApiKey(
 
   const ip = getClientIp(request);
   const keyHash = hashApiKey(credential.key);
-  const credentialBucket = `${ip}:${keyHash}`;
 
-  // Charged only on failure, so a flood of bad keys never costs a valid key
-  // anything until the address itself is over its limit.
-  const blocked = firstLimited(
-    apiKeyAddressFailureLimiter.peek(ip),
-    apiKeyCredentialFailureLimiter.peek(credentialBucket),
-  );
-  if (blocked) return tooManyRequests(blocked.retryAfterMs);
+  // Keyed by the credential alone and charged only on failure: a credential
+  // that keeps failing is refused without a lookup, and a valid key — which
+  // never fails — can never be locked out by anyone else's failures.
+  const blocked = apiKeyCredentialFailureLimiter.peek(keyHash);
+  if (blocked.limited) return tooManyRequests(blocked.retryAfterMs);
 
   const invalid = (reason: string, message = "Invalid API key"): ApiKeyAuthResult => {
-    recordFailure(ip, credentialBucket, reason);
+    recordFailure(ip, keyHash, reason);
     return refuse(401, message, { "WWW-Authenticate": `${REALM}, error="invalid_token"` });
   };
 
@@ -178,11 +194,21 @@ export async function authenticateApiKey(
   }
 
   const rate = apiKeyRequestLimiter.check(row.id);
-  if (rate.limited) return tooManyRequests(rate.retryAfterMs);
+  if (rate.limited) {
+    warnOnce(
+      `rate:${row.id}`,
+      `API key "${row.name}" (${row.prefix}…) went over ${apiKeyRequestLimiter.maxAttempts} requests a minute — refusing its requests until the minute is up`,
+    );
+    return tooManyRequests(rate.retryAfterMs);
+  }
 
   // A scope string this version does not recognise grants nothing.
   const scopes = row.scopes.filter(isApiScope);
   if (scope !== null && !scopes.includes(scope)) {
+    warnOnce(
+      `scope:${row.id}:${scope}`,
+      `API key "${row.name}" (${row.prefix}…) was refused ${request.method} ${request.nextUrl.pathname}: it does not have the "${scope}" scope`,
+    );
     return refuse(
       403,
       `This API key does not have the "${scope}" scope`,
@@ -205,43 +231,56 @@ export async function authenticateApiKey(
   };
 }
 
+function urlCarriesKey(url: URL): boolean {
+  if (containsApiKey(url.pathname)) return true;
+  for (const [name, value] of url.searchParams) {
+    if (KEY_QUERY_PARAMS.has(name.toLowerCase())) return true;
+    if (containsApiKey(name) || containsApiKey(value)) return true;
+  }
+  return false;
+}
+
 function readCredential(request: NextRequest): { key?: string; conflict?: boolean } {
-  // Only a Bearer credential counts. Any other scheme is left alone rather than
-  // rejected: a reverse proxy doing HTTP Basic auth in front of Librariarr
-  // forwards its own `Authorization`, and the client then sends the key in
-  // `X-Api-Key` instead.
+  // Only a Bearer credential counts, and only an `lbr_` one when `X-Api-Key` is
+  // also present. A reverse proxy authenticating in front of Librariarr puts
+  // its OWN credential in `Authorization` — HTTP Basic, or the Bearer JWT an
+  // oauth2-proxy / forward-auth setup injects — and the client then sends the
+  // key in `X-Api-Key`; that must work rather than read as two different keys.
   const authorization = request.headers.get("authorization");
   const bearer = authorization?.match(/^\s*Bearer\s+(.+?)\s*$/i)?.[1];
   const headerKey = request.headers.get("x-api-key")?.trim() || undefined;
-  if (bearer && headerKey && bearer !== headerKey) return { conflict: true };
+  if (bearer && headerKey && bearer !== headerKey) {
+    if (!bearer.startsWith(API_KEY_PREFIX)) return { key: headerKey };
+    if (!headerKey.startsWith(API_KEY_PREFIX)) return { key: bearer };
+    return { conflict: true };
+  }
   return { key: bearer ?? headerKey };
-}
-
-function firstLimited(
-  ...results: Array<{ limited: boolean; retryAfterMs?: number }>
-): { retryAfterMs?: number } | null {
-  return results.find((r) => r.limited) ?? null;
 }
 
 /**
  * Count a failed attempt. Logged at WARN the first time a credential fails in
  * its window (a deleted key still in some client's config shows up in System
- * Logs once, not every ten seconds) and when an address reaches its limit;
- * everything else at DEBUG. The presented value itself is never logged.
+ * Logs once, not every ten seconds) while the window's WARN budget lasts, and
+ * at DEBUG otherwise — so a flood of distinct junk keys cannot become a flood
+ * of log rows. The presented value itself is never logged.
  */
-function recordFailure(ip: string, credentialBucket: string, reason: string): void {
-  const credential = apiKeyCredentialFailureLimiter.check(credentialBucket);
-  const address = apiKeyAddressFailureLimiter.check(ip);
-  const from = ipLiteral(ip) ?? "an unknown address";
-  if (!address.limited && address.remaining === 0) {
+function recordFailure(ip: string, keyHash: string, reason: string): void {
+  const credential = apiKeyCredentialFailureLimiter.check(keyHash);
+  const message = `Rejected an API request from ${ipLiteral(ip) ?? "an unknown address"}: ${reason}`;
+  if (credential.remaining !== apiKeyCredentialFailureLimiter.maxAttempts - 1) {
+    apiLogger.debug("API", message);
+    return;
+  }
+  const budget = apiKeyFailureLogLimiter.check("failures");
+  if (budget.limited) {
+    apiLogger.debug("API", message);
+  } else if (budget.remaining === 0) {
     apiLogger.warn(
       "API",
-      `Too many failed API key attempts from ${from} — refusing every API key from it for up to 15 minutes`,
+      `${message} — failed API key attempts are arriving faster than is useful to log; the rest in this 15-minute window go to DEBUG`,
     );
-  } else if (credential.remaining === apiKeyCredentialFailureLimiter.maxAttempts - 1) {
-    apiLogger.warn("API", `Rejected an API request from ${from}: ${reason}`);
   } else {
-    apiLogger.debug("API", `Rejected an API request from ${from}: ${reason}`);
+    apiLogger.warn("API", message);
   }
 }
 

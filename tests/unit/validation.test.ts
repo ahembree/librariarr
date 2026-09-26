@@ -12,6 +12,7 @@ import {
   syncScheduleSchema,
   logRetentionSchema,
   terminateSessionSchema,
+  apiKeyCreateSchema,
 } from "@/lib/validation";
 
 /**
@@ -485,5 +486,81 @@ describe("authSettingsSchema", () => {
     expect(
       authSettingsSchema.safeParse({ plexLoginEnabled: 1 }).success
     ).toBe(false);
+  });
+});
+
+describe("apiKeyCreateSchema", () => {
+  const valid = { name: "Home Assistant", scopes: ["media:read"], expiresAt: null };
+
+  it("accepts a never-expiring key", () => {
+    expect(apiKeyCreateSchema.safeParse(valid).success).toBe(true);
+  });
+
+  it.each([
+    ["UTC", "2030-01-01T00:00:00.000Z"],
+    ["an offset", "2030-01-01T08:00:00+02:00"],
+  ])("accepts an expiry in %s", (_label, expiresAt) => {
+    expect(apiKeyCreateSchema.safeParse({ ...valid, expiresAt }).success).toBe(true);
+  });
+
+  it.each([
+    ["a date without a time", "2030-01-01"],
+    ["a time without a zone (ambiguous)", "2030-01-01T00:00:00"],
+    ["free text", "tomorrow"],
+    ["a number", 1893456000000],
+  ])("rejects an expiry that is %s", (_label, expiresAt) => {
+    expect(apiKeyCreateSchema.safeParse({ ...valid, expiresAt }).success).toBe(false);
+  });
+
+  it("requires expiresAt to be present (null means never)", () => {
+    const { expiresAt: _omit, ...rest } = valid;
+    void _omit;
+    expect(apiKeyCreateSchema.safeParse(rest).success).toBe(false);
+  });
+
+  it("trims the name before checking its length", () => {
+    const parsed = apiKeyCreateSchema.safeParse({ ...valid, name: "  Dash  " });
+    expect(parsed.success && parsed.data.name).toBe("Dash");
+    expect(apiKeyCreateSchema.safeParse({ ...valid, name: "   " }).success).toBe(false);
+    expect(apiKeyCreateSchema.safeParse({ ...valid, name: `  ${"x".repeat(64)}  ` }).success).toBe(true);
+    expect(apiKeyCreateSchema.safeParse({ ...valid, name: "x".repeat(65) }).success).toBe(false);
+  });
+
+  it.each([
+    ["a newline", "Dash\nboard"],
+    ["a tab", "Dash\tboard"],
+    ["a right-to-left override", "Dash\u202Eboard"],
+    ["a right-to-left isolate", "Dash\u2067board"],
+    ["a zero-width space", "Dash\u200Bboard"],
+    ["a byte-order mark", "Dash\uFEFFboard"],
+    ["a line separator", "Dash\u2028board"],
+  ])("rejects a name containing %s", (_label, name) => {
+    const parsed = apiKeyCreateSchema.safeParse({ ...valid, name });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0].message).toMatch(/control characters, direction overrides or invisible/);
+  });
+
+  it("rejects a name with nothing visible in it", () => {
+    const parsed = apiKeyCreateSchema.safeParse({ ...valid, name: "\u200D\u200D" });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0].message).toBe("Name must contain a visible character");
+  });
+
+  it.each([
+    ["punctuation, accents and emoji", "Café dashboard (v2) — 📺"],
+    ["an emoji built with a zero-width joiner", "🏳️‍🌈 Pride"],
+    ["a family emoji", "👨‍👩‍👧 Home"],
+    ["a non-Latin script", "Домашний сервер"],
+  ])("accepts %s in the name", (_label, name) => {
+    expect(apiKeyCreateSchema.safeParse({ ...valid, name }).success).toBe(true);
+  });
+
+  it("accepts only registry scopes, at least one", () => {
+    expect(apiKeyCreateSchema.safeParse({ ...valid, scopes: [] }).success).toBe(false);
+    expect(apiKeyCreateSchema.safeParse({ ...valid, scopes: ["media:write"] }).success).toBe(false);
+    expect(apiKeyCreateSchema.safeParse({ ...valid, scopes: ["*"] }).success).toBe(false);
+    expect(
+      apiKeyCreateSchema.safeParse({ ...valid, scopes: ["lifecycle:execute", "streams:write"] }).success,
+    ).toBe(true);
   });
 });

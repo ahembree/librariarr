@@ -57,7 +57,6 @@ import * as mediaPlays from "@/app/api/v1/media/[id]/plays/route";
 import * as mediaImage from "@/app/api/v1/media/[id]/image/route";
 import * as rules from "@/app/api/v1/lifecycle/rules/route";
 import * as ruleMatches from "@/app/api/v1/lifecycle/rules/matches/route";
-import * as ruleRun from "@/app/api/v1/lifecycle/rules/run/route";
 import * as actions from "@/app/api/v1/lifecycle/actions/route";
 import * as actionsExecute from "@/app/api/v1/lifecycle/actions/execute/route";
 import * as exceptions from "@/app/api/v1/lifecycle/exceptions/route";
@@ -115,13 +114,12 @@ const ROUTES: RouteCase[] = [
   { label: "GET /media/[id]/image", handler: mediaImage.GET, method: "GET", scope: "media:read", params: { id: "missing" }, status: 404 },
   { label: "GET /lifecycle/rules", handler: rules.GET, method: "GET", scope: "lifecycle:read", status: 200 },
   { label: "GET /lifecycle/rules/matches", handler: ruleMatches.GET, method: "GET", scope: "lifecycle:read", status: 200 },
-  { label: "POST /lifecycle/rules/run", handler: ruleRun.POST, method: "POST", scope: "lifecycle:write", body: {}, status: 200 },
   { label: "GET /lifecycle/actions", handler: actions.GET, method: "GET", scope: "lifecycle:read", status: 200 },
   { label: "POST /lifecycle/actions/execute", handler: actionsExecute.POST, method: "POST", scope: "lifecycle:execute", body: {}, status: 400 },
   { label: "GET /lifecycle/exceptions", handler: exceptions.GET, method: "GET", scope: "lifecycle:read", status: 200 },
   { label: "POST /lifecycle/exceptions", handler: exceptions.POST, method: "POST", scope: "lifecycle:write", body: {}, status: 400 },
-  { label: "DELETE /lifecycle/exceptions", handler: exceptions.DELETE, method: "DELETE", scope: "lifecycle:write", body: {}, status: 400 },
-  { label: "DELETE /lifecycle/exceptions/[id]", handler: exceptionById.DELETE, method: "DELETE", scope: "lifecycle:write", params: { id: "missing" }, status: 404 },
+  { label: "DELETE /lifecycle/exceptions", handler: exceptions.DELETE, method: "DELETE", scope: "lifecycle:execute", body: {}, status: 400 },
+  { label: "DELETE /lifecycle/exceptions/[id]", handler: exceptionById.DELETE, method: "DELETE", scope: "lifecycle:execute", params: { id: "missing" }, status: 404 },
   { label: "GET /lifecycle/stats", handler: lifecycleStats.GET, method: "GET", scope: "lifecycle:read", status: 200 },
   { label: "GET /tools/sessions", handler: sessions.GET, method: "GET", scope: "streams:read", status: 200 },
   { label: "POST /tools/sessions/terminate", handler: terminate.POST, method: "POST", scope: "streams:write", body: {}, status: 400 },
@@ -220,8 +218,8 @@ describe("/api/v1 endpoints", () => {
       const { key } = await createTestApiKey(user.id, { name: "n8n", scopes: ["sync:write"] });
 
       const route = ROUTES.find((r) => r.label === "POST /jobs/sync")!;
-      const body = await expectJson<{ queued: boolean }>(await call(route, { authorization: `Bearer ${key}` }), 202);
-      expect(body.queued).toBe(true);
+      const body = await expectJson(await call(route, { authorization: `Bearer ${key}` }), 202);
+      expect(body).toEqual({ queued: true, jobs: 1 });
       expect(mockEnqueueJob).toHaveBeenCalledTimes(1);
       expect(mockEnqueueJob).toHaveBeenCalledWith(
         TASK_SYNC_SERVER,
@@ -251,6 +249,20 @@ describe("/api/v1 endpoints", () => {
       );
     });
 
+    it("POST /jobs/sync reports a failed enqueue as 500 and leaves the watermark alone", async () => {
+      const user = await setupUser();
+      await createTestServer(user.id, { name: "Enabled" });
+      const { key } = await createTestApiKey(user.id, { scopes: ["sync:write"] });
+      mockEnqueueJob.mockResolvedValueOnce(false);
+      const body = await expectJson<{ error: string }>(
+        await call(ROUTES.find((r) => r.label === "POST /jobs/sync")!, { authorization: `Bearer ${key}` }),
+        500,
+      );
+      expect(body.error).toBe("Failed to enqueue the sync for 1 of 1 server");
+      const settings = await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } });
+      expect(settings.lastScheduledSync).toBeNull();
+    });
+
     it("POST /jobs/* reports a failed enqueue as 500", async () => {
       const user = await setupUser();
       const { key } = await createTestApiKey(user.id, { scopes: ["lifecycle:write"] });
@@ -262,23 +274,35 @@ describe("/api/v1 endpoints", () => {
       expect(body.error).toMatch(/enqueue/);
     });
 
-    it("a lifecycle:write key can add and remove an exception", async () => {
+    it("lifecycle:write can add an exception; only lifecycle:execute can remove one", async () => {
       const user = await setupUser();
       const server = await createTestServer(user.id);
       const library = await createTestLibrary(server.id, { type: "MOVIE" });
       const movie = await createTestMediaItem(library.id, { title: "Keep Me" });
-      const { key } = await createTestApiKey(user.id, { scopes: ["lifecycle:write"] });
-      const auth = { authorization: `Bearer ${key}` };
+      const writer = await createTestApiKey(user.id, { name: "writer", scopes: ["lifecycle:write"] });
 
-      const created = await call(ROUTES.find((r) => r.label === "POST /lifecycle/exceptions")!, auth, {
-        body: { mediaItemId: movie.id, reason: "Family favourite" },
-      });
+      const created = await call(
+        ROUTES.find((r) => r.label === "POST /lifecycle/exceptions")!,
+        { authorization: `Bearer ${writer.key}` },
+        { body: { mediaItemId: movie.id, reason: "Family favourite" } },
+      );
       expect(created.status).toBeLessThan(300);
       const exception = await prisma.lifecycleException.findFirstOrThrow({ where: { mediaItemId: movie.id } });
       expect(exception.reason).toBe("Family favourite");
 
+      // Removing the protection is what lets the rules delete the item, so a
+      // lifecycle:write key must not be able to — by id or in bulk.
       const deleteById = ROUTES.find((r) => r.label === "DELETE /lifecycle/exceptions/[id]")!;
-      await expectJson(await call({ ...deleteById, params: { id: exception.id } }, auth), 200);
+      const bulkDelete = ROUTES.find((r) => r.label === "DELETE /lifecycle/exceptions")!;
+      await expectJson(await call({ ...deleteById, params: { id: exception.id } }, { authorization: `Bearer ${writer.key}` }), 403);
+      await expectJson(
+        await call(bulkDelete, { authorization: `Bearer ${writer.key}` }, { body: { ids: [exception.id] } }),
+        403,
+      );
+      expect(await prisma.lifecycleException.count()).toBe(1);
+
+      const executor = await createTestApiKey(user.id, { name: "executor", scopes: ["lifecycle:execute"] });
+      await expectJson(await call({ ...deleteById, params: { id: exception.id } }, { authorization: `Bearer ${executor.key}` }), 200);
       expect(await prisma.lifecycleException.count()).toBe(0);
     });
 
@@ -294,6 +318,40 @@ describe("/api/v1 endpoints", () => {
       expect(body).toMatchObject({ enabled: true, message: "Back soon" });
       const settings = await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } });
       expect(settings.maintenanceMode).toBe(true);
+    });
+
+    it("PUT /tools/maintenance cannot change who is exempt or whether Discord is told", async () => {
+      const user = await setupUser();
+      await prisma.appSettings.update({
+        where: { userId: user.id },
+        data: { discordNotifyMaintenance: true, maintenanceExcludedUsers: ["admin"], maintenanceDelay: 45 },
+      });
+      const { key } = await createTestApiKey(user.id, { scopes: ["streams:write"] });
+      const route = ROUTES.find((r) => r.label === "PUT /tools/maintenance")!;
+      const put = (body: unknown) => call(route, { authorization: `Bearer ${key}` }, { body });
+
+      for (const extra of [{ discordNotifyMaintenance: false }, { excludedUsers: [] }]) {
+        const refused = await expectJson<{ details: string[] }>(await put({ enabled: true, ...extra }), 400);
+        expect(refused.details.join("\n")).toContain(`Unrecognized key: "${Object.keys(extra)[0]}"`);
+      }
+      await expectJson(await put({ enabled: true, message: "x".repeat(501) }), 400);
+
+      const untouched = await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } });
+      expect(untouched).toMatchObject({
+        maintenanceMode: false,
+        discordNotifyMaintenance: true,
+        maintenanceExcludedUsers: ["admin"],
+        maintenanceDelay: 45,
+      });
+
+      // What a key may change still goes through, and leaves the rest alone.
+      const body = await expectJson(await put({ enabled: true, delay: 10 }), 200);
+      expect(body).toMatchObject({
+        enabled: true,
+        delay: 10,
+        discordNotifyMaintenance: true,
+        excludedUsers: ["admin"],
+      });
     });
   });
 });

@@ -47,6 +47,19 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Actions switched off is the same backstop one level down: the editor keeps
+  // `actionType` when actions are turned off (so they can be turned back on),
+  // detection keeps filling matches, and nothing schedules or runs them. The
+  // Pending page only offers Execute for action-enabled rule sets, but this
+  // route is also the public API's `POST /api/v1/lifecycle/actions/execute`,
+  // where "turned off to review the matches first" must still mean off.
+  if (!ruleSet.actionEnabled) {
+    return NextResponse.json(
+      { error: "Actions are turned off for this rule set — turn them on before executing" },
+      { status: 400 }
+    );
+  }
+
   // Permanent-invalidity backstop (mirrors executeLifecycleActions): Seerr
   // criteria on a MUSIC rule set can never evaluate — Seerr has no music
   // requests, so every artist reads "never requested" and the stored matches

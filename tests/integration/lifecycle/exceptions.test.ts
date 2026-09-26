@@ -137,6 +137,16 @@ describe("Lifecycle Exceptions API", () => {
       const allBody = await expectJson<{ exceptions: unknown[] }>(allResponse, 200);
       expect(allBody.exceptions).toHaveLength(2);
     });
+
+    it("rejects an unknown type with 400 instead of failing the query", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      const body = await expectJson<{ error: string }>(
+        await callRoute(GET, { url: "/api/lifecycle/exceptions?type=BOOK" }),
+        400,
+      );
+      expect(body.error).toMatch(/Invalid type/);
+    });
   });
 
   // ── POST /api/lifecycle/exceptions ──

@@ -10,8 +10,10 @@ import { getApiKeyPrincipal } from "./principal";
  * than one taking `{ job }`, because each needs its own scope: queueing a sync
  * is harmless, queueing lifecycle execution can delete media.
  *
- * Answers 202: the job is queued on the serial main queue and may wait behind
- * whatever is running; its outcome is not part of this response.
+ * Answers 202 with `jobs`, how many were queued: the job is queued on the
+ * serial main queue and may wait behind whatever is running, and its outcome
+ * is not part of this response. A sync queues one job per enabled server not
+ * already syncing, so `jobs` is 0 when every server already is.
  */
 export async function runJobForApiKey(job: RunNowJob): Promise<Response> {
   const principal = getApiKeyPrincipal();
@@ -24,7 +26,7 @@ export async function runJobForApiKey(job: RunNowJob): Promise<Response> {
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: 500 });
     }
-    return NextResponse.json({ queued: true }, { status: 202 });
+    return NextResponse.json({ queued: true, jobs: result.jobs }, { status: 202 });
   } catch (error) {
     logger.error("Scheduler", `API-triggered ${job} failed`, { error: String(error) });
     return NextResponse.json(

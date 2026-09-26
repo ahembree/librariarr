@@ -150,6 +150,12 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const status = searchParams.get("status") || "PENDING";
+  if (!["PENDING", "COMPLETED", "FAILED", "ALL"].includes(status)) {
+    return NextResponse.json(
+      { error: "Invalid status. Must be PENDING, COMPLETED, FAILED, or ALL" },
+      { status: 400 }
+    );
+  }
 
   if (status === "PENDING") {
     return handlePendingGrouped(request, session.userId!);

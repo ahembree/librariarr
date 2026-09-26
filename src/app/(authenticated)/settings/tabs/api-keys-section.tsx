@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { toast } from "sonner";
 import {
   AlertCircle,
@@ -47,6 +47,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { formatDate, formatRelativeDate } from "@/lib/format";
+import { apiKeyNameProblem } from "@/lib/api-keys/name-rules";
 import {
   API_SCOPE_GROUPS,
   API_SCOPE_INFO,
@@ -83,6 +84,11 @@ type ExpiryChoice = (typeof EXPIRY_OPTIONS)[number]["value"];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// The latest custom date offered. The end of 9999-12-31 is already in the year
+// 10000 in UTC for anyone west of Greenwich, and a five-digit year is not an
+// ISO 8601 date-time the server accepts.
+const MAX_CUSTOM_DATE = "9998-12-31";
+
 const codeClass = "font-mono text-[0.85em] rounded bg-muted/60 px-1 py-0.5";
 
 /** `YYYY-MM-DD` in local time — the value format of `<input type="date">`. */
@@ -99,7 +105,7 @@ function localDateString(date: Date): string {
 function resolveExpiry(choice: ExpiryChoice, customDate: string): string | null | undefined {
   if (choice === "never") return null;
   if (choice === "custom") {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(customDate)) return undefined;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(customDate) || customDate > MAX_CUSTOM_DATE) return undefined;
     const end = new Date(`${customDate}T23:59:59`);
     if (Number.isNaN(end.getTime()) || end.getTime() <= Date.now()) return undefined;
     return end.toISOString();
@@ -116,6 +122,12 @@ function saveErrorMessage(data: { error?: string; details?: unknown } | null, fa
   return typeof first === "string" ? `${error} — ${first}` : error;
 }
 
+async function fetchApiKeys(): Promise<ApiKeyRow[]> {
+  const res = await fetch("/api/settings/api-keys", { cache: "no-store" });
+  if (!res.ok) throw new Error(String(res.status));
+  return ((await res.json()) as { apiKeys: ApiKeyRow[] }).apiKeys;
+}
+
 function isExpired(key: ApiKeyRow): boolean {
   return !!key.expiresAt && new Date(key.expiresAt).getTime() <= Date.now();
 }
@@ -123,56 +135,103 @@ function isExpired(key: ApiKeyRow): boolean {
 export function ApiKeysSection() {
   const [keys, setKeys] = useState<ApiKeyRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  // Bumped on every open, so each create starts from a fresh dialog — even one
+  // reopened before the previous close animation finished.
+  const [createSession, setCreateSession] = useState(0);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  // Kept once the dialog closes, so its title doesn't empty while it fades.
   const [deleteTarget, setDeleteTarget] = useState<ApiKeyRow | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const createButtonRef = useRef<HTMLButtonElement>(null);
+  // Set when the row whose Delete button opened the dialog is gone, so focus
+  // has somewhere to go other than the page body.
+  const refocusCreate = useRef(false);
+  const loadSeq = useRef(0);
 
+  // Only the newest request may write the list: a Retry and the refresh after
+  // a create can overlap, and an older answer must not replace a newer one.
   const load = async () => {
+    loadSeq.current += 1;
+    const seq = loadSeq.current;
     try {
-      const res = await fetch("/api/settings/api-keys", { cache: "no-store" });
-      if (!res.ok) throw new Error(String(res.status));
-      const data = (await res.json()) as { apiKeys: ApiKeyRow[] };
-      setKeys(data.apiKeys);
+      const apiKeys = await fetchApiKeys();
+      if (seq !== loadSeq.current) return;
+      setKeys(apiKeys);
       setLoadError(null);
     } catch {
-      setLoadError("Failed to load API keys");
+      if (seq === loadSeq.current) setLoadError("Failed to load API keys");
     }
   };
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/settings/api-keys", { cache: "no-store" });
-        if (!res.ok) throw new Error(String(res.status));
-        const data = (await res.json()) as { apiKeys: ApiKeyRow[] };
-        if (!cancelled) setKeys(data.apiKeys);
-      } catch {
-        if (!cancelled) setLoadError("Failed to load API keys");
-      }
-    })();
+    loadSeq.current += 1;
+    const seq = loadSeq.current;
+    fetchApiKeys().then(
+      (apiKeys) => {
+        if (seq === loadSeq.current) setKeys(apiKeys);
+      },
+      () => {
+        if (seq === loadSeq.current) setLoadError("Failed to load API keys");
+      },
+    );
     return () => {
-      cancelled = true;
+      // Nothing still in flight may land after unmount.
+      loadSeq.current += 1;
     };
   }, []);
 
+  const retry = async () => {
+    setRetrying(true);
+    try {
+      await load();
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  const openCreate = () => {
+    setCreateSession((n) => n + 1);
+    setCreateOpen(true);
+  };
+
+  const openDelete = (key: ApiKeyRow) => {
+    setDeleteTarget(key);
+    setDeleteOpen(true);
+  };
+
   const handleDelete = async () => {
     if (!deleteTarget) return;
+    const target = deleteTarget;
     setDeleting(true);
     try {
-      const res = await fetch(`/api/settings/api-keys/${encodeURIComponent(deleteTarget.id)}`, {
+      const res = await fetch(`/api/settings/api-keys/${encodeURIComponent(target.id)}`, {
         method: "DELETE",
       });
-      if (!res.ok && res.status !== 404) {
+      if (res.status === 404) {
+        // Most likely deleted from another tab. Re-read the list rather than
+        // assume, so it shows what the server actually has.
+        toast.info(`API key "${target.name}" was already deleted`);
+        refocusCreate.current = true;
+        setDeleteOpen(false);
+        void load();
+        return;
+      }
+      if (!res.ok) {
         const data = await res.json().catch(() => null);
         toast.error("Couldn't delete API key", { description: data?.error });
         return;
       }
-      setKeys((prev) => prev?.filter((k) => k.id !== deleteTarget.id) ?? prev);
-      toast.success(`API key "${deleteTarget.name}" deleted`, {
+      setKeys((prev) => prev?.filter((k) => k.id !== target.id) ?? prev);
+      // Also supersedes a load still in flight from before the delete, which
+      // would otherwise put the key back.
+      void load();
+      toast.success(`API key "${target.name}" deleted`, {
         description: "Anything using it lost access immediately.",
       });
-      setDeleteTarget(null);
+      refocusCreate.current = true;
+      setDeleteOpen(false);
     } catch {
       toast.error("Couldn't delete API key");
     } finally {
@@ -192,7 +251,7 @@ export function ApiKeysSection() {
         </>
       }
       action={
-        <Button size="sm" onClick={() => setCreateOpen(true)} disabled={keys === null && !loadError}>
+        <Button ref={createButtonRef} size="sm" onClick={openCreate} disabled={keys === null && !loadError}>
           <Plus className="mr-1.5 h-4 w-4" />
           Create API Key
         </Button>
@@ -203,7 +262,8 @@ export function ApiKeysSection() {
         <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>{loadError}</span>
-          <Button variant="outline" size="sm" className="ml-auto" onClick={load}>
+          <Button variant="outline" size="sm" className="ml-auto" onClick={retry} disabled={retrying}>
+            {retrying && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
             Retry
           </Button>
         </div>
@@ -225,25 +285,41 @@ export function ApiKeysSection() {
       {keys && keys.length > 0 && (
         <ul className="divide-y divide-border/60" aria-label="API keys">
           {keys.map((key) => (
-            <ApiKeyListItem key={key.id} apiKey={key} onDelete={() => setDeleteTarget(key)} />
+            <ApiKeyListItem key={key.id} apiKey={key} onDelete={() => openDelete(key)} />
           ))}
         </ul>
       )}
 
       <CreateApiKeyDialog
+        key={createSession}
         open={createOpen}
         onOpenChange={setCreateOpen}
         existingNames={keys?.map((k) => k.name) ?? []}
-        onCreated={(created) => setKeys((prev) => [created, ...(prev ?? [])])}
+        returnFocusTo={createButtonRef}
+        onCreated={(created) => {
+          // Shown at once; the refresh then fills in anything this list was
+          // missing (it may never have loaded).
+          setKeys((prev) => (prev ? [created, ...prev.filter((k) => k.id !== created.id)] : prev));
+          void load();
+        }}
+        onListStale={() => void load()}
       />
 
       <AlertDialog
-        open={deleteTarget !== null}
+        open={deleteOpen}
         onOpenChange={(open) => {
-          if (!open && !deleting) setDeleteTarget(null);
+          if (!open && deleting) return;
+          setDeleteOpen(open);
         }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent
+          onCloseAutoFocus={(e) => {
+            if (!refocusCreate.current) return;
+            refocusCreate.current = false;
+            e.preventDefault();
+            createButtonRef.current?.focus();
+          }}
+        >
           <AlertDialogHeader>
             <AlertDialogTitle>Delete API key &ldquo;{deleteTarget?.name}&rdquo;?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -338,19 +414,42 @@ function ApiKeyListItem({ apiKey, onDelete }: { apiKey: ApiKeyRow; onDelete: () 
   );
 }
 
+const ACCESS_OPTIONS = [
+  {
+    value: "read",
+    icon: Eye,
+    title: "Read-only",
+    description: "Read everything the API exposes. Cannot change anything.",
+  },
+  {
+    value: "custom",
+    icon: SlidersHorizontal,
+    title: "Custom scopes",
+    description: "Pick exactly what the key may read and do.",
+  },
+] as const;
+
+type AccessChoice = (typeof ACCESS_OPTIONS)[number]["value"];
+
 function CreateApiKeyDialog({
   open,
   onOpenChange,
   existingNames,
+  returnFocusTo,
   onCreated,
+  onListStale,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   existingNames: string[];
+  /** Focused once the dialog has closed. */
+  returnFocusTo: RefObject<HTMLButtonElement | null>;
   onCreated: (apiKey: ApiKeyRow) => void;
+  /** The list may be missing a key the server has — re-read it. */
+  onListStale: () => void;
 }) {
   const [name, setName] = useState("");
-  const [access, setAccess] = useState<"read" | "custom">("read");
+  const [access, setAccess] = useState<AccessChoice>("read");
   const [selected, setSelected] = useState<Set<ApiScope>>(new Set());
   const [expiry, setExpiry] = useState<ExpiryChoice>("90");
   const [customDate, setCustomDate] = useState("");
@@ -360,6 +459,20 @@ function CreateApiKeyDialog({
   const [revealedKey, setRevealedKey] = useState<{ key: string; name: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const keyInputRef = useRef<HTMLInputElement>(null);
+  // The key on screen now, for a copy that finishes after the dialog closed.
+  const revealedKeyRef = useRef<string | null>(null);
+  const accessRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  // Leaving the page while the key is on screen loses it for good, so ask.
+  useEffect(() => {
+    if (!revealedKey) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [revealedKey]);
 
   const reset = () => {
     setName("");
@@ -370,13 +483,14 @@ function CreateApiKeyDialog({
     setSaving(false);
     setError(null);
     setRevealedKey(null);
+    revealedKeyRef.current = null;
     setCopied(false);
   };
 
   const handleOpenChange = (next: boolean) => {
     if (saving) return;
-    // Closing drops the plaintext key from memory for good.
-    if (!next) reset();
+    // The form is reset once the close animation has finished (see
+    // onCloseAutoFocus) — resetting here swapped the content mid-fade.
     onOpenChange(next);
   };
 
@@ -395,17 +509,20 @@ function CreateApiKeyDialog({
   }, [selected]);
 
   const trimmedName = name.trim();
-  const duplicateName = existingNames.some((n) => n === trimmedName);
+  const nameProblem = apiKeyNameProblem(trimmedName);
+  const duplicateName = existingNames.includes(trimmedName);
+  // Nothing typed yet is not an error; Create simply stays disabled.
+  const nameError = duplicateName
+    ? "A key with this name already exists."
+    : name.length > 0
+      ? nameProblem
+      : null;
   const expiresAt = resolveExpiry(expiry, customDate);
   const canCreate =
-    trimmedName.length > 0 &&
-    trimmedName.length <= 64 &&
-    !duplicateName &&
-    scopes.length > 0 &&
-    expiresAt !== undefined &&
-    !saving;
+    nameProblem === null && !duplicateName && scopes.length > 0 && expiresAt !== undefined && !saving;
 
   const toggleScope = (scope: ApiScope, checked: boolean) => {
+    setError(null);
     setSelected((prev) => {
       const next = new Set(prev);
       if (checked) next.add(scope);
@@ -414,25 +531,63 @@ function CreateApiKeyDialog({
     });
   };
 
+  const selectAccess = (value: AccessChoice) => {
+    setError(null);
+    setAccess(value);
+  };
+
+  // Arrow keys move the choice, as in any radio group; Tab enters and leaves
+  // the group at the checked option.
+  const handleAccessKeyDown = (e: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const step =
+      e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+    if (step === 0) return;
+    e.preventDefault();
+    const next = (index + step + ACCESS_OPTIONS.length) % ACCESS_OPTIONS.length;
+    selectAccess(ACCESS_OPTIONS[next].value);
+    accessRefs.current[next]?.focus();
+  };
+
   const handleCreate = async () => {
     if (!canCreate) return;
+    // Resolved now rather than at the last render: the dialog may have sat
+    // open past the end of a custom date, or for a while on "7 days".
+    const expiresAtNow = resolveExpiry(expiry, customDate);
+    if (expiresAtNow === undefined) {
+      setError("That expiration date has passed — pick another.");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
       const res = await fetch("/api/settings/api-keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: trimmedName, scopes, expiresAt }),
+        body: JSON.stringify({ name: trimmedName, scopes, expiresAt: expiresAtNow }),
       });
       const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.key) {
-        setError(saveErrorMessage(data, "Failed to create API key"));
+      if (res.ok && typeof data?.key === "string" && data?.apiKey) {
+        const created = data.apiKey as ApiKeyRow;
+        revealedKeyRef.current = data.key;
+        setRevealedKey({ key: data.key, name: created.name });
+        onCreated(created);
         return;
       }
-      onCreated(data.apiKey as ApiKeyRow);
-      setRevealedKey({ key: data.key as string, name: (data.apiKey as ApiKeyRow).name });
+      if (res.ok) {
+        setError(
+          "The key was created, but its value could not be read. Delete it from the list and create another.",
+        );
+        onListStale();
+        return;
+      }
+      // A clash with a key this list has not seen (made in another tab).
+      if (res.status === 409) onListStale();
+      setError(saveErrorMessage(data, "Failed to create API key"));
     } catch {
-      setError("Network error — the key was not created");
+      setError(
+        "Network error. If the key was created anyway it will appear in the list — delete it and create another, since its value cannot be shown again.",
+      );
+      onListStale();
     } finally {
       setSaving(false);
     }
@@ -440,10 +595,11 @@ function CreateApiKeyDialog({
 
   const handleCopy = async () => {
     if (!revealedKey) return;
+    const value = revealedKey.key;
     let ok = false;
     try {
       // Only available in a secure context (HTTPS or localhost).
-      await navigator.clipboard.writeText(revealedKey.key);
+      await navigator.clipboard.writeText(value);
       ok = true;
     } catch {
       // Plain-HTTP LAN installs have no Clipboard API; fall back to copying
@@ -459,12 +615,14 @@ function CreateApiKeyDialog({
         }
       }
     }
+    // The dialog closed (and dropped the key) while the copy was pending.
+    if (revealedKeyRef.current !== value) return;
     if (ok) {
       setCopied(true);
       toast.success("API key copied");
     } else {
       toast.error("Couldn't copy automatically", {
-        description: "The key is selected — press Ctrl+C (or ⌘C) to copy it.",
+        description: "The key is selected in the field — copy it from there.",
       });
     }
   };
@@ -482,6 +640,16 @@ function CreateApiKeyDialog({
         }}
         onEscapeKeyDown={(e) => {
           if (revealedKey || saving) e.preventDefault();
+        }}
+        // Runs once the close animation has finished: drop the key from memory
+        // and hand focus back to the button that opened the dialog.
+        onCloseAutoFocus={(e) => {
+          reset();
+          const target = returnFocusTo.current;
+          if (target) {
+            e.preventDefault();
+            target.focus();
+          }
         }}
       >
         {revealedKey ? (
@@ -557,34 +725,39 @@ function CreateApiKeyDialog({
                 <Input
                   id="api-key-name"
                   placeholder="e.g. Home Assistant"
-                  maxLength={64}
                   autoComplete="off"
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  aria-invalid={duplicateName || undefined}
+                  onChange={(e) => {
+                    setError(null);
+                    setName(e.target.value);
+                  }}
+                  aria-invalid={nameError ? true : undefined}
+                  aria-describedby={nameError ? "api-key-name-error" : undefined}
                 />
-                {duplicateName && (
-                  <p className="text-xs text-destructive">A key with this name already exists.</p>
+                {nameError && (
+                  <p id="api-key-name-error" className="text-xs text-destructive">
+                    {nameError}
+                  </p>
                 )}
               </div>
 
               <fieldset className="space-y-2">
                 <legend className="mb-2 text-sm font-medium">Access</legend>
                 <div role="radiogroup" aria-label="Access" className="grid gap-2 sm:grid-cols-2">
-                  <AccessOption
-                    checked={access === "read"}
-                    onSelect={() => setAccess("read")}
-                    icon={Eye}
-                    title="Read-only"
-                    description="Read everything the API exposes. Cannot change anything."
-                  />
-                  <AccessOption
-                    checked={access === "custom"}
-                    onSelect={() => setAccess("custom")}
-                    icon={SlidersHorizontal}
-                    title="Custom scopes"
-                    description="Pick exactly what the key may read and do."
-                  />
+                  {ACCESS_OPTIONS.map((option, index) => (
+                    <AccessOption
+                      key={option.value}
+                      ref={(el) => {
+                        accessRefs.current[index] = el;
+                      }}
+                      checked={access === option.value}
+                      onSelect={() => selectAccess(option.value)}
+                      onKeyDown={(e) => handleAccessKeyDown(e, index)}
+                      icon={option.icon}
+                      title={option.title}
+                      description={option.description}
+                    />
+                  ))}
                 </div>
 
                 {access === "read" ? (
@@ -646,7 +819,13 @@ function CreateApiKeyDialog({
               <div className="space-y-2">
                 <Label htmlFor="api-key-expiry">Expiration</Label>
                 <div className="flex flex-col gap-2 sm:flex-row">
-                  <Select value={expiry} onValueChange={(v) => setExpiry(v as ExpiryChoice)}>
+                  <Select
+                    value={expiry}
+                    onValueChange={(v) => {
+                      setError(null);
+                      setExpiry(v as ExpiryChoice);
+                    }}
+                  >
                     <SelectTrigger id="api-key-expiry" className="sm:w-48">
                       <SelectValue />
                     </SelectTrigger>
@@ -663,8 +842,12 @@ function CreateApiKeyDialog({
                       type="date"
                       aria-label="Expiration date"
                       min={today}
+                      max={MAX_CUSTOM_DATE}
                       value={customDate}
-                      onChange={(e) => setCustomDate(e.target.value)}
+                      onChange={(e) => {
+                        setError(null);
+                        setCustomDate(e.target.value);
+                      }}
                       className="sm:w-48"
                     />
                   )}
@@ -680,7 +863,11 @@ function CreateApiKeyDialog({
                   </p>
                 ) : (
                   expiry === "custom" && (
-                    <p className="text-xs text-muted-foreground">Pick a date from today onward.</p>
+                    <p className="text-xs text-muted-foreground">
+                      {customDate
+                        ? "Pick a date from today onward, before the year 9999."
+                        : "Pick the last day the key should work."}
+                    </p>
                   )
                 )}
               </div>
@@ -710,24 +897,32 @@ function CreateApiKeyDialog({
 }
 
 function AccessOption({
+  ref,
   checked,
   onSelect,
+  onKeyDown,
   icon: Icon,
   title,
   description,
 }: {
+  ref: (el: HTMLButtonElement | null) => void;
   checked: boolean;
   onSelect: () => void;
+  onKeyDown: (e: KeyboardEvent<HTMLButtonElement>) => void;
   icon: LucideIcon;
   title: string;
   description: string;
 }) {
   return (
     <button
+      ref={ref}
       type="button"
       role="radio"
       aria-checked={checked}
+      // Roving tab stop: only the checked option is in the tab order.
+      tabIndex={checked ? 0 : -1}
       onClick={onSelect}
+      onKeyDown={onKeyDown}
       className={cn(
         "flex items-start gap-2.5 rounded-md border p-3 text-left transition-colors",
         checked ? "border-primary bg-primary/5" : "border-border hover:bg-accent/50",

@@ -16,7 +16,8 @@ import { logger } from "@/lib/logger";
 
 export type RunNowJob = "sync" | "detection" | "execution";
 
-export type RunNowResult = { ok: true } | { ok: false; error: string };
+/** `jobs`: how many jobs this call queued — for a sync, one per enabled server not already syncing. */
+export type RunNowResult = { ok: true; jobs: number } | { ok: false; error: string };
 
 export async function runJobNow(
   userId: string,
@@ -32,7 +33,8 @@ export async function runJobNow(
       where: { id: userId },
       include: { mediaServers: true },
     });
-    let allEnqueued = true;
+    let queued = 0;
+    let failed = 0;
     if (user) {
       // Enqueue a durable sync job per enabled server. Enqueueing is
       // non-blocking and error-isolated, so one unreachable server can't
@@ -50,18 +52,25 @@ export async function runJobNow(
           { serverId: server.id, trigger: `manual sync ${source}` },
           { jobKey: `sync:${server.id}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
         );
-        if (!ok) allEnqueued = false;
+        if (ok) queued++;
+        else failed++;
       }
     }
     // Advance the watermark only when every enqueue succeeded, so a failed
-    // enqueue doesn't stamp "last run" and skip the next scheduled window.
-    if (allEnqueued) {
-      await prisma.appSettings.update({
-        where: { userId },
-        data: { lastScheduledSync: new Date() },
-      });
+    // enqueue doesn't stamp "last run" and skip the next scheduled window —
+    // and say so, rather than reporting a sync that was never queued.
+    if (failed > 0) {
+      const total = queued + failed;
+      return {
+        ok: false,
+        error: `Failed to enqueue the sync for ${failed} of ${total} server${total === 1 ? "" : "s"}`,
+      };
     }
-    return { ok: true };
+    await prisma.appSettings.update({
+      where: { userId },
+      data: { lastScheduledSync: new Date() },
+    });
+    return { ok: true, jobs: queued };
   }
 
   if (job === "detection") {
@@ -79,7 +88,7 @@ export async function runJobNow(
       where: { userId },
       data: { lastScheduledLifecycleDetection: new Date() },
     });
-    return { ok: true };
+    return { ok: true, jobs: 1 };
   }
 
   logger.info("Scheduler", `Manual lifecycle execution triggered ${source}`);
@@ -96,5 +105,5 @@ export async function runJobNow(
     where: { userId },
     data: { lastScheduledLifecycleExecution: new Date() },
   });
-  return { ok: true };
+  return { ok: true, jobs: 1 };
 }

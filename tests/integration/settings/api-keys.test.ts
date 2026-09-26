@@ -183,6 +183,7 @@ describe("/api/settings/api-keys", () => {
       ["an empty name", { name: "   ", scopes: ["media:read"], expiresAt: null }],
       ["a name over 64 characters", { name: "x".repeat(65), scopes: ["media:read"], expiresAt: null }],
       ["a newline in the name", { name: "ok\nFAKE LOG LINE", scopes: ["media:read"], expiresAt: null }],
+      ["a right-to-left override in the name", { name: "Dash\u202Eboard", scopes: ["media:read"], expiresAt: null }],
       ["a malformed expiry", { name: "x", scopes: ["media:read"], expiresAt: "next tuesday" }],
       ["a missing expiry", { name: "x", scopes: ["media:read"] }],
     ])("rejects %s", async (_label, payload) => {
@@ -210,6 +211,18 @@ describe("/api/settings/api-keys", () => {
       expect(body.error).toMatch(/already exists/);
     });
 
+    it("surfaces an unexpected database error instead of reporting a name clash", async () => {
+      await login();
+      const spy = vi.spyOn(prisma, "$transaction").mockRejectedValueOnce(new Error("connection reset"));
+      try {
+        await expect(
+          create({ name: "Boom", scopes: ["media:read"], expiresAt: null }),
+        ).rejects.toThrow("connection reset");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
     it(`caps the number of keys at ${MAX_API_KEYS}`, async () => {
       const user = await login();
       for (let i = 0; i < MAX_API_KEYS; i++) await createTestApiKey(user.id, { name: `k${i}` });
@@ -218,6 +231,16 @@ describe("/api/settings/api-keys", () => {
         400,
       );
       expect(body.error).toMatch(String(MAX_API_KEYS));
+    });
+
+    it("holds the cap when requests race for the last slots", async () => {
+      const user = await login();
+      for (let i = 0; i < MAX_API_KEYS - 2; i++) await createTestApiKey(user.id, { name: `k${i}` });
+      const results = await Promise.all(
+        Array.from({ length: 6 }, (_, i) => create({ name: `racer ${i}`, scopes: ["media:read"], expiresAt: null })),
+      );
+      expect(results.map((r) => r.status).sort()).toEqual([201, 201, 400, 400, 400, 400]);
+      expect(await prisma.apiKey.count({ where: { userId: user.id } })).toBe(MAX_API_KEYS);
     });
   });
 
@@ -267,6 +290,18 @@ describe("/api/settings/api-keys", () => {
       await expectJson(await callRouteWithParams(DELETE, { id: row.id }, { method: "DELETE" }), 200);
       await expectJson(await callRouteWithParams(DELETE, { id: row.id }, { method: "DELETE" }), 404);
       await expectJson(await callRouteWithParams(DELETE, { id: "nope" }, { method: "DELETE" }), 404);
+    });
+
+    it("answers 404, not 500, when another request deleted the key first", async () => {
+      const user = await login();
+      const { row } = await createTestApiKey(user.id);
+      // The key is found, then gone by the time the delete runs.
+      const spy = vi.spyOn(prisma.apiKey, "deleteMany").mockResolvedValueOnce({ count: 0 });
+      try {
+        await expectJson(await callRouteWithParams(DELETE, { id: row.id }, { method: "DELETE" }), 404);
+      } finally {
+        spy.mockRestore();
+      }
     });
 
     it("leaves other keys working", async () => {

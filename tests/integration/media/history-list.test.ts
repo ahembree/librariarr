@@ -86,6 +86,40 @@ describe("GET /api/media/history", () => {
     expect(body.error).toBe("Unauthorized");
   });
 
+  it("rejects an unknown type with 400 instead of failing the query", async () => {
+    for (const type of ["BOOK", "MOVIE|BOOK", "movie"]) {
+      const body = await expectJson<{ error: string }>(
+        await callRoute(GET, { url: "/api/media/history", searchParams: { type } }),
+        400,
+      );
+      expect(body.error).toMatch(/Invalid type/);
+    }
+  });
+
+  it("filters by one or several types", async () => {
+    const episode = await createTestMediaItem(libraryId, {
+      type: "SERIES",
+      title: "Pilot",
+      parentTitle: "Show",
+      seasonNumber: 1,
+      episodeNumber: 1,
+    });
+    await addWatch(episode.id);
+
+    const series = await expectJson<HistoryResponse>(
+      await callRoute(GET, { url: "/api/media/history", searchParams: { type: "SERIES" } }),
+    );
+    expect(series.items).toHaveLength(1);
+    const either = await expectJson<HistoryResponse>(
+      await callRoute(GET, { url: "/api/media/history", searchParams: { type: "MOVIE|SERIES" } }),
+    );
+    expect(either.items).toHaveLength(1);
+    const movies = await expectJson<HistoryResponse>(
+      await callRoute(GET, { url: "/api/media/history", searchParams: { type: "MOVIE" } }),
+    );
+    expect(movies.items).toHaveLength(0);
+  });
+
   it("matches the episode title", async () => {
     const episode = await createTestMediaItem(libraryId, {
       type: "SERIES",

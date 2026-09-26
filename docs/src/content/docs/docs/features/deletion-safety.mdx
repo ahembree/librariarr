@@ -264,6 +264,7 @@ Open the rule set, turn **Action enabled** off, click Save. This:
 
 - Cancels every pending action for that rule set immediately.
 - Stops new pending actions from being created on the next detection runs.
+- Refuses any manual execution of the rule set's action, including through the [public API](/docs/advanced/api/), until you turn it back on.
 - Also wipes the current match list as a side effect of saving (if you want a record of what matched, take a screenshot first).
 
 You can turn **Action enabled** back on later when you've fixed the rule. The next detection run will rebuild the match list from scratch.

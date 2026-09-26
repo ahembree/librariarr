@@ -8,7 +8,14 @@ export class RateLimiter {
 
   constructor(
     readonly maxAttempts: number,
-    private windowMs: number
+    private windowMs: number,
+    /**
+     * Most keys tracked at once; the oldest is dropped to admit a new one.
+     * For limiters keyed by attacker-chosen values (a presented credential),
+     * where a flood of distinct keys would otherwise grow the map without
+     * bound until the next cleanup. Dropping an entry only forgets a count.
+     */
+    private maxEntries = Number.POSITIVE_INFINITY
   ) {}
 
   check(key: string): {
@@ -20,6 +27,10 @@ export class RateLimiter {
     const entry = this.store.get(key);
 
     if (!entry || now >= entry.resetAt) {
+      if (!entry && this.store.size >= this.maxEntries) {
+        const oldest = this.store.keys().next().value;
+        if (oldest !== undefined) this.store.delete(oldest);
+      }
       this.store.set(key, { count: 1, resetAt: now + this.windowMs });
       return { limited: false, remaining: this.maxAttempts - 1 };
     }
@@ -80,25 +91,23 @@ export const aiRateLimiter = new RateLimiter(30, 5 * 60 * 1000);
 
 // ─── Public API (/api/v1) ───
 //
-// Failed API key attempts are counted in two buckets, both only ever charged
-// on a failure (see `peek`). A key is 256 bits of randomness, so these are not
-// what stops guessing — nothing needs to. They bound the work an invalid key
-// can cause and tell a broken client to back off, while keeping a VALID key
-// working when some other client on the same address is misbehaving (every
-// container on one Docker host usually shares an address, and without trusted
-// proxy headers every client shares the "unknown" bucket):
+// A key is 256 bits of randomness, so no limiter here is what stops guessing —
+// nothing needs to. What they must never do is let one client's failures lock
+// OUT a valid key: every container on one Docker host usually shares an
+// address, and with TRUST_PROXY_HEADERS=false every client shares the single
+// "unknown" address, so any per-address bucket that blocks lets whoever sends
+// 500 junk requests shut every integration out, again and again. So:
 //
-// - per address + presented credential: a client stuck on a deleted or
-//   expired key gets 429s after 20 tries, and only it is affected;
-// - per address, any credential: a flood of distinct bad keys is cut off after
-//   500 in the window, at the cost of that address's valid keys for the rest of
-//   the window.
-//
-// Deliberately no global floor like `authGlobalRateLimiter`: with guessing off
-// the table, a global bucket would only let any client lock every integration
-// out of the API.
-export const apiKeyCredentialFailureLimiter = new RateLimiter(20, 15 * 60 * 1000);
-export const apiKeyAddressFailureLimiter = new RateLimiter(500, 15 * 60 * 1000);
+// - failures are counted per PRESENTED CREDENTIAL (its hash), charged only on
+//   failure (see `peek`): a client stuck on a deleted or expired key gets 429s
+//   after 20 tries, and nothing else is affected — a valid key never fails, so
+//   no one can fill its bucket. Capped at 10,000 tracked credentials so a flood
+//   of distinct junk keys cannot grow memory;
+// - `apiKeyFailureLogLimiter` bounds only the LOGGING of failures (50 WARN rows
+//   per window across every client), so a flood cannot become a flood of log
+//   rows either — it limits what is written, never who is served.
+export const apiKeyCredentialFailureLimiter = new RateLimiter(20, 15 * 60 * 1000, 10_000);
+export const apiKeyFailureLogLimiter = new RateLimiter(50, 15 * 60 * 1000);
 
 // Authenticated requests per API key: 600 a minute. Generous for dashboards and
 // scripts paging through a library; bounds a runaway client or a leaked key.
@@ -110,7 +119,7 @@ setInterval(() => {
   authGlobalRateLimiter.cleanup();
   aiRateLimiter.cleanup();
   apiKeyCredentialFailureLimiter.cleanup();
-  apiKeyAddressFailureLimiter.cleanup();
+  apiKeyFailureLogLimiter.cleanup();
   apiKeyRequestLimiter.cleanup();
 }, 5 * 60 * 1000).unref();
 
