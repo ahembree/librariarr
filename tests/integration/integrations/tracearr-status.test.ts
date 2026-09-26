@@ -27,6 +27,11 @@ import { GET } from "@/app/api/integrations/tracearr/status/route";
 // The fraction arithmetic is a pure helper beside the route, so its edge cases
 // are exercised directly as well as through the response shape.
 import { computeBackfillFraction } from "@/app/api/integrations/tracearr/status/backfill-fraction";
+import {
+  beginTracearrImport,
+  endTracearrImport,
+  recordTracearrImportPage,
+} from "@/lib/sync/tracearr-import-activity";
 
 interface StatusRow {
   serverId: string;
@@ -38,6 +43,13 @@ interface StatusRow {
   newestImported: string | null;
   oldestPlayAt: string | null;
   backfillFraction: number | null;
+  activeImport: {
+    pass: "forward" | "backfill" | null;
+    startedAt: string;
+    pages: number;
+    imported: number;
+    oldestReached: string | null;
+  } | null;
 }
 
 const STATUS_URL = "/api/integrations/tracearr/status";
@@ -157,7 +169,48 @@ describe("GET /api/integrations/tracearr/status", () => {
       // the walk has to go is unknown — indeterminate, not zero.
       oldestPlayAt: null,
       backfillFraction: null,
+      activeImport: null,
     });
+  });
+
+  it("reports no live import when nothing is running", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { name: "Idle" });
+    await mapToTracearr(server.id, "55555555-5555-5555-5555-555555555555", { backfillComplete: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const body = await expectJson<{ servers: StatusRow[] }>(await callRoute(GET, { url: STATUS_URL }));
+
+    expect(body.servers[0].activeImport).toBeNull();
+  });
+
+  it("reports the import running right now, even after the backfill completed", async () => {
+    // The stored rows say how much history is here; only this says a job is
+    // importing at this moment — which "History fully imported" cannot.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { name: "Busy" });
+    await mapToTracearr(server.id, "66666666-6666-6666-6666-666666666666", { backfillComplete: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const run = beginTracearrImport(server.id, user.id);
+    recordTracearrImportPage(run, {
+      pass: "forward",
+      pages: 2,
+      imported: 140,
+      oldestReached: new Date("2025-07-10T11:00:00.000Z"),
+    });
+    try {
+      const body = await expectJson<{ servers: StatusRow[] }>(await callRoute(GET, { url: STATUS_URL }));
+      expect(body.servers[0].activeImport).toMatchObject({
+        pass: "forward",
+        pages: 2,
+        imported: 140,
+        oldestReached: "2025-07-10T11:00:00.000Z",
+      });
+      expect(body.servers[0].activeImport).not.toHaveProperty("userId");
+    } finally {
+      endTracearrImport(run);
+    }
   });
 
   it("excludes a server that is not mapped to Tracearr", async () => {

@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { enqueueJob } from "@/lib/jobs/client";
-import { MAIN_QUEUE, TASK_SYNC_SERVER } from "@/lib/jobs/constants";
+import { eventBus } from "@/lib/events/event-bus";
+import { MAIN_QUEUE, REQUESTED_SYNC_PRIORITY, TASK_SYNC_SERVER } from "@/lib/jobs/constants";
 
 export async function POST(
   request: NextRequest,
@@ -30,18 +31,6 @@ export async function POST(
     );
   }
 
-  // Prevent duplicate syncs — if a sync is already running or pending for this server, reject
-  const activeJob = await prisma.syncJob.findFirst({
-    where: { mediaServerId: server.id, status: { in: ["RUNNING", "PENDING"] } },
-    select: { id: true },
-  });
-  if (activeJob) {
-    return NextResponse.json(
-      { error: "A sync is already running for this server" },
-      { status: 409 },
-    );
-  }
-
   // Optional: scope sync to a specific library
   let libraryKey: string | undefined;
   try {
@@ -66,6 +55,48 @@ export async function POST(
     }
   }
 
+  // Returned so the caller can tell the run this request starts from the
+  // previous one: the row below and anything the worker stamps later carry a
+  // `startedAt` at or after it, on this same process clock. Comparing job ids
+  // against the caller's last-seen list could not do that — a list that missed
+  // an event named an older job, and the newer finished one then read as this
+  // request's run and ended it before it began.
+  const requestedAt = new Date();
+
+  // The row exists from the moment the sync is asked for. MAIN_QUEUE is
+  // serial, so the job can wait behind a Tracearr backfill slice (up to five
+  // minutes), another server's sync or a lifecycle run — and until something
+  // wrote a row, every page had nothing to show: the click looked ignored for
+  // as long as the queue was busy. The run claims this row via `syncJobId`.
+  //
+  // Checked and created under a per-server lock. Two requests passing the
+  // duplicate check together (a second tab, Sync and Sync All at once) each
+  // created a row, the second enqueue replaced the first job's payload, and
+  // the first row was left PENDING with nothing to claim it — answering 409
+  // here and shrinking every Tracearr backfill slice to one page until a
+  // scheduled sync happened to adopt it.
+  const syncJob = await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      `SELECT pg_advisory_xact_lock(hashtext('sync-request:' || $1))`,
+      server.id,
+    );
+    const activeJob = await tx.syncJob.findFirst({
+      where: { mediaServerId: server.id, status: { in: ["RUNNING", "PENDING"] } },
+      select: { id: true },
+    });
+    if (activeJob) return null;
+    return tx.syncJob.create({
+      data: { mediaServerId: server.id, status: "PENDING", startedAt: requestedAt },
+      select: { id: true },
+    });
+  });
+  if (!syncJob) {
+    return NextResponse.json(
+      { error: "A sync is already running for this server" },
+      { status: 409 },
+    );
+  }
+
   // Mark the user's sync schedule as just-ran so the scheduler doesn't
   // fire a redundant sync at the next 15-minute mark (e.g. right after onboarding).
   await prisma.appSettings.upsert({
@@ -79,11 +110,27 @@ export async function POST(
   // full-server sync and distinct library-scoped syncs don't collide and
   // replace one another.
   const jobKey = libraryKey ? `sync:${server.id}:${libraryKey}` : `sync:${server.id}`;
-  await enqueueJob(
+  const enqueued = await enqueueJob(
     TASK_SYNC_SERVER,
-    { serverId: server.id, libraryKey, trigger: "manual sync request for this server" },
-    { jobKey, queueName: MAIN_QUEUE, maxAttempts: 3 },
+    {
+      serverId: server.id,
+      libraryKey,
+      trigger: "manual sync request for this server",
+      syncJobId: syncJob.id,
+    },
+    { jobKey, queueName: MAIN_QUEUE, maxAttempts: 3, priority: REQUESTED_SYNC_PRIORITY },
   );
+  if (!enqueued) {
+    // Nothing will ever claim the row, and a PENDING row makes this route
+    // answer 409 until a restart — so close it here instead.
+    await prisma.syncJob.update({
+      where: { id: syncJob.id },
+      data: { status: "FAILED", completedAt: new Date(), error: "Could not queue the sync job" },
+    });
+    return NextResponse.json({ error: "Could not queue the sync job" }, { status: 500 });
+  }
 
-  return NextResponse.json({ message: "Sync started" });
+  eventBus.emit({ type: "sync:started", userId: session.userId!, meta: { serverId: server.id } });
+
+  return NextResponse.json({ message: "Sync started", requestedAt: requestedAt.toISOString() });
 }

@@ -1,4 +1,5 @@
 import type { ChipColorMap, ChipColorCategory } from "@/lib/theme/chip-colors";
+import type { TracearrImportActivity } from "@/lib/sync/tracearr-import-activity";
 
 // ─── Server types ───
 
@@ -156,6 +157,13 @@ export interface TracearrImportStatus {
    * 0% progress when the truth is that progress is unknowable.
    */
   backfillFraction: number | null;
+  /**
+   * The import running for this server right now, or null. Live this-run
+   * figures the stored rows cannot express — the stored counts above say how
+   * much history is here, this says that a job is importing more at this
+   * moment (including a catch-up after the backfill has completed).
+   */
+  activeImport: TracearrImportActivity | null;
 }
 
 // ─── Schedule types ───

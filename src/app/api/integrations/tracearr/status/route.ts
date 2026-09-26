@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { sanitize } from "@/lib/api/sanitize";
 import { computeBackfillFraction } from "./backfill-fraction";
+import { getTracearrImportActivity } from "@/lib/sync/tracearr-import-activity";
 
 /**
  * GET /api/integrations/tracearr/status
@@ -105,6 +106,9 @@ export async function GET() {
         oldestImported,
         newestImported,
       }),
+      // The import running for this server right now, if any — live this-run
+      // counters the stored rows cannot express. `null` when nothing is running.
+      activeImport: getTracearrImportActivity(server.id),
     };
   });
 
