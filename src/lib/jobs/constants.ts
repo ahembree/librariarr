@@ -90,6 +90,15 @@ export interface SyncServerPayload {
   syncJobId?: string;
 }
 
+/**
+ * Graphile priority for a sync someone is waiting on (Settings → Sync / Sync
+ * All). Lower runs first; background work keeps the default 0. `MAIN_QUEUE` is
+ * serial and ordered by priority, then enqueue time, so without this a
+ * requested sync waited behind every job already queued — each mapped
+ * server's next 5-minute Tracearr backfill slice included.
+ */
+export const REQUESTED_SYNC_PRIORITY = -10;
+
 /** Payload for {@link TASK_SYNC_WATCH_HISTORY}. */
 export interface SyncWatchHistoryPayload {
   serverId: string;

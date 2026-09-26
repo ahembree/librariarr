@@ -31,7 +31,7 @@ vi.mock("@/lib/jobs/client", () => ({
 
 // Import route handler AFTER mocks
 import { POST } from "@/app/api/servers/[id]/sync/route";
-import { TASK_SYNC_SERVER, MAIN_QUEUE } from "@/lib/jobs/constants";
+import { TASK_SYNC_SERVER, MAIN_QUEUE, REQUESTED_SYNC_PRIORITY } from "@/lib/jobs/constants";
 import { getTestPrisma } from "../../setup/test-db";
 import { eventBus, type AppEvent } from "@/lib/events/event-bus";
 
@@ -120,7 +120,13 @@ describe("POST /api/servers/[id]/sync", () => {
         trigger: "manual sync request for this server",
         syncJobId: expect.any(String),
       },
-      expect.objectContaining({ jobKey: `sync:${server.id}`, queueName: MAIN_QUEUE }),
+      // Ahead of background work already queued (Tracearr backfill slices,
+      // watch-history refreshes): someone is waiting on this one.
+      expect.objectContaining({
+        jobKey: `sync:${server.id}`,
+        queueName: MAIN_QUEUE,
+        priority: REQUESTED_SYNC_PRIORITY,
+      }),
     );
   });
 

@@ -1788,6 +1788,47 @@ describe("syncTracearrHistory", () => {
       expect(mockInvalidate).toHaveBeenCalledTimes(1);
     });
 
+    it("gives way to a requested sync at the next page boundary, keeping the page", async () => {
+      // A slice holds the serial MAIN_QUEUE for up to five minutes and cannot be
+      // pre-empted from outside, so a sync the user is waiting on sat behind it.
+      storedRows({ min: MIN, max: MAX, backfillComplete: false });
+      mockGetHistoryPage.mockResolvedValue({
+        records: [historyRecord({ id: "chain-1" })],
+        nextCursor: "cursor-2",
+      });
+
+      const result = await syncTracearrHistory("server-1", {
+        passes: "backfill",
+        yieldTo: () => true,
+      });
+
+      // One page, never zero: a yield before any progress would re-enqueue a
+      // slice that did nothing.
+      expect(mockGetHistoryPage).toHaveBeenCalledTimes(1);
+      expect(insertCalls()).toHaveLength(1);
+      // The same clean stop as a spent deadline: resumable, never "complete",
+      // and not "errored" (which would make the job back off and burn retries).
+      expect(result).toEqual({ count: 1, backfillPending: true, backfillOutcome: "stopped" });
+      expect(mockPrisma.mediaServer.updateMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ tracearrBackfillComplete: true }),
+        }),
+      );
+    });
+
+    it("keeps walking while nothing is waiting", async () => {
+      storedRows({ min: MIN, max: MAX, backfillComplete: false });
+      mockGetHistoryPage
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "chain-1" })], nextCursor: "cursor-2" })
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "chain-2" })], nextCursor: null });
+      const yieldTo = vi.fn(() => false);
+
+      await syncTracearrHistory("server-1", { passes: "backfill", yieldTo });
+
+      expect(mockGetHistoryPage).toHaveBeenCalledTimes(2);
+      expect(yieldTo).toHaveBeenCalled();
+    });
+
     it("runs forward then backfill for an explicit both-passes run", async () => {
       // The default, and the only mode that touches both boundaries. The order
       // is user-visible: a backfill legitimately runs for many minutes, so this

@@ -32,6 +32,7 @@ import {
 } from "@/lib/jobs/constants";
 import { syncTracearrHistory } from "@/lib/sync/sync-tracearr-history";
 import { recoverHistoryForNewItems } from "@/lib/sync/tracearr-backfill-additions";
+import { watchForCancel } from "@/lib/sync/cancel-watch";
 
 /** Remove completed/failed lifecycle actions older than the retention window. */
 export async function cleanupOldActions(): Promise<void> {
@@ -172,13 +173,49 @@ const syncWatchHistoryTask: Task = async (payload) => {
  * walk ever reached the end — so a slice that dies to a restart, a deploy or a
  * crash simply picks up from the oldest play it managed to import.
  */
+/**
+ * How long a PENDING SyncJob row counts as "a requested sync is waiting".
+ * Bounded so a row whose job was lost (nothing claims it) cannot shrink every
+ * later backfill slice to one page forever.
+ */
+const REQUESTED_SYNC_WAIT_WINDOW_MS = 60 * 60_000;
+
+/**
+ * Is a sync someone asked for queued behind this job? The sync route creates
+ * its PENDING row at enqueue time, and nothing else leaves one behind while a
+ * MAIN_QUEUE job runs (the queue is serial), so a recent PENDING row is exactly
+ * that signal.
+ */
+async function requestedSyncWaiting(): Promise<boolean> {
+  const waiting = await prisma.syncJob.findFirst({
+    where: {
+      status: "PENDING",
+      startedAt: { gte: new Date(Date.now() - REQUESTED_SYNC_WAIT_WINDOW_MS) },
+    },
+    select: { id: true },
+  });
+  return waiting !== null;
+}
+
 const tracearrBackfill: Task = async (payload) => {
   const { serverId } = payload as SyncWatchHistoryPayload;
 
-  const result = await syncTracearrHistory(serverId, {
-    passes: "backfill",
-    deadlineMs: Date.now() + TRACEARR_BACKFILL_SLICE_MS,
-  });
+  // A slice holds the serial MAIN_QUEUE for up to five minutes, and a running
+  // job cannot be pre-empted. So the slice watches for a requested sync and
+  // ends itself at its next page boundary instead — the same resumable stop as
+  // a spent deadline, after which the requested sync (higher priority) runs
+  // and this re-enqueued slice follows it.
+  const waitingSync = watchForCancel(requestedSyncWaiting);
+  let result: Awaited<ReturnType<typeof syncTracearrHistory>>;
+  try {
+    result = await syncTracearrHistory(serverId, {
+      passes: "backfill",
+      deadlineMs: Date.now() + TRACEARR_BACKFILL_SLICE_MS,
+      yieldTo: () => waitingSync.signal.aborted,
+    });
+  } finally {
+    waitingSync.stop();
+  }
 
   // Re-import the plays of items that left the library and came back — their
   // `WatchHistory` was cascade-deleted with the old row, so they read as never

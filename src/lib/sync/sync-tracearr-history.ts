@@ -450,6 +450,17 @@ export interface TracearrImportOptions {
    * one, so a slice always ends on a committed page boundary.
    */
   deadlineMs?: number;
+  /**
+   * End the walk early, at the next page boundary, once this returns true.
+   *
+   * The background backfill passes one so a sync the user is waiting on does
+   * not sit behind the rest of a 5-minute slice: `MAIN_QUEUE` is serial, and
+   * the job cannot be pre-empted from outside. Checked exactly where
+   * `deadlineMs` is — never mid-page, and never before this walk has fetched
+   * one page — so a yield is the same clean, resumable stop as a spent slice
+   * and cannot turn into a slice that makes no progress.
+   */
+  yieldTo?: () => boolean;
 }
 
 export interface TracearrImportResult {
@@ -497,7 +508,7 @@ export async function syncTracearrHistory(
   serverId: string,
   options: TracearrImportOptions = {},
 ): Promise<TracearrImportResult> {
-  const { onProgress, signal, passes = "both", deadlineMs } = options;
+  const { onProgress, signal, passes = "both", deadlineMs, yieldTo } = options;
   const server = await prisma.mediaServer.findFirst({
     where: { id: serverId },
     select: {
@@ -739,6 +750,16 @@ export async function syncTracearrHistory(
             `Tracearr ${pass} pass for "${serverName}" reached its time slice ` +
               `after ${pages} page(s) — ${counters.inserted + counters.updated} ` +
               `row(s) kept; the next run continues from here`,
+          );
+          return "stopped";
+        }
+
+        if (yieldTo !== undefined && pagesThisWalk > 0 && yieldTo()) {
+          logger.info(
+            "WatchHistory",
+            `Tracearr ${pass} pass for "${serverName}" paused after ${pages} page(s) so a ` +
+              `requested sync can run — ${counters.inserted + counters.updated} row(s) kept; ` +
+              `the next run continues from here`,
           );
           return "stopped";
         }

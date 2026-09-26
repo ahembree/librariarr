@@ -3,7 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { enqueueJob } from "@/lib/jobs/client";
 import { eventBus } from "@/lib/events/event-bus";
-import { MAIN_QUEUE, TASK_SYNC_SERVER } from "@/lib/jobs/constants";
+import { MAIN_QUEUE, REQUESTED_SYNC_PRIORITY, TASK_SYNC_SERVER } from "@/lib/jobs/constants";
 
 export async function POST(
   request: NextRequest,
@@ -106,7 +106,7 @@ export async function POST(
       trigger: "manual sync request for this server",
       syncJobId: syncJob.id,
     },
-    { jobKey, queueName: MAIN_QUEUE, maxAttempts: 3 },
+    { jobKey, queueName: MAIN_QUEUE, maxAttempts: 3, priority: REQUESTED_SYNC_PRIORITY },
   );
   if (!enqueued) {
     // Nothing will ever claim the row, and a PENDING row makes this route
