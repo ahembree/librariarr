@@ -1,25 +1,32 @@
 import type { Metadata, Viewport } from "next";
-import { Sora, Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "sonner";
 import "./globals.css";
 
-const display = Sora({
+// Self-hosted (see src/app/fonts/README.md), not next/font/google: that
+// loader downloads the stylesheet from Google at build time, so a change in
+// what Google serves — or an outage — fails the production build. Each file is
+// the family's variable font; `weight` keeps the range the UI was designed
+// against (a heavier or lighter request clamps to it, as it did before).
+// Turbopack names each @font-face after its const, so these stay the family
+// names rather than generic words like "sans" or "mono".
+const sora = localFont({
+  src: "./fonts/Sora-Variable.woff2",
   variable: "--font-display",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+  weight: "400 700",
 });
 
-const sans = Plus_Jakarta_Sans({
+const plusJakartaSans = localFont({
+  src: "./fonts/PlusJakartaSans-Variable.woff2",
   variable: "--font-sans",
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
+  weight: "300 700",
 });
 
-const mono = JetBrains_Mono({
+const jetBrainsMono = localFont({
+  src: "./fonts/JetBrainsMono-Variable.woff2",
   variable: "--font-mono",
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
+  weight: "400 600",
 });
 
 export const metadata: Metadata = {
@@ -60,7 +67,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body
-        className={`${display.variable} ${sans.variable} ${mono.variable} antialiased`}
+        className={`${sora.variable} ${plusJakartaSans.variable} ${jetBrainsMono.variable} antialiased`}
       >
         <ThemeProvider>{children}</ThemeProvider>
         {/* Toasts auto-dismiss after 4s; a close button lets users dismiss

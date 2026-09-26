@@ -112,7 +112,7 @@ Users can choose from 7 accent colors in Settings. Each overrides `--primary`, `
 
 ## Typography
 
-Three font families from Google Fonts, each serving a distinct role:
+Three font families, each serving a distinct role. They are Google Fonts families, but the app ships its own copies (`src/app/fonts/`, loaded with `next/font/local`) — `next build` never contacts Google, so a change or outage there cannot break a build. To add a weight or a family, add the variable font file there and a `localFont()` call in `src/app/layout.tsx`; see `src/app/fonts/README.md` for how the files are produced.
 
 ### Sora (Display)
 
