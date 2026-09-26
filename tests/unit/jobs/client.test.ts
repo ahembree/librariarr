@@ -9,20 +9,23 @@ const m = vi.hoisted(() => {
     makeWorkerUtils: vi.fn().mockResolvedValue({ addJob, release }),
     poolEnd: vi.fn().mockResolvedValue(undefined),
     poolOn: vi.fn(),
+    poolQuery: vi.fn().mockResolvedValue({ rows: [] }),
     error: vi.fn(),
+    warn: vi.fn(),
   };
 });
-const { addJob, makeWorkerUtils, poolEnd, poolOn, error } = m;
+const { addJob, makeWorkerUtils, poolEnd, poolOn, poolQuery, error, warn } = m;
 
 vi.mock("graphile-worker", () => ({ makeWorkerUtils: m.makeWorkerUtils }));
 vi.mock("pg", () => ({
   Pool: vi.fn().mockImplementation(function (this: Record<string, unknown>) {
     this.on = m.poolOn;
     this.end = m.poolEnd;
+    this.query = m.poolQuery;
   }),
 }));
 vi.mock("@/lib/logger", () => ({
-  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: m.error },
+  logger: { debug: vi.fn(), info: vi.fn(), warn: m.warn, error: m.error },
 }));
 
 import { enqueueJob, getJobsPool, releaseJobsClient } from "@/lib/jobs/client";
@@ -53,6 +56,44 @@ describe("jobs client", () => {
     addJob.mockRejectedValueOnce(new Error("db down"));
     await expect(enqueueJob("task-c", {})).resolves.toBe(false);
     expect(error).toHaveBeenCalledWith("Jobs", expect.stringContaining("task-c"), expect.any(Object));
+  });
+
+  describe("a keyed enqueue replacing a queued job", () => {
+    it("keeps the queued job's priority when it is more urgent", async () => {
+      // A requested sync waits at -10 under `sync:<id>`; the scheduler's
+      // default-priority enqueue under the same key must not demote it.
+      poolQuery.mockResolvedValueOnce({ rows: [{ priority: -10 }] });
+      await enqueueJob("sync-server", { serverId: "s1" }, { jobKey: "sync:s1", queueName: "main" });
+      expect(poolQuery).toHaveBeenCalledWith(expect.stringContaining("graphile_worker.jobs"), ["sync:s1"]);
+      expect(addJob).toHaveBeenCalledWith(
+        "sync-server",
+        { serverId: "s1" },
+        { jobKey: "sync:s1", queueName: "main", priority: -10 },
+      );
+    });
+
+    it("applies a more urgent new priority", async () => {
+      poolQuery.mockResolvedValueOnce({ rows: [{ priority: 0 }] });
+      await enqueueJob("sync-server", {}, { jobKey: "sync:s1", priority: -10 });
+      expect(addJob).toHaveBeenCalledWith("sync-server", {}, { jobKey: "sync:s1", priority: -10 });
+    });
+
+    it("leaves the spec alone when nothing is queued under the key", async () => {
+      await enqueueJob("sync-server", {}, { jobKey: "sync:s1" });
+      expect(addJob).toHaveBeenCalledWith("sync-server", {}, { jobKey: "sync:s1" });
+    });
+
+    it("does not look anything up for an unkeyed job", async () => {
+      await enqueueJob("task", {}, { queueName: "main" });
+      expect(poolQuery).not.toHaveBeenCalled();
+    });
+
+    it("still enqueues when the lookup fails", async () => {
+      poolQuery.mockRejectedValueOnce(new Error("no such relation"));
+      await expect(enqueueJob("sync-server", {}, { jobKey: "sync:s1" })).resolves.toBe(true);
+      expect(addJob).toHaveBeenCalledWith("sync-server", {}, { jobKey: "sync:s1" });
+      expect(warn).toHaveBeenCalled();
+    });
   });
 
   afterAll(async () => {

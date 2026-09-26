@@ -1,5 +1,10 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { getTracearrImportActivity } from "@/lib/sync/tracearr-import-activity";
+import {
+  beginTracearrImport,
+  endTracearrImport,
+  getTracearrImportActivity,
+  recordTracearrImportPage,
+} from "@/lib/sync/tracearr-import-activity";
 import type { TracearrHistoryRecord } from "@/lib/tracearr/tracearr-client";
 import type { WatchHistoryProgress } from "@/lib/sync/watch-history-progress";
 
@@ -2613,6 +2618,27 @@ describe("syncTracearrHistory", () => {
 
       expect(seenDuring).toMatchObject({ pass: "backfill", pages: 1, imported: 1 });
       expect(getTracearrImportActivity("server-1")).toBeNull();
+    });
+
+    it("leaves a concurrent run of the same server registered when it finishes", async () => {
+      // A History-page Refresh can overlap a backfill slice. Keyed by server
+      // alone, whichever finished first removed the other's live readout.
+      storedRows({
+        min: new Date("2021-01-01T00:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: false,
+      });
+      const other = beginTracearrImport("server-1", "user-1");
+      recordTracearrImportPage(other, { pass: "backfill", pages: 40, imported: 3900, oldestReached: null });
+      try {
+        mockGetHistoryPage.mockResolvedValueOnce({ records: [historyRecord({ id: "chain-1" })], nextCursor: null });
+
+        await syncTracearrHistory("server-1", { passes: "backfill" });
+
+        expect(getTracearrImportActivity("server-1")).toMatchObject({ pages: 40, imported: 3900 });
+      } finally {
+        endTracearrImport(other);
+      }
     });
 
     it("clears the live entry and tells the page when the run throws", async () => {

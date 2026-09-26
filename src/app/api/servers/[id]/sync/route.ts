@@ -31,18 +31,6 @@ export async function POST(
     );
   }
 
-  // Prevent duplicate syncs — if a sync is already running or pending for this server, reject
-  const activeJob = await prisma.syncJob.findFirst({
-    where: { mediaServerId: server.id, status: { in: ["RUNNING", "PENDING"] } },
-    select: { id: true },
-  });
-  if (activeJob) {
-    return NextResponse.json(
-      { error: "A sync is already running for this server" },
-      { status: 409 },
-    );
-  }
-
   // Optional: scope sync to a specific library
   let libraryKey: string | undefined;
   try {
@@ -67,19 +55,6 @@ export async function POST(
     }
   }
 
-  // Mark the user's sync schedule as just-ran so the scheduler doesn't
-  // fire a redundant sync at the next 15-minute mark (e.g. right after onboarding).
-  await prisma.appSettings.upsert({
-    where: { userId: session.userId! },
-    update: { lastScheduledSync: new Date() },
-    create: { userId: session.userId!, lastScheduledSync: new Date() },
-  });
-
-  // Enqueue a durable background sync job (serialized on the main queue,
-  // retried on transient failure). The jobKey is scoped to the library so a
-  // full-server sync and distinct library-scoped syncs don't collide and
-  // replace one another.
-  const jobKey = libraryKey ? `sync:${server.id}:${libraryKey}` : `sync:${server.id}`;
   // Returned so the caller can tell the run this request starts from the
   // previous one: the row below and anything the worker stamps later carry a
   // `startedAt` at or after it, on this same process clock. Comparing job ids
@@ -93,11 +68,48 @@ export async function POST(
   // minutes), another server's sync or a lifecycle run — and until something
   // wrote a row, every page had nothing to show: the click looked ignored for
   // as long as the queue was busy. The run claims this row via `syncJobId`.
-  const syncJob = await prisma.syncJob.create({
-    data: { mediaServerId: server.id, status: "PENDING", startedAt: requestedAt },
-    select: { id: true },
+  //
+  // Checked and created under a per-server lock. Two requests passing the
+  // duplicate check together (a second tab, Sync and Sync All at once) each
+  // created a row, the second enqueue replaced the first job's payload, and
+  // the first row was left PENDING with nothing to claim it — answering 409
+  // here and shrinking every Tracearr backfill slice to one page until a
+  // scheduled sync happened to adopt it.
+  const syncJob = await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      `SELECT pg_advisory_xact_lock(hashtext('sync-request:' || $1))`,
+      server.id,
+    );
+    const activeJob = await tx.syncJob.findFirst({
+      where: { mediaServerId: server.id, status: { in: ["RUNNING", "PENDING"] } },
+      select: { id: true },
+    });
+    if (activeJob) return null;
+    return tx.syncJob.create({
+      data: { mediaServerId: server.id, status: "PENDING", startedAt: requestedAt },
+      select: { id: true },
+    });
+  });
+  if (!syncJob) {
+    return NextResponse.json(
+      { error: "A sync is already running for this server" },
+      { status: 409 },
+    );
+  }
+
+  // Mark the user's sync schedule as just-ran so the scheduler doesn't
+  // fire a redundant sync at the next 15-minute mark (e.g. right after onboarding).
+  await prisma.appSettings.upsert({
+    where: { userId: session.userId! },
+    update: { lastScheduledSync: new Date() },
+    create: { userId: session.userId!, lastScheduledSync: new Date() },
   });
 
+  // Enqueue a durable background sync job (serialized on the main queue,
+  // retried on transient failure). The jobKey is scoped to the library so a
+  // full-server sync and distinct library-scoped syncs don't collide and
+  // replace one another.
+  const jobKey = libraryKey ? `sync:${server.id}:${libraryKey}` : `sync:${server.id}`;
   const enqueued = await enqueueJob(
     TASK_SYNC_SERVER,
     {

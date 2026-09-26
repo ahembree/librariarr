@@ -305,4 +305,26 @@ describe("POST /api/servers/[id]/sync", () => {
     );
     expect(retry.status).toBe(200);
   });
+
+  it("accepts only one of two requests that arrive together", async () => {
+    // Both used to pass the duplicate check before either created its row, so
+    // each created one; the second enqueue replaced the first job's payload,
+    // and the first row sat PENDING with nothing to claim it.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const post = () =>
+      callRouteWithParams(
+        POST,
+        { id: server.id },
+        { url: `/api/servers/${server.id}/sync`, method: "POST" },
+      );
+    const statuses = (await Promise.all([post(), post(), post()])).map((r) => r.status).sort();
+
+    expect(statuses).toEqual([200, 409, 409]);
+    const rows = await getTestPrisma().syncJob.findMany({ where: { mediaServerId: server.id } });
+    expect(rows).toHaveLength(1);
+    expect(mockEnqueueJob).toHaveBeenCalledTimes(1);
+  });
 });

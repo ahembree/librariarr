@@ -24,6 +24,7 @@ import {
   beginTracearrImport,
   endTracearrImport,
   recordTracearrImportPage,
+  type TracearrImportHandle,
 } from "@/lib/sync/tracearr-import-activity";
 
 /**
@@ -513,14 +514,15 @@ export async function syncTracearrHistory(
   serverId: string,
   options: TracearrImportOptions = {},
 ): Promise<TracearrImportResult> {
+  const activity: { handle?: TracearrImportHandle } = {};
   try {
-    return await runTracearrImport(serverId, options);
+    return await runTracearrImport(serverId, options, activity);
   } finally {
     // A normal exit clears its activity entry itself, just before its final
-    // progress event. Anything still registered here left by a throw, and the
-    // Settings card would otherwise report an import running that is not —
-    // until a restart — so clear it and tell the page.
-    const orphaned = endTracearrImport(serverId);
+    // progress event. One still registered here was left by a throw, and
+    // Settings would otherwise report an import running that is not — until a
+    // restart — so clear it and tell the page.
+    const orphaned = activity.handle && endTracearrImport(activity.handle);
     if (orphaned) emitImportProgress(orphaned.userId, serverId, true);
   }
 }
@@ -528,6 +530,7 @@ export async function syncTracearrHistory(
 async function runTracearrImport(
   serverId: string,
   options: TracearrImportOptions,
+  activity: { handle?: TracearrImportHandle },
 ): Promise<TracearrImportResult> {
   const { onProgress, signal, passes = "both", deadlineMs, yieldTo } = options;
   const server = await prisma.mediaServer.findFirst({
@@ -610,7 +613,8 @@ async function runTracearrImport(
   const ownerUserId = server.userId;
   // From here the run is a real import, so Settings shows it as running. Forced
   // so the card appears now, not a page and a throttle window later.
-  beginTracearrImport(serverId, ownerUserId);
+  const importRun = beginTracearrImport(serverId, ownerUserId);
+  activity.handle = importRun;
   emitImportProgress(ownerUserId, serverId, true);
   // Bound once so the paging closure keeps the narrowed, non-null value.
   const mappedServerId = tracearrServerId;
@@ -903,20 +907,6 @@ async function runTracearrImport(
           counters.vanished += written.vanished;
         }
 
-        // Tell any watching client the readout moved. Emitted AFTER the page
-        // commits, so a listener that refetches can never read a figure this
-        // run has not durably written — and after the live counters are
-        // updated, for the same reason.
-        recordTracearrImportPage(serverId, {
-          pass,
-          pages,
-          imported: counters.inserted + counters.updated,
-          oldestReached: pageOldest && (!walked.oldestSeenAt || pageOldest < walked.oldestSeenAt)
-            ? pageOldest
-            : walked.oldestSeenAt,
-        });
-        emitImportProgress(ownerUserId, serverId);
-
         // The page is committed, so its position is now safe to keep. Doing this
         // after the writes is what makes a mid-page failure re-walked rather
         // than silently skipped.
@@ -926,6 +916,18 @@ async function runTracearrImport(
         ) {
           walked.oldestSeenAt = pageOldest;
         }
+
+        // Tell any watching client the readout moved. Emitted AFTER the page
+        // commits, so a listener that refetches can never read a figure this
+        // run has not durably written — and after the live counters are
+        // updated, for the same reason.
+        recordTracearrImportPage(importRun, {
+          pass,
+          pages,
+          imported: counters.inserted + counters.updated,
+          oldestReached: walked.oldestSeenAt,
+        });
+        emitImportProgress(ownerUserId, serverId);
 
         // Report per page, as the rows land — this is the slow path the whole
         // progress feature exists for, and a first import runs for minutes.
@@ -1243,7 +1245,7 @@ async function runTracearrImport(
   // is exactly the "it never updates" complaint, arriving at the end instead of
   // throughout. The activity entry is cleared first, so the refetch this
   // triggers no longer reports the run as live.
-  endTracearrImport(serverId);
+  endTracearrImport(importRun);
   emitImportProgress(ownerUserId, serverId, true);
 
   logger.info(

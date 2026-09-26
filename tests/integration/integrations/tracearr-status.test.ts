@@ -192,8 +192,8 @@ describe("GET /api/integrations/tracearr/status", () => {
     await mapToTracearr(server.id, "66666666-6666-6666-6666-666666666666", { backfillComplete: true });
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
-    beginTracearrImport(server.id, user.id);
-    recordTracearrImportPage(server.id, {
+    const run = beginTracearrImport(server.id, user.id);
+    recordTracearrImportPage(run, {
       pass: "forward",
       pages: 2,
       imported: 140,
@@ -209,7 +209,7 @@ describe("GET /api/integrations/tracearr/status", () => {
       });
       expect(body.servers[0].activeImport).not.toHaveProperty("userId");
     } finally {
-      endTracearrImport(server.id);
+      endTracearrImport(run);
     }
   });
 
