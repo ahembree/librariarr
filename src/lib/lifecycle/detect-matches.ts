@@ -48,8 +48,11 @@ function jsonSafe(value: unknown): string | number | boolean | object {
  * matched on to the copy that carries it now (see the carry-over in
  * `detectAndSaveMatches`). A member-scoped action keeps the same episodes /
  * tracks, re-expressed as the new copy's members of the same `dedupKey`;
- * `mediaItemTitle` follows the new copy, exactly as a freshly scheduled action
- * would record it.
+ * `mediaItemTitle` and `mediaItemYear` follow the new copy, exactly as a
+ * freshly scheduled action would record them. `mediaItemExternalId` stays as
+ * scheduled: copies are collapsed ON that id, so the new copy shares it —
+ * unless the copy has since been re-identified, and then the recorded id is
+ * what makes the executor refuse the action.
  */
 async function planActionCarryOver(
   ruleSetId: string,
@@ -95,6 +98,7 @@ async function planActionCarryOver(
         mediaItemId: to.id as string,
         mediaItemTitle: (to.title as string) ?? null,
         mediaItemParentTitle: (to.parentTitle as string | null) ?? null,
+        mediaItemYear: typeof to.year === "number" ? to.year : null,
         matchedMediaItemIds: members,
       },
     };

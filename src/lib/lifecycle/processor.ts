@@ -3,7 +3,9 @@ import type { Prisma } from "@/generated/prisma/client";
 import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { logger } from "@/lib/logger";
-import { normalizeTitle, executeAction, extractActionError } from "@/lib/lifecycle/actions";
+import { executeAction, extractActionError } from "@/lib/lifecycle/actions";
+import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
+import { arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
 import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
@@ -30,6 +32,41 @@ function formatTitleWithYear(title: string, year: number | null): string {
   const suffix = `(${year})`;
   if (title.endsWith(suffix)) return title;
   return `${title} ${suffix}`;
+}
+
+type RuleSetType = "MOVIE" | "SERIES" | "MUSIC";
+
+/**
+ * The external id each item's Arr app resolves it by (`arrIdSourceFor`), keyed
+ * by item id — recorded on a scheduled action with its titles and year so the
+ * executor can tell when the row has since become a different work. Detection
+ * returns `externalIds` only when a rule needed them, so the others are read
+ * from the item rows.
+ */
+async function arrExternalIdsOf(
+  type: RuleSetType,
+  items: Record<string, unknown>[],
+): Promise<Map<string, string>> {
+  const source = arrIdSourceFor(type);
+  const ids = new Map<string, string>();
+  const missing: string[] = [];
+  for (const item of items) {
+    if (!Array.isArray(item.externalIds)) {
+      missing.push(item.id as string);
+      continue;
+    }
+    const found = (item.externalIds as Array<{ source?: unknown; externalId?: unknown } | null>)
+      .find((e) => e?.source === source)?.externalId;
+    if (typeof found === "string") ids.set(item.id as string, found);
+  }
+  if (missing.length > 0) {
+    const rows = await prisma.mediaItemExternalId.findMany({
+      where: { mediaItemId: { in: missing }, source },
+      select: { mediaItemId: true, externalId: true },
+    });
+    for (const r of rows) ids.set(r.mediaItemId, r.externalId);
+  }
+  return ids;
 }
 
 interface ActionSchedulingRuleSet {
@@ -177,13 +214,19 @@ export async function scheduleActionsForRuleSet(
   if (newItems.length > 0) {
     const scheduledFor = new Date();
     scheduledFor.setDate(scheduledFor.getDate() + ruleSet.actionDelayDays);
+    const externalIds = await arrExternalIdsOf(ruleSet.type as RuleSetType, newItems);
 
     await prisma.lifecycleAction.createMany({
       data: newItems.map((item) => ({
         userId: ruleSet.userId,
         mediaItemId: item.id as string,
+        // The identity the executor re-checks before it acts. A series or
+        // artist match is its group: the show or artist as the title, no
+        // parent — see matchIdentityChange.
         mediaItemTitle: (item.title as string) ?? null,
         mediaItemParentTitle: (item.parentTitle as string | null) ?? null,
+        mediaItemYear: typeof item.year === "number" ? item.year : null,
+        mediaItemExternalId: externalIds.get(item.id as string) ?? null,
         ruleSetId: ruleSet.id,
         ruleSetName: ruleSet.name,
         ruleSetType: ruleSet.type,
@@ -602,19 +645,44 @@ export async function executeLifecycleActions(userId?: string) {
       continue;
     }
 
-    // Identity-swap guard: the action's title was snapshotted at creation;
-    // the joined mediaItem is the CURRENT row. If they no longer denote the
-    // same work (e.g. a Plex "Fix Match" / Jellyfin "Identify" rewrote this
-    // ratingKey's row to different content with different external ids before
-    // detection removed the now-stale match), the Arr resolution would target
-    // the NEW item — which never matched. Refuse rather than act on it.
-    if (
-      action.mediaItemTitle &&
-      mediaItem.title &&
-      normalizeTitle(action.mediaItemTitle) !== normalizeTitle(mediaItem.title)
-    ) {
-      await prisma.lifecycleAction.delete({ where: { id: action.id } });
-      logger.warn("Lifecycle", `Cancelled action ${action.id} — item identity changed since scheduling ("${action.mediaItemTitle}" → "${mediaItem.title}"); will re-evaluate on next detection`);
+    // Identity-swap guard: the action recorded its item's identity (titles,
+    // year, Arr external id) when it was scheduled; the joined mediaItem is
+    // the CURRENT row. If they no longer denote the same work (e.g. a Plex
+    // "Fix Match" / Jellyfin "Identify" rewrote this ratingKey's row to
+    // different content with different external ids before detection removed
+    // the now-stale match), the Arr resolution would target the NEW item —
+    // which never matched. Refuse rather than act on it.
+    //
+    // Compared through matchIdentityChange, never title to title: a series or
+    // artist action records its GROUP (title = the show or artist, parent
+    // cleared) against a representative episode or track, whose own title is
+    // the episode's or track's. A direct comparison read every one of them as
+    // a Fix Match ("Breaking Bad" → "Pilot") and cancelled it when due, so no
+    // scheduled series or artist action ever ran.
+    const ruleSetType = (action.ruleSet?.type ?? action.ruleSetType) as RuleSetType;
+    const identityChange = matchIdentityChange(
+      {
+        title: action.mediaItemTitle,
+        parentTitle: action.mediaItemParentTitle,
+        year: action.mediaItemYear,
+        externalIds: action.mediaItemExternalId
+          ? [{ source: arrIdSourceFor(ruleSetType), externalId: action.mediaItemExternalId }]
+          : [],
+      },
+      mediaItem,
+      ruleSetType,
+    );
+    if (identityChange) {
+      // The stored match describes the work that was there too, so it goes
+      // with the action and the next detection evaluates the item as it is
+      // now. Left in place, a sticky rule set would re-schedule from that old
+      // snapshot every run and this check would cancel it every time it came
+      // due — and a kept match's snapshot is otherwise never rewritten.
+      await prisma.$transaction([
+        prisma.lifecycleAction.delete({ where: { id: action.id } }),
+        prisma.ruleMatch.deleteMany({ where: { ruleSetId: action.ruleSetId!, mediaItemId: mediaItem.id } }),
+      ]);
+      logger.warn("Lifecycle", `Cancelled action ${action.id} — item identity changed since scheduling (${identityChange}); will re-evaluate on next detection`);
       continue;
     }
 

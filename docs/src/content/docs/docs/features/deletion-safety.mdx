@@ -202,6 +202,18 @@ Stale-match cancellation actually happens in two places, both as belt-and-braces
 
 Together these mean an item has to be a current match at both scheduling time and execution time for the action to actually run.
 
+### A check that the item is still the same title
+
+A match remembers *which library item* it is for, and a library item can change what it is without changing its identity in Librariarr: a Plex **Fix Match** or a Jellyfin/Emby **Identify** rewrites the same item to different content. If that happens while an action is waiting out its delay, the action would resolve the *new* title in *arr — one your rule never matched.
+
+So every scheduled action records what it was scheduled for: the title, the year, and the ID that *arr looks the title up by (TMDB for Radarr, TVDB for Sonarr, MusicBrainz for Lidarr). Just before it runs, Librariarr compares that record with the item as it is now, and cancels the action if:
+
+- **the title changed.** For a series or artist action, that is the name of the show or artist — the action covers the whole show or artist, so renaming one episode or track doesn't count. For a track-by-track music rule, both the track and its artist must still match. Cosmetic differences ("The Matrix" / "Matrix, The") are ignored, as in title validation below.
+- **the TMDB, TVDB or MusicBrainz ID changed** — the item now points at a different record in *arr, even if the name is the same.
+- **a movie's year moved by more than one.** Titles can't tell remakes apart ("Dune" 1984 and "Dune" 2021), so a Fix Match to a remake is caught by its year even when no ID was recorded.
+
+The cancellation is logged in System Logs with the reason ("item identity changed since scheduling"), and the item's match is cleared along with the action, since it described the old title too. The next detection run then evaluates the item as it is now, even on a rule set with **Sticky matches** on: if the new title matches the rule, it is matched and scheduled afresh with a full delay, so you can review it on the Pending Actions page first; if it doesn't, it drops out.
+
 ### Title validation against *arr
 
 This is a subtle but important protection. Imagine you have a rule that's about to delete a movie called "The Matrix". In between when the action was scheduled and when it runs, your library refreshes and the *arr record for that TMDB ID has been renamed (because the metadata source corrected itself, or because you manually renamed it). The system now has a TMDB ID pointing at one title in your library and a different title in *arr.

@@ -592,7 +592,7 @@ describe("detectAndSaveMatches", () => {
       };
 
       it("moves the match and its PENDING action to the copy instead of re-creating it", async () => {
-        mockEvaluateRules.mockResolvedValue([copy("b", "s2")]);
+        mockEvaluateRules.mockResolvedValue([copy("b", "s2", { year: 1999 })]);
         mockPrisma.ruleMatch.findMany.mockResolvedValue([held]);
         mockPrisma.lifecycleAction.findMany.mockResolvedValue([
           { id: "act1", mediaItemId: "a", matchedMediaItemIds: [] },
@@ -614,12 +614,17 @@ describe("detectAndSaveMatches", () => {
             where: { ruleSetId: "rs1", status: "PENDING", mediaItemId: { in: ["a"] } },
           }),
         );
+        // The titles and year follow the copy, like a freshly scheduled action.
+        // The Arr external id is NOT rewritten: copies are collapsed on it, and
+        // the one recorded at scheduling is what lets the executor refuse the
+        // action if this copy has since been re-identified.
         expect(mockPrisma.lifecycleAction.updateMany).toHaveBeenCalledWith({
           where: { id: "act1", status: "PENDING" },
           data: {
             mediaItemId: "b",
             mediaItemTitle: "Movie",
             mediaItemParentTitle: null,
+            mediaItemYear: 1999,
             matchedMediaItemIds: [],
           },
         });

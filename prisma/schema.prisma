@@ -608,6 +608,13 @@ model LifecycleAction {
   mediaItem              MediaItem?            @relation(fields: [mediaItemId], references: [id], onDelete: SetNull)
   mediaItemTitle         String?
   mediaItemParentTitle   String?
+  /// The item's year and the external id its Arr app resolves it by (TMDB for
+  /// a movie, TVDB for a series, MusicBrainz for music — `arrIdSourceFor`), as
+  /// they were when the action was scheduled. With the titles above, this is
+  /// the identity the scheduled executor re-checks before it acts: a Fix Match
+  /// that keeps the title ("Dune" 1984 → 2021) changes only these.
+  mediaItemYear          Int?
+  mediaItemExternalId    String?
   ruleSetId              String?
   ruleSet                RuleSet?              @relation(fields: [ruleSetId], references: [id], onDelete: SetNull)
   ruleSetName            String?
