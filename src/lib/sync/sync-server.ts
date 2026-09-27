@@ -14,6 +14,7 @@ import { computeSeriesKey } from "@/lib/media/series-key";
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
 import { withDeadlockRetry } from "@/lib/db-retry";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { normalizeResolutionFromDimensions } from "@/lib/resolution";
 import { eventBus } from "@/lib/events/event-bus";
 import { emitSyncProgress, clearSyncProgressThrottle } from "./sync-progress";
@@ -1475,9 +1476,13 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
 
     logger.error("Sync", "Sync failed", { error: errorMessage });
 
+    // The log keeps the full detail; the row is what /api/servers,
+    // /api/sync/status and their public-API mirrors return, and the message
+    // above embeds the request URL — for a Plex server, a hostname that spells
+    // out its address.
     await prisma.$queryRawUnsafe(
       `UPDATE "SyncJob" SET "status"=$1,"completedAt"=$2,"error"=$3,"currentLibrary"=NULL WHERE "id"=$4`,
-      "FAILED", new Date(), errorMessage, syncJob.id,
+      "FAILED", new Date(), sanitizeErrorDetail(errorMessage) ?? "Unknown error", syncJob.id,
     );
     // A partial run still changed the dataset — settle it before the
     // announcement for the same reason as the success path.

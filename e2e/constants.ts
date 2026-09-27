@@ -45,6 +45,7 @@ export const PAGES: { path: string; heading: RegExp }[] = [
   // System.
   { path: "/system/logs", heading: /^Logs$/i },
   { path: "/settings", heading: /Settings/i },
+  { path: "/settings/api-docs", heading: /^API Docs$/i },
 ];
 
 /**

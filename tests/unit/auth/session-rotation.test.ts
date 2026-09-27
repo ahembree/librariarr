@@ -86,6 +86,23 @@ describe("rotateSession (real iron-session)", () => {
     expect(readBack.userId).toBeUndefined();
   });
 
+  it("stamps when the login happened, and the stamp survives the round trip", async () => {
+    const { rotateSession, getSession } = await load();
+    const before = Date.now();
+
+    const session = await rotateSession();
+    expect(session.authenticatedAt).toBeGreaterThanOrEqual(before);
+    expect(session.authenticatedAt).toBeLessThanOrEqual(Date.now());
+    session.userId = "user-1";
+    session.isLoggedIn = true;
+    session.sessionVersion = 4;
+    await session.save();
+
+    mockFindUnique.mockResolvedValue({ sessionVersion: 4 });
+    const readBack = await getSession();
+    expect(readBack.authenticatedAt).toBe(session.authenticatedAt);
+  });
+
   it("writes a saveable session — the login flows' whole shape", async () => {
     const { rotateSession, getSession } = await load();
 

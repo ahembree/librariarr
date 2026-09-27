@@ -4,13 +4,26 @@ import { RadarrClient } from "@/lib/arr/radarr-client";
 import { SonarrClient } from "@/lib/arr/sonarr-client";
 import { LidarrClient } from "@/lib/arr/lidarr-client";
 import { logger } from "@/lib/logger";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { actionHonorsMemberIds, formatActionLabel, supportsSearchAfter } from "@/lib/lifecycle/action-types";
 
 // Re-export constants so server-side consumers can import from here too
 export { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES } from "@/lib/lifecycle/action-types";
 
-/** Extract a meaningful error message from Arr API failures, including the response body. */
+/**
+ * Extract a meaningful error message from Arr API failures, including the
+ * response body — SANITIZED: this is what gets persisted on the
+ * `LifecycleAction` row and returned by the execute/retry routes (and, through
+ * them, the public API), and an Arr error body routinely names the file it
+ * could not delete or the host it could not reach. `describeActionError` is
+ * the unsanitized text, for log lines only.
+ */
 export function extractActionError(error: unknown): string {
+  return sanitizeErrorDetail(describeActionError(error)) ?? "Unknown error";
+}
+
+/** The full Arr error text, paths and addresses included. Log it; never store or return it. */
+export function describeActionError(error: unknown): string {
   // Clients now wrap axios errors in IntegrationError, which exposes the
   // status / detail directly and keeps the original AxiosError as `cause`.
   if (error && typeof error === "object" && "name" in error && (error as { name: unknown }).name === "IntegrationError") {

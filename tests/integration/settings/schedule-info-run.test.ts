@@ -104,6 +104,22 @@ describe("POST /api/settings/schedule-info/run", () => {
     expect(settings?.lastScheduledSync).not.toBeNull();
   });
 
+  it("reports a sync that could not be queued instead of answering success", async () => {
+    const user = await setup();
+    const s1 = await createTestServer(user.id, { name: "Server 1" });
+    await createTestServer(user.id, { name: "Server 2" });
+    mockEnqueueJob.mockImplementation(async (_task: string, payload: { serverId: string }) => payload.serverId !== s1.id);
+
+    const res = await callRoute(POST, { method: "POST", body: { job: "sync" } });
+    const body = await expectJson<{ error: string }>(res, 500);
+    expect(body.error).toBe("Failed to enqueue the sync for 1 of 2 servers");
+
+    // The other server was still queued; the watermark waits for a clean run.
+    expect(mockEnqueueJob).toHaveBeenCalledTimes(2);
+    const settings = await prisma.appSettings.findUnique({ where: { userId: user.id } });
+    expect(settings?.lastScheduledSync).toBeNull();
+  });
+
   it("enqueues lifecycle detection and stamps lastScheduledLifecycleDetection", async () => {
     const user = await setup();
 

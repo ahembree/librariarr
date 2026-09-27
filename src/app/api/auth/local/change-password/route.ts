@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, changePasswordSchema } from "@/lib/validation";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
+import { hasRecentLogin, recentLoginRequired } from "@/lib/auth/recent-login";
 
 export async function POST(request: NextRequest) {
   // Rate-limit even though the route is authenticated. bcrypt.compare runs on
@@ -61,6 +62,13 @@ export async function POST(request: NextRequest) {
           { status: 401 }
         );
       }
+    } else if (hasNewPassword && !hasRecentLogin(session)) {
+      // There is no current password to confirm, and a first password is a
+      // lasting way in that outlives this session (see recent-login.ts): a
+      // stolen cookie must not be able to set one, nor use it to get past the
+      // API-key step-up, which accepts the password in place of a recent
+      // sign-in.
+      return recentLoginRequired("Setting a password", "set it");
     }
 
     if (hasNewUsername) {

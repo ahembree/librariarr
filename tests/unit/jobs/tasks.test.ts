@@ -234,6 +234,14 @@ describe("taskList", () => {
     expect(executeLifecycleActions).toHaveBeenCalledWith("u1");
   });
 
+  it("an execution run queued through an API key is held to the API's limits", async () => {
+    await (taskList[TASK_LIFECYCLE_EXECUTION] as (p: unknown, h: unknown) => Promise<void>)(
+      { userId: "u1", viaApiKey: "n8n" },
+      helpers,
+    );
+    expect(executeLifecycleActions).toHaveBeenCalledWith("u1", { viaApiKey: "n8n" });
+  });
+
   it("archive and cleanup tasks delegate to their helpers", async () => {
     await (taskList[TASK_ARCHIVE_LOGS] as (p: unknown, h: unknown) => Promise<void>)({}, helpers);
     await (taskList[TASK_CLEANUP_ACTIONS] as (p: unknown, h: unknown) => Promise<void>)({}, helpers);

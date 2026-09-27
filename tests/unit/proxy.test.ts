@@ -82,6 +82,40 @@ describe("proxy — CSRF origin check on /api mutations", () => {
   });
 });
 
+/**
+ * The public API is called by server-side applications with an API key in a
+ * header. They send no Origin/Referer and no cookie, so the CSRF check must
+ * let them through untouched; a browser page on another site still cannot
+ * post to it (and the guard never reads a cookie there anyway).
+ */
+describe("proxy — public API (/api/v1)", () => {
+  it.each(["POST", "PUT", "DELETE"])("passes a key-authenticated %s with no Origin through", (method) => {
+    const res = proxy(
+      req("http://localhost:3000/api/v1/jobs/sync", {
+        method,
+        headers: { host: "localhost:3000", authorization: "Bearer lbr_x" },
+      })
+    );
+    expect(res.headers.get("x-middleware-next")).toBe("1");
+  });
+
+  it("rejects a cross-site browser POST to /api/v1 like any other API route", () => {
+    const res = proxy(
+      req("http://localhost:3000/api/v1/tools/maintenance", {
+        method: "PUT",
+        headers: { host: "localhost:3000", origin: "http://evil.example", authorization: "Bearer lbr_x" },
+      })
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("never redirects an /api/v1 request to /login, cookie or not", () => {
+    const res = proxy(req("http://localhost:3000/api/v1/me", { headers: { host: "localhost:3000" } }));
+    expect(res.headers.get("x-middleware-next")).toBe("1");
+    expect(res.headers.get("location")).toBeNull();
+  });
+});
+
 describe("proxy — page auth gate", () => {
   it("redirects an unauthenticated page request to /login", () => {
     const res = proxy(req("http://localhost:3000/library/movies", { headers: { host: "localhost:3000" } }));

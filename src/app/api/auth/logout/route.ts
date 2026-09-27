@@ -46,6 +46,17 @@ export async function GET(request: NextRequest) {
   if (!isSameOriginRequest(request)) {
     return NextResponse.redirect(new URL("/login", getExternalBaseUrl(request)));
   }
+  // A top-level navigation from another site carries no Origin, and a link
+  // with rel=noreferrer no Referer either, so the lenient check above lets it
+  // through — and it would sign the admin out on every device. The browser
+  // labels such a navigation `Sec-Fetch-Site: cross-site` (or `same-site` from
+  // a sibling subdomain), which page script cannot change; it signs nobody
+  // out. The layout's own redirect is same-origin, and an address-bar visit is
+  // `none`, so both still log out.
+  const fetchSite = request.headers.get("sec-fetch-site");
+  if (fetchSite === "cross-site" || fetchSite === "same-site") {
+    return NextResponse.redirect(new URL("/login", getExternalBaseUrl(request)));
+  }
   const session = await getSession();
   await revokeAllSessions(session.userId);
   session.destroy();

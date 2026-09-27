@@ -108,7 +108,7 @@ function expectedRequestHost(request: NextRequest): string {
   return new URL(getExternalBaseUrl(request)).host.toLowerCase();
 }
 
-export function getExternalBaseUrl(request: NextRequest): string {
+export function getExternalBaseUrl(request: Pick<Request, "url" | "headers">): string {
   const requestUrl = new URL(request.url);
 
   // x-forwarded-host is added by reverse proxies; take the first value

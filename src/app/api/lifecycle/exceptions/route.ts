@@ -19,6 +19,12 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const type = searchParams.get("type");
+  if (type && !["ALL", "MOVIE", "SERIES", "MUSIC"].includes(type)) {
+    return NextResponse.json(
+      { error: "Invalid type. Must be MOVIE, SERIES, MUSIC, or ALL" },
+      { status: 400 }
+    );
+  }
 
   const where: Record<string, unknown> = {
     userId: session.userId,

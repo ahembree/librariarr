@@ -36,9 +36,25 @@ describe("POST /api/settings/sso/link — manual subject link", () => {
     await expectJson(res, 401);
   });
 
+  // A linked identity is a way to sign in that outlives the session, so a
+  // stolen cookie must not be enough.
+  it("refuses to link without a sign-in from the last 15 minutes", async () => {
+    const user = await createTestUser();
+    await prisma.appSettings.create({
+      data: { userId: user.id, ssoMode: "OIDC", oidcIssuer: "https://idp.example.com", oidcClientId: "client" },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
+
+    const res = await callRoute(POST, { method: "POST", body: { ssoSubject: "attacker" } });
+    const body = await expectJson<{ code: string }>(res, 403);
+    expect(body.code).toBe("reauth_required");
+    const unchanged = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(unchanged.ssoSubject).toBeNull();
+  });
+
   it("returns 400 when no settings exist (issuer unknown)", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const res = await callRoute(POST, {
       method: "POST",
@@ -58,7 +74,7 @@ describe("POST /api/settings/sso/link — manual subject link", () => {
         oidcClientId: "client",
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const res = await callRoute(POST, {
       method: "POST",
@@ -84,7 +100,7 @@ describe("POST /api/settings/sso/link — manual subject link", () => {
         oidcClientId: "client",
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     await callRoute(POST, {
       method: "POST",
@@ -103,7 +119,7 @@ describe("POST /api/settings/sso/link — manual subject link", () => {
         forwardAuthUserHeader: "Remote-User",
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     await callRoute(POST, {
       method: "POST",
@@ -123,7 +139,7 @@ describe("POST /api/settings/sso/link — manual subject link", () => {
         oidcClientId: "client",
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     await callRoute(POST, {
       method: "POST",
@@ -143,7 +159,7 @@ describe("POST /api/settings/sso/link — manual subject link", () => {
         oidcClientId: "client",
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const res = await callRoute(POST, {
       method: "POST",
@@ -163,7 +179,7 @@ describe("POST /api/settings/sso/link — manual subject link", () => {
         oidcClientId: "client",
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const initial = user.sessionVersion;
     await callRoute(POST, {
@@ -211,7 +227,7 @@ describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
         ssoEnabled: true,
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const res = await callRoute(DELETE, { method: "DELETE" });
     const body = await expectJson<{ error: string }>(res, 400);
@@ -244,7 +260,7 @@ describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
         ssoEnabled: true,
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const res = await callRoute(DELETE, { method: "DELETE" });
     await expectJson(res, 400);
@@ -267,7 +283,7 @@ describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
         ssoEnabled: true,
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const res = await callRoute(DELETE, { method: "DELETE" });
     const body = await expectJson<{
@@ -312,7 +328,7 @@ describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
         ssoEnabled: true,
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const res = await callRoute(DELETE, { method: "DELETE" });
     const body = await expectJson<{ globalSsoDisabled: boolean }>(res);
@@ -341,7 +357,7 @@ describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
         ssoEnabled: true,
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const res = await callRoute(DELETE, { method: "DELETE" });
     await expectJson(res, 400);
@@ -367,7 +383,7 @@ describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
         ssoEnabled: false, // already off
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const res = await callRoute(DELETE, { method: "DELETE" });
     const body = await expectJson<{ globalSsoDisabled: boolean }>(res);
@@ -391,7 +407,7 @@ describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
         ssoEnabled: true,
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const initial = user.sessionVersion;
     await callRoute(DELETE, { method: "DELETE" });

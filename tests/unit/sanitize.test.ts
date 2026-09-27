@@ -179,6 +179,14 @@ describe("sanitizeErrorDetail", () => {
     expect(sanitizeErrorDetail("Link fe80::1 unreachable")).toBe("Link [internal] unreachable");
   });
 
+  it("redacts plex.direct hostnames, which spell out the server's address", () => {
+    expect(sanitizeErrorDetail("HTTP 500 (GET https://192-168-1-5.0123abcd.plex.direct:32400/library/sections): boom")).toBe(
+      "HTTP 500 (GET https://[internal]:32400/library/sections): boom",
+    );
+    expect(sanitizeErrorDetail("Host 2001-db8--1.0123abcd.plex.direct down")).toBe("Host [internal] down");
+    expect(sanitizeErrorDetail("plex.direct is a domain")).toBe("plex.direct is a domain");
+  });
+
   it("does not over-redact a bare hex prefix or normal text (anchored segments)", () => {
     // No segment follows the prefix → not an address, must be left intact.
     expect(sanitizeErrorDetail("value fc00 only")).toBe("value fc00 only");

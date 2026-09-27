@@ -12,6 +12,7 @@ import { describePlexError } from "@/lib/plex/errors";
 import { findExceptedItemIds, findExceptionProtectedGroups, protectionKey } from "@/lib/lifecycle/exception-guard";
 import type { Prisma } from "@/generated/prisma/client";
 import { arrIdSourceFor, copyIdsOf, copyRank, crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
+import { identityFingerprint } from "@/lib/lifecycle/match-identity";
 
 interface RuleSetConfig {
   id: string;
@@ -597,14 +598,19 @@ export async function detectAndSaveMatches(
 
   // Matches this run already held whose derived members / servers / copies
   // changed — a copy appeared on another server, episodes were added or
-  // dropped. Nothing else rewrites a row the incremental run keeps, so without
-  // this a collection never learned of a new copy, and the executor went on
-  // intersecting an action against the members of the day the match was made.
+  // dropped — or whose identity did (a re-title, a new year or external id).
+  // Nothing else rewrites a row the incremental run keeps, so without this a
+  // collection never learned of a new copy, the executor went on intersecting
+  // an action against the members of the day the match was made, and the
+  // direct-execute identity check compared against a snapshot no run would
+  // ever refresh (see `identityFingerprint`).
   const refreshed = enrichedItems.filter((item) => {
     const id = item.id as string;
+    if (!existingIds.has(id)) return false;
+    const stored = existingDataMap.get(id);
     return (
-      existingIds.has(id) &&
-      collapseFingerprint(existingDataMap.get(id)) !== collapseFingerprint(item)
+      collapseFingerprint(stored) !== collapseFingerprint(item) ||
+      identityFingerprint(stored) !== identityFingerprint(item)
     );
   });
 

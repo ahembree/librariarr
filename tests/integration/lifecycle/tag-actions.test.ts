@@ -279,6 +279,7 @@ describe("Lifecycle Tag Actions", () => {
         type: "MOVIE",
       });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Tag Only Rule",
         type: "MOVIE",
         actionType: "DO_NOTHING",
@@ -318,6 +319,7 @@ describe("Lifecycle Tag Actions", () => {
     it("requires arrInstanceId when tag operations are configured", async () => {
       const user = await createTestUser();
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Tags No Arr",
         type: "MOVIE",
         actionType: "DO_NOTHING",
@@ -346,6 +348,7 @@ describe("Lifecycle Tag Actions", () => {
         type: "MOVIE",
       });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Plain DO_NOTHING",
         type: "MOVIE",
         actionType: "DO_NOTHING",
@@ -382,6 +385,7 @@ describe("Lifecycle Tag Actions", () => {
         type: "MOVIE",
       });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Full Tag Rule",
         type: "MOVIE",
         actionType: "UNMONITOR_RADARR",
@@ -419,6 +423,7 @@ describe("Lifecycle Tag Actions", () => {
         type: "MOVIE",
       });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Record Tag Rule",
         type: "MOVIE",
         actionType: "DO_NOTHING",
@@ -463,6 +468,7 @@ describe("Lifecycle Tag Actions", () => {
         type: "MOVIE",
       });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Fail Tag Rule",
         type: "MOVIE",
         actionType: "DO_NOTHING",

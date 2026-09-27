@@ -32,6 +32,7 @@ export async function GET() {
     webhookUsername: settings?.discordWebhookUsername ?? "",
     webhookAvatarUrl: settings?.discordWebhookAvatarUrl ?? "",
     notifyMaintenance: settings?.discordNotifyMaintenance ?? false,
+    notifyApiKeys: settings?.discordNotifyApiKeys ?? true,
   });
 }
 
@@ -43,7 +44,7 @@ export async function PUT(request: NextRequest) {
 
   const { data, error } = await validateRequest(request, discordSettingsSchema);
   if (error) return error;
-  const { webhookUrl, webhookUsername, webhookAvatarUrl, notifyMaintenance } = data;
+  const { webhookUrl, webhookUsername, webhookAvatarUrl, notifyMaintenance, notifyApiKeys } = data;
 
   const fields: Record<string, unknown> = {};
   // The mask means "unchanged" — never write the placeholder into the DB.
@@ -53,6 +54,7 @@ export async function PUT(request: NextRequest) {
   if (webhookUsername !== undefined) fields.discordWebhookUsername = webhookUsername || null;
   if (webhookAvatarUrl !== undefined) fields.discordWebhookAvatarUrl = webhookAvatarUrl || null;
   if (notifyMaintenance !== undefined) fields.discordNotifyMaintenance = !!notifyMaintenance;
+  if (notifyApiKeys !== undefined) fields.discordNotifyApiKeys = !!notifyApiKeys;
 
   const settings = await prisma.appSettings.upsert({
     where: { userId: session.userId! },
@@ -65,5 +67,6 @@ export async function PUT(request: NextRequest) {
     webhookUsername: settings.discordWebhookUsername ?? "",
     webhookAvatarUrl: settings.discordWebhookAvatarUrl ?? "",
     notifyMaintenance: settings.discordNotifyMaintenance,
+    notifyApiKeys: settings.discordNotifyApiKeys,
   });
 }

@@ -125,3 +125,13 @@ export interface SyncIncrementalPayload {
 export interface UserPayload {
   userId: string;
 }
+
+/**
+ * `TASK_LIFECYCLE_EXECUTION`. `viaApiKey` (the key's name) marks a run queued
+ * through `POST /api/v1/jobs/execution`: it is held by the public API's
+ * destructive limits as well as the app's own ceiling, and is queued under its
+ * own job key so it never rewrites the payload of a scheduled run.
+ */
+export interface LifecycleExecutionPayload extends UserPayload {
+  viaApiKey?: string;
+}

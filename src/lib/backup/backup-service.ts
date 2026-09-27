@@ -94,8 +94,15 @@ function reviver(_key: string, value: unknown): unknown {
   return value;
 }
 
-// Table export/import order respecting FK dependencies
-const TABLE_ORDER = [
+// Table export/import order respecting FK dependencies. Every model must be
+// either here or in `BACKUP_EXCLUDED_TABLES` — asserted over Prisma's model
+// list by tests/unit/backup/table-order.test.ts, because restore begins with
+// `TRUNCATE "User" CASCADE`: a table missing from both is destroyed by every
+// restore and never refilled. `collection` and `trashManagedResource` were
+// missing that way, and since `RuleSet.collectionId` references `Collection`,
+// a backup holding any rule set assigned to a Plex collection could not be
+// restored at all.
+export const BACKUP_TABLE_ORDER = [
   "systemConfig",
   "user",
   "appSettings",
@@ -110,6 +117,8 @@ const TABLE_ORDER = [
   "lidarrInstance",
   "seerrInstance",
   "tracearrInstance",
+  "trashManagedResource",
+  "collection",
   "ruleSet",
   "ruleMatch",
   "lifecycleAction",
@@ -121,6 +130,18 @@ const TABLE_ORDER = [
   "savedQuery",
   "logEntry",
 ] as const;
+
+/**
+ * Models deliberately left out of backups.
+ *
+ * `apiKey`: a restore wipes every API key (via the `User` CASCADE) instead of
+ * restoring the set the backup captured — which would bring back any key
+ * deleted since, silently undoing a revocation. Third-party apps need new keys
+ * after a restore; a backup file never carries key material, not even hashes.
+ */
+export const BACKUP_EXCLUDED_TABLES = ["apiKey"] as const;
+
+const TABLE_ORDER = BACKUP_TABLE_ORDER;
 
 // Tables that depend on mediaItem or are populated by sync — excluded from config-only backups
 const MEDIA_DEPENDENT_TABLES = new Set([
@@ -185,7 +206,10 @@ export async function createBackup(passphrase?: string, configOnly = true): Prom
   const compressed = gzipSync(Buffer.from(json, "utf-8"));
 
   const output = encrypted ? encryptBuffer(compressed, passphrase!) : compressed;
-  await fs.writeFile(filepath, output);
+  // Owner-only: a backup holds every integration's API key and the Plex token
+  // (encrypted only when a passphrase is set), and the container's umask would
+  // otherwise leave it readable by every user on the host.
+  await fs.writeFile(filepath, output, { mode: 0o600 });
 
   // Write sidecar metadata file so listBackups() doesn't need to decompress
   const metaPath = filepath + ".meta.json";
@@ -267,12 +291,24 @@ export async function restoreBackup(
       }
     }
 
+    // A rule set may point at a collection the file does not hold: every
+    // backup taken before `collection` joined TABLE_ORDER is like that. Detach
+    // those rule sets rather than fail the FK and with it the whole restore —
+    // their rules and actions come back, the collection has to be re-picked.
+    const restorableCollectionIds = new Set(
+      (backup.data.collection ?? []).map((row) => (row as { id?: unknown }).id),
+    );
+
     // Step 3: Re-insert data in dependency order, freeing each table after processing
     for (let tableIdx = 0; tableIdx < TABLE_ORDER.length; tableIdx++) {
       const table = TABLE_ORDER[tableIdx];
-      const rows = backup.data[table];
+      let rows = backup.data[table];
       delete backup.data[table]; // Allow GC of previous tables' data
       if (!rows || rows.length === 0) continue;
+
+      if (table === "ruleSet") {
+        rows = detachMissingCollections(rows, restorableCollectionIds);
+      }
 
       onProgress?.({
         phase: "restore",
@@ -453,35 +489,13 @@ export function getBackupFilePath(filename: string): string | null {
   return path.join(/* turbopackIgnore: true */ BACKUP_DIR, filename);
 }
 
-// Map Prisma model names to actual PostgreSQL table names
+// Map a Prisma delegate name to its PostgreSQL table: the model name, which is
+// the delegate with its first letter upper-cased (no model uses @@map). Derived
+// rather than listed, because a name missing from a hand-kept list fell through
+// unchanged, and a TRUNCATE of a table that does not exist aborts the restore's
+// whole transaction — every statement after it fails.
 function tableToDbName(table: string): string {
-  const map: Record<string, string> = {
-    systemConfig: "SystemConfig",
-    user: "User",
-    appSettings: "AppSettings",
-    mediaServer: "MediaServer",
-    library: "Library",
-    mediaItem: "MediaItem",
-    mediaItemExternalId: "MediaItemExternalId",
-    mediaStream: "MediaStream",
-    syncJob: "SyncJob",
-    sonarrInstance: "SonarrInstance",
-    radarrInstance: "RadarrInstance",
-    lidarrInstance: "LidarrInstance",
-    seerrInstance: "SeerrInstance",
-    tracearrInstance: "TracearrInstance",
-    ruleSet: "RuleSet",
-    ruleMatch: "RuleMatch",
-    lifecycleAction: "LifecycleAction",
-    lifecycleException: "LifecycleException",
-    watchHistory: "WatchHistory",
-    blackoutSchedule: "BlackoutSchedule",
-    prerollPreset: "PrerollPreset",
-    prerollSchedule: "PrerollSchedule",
-    savedQuery: "SavedQuery",
-    logEntry: "LogEntry",
-  };
-  return map[table] ?? table;
+  return table.charAt(0).toUpperCase() + table.slice(1);
 }
 
 // Per-table rename map for legacy field names from older schema versions.
@@ -519,6 +533,23 @@ const knownFieldCache = new Map<string, Set<string> | null>();
 
 /** Columns already reported as dropped, so one restore logs each table once. */
 const droppedFieldsReported = new Set<string>();
+
+function detachMissingCollections(rows: unknown[], collectionIds: Set<unknown>): unknown[] {
+  let detached = 0;
+  const result = rows.map((row) => {
+    const r = row as Record<string, unknown>;
+    if (r.collectionId == null || collectionIds.has(r.collectionId)) return row;
+    detached++;
+    return { ...r, collectionId: null };
+  });
+  if (detached > 0) {
+    logger.warn(
+      "Backup",
+      `Restore: ${detached} rule set(s) pointed at a collection this backup does not contain — detached; reassign their collection in the rule editor`,
+    );
+  }
+  return result;
+}
 
 // Deserialize date strings back to Date objects for Prisma, and migrate any
 // legacy field names so older backups still restore cleanly.

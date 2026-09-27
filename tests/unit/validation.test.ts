@@ -12,6 +12,14 @@ import {
   syncScheduleSchema,
   logRetentionSchema,
   terminateSessionSchema,
+  syncCancelSchema,
+  apiKeyCreateSchema,
+  actionExecuteSchema,
+  exceptionCreateSchema,
+  exceptionBulkDeleteSchema,
+  MAX_EXCEPTION_IDS_PER_REQUEST,
+  exceptionBulkUpdateSchema,
+  discordSettingsSchema,
 } from "@/lib/validation";
 
 /**
@@ -444,6 +452,33 @@ describe("terminateSessionSchema", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it("accepts the session ids each server type issues", () => {
+    const ids = [
+      "e3lqr5a10p6lsqyqtmzhjycv", // Plex Session.id
+      "42", // Plex sessionKey fallback
+      "2c94b1c2d9b14c33a5dfa18b0ae6d0d2", // Jellyfin / Emby
+      "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+    ];
+    const result = terminateSessionSchema.safeParse({ serverId: "s1", sessionIds: ids, message: "Bye" });
+    expect(result.success).toBe(true);
+  });
+
+  // The id lands in a media-server request path sent with the admin token.
+  it.each([
+    ["a parent-directory segment", "../System/Shutdown?x="],
+    ["a lone dot segment", ".."],
+    ["a slash", "a/b"],
+    ["a query", "abc?x=1"],
+    ["a fragment", "abc#x"],
+    ["a percent-encoding", "%2e%2e"],
+    ["whitespace", "a b"],
+    ["an empty id", ""],
+    ["an overlong id", "a".repeat(129)],
+  ])("rejects a session id with %s", (_label, id) => {
+    const result = terminateSessionSchema.safeParse({ serverId: "s1", sessionIds: [id], message: "Bye" });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("authSettingsSchema", () => {
@@ -485,5 +520,150 @@ describe("authSettingsSchema", () => {
     expect(
       authSettingsSchema.safeParse({ plexLoginEnabled: 1 }).success
     ).toBe(false);
+  });
+});
+
+describe("apiKeyCreateSchema", () => {
+  const valid = { name: "Home Assistant", scopes: ["media:read"], expiresAt: null };
+
+  it("accepts a never-expiring key", () => {
+    expect(apiKeyCreateSchema.safeParse(valid).success).toBe(true);
+  });
+
+  it.each([
+    ["UTC", "2030-01-01T00:00:00.000Z"],
+    ["an offset", "2030-01-01T08:00:00+02:00"],
+  ])("accepts an expiry in %s", (_label, expiresAt) => {
+    expect(apiKeyCreateSchema.safeParse({ ...valid, expiresAt }).success).toBe(true);
+  });
+
+  it.each([
+    ["a date without a time", "2030-01-01"],
+    ["a time without a zone (ambiguous)", "2030-01-01T00:00:00"],
+    ["free text", "tomorrow"],
+    ["a number", 1893456000000],
+  ])("rejects an expiry that is %s", (_label, expiresAt) => {
+    expect(apiKeyCreateSchema.safeParse({ ...valid, expiresAt }).success).toBe(false);
+  });
+
+  it("requires expiresAt to be present (null means never)", () => {
+    const { expiresAt: _omit, ...rest } = valid;
+    void _omit;
+    expect(apiKeyCreateSchema.safeParse(rest).success).toBe(false);
+  });
+
+  it("trims the name before checking its length", () => {
+    const parsed = apiKeyCreateSchema.safeParse({ ...valid, name: "  Dash  " });
+    expect(parsed.success && parsed.data.name).toBe("Dash");
+    expect(apiKeyCreateSchema.safeParse({ ...valid, name: "   " }).success).toBe(false);
+    expect(apiKeyCreateSchema.safeParse({ ...valid, name: `  ${"x".repeat(64)}  ` }).success).toBe(true);
+    expect(apiKeyCreateSchema.safeParse({ ...valid, name: "x".repeat(65) }).success).toBe(false);
+  });
+
+  it.each([
+    ["a newline", "Dash\nboard"],
+    ["a tab", "Dash\tboard"],
+    ["a right-to-left override", "Dash\u202Eboard"],
+    ["a right-to-left isolate", "Dash\u2067board"],
+    ["a zero-width space", "Dash\u200Bboard"],
+    ["a byte-order mark", "Dash\uFEFFboard"],
+    ["a line separator", "Dash\u2028board"],
+  ])("rejects a name containing %s", (_label, name) => {
+    const parsed = apiKeyCreateSchema.safeParse({ ...valid, name });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0].message).toMatch(/control characters, direction overrides or invisible/);
+  });
+
+  it("rejects a name with nothing visible in it", () => {
+    const parsed = apiKeyCreateSchema.safeParse({ ...valid, name: "\u200D\u200D" });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0].message).toBe("Name must contain a visible character");
+  });
+
+  it.each([
+    ["punctuation, accents and emoji", "Café dashboard (v2) — 📺"],
+    ["an emoji built with a zero-width joiner", "🏳️‍🌈 Pride"],
+    ["a family emoji", "👨‍👩‍👧 Home"],
+    ["a non-Latin script", "Домашний сервер"],
+  ])("accepts %s in the name", (_label, name) => {
+    expect(apiKeyCreateSchema.safeParse({ ...valid, name }).success).toBe(true);
+  });
+
+  it("accepts only registry scopes, at least one", () => {
+    expect(apiKeyCreateSchema.safeParse({ ...valid, scopes: [] }).success).toBe(false);
+    expect(apiKeyCreateSchema.safeParse({ ...valid, scopes: ["media:write"] }).success).toBe(false);
+    expect(apiKeyCreateSchema.safeParse({ ...valid, scopes: ["*"] }).success).toBe(false);
+    expect(
+      apiKeyCreateSchema.safeParse({ ...valid, scopes: ["lifecycle:execute", "streams:write"] }).success,
+    ).toBe(true);
+  });
+});
+
+describe("bounds on write inputs the public API reaches", () => {
+  it("terminateSessionSchema caps the message and the session list", () => {
+    const base = { serverId: "s1", message: "x".repeat(500) };
+    expect(terminateSessionSchema.safeParse(base).success).toBe(true);
+    expect(terminateSessionSchema.safeParse({ ...base, message: "x".repeat(501) }).success).toBe(false);
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => `sess-${i}`);
+    expect(terminateSessionSchema.safeParse({ ...base, sessionIds: ids(200) }).success).toBe(true);
+    expect(terminateSessionSchema.safeParse({ ...base, sessionIds: ids(201) }).success).toBe(false);
+  });
+
+  it("exception schemas cap the reason and the id list", () => {
+    expect(exceptionCreateSchema.safeParse({ mediaItemId: "m1", reason: "x".repeat(1000) }).success).toBe(true);
+    expect(exceptionCreateSchema.safeParse({ mediaItemId: "m1", reason: "x".repeat(1001) }).success).toBe(false);
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => `e-${i}`);
+    expect(exceptionBulkUpdateSchema.safeParse({ ids: ids(2), reason: "x".repeat(1001) }).success).toBe(false);
+    expect(exceptionBulkDeleteSchema.safeParse({ ids: ["x".repeat(201)] }).success).toBe(false);
+    expect(exceptionBulkDeleteSchema.safeParse({ ids: ids(MAX_EXCEPTION_IDS_PER_REQUEST + 1) }).success).toBe(false);
+  });
+
+  // The Exceptions page sends every exception id of a grouped row: a long show
+  // on two servers is well past a thousand, and the old cap of 1,000 made
+  // such a row impossible to remove or re-word from the UI.
+  it("exception bulk schemas take a whole grouped row of the Exceptions page", () => {
+    const ids = Array.from({ length: 1600 }, (_, i) => `e-${i}`);
+    expect(exceptionBulkDeleteSchema.safeParse({ ids }).success).toBe(true);
+    expect(exceptionBulkUpdateSchema.safeParse({ ids, reason: "r" }).success).toBe(true);
+  });
+
+  // Each of these goes straight into a DB lookup; a key could otherwise send
+  // an arbitrarily long string.
+  it("caps the id strings the public API's writes reach", () => {
+    const long = "x".repeat(201);
+    expect(syncCancelSchema.safeParse({ serverId: long }).success).toBe(false);
+    expect(syncCancelSchema.safeParse({ serverId: "s1" }).success).toBe(true);
+    expect(terminateSessionSchema.safeParse({ serverId: long }).success).toBe(false);
+    expect(exceptionCreateSchema.safeParse({ mediaItemId: long }).success).toBe(false);
+    expect(actionExecuteSchema.safeParse({ ruleSetId: long }).success).toBe(false);
+    expect(actionExecuteSchema.safeParse({ ruleSetId: "r1", mediaItemIds: [long] }).success).toBe(false);
+  });
+
+  it("actionExecuteSchema caps the media item list, leaving omission as execute-all", () => {
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => `m-${i}`);
+    expect(actionExecuteSchema.safeParse({ ruleSetId: "r1", mediaItemIds: ids(1000) }).success).toBe(true);
+    expect(actionExecuteSchema.safeParse({ ruleSetId: "r1", mediaItemIds: ids(1001) }).success).toBe(false);
+    expect(actionExecuteSchema.safeParse({ ruleSetId: "r1" }).success).toBe(true);
+  });
+});
+
+describe("apiKeyCreateSchema.currentPassword", () => {
+  const valid = { name: "Home Assistant", scopes: ["media:read"], expiresAt: null };
+
+  it("is optional, bounded like a login password, and never trimmed", () => {
+    expect(apiKeyCreateSchema.safeParse(valid).success).toBe(true);
+    const parsed = apiKeyCreateSchema.safeParse({ ...valid, currentPassword: " hunter2 " });
+    expect(parsed.success && parsed.data.currentPassword).toBe(" hunter2 ");
+    expect(apiKeyCreateSchema.safeParse({ ...valid, currentPassword: "x".repeat(200) }).success).toBe(true);
+    expect(apiKeyCreateSchema.safeParse({ ...valid, currentPassword: "x".repeat(201) }).success).toBe(false);
+    expect(apiKeyCreateSchema.safeParse({ ...valid, currentPassword: 123 }).success).toBe(false);
+  });
+});
+
+describe("discordSettingsSchema.notifyApiKeys", () => {
+  it("is an optional boolean", () => {
+    expect(discordSettingsSchema.safeParse({}).success).toBe(true);
+    expect(discordSettingsSchema.safeParse({ notifyApiKeys: false }).success).toBe(true);
+    expect(discordSettingsSchema.safeParse({ notifyApiKeys: "no" }).success).toBe(false);
   });
 });

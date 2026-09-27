@@ -38,6 +38,7 @@ model User {
   prerollSchedules      PrerollSchedule[]
   savedQueries          SavedQuery[]
   trashManagedResources TrashManagedResource[]
+  apiKeys               ApiKey[]
 
   // SSO subjects are only unique per-issuer. Two users can have sub "abc" if
   // they came from different IdPs. This composite key prevents the cross-IdP
@@ -77,6 +78,9 @@ model AppSettings {
   discordWebhookUsername          String?
   discordWebhookAvatarUrl         String?
   discordNotifyMaintenance        Boolean   @default(false)
+  /// Tell Discord when an API key is created or deleted — a stolen browser
+  /// session can mint one, so on by default wherever a webhook is set.
+  discordNotifyApiKeys            Boolean   @default(true)
   localAuthEnabled                Boolean   @default(false)
   // Allow signing in with Plex from the login page. When false, the Plex
   // button is hidden and /api/auth/plex/token rejects logins — but the
@@ -912,4 +916,40 @@ model TrashManagedResource {
   @@index([userId])
   @@index([sonarrInstanceId])
   @@index([radarrInstanceId])
+}
+
+/// A credential third-party applications use to call the public `/api/v1` API
+/// (see `src/lib/api-keys/`). Only a salted scrypt hash of the key is stored:
+/// the plaintext is returned once, by the create route, and cannot be
+/// recovered afterwards. Deleting the row revokes the key on its very next
+/// request — authentication reads this row on every call; what it remembers in
+/// memory is only that a key's hash has already been verified.
+///
+/// Deliberately NOT in the backup's `TABLE_ORDER`: a restore truncates `User`
+/// with CASCADE, so it wipes every key rather than resurrecting ones that were
+/// deleted after the backup was taken.
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  /// The key's leading characters (`lbr_` + 6), shown so a key can be told
+  /// apart in the list, and how its row is found. Far too short to
+  /// authenticate with.
+  prefix     String
+  /// Salted scrypt hash of the full key (`scrypt$N$r$p$salt$hash`), verified
+  /// after the lookup by `prefix`. The plaintext is never stored.
+  keyHash    String    @unique
+  /// Granted scopes, stored explicitly (with implied read scopes expanded) so a
+  /// scope added in a later version never silently widens an existing key.
+  scopes     String[]
+  /// null = never expires.
+  expiresAt  DateTime?
+  lastUsedAt DateTime?
+  lastUsedIp String?
+  createdAt  DateTime  @default(now())
+
+  @@unique([userId, name])
+  @@index([userId])
+  @@index([prefix])
 }
