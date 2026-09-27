@@ -6,7 +6,7 @@ import { apiLogger } from "@/lib/logger";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
 import { getExternalBaseUrl, isSameOriginRequest } from "@/lib/url";
 import { sanitizeEmail, sanitizeUsername } from "@/lib/sso/identity-claims";
-import { hasForwardAuthSecret, FORWARD_AUTH_SECRET_HEADER } from "@/lib/sso/forward-secret";
+import { hasForwardAuthSecret, FORWARD_AUTH_PROXY_HEADER } from "@/lib/sso/forward-secret";
 
 /**
  * Forward-auth login: trusts identity headers injected by an upstream reverse
@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
   if (!hasForwardAuthSecret(request.headers)) {
     apiLogger.warn(
       "Auth",
-      `Forward-auth login rejected: the ${FORWARD_AUTH_SECRET_HEADER} header is missing or wrong — the request did not come through the configured proxy`
+      `Forward-auth login rejected: the ${FORWARD_AUTH_PROXY_HEADER} header is missing or wrong — the request did not come through the configured proxy`
     );
     return NextResponse.redirect(new URL("/login?sso_error=proxy_secret", baseUrl));
   }
