@@ -272,3 +272,55 @@ describe("/api/v1 read endpoints never return a media file path", () => {
     expect(text).toContain("Arrival");
   });
 });
+
+/**
+ * A LifecycleAction stored before errors were sanitized at the source still
+ * holds the raw Arr / network text, which can name an internal address or a
+ * path. The v1 mirror passes every `error` field through `sanitizeErrorDetail`.
+ */
+describe("/api/v1/lifecycle/actions redacts stored error text", () => {
+  beforeEach(async () => {
+    await cleanDatabase();
+    clearMockSession();
+    vi.clearAllMocks();
+  });
+
+  afterAll(async () => {
+    await cleanDatabase();
+    await disconnectTestDb();
+  });
+
+  it("returns a legacy FAILED action's error without the internal address or path", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "MOVIE" });
+    const movie = await createTestMediaItem(library.id, { title: "Arrival" });
+    const ruleSet = await createTestRuleSet(user.id, { name: "Old", type: "MOVIE", actionEnabled: true, actionType: "DELETE_RADARR" });
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id,
+        mediaItemId: movie.id,
+        mediaItemTitle: movie.title,
+        ruleSetId: ruleSet.id,
+        ruleSetName: ruleSet.name,
+        ruleSetType: "MOVIE",
+        actionType: "DELETE_RADARR",
+        scheduledFor: new Date(),
+        status: "FAILED",
+        error: "connect ECONNREFUSED 192.168.1.20:7878 (at /app/src/lib/arr/radarr-client.ts)",
+      },
+    });
+    const { key } = await createTestApiKey(user.id, { scopes: [...READ_ONLY_SCOPES] });
+
+    const res = await callRouteWithParams(actions.GET as unknown as Handler, {}, {
+      url: "/api/v1/lifecycle/actions?status=FAILED",
+      headers: { authorization: `Bearer ${key}` },
+    });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain("ECONNREFUSED");
+    expect(text).not.toContain("192.168.1.20");
+    expect(text).not.toContain("radarr-client.ts");
+  });
+});
+

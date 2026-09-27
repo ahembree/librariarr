@@ -11,6 +11,7 @@ on:
       - "scripts/generate-openapi.ts"
       - "src/lib/api-keys/openapi.ts"
       - "src/lib/api-keys/scopes.ts"
+      - "src/lib/api-keys/limits.ts"
       - "package.json"
   workflow_dispatch:
 

@@ -1,6 +1,6 @@
 import { gunzip } from "node:zlib";
 import { promisify } from "node:util";
-import type { NextRequest } from "next/server";
+import { NextRequest } from "next/server";
 import { jsonResponse } from "@/lib/api/json-response";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
@@ -40,10 +40,13 @@ const gunzipAsync = promisify(gunzip);
  *   before they did still holds the raw text.
  *
  * A non-JSON response (an image, a stream, a body with no JSON content type)
- * is returned untouched. A JSON body the internal route already gzipped
- * (`jsonResponse` compresses past 4 KB when the client accepts it) is
- * inflated, transformed and re-emitted through `jsonResponse`, so the caller
- * still gets a compressed body; status and every other header are preserved.
+ * is returned untouched. The internal handler is called with the client's
+ * `Accept-Encoding` removed (GET/HEAD — every wrapped route), so it hands back
+ * plain JSON rather than a body this wrapper would have to inflate only to
+ * compress it again; the trimmed body is re-emitted through `jsonResponse`
+ * against the ORIGINAL request, so the caller still gets gzip when it asked
+ * for it. A gzipped body is still inflated, should a handler compress anyway.
+ * Status and every other header are preserved.
  */
 
 const FILE_PATH_KEYS = new Set(["filePath", "partFile"]);
@@ -88,6 +91,20 @@ const BODY_HEADERS = new Set(["content-type", "content-encoding", "content-lengt
 
 type RouteHandler<C> = (request: NextRequest, context: C) => Response | Promise<Response>;
 
+/**
+ * The request the internal handler sees: the same, minus `Accept-Encoding`, so
+ * `jsonResponse` there does not gzip a body this wrapper is about to parse.
+ * Only rebuilt for GET/HEAD, which have no body to carry over.
+ */
+function withoutAcceptEncoding(request: NextRequest): NextRequest {
+  if ((request.method !== "GET" && request.method !== "HEAD") || !request.headers.has("accept-encoding")) {
+    return request;
+  }
+  const headers = new Headers(request.headers);
+  headers.delete("accept-encoding");
+  return new NextRequest(request.url, { method: request.method, headers });
+}
+
 // Same overloads as `withApiKey`, so a one-parameter handler stays one-parameter
 // and one with dynamic segments keeps its `{ params }` context type.
 export function withoutServerInternals(
@@ -96,7 +113,7 @@ export function withoutServerInternals(
 export function withoutServerInternals<C>(handler: RouteHandler<C>): (request: NextRequest, context: C) => Promise<Response>;
 export function withoutServerInternals<C>(handler: RouteHandler<C>): (request: NextRequest, context: C) => Promise<Response> {
   return async (request: NextRequest, context: C): Promise<Response> => {
-    const response = await handler(request, context);
+    const response = await handler(withoutAcceptEncoding(request), context);
     if (!isJson(response) || response.body === null) return response;
 
     const raw = new Uint8Array(await response.arrayBuffer());

@@ -5,7 +5,8 @@ import { reserveExceptionRemoval } from "@/lib/api-keys/exception-removal";
 import { validateRequest, apiExceptionDeleteSchema } from "@/lib/validation";
 
 // Public API mirror of /api/lifecycle/exceptions — same parameters and response.
-export const GET = withApiKey("lifecycle:read", appGet);
+// It has no paging, so each read is charged as a full listing.
+export const GET = withApiKey("lifecycle:read", appGet, { fullListing: true });
 // Adding an exception only ever protects media.
 export const POST = withApiKey("lifecycle:write", appPost);
 // Removing one lifts that protection, after which the rules can match the item

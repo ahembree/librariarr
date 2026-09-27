@@ -58,7 +58,55 @@ describe("lifecycle execute single-flight registry", () => {
     // dev HMR re-evaluates it too. Two copies with separate sets would let two
     // requests through, so the set is pinned on globalThis.
     expect(tryBeginExecute("rs-1")).toBe(true);
-    const g = globalThis as unknown as { lifecycleExecuteInFlight: Set<string> };
-    expect(g.lifecycleExecuteInFlight.has("rs-1")).toBe(true);
+    const g = globalThis as unknown as { lifecycleExecuteInFlightScopes: Map<string, unknown> };
+    expect(g.lifecycleExecuteInFlightScopes.has("rs-1")).toBe(true);
+  });
+
+  // The Pending page runs per-item Executes side by side; a rule-set-wide lock
+  // made the second one answer 409 though it acted on a different match.
+  describe("item claims within a scope", () => {
+    it("lets disjoint items of one rule set run together", () => {
+      expect(tryBeginExecute("rs-1", ["a"])).toBe(true);
+      expect(tryBeginExecute("rs-1", ["b", "c"])).toBe(true);
+      expect(isExecuteInFlight("rs-1", "a")).toBe(true);
+      expect(isExecuteInFlight("rs-1", "c")).toBe(true);
+      expect(isExecuteInFlight("rs-1", "d")).toBe(false);
+    });
+
+    it("refuses a claim that overlaps an item already running", () => {
+      expect(tryBeginExecute("rs-1", ["a", "b"])).toBe(true);
+      expect(tryBeginExecute("rs-1", ["b", "z"])).toBe(false);
+      // The refused claim took nothing: z is still free.
+      expect(isExecuteInFlight("rs-1", "z")).toBe(false);
+      expect(tryBeginExecute("rs-1", ["z"])).toBe(true);
+    });
+
+    it("refuses the whole rule set while any item runs, and any item while the whole runs", () => {
+      expect(tryBeginExecute("rs-1", ["a"])).toBe(true);
+      expect(tryBeginExecute("rs-1")).toBe(false);
+      endExecute("rs-1", ["a"]);
+      expect(tryBeginExecute("rs-1")).toBe(true);
+      expect(tryBeginExecute("rs-1", ["b"])).toBe(false);
+      expect(isExecuteInFlight("rs-1", "b")).toBe(true);
+    });
+
+    it("treats an empty item list as the whole scope", () => {
+      expect(tryBeginExecute("rs-1", [])).toBe(true);
+      expect(tryBeginExecute("rs-1", ["a"])).toBe(false);
+      endExecute("rs-1", []);
+      expect(isExecuteInFlight("rs-1")).toBe(false);
+    });
+
+    it("releases only what a run claimed", () => {
+      expect(tryBeginExecute("rs-1", ["a"])).toBe(true);
+      expect(tryBeginExecute("rs-1", ["b"])).toBe(true);
+      endExecute("rs-1", ["a"]);
+      expect(isExecuteInFlight("rs-1", "a")).toBe(false);
+      expect(isExecuteInFlight("rs-1", "b")).toBe(true);
+      expect(tryBeginExecute("rs-1")).toBe(false);
+      endExecute("rs-1", ["b"]);
+      expect(isExecuteInFlight("rs-1")).toBe(false);
+      expect(tryBeginExecute("rs-1")).toBe(true);
+    });
   });
 });

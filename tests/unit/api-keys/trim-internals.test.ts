@@ -147,7 +147,9 @@ describe("withoutServerInternals", () => {
     expect(await res.json()).toEqual({ id: "abc" });
   });
 
-  it("inflates a gzipped JSON body, trims it, and re-compresses for a client that accepts gzip", async () => {
+  // The handler would otherwise gzip a multi-MB body only for this wrapper to
+  // inflate it and compress it again.
+  it("calls the handler without Accept-Encoding, and gzips the trimmed body for a client that accepts it", async () => {
     const big = Array.from({ length: 200 }, (_, i) => ({
       id: `s${i}`,
       name: `Server ${i}`.padEnd(40, "."),
@@ -156,9 +158,18 @@ describe("withoutServerInternals", () => {
       machineId: `machine-${i}`,
     }));
     expect(JSON.stringify({ servers: big }).length).toBeGreaterThan(MIN_COMPRESS_BYTES);
-    const wrapped = withoutServerInternals(async (req: NextRequest) => jsonResponse(req, { servers: big }));
+    const seen: Array<string | null> = [];
+    const handlerEncodings: Array<string | null> = [];
+    const wrapped = withoutServerInternals(async (req: NextRequest) => {
+      seen.push(req.headers.get("accept-encoding"));
+      const inner = await jsonResponse(req, { servers: big });
+      handlerEncodings.push(inner.headers.get("content-encoding"));
+      return inner;
+    });
 
-    const gz = await wrapped(request({ "accept-encoding": "gzip" }));
+    const gz = await wrapped(request({ "accept-encoding": "gzip", "x-api-key": "kept" }));
+    expect(seen).toEqual([null]);
+    expect(handlerEncodings).toEqual([null]);
     expect(gz.headers.get("content-encoding")).toBe("gzip");
     const body = JSON.parse(gunzipSync(new Uint8Array(await gz.arrayBuffer())).toString("utf8")) as { servers: Record<string, unknown>[] };
     expect(body.servers).toHaveLength(200);

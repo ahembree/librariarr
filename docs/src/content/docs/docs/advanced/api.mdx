@@ -128,15 +128,15 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
 | `GET` | `/api/v1/lifecycle/rules` | `lifecycle:read` | Rule sets |
-| `GET` | `/api/v1/lifecycle/rules/matches` | `lifecycle:read` | Current matches per rule set. Each match carries the item as detection stored it, without its file path |
-| `GET` | `/api/v1/lifecycle/actions` | `lifecycle:read` | Actions by `status`: `PENDING` (default), `COMPLETED`, `FAILED` or `ALL` |
-| `GET` | `/api/v1/lifecycle/exceptions` | `lifecycle:read` | Exceptions; `type` = `MOVIE`, `SERIES`, `MUSIC` or `ALL` |
+| `GET` | `/api/v1/lifecycle/rules/matches` | `lifecycle:read` | Current matches per rule set. Each match carries the item as detection stored it, without its file path. Not paged: each call counts as 20 requests |
+| `GET` | `/api/v1/lifecycle/actions` | `lifecycle:read` | Actions by `status`: `PENDING` (default), `COMPLETED`, `FAILED` or `ALL`. A failed action's error has internal paths and addresses redacted. Not paged: each call counts as 20 requests |
+| `GET` | `/api/v1/lifecycle/exceptions` | `lifecycle:read` | Exceptions; `type` = `MOVIE`, `SERIES`, `MUSIC` or `ALL`. Not paged: each call counts as 20 requests |
 | `GET` | `/api/v1/lifecycle/stats` | `lifecycle:read` | Deletion statistics |
 | `POST` | `/api/v1/lifecycle/exceptions` | `lifecycle:write` | Exclude an item from every rule: `{ "mediaItemId": "…", "reason": "…", "scope": "individual" }` (`scope` can also be `series`, `artist` or `album`) |
 | `POST` | `/api/v1/jobs/detection` | `lifecycle:write` | Queue lifecycle detection for every enabled rule set, like **Run now**. Answers `202` with `{ "queued": true, "jobs": 1 }`; read the result from `/api/v1/lifecycle/rules/matches` once the job has run |
 | `DELETE` | `/api/v1/lifecycle/exceptions` | `lifecycle:execute` | Remove exceptions: `{ "ids": ["…"] }`, at most 25. Counts against the [deletion limits](#deletion-limits) |
 | `DELETE` | `/api/v1/lifecycle/exceptions/{id}` | `lifecycle:execute` | Remove one exception. Counts against the [deletion limits](#deletion-limits) |
-| `POST` | `/api/v1/lifecycle/actions/execute` | `lifecycle:execute` | Run a rule set's action now on named matches: `{ "ruleSetId": "…", "mediaItemIds": ["…"] }`. `mediaItemIds` is required (1 to 25 ids); there is no "every match". Only ids that are current matches of the rule set are acted on. The rule set must be enabled, with actions turned on (`400` otherwise). `409` if an item changed since it matched, or while an execution of the same rule set is already running (one runs at a time, so an overlapping call never repeats its deletions). A deleting action counts against the [deletion limits](#deletion-limits) |
+| `POST` | `/api/v1/lifecycle/actions/execute` | `lifecycle:execute` | Run a rule set's action now on named matches: `{ "ruleSetId": "…", "mediaItemIds": ["…"] }`. `mediaItemIds` is required (1 to 25 ids); there is no "every match". Only ids that are current matches of the rule set are acted on. The rule set must be enabled, with actions turned on (`400` otherwise). `409` if an item changed since it matched, or while another execution of the same rule set covers one of the named items (so an overlapping call never repeats its deletions; calls naming different items run side by side). A deleting action counts against the [deletion limits](#deletion-limits) |
 | `POST` | `/api/v1/jobs/execution` | `lifecycle:execute` | Queue lifecycle execution (every due pending action), like **Run now**. Answers `202` with `{ "queued": true, "jobs": 1 }`. The run is held, deleting nothing, if it would exceed the [deletion limits](#deletion-limits) |
 
 ### Streams
@@ -191,13 +191,13 @@ Errors are JSON: `{ "error": "…" }`, sometimes with a `details` array (validat
 | `401` | No key, a key that is not valid (never issued, or deleted), or an expired key (`"API key has expired"`). Includes a `WWW-Authenticate: Bearer` header |
 | `403` | The key is valid but lacks the endpoint's scope. The body's `requiredScope` and the `WWW-Authenticate` header (`error="insufficient_scope"`) name the missing scope |
 | `404` | The item, server, rule set or exception does not exist |
-| `409` | A conflict: a sync is already running (`POST /servers/{id}/sync`), or an item changed identity since it matched (`POST /lifecycle/actions/execute`, which then executes nothing; run detection again) |
+| `409` | A conflict: a sync is already running (`POST /servers/{id}/sync`); an item changed identity since it matched (`POST /lifecycle/actions/execute`, which then executes nothing; run detection again); or another execution of the rule set is running on one of the named items |
 | `429` | Rate limited, or the [deletion limits](#deletion-limits) are spent; wait for the number of seconds in `Retry-After` |
 | `503` | Librariarr could not check the key (for example, the database is unavailable). The request was refused, not let through |
 
 ## Rate limits
 
-- **Per key:** 600 requests per minute. Past that, the key's requests are answered `429` until the minute is up. A request with `limit=0` returns a whole library rather than a page, so it counts as 20 requests — thirty full listings a minute. `limit` is read as a number, so every spelling of zero (`00`, `+0`, `0.0`) is a full listing and costs the same.
+- **Per key:** 600 requests per minute. Past that, the key's requests are answered `429` until the minute is up. A request with `limit=0` returns a whole library rather than a page, so it counts as 20 requests — thirty full listings a minute. `limit` is read as a number, so every spelling of zero (`00`, `+0`, `0.0`) is a full listing and costs the same. The listings with no paging — rule matches, actions and exceptions — always return everything, so every call to them counts as 20 too.
 - **Unrecognised keys:** at most 1,000 keys that turn out not to exist are looked up per minute, across every client. Past that, until the minute is up, a key that has not been used successfully in the last 15 minutes is answered `429` without being looked up; keys in use are unaffected. This bounds what a flood of random keys can cost, at the price of an idle integration waiting out the minute while such a flood lasts.
 - **Failing keys:** a key that fails 20 times within 15 minutes (deleted, expired, mistyped) is answered `429` for the rest of that window without being looked up, so an application still using a deleted key stops costing anything. Failures are counted per key, not per address, so they never lock out a key that works, even when every client reaches Librariarr from the same address (containers on one Docker host, or `TRUST_PROXY_HEADERS=false`).
 
@@ -211,7 +211,7 @@ An API key can never delete in bulk. Bulk deletion stays with Librariarr itself:
 - **Whole requests only.** A request is either run in full or not at all, never the first few items of it. A refused request is not charged.
 - **Queued runs too.** An execution queued with `POST /jobs/execution` is held when it would delete more than 25 items or go over the hourly budget. Nothing is deleted, the actions stay pending, and a Discord message says so when a webhook is set (at most once every 15 minutes, however often the run is queued). They then run on the rule set's schedule, or from the Pending page. A held API run does not postpone the scheduled one.
 - **The app's own checks still apply.** The item must be a current match of an enabled rule set with actions turned on, lifecycle exceptions are honoured (on every server's copy), and the deletion limit under Settings applies first.
-- **The right item.** An item re-matched on the media server after the rules matched it (a Plex "Fix Match" or a Jellyfin "Identify") is refused with `409`, because acting on it would reach the new title. Run detection again, and review the matches.
+- **The right item.** An item re-matched on the media server after the rules matched it (a Plex "Fix Match" or a Jellyfin "Identify") is refused with `409`, because acting on it would reach the new title. Run detection again, and review the matches: detection refreshes every match it keeps, so an item that still matches the rules under its new title can then be executed, and one that no longer matches drops out.
 
 The hourly budget is kept in memory, so restarting Librariarr resets it.
 

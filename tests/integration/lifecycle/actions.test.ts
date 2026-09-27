@@ -1212,6 +1212,53 @@ describe("Lifecycle Actions", () => {
       expect(again.status).toBe(200);
     });
 
+    // The Pending page's per-item Execute buttons run side by side; a lock on
+    // the whole rule set made the second answer 409 though it named another
+    // match.
+    it("runs per-item executes of different items of one rule set side by side", async () => {
+      const { item, ruleSet } = await seedExecutable();
+      const second = await createTestMediaItem(item.libraryId, { title: "Second Movie", type: "MOVIE" });
+      await createTestRuleMatch(ruleSet.id, second.id);
+      const { runner, release } = await holdNextRun();
+
+      const first = execute(ruleSet.id, [item.id]);
+      await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(1));
+
+      const other = await execute(ruleSet.id, [second.id]);
+      expect(other.status).toBe(200);
+
+      release();
+      expect((await first).status).toBe(200);
+    });
+
+    it("refuses Execute All while one of the rule set's items is running, and an item while Execute All runs", async () => {
+      const { item, ruleSet } = await seedExecutable();
+      const second = await createTestMediaItem(item.libraryId, { title: "Second Movie", type: "MOVIE" });
+      await createTestRuleMatch(ruleSet.id, second.id);
+      const executeAll = () =>
+        callRoute(executePost, {
+          url: "/api/lifecycle/actions/execute",
+          method: "POST",
+          body: { ruleSetId: ruleSet.id },
+        });
+
+      const held = await holdNextRun();
+      const first = execute(ruleSet.id, [item.id]);
+      await vi.waitFor(() => expect(held.runner).toHaveBeenCalledTimes(1));
+      const all = await expectJson<{ error: string }>(await executeAll(), 409);
+      expect(all.error).toMatch(/already running for this rule set/i);
+      held.release();
+      expect((await first).status).toBe(200);
+
+      const heldAll = await holdNextRun();
+      const whole = executeAll();
+      await vi.waitFor(() => expect(heldAll.runner).toHaveBeenCalledTimes(2));
+      const one = await expectJson<{ error: string }>(await execute(ruleSet.id, [second.id]), 409);
+      expect(one.error).toMatch(/already running for this rule set/i);
+      heldAll.release();
+      expect((await whole).status).toBe(200);
+    });
+
     it("refuses a force-retry of the same rule set while an execute holds the lock", async () => {
       const { user, item, ruleSet } = await seedExecutable();
       const failedAction = await createTestAction(user.id, item.id, ruleSet.id, { status: "FAILED" });

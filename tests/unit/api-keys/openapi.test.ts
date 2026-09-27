@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { getApiKeyGuard } from "@/lib/api-keys/guard";
+import { FULL_LISTING_REQUEST_COST } from "@/lib/api-keys/limits";
 import { API_OPERATIONS, buildOpenApiDocument, operationId } from "@/lib/api-keys/openapi";
 import { API_SCOPES } from "@/lib/api-keys/scopes";
 
@@ -38,6 +39,24 @@ describe("OpenAPI document", () => {
   it("describes exactly the routes on disk, with the scope each one enforces", async () => {
     const described = API_OPERATIONS.map((op) => `${op.method} ${op.path} ${op.scope ?? "-"}`).sort();
     expect(described).toEqual(await routeTable());
+  });
+
+  // A key's budget treats these reads differently; the document must say so
+  // wherever the guard does.
+  it("tells a client which reads are charged as full listings", async () => {
+    const charged: string[] = [];
+    for (const file of routeFiles(V1_ROOT)) {
+      const route = "/" + path.relative(V1_ROOT, path.dirname(file)).split(path.sep).join("/");
+      const mod = (await import(file)) as Record<string, unknown>;
+      for (const [method, handler] of Object.entries(mod)) {
+        if (getApiKeyGuard(handler)?.fullListing) charged.push(`${method.toLowerCase()} ${route}`);
+      }
+    }
+    expect(charged.length).toBeGreaterThan(0);
+    for (const entry of charged) {
+      const op = API_OPERATIONS.find((o) => `${o.method} ${o.path}` === entry);
+      expect(op?.description, entry).toContain(`every read counts as ${FULL_LISTING_REQUEST_COST} requests`);
+    }
   });
 
   it("names only registry scopes", () => {

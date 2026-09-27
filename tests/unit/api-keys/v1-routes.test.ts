@@ -124,4 +124,19 @@ describe("/api/v1 route guards", () => {
     );
     expect(actual).toEqual(expected);
   });
+
+  // A read with no paging returns the whole listing, so it must be priced like
+  // a limit=0 read. Pinned here so a new unpaged listing is a reviewed change.
+  it("charges exactly the unpaged listings as full listings", async () => {
+    const fullListings = (await loadRoutes())
+      .filter(({ handler }) => getApiKeyGuard(handler)?.fullListing)
+      .map(({ route, method }) => `${method} ${route}`)
+      .sort();
+    expect(fullListings).toEqual([
+      "GET /api/v1/lifecycle/actions",
+      "GET /api/v1/lifecycle/exceptions",
+      "GET /api/v1/lifecycle/rules/matches",
+    ]);
+  });
 });
+

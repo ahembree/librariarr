@@ -1,5 +1,5 @@
 import { API_SCOPE_INFO, API_SCOPES, type ApiScope } from "./scopes";
-import { API_DESTRUCTIVE_PER_HOUR, API_DESTRUCTIVE_PER_REQUEST } from "./limits";
+import { API_DESTRUCTIVE_PER_HOUR, API_DESTRUCTIVE_PER_REQUEST, FULL_LISTING_REQUEST_COST } from "./limits";
 
 const PER_REQUEST = API_DESTRUCTIVE_PER_REQUEST;
 const PER_HOUR = API_DESTRUCTIVE_PER_HOUR;
@@ -47,7 +47,7 @@ const LIST_PAGING: Param[] = [
   {
     name: "limit",
     description:
-      "Rows per page (0 = everything, which counts as 20 requests against the key's budget).",
+      `Rows per page (0 = everything, which counts as ${FULL_LISTING_REQUEST_COST} requests against the key's budget).`,
     schema: { type: "integer", minimum: 0 },
   },
   { name: "offset", description: "Skip this many rows; overrides `page`.", schema: { type: "integer", minimum: 0 } },
@@ -217,13 +217,14 @@ export const API_OPERATIONS: readonly Operation[] = [
     query: [{ name: "type", description: "Which artwork; poster by default.", schema: { type: "string", enum: ["art", "parent", "season"] } }, { name: "w", description: "Width.", schema: { type: "integer", enum: [400, 640, 800] } }],
   },
   { method: "get", path: "/lifecycle/rules", scope: "lifecycle:read", tag: "Lifecycle", summary: "Rule sets" },
-  { method: "get", path: "/lifecycle/rules/matches", scope: "lifecycle:read", tag: "Lifecycle", summary: "Current matches per rule set", description: "Each match carries the item snapshot detection stored, without its file path." },
+  { method: "get", path: "/lifecycle/rules/matches", scope: "lifecycle:read", tag: "Lifecycle", summary: "Current matches per rule set", description: `Each match carries the item snapshot detection stored, without its file path. Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.` },
   {
     method: "get",
     path: "/lifecycle/actions",
     scope: "lifecycle:read",
     tag: "Lifecycle",
     summary: "Actions by status",
+    description: `Each action's \`error\` is redacted of internal addresses and paths. Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.`,
     query: [{ name: "status", description: "Which actions.", schema: { type: "string", enum: ["PENDING", "COMPLETED", "FAILED", "ALL"], default: "PENDING" } }],
   },
   {
@@ -232,6 +233,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "lifecycle:read",
     tag: "Lifecycle",
     summary: "Exceptions",
+    description: `Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.`,
     query: [{ name: "type", description: "Library type, or ALL.", schema: { type: "string", enum: ["MOVIE", "SERIES", "MUSIC", "ALL"] } }],
   },
   { method: "get", path: "/lifecycle/stats", scope: "lifecycle:read", tag: "Lifecycle", summary: "Deletion statistics" },
@@ -401,7 +403,7 @@ export interface OpenApiDocumentOptions {
   serverVariables?: Record<string, { default: string; description?: string }>;
 }
 
-/** The OpenAPI document for `/api/v1`, served at `baseUrl`. */
+/** The OpenAPI document for `/api/v1`, served at `baseUrl` (`""` for the relative `/api/v1`). */
 export function buildOpenApiDocument(
   baseUrl: string,
   version: string,
@@ -467,7 +469,7 @@ export function buildOpenApiDocument(
         "Scopes:",
         scopeTable,
         "",
-        "Rate limits: 600 requests per minute per key (a `limit=0` listing counts as 20). Errors are `{ error }`, sometimes with `details`.",
+        `Rate limits: 600 requests per minute per key (a \`limit=0\` listing, and any read of a listing without paging, counts as ${FULL_LISTING_REQUEST_COST}). Errors are \`{ error }\`, sometimes with \`details\`.`,
         "",
         `Deletion limits: a request can delete (or remove the exception of) at most ${PER_REQUEST} items, and every key together at most ${PER_HOUR} an hour. Every item must be named; nothing acts on "all matches".`,
       ].join("\n"),

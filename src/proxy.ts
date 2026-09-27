@@ -14,6 +14,10 @@ export function proxy(request: NextRequest) {
   // API routes handle auth themselves. The proxy's one job for them is the
   // CSRF origin check on state-changing methods — applied here, once, rather
   // than remembered in 100+ route files. See `isTrustedMutationOrigin`.
+  // `/api/v1` keeps it too, deliberately: the key guard never reads the
+  // cookie, but a reverse proxy set up to add an API key header would make
+  // that key as ambient as a cookie. Its clients are server-side (no Origin,
+  // which passes), and the docs site's Try it out is documented as read-only.
   if (isApiRoute) {
     if (!SAFE_METHODS.has(request.method) && !isTrustedMutationOrigin(request)) {
       return NextResponse.json(

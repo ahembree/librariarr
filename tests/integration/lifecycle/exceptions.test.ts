@@ -32,7 +32,7 @@ vi.mock("@/lib/lifecycle/collections", () => ({
 }));
 
 // Route imports — MUST come AFTER vi.mock() calls
-import { GET, POST } from "@/app/api/lifecycle/exceptions/route";
+import { GET, POST, DELETE as BULK_DELETE, PATCH as BULK_PATCH } from "@/app/api/lifecycle/exceptions/route";
 import { DELETE } from "@/app/api/lifecycle/exceptions/[id]/route";
 
 const prisma = getTestPrisma();
@@ -510,4 +510,47 @@ describe("Lifecycle Exceptions API", () => {
       expect(dbException).toBeNull();
     });
   });
+
+  // ── Bulk DELETE / PATCH /api/lifecycle/exceptions ──
+  // The Exceptions page removes or re-words a grouped row in one request: every
+  // episode or track of a show or artist, on every server. A long show held on
+  // two servers is well past a thousand ids, which the old cap of 1,000 refused.
+
+  describe("bulk DELETE and PATCH /api/lifecycle/exceptions", () => {
+    async function rowOfExceptions() {
+      const { user, mediaItem } = await createUserWithMediaItem();
+      const other = await createTestMediaItem(mediaItem.libraryId, { title: "Other" });
+      const kept = await prisma.lifecycleException.create({
+        data: { userId: user.id, mediaItemId: mediaItem.id, reason: "keep" },
+      });
+      const second = await prisma.lifecycleException.create({
+        data: { userId: user.id, mediaItemId: other.id, reason: "keep" },
+      });
+      // A grouped row's worth of ids: the two real ones plus the rest of a big show.
+      const ids = [kept.id, second.id, ...Array.from({ length: 1598 }, (_, i) => `absent-${i}`)];
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      return { ids, realIds: [kept.id, second.id] };
+    }
+
+    it("re-words every exception of a row larger than a thousand ids", async () => {
+      const { ids, realIds } = await rowOfExceptions();
+      const response = await callRoute(BULK_PATCH, {
+        method: "PATCH",
+        body: { ids, reason: "new reason" },
+      });
+      const body = await expectJson<{ updated: number }>(response, 200);
+      expect(body.updated).toBe(2);
+      const rows = await prisma.lifecycleException.findMany({ where: { id: { in: realIds } } });
+      expect(rows.every((r) => r.reason === "new reason")).toBe(true);
+    });
+
+    it("removes every exception of a row larger than a thousand ids", async () => {
+      const { ids, realIds } = await rowOfExceptions();
+      const response = await callRoute(BULK_DELETE, { method: "DELETE", body: { ids } });
+      const body = await expectJson<{ deleted: number }>(response, 200);
+      expect(body.deleted).toBe(2);
+      expect(await prisma.lifecycleException.count({ where: { id: { in: realIds } } })).toBe(0);
+    });
+  });
 });
+

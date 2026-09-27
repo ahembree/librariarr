@@ -80,24 +80,26 @@ export async function POST(
     );
   }
 
-  // SINGLE-FLIGHT, keyed by the rule set: this runs the Arr call inline
-  // exactly like the manual execute route, so two overlapping retries of the
-  // same FAILED action — or a retry landing while an Execute of the same rule
-  // set is mid-run — each send the same delete and each record a COMPLETED
-  // row with its own `deletedBytes`. Claimed before any read the response is
-  // built from, released in the `finally` on every exit. See
+  // SINGLE-FLIGHT on the action's item within its rule set: this runs the Arr
+  // call inline exactly like the manual execute route, so two overlapping
+  // retries of the same FAILED action — or a retry landing while an Execute of
+  // the same rule set covers the item — each send the same delete and each
+  // record a COMPLETED row with its own `deletedBytes`. Claimed before any read
+  // the response is built from, released in the `finally` on every exit. See
   // `execute-in-flight.ts` for the live-review finding behind this.
   const ruleSetId = action.ruleSetId;
-  if (!tryBeginExecute(ruleSetId)) {
+  // An action whose item is gone claims the whole rule set; retryAction refuses it anyway.
+  const lockedItems = action.mediaItemId ? [action.mediaItemId] : undefined;
+  if (!tryBeginExecute(ruleSetId, lockedItems)) {
     return NextResponse.json(
-      { error: "An execution is already running for this rule set" },
+      { error: "An execution covering this item is already running for this rule set" },
       { status: 409 }
     );
   }
   try {
     return await retryAction(session, { ...action, ruleSetId }, skipTitleValidation);
   } finally {
-    endExecute(ruleSetId);
+    endExecute(ruleSetId, lockedItems);
   }
 }
 
@@ -105,7 +107,7 @@ type FailedAction = Prisma.LifecycleActionGetPayload<{
   include: { mediaItem: { include: { externalIds: true } } };
 }> & { ruleSetId: string };
 
-/** The retry proper. Runs under the rule set's execute lock (see `POST`). */
+/** The retry proper. Runs under the execute lock on its item (see `POST`). */
 async function retryAction(
   session: Awaited<ReturnType<typeof getSession>>,
   action: FailedAction,

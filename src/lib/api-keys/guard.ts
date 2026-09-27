@@ -21,6 +21,7 @@ import {
 } from "./keys";
 import { runAsApiKey, type ApiKeyPrincipal } from "./principal";
 import { isApiScope, type ApiScope } from "./scopes";
+import { FULL_LISTING_REQUEST_COST } from "./limits";
 
 /**
  * The `/api/v1` authentication boundary.
@@ -105,13 +106,9 @@ interface ApiKeyRow {
 
 type Lookup = { row: ApiKeyRow | null } | { verificationLimitedMs: number | undefined };
 
-/**
- * What one `limit=0` listing costs against the per-key request budget. It
- * returns a whole library — tens of MB, gzipped — where an ordinary page is
- * 50 rows, so counted as one request a leaked read-only key could pull the
- * library 600 times a minute.
- */
-export const FULL_LISTING_REQUEST_COST = 20;
+// What a full-listing read costs; defined with the other client-safe limits
+// because the OpenAPI document quotes it.
+export { FULL_LISTING_REQUEST_COST };
 
 /**
  * A valid key refused for its scope or its request budget is logged at WARN —
@@ -130,6 +127,19 @@ const API_KEY_GUARD = Symbol.for("librariarr.apiKeyGuard");
 export interface ApiKeyGuardInfo {
   /** The scope the handler requires; `null` = any valid key (introspection). */
   scope: ApiScope | null;
+  /** Every GET returns a whole listing, charged `FULL_LISTING_REQUEST_COST`. */
+  fullListing: boolean;
+}
+
+export interface ApiKeyGuardOptions {
+  /**
+   * The route has no paging: every GET returns the whole listing (every rule
+   * match with its stored item, all action history, every exception), so it
+   * is charged like a `limit=0` read. Counted as one request, a leaked
+   * read-only key could pull it 600 times a minute — the whole-library pull
+   * `FULL_LISTING_REQUEST_COST` exists to price.
+   */
+  fullListing?: boolean;
 }
 
 type RouteHandler<C> = (request: NextRequest, context: C) => Response | Promise<Response>;
@@ -139,21 +149,25 @@ type RouteHandler<C> = (request: NextRequest, context: C) => Response | Promise<
 export function withApiKey(
   scope: ApiScope | null,
   handler: (request: NextRequest) => Response | Promise<Response>,
+  options?: ApiKeyGuardOptions,
 ): (request: NextRequest) => Promise<Response>;
 export function withApiKey<C>(
   scope: ApiScope | null,
   handler: RouteHandler<C>,
+  options?: ApiKeyGuardOptions,
 ): (request: NextRequest, context: C) => Promise<Response>;
 export function withApiKey<C>(
   scope: ApiScope | null,
   handler: RouteHandler<C>,
+  options: ApiKeyGuardOptions = {},
 ): (request: NextRequest, context: C) => Promise<Response> {
   if (scope !== null && !isApiScope(scope)) {
     throw new Error(`Unknown API scope "${String(scope)}"`);
   }
+  const fullListing = options.fullListing === true;
 
   const guarded = async (request: NextRequest, context: C): Promise<Response> => {
-    const auth = await authenticateApiKey(request, scope);
+    const auth = await authenticateApiKey(request, scope, { fullListing });
     if (!auth.ok) return auth.response;
 
     let status: number | "error" = "error";
@@ -167,7 +181,7 @@ export function withApiKey<C>(
   };
 
   Object.defineProperty(guarded, API_KEY_GUARD, {
-    value: Object.freeze({ scope } satisfies ApiKeyGuardInfo),
+    value: Object.freeze({ scope, fullListing } satisfies ApiKeyGuardInfo),
   });
   return guarded;
 }
@@ -185,6 +199,7 @@ export type ApiKeyAuthResult =
 export async function authenticateApiKey(
   request: NextRequest,
   scope: ApiScope | null,
+  options: ApiKeyGuardOptions = {},
 ): Promise<ApiKeyAuthResult> {
   if (urlCarriesKey(request.nextUrl)) {
     return refuse(
@@ -269,7 +284,7 @@ export async function authenticateApiKey(
   }
   rememberVerified(presented, row.id);
 
-  const rate = apiKeyRequestLimiter.check(row.id, requestCost(request));
+  const rate = apiKeyRequestLimiter.check(row.id, requestCost(request, options.fullListing === true));
   if (rate.limited) {
     warnOnce(
       `rate:${row.id}`,
@@ -367,14 +382,16 @@ function rememberVerified(presented: string, id: string): void {
 
 /**
  * Charged against the per-key budget: 1, or `FULL_LISTING_REQUEST_COST` for a
- * full-listing read. "Full listing" is decided by `isFullListingLimit`, the
- * same rule the handlers apply, never by comparing the raw string to `"0"`:
- * the handlers `parseInt` the value, so `limit=00`, `+0`, `0.0`, `0e0` and
- * `0abc` all returned the whole library — verified live — while a string
- * comparison charged each as one ordinary request.
+ * full-listing read — any GET of a route without paging (`fullListing`), or a
+ * paged route asked for `limit=0`. The latter is decided by
+ * `isFullListingLimit`, the same rule the handlers apply, never by comparing
+ * the raw string to `"0"`: the handlers `parseInt` the value, so `limit=00`,
+ * `+0`, `0.0`, `0e0` and `0abc` all returned the whole library — verified
+ * live — while a string comparison charged each as one ordinary request.
  */
-function requestCost(request: NextRequest): number {
+function requestCost(request: NextRequest, fullListing: boolean): number {
   if (request.method !== "GET" && request.method !== "HEAD") return 1;
+  if (fullListing) return FULL_LISTING_REQUEST_COST;
   return isFullListingLimit(request.nextUrl.searchParams.get("limit")) ? FULL_LISTING_REQUEST_COST : 1;
 }
 

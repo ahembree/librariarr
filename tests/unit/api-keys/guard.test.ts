@@ -110,8 +110,12 @@ describe("withApiKey", () => {
   it("marks the handler with its scope, and nothing else is marked", () => {
     expect(getApiKeyGuard(withApiKey("lifecycle:read", async () => new Response()))).toEqual({
       scope: "lifecycle:read",
+      fullListing: false,
     });
-    expect(getApiKeyGuard(withApiKey(null, async () => new Response()))).toEqual({ scope: null });
+    expect(getApiKeyGuard(withApiKey(null, async () => new Response()))).toEqual({ scope: null, fullListing: false });
+    expect(
+      getApiKeyGuard(withApiKey("lifecycle:read", async () => new Response(), { fullListing: true })),
+    ).toEqual({ scope: "lifecycle:read", fullListing: true });
     expect(getApiKeyGuard(async () => new Response())).toBeUndefined();
     expect(getApiKeyGuard("GET")).toBeUndefined();
   });
@@ -514,6 +518,36 @@ describe("authenticateApiKey — request cost", () => {
       await authenticateApiKey(
         request({ "x-api-key": key }, "http://localhost/api/v1/sync/cancel?limit=0", "POST"),
         "media:read",
+      );
+      expect(spy).toHaveBeenLastCalledWith("key-1", 1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // A route with no paging returns its whole listing on every read — every
+  // rule match with its stored item, all action history — so each read costs
+  // what a limit=0 read does, whatever the query string says.
+  it("charges every read of a route without paging as a full listing, and its writes as one", async () => {
+    const key = await storedKey();
+    const spy = vi.spyOn(apiKeyRequestLimiter, "check");
+    try {
+      await authenticateApiKey(
+        request({ "x-api-key": key }, "http://localhost/api/v1/lifecycle/rules/matches"),
+        "lifecycle:read",
+        { fullListing: true },
+      );
+      expect(spy).toHaveBeenLastCalledWith("key-1", FULL_LISTING_REQUEST_COST);
+      await authenticateApiKey(
+        request({ "x-api-key": key }, "http://localhost/api/v1/lifecycle/exceptions?limit=5"),
+        "lifecycle:read",
+        { fullListing: true },
+      );
+      expect(spy).toHaveBeenLastCalledWith("key-1", FULL_LISTING_REQUEST_COST);
+      await authenticateApiKey(
+        request({ "x-api-key": key }, "http://localhost/api/v1/lifecycle/exceptions", "POST"),
+        "lifecycle:read",
+        { fullListing: true },
       );
       expect(spy).toHaveBeenLastCalledWith("key-1", 1);
     } finally {

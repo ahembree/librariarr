@@ -27,3 +27,14 @@ export const API_DESTRUCTIVE_PER_HOUR = 100;
 
 /** The rolling window `API_DESTRUCTIVE_PER_HOUR` is counted over. */
 export const API_DESTRUCTIVE_WINDOW_MS = 60 * 60 * 1000;
+
+/**
+ * What one full-listing read costs against a key's 600-requests-a-minute
+ * budget: a `limit=0` read of a paged listing, or any read of a listing with
+ * no paging (rule matches, action history, exceptions). One returns a whole
+ * library — tens of MB, gzipped — where an ordinary page is 50 rows, so
+ * counted as one request a leaked read-only key could pull it 600 times a
+ * minute. Here rather than in `guard.ts` because `openapi.ts` quotes it.
+ */
+export const FULL_LISTING_REQUEST_COST = 20;
+

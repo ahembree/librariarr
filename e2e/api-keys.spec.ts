@@ -18,7 +18,7 @@ test.describe("API keys", () => {
     await expect(page.getByRole("heading", { name: "API Keys" })).toBeVisible();
     await expect(page.getByText(/no api keys yet/i)).toBeVisible();
 
-    // ── OpenAPI document: browsable in Swagger UI, downloadable, built for this address ──
+    // ── OpenAPI document: browsable in Swagger UI, downloadable for this address ──
     await page.getByRole("link", { name: /^api docs$/i }).click();
     await expect(page.getByRole("heading", { name: /^API Docs$/i })).toBeVisible();
     // Swagger UI rendered the generated document: its title, an operation, the Authorize button.
@@ -30,11 +30,14 @@ test.describe("API keys", () => {
     expect(spec.status()).toBe(200);
     const doc = await spec.json();
     expect(doc.openapi).toBe("3.1.0");
-    expect(doc.servers[0].url).toBe(`${baseURL}/api/v1`);
+    // Relative for the viewer, so Try it out uses the page's own scheme and host.
+    expect(doc.servers[0].url).toBe("/api/v1");
     expect(doc.paths["/me"].get["x-scope"]).toBeNull();
     const downloadHref = await page.getByRole("link", { name: /^download$/i }).getAttribute("href");
     const file = await page.request.get(downloadHref!);
     expect(file.headers()["content-disposition"]).toContain("librariarr-openapi.json");
+    // A saved file has no address to resolve against: absolute, for this instance.
+    expect((await file.json()).servers[0].url).toBe(`${baseURL}/api/v1`);
     await page.getByRole("link", { name: /^api keys$/i }).click();
     await expect(page.getByRole("heading", { name: "API Keys" })).toBeVisible();
 

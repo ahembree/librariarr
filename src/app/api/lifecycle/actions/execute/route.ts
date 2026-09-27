@@ -64,17 +64,24 @@ export async function POST(request: NextRequest) {
   // ownership-checked and BEFORE any side effect (the MUSIC+Seerr refusal
   // below disarms the rule set), and released in the `finally` whatever the
   // exit. A collision is answered, not queued: the work the second caller
-  // asked for is already being done. See `execute-in-flight.ts`.
-  if (!tryBeginExecute(ruleSet.id)) {
+  // asked for is already being done. A request naming items claims only those
+  // (per-item Executes of one rule set run side by side); one naming none is
+  // Execute All and claims the whole rule set. See `execute-in-flight.ts`.
+  const lockedItems = mediaItemIds ? [...mediaItemIds] : undefined;
+  if (!tryBeginExecute(ruleSet.id, lockedItems)) {
     return NextResponse.json(
-      { error: "An execution is already running for this rule set" },
+      {
+        error: lockedItems
+          ? "An execution covering these items is already running for this rule set"
+          : "An execution is already running for this rule set",
+      },
       { status: 409 }
     );
   }
   try {
     return await executeRuleSet(session, ruleSet, mediaItemIds);
   } finally {
-    endExecute(ruleSet.id);
+    endExecute(ruleSet.id, lockedItems);
   }
 }
 

@@ -275,7 +275,7 @@ export const transcodeManagerSchema = z.object({
 const sessionIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/, "Invalid session id");
 
 export const terminateSessionSchema = z.object({
-  serverId: z.string().min(1, "Server ID is required"),
+  serverId: z.string().min(1, "Server ID is required").max(200),
   sessionIds: z.array(sessionIdSchema).max(200, "At most 200 sessions per request").optional(),
   message: z
     .string()
@@ -472,12 +472,12 @@ export const ruleTestItemSchema = z.object({
 });
 
 export const actionExecuteSchema = z.object({
-  ruleSetId: z.string().min(1, "Rule set ID is required"),
+  ruleSetId: z.string().min(1, "Rule set ID is required").max(200),
   // Omitted = execute every match. An EMPTY list is refused rather than read the
   // same way: a caller mapping an empty selection to ids would otherwise run
   // the rule set's action against every match it holds.
   mediaItemIds: z
-    .array(z.string().min(1))
+    .array(z.string().min(1).max(200))
     .min(1, "Pass at least one media item id, or omit mediaItemIds to execute every match")
     .max(1000, "At most 1000 media item ids per request; omit mediaItemIds to execute every match")
     .optional(),
@@ -504,15 +504,23 @@ export const collectionSyncSchema = z.object({
 });
 
 // Bounded because the public API reaches these: a reason is free text stored
-// per row, and an id list is one query per id.
+// per row.
 const exceptionReasonSchema = z.string().max(1000, "Reason must be 1000 characters or fewer");
+// The Exceptions page removes or re-words a grouped row in one request — every
+// episode or track of a show or artist, on every server — so a long show held
+// on two servers is well past a thousand ids, and a cap of 1,000 made such a
+// row impossible to remove from the UI. Both uses are a single
+// deleteMany/updateMany. A key never reaches this cap: the public API's DELETE
+// validates `apiExceptionDeleteSchema` (API_DESTRUCTIVE_PER_REQUEST ids) first,
+// and PATCH is not exposed to keys.
+export const MAX_EXCEPTION_IDS_PER_REQUEST = 100_000;
 const exceptionIdsSchema = z
-  .array(z.string().min(1))
+  .array(z.string().min(1).max(200))
   .min(1, "At least one ID is required")
-  .max(1000, "At most 1000 IDs per request");
+  .max(MAX_EXCEPTION_IDS_PER_REQUEST, `At most ${MAX_EXCEPTION_IDS_PER_REQUEST} IDs per request`);
 
 export const exceptionCreateSchema = z.object({
-  mediaItemId: z.string().min(1, "Media item ID is required"),
+  mediaItemId: z.string().min(1, "Media item ID is required").max(200),
   reason: exceptionReasonSchema.optional(),
   scope: z
     .enum(["individual", "series", "artist", "album"])
@@ -619,7 +627,8 @@ export const apiActionExecuteSchema = z.strictObject({
 /**
  * `DELETE /api/v1/lifecycle/exceptions` — removing an exception lets the rules
  * match the item again, so a key may remove at most
- * `API_DESTRUCTIVE_PER_REQUEST` per request (the app's own route takes 1,000).
+ * `API_DESTRUCTIVE_PER_REQUEST` per request (the app's own route takes a whole
+ * grouped row of the Exceptions page at once).
  */
 export const apiExceptionDeleteSchema = z.strictObject({
   ids: z
@@ -809,7 +818,7 @@ export const arrActionSchema = z.object({
 });
 
 export const syncCancelSchema = z.object({
-  serverId: z.string().min(1, "Server ID is required"),
+  serverId: z.string().min(1, "Server ID is required").max(200),
 });
 
 // --- Query Builder ---

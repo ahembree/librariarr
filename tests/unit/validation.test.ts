@@ -12,10 +12,12 @@ import {
   syncScheduleSchema,
   logRetentionSchema,
   terminateSessionSchema,
+  syncCancelSchema,
   apiKeyCreateSchema,
   actionExecuteSchema,
   exceptionCreateSchema,
   exceptionBulkDeleteSchema,
+  MAX_EXCEPTION_IDS_PER_REQUEST,
   exceptionBulkUpdateSchema,
   discordSettingsSchema,
 } from "@/lib/validation";
@@ -611,10 +613,30 @@ describe("bounds on write inputs the public API reaches", () => {
     expect(exceptionCreateSchema.safeParse({ mediaItemId: "m1", reason: "x".repeat(1000) }).success).toBe(true);
     expect(exceptionCreateSchema.safeParse({ mediaItemId: "m1", reason: "x".repeat(1001) }).success).toBe(false);
     const ids = (n: number) => Array.from({ length: n }, (_, i) => `e-${i}`);
-    expect(exceptionBulkDeleteSchema.safeParse({ ids: ids(1000) }).success).toBe(true);
-    expect(exceptionBulkDeleteSchema.safeParse({ ids: ids(1001) }).success).toBe(false);
-    expect(exceptionBulkUpdateSchema.safeParse({ ids: ids(1001), reason: "r" }).success).toBe(false);
     expect(exceptionBulkUpdateSchema.safeParse({ ids: ids(2), reason: "x".repeat(1001) }).success).toBe(false);
+    expect(exceptionBulkDeleteSchema.safeParse({ ids: ["x".repeat(201)] }).success).toBe(false);
+    expect(exceptionBulkDeleteSchema.safeParse({ ids: ids(MAX_EXCEPTION_IDS_PER_REQUEST + 1) }).success).toBe(false);
+  });
+
+  // The Exceptions page sends every exception id of a grouped row: a long show
+  // on two servers is well past a thousand, and the old cap of 1,000 made
+  // such a row impossible to remove or re-word from the UI.
+  it("exception bulk schemas take a whole grouped row of the Exceptions page", () => {
+    const ids = Array.from({ length: 1600 }, (_, i) => `e-${i}`);
+    expect(exceptionBulkDeleteSchema.safeParse({ ids }).success).toBe(true);
+    expect(exceptionBulkUpdateSchema.safeParse({ ids, reason: "r" }).success).toBe(true);
+  });
+
+  // Each of these goes straight into a DB lookup; a key could otherwise send
+  // an arbitrarily long string.
+  it("caps the id strings the public API's writes reach", () => {
+    const long = "x".repeat(201);
+    expect(syncCancelSchema.safeParse({ serverId: long }).success).toBe(false);
+    expect(syncCancelSchema.safeParse({ serverId: "s1" }).success).toBe(true);
+    expect(terminateSessionSchema.safeParse({ serverId: long }).success).toBe(false);
+    expect(exceptionCreateSchema.safeParse({ mediaItemId: long }).success).toBe(false);
+    expect(actionExecuteSchema.safeParse({ ruleSetId: long }).success).toBe(false);
+    expect(actionExecuteSchema.safeParse({ ruleSetId: "r1", mediaItemIds: [long] }).success).toBe(false);
   });
 
   it("actionExecuteSchema caps the media item list, leaving omission as execute-all", () => {
