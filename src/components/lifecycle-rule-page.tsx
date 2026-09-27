@@ -89,7 +89,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import type { ChipColorCategory } from "@/lib/theme/chip-colors";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatFileSize, formatDuration } from "@/lib/format";
-import { formatEpisodeTitle, seriesTitleOf } from "@/lib/media/display-title";
+import { formatMediaItemTitle, seriesTitleOf } from "@/lib/media/display-title";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn, generateId } from "@/lib/utils";
 import { QueryProgress, useStreamProgress } from "@/components/query-progress";
@@ -518,11 +518,7 @@ function PreviewCardGrid({
                       )}
                       <MediaCard
                         imageUrl={`/api/media/${item.id}/image${mediaType !== "MOVIE" ? "?type=parent" : ""}`}
-                        title={mediaType === "SERIES"
-                          ? seriesTitleOf(item)
-                          : item.parentTitle
-                            ? `${item.parentTitle} - ${item.title}`
-                            : item.title}
+                        title={previewTitle(item, mediaType)}
                         fallbackIcon={fallbackIcon}
                         aspectRatio={aspectRatio}
                         onClick={() => onItemClick(item)}
@@ -942,9 +938,7 @@ export function LifecycleRulePage({
   }) =>
     scopeConfig && seriesScope
       ? (item.parentTitle ?? item.title)
-      : mediaType === "SERIES"
-        ? formatEpisodeTitle(item)
-        : item.title;
+      : formatMediaItemTitle({ ...item, type: mediaType });
 
   const fetchDistinctValues = async () => {
     try {

@@ -1971,6 +1971,66 @@ describe("executeLifecycleActions", () => {
       }));
     });
 
+    it("names a file delete on one episode it is not stored against after that episode", async () => {
+      // Series scope forced by an aggregate field: stored against the show's
+      // lowest-id episode, acting only on the one episode that matched.
+      mockPrisma.lifecycleAction.findMany.mockResolvedValue([{
+        ...showAction("DELETE_FILES_SONARR"),
+        matchedMediaItemIds: ["ep310"],
+        mediaItem: { ...episode, type: "SERIES", seasonNumber: 1, episodeNumber: 1 },
+      }]);
+      mockPrisma.mediaItem.findMany.mockImplementation(async (args: { select?: Record<string, boolean> }) =>
+        args.select?.seasonNumber
+          ? [{ id: "ep310", title: "Unfinished Business", seasonNumber: 3, episodeNumber: 10 }]
+          : [{ fileSize: BigInt(100) }],
+      );
+      mockExecuteAction.mockResolvedValue(undefined);
+
+      await executeLifecycleActions("u1");
+
+      const { logger } = await import("@/lib/logger");
+      expect(logger.info).toHaveBeenCalledWith(
+        "Lifecycle",
+        'Executed DELETE_FILES_SONARR for "Battlestar Galactica S03E10" in rule set "Shows"',
+      );
+      expect(mockBuildSuccessSummaryEmbed).toHaveBeenCalledWith("Shows", "DELETE_FILES_SONARR", ["Battlestar Galactica S03E10"]);
+      expect(mockPrisma.lifecycleAction.update).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ mediaItemSeasonNumber: 3, mediaItemEpisodeNumber: 10 }),
+      }));
+      mockPrisma.mediaItem.findMany.mockReset();
+    });
+
+    it("records the members it acted on, and names the one left after the rest stopped matching", async () => {
+      mockPrisma.ruleMatch.findMany.mockResolvedValue([
+        { ruleSetId: "rs1", mediaItemId: "rep1", itemData: { memberIds: ["ep2"] } },
+      ]);
+      mockPrisma.lifecycleAction.findMany.mockResolvedValue([{
+        ...showAction("DELETE_FILES_SONARR"),
+        matchedMediaItemIds: ["rep1", "ep2"],
+        mediaItem: { ...episode, type: "SERIES", seasonNumber: 1, episodeNumber: 1 },
+      }]);
+      mockPrisma.mediaItem.findMany.mockImplementation(async (args: { select?: Record<string, boolean> }) =>
+        args.select?.seasonNumber
+          ? [{ id: "ep2", title: "Water", seasonNumber: 1, episodeNumber: 2 }]
+          : [{ fileSize: BigInt(100) }],
+      );
+      mockExecuteAction.mockResolvedValue(undefined);
+
+      await executeLifecycleActions("u1");
+
+      expect(mockExecuteAction).toHaveBeenCalledWith(expect.objectContaining({ matchedMediaItemIds: ["ep2"] }));
+      expect(mockPrisma.lifecycleAction.update).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({
+          status: "COMPLETED",
+          matchedMediaItemIds: ["ep2"],
+          mediaItemSeasonNumber: 1,
+          mediaItemEpisodeNumber: 2,
+        }),
+      }));
+      expect(mockBuildSuccessSummaryEmbed).toHaveBeenCalledWith("Shows", "DELETE_FILES_SONARR", ["Battlestar Galactica S01E02"]);
+      mockPrisma.mediaItem.findMany.mockReset();
+    });
+
     it("names the show when it cancels a series action that no longer matches", async () => {
       mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
       mockPrisma.lifecycleAction.findMany.mockResolvedValue([

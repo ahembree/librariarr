@@ -3,7 +3,8 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
-import { actionTargetTitle, actionTitleSnapshot } from "@/lib/lifecycle/action-target";
+import { actionTargetTitle, actionTitleSnapshot, loneMemberId } from "@/lib/lifecycle/action-target";
+import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
 import { tryBeginExecute, endExecute } from "@/lib/lifecycle/execute-in-flight";
 import {
   findExceptedItemIds,
@@ -221,6 +222,14 @@ async function retryAction(
     );
   }
 
+  // A file delete on exactly one other episode is named after it.
+  const loneId = loneMemberId(action);
+  const target = {
+    ...action,
+    mediaItem,
+    memberEpisode: loneId ? (await loadMemberEpisodes([loneId])).get(loneId) : undefined,
+  };
+
   try {
     await executeAction({
       id: action.id,
@@ -233,6 +242,7 @@ async function retryAction(
       addArrTags: action.addArrTags,
       removeArrTags: action.removeArrTags,
       skipTitleValidation,
+      memberEpisode: target.memberEpisode,
       mediaItem,
     });
 
@@ -242,7 +252,7 @@ async function retryAction(
         status: "COMPLETED",
         executedAt: new Date(),
         error: null,
-        ...actionTitleSnapshot({ ...action, mediaItem }),
+        ...actionTitleSnapshot(target),
       },
     });
 
@@ -259,7 +269,7 @@ async function retryAction(
       },
     });
 
-    logger.info("Lifecycle", `Force-retried action ${id} for "${actionTargetTitle({ ...action, mediaItem })}" — succeeded`);
+    logger.info("Lifecycle", `Force-retried action ${id} for "${actionTargetTitle(target)}" — succeeded`);
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -269,7 +279,7 @@ async function retryAction(
       data: { error: msg, executedAt: new Date() },
     });
 
-    logger.error("Lifecycle", `Force-retry failed for "${actionTargetTitle({ ...action, mediaItem })}"`, { error: describeActionError(error) });
+    logger.error("Lifecycle", `Force-retry failed for "${actionTargetTitle(target)}"`, { error: describeActionError(error) });
 
     return NextResponse.json({ error: msg }, { status: 500 });
   }

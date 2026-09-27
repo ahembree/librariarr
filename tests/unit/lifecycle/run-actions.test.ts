@@ -138,6 +138,30 @@ describe("executeActionsForItems", () => {
       });
     });
 
+    it("names a file delete on one episode it is not stored against after that episode", async () => {
+      m.executeAction.mockRejectedValue(new Error("No episode file"));
+      m.prisma.mediaItem.findMany.mockResolvedValueOnce([
+        { id: "ep10", title: "Fly", seasonNumber: 3, episodeNumber: 10 },
+      ]);
+
+      const result = await executeActionsForItems(
+        "u1",
+        [episode(1)],
+        { ...CONFIG, actionType: "DELETE_FILES_SONARR", arrInstanceId: "sonarr-1" },
+        new Map([["ep1", ["ep10"]]]),
+        SERIES_HISTORY,
+      );
+
+      expect(result.errors).toEqual(["Breaking Bad S03E10: No episode file"]);
+      expect(m.executeAction).toHaveBeenCalledWith(
+        expect.objectContaining({ memberEpisode: { title: "Fly", seasonNumber: 3, episodeNumber: 10 } }),
+        undefined,
+      );
+      expect(m.prisma.lifecycleAction.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ mediaItemSeasonNumber: 3, mediaItemEpisodeNumber: 10 }),
+      });
+    });
+
     it("names a file delete on one episode by show and SxxExx", async () => {
       m.executeAction.mockRejectedValue(new Error("No episode file"));
 

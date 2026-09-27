@@ -142,7 +142,15 @@ export async function GET(request: NextRequest) {
     // external merge). The tie block straddling the page boundary then permutes
     // between the passes, so the stitched list shows some rows twice and drops
     // others entirely. Reproduced at 80 duplicated / 80 missing out of 20k rows.
-    orderBy: [{ [sortBy]: sortOrder }, { id: "asc" as const }],
+    // By show, a show's episodes run in SxxExx order — the order a list headed
+    // "<Show> SxxExx" reads in, rather than whatever their ids happen to be.
+    orderBy: [
+      { [sortBy]: sortOrder },
+      ...(sortBy === "parentTitle"
+        ? [{ seasonNumber: "asc" as const }, { episodeNumber: "asc" as const }]
+        : []),
+      { id: "asc" as const },
+    ],
     select: selectBase,
   });
 

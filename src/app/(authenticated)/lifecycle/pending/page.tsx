@@ -978,10 +978,6 @@ export default function PendingActionsPage() {
 
   const openDetailPanel = async (action: ActionItem) => {
     const mediaType = action.mediaItem.type as "MOVIE" | "SERIES" | "MUSIC";
-    setSelectedItemType(mediaType);
-    // The panel names a series action as its row does — the show, or
-    // "<Show> SxxExx" for an action on one episode — not by the episode fetched.
-    setSelectedTitle(mediaType === "SERIES" ? action.mediaItem.title : undefined);
     if (!action.mediaItem.id) return;
     setLoadingDetail(true);
     try {
@@ -1002,6 +998,12 @@ export default function PendingActionsPage() {
             item.parentTitle = null;
           }
         }
+        // Set with the item, never ahead of it, so the open panel cannot show
+        // one item under another's type or title. A series action is named as
+        // its row names it — the show, or "<Show> SxxExx" for an action on one
+        // episode — not by the episode it is stored against.
+        setSelectedItemType(mediaType);
+        setSelectedTitle(mediaType === "SERIES" ? action.mediaItem.title : undefined);
         setSelectedItem(item);
       }
     } catch (error) {

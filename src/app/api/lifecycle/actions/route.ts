@@ -4,7 +4,14 @@ import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
-import { actionTargetTitle, actionTitleSnapshot, snapshotTargetTitle } from "@/lib/lifecycle/action-target";
+import {
+  actionTargetTitle,
+  actionTitleSnapshot,
+  loneMemberId,
+  snapshotTargetTitle,
+  type MemberEpisode,
+} from "@/lib/lifecycle/action-target";
+import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
 import { loadGroupMemberStats, aggregateGroupMembers, memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 import { heldScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped-action-hold";
 
@@ -125,7 +132,9 @@ function buildActionMediaItem(
     ruleSetType: string | null;
     mediaItem: SelectedMediaItem | null;
   },
-  ruleSetType: string
+  ruleSetType: string,
+  /** Episodes named by an action on one other episode, keyed by `loneMemberId`. */
+  memberEpisodes: Map<string, MemberEpisode>,
 ): ActionItemMediaItem {
   // A series action is named by what it acts on: the show, or "<Show> SxxExx"
   // when it acts on one episode — never by the representative episode's own
@@ -133,7 +142,11 @@ function buildActionMediaItem(
   if (action.mediaItem) {
     const mi = serializeMediaItem(action.mediaItem);
     if (ruleSetType === "SERIES") {
-      const title = actionTargetTitle({ ...action, mediaItem: { ...action.mediaItem, type: "SERIES" } });
+      const title = actionTargetTitle({
+        ...action,
+        mediaItem: { ...action.mediaItem, type: "SERIES" },
+        memberEpisode: memberEpisodes.get(loneMemberId(action) ?? ""),
+      });
       return { ...mi, title, parentTitle: null };
     }
     return mi;
@@ -322,6 +335,18 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
     };
   }
 
+  // A series action on exactly one other episode is named after that episode.
+  const memberEpisodes = await loadMemberEpisodes([
+    ...pendingActions.map(loneMemberId),
+    ...filteredUpcoming.map((m) =>
+      loneMemberId({
+        actionType: m.ruleSet.actionType!,
+        matchedMediaItemIds: memberIdsFromItemData(m.itemData),
+        mediaItemId: m.mediaItemId,
+      }),
+    ),
+  ]);
+
   // 3. Group by rule set
   const groupMap = new Map<string, RuleSetGroup>();
 
@@ -331,7 +356,7 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       groupMap.set(a.ruleSetId!, { ruleSet: a.ruleSet!, items: [], count: 0 });
     }
     const group = groupMap.get(a.ruleSetId!)!;
-    const mi = buildActionMediaItem(a, a.ruleSet!.type);
+    const mi = buildActionMediaItem(a, a.ruleSet!.type, memberEpisodes);
     group.items.push({
       id: a.id,
       actionType: a.actionType,
@@ -366,7 +391,7 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       title: snapshot?.title,
       parentTitle: snapshot?.parentTitle,
     });
-    const memberIds = (snapshot?.memberIds as string[] | undefined) ?? [];
+    const memberIds = memberIdsFromItemData(m.itemData);
     const mi = buildActionMediaItem({
       actionType: m.ruleSet.actionType!,
       matchedMediaItemIds: memberIds,
@@ -375,7 +400,7 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       mediaItemParentTitle: m.mediaItem.parentTitle,
       ruleSetType: m.ruleSet.type,
       mediaItem: m.mediaItem,
-    }, m.ruleSet.type);
+    }, m.ruleSet.type, memberEpisodes);
 
     group.items.push({
       id: `rm_${m.id}`,
@@ -480,6 +505,9 @@ async function handleStatusGrouped(request: NextRequest, userId: string, status:
     statusMemberMap = new Map(members.map((m) => [m.id, { fileSize: m.fileSize ?? BigInt(0), playCount: m.playCount, lastPlayedAt: m.lastPlayedAt }]));
   }
 
+  // A series action on exactly one other episode is named after that episode.
+  const memberEpisodes = await loadMemberEpisodes(deduped.map(loneMemberId));
+
   const groupMap = new Map<string, RuleSetGroup>();
 
   for (const a of deduped) {
@@ -505,7 +533,7 @@ async function handleStatusGrouped(request: NextRequest, userId: string, status:
       groupMap.set(groupKey, { ruleSet: ruleSetData, items: [], count: 0 });
     }
     const group = groupMap.get(groupKey)!;
-    let mi = buildActionMediaItem(a, ruleSetData.type);
+    let mi = buildActionMediaItem(a, ruleSetData.type, memberEpisodes);
 
     // Apply series/music aggregation from member items
     if (a.matchedMediaItemIds.length > 0) {

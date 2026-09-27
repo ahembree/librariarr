@@ -16,7 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { LayoutGrid, TableProperties, List, Clock, HardDrive } from "lucide-react";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { useCardSize } from "@/hooks/use-card-size";
-import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
+import { useCardDisplay, SEASON_EPISODE_TOGGLES } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
@@ -240,7 +240,7 @@ export default function SeasonDetailPage() {
             {viewMode === "cards" && (
               <>
                 <CardSizeControl size={size} onChange={setSize} />
-                <CardDisplayControl prefs={prefs} config={TOGGLE_CONFIGS.SERIES_EPISODES} onToggle={setVisible} />
+                <CardDisplayControl prefs={prefs} config={SEASON_EPISODE_TOGGLES} onToggle={setVisible} />
               </>
             )}
           </div>

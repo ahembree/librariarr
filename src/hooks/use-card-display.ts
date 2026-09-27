@@ -101,9 +101,10 @@ export const TOGGLE_CONFIGS: Record<CardLibraryType, ToggleConfig> = {
       { key: "dynamicRange", label: "Dynamic Range" },
       { key: "audioProfile", label: "Audio Profile" },
     ],
+    // The All Episodes grid heads each card "<Show> SxxExx", so its one extra
+    // line is the episode's own title.
     metadata: [
       { key: "episodeTitle", label: "Episode Title" },
-      { key: "episodeLabel", label: "Episode Label" },
       { key: "duration", label: "Duration" },
       { key: "fileSize", label: "File Size" },
     ],
@@ -131,6 +132,20 @@ export const TOGGLE_CONFIGS: Record<CardLibraryType, ToggleConfig> = {
       { key: "fileSize", label: "File Size" },
     ],
   },
+};
+
+/**
+ * A season's own episode grid shares the SERIES_EPISODES preferences, but it
+ * sits under its show's heading and titles each card "E01 — <episode>", so it
+ * offers the SxxExx label instead of the episode title.
+ */
+export const SEASON_EPISODE_TOGGLES: ToggleConfig = {
+  badges: TOGGLE_CONFIGS.SERIES_EPISODES.badges,
+  metadata: [
+    { key: "episodeLabel", label: "Episode Label" },
+    { key: "duration", label: "Duration" },
+    { key: "fileSize", label: "File Size" },
+  ],
 };
 
 function loadFromStorage(): AllCardDisplayPreferences {

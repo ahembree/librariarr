@@ -48,7 +48,8 @@ export default function AllEpisodesPage() {
   const { servers } = useServers();
   const [items, setItems] = useState<MediaListItem[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>({});
-  const [sortBy, setSortBy] = useState("title");
+  // Cards are headed "<Show> SxxExx", so they list by show, then SxxExx.
+  const [sortBy, setSortBy] = useState("parentTitle");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [loading, setLoading] = useState(true);
   // The first screenful arrives before the rest of the library; consumers that

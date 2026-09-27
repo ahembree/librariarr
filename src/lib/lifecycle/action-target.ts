@@ -2,21 +2,52 @@
 import { actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
 import { formatEpisodeTitle, seriesTitleOf, type MediaTitleParts } from "@/lib/media/display-title";
 
+/** An episode as far as naming it goes: its own title and its SxxExx. */
+export interface MemberEpisode {
+  title?: string | null;
+  seasonNumber?: number | null;
+  episodeNumber?: number | null;
+}
+
 export interface ActionTargetParts {
   actionType: string;
   /** The episodes a member-scoped action acts on. */
   matchedMediaItemIds?: readonly string[] | null;
   mediaItem: MediaTitleParts & { id: string; title: string; parentTitle: string | null };
+  /**
+   * The one episode a member-scoped action acts on when that episode is NOT
+   * the item the action is stored against (see `loneMemberId`). A series match
+   * is stored against the show's lowest-id episode, which need not be one of
+   * the episodes it matched, so the caller has to look this one up; without it
+   * the action is named by its show.
+   */
+  memberEpisode?: MemberEpisode | null;
 }
 
 function isSeriesAction(action: ActionTargetParts): boolean {
   return action.mediaItem.type === "SERIES" || action.actionType.endsWith("_SONARR");
 }
 
-/** Whether a series action acts on exactly one episode: the one it is stored against. */
-function targetsOneEpisode(action: ActionTargetParts): boolean {
+/**
+ * The id of the one episode a member-scoped action acts on when it is not the
+ * action's own item — the episode whose numbers the caller must supply as
+ * `memberEpisode` — else null.
+ */
+export function loneMemberId(action: {
+  actionType: string;
+  matchedMediaItemIds?: readonly string[] | null;
+  mediaItemId?: string | null;
+}): string | null {
   const members = action.matchedMediaItemIds ?? [];
-  return actionHonorsMemberIds(action.actionType) && members.length === 1 && members[0] === action.mediaItem.id;
+  if (!actionHonorsMemberIds(action.actionType) || members.length !== 1) return null;
+  return members[0] !== action.mediaItemId ? members[0] : null;
+}
+
+/** The one episode a series action acts on, when it acts on exactly one. */
+function targetEpisode(action: ActionTargetParts): MemberEpisode | null {
+  const members = action.matchedMediaItemIds ?? [];
+  if (!actionHonorsMemberIds(action.actionType) || members.length !== 1) return null;
+  return members[0] === action.mediaItem.id ? action.mediaItem : (action.memberEpisode ?? null);
 }
 
 /**
@@ -33,7 +64,14 @@ function targetsOneEpisode(action: ActionTargetParts): boolean {
 export function actionTargetTitle(action: ActionTargetParts): string {
   const item = action.mediaItem;
   if (!isSeriesAction(action)) return item.title;
-  return targetsOneEpisode(action) ? formatEpisodeTitle(item) : seriesTitleOf(item);
+  const episode = targetEpisode(action);
+  if (!episode) return seriesTitleOf(item);
+  return formatEpisodeTitle({
+    title: episode.title,
+    parentTitle: item.parentTitle,
+    seasonNumber: episode.seasonNumber,
+    episodeNumber: episode.episodeNumber,
+  });
 }
 
 export interface ActionTitleSnapshot {
@@ -58,12 +96,12 @@ export interface ActionTitleSnapshot {
 export function actionTitleSnapshot(action: ActionTargetParts): ActionTitleSnapshot {
   const item = action.mediaItem;
   if (!isSeriesAction(action)) return { mediaItemTitle: item.title, mediaItemParentTitle: item.parentTitle };
-  const one = targetsOneEpisode(action);
+  const episode = targetEpisode(action);
   return {
     mediaItemTitle: seriesTitleOf(item),
     mediaItemParentTitle: null,
-    mediaItemSeasonNumber: one ? (item.seasonNumber ?? null) : null,
-    mediaItemEpisodeNumber: one ? (item.episodeNumber ?? null) : null,
+    mediaItemSeasonNumber: episode?.seasonNumber ?? null,
+    mediaItemEpisodeNumber: episode?.episodeNumber ?? null,
   };
 }
 

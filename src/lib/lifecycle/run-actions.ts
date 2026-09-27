@@ -2,7 +2,8 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
 import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
-import { actionTargetTitle, actionTitleSnapshot } from "@/lib/lifecycle/action-target";
+import { actionTargetTitle, actionTitleSnapshot, loneMemberId } from "@/lib/lifecycle/action-target";
+import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
 
 /**
  * Action configuration shared by rule-based and ad-hoc (query page) execution.
@@ -115,10 +116,16 @@ export async function executeActionsForItems(
   // Once the Arr instance fails at the host level, the remaining items fail
   // with that same error instead of each paying the retry budget again.
   const unreachable = new UnreachableInstances();
+  // An item acted on through exactly one OTHER episode is named after it.
+  const loneMember = (item: ActionItem) =>
+    loneMemberId({ actionType, matchedMediaItemIds: episodeIdMap.get(item.id), mediaItemId: item.id });
+  const memberEpisodes = await loadMemberEpisodes(items.map(loneMember));
 
   for (const item of items) {
     const matchedMediaItemIds = episodeIdMap.get(item.id) ?? [];
-    const title = actionTargetTitle({ actionType, matchedMediaItemIds, mediaItem: item });
+    const memberEpisode = memberEpisodes.get(loneMember(item) ?? "");
+    const target = { actionType, matchedMediaItemIds, mediaItem: item, memberEpisode };
+    const title = actionTargetTitle(target);
     // Surface the live sub-step for this item (tags → main action) to the bar.
     const reportStep = onProgress
       ? (step: string) => onProgress({ done: processed, total, current: { title, step } })
@@ -137,6 +144,7 @@ export async function executeActionsForItems(
         matchedMediaItemIds,
         addArrTags: config.addArrTags,
         removeArrTags: config.removeArrTags,
+        memberEpisode,
         mediaItem: item,
       }, reportStep);
 
@@ -187,7 +195,7 @@ export async function executeActionsForItems(
           data: {
             userId,
             mediaItemId: item.id,
-            ...actionTitleSnapshot({ actionType, matchedMediaItemIds, mediaItem: item }),
+            ...actionTitleSnapshot(target),
             ruleSetId: history.ruleSetId,
             ruleSetName: history.ruleSetName,
             ruleSetType: history.ruleSetType,
@@ -220,7 +228,7 @@ export async function executeActionsForItems(
         data: {
           userId,
           mediaItemId: item.id,
-          ...actionTitleSnapshot({ actionType, matchedMediaItemIds, mediaItem: item }),
+          ...actionTitleSnapshot(target),
           ruleSetId: history.ruleSetId,
           ruleSetName: history.ruleSetName,
           ruleSetType: history.ruleSetType,

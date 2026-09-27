@@ -6,7 +6,7 @@ import { LidarrClient } from "@/lib/arr/lidarr-client";
 import { logger } from "@/lib/logger";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { actionHonorsMemberIds, formatActionLabel, supportsSearchAfter } from "@/lib/lifecycle/action-types";
-import { actionTargetTitle } from "@/lib/lifecycle/action-target";
+import { actionTargetTitle, type MemberEpisode } from "@/lib/lifecycle/action-target";
 import { seriesTitleOf } from "@/lib/media/display-title";
 
 // Re-export constants so server-side consumers can import from here too
@@ -66,6 +66,8 @@ export interface ActionRecord {
   addArrTags: string[];
   removeArrTags: string[];
   skipTitleValidation?: boolean;
+  /** The one other episode a member-scoped action acts on, for naming it (see `actionTargetTitle`). */
+  memberEpisode?: MemberEpisode | null;
   mediaItem: {
     id: string;
     title: string;

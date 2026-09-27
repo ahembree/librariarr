@@ -4,7 +4,8 @@ import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifec
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
-import { actionTargetTitle, actionTitleSnapshot, type ActionTargetParts } from "@/lib/lifecycle/action-target";
+import { actionTargetTitle, actionTitleSnapshot, loneMemberId, type ActionTargetParts } from "@/lib/lifecycle/action-target";
+import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
 import { formatMediaItemTitle, seriesTitleOf } from "@/lib/media/display-title";
 import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { arrExternalIdsOf, arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
@@ -623,6 +624,12 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     failures: { title: string; error: string }[];
   }>();
 
+  // A series action on exactly one episode other than the one it is stored
+  // against is named after that episode ("<Show> SxxExx"), so look those up —
+  // once for the run as scheduled, and again below for any that pass 1 narrows
+  // down to one.
+  const memberEpisodes = await loadMemberEpisodes(pendingActions.map(loneMemberId));
+
   // PASS 1 — cancel or narrow. Every check here runs BEFORE the ceiling is
   // counted, so the count is what the run would actually destroy: counting the
   // raw pending list included actions about to be cancelled as stale, excepted
@@ -644,7 +651,11 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     }
 
     const mediaItem = action.mediaItem;
-    const target = actionTargetTitle({ ...action, mediaItem });
+    const target = actionTargetTitle({
+      ...action,
+      mediaItem,
+      memberEpisode: memberEpisodes.get(loneMemberId(action) ?? ""),
+    });
 
     // Permanent-invalidity backstop: a MUSIC rule set with Seerr criteria can
     // never evaluate (Seerr has no music requests), so its matches are the
@@ -785,7 +796,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       protectedGroupsByUser.get(action.userId)?.has(groupKey)
     ) {
       await prisma.lifecycleAction.delete({ where: { id: action.id } });
-      logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${mediaItem.parentTitle}" — an episode/track of it is excluded via lifecycle exception and a ${action.actionType} cannot exclude it`);
+      logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${target}" — an episode/track of it is excluded via lifecycle exception and a ${action.actionType} cannot exclude it`);
       continue;
     }
 
@@ -861,6 +872,16 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       `(${currentMatches.length} current matches across ${ruleSetIds.length} rule sets)`,
   );
 
+  // Pass 1 can narrow a member-scoped action down to one episode it was not
+  // stored against; name those too.
+  for (const [id, episode] of await loadMemberEpisodes(
+    executable
+      .map(({ action, filteredMatchedIds }) => loneMemberId({ ...action, matchedMediaItemIds: filteredMatchedIds }))
+      .filter((id) => id && !memberEpisodes.has(id)),
+  )) {
+    memberEpisodes.set(id, episode);
+  }
+
   // PASS 2 — execute what survived.
   // Arr instances that failed at the host level this run: their remaining
   // actions stay PENDING for the next run rather than each paying the client's
@@ -880,8 +901,15 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     }
 
     // The action as it runs — with the members pass 1 left it — which is also
-    // what its log line and notifications name (see `executedTitle`).
-    const running = { ...action, matchedMediaItemIds: filteredMatchedIds, mediaItem };
+    // what its log line, notifications and history name (see `executedTitle`).
+    const running = {
+      ...action,
+      matchedMediaItemIds: filteredMatchedIds,
+      mediaItem,
+      memberEpisode: memberEpisodes.get(
+        loneMemberId({ ...action, matchedMediaItemIds: filteredMatchedIds }) ?? "",
+      ),
+    };
     try {
       await executeAction(running);
 
@@ -926,6 +954,9 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
             status: "COMPLETED",
             executedAt: new Date(),
             deletedBytes,
+            // What it acted on, not what was scheduled: pass 1 may have dropped
+            // members that stopped matching or were excepted since.
+            matchedMediaItemIds: filteredMatchedIds,
             ...actionTitleSnapshot(running),
           },
         }),
@@ -968,6 +999,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
           status: "FAILED",
           error: msg,
           executedAt: new Date(),
+          matchedMediaItemIds: filteredMatchedIds,
           ...actionTitleSnapshot(running),
         },
       });
