@@ -26,7 +26,7 @@ export const API_SCOPES = [
 
 export type ApiScope = (typeof API_SCOPES)[number];
 
-export interface ApiScopeInfo {
+interface ApiScopeInfo {
   label: string;
   description: string;
   access: "read" | "write";

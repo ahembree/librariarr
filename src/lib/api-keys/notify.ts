@@ -1,13 +1,6 @@
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { buildApiKeyEmbed, sendDiscordNotification } from "@/lib/discord/client";
-
-export interface NotifiedApiKey {
-  name: string;
-  prefix: string;
-  scopes: readonly string[];
-  expiresAt: Date | null;
-}
+import { buildApiKeyEmbed, sendDiscordNotification, type ApiKeyEmbedKey } from "@/lib/discord/client";
 
 /**
  * Tell Discord an API key was created or deleted, when a webhook is set and
@@ -21,7 +14,7 @@ export interface NotifiedApiKey {
 export async function notifyApiKeyChange(
   userId: string,
   event: "created" | "deleted",
-  key: NotifiedApiKey,
+  key: ApiKeyEmbedKey,
 ): Promise<void> {
   try {
     const settings = await prisma.appSettings.findUnique({

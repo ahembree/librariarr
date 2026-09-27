@@ -451,7 +451,7 @@ export function resetApiHoldNotices(): void {
   lastApiHoldNoticeAt = Number.NEGATIVE_INFINITY;
 }
 
-export interface ExecuteLifecycleOptions {
+interface ExecuteLifecycleOptions {
   /**
    * The name of the API key that queued this run (`POST /api/v1/jobs/execution`).
    * Such a run is also held by the public API's destructive limits — see

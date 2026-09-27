@@ -18,7 +18,7 @@ import { logger } from "@/lib/logger";
 export type RunNowJob = "sync" | "detection" | "execution";
 
 /** `jobs`: how many jobs this call queued — for a sync, one per enabled server not already syncing. */
-export type RunNowResult = { ok: true; jobs: number } | { ok: false; error: string };
+type RunNowResult = { ok: true; jobs: number } | { ok: false; error: string };
 
 export async function runJobNow(
   userId: string,

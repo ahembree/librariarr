@@ -106,10 +106,6 @@ interface ApiKeyRow {
 
 type Lookup = { row: ApiKeyRow | null } | { verificationLimitedMs: number | undefined };
 
-// What a full-listing read costs; defined with the other client-safe limits
-// because the OpenAPI document quotes it.
-export { FULL_LISTING_REQUEST_COST };
-
 /**
  * A valid key refused for its scope or its request budget is logged at WARN —
  * a read-only key probing write endpoints is exactly what an audit log is for —
@@ -124,14 +120,14 @@ function warnOnce(throttleKey: string, message: string): void {
 
 const API_KEY_GUARD = Symbol.for("librariarr.apiKeyGuard");
 
-export interface ApiKeyGuardInfo {
+interface ApiKeyGuardInfo {
   /** The scope the handler requires; `null` = any valid key (introspection). */
   scope: ApiScope | null;
   /** Every GET returns a whole listing, charged `FULL_LISTING_REQUEST_COST`. */
   fullListing: boolean;
 }
 
-export interface ApiKeyGuardOptions {
+interface ApiKeyGuardOptions {
   /**
    * The route has no paging: every GET returns the whole listing (every rule
    * match with its stored item, all action history, every exception), so it
@@ -192,7 +188,7 @@ export function getApiKeyGuard(handler: unknown): ApiKeyGuardInfo | undefined {
   return (handler as unknown as Record<symbol, ApiKeyGuardInfo | undefined>)[API_KEY_GUARD];
 }
 
-export type ApiKeyAuthResult =
+type ApiKeyAuthResult =
   | { ok: true; principal: ApiKeyPrincipal }
   | { ok: false; response: Response };
 

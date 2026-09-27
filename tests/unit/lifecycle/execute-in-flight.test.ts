@@ -2,20 +2,27 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   tryBeginExecute,
   endExecute,
-  isExecuteInFlight,
   queryExecuteKey,
   _resetExecuteInFlightForTesting,
 } from "@/lib/lifecycle/execute-in-flight";
+
+/** Whether a run holds `scope` (or, given one, `item`): probed by claiming it and letting go. */
+function running(scope: string, item?: string): boolean {
+  const items = item === undefined ? undefined : [item];
+  if (!tryBeginExecute(scope, items)) return true;
+  endExecute(scope, items);
+  return false;
+}
 
 describe("lifecycle execute single-flight registry", () => {
   beforeEach(() => _resetExecuteInFlightForTesting());
 
   it("claims a free key and refuses a second claim until it is released", () => {
     expect(tryBeginExecute("rs-1")).toBe(true);
-    expect(isExecuteInFlight("rs-1")).toBe(true);
+    expect(running("rs-1")).toBe(true);
     expect(tryBeginExecute("rs-1")).toBe(false);
     endExecute("rs-1");
-    expect(isExecuteInFlight("rs-1")).toBe(false);
+    expect(running("rs-1")).toBe(false);
     expect(tryBeginExecute("rs-1")).toBe(true);
   });
 
@@ -23,13 +30,13 @@ describe("lifecycle execute single-flight registry", () => {
     expect(tryBeginExecute("rs-1")).toBe(true);
     expect(tryBeginExecute("rs-2")).toBe(true);
     endExecute("rs-1");
-    expect(isExecuteInFlight("rs-2")).toBe(true);
+    expect(running("rs-2")).toBe(true);
   });
 
   it("releasing an unheld key is a no-op and does not disturb a held one", () => {
     expect(tryBeginExecute("rs-1")).toBe(true);
     endExecute("rs-2");
-    expect(isExecuteInFlight("rs-1")).toBe(true);
+    expect(running("rs-1")).toBe(true);
   });
 
   it("is released after the guarded work throws, when released from a finally", async () => {
@@ -42,7 +49,7 @@ describe("lifecycle execute single-flight registry", () => {
       }
     };
     await expect(run()).rejects.toThrow("Arr exploded");
-    expect(isExecuteInFlight("rs-1")).toBe(false);
+    expect(running("rs-1")).toBe(false);
     expect(tryBeginExecute("rs-1")).toBe(true);
   });
 
@@ -68,16 +75,16 @@ describe("lifecycle execute single-flight registry", () => {
     it("lets disjoint items of one rule set run together", () => {
       expect(tryBeginExecute("rs-1", ["a"])).toBe(true);
       expect(tryBeginExecute("rs-1", ["b", "c"])).toBe(true);
-      expect(isExecuteInFlight("rs-1", "a")).toBe(true);
-      expect(isExecuteInFlight("rs-1", "c")).toBe(true);
-      expect(isExecuteInFlight("rs-1", "d")).toBe(false);
+      expect(running("rs-1", "a")).toBe(true);
+      expect(running("rs-1", "c")).toBe(true);
+      expect(running("rs-1", "d")).toBe(false);
     });
 
     it("refuses a claim that overlaps an item already running", () => {
       expect(tryBeginExecute("rs-1", ["a", "b"])).toBe(true);
       expect(tryBeginExecute("rs-1", ["b", "z"])).toBe(false);
       // The refused claim took nothing: z is still free.
-      expect(isExecuteInFlight("rs-1", "z")).toBe(false);
+      expect(running("rs-1", "z")).toBe(false);
       expect(tryBeginExecute("rs-1", ["z"])).toBe(true);
     });
 
@@ -87,25 +94,25 @@ describe("lifecycle execute single-flight registry", () => {
       endExecute("rs-1", ["a"]);
       expect(tryBeginExecute("rs-1")).toBe(true);
       expect(tryBeginExecute("rs-1", ["b"])).toBe(false);
-      expect(isExecuteInFlight("rs-1", "b")).toBe(true);
+      expect(running("rs-1", "b")).toBe(true);
     });
 
     it("treats an empty item list as the whole scope", () => {
       expect(tryBeginExecute("rs-1", [])).toBe(true);
       expect(tryBeginExecute("rs-1", ["a"])).toBe(false);
       endExecute("rs-1", []);
-      expect(isExecuteInFlight("rs-1")).toBe(false);
+      expect(running("rs-1")).toBe(false);
     });
 
     it("releases only what a run claimed", () => {
       expect(tryBeginExecute("rs-1", ["a"])).toBe(true);
       expect(tryBeginExecute("rs-1", ["b"])).toBe(true);
       endExecute("rs-1", ["a"]);
-      expect(isExecuteInFlight("rs-1", "a")).toBe(false);
-      expect(isExecuteInFlight("rs-1", "b")).toBe(true);
+      expect(running("rs-1", "a")).toBe(false);
+      expect(running("rs-1", "b")).toBe(true);
       expect(tryBeginExecute("rs-1")).toBe(false);
       endExecute("rs-1", ["b"]);
-      expect(isExecuteInFlight("rs-1")).toBe(false);
+      expect(running("rs-1")).toBe(false);
       expect(tryBeginExecute("rs-1")).toBe(true);
     });
   });

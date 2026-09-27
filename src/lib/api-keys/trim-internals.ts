@@ -1,10 +1,6 @@
-import { gunzip } from "node:zlib";
-import { promisify } from "node:util";
 import { NextRequest } from "next/server";
 import { jsonResponse } from "@/lib/api/json-response";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
-
-const gunzipAsync = promisify(gunzip);
 
 /**
  * Drops a media server's addressing details from a JSON response before it
@@ -45,8 +41,7 @@ const gunzipAsync = promisify(gunzip);
  * plain JSON rather than a body this wrapper would have to inflate only to
  * compress it again; the trimmed body is re-emitted through `jsonResponse`
  * against the ORIGINAL request, so the caller still gets gzip when it asked
- * for it. A gzipped body is still inflated, should a handler compress anyway.
- * Status and every other header are preserved.
+ * for it. Status and every other header are preserved.
  */
 
 const FILE_PATH_KEYS = new Set(["filePath", "partFile"]);
@@ -116,16 +111,7 @@ export function withoutServerInternals<C>(handler: RouteHandler<C>): (request: N
     const response = await handler(withoutAcceptEncoding(request), context);
     if (!isJson(response) || response.body === null) return response;
 
-    const raw = new Uint8Array(await response.arrayBuffer());
-    const encoding = response.headers.get("content-encoding")?.trim().toLowerCase();
-    const text = encoding === "gzip"
-      ? (await gunzipAsync(raw)).toString("utf8")
-      : new TextDecoder().decode(raw);
-    // An empty JSON body (a 204-ish handler) has nothing to trim — pass the
-    // original through rather than re-emit `undefined`.
-    if (text.length === 0) return new Response(raw, { status: response.status, headers: response.headers });
-
-    const trimmed = trimServerInternals(JSON.parse(text));
+    const trimmed = trimServerInternals(await response.json());
     const headers = new Headers();
     response.headers.forEach((value, key) => {
       if (!BODY_HEADERS.has(key.toLowerCase())) headers.set(key, value);

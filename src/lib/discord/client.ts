@@ -169,10 +169,15 @@ export function buildMatchChangeEmbed(
  * session that minted it, so this is the one notice that reveals a session
  * someone else got hold of. Blue for created, grey for deleted; never the key.
  */
-export function buildApiKeyEmbed(
-  event: "created" | "deleted",
-  key: { name: string; prefix: string; scopes: readonly string[]; expiresAt: Date | null },
-): DiscordEmbed {
+/** The fields of an API key a created/deleted notification shows. */
+export interface ApiKeyEmbedKey {
+  name: string;
+  prefix: string;
+  scopes: readonly string[];
+  expiresAt: Date | null;
+}
+
+export function buildApiKeyEmbed(event: "created" | "deleted", key: ApiKeyEmbedKey): DiscordEmbed {
   const created = event === "created";
   return {
     title: created ? "API Key Created" : "API Key Deleted",

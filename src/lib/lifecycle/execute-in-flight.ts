@@ -110,17 +110,6 @@ export function endExecute(scope: string, itemIds?: readonly string[]): void {
   if (!held.whole && held.items.size === 0) inFlight.delete(scope);
 }
 
-/**
- * True while anything in `scope` runs, or — given `itemId` — while a run covers
- * that item (the whole scope, or the item by name).
- */
-export function isExecuteInFlight(scope: string, itemId?: string): boolean {
-  const held = inFlight.get(scope);
-  if (!held) return false;
-  if (itemId === undefined) return held.whole || held.items.size > 0;
-  return held.whole || held.items.has(itemId);
-}
-
 /** Test-only: release every scope. */
 export function _resetExecuteInFlightForTesting(): void {
   inFlight.clear();

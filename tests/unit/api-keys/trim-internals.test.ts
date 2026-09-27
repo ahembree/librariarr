@@ -177,20 +177,6 @@ describe("withoutServerInternals", () => {
     expect(JSON.stringify(body)).not.toContain("machineId");
   });
 
-  it("returns a plain body when the handler compressed but the wrapper's client did not ask for gzip", async () => {
-    // A handler that gzips regardless of the caller (the internal route saw a
-    // different request) must still come back readable.
-    const big = { servers: Array.from({ length: 300 }, (_, i) => ({ type: "EMBY", url: `http://10.1.1.${i % 250}`, name: `n${i}`.padEnd(30, "x") })) };
-    const wrapped = withoutServerInternals(async () =>
-      jsonResponse(new NextRequest("http://localhost/x", { headers: { "accept-encoding": "gzip" } }), big),
-    );
-    const res = await wrapped(request());
-    expect(res.headers.get("content-encoding")).toBeNull();
-    const parsed = (await res.json()) as { servers: Record<string, unknown>[] };
-    expect(parsed.servers).toHaveLength(300);
-    expect(parsed.servers.every((s) => !("url" in s))).toBe(true);
-  });
-
   it("returns a non-JSON response untouched", async () => {
     const original = new Response("url machineId filePath", { status: 200, headers: { "content-type": "text/plain" } });
     const wrapped = withoutServerInternals(async () => original);

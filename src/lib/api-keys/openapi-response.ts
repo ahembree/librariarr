@@ -3,9 +3,9 @@ import { jsonResponse } from "@/lib/api/json-response";
 import { getExternalBaseUrl } from "@/lib/url";
 import { buildOpenApiDocument } from "./openapi";
 
-export const OPENAPI_FILENAME = "librariarr-openapi.json";
+const OPENAPI_FILENAME = "librariarr-openapi.json";
 
-export interface OpenApiResponseOptions {
+interface OpenApiResponseOptions {
   /**
    * Serve the `servers` URL as the relative `/api/v1`, for the in-app Swagger
    * viewer. A relative URL resolves against the page's own address, while the

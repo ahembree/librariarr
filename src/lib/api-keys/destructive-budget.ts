@@ -36,11 +36,11 @@ function spends(): Spend[] {
   return (g[STATE] ??= []);
 }
 
-export type DestructiveRefusal =
+type DestructiveRefusal =
   | { ok: false; status: 400; error: string }
   | { ok: false; status: 429; error: string; retryAfterSeconds: number };
 
-export type DestructiveReservation = { ok: true; remaining: number } | DestructiveRefusal;
+type DestructiveReservation = { ok: true; remaining: number } | DestructiveRefusal;
 
 /**
  * Reserve `count` destructive items for one request, or refuse the whole

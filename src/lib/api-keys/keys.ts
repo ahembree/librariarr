@@ -58,7 +58,7 @@ function randomBase62(length: number): string {
   return out;
 }
 
-export interface GeneratedApiKey {
+interface GeneratedApiKey {
   /** The plaintext — returned to the user once and never stored. */
   key: string;
   prefix: string;

@@ -18,13 +18,13 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import {
-  FULL_LISTING_REQUEST_COST,
   _resetVerifiedApiKeysForTesting,
   authenticateApiKey,
   getApiKeyGuard,
   withApiKey,
 } from "@/lib/api-keys/guard";
 import { generateApiKey, hashApiKey, newApiKey } from "@/lib/api-keys/keys";
+import { FULL_LISTING_REQUEST_COST } from "@/lib/api-keys/limits";
 import {
   apiKeyRequestLimiter,
   apiKeyUnknownLookupFloor,
@@ -65,8 +65,7 @@ function serveTable() {
   m.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => {
     const row = table.get(where.id);
     if (!row) return null;
-    const { keyHash: _hash, ...visible } = row;
-    return visible;
+    return Object.fromEntries(Object.entries(row).filter(([field]) => field !== "keyHash"));
   });
 }
 

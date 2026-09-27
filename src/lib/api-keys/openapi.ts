@@ -394,7 +394,7 @@ function pathParams(path: string) {
   }));
 }
 
-export interface OpenApiDocumentOptions {
+interface OpenApiDocumentOptions {
   /**
    * Make `baseUrl` a template the reader fills in (`{baseUrl}` with a default),
    * for a document published away from any instance — the docs site — where

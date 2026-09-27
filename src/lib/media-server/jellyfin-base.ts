@@ -121,7 +121,7 @@ function mapStreamType(type: string): number {
  * into the query string. Encoding keeps `/`, `?`, `#` and `%` inside the
  * segment; `.` and `..` are refused because encoding leaves them dot segments.
  */
-export function sessionPath(sessionId: string, endpoint: "Message" | "Playing/Stop"): string {
+function sessionPath(sessionId: string, endpoint: "Message" | "Playing/Stop"): string {
   if (sessionId === "" || sessionId === "." || sessionId === "..") {
     throw new Error(`Invalid session id "${sessionId}"`);
   }
