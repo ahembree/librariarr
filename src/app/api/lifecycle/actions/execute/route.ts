@@ -18,6 +18,7 @@ import { eventBus } from "@/lib/events/event-bus";
 import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
+import { memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 import { getApiKeyPrincipal } from "@/lib/api-keys/principal";
 import { destructiveRefusalResponse, reserveApiDestructive } from "@/lib/api-keys/destructive-budget";
 
@@ -36,9 +37,7 @@ function storedMemberIds(
 ): Map<string, string[]> {
   const byItem = new Map<string, string[]>();
   for (const m of matches) {
-    const memberIds = (m.itemData as { memberIds?: unknown } | null)?.memberIds;
-    if (!Array.isArray(memberIds)) continue;
-    const ids = memberIds.filter((id): id is string => typeof id === "string");
+    const ids = memberIdsFromItemData(m.itemData);
     if (ids.length > 0) byItem.set(m.mediaItemId, ids);
   }
   return byItem;

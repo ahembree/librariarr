@@ -483,6 +483,50 @@ describe("grouped lifecycle actions through the scheduled executor (e2e)", () =>
       expect(identityWarnings()).toEqual([]);
     });
 
+    it("keeps the Arr id a stale match was made with, so a same-titled show is refused", async () => {
+      const prisma = getTestPrisma();
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      // Episode scope and no Arr criteria: the engine returns no external ids.
+      const [pilot, second] = await seedShow(library.id, "Battlestar Galactica", "71173");
+      const ruleSet = await createTestRuleSet(user.id, {
+        type: "SERIES",
+        seriesScope: false,
+        rules: UNPLAYED,
+        serverIds: [server.id],
+        actionEnabled: true,
+        actionType: "DO_NOTHING",
+        actionDelayDays: 0,
+      });
+      await prisma.ruleSet.update({ where: { id: ruleSet.id }, data: { stickyMatches: true } });
+      await processLifecycleRules(user.id);
+
+      // The match records the id it was made with.
+      const [match] = await prisma.ruleMatch.findMany({ where: { ruleSetId: ruleSet.id } });
+      expect((match.itemData as { externalIds?: unknown }).externalIds).toEqual([
+        { source: "TVDB", externalId: "71173" },
+      ]);
+
+      // Its action goes away before running (actions turned off and on), then a
+      // Fix Match moves the row to the same-titled 2004 show, which the rules no
+      // longer select. The sticky rule set keeps the old match and schedules it again.
+      await prisma.lifecycleAction.deleteMany({ where: { ruleSetId: ruleSet.id } });
+      for (const ep of [pilot, second]) {
+        await prisma.mediaItemExternalId.updateMany({ where: { mediaItemId: ep.id, source: "TVDB" }, data: { externalId: "73545" } });
+        await prisma.mediaItem.update({ where: { id: ep.id }, data: { playCount: 3 } });
+      }
+      await processLifecycleRules(user.id);
+      const [rescheduled] = await prisma.lifecycleAction.findMany({ where: { ruleSetId: ruleSet.id } });
+      expect(rescheduled.mediaItemExternalId).toBe("71173");
+
+      await makeDue(ruleSet.id);
+      await executeLifecycleActions(user.id);
+      expect(await prisma.lifecycleAction.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
+      expect(identityWarnings()).toHaveLength(1);
+      expect(identityWarnings()[0]).toContain("73545");
+    });
+
     it("drops the item when the new title does not match", async () => {
       const { prisma, user, movie, ruleSet } = await stickyMovie();
       await prisma.mediaItem.update({ where: { id: movie.id }, data: { title: "Hackers", year: 1995, playCount: 4 } });
@@ -493,6 +537,47 @@ describe("grouped lifecycle actions through the scheduled executor (e2e)", () =>
 
       expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
       expect(await prisma.lifecycleAction.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
+    });
+  });
+
+  describe("the one-time upgrade hold", () => {
+    // A rule set with no delay has nothing pending between runs — the old guard
+    // cancelled each action the moment it was scheduled — so the migration had
+    // no row to move. Its actions are held when they are scheduled instead.
+    it("holds a series action with no delay until the hold passes, and not a movie's", async () => {
+      const prisma = getTestPrisma();
+      const user = await createTestUser();
+      const heldUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      await prisma.appSettings.create({ data: { userId: user.id, groupedActionsHeldUntil: heldUntil } });
+      const server = await createTestServer(user.id);
+      const shows = await createTestLibrary(server.id, { type: "SERIES" });
+      await seedShow(shows.id);
+      const films = await createTestLibrary(server.id, { type: "MOVIE" });
+      await createTestMediaItem(films.id, { type: "MOVIE", title: "Dune", year: 2021, playCount: 0 });
+
+      const series = await createTestRuleSet(user.id, {
+        type: "SERIES", seriesScope: true, rules: UNPLAYED, serverIds: [server.id],
+        actionEnabled: true, actionType: "DO_NOTHING", actionDelayDays: 0,
+      });
+      const movies = await createTestRuleSet(user.id, {
+        type: "MOVIE", rules: UNPLAYED, serverIds: [server.id],
+        actionEnabled: true, actionType: "DO_NOTHING", actionDelayDays: 0,
+      });
+
+      await processLifecycleRules(user.id);
+      const [showAction] = await prisma.lifecycleAction.findMany({ where: { ruleSetId: series.id } });
+      expect(showAction.scheduledFor.getTime()).toBe(heldUntil.getTime());
+
+      await executeLifecycleActions(user.id);
+      expect((await prisma.lifecycleAction.findUnique({ where: { id: showAction.id } }))?.status).toBe("PENDING");
+      const [movieAction] = await prisma.lifecycleAction.findMany({ where: { ruleSetId: movies.id } });
+      expect(movieAction.status).toBe("COMPLETED");
+
+      // The week is up.
+      await prisma.appSettings.update({ where: { userId: user.id }, data: { groupedActionsHeldUntil: new Date(Date.now() - 1000) } });
+      await makeDue(series.id);
+      await executeLifecycleActions(user.id);
+      expect((await prisma.lifecycleAction.findUnique({ where: { id: showAction.id } }))?.status).toBe("COMPLETED");
     });
   });
 });

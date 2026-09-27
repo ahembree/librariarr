@@ -34,13 +34,27 @@ WHERE la."status" = 'PENDING'
 -- as the title, no parent title. So the check cancelled every one of those
 -- actions when it came due; detection scheduled it again and it was cancelled
 -- again. They run from this release on, deleting ones included. None of them
--- has ever run, so the ones already pending are held until at least a week
--- after the upgrade: time to review them on the Pending page before they act
--- for the first time. Selected by that group snapshot rather than by the rule
--- set's current scope, which can have changed since they were scheduled.
--- (`scheduledFor` holds UTC, like every Prisma DateTime.)
+-- has ever run, so they are held until at least a week after the upgrade:
+-- time to review them on the Pending page before they act for the first time.
+--
+-- The hold is recorded on the install's settings rather than only applied to
+-- the actions pending now, because those are not all of them: a rule set with
+-- no delay has nothing pending between runs, and a cancelled action is only
+-- scheduled again at the next detection. Scheduling applies it to every series
+-- or artist action it creates until it passes. (DateTimes hold UTC.)
+ALTER TABLE "AppSettings" ADD COLUMN "groupedActionsHeldUntil" TIMESTAMP(3);
+UPDATE "AppSettings" SET "groupedActionsHeldUntil" = (NOW() AT TIME ZONE 'UTC') + INTERVAL '7 days';
+
+-- The ones already pending, selected by that group snapshot rather than by the
+-- rule set's current scope, which can have changed since they were scheduled.
 UPDATE "LifecycleAction" AS la
-SET "scheduledFor" = GREATEST(la."scheduledFor", (NOW() AT TIME ZONE 'UTC') + INTERVAL '7 days')
+SET "scheduledFor" = GREATEST(
+      la."scheduledFor",
+      COALESCE(
+        (SELECT s."groupedActionsHeldUntil" FROM "AppSettings" AS s WHERE s."userId" = la."userId"),
+        (NOW() AT TIME ZONE 'UTC') + INTERVAL '7 days'
+      )
+    )
 FROM "RuleSet" AS rs
 WHERE la."status" = 'PENDING'
   AND rs."id" = la."ruleSetId"

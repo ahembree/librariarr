@@ -45,6 +45,7 @@ vi.mock("@/lib/lifecycle/collections", () => ({
 import { processLifecycleRules, executeLifecycleActions } from "@/lib/lifecycle/processor";
 import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
 import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
+import { arrExternalIdsOf } from "@/lib/lifecycle/cross-server-copies";
 
 const prisma = getTestPrisma();
 
@@ -211,5 +212,32 @@ describe("cross-server copies of one title", () => {
 
     expect(cross.get(a.id)?.matchedRuleSets).toEqual(["Odd"]);
     expect(cross.get(b.id)?.matchedRuleSets).toEqual([]);
+  });
+});
+
+describe("arrExternalIdsOf", () => {
+  beforeEach(async () => {
+    await cleanDatabase();
+  });
+
+  it("reads the Arr family's id from the item, and loads it for items the engine returned without ids", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "MOVIE" });
+    const bare = await createTestMediaItem(library.id, { title: "Dune", type: "MOVIE" });
+    await createTestExternalId(bare.id, "TMDB", "438631");
+    await createTestExternalId(bare.id, "IMDB", "tt1160419");
+    const none = await createTestMediaItem(library.id, { title: "No Id", type: "MOVIE" });
+
+    const ids = await arrExternalIdsOf("MOVIE", [
+      // Carried ids win over the row, and only the Arr family's source counts.
+      { id: "carried", externalIds: [{ source: "IMDB", externalId: "tt0133093" }, { source: "TMDB", externalId: "603" }] },
+      { id: "carried-empty", externalIds: [] },
+      { id: bare.id },
+      { id: none.id },
+    ]);
+
+    expect(Object.fromEntries(ids)).toEqual({ carried: "603", [bare.id]: "438631" });
+    expect(Object.fromEntries(await arrExternalIdsOf("MOVIE", [{ id: bare.id }], { loadMissing: false }))).toEqual({});
   });
 });

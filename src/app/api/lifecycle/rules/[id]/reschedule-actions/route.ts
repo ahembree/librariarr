@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { groupScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped-action-hold";
 
 export async function POST(
   _request: NextRequest,
@@ -15,7 +16,7 @@ export async function POST(
 
   const ruleSet = await prisma.ruleSet.findFirst({
     where: { id, userId: session.userId },
-    select: { actionDelayDays: true },
+    select: { actionDelayDays: true, type: true },
   });
 
   if (!ruleSet) {
@@ -25,10 +26,25 @@ export async function POST(
   const scheduledFor = new Date();
   scheduledFor.setDate(scheduledFor.getDate() + ruleSet.actionDelayDays);
 
-  const result = await prisma.lifecycleAction.updateMany({
-    where: { ruleSetId: id, status: "PENDING" },
-    data: { scheduledFor },
-  });
+  // A show's or an artist's action keeps the one-time upgrade hold, as when it
+  // was scheduled (see grouped-action-hold.ts).
+  const hold = await loadGroupedActionHold(session.userId!);
+  const groupedFor = groupScheduledFor(scheduledFor, hold, ruleSet.type);
+
+  const [result] = await prisma.$transaction([
+    prisma.lifecycleAction.updateMany({
+      where: { ruleSetId: id, status: "PENDING" },
+      data: { scheduledFor },
+    }),
+    ...(groupedFor > scheduledFor
+      ? [
+          prisma.lifecycleAction.updateMany({
+            where: { ruleSetId: id, status: "PENDING", mediaItemTitle: { not: null }, mediaItemParentTitle: null },
+            data: { scheduledFor: groupedFor },
+          }),
+        ]
+      : []),
+  ]);
 
   return NextResponse.json({ updated: result.count });
 }

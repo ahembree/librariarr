@@ -11,6 +11,7 @@ import {
   createTestMediaItem,
   createTestRuleSet,
   createTestRuleMatch,
+  createTestExternalId,
 } from "../../setup/test-helpers";
 
 // Critical: redirect prisma to test database
@@ -207,6 +208,39 @@ describe("Lifecycle Actions", () => {
       expect(body.groups[0].items[0].estimated).toBe(true);
       expect(body.groups[0].items[0].actionType).toBe("DELETE_RADARR");
       expect(body.groups[0].items[0].mediaItem.id).toBe(item.id);
+    });
+
+    it("estimates a show's match at the one-time upgrade hold, and a movie's at its own delay", async () => {
+      const DAY = 24 * 60 * 60 * 1000;
+      const user = await createTestUser();
+      const heldUntil = new Date(Date.now() + 5 * DAY);
+      await getTestPrisma().appSettings.create({ data: { userId: user.id, groupedActionsHeldUntil: heldUntil } });
+      const server = await createTestServer(user.id);
+      const shows = await createTestLibrary(server.id, { type: "SERIES" });
+      const films = await createTestLibrary(server.id, { type: "MOVIE" });
+      const ep = await createTestMediaItem(shows.id, { title: "Pilot", type: "SERIES", parentTitle: "The Wire" });
+      const film = await createTestMediaItem(films.id, { title: "Dune", type: "MOVIE" });
+      const seriesRules = await createTestRuleSet(user.id, {
+        name: "Shows", type: "SERIES", seriesScope: true, enabled: true,
+        actionEnabled: true, actionType: "DELETE_SONARR", actionDelayDays: 1,
+      });
+      const movieRules = await createTestRuleSet(user.id, {
+        name: "Films", enabled: true, actionEnabled: true, actionType: "DELETE_RADARR", actionDelayDays: 1,
+      });
+      // As detection stores a show: the show as the title, no parent.
+      await createTestRuleMatch(seriesRules.id, ep.id, { id: ep.id, title: "The Wire", parentTitle: null, memberIds: [ep.id] });
+      await createTestRuleMatch(movieRules.id, film.id);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(GET, { url: "/api/lifecycle/actions" });
+      const body = await expectJson<{
+        groups: { ruleSet: { id: string }; items: { estimated: boolean; scheduledFor: string }[] }[];
+      }>(response, 200);
+      const show = body.groups.find((g) => g.ruleSet.id === seriesRules.id)!.items[0];
+      expect(show.estimated).toBe(true);
+      expect(new Date(show.scheduledFor).getTime()).toBe(heldUntil.getTime());
+      const movie = body.groups.find((g) => g.ruleSet.id === movieRules.id)!.items[0];
+      expect(new Date(movie.scheduledFor).getTime()).toBeLessThan(heldUntil.getTime() - 3 * DAY);
     });
 
     it("suppresses the estimated row when a completed action of the SAME type already ran", async () => {
@@ -980,6 +1014,66 @@ describe("Lifecycle Actions", () => {
       expect(executeAction).not.toHaveBeenCalled();
     });
 
+    it("refuses to retry an action whose item was re-identified since it was scheduled", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const pilot = await createTestMediaItem(library.id, {
+        title: "Miniseries Part 1", type: "SERIES", parentTitle: "Battlestar Galactica", seasonNumber: 1, episodeNumber: 1,
+      });
+      // A Fix Match moved the row to the same-titled 2004 show.
+      await createTestExternalId(pilot.id, "TVDB", "73545");
+      const ruleSet = await createTestRuleSet(user.id, { name: "Shows", type: "SERIES", seriesScope: true });
+      const prisma = getTestPrisma();
+      const action = await prisma.lifecycleAction.create({
+        data: {
+          userId: user.id, mediaItemId: pilot.id, ruleSetId: ruleSet.id, actionType: "DELETE_SONARR",
+          status: "FAILED", scheduledFor: new Date(), mediaItemTitle: "Battlestar Galactica",
+          mediaItemParentTitle: null, mediaItemYear: 1978, mediaItemExternalId: "71173",
+        },
+      });
+      await createTestRuleMatch(ruleSet.id, pilot.id, { id: pilot.id, title: "Battlestar Galactica", parentTitle: null });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRouteWithParams(actionRetry, { id: action.id }, {
+        url: `/api/lifecycle/actions/${action.id}`,
+        method: "POST",
+      });
+      const body = await expectJson<{ error: string }>(response, 409);
+      expect(body.error).toContain("73545");
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+      expect((await prisma.lifecycleAction.findUnique({ where: { id: action.id } }))?.status).toBe("FAILED");
+    });
+
+    it("retries a failed series action recorded as its show", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const pilot = await createTestMediaItem(library.id, {
+        title: "Pilot", type: "SERIES", parentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 1,
+      });
+      await createTestExternalId(pilot.id, "TVDB", "81189");
+      const ruleSet = await createTestRuleSet(user.id, { name: "Shows", type: "SERIES", seriesScope: true });
+      const action = await getTestPrisma().lifecycleAction.create({
+        data: {
+          userId: user.id, mediaItemId: pilot.id, ruleSetId: ruleSet.id, actionType: "DO_NOTHING",
+          status: "FAILED", scheduledFor: new Date(), mediaItemTitle: "Breaking Bad",
+          mediaItemParentTitle: null, mediaItemExternalId: "81189",
+        },
+      });
+      await createTestRuleMatch(ruleSet.id, pilot.id, { id: pilot.id, title: "Breaking Bad", parentTitle: null });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRouteWithParams(actionRetry, { id: action.id }, {
+        url: `/api/lifecycle/actions/${action.id}`,
+        method: "POST",
+      });
+      await expectJson(response, 200);
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).toHaveBeenCalledTimes(1);
+    });
+
     it("retries a FAILED action when no exception exists", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
@@ -1476,6 +1570,36 @@ describe("Lifecycle Actions", () => {
 
       // Not just the representative track the match is stored against.
       expect(await executedMembers()).toEqual([t1.id, t2.id].sort());
+    });
+
+    it("counts a whole-series delete by the show's seriesKey, not a same-titled show beside it", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const ep1 = await createTestMediaItem(library.id, {
+        title: "Miniseries", type: "SERIES", parentTitle: "Battlestar Galactica", seriesKey: "tvdb:73545", fileSize: BigInt(100),
+      });
+      await createTestMediaItem(library.id, {
+        title: "33", type: "SERIES", parentTitle: "Battlestar Galactica", seriesKey: "tvdb:73545", fileSize: BigInt(200),
+      });
+      // The 1978 show: same title, same library, a different series.
+      await createTestMediaItem(library.id, {
+        title: "Saga of a Star World", type: "SERIES", parentTitle: "Battlestar Galactica", seriesKey: "tvdb:71173", fileSize: BigInt(5000),
+      });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Shows", type: "SERIES", seriesScope: true, actionEnabled: true, actionType: "DELETE_SONARR", arrInstanceId: "arr-1",
+      });
+      await createTestRuleMatch(ruleSet.id, ep1.id, { id: ep1.id, title: "Battlestar Galactica", parentTitle: null });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id },
+      });
+      expect((await expectJson<{ executed: number }>(response, 200)).executed).toBe(1);
+      const [record] = await getTestPrisma().lifecycleAction.findMany({ where: { userId: user.id } });
+      expect(record.deletedBytes).toBe(BigInt(300));
     });
 
     it("refuses a whole-record delete of a series-scope match whose episode is excepted, from the members", async () => {
