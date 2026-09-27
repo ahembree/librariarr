@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
+import { actionTargetTitle, actionTitleSnapshot } from "@/lib/lifecycle/action-target";
 import { tryBeginExecute, endExecute } from "@/lib/lifecycle/execute-in-flight";
 import {
   findExceptedItemIds,
@@ -241,8 +242,7 @@ async function retryAction(
         status: "COMPLETED",
         executedAt: new Date(),
         error: null,
-        mediaItemTitle: mediaItem.title,
-        mediaItemParentTitle: mediaItem.parentTitle,
+        ...actionTitleSnapshot({ ...action, mediaItem }),
       },
     });
 
@@ -259,7 +259,7 @@ async function retryAction(
       },
     });
 
-    logger.info("Lifecycle", `Force-retried action ${id} for "${mediaItem.title}" — succeeded`);
+    logger.info("Lifecycle", `Force-retried action ${id} for "${actionTargetTitle({ ...action, mediaItem })}" — succeeded`);
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -269,7 +269,7 @@ async function retryAction(
       data: { error: msg, executedAt: new Date() },
     });
 
-    logger.error("Lifecycle", `Force-retry failed for "${mediaItem.title}"`, { error: describeActionError(error) });
+    logger.error("Lifecycle", `Force-retry failed for "${actionTargetTitle({ ...action, mediaItem })}"`, { error: describeActionError(error) });
 
     return NextResponse.json({ error: msg }, { status: 500 });
   }

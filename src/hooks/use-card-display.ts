@@ -46,7 +46,7 @@ const DEFAULTS: Record<CardLibraryType, CardDisplayPreferences> = {
   },
   SERIES_EPISODES: {
     badges: { resolution: true, dynamicRange: true, audioProfile: true },
-    metadata: { seriesName: true, episodeLabel: true, duration: true, fileSize: true },
+    metadata: { episodeTitle: true, episodeLabel: true, duration: true, fileSize: true },
     servers: true,
   },
   MUSIC: {
@@ -102,7 +102,7 @@ export const TOGGLE_CONFIGS: Record<CardLibraryType, ToggleConfig> = {
       { key: "audioProfile", label: "Audio Profile" },
     ],
     metadata: [
-      { key: "seriesName", label: "Series Name" },
+      { key: "episodeTitle", label: "Episode Title" },
       { key: "episodeLabel", label: "Episode Label" },
       { key: "duration", label: "Duration" },
       { key: "fileSize", label: "File Size" },

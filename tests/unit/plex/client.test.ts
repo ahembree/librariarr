@@ -613,6 +613,44 @@ describe("PlexClient", () => {
       expect(result[0].sessionId).toBe("abc");
     });
 
+    it("carries an episode's season and episode numbers, so it can be named by show and SxxExx", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            Metadata: [
+              {
+                title: "Pilot",
+                type: "episode",
+                parentTitle: "Season 1",
+                grandparentTitle: "Breaking Bad",
+                parentIndex: 1,
+                index: 1,
+                User: { id: "1", title: "Admin" },
+                Player: { product: "Plex Web", platform: "Chrome", state: "playing" },
+                Session: { id: "ep-session" },
+              },
+              {
+                title: "Teardrop",
+                type: "track",
+                parentTitle: "Mezzanine",
+                grandparentTitle: "Massive Attack",
+                parentIndex: 1,
+                index: 3,
+                User: { id: "1", title: "Admin" },
+                Player: { product: "Plexamp", platform: "iOS", state: "playing" },
+                Session: { id: "track-session" },
+              },
+            ],
+          },
+        },
+      });
+      const [episode, track] = await client.getSessions();
+      expect(episode).toMatchObject({ grandparentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 1 });
+      // A track's parentIndex/index are its disc and track numbers, not an SxxExx.
+      expect(track.seasonNumber).toBeUndefined();
+      expect(track.episodeNumber).toBeUndefined();
+    });
+
     it("falls back to the item sessionKey when no Session element is present", async () => {
       // Plex omits the Session element for some clients; without a fallback the
       // sessionId was "" and multiple such sessions collided on one key.

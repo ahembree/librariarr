@@ -89,6 +89,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import type { ChipColorCategory } from "@/lib/theme/chip-colors";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatFileSize, formatDuration } from "@/lib/format";
+import { formatEpisodeTitle, seriesTitleOf } from "@/lib/media/display-title";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn, generateId } from "@/lib/utils";
 import { QueryProgress, useStreamProgress } from "@/components/query-progress";
@@ -304,6 +305,16 @@ export interface LifecycleRulePageProps {
   embedded?: boolean;
 }
 
+/**
+ * A preview row's name. Detection groups a series in either scope, so every
+ * SERIES row is a show — named by the show, never by the representative
+ * episode it is stored against.
+ */
+function previewTitle(item: { title: string; parentTitle: string | null }, mediaType: string): string {
+  if (mediaType === "SERIES") return seriesTitleOf(item);
+  return item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title;
+}
+
 function formatResolution(resolution: string | null): string {
   if (!resolution) return "";
   const label = normalizeResolutionLabel(resolution);
@@ -507,9 +518,11 @@ function PreviewCardGrid({
                       )}
                       <MediaCard
                         imageUrl={`/api/media/${item.id}/image${mediaType !== "MOVIE" ? "?type=parent" : ""}`}
-                        title={item.parentTitle
-                          ? `${item.parentTitle} - ${item.title}`
-                          : item.title}
+                        title={mediaType === "SERIES"
+                          ? seriesTitleOf(item)
+                          : item.parentTitle
+                            ? `${item.parentTitle} - ${item.title}`
+                            : item.title}
                         fallbackIcon={fallbackIcon}
                         aspectRatio={aspectRatio}
                         onClick={() => onItemClick(item)}
@@ -517,7 +530,7 @@ function PreviewCardGrid({
                           <MediaHoverPopover
                             imageAspect={aspectRatio}
                             data={{
-                              title: item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title,
+                              title: previewTitle(item, mediaType),
                               year: item.year,
                               summary: item.summary,
                               contentRating: item.contentRating,
@@ -913,12 +926,25 @@ export function LifecycleRulePage({
   // Test Media
   const [showTestMediaDialog, setShowTestMediaDialog] = useState(false);
   const [testMediaSearch, setTestMediaSearch] = useState("");
-  const [testMediaResults, setTestMediaResults] = useState<Array<{ id: string; title: string; parentTitle?: string | null; year?: number | null; thumbUrl?: string | null; type: string }>>([]);
+  const [testMediaResults, setTestMediaResults] = useState<Array<{ id: string; title: string; parentTitle?: string | null; seasonNumber?: number | null; episodeNumber?: number | null; year?: number | null; thumbUrl?: string | null; type: string }>>([]);
   const [testMediaSearching, setTestMediaSearching] = useState(false);
-  const [testMediaSelected, setTestMediaSelected] = useState<{ id: string; title: string; parentTitle?: string | null; year?: number | null } | null>(null);
+  const [testMediaSelected, setTestMediaSelected] = useState<{ id: string; title: string; parentTitle?: string | null; seasonNumber?: number | null; episodeNumber?: number | null; year?: number | null } | null>(null);
   const [testMediaEvaluating, setTestMediaEvaluating] = useState(false);
   const [testMediaResult, setTestMediaResult] = useState<{ matches: boolean; matchedCriteria: MatchedCriterion[]; actualValues: Record<string, string> } | null>(null);
   const testMediaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // What Test Media evaluates: a show in series scope, otherwise one episode —
+  // its show and SxxExx, never its own title — or a movie or track.
+  const testMediaTitle = (item: {
+    title: string;
+    parentTitle?: string | null;
+    seasonNumber?: number | null;
+    episodeNumber?: number | null;
+  }) =>
+    scopeConfig && seriesScope
+      ? (item.parentTitle ?? item.title)
+      : mediaType === "SERIES"
+        ? formatEpisodeTitle(item)
+        : item.title;
 
   const fetchDistinctValues = async () => {
     try {
@@ -3085,7 +3111,7 @@ export function LifecycleRulePage({
                   imageUrl={`/api/media/${item.id}/image${mediaType !== "MOVIE" ? "?type=parent" : ""}`}
                   imageAspect={mediaType === "MUSIC" ? "square" : "poster"}
                   data={{
-                    title: item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title,
+                    title: previewTitle(item, mediaType),
                     year: item.year,
                     summary: item.summary,
                     contentRating: item.contentRating,
@@ -3215,9 +3241,7 @@ export function LifecycleRulePage({
           {!testMediaSelected && testMediaResults.length > 0 && (
             <div className="max-h-60 overflow-y-auto rounded-md border">
               {testMediaResults.map((item) => {
-                const displayTitle = scopeConfig && seriesScope
-                  ? (item.parentTitle ?? item.title)
-                  : item.title;
+                const displayTitle = testMediaTitle(item);
                 return (
                   <button
                     key={item.id}
@@ -3258,9 +3282,7 @@ export function LifecycleRulePage({
               <div className="flex items-center justify-between rounded-md border p-3">
                 <div>
                   <p className="text-sm font-medium">
-                    {scopeConfig && seriesScope
-                      ? (testMediaSelected.parentTitle ?? testMediaSelected.title)
-                      : testMediaSelected.title}
+                    {testMediaTitle(testMediaSelected)}
                   </p>
                   {testMediaSelected.year && (
                     <p className="text-xs text-muted-foreground">{testMediaSelected.year}</p>

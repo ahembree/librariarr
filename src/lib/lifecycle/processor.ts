@@ -4,6 +4,8 @@ import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifec
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
+import { actionTargetTitle, actionTitleSnapshot, type ActionTargetParts } from "@/lib/lifecycle/action-target";
+import { formatMediaItemTitle, seriesTitleOf } from "@/lib/media/display-title";
 import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { arrExternalIdsOf, arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
 import { heldScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped-action-hold";
@@ -37,13 +39,28 @@ function formatTitleWithYear(title: string, year: number | null): string {
 }
 
 /**
- * How a notification names the item an action ran on: its show or artist when
- * it has one — without a year, which is the episode's or track's own, not the
- * show's (a series action on "Breaking Bad" stored against a 2013 episode is
- * not "Breaking Bad (2013)") — else its own title and year.
+ * How this executor's log lines and notifications name the item an action ran
+ * on. A series action is stored against one representative episode but acts on
+ * the show, so it is named by the show — "<Show> SxxExx" when it acts on one
+ * episode (`actionTargetTitle`) — never by that episode's own title. A track is
+ * named by its artist, anything else by its own title.
  */
-function notificationTitle(item: { title: string; parentTitle: string | null; year: number | null }): string {
-  return item.parentTitle ? item.parentTitle : formatTitleWithYear(item.title, item.year);
+function executedTitle(action: ActionTargetParts): string {
+  const item = action.mediaItem;
+  if (item.type === "SERIES") return actionTargetTitle(action);
+  return item.parentTitle ?? item.title;
+}
+
+/**
+ * `executedTitle`, plus the year for an item named by its own title. A show or
+ * artist gets none: the year is the episode's or track's own, not the show's
+ * (a series action on "Breaking Bad" stored against a 2013 episode is not
+ * "Breaking Bad (2013)").
+ */
+function notificationTitle(action: ActionTargetParts & { mediaItem: { year: number | null } }): string {
+  const item = action.mediaItem;
+  if (item.type === "SERIES" || item.parentTitle) return executedTitle(action);
+  return formatTitleWithYear(item.title, item.year);
 }
 
 interface ActionSchedulingRuleSet {
@@ -384,8 +401,12 @@ export async function processLifecycleRules(userId?: string) {
                     select: { title: true, parentTitle: true, titleSort: true },
                     orderBy: { titleSort: "asc" },
                   });
+                  // A series match is its show in either scope, stored against
+                  // one representative episode — never name it by that episode.
                   removedTitles = removedItems.map((item) =>
-                    ruleSet.seriesScope && item.parentTitle ? item.parentTitle : item.title
+                    ruleSet.type === "SERIES"
+                      ? seriesTitleOf(item)
+                      : ruleSet.seriesScope && item.parentTitle ? item.parentTitle : item.title
                   );
                 }
 
@@ -623,6 +644,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     }
 
     const mediaItem = action.mediaItem;
+    const target = actionTargetTitle({ ...action, mediaItem });
 
     // Permanent-invalidity backstop: a MUSIC rule set with Seerr criteria can
     // never evaluate (Seerr has no music requests), so its matches are the
@@ -642,14 +664,14 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     // Delete actions for items excluded via LifecycleException
     if (exceptionSet.has(`${action.userId}:${action.mediaItemId}`)) {
       await prisma.lifecycleAction.delete({ where: { id: action.id } });
-      logger.info("Lifecycle", `Deleted action ${action.id} — "${mediaItem.title}" is excluded via lifecycle exception`);
+      logger.info("Lifecycle", `Deleted action ${action.id} — "${formatMediaItemTitle(mediaItem)}" is excluded via lifecycle exception`);
       continue;
     }
 
     // Delete actions for items that are no longer a current match
     if (!matchSet.has(`${action.ruleSetId}:${action.mediaItemId}`)) {
       await prisma.lifecycleAction.delete({ where: { id: action.id } });
-      logger.info("Lifecycle", `Deleted stale action ${action.id} — "${mediaItem.title}" is no longer a match for rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
+      logger.info("Lifecycle", `Deleted stale action ${action.id} — "${target}" is no longer a match for rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
       continue;
     }
 
@@ -714,11 +736,11 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
         const stillMatching = filteredMatchedIds.filter((mid) => currentMembers.has(mid));
         if (stillMatching.length === 0) {
           await prisma.lifecycleAction.delete({ where: { id: action.id } });
-          logger.info("Lifecycle", `Deleted action ${action.id} — none of the originally targeted members for "${mediaItem.title}" still match`);
+          logger.info("Lifecycle", `Deleted action ${action.id} — none of the originally targeted members for "${target}" still match`);
           continue;
         }
         if (stillMatching.length < filteredMatchedIds.length) {
-          logger.info("Lifecycle", `Dropped ${filteredMatchedIds.length - stillMatching.length} member(s) from action on "${mediaItem.title}" that no longer match`);
+          logger.info("Lifecycle", `Dropped ${filteredMatchedIds.length - stillMatching.length} member(s) from action on "${target}" that no longer match`);
         }
         filteredMatchedIds = stillMatching;
       }
@@ -730,7 +752,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       if (filteredMatchedIds.length === 0) {
         // All targeted episodes/tracks are now excepted — cancel the action
         await prisma.lifecycleAction.delete({ where: { id: action.id } });
-        logger.info("Lifecycle", `Deleted action ${action.id} — all targeted episodes/tracks for "${mediaItem.title}" are excluded via lifecycle exceptions`);
+        logger.info("Lifecycle", `Deleted action ${action.id} — all targeted episodes/tracks for "${target}" are excluded via lifecycle exceptions`);
         continue;
       }
       if (filteredMatchedIds.length < original.length) {
@@ -742,10 +764,10 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
         // below and are safe to proceed.
         if (isDestructiveActionType(action.actionType) && !actionHonorsMemberIds(action.actionType)) {
           await prisma.lifecycleAction.delete({ where: { id: action.id } });
-          logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${mediaItem.title}" — ${original.length - filteredMatchedIds.length} member(s) are excepted and a ${action.actionType} cannot exclude them`);
+          logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${target}" — ${original.length - filteredMatchedIds.length} member(s) are excepted and a ${action.actionType} cannot exclude them`);
           continue;
         }
-        logger.info("Lifecycle", `Filtered ${original.length - filteredMatchedIds.length} excepted episodes/tracks from action on "${mediaItem.title}"`);
+        logger.info("Lifecycle", `Filtered ${original.length - filteredMatchedIds.length} excepted episodes/tracks from action on "${target}"`);
       }
     }
 
@@ -857,8 +879,11 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       continue;
     }
 
+    // The action as it runs — with the members pass 1 left it — which is also
+    // what its log line and notifications name (see `executedTitle`).
+    const running = { ...action, matchedMediaItemIds: filteredMatchedIds, mediaItem };
     try {
-      await executeAction({ ...action, matchedMediaItemIds: filteredMatchedIds, mediaItem });
+      await executeAction(running);
 
       // Compute deleted bytes for stats tracking (only for delete actions)
       let deletedBytes: bigint | null = null;
@@ -901,8 +926,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
             status: "COMPLETED",
             executedAt: new Date(),
             deletedBytes,
-            mediaItemTitle: mediaItem.title,
-            mediaItemParentTitle: mediaItem.parentTitle,
+            ...actionTitleSnapshot(running),
           },
         }),
         prisma.ruleMatch.deleteMany({
@@ -910,7 +934,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
         }),
       ]);
 
-      logger.info("Lifecycle", `Executed ${action.actionType} for "${mediaItem.parentTitle ?? mediaItem.title}" in rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
+      logger.info("Lifecycle", `Executed ${action.actionType} for "${executedTitle(running)}" in rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
 
       // Queue a targeted library sync for destructive actions
       if (action.actionType.includes("DELETE") && mediaItem.library?.mediaServerId) {
@@ -931,7 +955,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
             titles: [],
           });
         }
-        successesByRuleSet.get(key)!.titles.push(notificationTitle(mediaItem));
+        successesByRuleSet.get(key)!.titles.push(notificationTitle(running));
       }
 
     } catch (error) {
@@ -944,8 +968,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
           status: "FAILED",
           error: msg,
           executedAt: new Date(),
-          mediaItemTitle: mediaItem.title,
-          mediaItemParentTitle: mediaItem.parentTitle,
+          ...actionTitleSnapshot(running),
         },
       });
 
@@ -962,7 +985,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
           });
         }
         failuresByRuleSet.get(key)!.failures.push({
-          title: notificationTitle(mediaItem),
+          title: notificationTitle(running),
           error: msg,
         });
       }

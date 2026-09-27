@@ -4,6 +4,7 @@ import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
+import { actionTargetTitle, actionTitleSnapshot, snapshotTargetTitle } from "@/lib/lifecycle/action-target";
 import { loadGroupMemberStats, aggregateGroupMembers, memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 import { heldScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped-action-hold";
 
@@ -74,7 +75,7 @@ interface RuleSetGroup {
  * destructive lifecycle action followed by a library sync).
  */
 const MEDIA_ITEM_SELECT = {
-  id: true, title: true, parentTitle: true, type: true, thumbUrl: true,
+  id: true, title: true, parentTitle: true, type: true, thumbUrl: true, seasonNumber: true, episodeNumber: true,
   year: true, summary: true, parentSummary: true, contentRating: true, rating: true, ratingImage: true, audienceRating: true, audienceRatingImage: true,
   duration: true, resolution: true, dynamicRange: true, audioProfile: true, fileSize: true,
   genres: true, studio: true, playCount: true, lastPlayedAt: true, addedAt: true,
@@ -83,6 +84,7 @@ const MEDIA_ITEM_SELECT = {
 
 type SelectedMediaItem = {
   id: string; title: string; parentTitle: string | null; type: string; thumbUrl: string | null;
+  seasonNumber: number | null; episodeNumber: number | null;
   year: number | null; summary: string | null; parentSummary: string | null; contentRating: string | null;
   rating: number | null; ratingImage: string | null;
   audienceRating: number | null; audienceRatingImage: string | null;
@@ -113,18 +115,26 @@ function serializeMediaItem(mi: SelectedMediaItem): ActionItemMediaItem {
 
 function buildActionMediaItem(
   action: {
+    actionType: string;
+    matchedMediaItemIds: string[];
     mediaItemId: string | null;
     mediaItemTitle: string | null;
     mediaItemParentTitle: string | null;
+    mediaItemSeasonNumber?: number | null;
+    mediaItemEpisodeNumber?: number | null;
     ruleSetType: string | null;
     mediaItem: SelectedMediaItem | null;
   },
   ruleSetType: string
 ): ActionItemMediaItem {
+  // A series action is named by what it acts on: the show, or "<Show> SxxExx"
+  // when it acts on one episode — never by the representative episode's own
+  // title (see actionTargetTitle).
   if (action.mediaItem) {
     const mi = serializeMediaItem(action.mediaItem);
-    if (ruleSetType === "SERIES" && mi.parentTitle) {
-      return { ...mi, title: mi.parentTitle, parentTitle: null };
+    if (ruleSetType === "SERIES") {
+      const title = actionTargetTitle({ ...action, mediaItem: { ...action.mediaItem, type: "SERIES" } });
+      return { ...mi, title, parentTitle: null };
     }
     return mi;
   }
@@ -137,8 +147,8 @@ function buildActionMediaItem(
     audioProfile: null, fileSize: null, genres: null, studio: null,
     playCount: 0, lastPlayedAt: null, addedAt: null, matchedEpisodes: null,
   };
-  if (ruleSetType === "SERIES" && parentTitle) {
-    return { id: null, title: parentTitle, parentTitle: null, type: ruleSetType, ...nullFields };
+  if (ruleSetType === "SERIES") {
+    return { id: null, title: snapshotTargetTitle(action), parentTitle: null, type: ruleSetType, ...nullFields };
   }
   return { id: null, title, parentTitle, type: action.ruleSetType ?? ruleSetType, ...nullFields };
 }
@@ -195,7 +205,7 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       pendingBackfill.map((a) =>
         prisma.lifecycleAction.update({
           where: { id: a.id },
-          data: { mediaItemTitle: a.mediaItem!.title, mediaItemParentTitle: a.mediaItem!.parentTitle },
+          data: actionTitleSnapshot({ ...a, mediaItem: a.mediaItem! }),
         })
       )
     );
@@ -356,14 +366,16 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       title: snapshot?.title,
       parentTitle: snapshot?.parentTitle,
     });
+    const memberIds = (snapshot?.memberIds as string[] | undefined) ?? [];
     const mi = buildActionMediaItem({
+      actionType: m.ruleSet.actionType!,
+      matchedMediaItemIds: memberIds,
       mediaItemId: m.mediaItemId,
       mediaItemTitle: m.mediaItem.title,
       mediaItemParentTitle: m.mediaItem.parentTitle,
       ruleSetType: m.ruleSet.type,
       mediaItem: m.mediaItem,
     }, m.ruleSet.type);
-    const memberIds = (snapshot?.memberIds as string[] | undefined) ?? [];
 
     group.items.push({
       id: `rm_${m.id}`,
@@ -428,18 +440,18 @@ async function handleStatusGrouped(request: NextRequest, userId: string, status:
 
   // Lazy backfill: snapshot title for actions that have a live mediaItem but no
   // denormalized title yet (pre-migration records). Prevents "Unknown" after deletion.
-  const backfillIds: { id: string; title: string; parentTitle: string | null }[] = [];
+  const backfill: { id: string; data: ReturnType<typeof actionTitleSnapshot> }[] = [];
   for (const a of actions) {
     if (a.mediaItem && !a.mediaItemTitle) {
-      backfillIds.push({ id: a.id, title: a.mediaItem.title, parentTitle: a.mediaItem.parentTitle });
+      backfill.push({ id: a.id, data: actionTitleSnapshot({ ...a, mediaItem: a.mediaItem }) });
     }
   }
-  if (backfillIds.length > 0) {
+  if (backfill.length > 0) {
     await Promise.all(
-      backfillIds.map((b) =>
+      backfill.map((b) =>
         prisma.lifecycleAction.update({
           where: { id: b.id },
-          data: { mediaItemTitle: b.title, mediaItemParentTitle: b.parentTitle },
+          data: b.data,
         })
       )
     );
@@ -477,7 +489,7 @@ async function handleStatusGrouped(request: NextRequest, userId: string, status:
     const ruleSetData = a.ruleSet ?? {
       id: groupKey,
       name: a.ruleSetName ?? "Deleted Rule Set",
-      type: a.ruleSetType ?? "MOVIE",
+      type: a.ruleSetType ?? a.mediaItem?.type ?? "MOVIE",
       actionType: a.actionType,
       actionDelayDays: 0,
       addImportExclusion: false,

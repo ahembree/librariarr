@@ -240,6 +240,9 @@ export interface MediaSession {
   grandparentTitle?: string;
   type: string;
   year?: number;
+  /** An episode's season and episode numbers — its SxxExx (episodes only). */
+  seasonNumber?: number;
+  episodeNumber?: number;
   thumb?: string;
   art?: string;
   parentThumb?: string;

@@ -12,6 +12,7 @@ import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { validateRequest, ruleDiffSchema } from "@/lib/validation";
 import { loadGroupMemberStats, aggregateGroupMembers, memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
+import { seriesTitleOf } from "@/lib/media/display-title";
 
 interface DiffItem {
   id: string;
@@ -53,7 +54,16 @@ async function applyGroupShape(
   return rows.map((row) => {
     const itemData = itemDataById.get(row.id as string);
     const totals = aggregateGroupMembers(memberIdsFromItemData(itemData), memberStats);
-    if (!totals) return row;
+    if (!totals) {
+      // A series match is its show even when it records no members (one stored
+      // before they were) — never the representative episode's own title.
+      if (row.type !== "SERIES") return row;
+      const title = seriesTitleOf({
+        title: (itemData?.title as string | undefined) ?? (row.title as string),
+        parentTitle: (itemData?.parentTitle as string | null | undefined) ?? (row.parentTitle as string | null),
+      });
+      return { ...row, title, parentTitle: null, seasonNumber: null, episodeNumber: null };
+    }
     return {
       ...row,
       // Identity comes from the stored aggregate so the row reads as the show

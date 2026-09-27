@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
 import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
+import { actionTargetTitle, actionTitleSnapshot } from "@/lib/lifecycle/action-target";
 
 /**
  * Action configuration shared by rule-based and ad-hoc (query page) execution.
@@ -43,6 +44,11 @@ export interface ActionItem {
   fileSize: bigint | null;
   libraryId: string;
   seriesKey?: string | null;
+  // What names the item in progress, errors and logs (see `actionTargetTitle`):
+  // a SERIES row is an episode, named by its show and SxxExx, never its own title.
+  type?: string | null;
+  seasonNumber?: number | null;
+  episodeNumber?: number | null;
   externalIds: { source: string; externalId: string }[];
 }
 
@@ -112,9 +118,10 @@ export async function executeActionsForItems(
 
   for (const item of items) {
     const matchedMediaItemIds = episodeIdMap.get(item.id) ?? [];
+    const title = actionTargetTitle({ actionType, matchedMediaItemIds, mediaItem: item });
     // Surface the live sub-step for this item (tags → main action) to the bar.
     const reportStep = onProgress
-      ? (step: string) => onProgress({ done: processed, total, current: { title: item.title, step } })
+      ? (step: string) => onProgress({ done: processed, total, current: { title, step } })
       : undefined;
     reportStep?.("Starting");
     try {
@@ -180,8 +187,7 @@ export async function executeActionsForItems(
           data: {
             userId,
             mediaItemId: item.id,
-            mediaItemTitle: item.title,
-            mediaItemParentTitle: item.parentTitle,
+            ...actionTitleSnapshot({ actionType, matchedMediaItemIds, mediaItem: item }),
             ruleSetId: history.ruleSetId,
             ruleSetName: history.ruleSetName,
             ruleSetType: history.ruleSetType,
@@ -206,16 +212,15 @@ export async function executeActionsForItems(
     } catch (error) {
       unreachable.record(config.arrInstanceId, error);
       const msg = extractActionError(error);
-      errors.push(`${item.title}: ${msg}`);
-      failures.push({ title: item.title, error: msg });
-      logger.error("Lifecycle", `Failed immediate ${actionType} for "${item.title}"`, { error: describeActionError(error) });
+      errors.push(`${title}: ${msg}`);
+      failures.push({ title, error: msg });
+      logger.error("Lifecycle", `Failed immediate ${actionType} for "${title}"`, { error: describeActionError(error) });
 
       await prisma.lifecycleAction.create({
         data: {
           userId,
           mediaItemId: item.id,
-          mediaItemTitle: item.title,
-          mediaItemParentTitle: item.parentTitle,
+          ...actionTitleSnapshot({ actionType, matchedMediaItemIds, mediaItem: item }),
           ruleSetId: history.ruleSetId,
           ruleSetName: history.ruleSetName,
           ruleSetType: history.ruleSetType,

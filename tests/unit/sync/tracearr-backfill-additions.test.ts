@@ -86,6 +86,10 @@ function candidate(n: number) {
     id: `item-${n}`,
     ratingKey: `${1000 + n}`,
     title: `Item ${n}`,
+    type: "MOVIE",
+    parentTitle: null as string | null,
+    seasonNumber: null as number | null,
+    episodeNumber: null as number | null,
     // No provider ids by default: the rating-key path is the common case, and a
     // candidate that carries ids would silently exercise the fallback too.
     tvdbId: null,
@@ -98,6 +102,10 @@ let candidates: Array<{
   id: string;
   ratingKey: string;
   title: string;
+  type?: string;
+  parentTitle?: string | null;
+  seasonNumber?: number | null;
+  episodeNumber?: number | null;
   tvdbId: string | null;
   tmdbId: string | null;
   imdbId: string | null;
@@ -474,6 +482,25 @@ describe("recoverHistoryForNewItems", () => {
       expect(m.logger.warn).not.toHaveBeenCalledWith(
         "WatchHistory",
         expect.stringContaining("Stopping Tracearr play recovery"),
+        expect.anything(),
+      );
+    });
+
+    it("names an episode it could not recover by its show and SxxExx", async () => {
+      candidates = [{
+        ...candidate(1), type: "SERIES", title: "Pilot", parentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 2,
+      }];
+      m.getHistoryForItem.mockRejectedValueOnce(new IntegrationError("Tracearr", {
+        config: { url: "/api/v2/public/history", method: "get" },
+        code: "ERR_BAD_RESPONSE",
+        response: { status: 500, data: {} },
+      } as never));
+
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(m.logger.warn).toHaveBeenCalledWith(
+        "WatchHistory",
+        'Could not recover Tracearr history for "Breaking Bad S01E02" on "Test Plex" — continuing with the remaining candidates',
         expect.anything(),
       );
     });

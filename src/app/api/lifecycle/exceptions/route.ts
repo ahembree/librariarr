@@ -61,6 +61,7 @@ export async function GET(request: NextRequest) {
           studio: true,
           playCount: true,
           seasonNumber: true,
+          episodeNumber: true,
           lastPlayedAt: true,
           addedAt: true,
           library: {

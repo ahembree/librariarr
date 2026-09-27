@@ -8,7 +8,7 @@ import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
 import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
-import { Tv, Layers, List, Clock, HardDrive } from "lucide-react";
+import { Tv, Layers, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import Link from "next/link";
 import type { MediaListItem } from "@/lib/types";
@@ -19,6 +19,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { fetchListProgressively } from "@/lib/media/progressive-load";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
+import { formatEpisodeCode, formatEpisodeTitle } from "@/lib/media/display-title";
 import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
@@ -247,7 +248,7 @@ export default function AllEpisodesPage() {
                   summaryUrl={`/api/media/${item.id}`}
                   imageUrl={`/api/media/${item.id}/image?type=parent`}
                   data={{
-                    title: item.title,
+                    title: formatEpisodeTitle(item),
                     year: item.year,
                     contentRating: item.contentRating,
                     rating: item.rating,
@@ -307,7 +308,7 @@ export default function AllEpisodesPage() {
                             key={ep.id}
                             priority={virtualRow.index < PRIORITY_ROWS}
                             imageUrl={`/api/media/${ep.id}/image`}
-                            title={ep.title}
+                            title={formatEpisodeTitle(ep)}
                             aspectRatio="landscape"
                             fallbackIcon="series"
                             href={`/library/series/episode/${ep.id}?from=${encodeURIComponent("/library/series/episodes")}`}
@@ -316,7 +317,7 @@ export default function AllEpisodesPage() {
                               <MediaHoverPopover
                                 summaryUrl={`/api/media/${ep.id}`}
                                 data={{
-                                  title: ep.title,
+                                  title: formatEpisodeTitle(ep),
                                   year: ep.year,
                                   contentRating: ep.contentRating,
                                   rating: ep.rating,
@@ -339,9 +340,9 @@ export default function AllEpisodesPage() {
                             }
                             metadata={
                               <MetadataLine stacked>
-                                {show("metadata", "seriesName") && ep.parentTitle && <MetadataItem icon={<Tv />}>{ep.parentTitle}</MetadataItem>}
-                                {show("metadata", "episodeLabel") && ep.seasonNumber != null && ep.episodeNumber != null && (
-                                  <MetadataItem icon={<List />}>S{String(ep.seasonNumber).padStart(2, "0")}E{String(ep.episodeNumber).padStart(2, "0")}</MetadataItem>
+                                {/* The heading already names the show and SxxExx (or, unnumbered, the episode title). */}
+                                {show("metadata", "episodeTitle") && ep.title && formatEpisodeCode(ep.seasonNumber, ep.episodeNumber) && (
+                                  <MetadataItem icon={<Tv />}>{ep.title}</MetadataItem>
                                 )}
                                 {show("metadata", "duration") && formatDuration(ep.duration) && <MetadataItem icon={<Clock />}>{formatDuration(ep.duration)}</MetadataItem>}
                                 {show("metadata", "fileSize") && formatFileSize(ep.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(ep.fileSize)}</MetadataItem>}

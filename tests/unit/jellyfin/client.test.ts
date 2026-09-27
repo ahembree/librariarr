@@ -179,6 +179,38 @@ describe("JellyfinClient", () => {
       expect(sessions[0].transcoding?.audioDecision).toBe("transcode");
     });
 
+    it("carries an episode's season and episode numbers, so it can be named by show and SxxExx", async () => {
+      const client = makeClientWithSessions([
+        {
+          Id: "sess-ep",
+          UserId: "u1",
+          UserName: "bob",
+          Client: "Jellyfin Web",
+          DeviceName: "Chrome",
+          NowPlayingItem: {
+            Id: "ep1",
+            Name: "Pilot",
+            Type: "Episode",
+            SeriesName: "Breaking Bad",
+            SeasonName: "Season 1",
+            ParentIndexNumber: 1,
+            IndexNumber: 1,
+          },
+          PlayState: { IsPaused: false, CanSeek: true },
+        },
+      ]);
+
+      const [session] = await client.getSessions();
+
+      expect(session).toMatchObject({
+        type: "episode",
+        title: "Pilot",
+        grandparentTitle: "Breaking Bad",
+        seasonNumber: 1,
+        episodeNumber: 1,
+      });
+    });
+
     it("falls back to the media stream dimensions when a server does send them", async () => {
       const client = makeClientWithSessions([
         {

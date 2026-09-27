@@ -655,6 +655,7 @@ export default function PendingActionsPage() {
   // Media detail panel state
   const [selectedItem, setSelectedItem] = useState<MediaItemWithRelations | null>(null);
   const [selectedItemType, setSelectedItemType] = useState<"MOVIE" | "SERIES" | "MUSIC">("MOVIE");
+  const [selectedTitle, setSelectedTitle] = useState<string | undefined>(undefined);
   const [, setLoadingDetail] = useState(false);
   const { width: panelWidth, resizeHandleProps } = usePanelResize({
     storageKey: "lifecycle-pending-panel-width",
@@ -978,6 +979,9 @@ export default function PendingActionsPage() {
   const openDetailPanel = async (action: ActionItem) => {
     const mediaType = action.mediaItem.type as "MOVIE" | "SERIES" | "MUSIC";
     setSelectedItemType(mediaType);
+    // The panel names a series action as its row does — the show, or
+    // "<Show> SxxExx" for an action on one episode — not by the episode fetched.
+    setSelectedTitle(mediaType === "SERIES" ? action.mediaItem.title : undefined);
     if (!action.mediaItem.id) return;
     setLoadingDetail(true);
     try {
@@ -1407,6 +1411,7 @@ export default function PendingActionsPage() {
         <MediaDetailSidePanel
           item={selectedItem}
           mediaType={selectedItemType}
+          title={selectedTitle}
           onClose={() => setSelectedItem(null)}
           width={panelWidth}
           resizeHandleProps={resizeHandleProps}

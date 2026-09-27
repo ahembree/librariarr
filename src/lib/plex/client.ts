@@ -795,6 +795,10 @@ export class PlexClient implements MediaServerClient {
           grandparentTitle: item.grandparentTitle ? String(item.grandparentTitle) : undefined,
           type: String(item.type ?? ""),
           year: item.year as number | undefined,
+          ...(item.type === "episode" && {
+            seasonNumber: typeof item.parentIndex === "number" ? item.parentIndex : undefined,
+            episodeNumber: typeof item.index === "number" ? item.index : undefined,
+          }),
           thumb: item.thumb ? String(item.thumb) : undefined,
           art: item.art ? String(item.art) : undefined,
           parentThumb: item.parentThumb ? String(item.parentThumb) : undefined,

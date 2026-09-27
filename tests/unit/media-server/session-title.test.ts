@@ -2,7 +2,20 @@ import { describe, it, expect } from "vitest";
 import { formatSessionMediaTitle } from "@/lib/media-server/session-title";
 
 describe("formatSessionMediaTitle", () => {
-  it("prefixes an episode with its show", () => {
+  it("names an episode by its show and SxxExx, never its own title", () => {
+    expect(
+      formatSessionMediaTitle({
+        type: "episode",
+        title: "Pilot",
+        parentTitle: "Season 1",
+        grandparentTitle: "Breaking Bad",
+        seasonNumber: 1,
+        episodeNumber: 1,
+      })
+    ).toBe("Breaking Bad S01E01");
+  });
+
+  it("follows the show with the episode title when the server sent no numbers", () => {
     expect(
       formatSessionMediaTitle({
         type: "episode",
@@ -10,16 +23,22 @@ describe("formatSessionMediaTitle", () => {
         parentTitle: "Season 1",
         grandparentTitle: "Breaking Bad",
       })
-    ).toBe("Breaking Bad · Pilot");
+    ).toBe("Breaking Bad — Pilot");
   });
 
-  it("falls back to the season title when an episode has no show title", () => {
+  it("never names the season as the show", () => {
     expect(
-      formatSessionMediaTitle({ type: "episode", title: "Pilot", parentTitle: "Season 1" })
-    ).toBe("Season 1 · Pilot");
+      formatSessionMediaTitle({
+        type: "episode",
+        title: "Pilot",
+        parentTitle: "Season 1",
+        seasonNumber: 1,
+        episodeNumber: 1,
+      })
+    ).toBe("Pilot (S01E01)");
   });
 
-  it("returns the bare episode title when neither parent is known", () => {
+  it("returns the bare episode title when nothing else is known", () => {
     expect(formatSessionMediaTitle({ type: "episode", title: "Pilot" })).toBe("Pilot");
   });
 

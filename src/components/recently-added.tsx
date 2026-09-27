@@ -21,6 +21,7 @@ import { CACHE_WIDTH_GRID, withImageWidth } from "@/lib/image-url";
 import { Clock, Film, Tv, Music, ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatRelativeDate } from "@/lib/format";
+import { formatEpisodeCode, formatEpisodeTitle } from "@/lib/media/display-title";
 import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
 import { LazyMediaHoverPopover } from "@/components/lazy-media-hover-popover";
@@ -94,10 +95,6 @@ const SHELF_LIMIT = 24;
 
 const TYPE_ICONS = { MOVIE: Film, SERIES: Tv, MUSIC: Music } as const;
 
-function pad2(n: number | null): string {
-  return (n ?? 0).toString().padStart(2, "0");
-}
-
 /** Full display name, used for popover placeholders and aria labels. */
 function formatEpisode(item: RecentItem): string {
   if (item.type === "MOVIE") {
@@ -110,7 +107,7 @@ function formatEpisode(item: RecentItem): string {
   }
   return isGroup(item)
     ? `${item.parentTitle ?? "Unknown"} — Season ${item.seasonNumber ?? "?"} (${plural(item.memberCount, "episode")})`
-    : `${item.parentTitle ?? "Unknown"} — S${pad2(item.seasonNumber)}E${pad2(item.episodeNumber)}`;
+    : formatEpisodeTitle(item);
 }
 
 /** One poster tile on the shelf. Video uses 2:3 posters (episodes show the
@@ -147,8 +144,8 @@ function ShelfTile({
       ? item.year?.toString() ?? ""
       : item.type === "SERIES"
         ? grouped
-          ? `S${pad2(item.seasonNumber)} · ${plural(item.memberCount, "episode")}`
-          : `S${pad2(item.seasonNumber)} · E${pad2(item.episodeNumber)}`
+          ? [formatEpisodeCode(item.seasonNumber, null), plural(item.memberCount, "episode")].filter(Boolean).join(" · ")
+          : formatEpisodeCode(item.seasonNumber, item.episodeNumber) ?? ""
         : grouped
           ? `${item.parentTitle ?? ""} · ${plural(item.memberCount, "track")}`.replace(/^ · /, "")
           : item.parentTitle ?? "";

@@ -154,6 +154,9 @@ export async function GET(request: NextRequest) {
       title: true,
       parentTitle: true,
       seriesKey: true,
+      // An episode is named by its show and SxxExx, not its own title.
+      seasonNumber: true,
+      episodeNumber: true,
       year: true,
       thumbUrl: true,
       type: true,

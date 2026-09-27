@@ -286,6 +286,53 @@ describe("executeAction", () => {
     expect(mockSonarrClient.deleteSeries).toHaveBeenCalledWith(2, true, false);
   });
 
+  it("logs a series action by the show, never by the episode it is stored against", async () => {
+    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
+    });
+    mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({ id: 2, title: "Breaking Bad", tvdbId: 81189, tags: [] });
+
+    await executeAction(makeAction({
+      actionType: "DELETE_SONARR",
+      matchedMediaItemIds: ["ep1", "ep2"],
+      mediaItem: {
+        id: "ep1", type: "SERIES", title: "Pilot", parentTitle: "Breaking Bad", year: 2008,
+        seasonNumber: 1, episodeNumber: 1,
+        externalIds: [{ source: "TVDB", externalId: "81189" }],
+      },
+    }));
+
+    const { logger } = await import("@/lib/logger");
+    const lines = vi.mocked(logger.info).mock.calls.map((c) => c[1] as string);
+    expect(lines).toContainEqual(expect.stringMatching(/^Starting DELETE_SONARR for "Breaking Bad" /));
+    expect(lines).toContain('Executed DELETE_SONARR for "Breaking Bad"');
+    expect(lines.join("\n")).not.toContain("Pilot");
+  });
+
+  it("logs a file delete on one episode by show and SxxExx", async () => {
+    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
+    });
+    mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({ id: 2, title: "Breaking Bad", tvdbId: 81189, tags: [] });
+    mockPrisma.mediaItem.findMany.mockResolvedValue([{ seasonNumber: 3, episodeNumber: 10 }]);
+    mockSonarrClient.getEpisodes.mockResolvedValue([{ seasonNumber: 3, episodeNumber: 10, episodeFileId: 31 }]);
+    mockSonarrClient.deleteEpisodeFiles.mockResolvedValue(undefined);
+
+    await executeAction(makeAction({
+      actionType: "DELETE_FILES_SONARR",
+      matchedMediaItemIds: ["ep10"],
+      mediaItem: {
+        id: "ep10", type: "SERIES", title: "Fly", parentTitle: "Breaking Bad", year: 2010,
+        seasonNumber: 3, episodeNumber: 10,
+        externalIds: [{ source: "TVDB", externalId: "81189" }],
+      },
+    }));
+
+    const { logger } = await import("@/lib/logger");
+    const lines = vi.mocked(logger.info).mock.calls.map((c) => c[1] as string);
+    expect(lines).toContain('Executed DELETE_FILES_SONARR for "Breaking Bad S03E10"');
+  });
+
   it("DELETE_SONARR allows an episode that aired years after the series premiered", async () => {
     // Regression: a "Dope" (2017) episode that aired in 2019 was wrongly blocked
     // because the symmetric year guard compared the episode air year (2019) to

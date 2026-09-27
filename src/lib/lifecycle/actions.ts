@@ -6,6 +6,8 @@ import { LidarrClient } from "@/lib/arr/lidarr-client";
 import { logger } from "@/lib/logger";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { actionHonorsMemberIds, formatActionLabel, supportsSearchAfter } from "@/lib/lifecycle/action-types";
+import { actionTargetTitle } from "@/lib/lifecycle/action-target";
+import { seriesTitleOf } from "@/lib/media/display-title";
 
 // Re-export constants so server-side consumers can import from here too
 export { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES } from "@/lib/lifecycle/action-types";
@@ -69,6 +71,11 @@ export interface ActionRecord {
     title: string;
     parentTitle: string | null;
     year: number | null;
+    // What names the item in a log line (see `actionTargetTitle`): a SERIES
+    // row is an episode, named by its show and SxxExx, never its own title.
+    type?: string | null;
+    seasonNumber?: number | null;
+    episodeNumber?: number | null;
     externalIds: { source: string; externalId: string }[];
   };
 }
@@ -547,7 +554,7 @@ async function deleteEpisodeFilesForAction(
   if (actionHonorsMemberIds(action.actionType)) {
     logger.warn(
       "Lifecycle",
-      `Skipping ${action.actionType} file deletion for series "${action.mediaItem.title}" — no matched episodes resolved (refusing to delete all episode files without a whole-series signal)`,
+      `Skipping ${action.actionType} file deletion for series "${seriesTitleOf(action.mediaItem)}" — no matched episodes resolved (refusing to delete all episode files without a whole-series signal)`,
     );
     return;
   }
@@ -555,7 +562,7 @@ async function deleteEpisodeFilesForAction(
   // there is nothing scoped to act on — skip.
   logger.warn(
     "Lifecycle",
-    `Skipping ${action.actionType} file deletion for series "${action.mediaItem.title}" — no episodes to act on`,
+    `Skipping ${action.actionType} file deletion for series "${seriesTitleOf(action.mediaItem)}" — no episodes to act on`,
   );
 }
 
@@ -872,7 +879,8 @@ export async function executeAction(
    */
   onStep?: (label: string) => void,
 ): Promise<void> {
-  logger.info("Lifecycle", `Starting ${action.actionType} for "${action.mediaItem.title}" (item: ${action.mediaItem.id}, arr: ${action.arrInstanceId ?? "none"}${action.matchedMediaItemIds.length > 0 ? `, ${action.matchedMediaItemIds.length} matched episodes` : ""})`);
+  const target = actionTargetTitle(action);
+  logger.info("Lifecycle", `Starting ${action.actionType} for "${target}" (item: ${action.mediaItem.id}, arr: ${action.arrInstanceId ?? "none"}${action.matchedMediaItemIds.length > 0 ? `, ${action.matchedMediaItemIds.length} matched episodes` : ""})`);
 
   // Execute tag operations before the main action
   if (action.addArrTags.length > 0 || action.removeArrTags.length > 0) {
@@ -881,7 +889,7 @@ export async function executeAction(
     const tagOps: string[] = [];
     if (action.addArrTags.length > 0) tagOps.push(`+tags: ${action.addArrTags.join(", ")}`);
     if (action.removeArrTags.length > 0) tagOps.push(`-tags: ${action.removeArrTags.join(", ")}`);
-    logger.info("Lifecycle", `Tag operations for "${action.mediaItem.title}": ${tagOps.join("; ")}`);
+    logger.info("Lifecycle", `Tag operations for "${target}": ${tagOps.join("; ")}`);
   }
 
   // Report the main step. DELETE_FILES / quality-profile actions also trigger a
@@ -965,6 +973,6 @@ export async function executeAction(
 
   logger.info(
     "Lifecycle",
-    `Executed ${action.actionType} for "${action.mediaItem.title}"${action.addImportExclusion ? " (with import exclusion)" : ""}`
+    `Executed ${action.actionType} for "${target}"${action.addImportExclusion ? " (with import exclusion)" : ""}`
   );
 }

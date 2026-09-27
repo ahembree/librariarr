@@ -363,6 +363,15 @@ Transient feedback uses [sonner](https://sonner.emilkowal.ski/) via the global `
 
 Toasts auto-dismiss after 4s and are dismissable via the close button; never set a long/`Infinity` duration for routine feedback.
 
+### Naming TV Items
+
+An episode row's own `title` is the **episode's** name ("Pilot"). The show is its `parentTitle`. Name TV items through `src/lib/media/display-title.ts`:
+
+- Anything that stands for a **show**, such as a series row, a series lifecycle match or action, or a group of excepted episodes, is named by the show. Use `seriesTitleOf`. Never use the title of the representative episode it is stored against.
+- Anything that stands for **one episode** is named `<Show> SxxExx`. Use `formatEpisodeTitle` (for example "Breaking Bad S01E01"), or `formatMediaItemTitle` for a row of any type. This covers log lines, toasts, dialogs, hover-popover titles and card headings.
+- The episode's own title is fine where the show is already on screen, such as the episode list of a season page, or as secondary detail beside the show and code.
+- For lifecycle actions use `actionTargetTitle` and `actionTitleSnapshot` (`src/lib/lifecycle/action-target.ts`). An action stored against an episode may act on the whole show or on exactly that episode.
+
 ### Hover Popovers
 
 Every `MediaHoverPopover` must pass the **same universal set of fields** regardless of page, view type (table or card), or data source. All fields are optional — sections hide gracefully when data is absent. The component renders only what is non-null, so passing all fields is always safe.

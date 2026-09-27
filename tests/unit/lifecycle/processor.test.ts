@@ -1097,6 +1097,37 @@ describe("processLifecycleRules", () => {
     expect(mockDetectAndSaveMatches).not.toHaveBeenCalled();
   });
 
+  it("names a removed series match by its show in the match-change notification, in episode scope too", async () => {
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasArrRules.mockReturnValue(false);
+    mockHasSeerrRules.mockReturnValue(false);
+    // The show matched last run (stored against an episode) and no longer does.
+    mockPrisma.ruleMatch.findMany.mockResolvedValueOnce([{ mediaItemId: "old-ep" }]);
+    mockDetectAndSaveMatches.mockResolvedValue({ items: [], count: 0, episodeIdMap: new Map(), currentItems: [] });
+    mockPrisma.appSettings.findUnique.mockResolvedValue({
+      discordWebhookUrl: "https://discord.com/webhook/123", discordWebhookUsername: null, discordWebhookAvatarUrl: null,
+    });
+    mockPrisma.mediaItem.findMany.mockResolvedValueOnce([{ title: "Pilot", parentTitle: "Breaking Bad", titleSort: "Pilot" }]);
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 0 });
+    mockSyncAllCollections.mockResolvedValue(undefined);
+    mockSendDiscordNotification.mockResolvedValue(undefined);
+
+    mockPrisma.ruleSet.findMany.mockResolvedValueOnce([
+      {
+        id: "rs1", userId: "u1", name: "Episodes", type: "SERIES",
+        rules: [{ field: "title", operator: "contains", value: "x", enabled: true }],
+        seriesScope: false, serverIds: ["s1"], actionEnabled: false, actionType: null, actionDelayDays: 0,
+        arrInstanceId: null, targetQualityProfileId: null, addImportExclusion: false, addArrTags: [], removeArrTags: [],
+        collectionId: null, discordNotifyOnMatch: true, stickyMatches: false, searchAfterAction: false,
+        user: { mediaServers: [{ id: "s1" }] },
+      },
+    ]);
+
+    await processLifecycleRules("u1");
+
+    expect(mockBuildMatchChangeEmbed).toHaveBeenCalledWith("Episodes", 0, 1, "SERIES", [], ["Breaking Bad"]);
+  });
+
   it("syncs collections once after processing all rule sets", async () => {
     mockHasAnyActiveRules.mockReturnValue(true);
     mockHasArrRules.mockReturnValue(false);
@@ -1893,6 +1924,66 @@ describe("executeLifecycleActions", () => {
       });
       expect(mockPrisma.lifecycleAction.update).toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ status: "COMPLETED", deletedBytes: BigInt(300) }) }),
+      );
+    });
+
+    it("logs and records a series action by its show, never the episode it is stored against", async () => {
+      mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+        { ...showAction("UNMONITOR_SONARR"), mediaItem: { ...episode, type: "SERIES", seasonNumber: 1, episodeNumber: 1 } },
+      ]);
+      mockExecuteAction.mockResolvedValue(undefined);
+
+      await executeLifecycleActions("u1");
+
+      const { logger } = await import("@/lib/logger");
+      expect(logger.info).toHaveBeenCalledWith(
+        "Lifecycle",
+        'Executed UNMONITOR_SONARR for "Battlestar Galactica" in rule set "Shows"',
+      );
+      expect(mockPrisma.lifecycleAction.update).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ mediaItemTitle: "Battlestar Galactica", mediaItemParentTitle: null }),
+      }));
+    });
+
+    it("names a file delete on one episode by show and SxxExx in its log, Discord and history", async () => {
+      mockPrisma.lifecycleAction.findMany.mockResolvedValue([{
+        ...showAction("DELETE_FILES_SONARR"),
+        matchedMediaItemIds: ["rep1"],
+        mediaItem: { ...episode, type: "SERIES", seasonNumber: 1, episodeNumber: 1 },
+      }]);
+      mockPrisma.mediaItem.findMany.mockResolvedValue([{ fileSize: BigInt(100) }]);
+      mockExecuteAction.mockResolvedValue(undefined);
+
+      await executeLifecycleActions("u1");
+
+      const { logger } = await import("@/lib/logger");
+      expect(logger.info).toHaveBeenCalledWith(
+        "Lifecycle",
+        'Executed DELETE_FILES_SONARR for "Battlestar Galactica S01E01" in rule set "Shows"',
+      );
+      expect(mockBuildSuccessSummaryEmbed).toHaveBeenCalledWith("Shows", "DELETE_FILES_SONARR", ["Battlestar Galactica S01E01"]);
+      expect(mockPrisma.lifecycleAction.update).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({
+          mediaItemTitle: "Battlestar Galactica",
+          mediaItemSeasonNumber: 1,
+          mediaItemEpisodeNumber: 1,
+        }),
+      }));
+    });
+
+    it("names the show when it cancels a series action that no longer matches", async () => {
+      mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
+      mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+        { ...showAction("DELETE_SONARR"), mediaItem: { ...episode, type: "SERIES", seasonNumber: 1, episodeNumber: 1 } },
+      ]);
+      mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+
+      await executeLifecycleActions("u1");
+
+      const { logger } = await import("@/lib/logger");
+      expect(logger.info).toHaveBeenCalledWith(
+        "Lifecycle",
+        'Deleted stale action a1 — "Battlestar Galactica" is no longer a match for rule set "Shows"',
       );
     });
 

@@ -275,6 +275,8 @@ describe("Tools sessions endpoints", () => {
           type: "episode",
           parentTitle: "Season 1",
           grandparentTitle: "Breaking Bad",
+          seasonNumber: 1,
+          episodeNumber: 1,
         },
       ]);
       // The terminate route reads labels from what the listing routes saw — it
@@ -300,7 +302,7 @@ describe("Tools sessions endpoints", () => {
         'Terminated session for "alice" on "My Plex" — Arrival (2016) (session s1) (trigger: manual, reason: Going down for maintenance)'
       );
       expect(lines).toContain(
-        'Terminated session for "bob" on "My Plex" — Breaking Bad · Pilot (session s2) (trigger: manual, reason: Going down for maintenance)'
+        'Terminated session for "bob" on "My Plex" — Breaking Bad S01E01 (session s2) (trigger: manual, reason: Going down for maintenance)'
       );
       expect(terminationLogMeta("s1")).toMatchObject({
         sessionId: "s1",
