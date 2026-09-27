@@ -1109,4 +1109,120 @@ describe("Lifecycle Actions", () => {
     });
   });
 
+  // Detection records the episodes / tracks a match acts on (`itemData.memberIds`)
+  // for a series match in either scope and for an artist-scope music match, and
+  // the scheduled executor acts on exactly those. This route read them only for
+  // series with series scope off: a series-scope member-scoped file delete went
+  // out with no episodes (deleting nothing, yet recorded COMPLETED), and an
+  // artist-scope one with only the representative track.
+  describe("POST /api/lifecycle/actions/execute — members of every grouped scope", () => {
+    async function executedMembers() {
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      const calls = vi.mocked(executeAction).mock.calls;
+      expect(calls).toHaveLength(1);
+      return [...calls[0][0].matchedMediaItemIds].sort();
+    }
+
+    async function seriesScopeShow(actionType: string) {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const ep1 = await createTestMediaItem(library.id, {
+        title: "Pilot", type: "SERIES", parentTitle: "Scoped Show", seasonNumber: 1, episodeNumber: 1,
+      });
+      const ep2 = await createTestMediaItem(library.id, {
+        title: "Second", type: "SERIES", parentTitle: "Scoped Show", seasonNumber: 1, episodeNumber: 2,
+      });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Series scope",
+        type: "SERIES",
+        seriesScope: true,
+        actionType,
+        arrInstanceId: "arr-1",
+      });
+      // As detection stores a series-scope match: the show as the title.
+      await createTestRuleMatch(ruleSet.id, ep1.id, {
+        id: ep1.id, title: "Scoped Show", parentTitle: null, memberIds: [ep1.id, ep2.id],
+      });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      return { user, ep1, ep2, ruleSet };
+    }
+
+    it("passes a series-scope match's episodes to a member-scoped file delete", async () => {
+      const { user, ep1, ep2, ruleSet } = await seriesScopeShow("DELETE_FILES_SONARR");
+
+      const response = await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id },
+      });
+      expect((await expectJson<{ executed: number }>(response, 200)).executed).toBe(1);
+
+      expect(await executedMembers()).toEqual([ep1.id, ep2.id].sort());
+      const [record] = await getTestPrisma().lifecycleAction.findMany({ where: { userId: user.id } });
+      expect(record.status).toBe("COMPLETED");
+      expect([...record.matchedMediaItemIds].sort()).toEqual([ep1.id, ep2.id].sort());
+    });
+
+    it("passes them for selected items too, leaving out an excepted episode", async () => {
+      const { user, ep1, ep2, ruleSet } = await seriesScopeShow("DELETE_FILES_SONARR");
+      await getTestPrisma().lifecycleException.create({ data: { userId: user.id, mediaItemId: ep2.id } });
+
+      const response = await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id, mediaItemIds: [ep1.id] },
+      });
+      expect((await expectJson<{ executed: number }>(response, 200)).executed).toBe(1);
+
+      expect(await executedMembers()).toEqual([ep1.id]);
+    });
+
+    it("passes an artist-scope match's tracks to a member-scoped file delete", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MUSIC" });
+      const t1 = await createTestMediaItem(library.id, { title: "Creep", type: "MUSIC", parentTitle: "Radiohead", albumTitle: "Pablo Honey" });
+      const t2 = await createTestMediaItem(library.id, { title: "Karma Police", type: "MUSIC", parentTitle: "Radiohead", albumTitle: "OK Computer" });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Artist scope",
+        type: "MUSIC",
+        seriesScope: true,
+        actionType: "DELETE_FILES_LIDARR",
+        arrInstanceId: "lidarr-1",
+      });
+      await createTestRuleMatch(ruleSet.id, t1.id, {
+        id: t1.id, title: "Radiohead", parentTitle: null, memberIds: [t1.id, t2.id],
+      });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id },
+      });
+      expect((await expectJson<{ executed: number }>(response, 200)).executed).toBe(1);
+
+      // Not just the representative track the match is stored against.
+      expect(await executedMembers()).toEqual([t1.id, t2.id].sort());
+    });
+
+    it("refuses a whole-record delete of a series-scope match whose episode is excepted, from the members", async () => {
+      const { user, ep2, ruleSet } = await seriesScopeShow("DELETE_SONARR");
+      await getTestPrisma().lifecycleException.create({ data: { userId: user.id, mediaItemId: ep2.id } });
+
+      const response = await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id },
+      });
+      const body = await expectJson<{ error: string }>(response, 400);
+      // Refused at the member check, before the whole-record sibling lookup.
+      expect(body.error).toBe("All selected items are excluded from lifecycle actions");
+
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+  });
+
 });
