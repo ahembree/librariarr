@@ -546,7 +546,7 @@ export async function createTestApiKey(
   }>
 ) {
   const prisma = getTestPrisma();
-  const { key, prefix, keyHash } = generateApiKey();
+  const { key, prefix, keyHash } = await generateApiKey();
   const row = await prisma.apiKey.create({
     data: {
       userId,

@@ -29,7 +29,7 @@ import { GET as serversGET } from "@/app/api/v1/servers/route";
 import { POST as cancelPOST } from "@/app/api/v1/sync/cancel/route";
 import { withApiKey } from "@/lib/api-keys/guard";
 import { getSession } from "@/lib/auth/session";
-import { generateApiKey } from "@/lib/api-keys/keys";
+import { newApiKey } from "@/lib/api-keys/keys";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { apiKeyRequestLimiter } from "@/lib/rate-limit/rate-limiter";
 
@@ -160,7 +160,7 @@ describe("/api/v1 authentication guard", () => {
     });
 
     it("401 for a well-formed key that was never issued", async () => {
-      const res = await callRoute(meGET, { headers: withKey(generateApiKey().key) });
+      const res = await callRoute(meGET, { headers: withKey(newApiKey()) });
       await expectJson(res, 401);
     });
 
@@ -230,15 +230,27 @@ describe("/api/v1 authentication guard", () => {
       expect(body.apiKey.scopes).toEqual(["media:read"]);
     });
 
-    it("fails closed with 503 when the key lookup errors", async () => {
+    it("fails closed with 503 when the key lookup errors, before and after the key is verified", async () => {
       const user = await createTestUser();
       const { key } = await createTestApiKey(user.id);
-      const spy = vi.spyOn(prisma.apiKey, "findUnique").mockRejectedValueOnce(new Error("db down"));
+
+      // First use: the rows sharing the key's prefix are looked up.
+      const findMany = vi.spyOn(prisma.apiKey, "findMany").mockRejectedValueOnce(new Error("db down"));
       try {
         const body = await expectJson<{ error: string }>(await callRoute(meGET, { headers: withKey(key) }), 503);
         expect(body.error).not.toMatch(/db down/);
       } finally {
-        spy.mockRestore();
+        findMany.mockRestore();
+      }
+
+      // Once verified, every request still re-reads the row by id.
+      await expectJson(await callRoute(meGET, { headers: withKey(key) }), 200);
+      const findUnique = vi.spyOn(prisma.apiKey, "findUnique").mockRejectedValueOnce(new Error("db down"));
+      try {
+        const body = await expectJson<{ error: string }>(await callRoute(meGET, { headers: withKey(key) }), 503);
+        expect(body.error).not.toMatch(/db down/);
+      } finally {
+        findUnique.mockRestore();
       }
     });
   });
@@ -362,7 +374,7 @@ describe("/api/v1 authentication guard", () => {
     it("stops answering a credential that keeps failing, without touching other keys", async () => {
       const user = await createTestUser();
       const { key: goodKey } = await createTestApiKey(user.id);
-      const deadKey = generateApiKey().key;
+      const deadKey = newApiKey();
       const ip = freshIp();
 
       for (let i = 0; i < 20; i++) {
@@ -440,7 +452,7 @@ describe("/api/v1 authentication guard", () => {
     });
 
     it("never logs the presented key", async () => {
-      const deadKey = generateApiKey().key;
+      const deadKey = newApiKey();
       await callRoute(meGET, { headers: withKey(deadKey) });
       const logged = JSON.stringify([...apiLogger.warn.mock.calls, ...apiLogger.debug.mock.calls]);
       expect(logged).not.toContain(deadKey);

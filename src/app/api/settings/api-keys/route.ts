@@ -106,7 +106,8 @@ export async function POST(request: NextRequest) {
   }
 
   const scopes = normalizeScopes(data.scopes);
-  const { key, prefix, keyHash } = generateApiKey();
+  // Hashed (scrypt, tens of milliseconds) before the lock below is taken.
+  const { key, prefix, keyHash } = await generateApiKey();
 
   // Counted and inserted under one lock, or concurrent requests each pass the
   // count and together create more than MAX_API_KEYS.

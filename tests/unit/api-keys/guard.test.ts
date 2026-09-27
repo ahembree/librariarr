@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 const m = vi.hoisted(() => ({
   findUnique: vi.fn(),
+  findMany: vi.fn(),
   updateMany: vi.fn(),
   warn: vi.fn(),
   info: vi.fn(),
@@ -10,7 +11,7 @@ const m = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/db", () => ({
-  prisma: { apiKey: { findUnique: m.findUnique, updateMany: m.updateMany } },
+  prisma: { apiKey: { findUnique: m.findUnique, findMany: m.findMany, updateMany: m.updateMany } },
 }));
 vi.mock("@/lib/logger", () => ({
   apiLogger: { debug: m.debug, info: m.info, warn: m.warn, error: vi.fn() },
@@ -18,12 +19,17 @@ vi.mock("@/lib/logger", () => ({
 
 import {
   FULL_LISTING_REQUEST_COST,
+  _resetVerifiedApiKeysForTesting,
   authenticateApiKey,
   getApiKeyGuard,
   withApiKey,
 } from "@/lib/api-keys/guard";
-import { generateApiKey, hashApiKey } from "@/lib/api-keys/keys";
-import { apiKeyRequestLimiter, apiKeyUnknownLookupFloor } from "@/lib/rate-limit/rate-limiter";
+import { generateApiKey, hashApiKey, newApiKey } from "@/lib/api-keys/keys";
+import {
+  apiKeyRequestLimiter,
+  apiKeyUnknownLookupFloor,
+  apiKeyVerificationFloor,
+} from "@/lib/rate-limit/rate-limiter";
 import { getApiKeyPrincipal } from "@/lib/api-keys/principal";
 import type { ApiScope } from "@/lib/api-keys/scopes";
 
@@ -39,23 +45,56 @@ function request(
   });
 }
 
-function storedKey(overrides: Partial<{ scopes: string[]; expiresAt: Date | null; lastUsedAt: Date | null }> = {}) {
-  const generated = generateApiKey();
-  m.findUnique.mockImplementation(async ({ where }: { where: { keyHash: string } }) =>
-    where.keyHash === generated.keyHash
-      ? {
-          id: "key-1",
-          userId: "user-1",
-          name: "Dashboard",
-          prefix: generated.prefix,
-          scopes: ["media:read"],
-          expiresAt: null,
-          lastUsedAt: null,
-          ...overrides,
-        }
-      : null,
+interface Row {
+  id: string;
+  userId: string;
+  name: string;
+  prefix: string;
+  keyHash: string;
+  scopes: string[];
+  expiresAt: Date | null;
+  lastUsedAt: Date | null;
+}
+
+/** The mocked ApiKey table, answering the guard's two queries. */
+const table = new Map<string, Row>();
+function serveTable() {
+  m.findMany.mockImplementation(async ({ where }: { where: { prefix: string } }) =>
+    [...table.values()].filter((row) => row.prefix === where.prefix),
   );
-  return generated.key;
+  m.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => {
+    const row = table.get(where.id);
+    if (!row) return null;
+    const { keyHash: _hash, ...visible } = row;
+    return visible;
+  });
+}
+
+async function addKey(
+  id: string,
+  overrides: Partial<{ scopes: string[]; expiresAt: Date | null; lastUsedAt: Date | null }> = {},
+) {
+  const generated = await generateApiKey();
+  table.set(id, {
+    id,
+    userId: "user-1",
+    name: "Dashboard",
+    prefix: generated.prefix,
+    keyHash: generated.keyHash,
+    scopes: ["media:read"],
+    expiresAt: null,
+    lastUsedAt: null,
+    ...overrides,
+  });
+  serveTable();
+  return generated;
+}
+
+/** A table holding exactly one key, "key-1"; returns its plaintext. */
+async function storedKey(overrides: Partial<{ scopes: string[]; expiresAt: Date | null; lastUsedAt: Date | null }> = {}) {
+  table.clear();
+  _resetVerifiedApiKeysForTesting();
+  return (await addKey("key-1", overrides)).key;
 }
 
 describe("withApiKey", () => {
@@ -85,7 +124,7 @@ describe("withApiKey", () => {
   });
 
   it("runs the handler under the key's principal and passes the route context through", async () => {
-    const key = storedKey();
+    const key = await storedKey();
     const context = { params: Promise.resolve({ id: "abc" }) };
     const handler = vi.fn(async (_req: NextRequest, ctx: typeof context) => {
       const principal = getApiKeyPrincipal();
@@ -104,7 +143,7 @@ describe("withApiKey — response handling", () => {
   });
 
   it("returns a response with immutable headers untouched instead of failing", async () => {
-    const key = storedKey();
+    const key = await storedKey();
     const handler = withApiKey("media:read", async () => Response.redirect("http://localhost/elsewhere", 302));
     const res = await handler(request({ "x-api-key": key }));
     expect(res.status).toBe(302);
@@ -112,7 +151,7 @@ describe("withApiKey — response handling", () => {
   });
 
   it("keeps a handler's own non-public Cache-Control", async () => {
-    const key = storedKey();
+    const key = await storedKey();
     const handler = withApiKey("media:read", async () =>
       NextResponse.json({}, { headers: { "Cache-Control": "private, max-age=60" } }),
     );
@@ -121,7 +160,7 @@ describe("withApiKey — response handling", () => {
   });
 
   it("audits HEAD like GET — at DEBUG, not INFO", async () => {
-    const key = storedKey();
+    const key = await storedKey();
     const handler = withApiKey("media:read", async () => new Response(null, { status: 200 }));
     await handler(request({ "x-api-key": key }, "http://localhost/api/v1/media/movies", "HEAD"));
     expect(m.debug).toHaveBeenCalledWith("API", expect.stringMatching(/^HEAD \/api\/v1\/media\/movies → 200/));
@@ -134,7 +173,7 @@ describe("authenticateApiKey — keys in the URL", () => {
     vi.clearAllMocks();
   });
 
-  const key = generateApiKey().key;
+  const key = newApiKey();
 
   it.each([
     ["an upper-case parameter name", `?API_KEY=${key}`],
@@ -160,6 +199,7 @@ describe("authenticateApiKey — keys in the URL", () => {
       expect(result.response.status).toBe(400);
       expect(((await result.response.json()) as { error: string }).error).toMatch(/never in the URL/);
     }
+    expect(m.findMany).not.toHaveBeenCalled();
     expect(m.findUnique).not.toHaveBeenCalled();
   });
 
@@ -171,7 +211,7 @@ describe("authenticateApiKey — keys in the URL", () => {
     // decode must hand the raw value back rather than throw.
     ["an undecodable value", "?q=100%25%zz"],
   ])("does not mistake %s for a key", async (_label, suffix) => {
-    storedKey();
+    await storedKey();
     const result = await authenticateApiKey(
       request({}, `http://localhost/api/v1/media/movies${suffix}`),
       null,
@@ -188,28 +228,29 @@ describe("authenticateApiKey", () => {
     m.updateMany.mockResolvedValue({ count: 1 });
   });
 
-  it("looks the key up by its SHA-256, never by the key itself", async () => {
-    const key = storedKey();
+  it("finds the key by its display prefix and verifies its hash — the key itself never reaches the database", async () => {
+    const key = await storedKey();
     const result = await authenticateApiKey(request({ "x-api-key": key }), "media:read");
     expect(result.ok).toBe(true);
-    expect(m.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { keyHash: hashApiKey(key) } }));
-    expect(JSON.stringify(m.findUnique.mock.calls)).not.toContain(key);
+    expect(m.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { prefix: key.slice(0, 10) } }));
+    expect(JSON.stringify([m.findMany.mock.calls, m.findUnique.mock.calls])).not.toContain(key);
   });
 
   it("does not touch the database for a malformed key", async () => {
     const result = await authenticateApiKey(request({ authorization: "Bearer lbr_short" }), null);
     expect(result.ok).toBe(false);
+    expect(m.findMany).not.toHaveBeenCalled();
     expect(m.findUnique).not.toHaveBeenCalled();
   });
 
   it("trims a padded X-Api-Key and Bearer token", async () => {
-    const key = storedKey();
+    const key = await storedKey();
     expect((await authenticateApiKey(request({ "x-api-key": `  ${key}  ` }), null)).ok).toBe(true);
     expect((await authenticateApiKey(request({ authorization: `Bearer   ${key}  ` }), null)).ok).toBe(true);
   });
 
   it("prefers the lbr_ key when the other header holds something else", async () => {
-    const key = storedKey();
+    const key = await storedKey();
     const viaApiKeyHeader = await authenticateApiKey(
       request({ authorization: "Bearer some-proxy-jwt", "x-api-key": key }),
       null,
@@ -223,7 +264,7 @@ describe("authenticateApiKey", () => {
   });
 
   it("accepts the same key in both headers", async () => {
-    const key = storedKey();
+    const key = await storedKey();
     const result = await authenticateApiKey(
       request({ authorization: `Bearer ${key}`, "x-api-key": key }),
       null,
@@ -232,27 +273,27 @@ describe("authenticateApiKey", () => {
   });
 
   it("treats a key past its expiry instant as expired", async () => {
-    const key = storedKey({ expiresAt: new Date(Date.now() - 1) });
+    const key = await storedKey({ expiresAt: new Date(Date.now() - 1) });
     const result = await authenticateApiKey(request({ "x-api-key": key }), null);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.response.status).toBe(401);
   });
 
   it("skips the last-used write while the recorded use is under a minute old", async () => {
-    const key = storedKey({ lastUsedAt: new Date(Date.now() - 10_000) });
+    const key = await storedKey({ lastUsedAt: new Date(Date.now() - 10_000) });
     await authenticateApiKey(request({ "x-api-key": key }), null);
     expect(m.updateMany).not.toHaveBeenCalled();
   });
 
   it("still authenticates when recording the last use fails", async () => {
-    const key = storedKey();
+    const key = await storedKey();
     m.updateMany.mockRejectedValueOnce(new Error("write failed"));
     const result = await authenticateApiKey(request({ "x-api-key": key }), null);
     expect(result.ok).toBe(true);
   });
 
   it("stores no address when the client address is unknown", async () => {
-    const key = storedKey();
+    const key = await storedKey();
     const req = new NextRequest("http://localhost/api/v1/me", { headers: { "x-api-key": key } });
     await authenticateApiKey(req, null);
     expect(m.updateMany).toHaveBeenCalledWith(
@@ -267,7 +308,7 @@ describe("authenticateApiKey", () => {
     ["free text posing as an address", "10.0.0.1 admin logged in", null],
     ["no address at all", undefined, null],
   ])("records %s as the last-used address only if it is an IP literal", async (_label, forwarded, stored) => {
-    const key = storedKey();
+    const key = await storedKey();
     const headers: Record<string, string> = { "x-api-key": key };
     if (forwarded) headers["x-forwarded-for"] = forwarded;
     await authenticateApiKey(new NextRequest("http://localhost/api/v1/me", { headers }), null);
@@ -277,16 +318,120 @@ describe("authenticateApiKey", () => {
   });
 
   it("never writes a forged address into the log", async () => {
-    storedKey();
+    await storedKey();
     await authenticateApiKey(
       new NextRequest("http://localhost/api/v1/me", {
-        headers: { "x-api-key": generateApiKey().key, "x-forwarded-for": "1.2.3.4 [FAKE] admin" },
+        headers: { "x-api-key": newApiKey(), "x-forwarded-for": "1.2.3.4 [FAKE] admin" },
       }),
       null,
     );
     const logged = JSON.stringify(m.warn.mock.calls);
     expect(logged).toContain("an unknown address");
     expect(logged).not.toContain("FAKE");
+  });
+});
+
+describe("authenticateApiKey — verification", () => {
+  const verifyStore = () => (apiKeyVerificationFloor as unknown as { store: Map<string, unknown> }).store;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    m.updateMany.mockResolvedValue({ count: 1 });
+    table.clear();
+    _resetVerifiedApiKeysForTesting();
+    verifyStore().clear();
+  });
+
+  afterEach(() => {
+    verifyStore().clear();
+  });
+
+  const auth = (key: string) => authenticateApiKey(request({ authorization: `Bearer ${key}` }), "media:read");
+
+  it("derives the key once, then reads its row by id on every request", async () => {
+    const { key } = await addKey("key-1");
+    expect((await auth(key)).ok).toBe(true);
+    expect((await auth(key)).ok).toBe(true);
+    expect((await auth(key)).ok).toBe(true);
+    expect(m.findMany).toHaveBeenCalledTimes(1);
+    expect(m.findUnique).toHaveBeenCalledTimes(2);
+    expect(m.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "key-1" } }));
+  });
+
+  it("revokes a verified key on its next request once its row is deleted", async () => {
+    const { key } = await addKey("key-1");
+    expect((await auth(key)).ok).toBe(true);
+    table.delete("key-1");
+    const revoked = await auth(key);
+    expect(revoked.ok === false && revoked.response.status).toBe(401);
+    // …and it is forgotten, so it cannot come back if a row reappears.
+    await addKey("key-2");
+    expect((await auth(key)).ok).toBe(false);
+  });
+
+  it("re-reads expiry on every request, even for a key it has verified", async () => {
+    const { key } = await addKey("key-1");
+    expect((await auth(key)).ok).toBe(true);
+    table.get("key-1")!.expiresAt = new Date(Date.now() - 1);
+    const expired = await auth(key);
+    expect(expired.ok === false && expired.response.status).toBe(401);
+  });
+
+  it("refuses a key whose prefix is right and whose secret is not", async () => {
+    const { key } = await addKey("key-1");
+    const forged = key.slice(0, 10) + newApiKey().slice(10);
+    const result = await auth(forged);
+    expect(result.ok === false && result.response.status).toBe(401);
+    expect(m.findUnique).not.toHaveBeenCalled();
+    // The real key still works.
+    expect((await auth(key)).ok).toBe(true);
+  });
+
+  it("tells two keys that share a prefix apart", async () => {
+    const first = await addKey("key-1");
+    // A second real key under the same 10-character prefix: only the hash can
+    // say which row is whose.
+    const secondKey = first.key.slice(0, 10) + newApiKey().slice(10);
+    table.set("key-2", { ...table.get("key-1")!, id: "key-2", keyHash: await hashApiKey(secondKey) });
+
+    const second = await auth(secondKey);
+    expect(second.ok && second.principal.keyId).toBe("key-2");
+    const firstResult = await auth(first.key);
+    expect(firstResult.ok && firstResult.principal.keyId).toBe("key-1");
+  });
+
+  it("derives a key once however many first requests arrive together", async () => {
+    const { key } = await addKey("key-1");
+    const results = await Promise.all(Array.from({ length: 5 }, () => auth(key)));
+    expect(results.every((r) => r.ok)).toBe(true);
+    expect(m.findMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops deriving once a minute's verification budget is spent — never for a key in use", async () => {
+    const active = await addKey("key-1");
+    const idle = await addKey("key-2");
+    expect((await auth(active.key)).ok).toBe(true);
+
+    // Someone presenting forged keys under a known prefix spends the budget.
+    apiKeyVerificationFloor.check("verifications", apiKeyVerificationFloor.maxAttempts);
+    const forged = await auth(idle.key.slice(0, 10) + newApiKey().slice(10));
+    expect(forged.ok === false && forged.response.status).toBe(429);
+    const warnings = m.warn.mock.calls.filter(([, msg]) => String(msg).includes("API key verifications"));
+    expect(warnings).toHaveLength(1);
+
+    // An idle key waits the minute out…
+    const idleRefused = await auth(idle.key);
+    expect(idleRefused.ok === false && idleRefused.response.status).toBe(429);
+    // …the key in use does not, and is still re-read (so deleting it revokes it).
+    const lookups = m.findUnique.mock.calls.length;
+    expect((await auth(active.key)).ok).toBe(true);
+    expect(m.findUnique.mock.calls.length).toBe(lookups + 1);
+    // A key whose prefix matches nothing costs no derivation, so it is not refused for this.
+    const unknown = await auth(newApiKey());
+    expect(unknown.ok === false && unknown.response.status).toBe(401);
+
+    verifyStore().clear();
+    expect((await auth(idle.key)).ok).toBe(true);
   });
 });
 
@@ -297,6 +442,8 @@ describe("authenticateApiKey — unknown-key floor", () => {
     vi.clearAllMocks();
     m.updateMany.mockResolvedValue({ count: 1 });
     floorStore().clear();
+    table.clear();
+    _resetVerifiedApiKeysForTesting();
   });
 
   afterEach(() => {
@@ -304,53 +451,42 @@ describe("authenticateApiKey — unknown-key floor", () => {
   });
 
   it("stops looking up keys nobody has used once a minute's worth of unknown ones went by — never a key in use", async () => {
-    const active = generateApiKey();
-    const idle = generateApiKey();
-    const rowFor = (generated: ReturnType<typeof generateApiKey>) => ({
-      id: `key-${generated.prefix}`,
-      userId: "user-1",
-      name: "Dashboard",
-      prefix: generated.prefix,
-      scopes: ["media:read"],
-      expiresAt: null,
-      lastUsedAt: new Date(),
-    });
-    m.findUnique.mockImplementation(async ({ where }: { where: { keyHash: string } }) =>
-      where.keyHash === active.keyHash ? rowFor(active) : where.keyHash === idle.keyHash ? rowFor(idle) : null,
-    );
+    const active = await addKey("key-active", { lastUsedAt: new Date() });
+    const idle = await addKey("key-idle", { lastUsedAt: new Date() });
     const auth = (key: string) => authenticateApiKey(request({ authorization: `Bearer ${key}` }), "media:read");
+    const lookups = () => m.findMany.mock.calls.length + m.findUnique.mock.calls.length;
 
     // The active key authenticates once before the flood, so it is remembered.
     expect((await auth(active.key)).ok).toBe(true);
 
-    const lookupsBefore = m.findUnique.mock.calls.length;
+    const lookupsBefore = lookups();
     for (let i = 0; i < apiKeyUnknownLookupFloor.maxAttempts; i++) {
-      const res = await auth(generateApiKey().key);
+      const res = await auth(newApiKey());
       expect(res.ok).toBe(false);
       if (res.ok === false) expect(res.response.status).toBe(401);
     }
     // Every one of those was a real lookup, and the budget's end was logged once.
-    expect(m.findUnique.mock.calls.length).toBe(lookupsBefore + apiKeyUnknownLookupFloor.maxAttempts);
+    expect(lookups()).toBe(lookupsBefore + apiKeyUnknownLookupFloor.maxAttempts);
     const warnings = m.warn.mock.calls.filter(([, msg]) => String(msg).includes("unrecognised API keys"));
     expect(warnings).toHaveLength(1);
 
     // Past the floor: an unknown key is refused without a lookup…
-    const lookupsAtFloor = m.findUnique.mock.calls.length;
-    const refused = await auth(generateApiKey().key);
+    const lookupsAtFloor = lookups();
+    const refused = await auth(newApiKey());
     expect(refused.ok === false && refused.response.status).toBe(429);
     // …and so is a valid key that has not been used lately (idle integrations
     // wait the minute out)…
     const idleRefused = await auth(idle.key);
     expect(idleRefused.ok === false && idleRefused.response.status).toBe(429);
-    expect(m.findUnique.mock.calls.length).toBe(lookupsAtFloor);
-    // …but the key in use is still looked up (so deleting it would still
-    // revoke it) and still works.
+    expect(lookups()).toBe(lookupsAtFloor);
+    // …but the key in use is still read (so deleting it would still revoke
+    // it) and still works.
     expect((await auth(active.key)).ok).toBe(true);
-    expect(m.findUnique.mock.calls.length).toBe(lookupsAtFloor + 1);
+    expect(lookups()).toBe(lookupsAtFloor + 1);
     // A malformed key never reached the database before and still does not.
     const malformed = await auth("lbr_not-a-key");
     expect(malformed.ok === false && malformed.response.status).toBe(401);
-    expect(m.findUnique.mock.calls.length).toBe(lookupsAtFloor + 1);
+    expect(lookups()).toBe(lookupsAtFloor + 1);
 
     // The minute passes.
     floorStore().clear();
@@ -365,7 +501,7 @@ describe("authenticateApiKey — request cost", () => {
   });
 
   it("charges a limit=0 listing as several requests, everything else as one", async () => {
-    const key = storedKey();
+    const key = await storedKey();
     const spy = vi.spyOn(apiKeyRequestLimiter, "check");
     try {
       await authenticateApiKey(request({ "x-api-key": key }, "http://localhost/api/v1/media/movies?limit=0"), "media:read");
@@ -403,7 +539,7 @@ describe("authenticateApiKey — request cost", () => {
     ["abc", 1],
     ["", 1],
   ])("charges limit=%j the same as the handler reads it (%i)", async (raw, cost) => {
-    const key = storedKey();
+    const key = await storedKey();
     const spy = vi.spyOn(apiKeyRequestLimiter, "check");
     try {
       const url = `http://localhost/api/v1/media/movies?limit=${encodeURIComponent(raw)}`;
@@ -415,7 +551,7 @@ describe("authenticateApiKey — request cost", () => {
   });
 
   it("charges a read with no limit as one request", async () => {
-    const key = storedKey();
+    const key = await storedKey();
     const spy = vi.spyOn(apiKeyRequestLimiter, "check");
     try {
       await authenticateApiKey(request({ "x-api-key": key }, "http://localhost/api/v1/media/movies?page=2"), "media:read");

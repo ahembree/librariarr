@@ -8,14 +8,16 @@ import {
   apiKeyFailureLogLimiter,
   apiKeyRequestLimiter,
   apiKeyUnknownLookupFloor,
+  apiKeyVerificationFloor,
   getClientIp,
 } from "@/lib/rate-limit/rate-limiter";
 import {
   API_KEY_DISPLAY_PREFIX_LENGTH,
   API_KEY_PREFIX,
+  apiKeyLookupPrefix,
   containsApiKey,
-  hashApiKey,
   isWellFormedApiKey,
+  verifyApiKey,
 } from "./keys";
 import { runAsApiKey, type ApiKeyPrincipal } from "./principal";
 import { isApiScope, type ApiScope } from "./scopes";
@@ -28,11 +30,13 @@ import { isApiScope, type ApiScope } from "./scopes";
  *   2. reads the key from `Authorization: Bearer …` or `X-Api-Key` — never from
  *      a cookie, so a logged-in browser cannot be made to call the API (no
  *      ambient credential means no CSRF);
- *   3. looks it up by SHA-256 hash, on every request — nothing is cached, so a
- *      deleted key stops working on its very next request (a credential that
- *      has NOT authenticated recently is looked up only while the unknown-key
- *      floor has budget, so a flood of random keys cannot turn into a flood
- *      of lookups);
+ *   3. finds the key's row by its stored prefix and verifies the salted scrypt
+ *      hash — once per key per process, after which the verified key is
+ *      remembered — and re-reads the row by id on EVERY request, so a deleted
+ *      key stops working on its very next request (a credential that has NOT
+ *      authenticated recently is looked up, and verified, only while the
+ *      lookup and verification floors have budget, so a flood of forged keys
+ *      cannot turn into a flood of lookups or key derivations);
  *   4. rejects an expired key, then a key lacking the handler's scope;
  *   5. runs the handler as the key's owner (`runAsApiKey`), which is how a
  *      handler shared with the app's own UI sees an authenticated user.
@@ -56,17 +60,50 @@ const KEY_QUERY_PARAMS = new Set(["api_key", "apikey", "api-key", "x-api-key", "
 const LAST_USED_WRITE_INTERVAL_MS = 60 * 1000;
 
 /**
- * Credentials that authenticated in the last 15 minutes, by hash. This is NOT
- * an authentication cache — every request still looks its key up, so deleting
- * a key still revokes it on the next one. It only exempts a key in active use
- * from `apiKeyUnknownLookupFloor`, so that a flood of random keys can shut out
- * at most keys that have been idle longer, and only while the flood lasts.
+ * Keys verified in this process in the last 15 minutes (sliding), by the key
+ * itself → the id of the row its hash verified against. This is what makes a
+ * slow hash affordable: scrypt runs once per key per process, or after 15 idle
+ * minutes, rather than on every request.
+ *
+ * It is NOT an authorisation cache: every request still reads the key's row by
+ * id, so deleting a key revokes it on the next request and its expiry and
+ * scopes are read fresh. It also exempts a key in active use from the lookup
+ * and verification floors, so a flood of forged keys can shut out at most
+ * keys idle for longer, and only while the flood lasts. The keys it holds are
+ * ones this process has just been sent in a request; they live only in memory.
  * Bounded far above the 50 keys that can exist.
  */
-const RECENTLY_VALID_TTL_MS = 15 * 60 * 1000;
-const MAX_RECENTLY_VALID = 1000;
-const recentlyValid = new Map<string, number>();
+const VERIFIED_TTL_MS = 15 * 60 * 1000;
+const MAX_VERIFIED = 1000;
+const verifiedKeys = new Map<string, { id: string; until: number }>();
+/** One verification per key at a time: a burst of first requests shares it. */
+const verificationsInFlight = new Map<string, Promise<Lookup>>();
+/** At most this many rows share a prefix (the display prefix is 36 random bits). */
+const MAX_PREFIX_CANDIDATES = 5;
 const UNKNOWN_LOOKUPS = "unknown-lookups";
+const VERIFICATIONS = "verifications";
+
+const ROW_SELECT = {
+  id: true,
+  userId: true,
+  name: true,
+  prefix: true,
+  scopes: true,
+  expiresAt: true,
+  lastUsedAt: true,
+} as const;
+
+interface ApiKeyRow {
+  id: string;
+  userId: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  expiresAt: Date | null;
+  lastUsedAt: Date | null;
+}
+
+type Lookup = { row: ApiKeyRow | null } | { verificationLimitedMs: number | undefined };
 
 /**
  * What one `limit=0` listing costs against the per-key request budget. It
@@ -165,48 +202,48 @@ export async function authenticateApiKey(
   }
 
   const ip = getClientIp(request);
-  const keyHash = hashApiKey(credential.key);
+  const presented = credential.key;
+  const wellFormed = isWellFormedApiKey(presented);
+  // The failure limiter's identity for this credential: the key itself, or a
+  // bounded slice of anything else, so a multi-kilobyte junk header cannot
+  // become a multi-kilobyte map key.
+  const failureKey = wellFormed ? presented : `malformed:${presented.slice(0, 64)}`;
 
   // Keyed by the credential alone and charged only on failure: a credential
   // that keeps failing is refused without a lookup, and a valid key — which
   // never fails — can never be locked out by anyone else's failures.
-  const blocked = apiKeyCredentialFailureLimiter.peek(keyHash);
+  const blocked = apiKeyCredentialFailureLimiter.peek(failureKey);
   if (blocked.limited) return tooManyRequests(blocked.retryAfterMs);
 
   const invalid = (reason: string, message = "Invalid API key"): ApiKeyAuthResult => {
-    recordFailure(ip, keyHash, reason);
+    verifiedKeys.delete(presented);
+    recordFailure(ip, failureKey, reason);
     return refuse(401, message, { "WWW-Authenticate": `${REALM}, error="invalid_token"` });
   };
 
-  if (!isWellFormedApiKey(credential.key)) return invalid("not a Librariarr API key");
+  if (!wellFormed) return invalid("not a Librariarr API key");
 
-  if (!isRecentlyValid(keyHash)) {
+  const verifiedId = recentlyVerifiedId(presented);
+  if (!verifiedId) {
     const floor = apiKeyUnknownLookupFloor.peek(UNKNOWN_LOOKUPS);
     if (floor.limited) return tooManyRequests(floor.retryAfterMs);
   }
 
-  let row: {
-    id: string;
-    userId: string;
-    name: string;
-    prefix: string;
-    scopes: string[];
-    expiresAt: Date | null;
-    lastUsedAt: Date | null;
-  } | null;
+  let row: ApiKeyRow | null;
   try {
-    row = await prisma.apiKey.findUnique({
-      where: { keyHash },
-      select: {
-        id: true,
-        userId: true,
-        name: true,
-        prefix: true,
-        scopes: true,
-        expiresAt: true,
-        lastUsedAt: true,
-      },
-    });
+    if (verifiedId) {
+      row = await prisma.apiKey.findUnique({ where: { id: verifiedId }, select: ROW_SELECT });
+    } else {
+      const lookup = await lookUpAndVerify(presented);
+      if ("verificationLimitedMs" in lookup) {
+        warnOnce(
+          VERIFICATIONS,
+          `${apiKeyVerificationFloor.maxAttempts} API key verifications were needed within a minute — refusing to verify any further key not used successfully in the last 15 minutes until the minute is up`,
+        );
+        return tooManyRequests(lookup.verificationLimitedMs);
+      }
+      row = lookup.row;
+    }
   } catch (error) {
     // Fail closed. The detail stays in the log; the caller learns nothing.
     apiLogger.error("API", "API key lookup failed", { error: String(error) });
@@ -230,7 +267,7 @@ export async function authenticateApiKey(
   if (row.expiresAt && row.expiresAt.getTime() <= now.getTime()) {
     return invalid(`API key "${row.name}" (${row.prefix}…) has expired`, "API key has expired");
   }
-  rememberValid(keyHash);
+  rememberVerified(presented, row.id);
 
   const rate = apiKeyRequestLimiter.check(row.id, requestCost(request));
   if (rate.limited) {
@@ -270,28 +307,62 @@ export async function authenticateApiKey(
   };
 }
 
-function isRecentlyValid(keyHash: string): boolean {
-  const until = recentlyValid.get(keyHash);
-  if (until === undefined) return false;
-  if (until <= Date.now()) {
-    recentlyValid.delete(keyHash);
-    return false;
-  }
-  return true;
+/**
+ * The rows sharing the key's prefix, and the one whose hash the key verifies
+ * against — `null` when none does. A key whose prefix matches nothing costs a
+ * lookup and no derivation; each derivation is charged to
+ * `apiKeyVerificationFloor` first. Concurrent first requests for one key share
+ * a single run.
+ */
+function lookUpAndVerify(presented: string): Promise<Lookup> {
+  const running = verificationsInFlight.get(presented);
+  if (running) return running;
+  const run = (async (): Promise<Lookup> => {
+    const candidates = await prisma.apiKey.findMany({
+      where: { prefix: apiKeyLookupPrefix(presented) },
+      select: { ...ROW_SELECT, keyHash: true },
+      take: MAX_PREFIX_CANDIDATES,
+    });
+    if (candidates.length === 0) return { row: null };
+    const floor = apiKeyVerificationFloor.check(VERIFICATIONS, candidates.length);
+    if (floor.limited) return { verificationLimitedMs: floor.retryAfterMs };
+    for (const { keyHash, ...candidate } of candidates) {
+      if (await verifyApiKey(presented, keyHash)) return { row: candidate };
+    }
+    return { row: null };
+  })().finally(() => verificationsInFlight.delete(presented));
+  verificationsInFlight.set(presented, run);
+  return run;
 }
 
-function rememberValid(keyHash: string): void {
+/** Test-only: forget every verified key and in-flight verification. */
+export function _resetVerifiedApiKeysForTesting(): void {
+  verifiedKeys.clear();
+  verificationsInFlight.clear();
+}
+
+function recentlyVerifiedId(presented: string): string | undefined {
+  const entry = verifiedKeys.get(presented);
+  if (!entry) return undefined;
+  if (entry.until <= Date.now()) {
+    verifiedKeys.delete(presented);
+    return undefined;
+  }
+  return entry.id;
+}
+
+function rememberVerified(presented: string, id: string): void {
   const now = Date.now();
-  if (!recentlyValid.has(keyHash) && recentlyValid.size >= MAX_RECENTLY_VALID) {
-    for (const [hash, until] of recentlyValid) if (until <= now) recentlyValid.delete(hash);
-    if (recentlyValid.size >= MAX_RECENTLY_VALID) {
-      const oldest = recentlyValid.keys().next().value;
-      if (oldest !== undefined) recentlyValid.delete(oldest);
+  if (!verifiedKeys.has(presented) && verifiedKeys.size >= MAX_VERIFIED) {
+    for (const [key, entry] of verifiedKeys) if (entry.until <= now) verifiedKeys.delete(key);
+    if (verifiedKeys.size >= MAX_VERIFIED) {
+      const oldest = verifiedKeys.keys().next().value;
+      if (oldest !== undefined) verifiedKeys.delete(oldest);
     }
   }
   // Re-inserted so insertion order is last-use order for the eviction above.
-  recentlyValid.delete(keyHash);
-  recentlyValid.set(keyHash, now + RECENTLY_VALID_TTL_MS);
+  verifiedKeys.delete(presented);
+  verifiedKeys.set(presented, { id, until: now + VERIFIED_TTL_MS });
 }
 
 /**
@@ -367,8 +438,8 @@ function readCredential(request: NextRequest): { key?: string; conflict?: boolea
  * at DEBUG otherwise — so a flood of distinct junk keys cannot become a flood
  * of log rows. The presented value itself is never logged.
  */
-function recordFailure(ip: string, keyHash: string, reason: string): void {
-  const credential = apiKeyCredentialFailureLimiter.check(keyHash);
+function recordFailure(ip: string, failureKey: string, reason: string): void {
+  const credential = apiKeyCredentialFailureLimiter.check(failureKey);
   const message = `Rejected an API request from ${ipLiteral(ip) ?? "an unknown address"}: ${reason}`;
   if (credential.remaining !== apiKeyCredentialFailureLimiter.maxAttempts - 1) {
     apiLogger.debug("API", message);

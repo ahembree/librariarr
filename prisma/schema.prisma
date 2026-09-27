@@ -919,10 +919,11 @@ model TrashManagedResource {
 }
 
 /// A credential third-party applications use to call the public `/api/v1` API
-/// (see `src/lib/api-keys/`). Only a SHA-256 digest of the key is stored: the
-/// plaintext is returned once, by the create route, and cannot be recovered
-/// afterwards. Deleting the row revokes the key on its very next request —
-/// authentication reads this table on every call and caches nothing.
+/// (see `src/lib/api-keys/`). Only a salted scrypt hash of the key is stored:
+/// the plaintext is returned once, by the create route, and cannot be
+/// recovered afterwards. Deleting the row revokes the key on its very next
+/// request — authentication reads this row on every call; what it remembers in
+/// memory is only that a key's hash has already been verified.
 ///
 /// Deliberately NOT in the backup's `TABLE_ORDER`: a restore truncates `User`
 /// with CASCADE, so it wipes every key rather than resurrecting ones that were
@@ -933,9 +934,11 @@ model ApiKey {
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   name       String
   /// The key's leading characters (`lbr_` + 6), shown so a key can be told
-  /// apart in the list. Far too short to authenticate with.
+  /// apart in the list, and how its row is found. Far too short to
+  /// authenticate with.
   prefix     String
-  /// SHA-256 (hex) of the full key — the authentication lookup.
+  /// Salted scrypt hash of the full key (`scrypt$N$r$p$salt$hash`), verified
+  /// after the lookup by `prefix`. The plaintext is never stored.
   keyHash    String    @unique
   /// Granted scopes, stored explicitly (with implied read scopes expanded) so a
   /// scope added in a later version never silently widens an existing key.
@@ -948,4 +951,5 @@ model ApiKey {
 
   @@unique([userId, name])
   @@index([userId])
+  @@index([prefix])
 }

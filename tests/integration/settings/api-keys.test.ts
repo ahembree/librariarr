@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
-import { createHash } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
@@ -31,7 +30,7 @@ vi.mock("@/lib/discord/client", async (importOriginal) => ({
 import { GET, POST } from "@/app/api/settings/api-keys/route";
 import { DELETE } from "@/app/api/settings/api-keys/[id]/route";
 import { GET as meGET } from "@/app/api/v1/me/route";
-import { API_KEY_PATTERN } from "@/lib/api-keys/keys";
+import { API_KEY_PATTERN, verifyApiKey } from "@/lib/api-keys/keys";
 import { API_KEY_CREATE_REAUTH_WINDOW_MS, MAX_API_KEYS } from "@/lib/api-keys/manage";
 import { authGlobalRateLimiter, authRateLimiter } from "@/lib/rate-limit/rate-limiter";
 import { READ_ONLY_SCOPES } from "@/lib/api-keys/scopes";
@@ -121,7 +120,9 @@ describe("/api/settings/api-keys", () => {
 
       const row = await prisma.apiKey.findUniqueOrThrow({ where: { id: body.apiKey.id } });
       expect(row.userId).toBe(user.id);
-      expect(row.keyHash).toBe(createHash("sha256").update(body.key).digest("hex"));
+      // A salted scrypt hash of the key, not the key or a fast digest of it.
+      expect(row.keyHash).toMatch(/^scrypt\$/);
+      expect(await verifyApiKey(body.key, row.keyHash)).toBe(true);
       // Nothing about the stored row reveals the key.
       expect(JSON.stringify(row)).not.toContain(body.key.slice(10));
 

@@ -109,7 +109,7 @@ export const aiRateLimiter = new RateLimiter(30, 5 * 60 * 1000);
 // "unknown" address, so any per-address bucket that blocks lets whoever sends
 // 500 junk requests shut every integration out, again and again. So:
 //
-// - failures are counted per PRESENTED CREDENTIAL (its hash), charged only on
+// - failures are counted per PRESENTED CREDENTIAL, charged only on
 //   failure (see `peek`): a client stuck on a deleted or expired key gets 429s
 //   after 20 tries, and nothing else is affected — a valid key never fails, so
 //   no one can fill its bucket. Capped at 10,000 tracked credentials so a flood
@@ -130,6 +130,16 @@ export const apiKeyFailureLogLimiter = new RateLimiter(50, 15 * 60 * 1000);
 // 20-failure bucket long before.
 export const apiKeyUnknownLookupFloor = new RateLimiter(1000, 60 * 1000);
 
+// How many scrypt verifications of API keys may run per minute, across every
+// client. A key is stored as a salted scrypt hash and found by its 10-character
+// display prefix, so a key whose prefix exists costs one key derivation (tens
+// of milliseconds, 16 MiB) to reject. The prefix is not secret — it is shown in
+// Settings — so this bounds what someone presenting forged keys under a known
+// prefix can spend. Like the lookup floor it never touches a key verified in
+// the last 15 minutes (the guard remembers those), and a legitimate process
+// verifies each of its at most 50 keys once.
+export const apiKeyVerificationFloor = new RateLimiter(100, 60 * 1000);
+
 // Authenticated requests per API key: 600 a minute. Generous for dashboards and
 // scripts paging through a library; bounds a runaway client or a leaked key.
 export const apiKeyRequestLimiter = new RateLimiter(600, 60 * 1000);
@@ -142,6 +152,7 @@ setInterval(() => {
   apiKeyCredentialFailureLimiter.cleanup();
   apiKeyFailureLogLimiter.cleanup();
   apiKeyUnknownLookupFloor.cleanup();
+  apiKeyVerificationFloor.cleanup();
   apiKeyRequestLimiter.cleanup();
 }, 5 * 60 * 1000).unref();
 
