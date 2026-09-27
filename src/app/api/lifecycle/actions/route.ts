@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
 import { loadGroupMemberStats, aggregateGroupMembers, memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
+import { heldScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped-action-hold";
 
 interface ActionItemMediaItem {
   id: string | null;
@@ -339,14 +340,22 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
     group.count++;
   }
 
-  // Add upcoming RuleMatch items (estimated)
+  // Add upcoming RuleMatch items (estimated). A show's or an artist's match
+  // estimates the one-time upgrade hold its action will be scheduled with.
+  const hold = filteredUpcoming.length > 0 ? await loadGroupedActionHold(userId) : null;
   for (const m of filteredUpcoming) {
     if (!groupMap.has(m.ruleSetId)) {
       groupMap.set(m.ruleSetId, { ruleSet: m.ruleSet, items: [], count: 0 });
     }
     const group = groupMap.get(m.ruleSetId)!;
-    const estimatedDate = new Date(m.detectedAt);
-    estimatedDate.setDate(estimatedDate.getDate() + m.ruleSet.actionDelayDays);
+    const snapshot = m.itemData as Record<string, unknown> | null;
+    const detectedPlusDelay = new Date(m.detectedAt);
+    detectedPlusDelay.setDate(detectedPlusDelay.getDate() + m.ruleSet.actionDelayDays);
+    const estimatedDate = heldScheduledFor(detectedPlusDelay, hold, {
+      type: m.ruleSet.type,
+      title: snapshot?.title,
+      parentTitle: snapshot?.parentTitle,
+    });
     const mi = buildActionMediaItem({
       mediaItemId: m.mediaItemId,
       mediaItemTitle: m.mediaItem.title,
@@ -354,8 +363,7 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       ruleSetType: m.ruleSet.type,
       mediaItem: m.mediaItem,
     }, m.ruleSet.type);
-    const data = m.itemData as Record<string, unknown> | null;
-    const memberIds = (data?.memberIds as string[] | undefined) ?? [];
+    const memberIds = (snapshot?.memberIds as string[] | undefined) ?? [];
 
     group.items.push({
       id: `rm_${m.id}`,

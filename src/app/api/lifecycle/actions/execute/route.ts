@@ -18,8 +18,30 @@ import { eventBus } from "@/lib/events/event-bus";
 import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
+import { memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 import { getApiKeyPrincipal } from "@/lib/api-keys/principal";
 import { destructiveRefusalResponse, reserveApiDestructive } from "@/lib/api-keys/destructive-budget";
+
+/**
+ * The episode / track ids each stored match acts on, keyed by its item — for
+ * every match detection recorded them on: a series match in either scope and
+ * an artist-scope music match. The scheduled path schedules its actions with
+ * exactly these (`scheduleActionsForRuleSet`); reading them only for series
+ * with series scope off sent a series-scope member-scoped file delete out with
+ * no episodes (it deleted nothing and recorded COMPLETED) and an artist-scope
+ * one with only the representative track, and the member exception checks
+ * below never saw those members.
+ */
+function storedMemberIds(
+  matches: Array<{ mediaItemId: string; itemData: unknown }>,
+): Map<string, string[]> {
+  const byItem = new Map<string, string[]>();
+  for (const m of matches) {
+    const ids = memberIdsFromItemData(m.itemData);
+    if (ids.length > 0) byItem.set(m.mediaItemId, ids);
+  }
+  return byItem;
+}
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -170,7 +192,7 @@ async function executeRuleSet(
     );
   }
 
-  // Track episode-level matched IDs for series with seriesScope=false
+  // Episode / track ids per matched item, wherever the stored match has them
   const episodeIdMap = new Map<string, string[]>();
   // What each match looked like when detection stored it, for the identity check.
   const snapshots = new Map<string, unknown>();
@@ -198,16 +220,7 @@ async function executeRuleSet(
     itemIds = storedMatches.map((m) => m.mediaItemId);
     for (const m of storedMatches) snapshots.set(m.mediaItemId, m.itemData);
 
-    // Extract episodeIdMap from stored match data for series episode-level tracking
-    if (ruleSet.type === "SERIES" && !ruleSet.seriesScope) {
-      for (const rm of storedMatches) {
-        const rmData = rm.itemData as Record<string, unknown> | null;
-        const memberIds = rmData?.memberIds as string[] | undefined;
-        if (memberIds && memberIds.length > 0) {
-          episodeIdMap.set(rm.mediaItemId, memberIds);
-        }
-      }
-    }
+    for (const [id, members] of storedMemberIds(storedMatches)) episodeIdMap.set(id, members);
 
     logger.info("Lifecycle", `Manual execute all: ${storedMatches.length} stored matches for rule set "${ruleSet.id}"`);
   } else {
@@ -235,16 +248,7 @@ async function executeRuleSet(
       );
     }
 
-    // Extract episodeIdMap from stored match data for series episode-level tracking
-    if (ruleSet.type === "SERIES" && !ruleSet.seriesScope) {
-      for (const rm of validMatches) {
-        const rmData = rm.itemData as Record<string, unknown> | null;
-        const memberIds = rmData?.memberIds as string[] | undefined;
-        if (memberIds && memberIds.length > 0) {
-          episodeIdMap.set(rm.mediaItemId, memberIds);
-        }
-      }
-    }
+    for (const [id, members] of storedMemberIds(validMatches)) episodeIdMap.set(id, members);
 
     logger.info("Lifecycle", `Manual execute selected: ${itemIds.length} validated matches (${invalidIds.length} rejected) for rule set "${ruleSet.id}"`);
   }

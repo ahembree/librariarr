@@ -204,9 +204,17 @@ Together these mean an item has to be a current match at both scheduling time an
 
 ### The item must still be the one that matched
 
-A match remembers an item, and your media server can change what that item *is*. A Plex **Fix Match** or a Jellyfin **Identify** rewrites the same library entry to a different title, with different TMDB/TVDB ids, and the next sync records that before the next detection run notices the match is stale. Acting on the match then would reach the *new* title in Radarr or Sonarr — one your rules never matched — and the title check below would pass, because it compares against the new title.
+A match remembers an item, and your media server can change what that item *is*. A Plex **Fix Match** or a Jellyfin/Emby **Identify** rewrites the same library entry to a different title, with different TMDB/TVDB ids, and the next sync records that before the next detection run notices the match is stale. Acting on the match then would reach the *new* title in Radarr or Sonarr — one your rules never matched — and the title check below would pass, because it compares against the new title.
 
-So before anything runs, Librariarr compares the item with what it looked like when the rule matched it: its title (the show or artist for series and music), the TMDB/TVDB/MusicBrainz id Radarr, Sonarr or Lidarr looks it up by, and for movies the year (remakes share a title). If any of them changed, the item is refused. Scheduled runs cancel that one action; the **Execute** button on the Pending page, and the public API, refuse the whole request and ask you to run detection again. Detection then re-checks the item against your rules as it is now.
+So before anything runs, Librariarr compares the item with what it looked like when the rule matched it, and refuses it if:
+
+- **the title changed.** For a series or artist action, that is the name of the show or artist — the action covers the whole show or artist, so renaming one episode or track doesn't count. For a track-by-track music rule, both the track and its artist must still match. Cosmetic differences ("The Matrix" / "Matrix, The") are ignored, as in title validation below.
+- **the TMDB, TVDB or MusicBrainz ID changed** — the item now points at a different record in *arr, even if the name is the same.
+- **a movie's year moved by more than one.** Titles can't tell remakes apart ("Dune" 1984 and "Dune" 2021), so a Fix Match to a remake is caught by its year even when no ID was recorded.
+
+**Scheduled runs**, and **Retry** on a failed action, compare with what the action recorded when it was scheduled; a scheduled run cancels that one action. The cancellation is logged in System Logs with the reason ("item identity changed since scheduling"), and the item's match is cleared along with the action, since it described the old title too. The next detection run then evaluates the item as it is now, even on a rule set with **Sticky matches** on: if the new title matches the rule, it is matched and scheduled afresh with a full delay, so you can review it on the Pending Actions page first; if it doesn't, it drops out.
+
+The **Execute** button on the Pending page, and the public API, compare with the match as the last detection run stored it. They refuse the whole request and ask you to run detection again, which re-checks the item against your rules as it is now. Every match records the ID along with the title; a match recorded by an older version gains it the next time the item matches.
 
 ### Title validation against *arr
 

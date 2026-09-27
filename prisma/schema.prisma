@@ -142,6 +142,14 @@ model AppSettings {
   /// arbitrary subset of a suspect match set is not safer, just quieter.
   maxAutoDeleteItems              Int?
   deletionStatsResetAt            DateTime?
+  /// Until this passes, a grouped SERIES or MUSIC action (one that acts on a
+  /// show or an artist, not a single item) is scheduled no earlier than it.
+  /// Before migration `0024` the scheduled executor cancelled every such action
+  /// as an identity change, so none had ever run; that migration held the
+  /// pending ones for a week and set this, so the ones scheduled during that
+  /// week wait as long — a rule set with no delay had nothing pending to hold.
+  /// Null on an install created since, which has no such backlog.
+  groupedActionsHeldUntil         DateTime?
   // AI analysis (read-only library assistant). Provider-neutral so any backend
   // works — "openai-compatible" covers OpenAI, Ollama, LM Studio, OpenRouter,
   // Groq, vLLM, LocalAI, etc.; "anthropic" is the native Claude Messages API.
@@ -612,6 +620,13 @@ model LifecycleAction {
   mediaItem              MediaItem?            @relation(fields: [mediaItemId], references: [id], onDelete: SetNull)
   mediaItemTitle         String?
   mediaItemParentTitle   String?
+  /// The item's year and the external id its Arr app resolves it by (TMDB for
+  /// a movie, TVDB for a series, MusicBrainz for music — `arrIdSourceFor`), as
+  /// they were when the action was scheduled. With the titles above, this is
+  /// the identity the scheduled executor re-checks before it acts: a Fix Match
+  /// that keeps the title ("Dune" 1984 → 2021) changes only these.
+  mediaItemYear          Int?
+  mediaItemExternalId    String?
   ruleSetId              String?
   ruleSet                RuleSet?              @relation(fields: [ruleSetId], references: [id], onDelete: SetNull)
   ruleSetName            String?

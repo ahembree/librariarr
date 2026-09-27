@@ -10,6 +10,8 @@ import {
   protectionKey,
   isWholeRecordDestructiveAction,
 } from "@/lib/lifecycle/exception-guard";
+import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
+import { arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
 import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import type { Prisma } from "@/generated/prisma/client";
@@ -190,6 +192,33 @@ async function retryAction(
   }
 
   const mediaItem = action.mediaItem;
+
+  // A Fix Match since the action was scheduled: a retry would act on a work
+  // the rules never matched. Compared with the action's own snapshot, exactly
+  // as the scheduled executor does before it runs an action (see
+  // match-identity.ts); a snapshot too old to judge passes.
+  const identityChange = matchIdentityChange(
+    {
+      title: action.mediaItemTitle,
+      parentTitle: action.mediaItemParentTitle,
+      year: action.mediaItemYear,
+      externalIds: action.mediaItemExternalId
+        ? [{ source: arrIdSourceFor(ruleSet.type), externalId: action.mediaItemExternalId }]
+        : [],
+    },
+    mediaItem,
+    ruleSet.type,
+  );
+  if (identityChange) {
+    return NextResponse.json(
+      {
+        error:
+          `This item is no longer the title the action was scheduled for (${identityChange}) — ` +
+          "remove the failed action and run detection again",
+      },
+      { status: 409 }
+    );
+  }
 
   try {
     await executeAction({

@@ -7,6 +7,42 @@ export function arrIdSourceFor(type: "MOVIE" | "SERIES" | "MUSIC"): string {
 }
 
 /**
+ * The external id each item's Arr app resolves it by (`arrIdSourceFor`), keyed
+ * by item id: read from the item's own `externalIds` where it carries them,
+ * and — unless `loadMissing` is false — loaded in one query for the items that
+ * carry none (the engine returns `externalIds` only when a rule needed them).
+ * An item with no such id is absent from the map. The one place detection's
+ * collapse key, the id detection records on a match and the id scheduling
+ * records on an action are read, so the three cannot disagree.
+ */
+export async function arrExternalIdsOf(
+  type: "MOVIE" | "SERIES" | "MUSIC",
+  items: Record<string, unknown>[],
+  opts: { loadMissing?: boolean } = {},
+): Promise<Map<string, string>> {
+  const source = arrIdSourceFor(type);
+  const ids = new Map<string, string>();
+  const missing: string[] = [];
+  for (const item of items) {
+    if (!Array.isArray(item.externalIds)) {
+      missing.push(item.id as string);
+      continue;
+    }
+    const found = (item.externalIds as Array<{ source?: unknown; externalId?: unknown } | null>)
+      .find((e) => e?.source === source)?.externalId;
+    if (typeof found === "string") ids.set(item.id as string, found);
+  }
+  if (missing.length > 0 && opts.loadMissing !== false) {
+    const rows = await prisma.mediaItemExternalId.findMany({
+      where: { mediaItemId: { in: missing }, source },
+      select: { mediaItemId: true, externalId: true },
+    });
+    for (const r of rows) ids.set(r.mediaItemId, r.externalId);
+  }
+  return ids;
+}
+
+/**
  * The cross-server identity detection collapses copies of one title by: the
  * external id the rule set's Arr family resolves its record by, for every item
  * that can be collapsed — keyed by item id; an item absent from the map stays
@@ -31,25 +67,12 @@ export async function crossServerCopyKeys(
 ): Promise<Map<string, string>> {
   const keys = new Map<string, string>();
   if (opts.serverCount <= 1) return keys;
-  const source = arrIdSourceFor(opts.type);
   const collapseWithoutArr = !opts.arrData && opts.actionArmed;
   if (!opts.arrData && !collapseWithoutArr) return keys;
 
-  const loaded = new Map<string, string>();
-  if (collapseWithoutArr) {
-    const missing = items.filter((i) => !Array.isArray(i.externalIds)).map((i) => i.id as string);
-    if (missing.length > 0) {
-      const rows = await prisma.mediaItemExternalId.findMany({
-        where: { mediaItemId: { in: missing }, source },
-        select: { mediaItemId: true, externalId: true },
-      });
-      for (const r of rows) loaded.set(r.mediaItemId, r.externalId);
-    }
-  }
+  const ids = await arrExternalIdsOf(opts.type, items, { loadMissing: collapseWithoutArr });
   for (const item of items) {
-    const externalIds = (item.externalIds ?? []) as Array<{ source: string; externalId: string }>;
-    const key =
-      externalIds.find((e) => e.source === source)?.externalId ?? loaded.get(item.id as string);
+    const key = ids.get(item.id as string);
     if (!key) continue;
     if (opts.arrData && !opts.arrData[key]) continue;
     keys.set(item.id as string, key);

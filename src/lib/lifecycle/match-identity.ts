@@ -49,11 +49,12 @@ export function identityFingerprint(item: Record<string, unknown> | undefined): 
  * sync stores that before the next detection drops the stale match. Executing
  * the match then resolves the Arr record from the row's NEW external id, and
  * title validation passes, because it compares the Arr record against the new
- * title: the action lands on a work the rules never matched. The scheduled
- * executor refuses this by comparing the title it recorded when it scheduled
- * the action; this is the same refusal for the paths that execute a stored
- * match directly — the Pending page's Execute and the public API — against the
- * snapshot detection stored in `RuleMatch.itemData`.
+ * title: the action lands on a work the rules never matched. Every path that
+ * acts refuses it through this function, each against its own snapshot: the
+ * scheduled executor and force-retry against the identity the action recorded
+ * when it was scheduled (it cancels the action and clears the match), the
+ * paths that execute a stored match directly — the Pending page's Execute and
+ * the public API — against the snapshot detection stored in `RuleMatch.itemData`.
  *
  * Three signals, any of which is enough:
  *  - the title. A series or artist match is stored as its group (title = the
@@ -68,8 +69,8 @@ export function identityFingerprint(item: Record<string, unknown> | undefined): 
  *    ("Dune" 1984 and 2021), so a move of more than a year is a different work.
  *
  * Errs toward refusing: a title the server merely re-worded also reads as a
- * change, and the cure is only to run detection again, which re-snapshots
- * (see `identityFingerprint`).
+ * change, and the cure is only to run detection again, which re-snapshots the
+ * match (see `identityFingerprint`) and schedules a cancelled action afresh.
  */
 export function matchIdentityChange(
   snapshot: unknown,

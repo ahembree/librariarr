@@ -42,6 +42,7 @@ export interface ActionItem {
   year: number | null;
   fileSize: bigint | null;
   libraryId: string;
+  seriesKey?: string | null;
   externalIds: { source: string; externalId: string }[];
 }
 
@@ -137,9 +138,14 @@ export async function executeActionsForItems(
       if (actionType.includes("DELETE")) {
         if (actionType === "DELETE_SONARR" && item.parentTitle) {
           // Whole-series delete removes EVERY episode, so count the whole
-          // series' file size rather than just the matched/selected members.
+          // series' file size rather than just the matched/selected members —
+          // the series by its `seriesKey` (the title only for a row without one).
           const agg = await prisma.mediaItem.aggregate({
-            where: { type: "SERIES", parentTitle: item.parentTitle, libraryId: item.libraryId },
+            where: {
+              type: "SERIES",
+              libraryId: item.libraryId,
+              ...(item.seriesKey ? { seriesKey: item.seriesKey } : { parentTitle: item.parentTitle }),
+            },
             _sum: { fileSize: true },
           });
           deletedBytes = agg._sum.fileSize ?? null;

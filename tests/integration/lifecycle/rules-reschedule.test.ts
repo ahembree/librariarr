@@ -215,4 +215,43 @@ describe("POST /api/lifecycle/rules/[id]/reschedule-actions", () => {
     const body = await expectJson<{ updated: number }>(response, 200);
     expect(body.updated).toBe(0);
   });
+
+  it("keeps a show's action at the one-time upgrade hold, and reschedules an episode's normally", async () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const user = await createTestUser();
+    const heldUntil = new Date(Date.now() + 5 * DAY);
+    await getTestPrisma().appSettings.create({ data: { userId: user.id, groupedActionsHeldUntil: heldUntil } });
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const ep1 = await createTestMediaItem(library.id, { title: "Pilot", type: "SERIES", parentTitle: "The Wire" });
+    const ep2 = await createTestMediaItem(library.id, { title: "Pilot", type: "SERIES", parentTitle: "Lost" });
+    const ruleSet = await createTestRuleSet(user.id, { name: "Shows", type: "SERIES", actionDelayDays: 1 });
+    const prisma = getTestPrisma();
+    // As scheduled from a show (either series scope) and from a legacy episode snapshot.
+    const show = await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: ep1.id, ruleSetId: ruleSet.id, actionType: "DO_NOTHING",
+        status: "PENDING", scheduledFor: new Date(), mediaItemTitle: "The Wire", mediaItemParentTitle: null,
+      },
+    });
+    const episode = await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: ep2.id, ruleSetId: ruleSet.id, actionType: "DO_NOTHING",
+        status: "PENDING", scheduledFor: new Date(), mediaItemTitle: "Pilot", mediaItemParentTitle: "Lost",
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    const response = await callRouteWithParams(
+      POST,
+      { id: ruleSet.id },
+      { url: `/api/lifecycle/rules/${ruleSet.id}/reschedule-actions`, method: "POST" }
+    );
+    expect((await expectJson<{ updated: number }>(response, 200)).updated).toBe(2);
+
+    const after = await prisma.lifecycleAction.findUniqueOrThrow({ where: { id: show.id } });
+    expect(after.scheduledFor.getTime()).toBe(heldUntil.getTime());
+    const other = await prisma.lifecycleAction.findUniqueOrThrow({ where: { id: episode.id } });
+    expect(other.scheduledFor.getTime()).toBeLessThan(heldUntil.getTime() - 3 * DAY);
+  });
 });

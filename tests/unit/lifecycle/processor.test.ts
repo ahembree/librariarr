@@ -29,6 +29,12 @@ const mockPrisma = vi.hoisted(() => ({
   },
   mediaItem: {
     findMany: vi.fn(),
+    aggregate: vi.fn(),
+  },
+  // Scheduling reads the Arr external id of items detection returned without
+  // `externalIds`. Defaults to none found.
+  mediaItemExternalId: {
+    findMany: vi.fn().mockResolvedValue([]),
   },
   // $transaction supports both the array form (returns resolved array) and the
   // callback form (invokes the callback with the same mock client). Production
@@ -607,6 +613,166 @@ describe("scheduleActionsForRuleSet", () => {
       }),
     );
   });
+
+  it("records the identity the executor re-checks: titles, year and the Arr external id", async () => {
+    mockPrisma.lifecycleAction.findMany
+      .mockResolvedValueOnce([]) // previousPending
+      .mockResolvedValueOnce([]) // allPending (dedup)
+      .mockResolvedValueOnce([]); // existingActions
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 0 });
+    mockPrisma.lifecycleAction.createMany.mockResolvedValue({ count: 2 });
+    // Only the item detection returned WITHOUT external ids is looked up.
+    mockPrisma.mediaItemExternalId.findMany.mockResolvedValueOnce([
+      { mediaItemId: "bare", externalId: "438631" },
+    ]);
+
+    await scheduleActionsForRuleSet(
+      {
+        id: "rs1",
+        userId: "u1",
+        name: "Test",
+        type: "MOVIE",
+        actionEnabled: true,
+        actionType: "DELETE_RADARR",
+        actionDelayDays: 7,
+        arrInstanceId: "arr1",
+        targetQualityProfileId: null,
+        addImportExclusion: false,
+        searchAfterAction: false,
+        addArrTags: [],
+        removeArrTags: [],
+      },
+      [
+        {
+          id: "loaded",
+          title: "The Matrix",
+          parentTitle: null,
+          year: 1999,
+          externalIds: [
+            { source: "IMDB", externalId: "tt0133093" },
+            { source: "TMDB", externalId: "603" },
+          ],
+        },
+        { id: "bare", title: "Dune", parentTitle: null, year: 2021 },
+      ],
+      new Map(),
+    );
+
+    expect(mockPrisma.mediaItemExternalId.findMany).toHaveBeenCalledWith({
+      where: { mediaItemId: { in: ["bare"] }, source: "TMDB" },
+      select: { mediaItemId: true, externalId: true },
+    });
+    const data = mockPrisma.lifecycleAction.createMany.mock.calls[0][0].data;
+    expect(data).toEqual([
+      expect.objectContaining({ mediaItemId: "loaded", mediaItemTitle: "The Matrix", mediaItemYear: 1999, mediaItemExternalId: "603" }),
+      expect.objectContaining({ mediaItemId: "bare", mediaItemTitle: "Dune", mediaItemYear: 2021, mediaItemExternalId: "438631" }),
+    ]);
+  });
+
+  it("records a series group's show-level TVDB id and leaves an id-less item's snapshot empty", async () => {
+    mockPrisma.lifecycleAction.findMany
+      .mockResolvedValueOnce([]) // previousPending
+      .mockResolvedValueOnce([]) // allPending (dedup)
+      .mockResolvedValueOnce([]); // existingActions
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 0 });
+    mockPrisma.lifecycleAction.createMany.mockResolvedValue({ count: 2 });
+
+    await scheduleActionsForRuleSet(
+      {
+        id: "rs1",
+        userId: "u1",
+        name: "Test",
+        type: "SERIES",
+        actionEnabled: true,
+        actionType: "DELETE_SONARR",
+        actionDelayDays: 7,
+        arrInstanceId: "arr1",
+        targetQualityProfileId: null,
+        addImportExclusion: false,
+        searchAfterAction: false,
+        addArrTags: [],
+        removeArrTags: [],
+      },
+      [
+        // Detection's group record: the show as the title, no parent.
+        { id: "ep1", title: "Breaking Bad", parentTitle: null, year: 2008, externalIds: [{ source: "TVDB", externalId: "81189" }] },
+        { id: "ep9", title: "Unknown Show", parentTitle: null, year: null, externalIds: [] },
+      ],
+      new Map([["ep1", ["ep1", "ep2"]], ["ep9", ["ep9"]]]),
+    );
+
+    expect(mockPrisma.mediaItemExternalId.findMany).not.toHaveBeenCalled();
+    const data = mockPrisma.lifecycleAction.createMany.mock.calls[0][0].data;
+    expect(data).toEqual([
+      expect.objectContaining({ mediaItemTitle: "Breaking Bad", mediaItemParentTitle: null, mediaItemExternalId: "81189" }),
+      expect.objectContaining({ mediaItemTitle: "Unknown Show", mediaItemYear: null, mediaItemExternalId: null }),
+    ]);
+  });
+
+  describe("the one-time upgrade hold on grouped actions", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+
+    async function schedule(
+      type: "MOVIE" | "SERIES" | "MUSIC",
+      item: Record<string, unknown>,
+      heldUntil: Date | null,
+      actionDelayDays = 0,
+    ): Promise<Date> {
+      mockPrisma.lifecycleAction.findMany
+        .mockResolvedValueOnce([]) // previousPending
+        .mockResolvedValueOnce([]) // allPending (dedup)
+        .mockResolvedValueOnce([]); // existingActions
+      mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 0 });
+      mockPrisma.lifecycleAction.createMany.mockResolvedValue({ count: 1 });
+      mockPrisma.appSettings.findUnique.mockResolvedValueOnce({ groupedActionsHeldUntil: heldUntil });
+      await scheduleActionsForRuleSet(
+        {
+          id: "rs1",
+          userId: "u1",
+          name: "Test",
+          type,
+          actionEnabled: true,
+          actionType: "DELETE_SONARR",
+          actionDelayDays,
+          arrInstanceId: "arr1",
+          targetQualityProfileId: null,
+          addImportExclusion: false,
+          searchAfterAction: false,
+          addArrTags: [],
+          removeArrTags: [],
+        },
+        [{ externalIds: [], ...item }],
+        new Map(),
+      );
+      return mockPrisma.lifecycleAction.createMany.mock.calls.at(-1)![0].data[0].scheduledFor;
+    }
+
+    it("schedules a show's or an artist's action no earlier than the hold", async () => {
+      const hold = new Date(Date.now() + 5 * DAY);
+      expect(await schedule("SERIES", { id: "ep1", title: "Breaking Bad", parentTitle: null }, hold)).toEqual(hold);
+      expect(await schedule("MUSIC", { id: "t1", title: "Radiohead", parentTitle: null }, hold)).toEqual(hold);
+      expect(mockPrisma.appSettings.findUnique).toHaveBeenCalledWith({
+        where: { userId: "u1" },
+        select: { groupedActionsHeldUntil: true },
+      });
+    });
+
+    it("leaves a single item's action, a later delay and a passed hold alone", async () => {
+      const hold = new Date(Date.now() + 5 * DAY);
+      const now = Date.now();
+      // A track matched on its own, and a movie: the old check never cancelled them.
+      expect((await schedule("MUSIC", { id: "t2", title: "Creep", parentTitle: "Radiohead" }, hold)).getTime())
+        .toBeLessThan(now + DAY);
+      expect((await schedule("MOVIE", { id: "m1", title: "Dune", parentTitle: null }, hold)).getTime())
+        .toBeLessThan(now + DAY);
+      // A delay that already ends after the hold keeps its own date.
+      expect((await schedule("SERIES", { id: "ep2", title: "The Wire", parentTitle: null }, hold, 30)).getTime())
+        .toBeGreaterThan(hold.getTime());
+      // Once the hold has passed it no longer applies.
+      expect((await schedule("SERIES", { id: "ep3", title: "The Wire", parentTitle: null }, new Date(now - DAY))).getTime())
+        .toBeLessThan(now + DAY);
+    });
+  });
 });
 
 describe("processLifecycleRules", () => {
@@ -1067,6 +1233,8 @@ describe("executeLifecycleActions", () => {
     await executeLifecycleActions("u1");
 
     expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+    // The match went stale with it: the next detection evaluates the new title.
+    expect(mockPrisma.ruleMatch.deleteMany).toHaveBeenCalledWith({ where: { ruleSetId: "rs1", mediaItemId: "item1" } });
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1092,6 +1260,155 @@ describe("executeLifecycleActions", () => {
     await executeLifecycleActions("u1");
 
     expect(mockExecuteAction).toHaveBeenCalledTimes(1);
+  });
+
+  describe("identity guard on grouped (series / artist) actions", () => {
+    // Detection stores a series or artist match as its GROUP — the show or
+    // artist as the title, no parent — against a representative episode or
+    // track, whose own title is the episode's or track's.
+    function groupedAction(
+      type: "SERIES" | "MUSIC",
+      snapshot: { title: string; externalId?: string },
+      row: { title: string; parentTitle: string | null; externalIds?: Array<{ source: string; externalId: string }> },
+    ) {
+      return {
+        id: "a1",
+        userId: "u1",
+        mediaItemId: "rep1",
+        mediaItemTitle: snapshot.title,
+        mediaItemParentTitle: null,
+        mediaItemYear: null,
+        mediaItemExternalId: snapshot.externalId ?? null,
+        mediaItem: {
+          id: "rep1",
+          year: 2008,
+          externalIds: [],
+          library: { key: "1", mediaServerId: "s1" },
+          ...row,
+        },
+        ruleSetId: "rs1",
+        actionType: "DO_NOTHING",
+        matchedMediaItemIds: [],
+        ruleSet: { name: "Test", discordNotifyOnAction: false, userId: "u1", type, rules: [] },
+      };
+    }
+
+    beforeEach(() => {
+      mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "rep1" }]);
+      mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+      mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+      mockPrisma.$transaction.mockResolvedValue([{}, {}]);
+    });
+
+    it("executes a series action whose group title is the representative episode's show", async () => {
+      mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+        groupedAction(
+          "SERIES",
+          { title: "Breaking Bad", externalId: "81189" },
+          { title: "Pilot", parentTitle: "Breaking Bad", externalIds: [{ source: "TVDB", externalId: "81189" }] },
+        ),
+      ]);
+
+      await executeLifecycleActions("u1");
+
+      expect(mockPrisma.lifecycleAction.delete).not.toHaveBeenCalled();
+      expect(mockExecuteAction).toHaveBeenCalledTimes(1);
+    });
+
+    it("executes an artist action whose group title is the representative track's artist", async () => {
+      mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+        groupedAction("MUSIC", { title: "Radiohead" }, { title: "Creep", parentTitle: "Radiohead" }),
+      ]);
+
+      await executeLifecycleActions("u1");
+
+      expect(mockPrisma.lifecycleAction.delete).not.toHaveBeenCalled();
+      expect(mockExecuteAction).toHaveBeenCalledTimes(1);
+    });
+
+    it("cancels a series action whose show was re-identified", async () => {
+      mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+        groupedAction("SERIES", { title: "Breaking Bad" }, { title: "Pilot", parentTitle: "Better Call Saul" }),
+      ]);
+
+      await executeLifecycleActions("u1");
+
+      expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+      expect(mockExecuteAction).not.toHaveBeenCalled();
+    });
+
+    it("cancels a series action whose show's TVDB id changed under the same title", async () => {
+      mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+        groupedAction(
+          "SERIES",
+          { title: "Battlestar Galactica", externalId: "71173" },
+          { title: "Pilot", parentTitle: "Battlestar Galactica", externalIds: [{ source: "TVDB", externalId: "73545" }] },
+        ),
+      ]);
+
+      await executeLifecycleActions("u1");
+
+      expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+      expect(mockExecuteAction).not.toHaveBeenCalled();
+    });
+  });
+
+  it("cancels a movie action whose row became a remake of the same title (TMDB id and year)", async () => {
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      {
+        id: "a1",
+        userId: "u1",
+        mediaItemId: "item1",
+        mediaItemTitle: "Dune",
+        mediaItemParentTitle: null,
+        mediaItemYear: 1984,
+        mediaItemExternalId: "841",
+        mediaItem: {
+          id: "item1", title: "Dune", parentTitle: null, year: 2021,
+          library: { key: "1", mediaServerId: "s1" },
+          externalIds: [{ source: "TMDB", externalId: "438631" }],
+        },
+        ruleSetId: "rs1",
+        actionType: "DELETE_RADARR",
+        matchedMediaItemIds: [],
+        ruleSet: { name: "Test", discordNotifyOnAction: false, userId: "u1", type: "MOVIE", rules: [] },
+      },
+    ]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "item1" }]);
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+    mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+
+    await executeLifecycleActions("u1");
+
+    expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(mockExecuteAction).not.toHaveBeenCalled();
+  });
+
+  it("cancels a movie action whose year moved by more than one even when no id was recorded", async () => {
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      {
+        id: "a1",
+        userId: "u1",
+        mediaItemId: "item1",
+        mediaItemTitle: "Dune",
+        mediaItemParentTitle: null,
+        mediaItemYear: 1984,
+        mediaItemExternalId: null,
+        mediaItem: { id: "item1", title: "Dune", parentTitle: null, year: 2021, library: { key: "1", mediaServerId: "s1" }, externalIds: [] },
+        ruleSetId: "rs1",
+        actionType: "DELETE_RADARR",
+        matchedMediaItemIds: [],
+        ruleSet: { name: "Test", discordNotifyOnAction: false, userId: "u1", type: "MOVIE", rules: [] },
+      },
+    ]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "item1" }]);
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+    mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+
+    await executeLifecycleActions("u1");
+
+    expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
   it("refuses a whole-record DELETE_SONARR when a member is excepted (exception inviolability)", async () => {
@@ -1517,6 +1834,84 @@ describe("executeLifecycleActions", () => {
       "UNMONITOR_RADARR",
       expect.arrayContaining(["Movie (2024)"]),
     );
+  });
+
+  describe("a grouped action that runs", () => {
+    // A series match is stored against a representative episode: its own
+    // title, year and file size are the episode's, not the show's.
+    const episode = {
+      id: "rep1",
+      title: "Pilot",
+      parentTitle: "Battlestar Galactica",
+      year: 2003,
+      seriesKey: "tvdb:73545",
+      libraryId: "lib1",
+      fileSize: BigInt(100),
+      library: { key: "1", mediaServerId: "s1" },
+      externalIds: [{ source: "TVDB", externalId: "73545" }],
+    };
+
+    function showAction(actionType: string) {
+      return {
+        id: "a1",
+        userId: "u1",
+        mediaItemId: "rep1",
+        mediaItemTitle: "Battlestar Galactica",
+        mediaItemParentTitle: null,
+        mediaItemYear: 2003,
+        mediaItemExternalId: "73545",
+        mediaItem: episode,
+        ruleSetId: "rs1",
+        actionType,
+        matchedMediaItemIds: [],
+        ruleSet: { name: "Shows", discordNotifyOnAction: true, userId: "u1", type: "SERIES", rules: [] },
+      };
+    }
+
+    beforeEach(() => {
+      mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "rep1" }]);
+      mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+      mockPrisma.lifecycleAction.update.mockResolvedValue({});
+      mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
+      mockPrisma.appSettings.findMany.mockResolvedValue([
+        { userId: "u1", discordWebhookUrl: "https://discord.com/webhook/123", discordWebhookUsername: null, discordWebhookAvatarUrl: null },
+      ]);
+      mockSyncMediaServer.mockResolvedValue(undefined);
+      mockSendDiscordNotification.mockResolvedValue(undefined);
+    });
+
+    it("counts a whole-series delete by the show's seriesKey, not every show sharing its title", async () => {
+      mockPrisma.lifecycleAction.findMany.mockResolvedValue([showAction("DELETE_SONARR")]);
+      mockPrisma.mediaItem.aggregate.mockResolvedValue({ _sum: { fileSize: BigInt(300) } });
+      mockExecuteAction.mockResolvedValue(undefined);
+
+      await executeLifecycleActions("u1");
+
+      expect(mockPrisma.mediaItem.aggregate).toHaveBeenCalledWith({
+        where: { type: "SERIES", libraryId: "lib1", seriesKey: "tvdb:73545" },
+        _sum: { fileSize: true },
+      });
+      expect(mockPrisma.lifecycleAction.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: "COMPLETED", deletedBytes: BigInt(300) }) }),
+      );
+    });
+
+    it("names the show in Discord without the episode's year, on success and on failure", async () => {
+      mockPrisma.lifecycleAction.findMany.mockResolvedValue([showAction("UNMONITOR_SONARR")]);
+      mockExecuteAction.mockResolvedValue(undefined);
+      await executeLifecycleActions("u1");
+      expect(mockBuildSuccessSummaryEmbed).toHaveBeenCalledWith("Shows", "UNMONITOR_SONARR", ["Battlestar Galactica"]);
+
+      mockPrisma.lifecycleAction.findMany.mockResolvedValue([showAction("UNMONITOR_SONARR")]);
+      mockExecuteAction.mockRejectedValue(new Error("Sonarr said no"));
+      mockExtractActionError.mockReturnValue("Sonarr said no");
+      await executeLifecycleActions("u1");
+      expect(mockBuildFailureSummaryEmbed).toHaveBeenCalledWith(
+        "Shows",
+        "UNMONITOR_SONARR",
+        [{ title: "Battlestar Galactica", error: "Sonarr said no" }],
+      );
+    });
   });
 
   it("removes match after successful action execution", async () => {

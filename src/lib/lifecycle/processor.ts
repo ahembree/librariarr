@@ -1,9 +1,12 @@
 import { prisma } from "@/lib/db";
-import type { Prisma } from "@/generated/prisma/client";
+import type { LibraryType, Prisma } from "@/generated/prisma/client";
 import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { logger } from "@/lib/logger";
-import { normalizeTitle, executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
+import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
+import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
+import { arrExternalIdsOf, arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
+import { heldScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped-action-hold";
 import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
@@ -31,6 +34,16 @@ function formatTitleWithYear(title: string, year: number | null): string {
   const suffix = `(${year})`;
   if (title.endsWith(suffix)) return title;
   return `${title} ${suffix}`;
+}
+
+/**
+ * How a notification names the item an action ran on: its show or artist when
+ * it has one — without a year, which is the episode's or track's own, not the
+ * show's (a series action on "Breaking Bad" stored against a 2013 episode is
+ * not "Breaking Bad (2013)") — else its own title and year.
+ */
+function notificationTitle(item: { title: string; parentTitle: string | null; year: number | null }): string {
+  return item.parentTitle ? item.parentTitle : formatTitleWithYear(item.title, item.year);
 }
 
 interface ActionSchedulingRuleSet {
@@ -178,13 +191,23 @@ export async function scheduleActionsForRuleSet(
   if (newItems.length > 0) {
     const scheduledFor = new Date();
     scheduledFor.setDate(scheduledFor.getDate() + ruleSet.actionDelayDays);
+    const externalIds = await arrExternalIdsOf(ruleSet.type as LibraryType, newItems);
+    // A show's or an artist's action waits out the one-time upgrade hold.
+    const hold = await loadGroupedActionHold(ruleSet.userId);
+    const dueAt = (item: Record<string, unknown>) =>
+      heldScheduledFor(scheduledFor, hold, { type: ruleSet.type, title: item.title, parentTitle: item.parentTitle });
 
     await prisma.lifecycleAction.createMany({
       data: newItems.map((item) => ({
         userId: ruleSet.userId,
         mediaItemId: item.id as string,
+        // The identity the executor re-checks before it acts. A series or
+        // artist match is its group: the show or artist as the title, no
+        // parent — see matchIdentityChange.
         mediaItemTitle: (item.title as string) ?? null,
         mediaItemParentTitle: (item.parentTitle as string | null) ?? null,
+        mediaItemYear: typeof item.year === "number" ? item.year : null,
+        mediaItemExternalId: externalIds.get(item.id as string) ?? null,
         ruleSetId: ruleSet.id,
         ruleSetName: ruleSet.name,
         ruleSetType: ruleSet.type,
@@ -194,7 +217,7 @@ export async function scheduleActionsForRuleSet(
         matchedMediaItemIds: episodeIdMap.get(item.id as string) ?? [],
         addArrTags: ruleSet.addArrTags,
         removeArrTags: ruleSet.removeArrTags,
-        scheduledFor,
+        scheduledFor: dueAt(item),
         arrInstanceId: ruleSet.arrInstanceId,
         targetQualityProfileId: ruleSet.targetQualityProfileId,
       })),
@@ -202,7 +225,7 @@ export async function scheduleActionsForRuleSet(
     });
 
     for (const item of newItems) {
-      logger.info("Lifecycle", `Scheduled ${ruleSet.actionType} for "${item.title}" on ${scheduledFor.toISOString()}`);
+      logger.info("Lifecycle", `Scheduled ${ruleSet.actionType} for "${item.title}" on ${dueAt(item).toISOString()}`);
     }
   }
 }
@@ -630,19 +653,44 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       continue;
     }
 
-    // Identity-swap guard: the action's title was snapshotted at creation;
-    // the joined mediaItem is the CURRENT row. If they no longer denote the
-    // same work (e.g. a Plex "Fix Match" / Jellyfin "Identify" rewrote this
-    // ratingKey's row to different content with different external ids before
-    // detection removed the now-stale match), the Arr resolution would target
-    // the NEW item — which never matched. Refuse rather than act on it.
-    if (
-      action.mediaItemTitle &&
-      mediaItem.title &&
-      normalizeTitle(action.mediaItemTitle) !== normalizeTitle(mediaItem.title)
-    ) {
-      await prisma.lifecycleAction.delete({ where: { id: action.id } });
-      logger.warn("Lifecycle", `Cancelled action ${action.id} — item identity changed since scheduling ("${action.mediaItemTitle}" → "${mediaItem.title}"); will re-evaluate on next detection`);
+    // Identity-swap guard: the action recorded its item's identity (titles,
+    // year, Arr external id) when it was scheduled; the joined mediaItem is
+    // the CURRENT row. If they no longer denote the same work (e.g. a Plex
+    // "Fix Match" / Jellyfin "Identify" rewrote this ratingKey's row to
+    // different content with different external ids before detection removed
+    // the now-stale match), the Arr resolution would target the NEW item —
+    // which never matched. Refuse rather than act on it.
+    //
+    // Compared through matchIdentityChange, never title to title: a series or
+    // artist action records its GROUP (title = the show or artist, parent
+    // cleared) against a representative episode or track, whose own title is
+    // the episode's or track's. A direct comparison read every one of them as
+    // a Fix Match ("Breaking Bad" → "Pilot") and cancelled it when due, so no
+    // scheduled series or artist action ever ran.
+    const ruleSetType = (action.ruleSet?.type ?? action.ruleSetType) as LibraryType;
+    const identityChange = matchIdentityChange(
+      {
+        title: action.mediaItemTitle,
+        parentTitle: action.mediaItemParentTitle,
+        year: action.mediaItemYear,
+        externalIds: action.mediaItemExternalId
+          ? [{ source: arrIdSourceFor(ruleSetType), externalId: action.mediaItemExternalId }]
+          : [],
+      },
+      mediaItem,
+      ruleSetType,
+    );
+    if (identityChange) {
+      // The stored match describes the work that was there too, so it goes
+      // with the action and the next detection evaluates the item as it is
+      // now. Left in place, a sticky rule set would re-schedule from that old
+      // snapshot every run and this check would cancel it every time it came
+      // due — and a kept match's snapshot is otherwise never rewritten.
+      await prisma.$transaction([
+        prisma.lifecycleAction.delete({ where: { id: action.id } }),
+        prisma.ruleMatch.deleteMany({ where: { ruleSetId: action.ruleSetId!, mediaItemId: mediaItem.id } }),
+      ]);
+      logger.warn("Lifecycle", `Cancelled action ${action.id} — item identity changed since scheduling (${identityChange}); will re-evaluate on next detection`);
       continue;
     }
 
@@ -818,9 +866,15 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
         if (action.actionType === "DELETE_SONARR" && mediaItem.parentTitle) {
           // Whole-series delete removes EVERY episode of the series, so count the
           // whole series' file size — not just the matched members, which
-          // under-counts when only a subset of episodes matched the rule.
+          // under-counts when only a subset of episodes matched the rule. The
+          // series is its `seriesKey`, not its title: two same-titled shows in
+          // one library are two series (the title only for a row without one).
           const agg = await prisma.mediaItem.aggregate({
-            where: { type: "SERIES", parentTitle: mediaItem.parentTitle, libraryId: mediaItem.libraryId },
+            where: {
+              type: "SERIES",
+              libraryId: mediaItem.libraryId,
+              ...(mediaItem.seriesKey ? { seriesKey: mediaItem.seriesKey } : { parentTitle: mediaItem.parentTitle }),
+            },
             _sum: { fileSize: true },
           });
           deletedBytes = agg._sum.fileSize ?? null;
@@ -877,9 +931,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
             titles: [],
           });
         }
-        const displayTitle = mediaItem.parentTitle ?? mediaItem.title;
-        const titleWithYear = formatTitleWithYear(displayTitle, mediaItem.year);
-        successesByRuleSet.get(key)!.titles.push(titleWithYear);
+        successesByRuleSet.get(key)!.titles.push(notificationTitle(mediaItem));
       }
 
     } catch (error) {
@@ -909,9 +961,8 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
             failures: [],
           });
         }
-        const displayTitle = mediaItem.parentTitle ?? mediaItem.title;
         failuresByRuleSet.get(key)!.failures.push({
-          title: formatTitleWithYear(displayTitle, mediaItem.year),
+          title: notificationTitle(mediaItem),
           error: msg,
         });
       }

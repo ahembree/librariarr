@@ -11,7 +11,7 @@ import { syncCollectionById, syncAllCollections } from "@/lib/lifecycle/collecti
 import { describePlexError } from "@/lib/plex/errors";
 import { findExceptedItemIds, findExceptionProtectedGroups, protectionKey } from "@/lib/lifecycle/exception-guard";
 import type { Prisma } from "@/generated/prisma/client";
-import { arrIdSourceFor, copyIdsOf, copyRank, crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
+import { arrExternalIdsOf, arrIdSourceFor, copyIdsOf, copyRank, crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
 import { identityFingerprint } from "@/lib/lifecycle/match-identity";
 
 interface RuleSetConfig {
@@ -49,8 +49,11 @@ function jsonSafe(value: unknown): string | number | boolean | object {
  * matched on to the copy that carries it now (see the carry-over in
  * `detectAndSaveMatches`). A member-scoped action keeps the same episodes /
  * tracks, re-expressed as the new copy's members of the same `dedupKey`;
- * `mediaItemTitle` follows the new copy, exactly as a freshly scheduled action
- * would record it.
+ * `mediaItemTitle` and `mediaItemYear` follow the new copy, exactly as a
+ * freshly scheduled action would record them. `mediaItemExternalId` stays as
+ * scheduled: copies are collapsed ON that id, so the new copy shares it —
+ * unless the copy has since been re-identified, and then the recorded id is
+ * what makes the executor refuse the action.
  */
 async function planActionCarryOver(
   ruleSetId: string,
@@ -96,6 +99,7 @@ async function planActionCarryOver(
         mediaItemId: to.id as string,
         mediaItemTitle: (to.title as string) ?? null,
         mediaItemParentTitle: (to.parentTitle as string | null) ?? null,
+        mediaItemYear: typeof to.year === "number" ? to.year : null,
         matchedMediaItemIds: members,
       },
     };
@@ -363,6 +367,20 @@ export async function detectAndSaveMatches(
       const titleB = ((b.parentTitle ?? b.title ?? "") as string).toLowerCase();
       return titleA.localeCompare(titleB);
     });
+
+  // Every match records the id its Arr app resolves it by, alongside its title
+  // and year: they are the identity both checks before an action runs compare
+  // against (see match-identity.ts), and the engine returns `externalIds` only
+  // when a rule needed them. Without it the direct-execute check could not see
+  // an id change, and a sticky rule set re-scheduling a match its rules no
+  // longer select took the id from the row as it is now, so a same-titled
+  // re-identification (Battlestar Galactica 1978 → 2004) passed both.
+  const arrIds = await arrExternalIdsOf(ruleSet.type, enrichedItems);
+  for (const item of enrichedItems) {
+    if (Array.isArray(item.externalIds)) continue;
+    const externalId = arrIds.get(item.id as string);
+    item.externalIds = externalId ? [{ source: arrIdSource, externalId }] : [];
+  }
 
   // Filter out items that have a LifecycleException for this user
   const isGroupedScope =
