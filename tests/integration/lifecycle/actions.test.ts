@@ -1406,6 +1406,7 @@ describe("Lifecycle Actions", () => {
         name: "Series scope",
         type: "SERIES",
         seriesScope: true,
+        actionEnabled: true,
         actionType,
         arrInstanceId: "arr-1",
       });
@@ -1457,6 +1458,7 @@ describe("Lifecycle Actions", () => {
         name: "Artist scope",
         type: "MUSIC",
         seriesScope: true,
+        actionEnabled: true,
         actionType: "DELETE_FILES_LIDARR",
         arrInstanceId: "lidarr-1",
       });
