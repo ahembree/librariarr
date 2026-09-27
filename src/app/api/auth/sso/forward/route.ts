@@ -45,7 +45,7 @@ export async function GET(request: NextRequest) {
       "Auth",
       `Forward-auth login rejected: the ${FORWARD_AUTH_PROXY_HEADER} header is missing or wrong — the request did not come through the configured proxy`
     );
-    return NextResponse.redirect(new URL("/login?sso_error=proxy_secret", baseUrl));
+    return NextResponse.redirect(new URL("/login?sso_error=untrusted_proxy", baseUrl));
   }
 
   const rawSubject = request.headers.get(settings.forwardAuthUserHeader);

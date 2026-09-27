@@ -137,7 +137,7 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
         headers: { ...SAME_ORIGIN_HEADERS, "Remote-User": "alice", ...extra },
       });
       const loc = new URL(res.headers.get("location")!);
-      expect(loc.searchParams.get("sso_error")).toBe("proxy_secret");
+      expect(loc.searchParams.get("sso_error")).toBe("untrusted_proxy");
       expect(getMockSession().isLoggedIn).toBeFalsy();
     });
 
