@@ -14,6 +14,32 @@ function text(value: unknown): string | null {
 }
 
 /**
+ * The snapshot fields `matchIdentityChange` reads, as one comparable string.
+ * Detection rewrites a match it keeps whenever this differs between the stored
+ * snapshot and the item it just matched, so the snapshot always describes the
+ * item as the latest run saw it. Without that, a match that kept matching after
+ * a re-title (a metadata refresh, a Fix Match onto a work the rules still
+ * select) kept its old snapshot forever: every direct execute of the rule set
+ * answered 409, and running detection again — the remedy the refusal names —
+ * changed nothing, because detection only rewrote a kept match when its
+ * members, servers or copies changed.
+ */
+export function identityFingerprint(item: Record<string, unknown> | undefined): string {
+  if (!item) return "";
+  const ids = (Array.isArray(item.externalIds) ? (item.externalIds as unknown[]) : [])
+    .map((e) => (e && typeof e === "object" ? (e as Record<string, unknown>) : null))
+    .filter((e): e is Record<string, unknown> => e !== null)
+    .map((e) => `${String(e.source)}:${String(e.externalId)}`)
+    .sort();
+  return JSON.stringify([
+    text(item.title),
+    text(item.parentTitle),
+    typeof item.year === "number" ? item.year : null,
+    ids,
+  ]);
+}
+
+/**
  * Why the item a stored match points at is no longer the work that matched, or
  * `null` when it still is (or the stored snapshot is too old to tell).
  *
@@ -42,7 +68,8 @@ function text(value: unknown): string | null {
  *    ("Dune" 1984 and 2021), so a move of more than a year is a different work.
  *
  * Errs toward refusing: a title the server merely re-worded also reads as a
- * change, and the cure is only to run detection again, which re-snapshots.
+ * change, and the cure is only to run detection again, which re-snapshots
+ * (see `identityFingerprint`).
  */
 export function matchIdentityChange(
   snapshot: unknown,

@@ -79,6 +79,16 @@ describe("GET /api/media/stats/timeline", () => {
     await expectJson(response, 400);
   });
 
+  // The type used to be spliced into the SQL as a quote-doubled literal; it is
+  // a bound parameter now, and anything but a library type is refused first.
+  it.each(["EPISODE", "MOVIE' OR '1'='1", "movie"])("returns 400 for the type %j", async (type) => {
+    await authedUser();
+    const response = await callRoute(GET, {
+      url: `${BASE}?dateField=addedAt&type=${encodeURIComponent(type)}`,
+    });
+    await expectJson(response, 400);
+  });
+
   it("returns empty points when the user has no servers", async () => {
     await authedUser();
     const response = await callRoute(GET, { url: `${BASE}?dateField=addedAt` });

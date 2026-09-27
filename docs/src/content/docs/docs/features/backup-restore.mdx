@@ -66,7 +66,12 @@ Configuration backups capture every column of the configuration tables, includin
 - **User accounts** — usernames, hashed passwords, Plex IDs/tokens, and SSO linkage (`ssoSubject`, `ssoProvider`, `ssoEnabled`)
 - **App settings** — schedules, notifications, theme, and the full SSO configuration (mode, OIDC issuer/client ID/client secret/scopes/username claim, forward-auth header names, master `ssoEnabled` toggle)
 - **Media servers, libraries, and integrations** (Sonarr, Radarr, Lidarr, Seerr)
-- **Lifecycle rule sets, blackout schedules, preroll presets and schedules, saved queries**
+- **Lifecycle rule sets and the Plex collections they feed, blackout schedules, preroll presets and schedules, saved queries**
+- **TRaSH Guide Sync assignments** (which custom formats, quality profiles, sizes and naming Librariarr manages on each Sonarr/Radarr instance)
+
+Backups made before collections and TRaSH assignments were included still restore: rule sets that were assigned to a collection come back without one (reassign it in the rule editor), and TRaSH assignments need to be made again.
+
+**API keys are never included** — not even their hashes — and restoring a backup deletes every existing API key, so a key you deleted can never be brought back by restoring an older backup. After a restore, create new keys under **Settings → Authentication → API Keys** for the applications that use the [public API](/docs/advanced/api/).
 
 After restoring, SSO is restored exactly as configured at backup time. If the restored backup has SSO enabled but you cannot reach the IdP from the new environment, use the [`SSO_DISABLE_OVERRIDE`](/docs/advanced/sso/#recovery--locked-out-of-sso) env var to recover access.
 
@@ -154,6 +159,8 @@ The restore process:
 
 Backup files follow the naming pattern: `librariarr-backup-{timestamp}.json.gz[.enc]`
 
+Each backup file is written readable and writable by its owner only (mode `600`), the user the container runs as (`PUID`), because it holds your integrations' credentials. To copy backups off the host as another user, read them as root or as that user. Downloads from Settings are sent with `Cache-Control: no-store`, so no browser or proxy cache keeps a copy.
+
 ## Managing Backups
 
 From the **Available Backups** section:
@@ -167,4 +174,5 @@ From the **Available Backups** section:
 - Restoring replaces **all** data — there is no selective/partial restore
 - Encrypted backups require the exact passphrase used at creation time
 - The restore process logs out all sessions — plan accordingly
+- Restoring deletes every API key; applications using the public API need new keys
 - Full backups can be large for libraries with tens of thousands of items

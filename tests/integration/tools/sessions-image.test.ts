@@ -82,7 +82,7 @@ describe("GET /api/tools/sessions/image", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe("image/png");
-    expect(response.headers.get("Cache-Control")).toBe("public, max-age=86400");
+    expect(response.headers.get("Cache-Control")).toBe("private, max-age=86400");
   });
 
   it("returns 502 on failed fetch", async () => {

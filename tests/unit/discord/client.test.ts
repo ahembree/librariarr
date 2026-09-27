@@ -5,6 +5,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import {
+  buildApiKeyEmbed,
   sendDiscordNotification,
   buildSuccessSummaryEmbed,
   buildFailureSummaryEmbed,
@@ -227,5 +228,40 @@ describe("buildMaintenanceEmbed", () => {
     expect(embed.title).toBe("Maintenance Mode Disabled");
     expect(embed.description).toContain("deactivated");
     expect(embed.color).toBe(0x22c55e);
+  });
+});
+
+describe("buildApiKeyEmbed", () => {
+  const key = {
+    name: "Home Assistant",
+    prefix: "lbr_Ab3xYz",
+    scopes: ["media:read", "servers:read"],
+    expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+  };
+
+  it("announces a created key with its scopes and expiry, and says what to do if it was not you", () => {
+    const embed = buildApiKeyEmbed("created", key);
+    expect(embed.title).toBe("API Key Created");
+    expect(embed.description).toMatch(/if you did not do this/i);
+    expect(embed.fields).toEqual([
+      { name: "Name", value: "Home Assistant", inline: true },
+      { name: "Key", value: "lbr_Ab3xYz…", inline: true },
+      { name: "Scopes", value: "media:read, servers:read", inline: false },
+      { name: "Expires", value: "2030-01-01T00:00:00.000Z", inline: true },
+    ]);
+    expect(embed.footer?.text).toBe("Librariarr API Keys");
+    expect(embed.timestamp).toBeTruthy();
+  });
+
+  it("reports a never-expiring key as such", () => {
+    const embed = buildApiKeyEmbed("created", { ...key, expiresAt: null });
+    expect(embed.fields?.find((f) => f.name === "Expires")?.value).toBe("Never");
+  });
+
+  it("announces a deleted key with its name and prefix only", () => {
+    const embed = buildApiKeyEmbed("deleted", key);
+    expect(embed.title).toBe("API Key Deleted");
+    expect(embed.fields?.map((f) => f.name)).toEqual(["Name", "Key"]);
+    expect(embed.color).not.toBe(buildApiKeyEmbed("created", key).color);
   });
 });

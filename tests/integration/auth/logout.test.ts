@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
-import { setMockSession, clearMockSession } from "../../setup/mock-session";
+import { setMockSession, clearMockSession, getMockSession } from "../../setup/mock-session";
 import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
 
 // Critical: redirect prisma to test database
@@ -145,5 +145,39 @@ describe("GET /api/auth/logout", () => {
     const locationHeader = response.headers.get("location");
     expect(locationHeader).toBeDefined();
     expect(locationHeader).toContain("/login");
+  });
+
+  // A link on another site with rel=noreferrer sends neither Origin nor
+  // Referer; the browser still marks the navigation as cross-site.
+  it.each(["cross-site", "same-site"])(
+    "signs nobody out for a %s navigation that carries no Origin or Referer",
+    async (fetchSite) => {
+      const user = await createTestUser();
+      const before = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
+      setMockSession({ userId: user.id, isLoggedIn: true, sessionVersion: before });
+
+      const response = await callRoute(GET, {
+        url: "/api/auth/logout",
+        method: "GET",
+        headers: { "Sec-Fetch-Site": fetchSite },
+      });
+      expect(response.status).toBe(307);
+      expect(response.headers.get("location")).toContain("/login");
+
+      const after = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
+      expect(after).toBe(before);
+      expect(getMockSession().isLoggedIn).toBe(true);
+    },
+  );
+
+  it.each(["same-origin", "none"])("still logs out for a %s navigation", async (fetchSite) => {
+    const user = await createTestUser();
+    const before = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
+    setMockSession({ userId: user.id, isLoggedIn: true, sessionVersion: before });
+
+    await callRoute(GET, { url: "/api/auth/logout", method: "GET", headers: { "Sec-Fetch-Site": fetchSite } });
+
+    const after = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
+    expect(after).toBe(before + 1);
   });
 });

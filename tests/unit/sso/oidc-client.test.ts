@@ -132,6 +132,20 @@ describe("resolveRedirectUri", () => {
       "https://direct.example.com/api/auth/sso/oidc/callback"
     );
   });
+
+  it("takes the first value a chain of proxies appended", () => {
+    const req = new Request("http://internal/api/auth/sso/oidc/login", {
+      headers: { "x-forwarded-proto": "https, http", "x-forwarded-host": "librariarr.example.com, internal" },
+    });
+    expect(resolveRedirectUri(req)).toBe("https://librariarr.example.com/api/auth/sso/oidc/callback");
+  });
+
+  it("ignores a forwarded scheme or host that is not one", () => {
+    const req = new Request("http://internal:3000/api/auth/sso/oidc/login", {
+      headers: { "x-forwarded-proto": "javascript", "x-forwarded-host": "evil.example/path" },
+    });
+    expect(resolveRedirectUri(req)).toBe("http://internal:3000/api/auth/sso/oidc/callback");
+  });
 });
 
 describe("discoverOidc", () => {
@@ -201,6 +215,24 @@ describe("discoverOidc", () => {
     await expect(
       discoverOidc("https://idp.example.com", { skipCache: true })
     ).rejects.toThrow(/OIDC issuer mismatch/);
+  });
+
+  // `issuer` is REQUIRED (Discovery §3); skipping the match when it is absent
+  // skipped the one check that ties the document to the URL it came from.
+  it("rejects a discovery document with no issuer", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          authorization_endpoint: "https://idp.example.com/auth",
+          token_endpoint: "https://idp.example.com/token",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    ) as typeof fetch;
+
+    await expect(
+      discoverOidc("https://idp.example.com", { skipCache: true })
+    ).rejects.toThrow(/has no issuer/);
   });
 
   it("tolerates trailing-slash differences in the issuer claim", async () => {

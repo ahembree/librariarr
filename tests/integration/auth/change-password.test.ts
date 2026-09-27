@@ -72,7 +72,7 @@ describe("POST /api/auth/local/change-password", () => {
 
   it("returns 400 when neither newPassword nor newUsername provided", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -85,7 +85,7 @@ describe("POST /api/auth/local/change-password", () => {
 
   it("returns 400 for password shorter than 8 characters", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -98,7 +98,7 @@ describe("POST /api/auth/local/change-password", () => {
 
   it("returns 400 for username shorter than 3 characters", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -116,7 +116,7 @@ describe("POST /api/auth/local/change-password", () => {
       data: { passwordHash: "hashed_oldpassword" },
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -139,7 +139,7 @@ describe("POST /api/auth/local/change-password", () => {
       data: { passwordHash: "hashed_correctpassword" },
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -157,7 +157,7 @@ describe("POST /api/auth/local/change-password", () => {
       data: { passwordHash: "hashed_existing" },
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -170,7 +170,7 @@ describe("POST /api/auth/local/change-password", () => {
 
   it("allows setting password without currentPassword when no existing password", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -184,9 +184,47 @@ describe("POST /api/auth/local/change-password", () => {
     expect(updated?.passwordHash).toBe("hashed_newpassword123");
   });
 
+  // A first password is a lasting way in that the API-key step-up also
+  // accepts, so a stolen cookie must not be able to set one.
+  it.each([
+    ["a sign-in older than 15 minutes", Date.now() - 16 * 60 * 1000],
+    ["a session with no sign-in time", undefined],
+  ])("refuses to set a first password on %s", async (_label, authenticatedAt) => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt });
+
+    const response = await callRoute(POST, {
+      url: "/api/auth/local/change-password",
+      method: "POST",
+      body: { newPassword: "newpassword123" },
+    });
+    const body = await expectJson<{ error: string; code: string }>(response, 403);
+    expect(body.code).toBe("reauth_required");
+    expect(body.error).toMatch(/sign-in from the last 15 minutes/);
+
+    const unchanged = await prisma.user.findUnique({ where: { id: user.id } });
+    expect(unchanged?.passwordHash).toBeNull();
+    expect(unchanged?.sessionVersion).toBe(user.sessionVersion);
+  });
+
+  it("still changes an existing password on an old sign-in when the current password is right", async () => {
+    const user = await createTestUser();
+    await prisma.user.update({ where: { id: user.id }, data: { passwordHash: "hashed_oldpassword1" } });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() - 60 * 60 * 1000 });
+
+    const response = await callRoute(POST, {
+      url: "/api/auth/local/change-password",
+      method: "POST",
+      body: { currentPassword: "oldpassword1", newPassword: "newpassword123" },
+    });
+    await expectJson(response, 200);
+    const updated = await prisma.user.findUnique({ where: { id: user.id } });
+    expect(updated?.passwordHash).toBe("hashed_newpassword123");
+  });
+
   it("changes username successfully", async () => {
     const user = await createTestUser({ username: "OldName" });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -210,7 +248,7 @@ describe("POST /api/auth/local/change-password", () => {
       data: { localUsername: "takenname" },
     });
 
-    setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -228,7 +266,7 @@ describe("POST /api/auth/local/change-password", () => {
       data: { passwordHash: "hashed_oldpw" },
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -252,7 +290,7 @@ describe("POST /api/auth/local/change-password", () => {
   it("increments sessionVersion to invalidate other sessions", async () => {
     const user = await createTestUser();
     const initialVersion = user.sessionVersion;
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -269,7 +307,7 @@ describe("POST /api/auth/local/change-password", () => {
     // Ensure no localUsername is set
     expect(user.localUsername).toBeNull();
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -291,7 +329,7 @@ describe("POST /api/auth/local/change-password", () => {
       data: { localUsername: "myname" },
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -305,7 +343,7 @@ describe("POST /api/auth/local/change-password", () => {
 
   it("returns 401 when user no longer exists in DB", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     // Delete user from DB
     await prisma.user.delete({ where: { id: user.id } });

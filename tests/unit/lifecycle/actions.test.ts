@@ -72,7 +72,7 @@ vi.mock("axios", () => ({
   isAxiosError: vi.fn(),
 }));
 
-import { executeAction, extractActionError, cleanupArrTags } from "@/lib/lifecycle/actions";
+import { executeAction, extractActionError, describeActionError, cleanupArrTags } from "@/lib/lifecycle/actions";
 import type { ActionRecord } from "@/lib/lifecycle/actions";
 import axios from "axios";
 
@@ -101,6 +101,21 @@ function makeAction(overrides: Partial<ActionRecord> = {}): ActionRecord {
 describe("extractActionError", () => {
   it("returns message from Error instance", () => {
     expect(extractActionError(new Error("something broke"))).toBe("something broke");
+  });
+
+  it("sanitizes paths and private addresses out of what is stored and returned", () => {
+    const ie = Object.assign(new Error("Radarr HTTP 500: boom"), {
+      name: "IntegrationError",
+      status: 500,
+      detail: "Unable to delete /data/movies/Arrival (2016)/Arrival.mkv on 192.168.1.20 via https://10-0-0-5.abc123.plex.direct:32400 (/app/src/lib/arr/radarr-client.ts)",
+    });
+    expect(extractActionError(ie)).toBe(
+      "HTTP 500: Unable to delete /data/movies/Arrival (2016)/Arrival.mkv on [internal] via https://[internal]:32400 ([internal])",
+    );
+    // The log line keeps the full text.
+    expect(describeActionError(ie)).toContain("192.168.1.20");
+    expect(describeActionError(ie)).toContain("radarr-client.ts");
+    expect(extractActionError(new Error("ECONNREFUSED 172.16.0.9:8989"))).toBe("ECONNREFUSED [internal]:8989");
   });
 
   it("returns 'Unknown error' for non-Error values", () => {

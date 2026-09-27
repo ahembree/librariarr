@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { clampSkip } from "@/lib/api/pagination";
 import type { Prisma } from "@/generated/prisma/client";
 
 /**
@@ -176,7 +177,7 @@ export async function fetchPlayHistory(options: {
       // the order total, so paging can't duplicate or drop rows in a tie block.
       orderBy: [{ watchedAt: { sort: "desc", nulls: "last" } }, { id: "asc" }],
       take: limit + 1,
-      skip: (page - 1) * limit,
+      skip: clampSkip((page - 1) * limit),
       select: PLAY_HISTORY_SELECT,
     }),
     prisma.watchHistory.count({ where }),

@@ -1,4 +1,5 @@
 import type { Prisma } from "@/generated/prisma/client";
+import { escapeLike } from "./escape-like";
 
 // Map standardized resolution labels to raw DB patterns
 const RESOLUTION_DB_VALUES: Record<string, string[]> = {
@@ -89,7 +90,10 @@ export function applyCommonFilters(
     }
   }
 
-  // String multi-select filters (case-insensitive contains for each)
+  // String multi-select filters (case-insensitive contains for each).
+  // `escapeLike`: `contains` is a LIKE pattern and Prisma does not escape
+  // `%` / `_` / `\`, so an unescaped value is a wildcard, not a codec name
+  // (the same hole the list routes' `search` had — see escape-like.ts).
   const multiContains: [string, keyof Prisma.MediaItemWhereInput][] = [
     ["videoCodec", "videoCodec"],
     ["audioCodec", "audioCodec"],
@@ -102,10 +106,10 @@ export function applyCommonFilters(
     const values = parseMulti(params.get(param));
     if (values) {
       if (values.length === 1) {
-        (where as Record<string, unknown>)[field] = { contains: values[0], mode: "insensitive" };
+        (where as Record<string, unknown>)[field] = { contains: escapeLike(values[0]), mode: "insensitive" };
       } else {
         andClauses.push({
-          OR: values.map((v) => ({ [field]: { contains: v, mode: "insensitive" } })),
+          OR: values.map((v) => ({ [field]: { contains: escapeLike(v), mode: "insensitive" } })),
         });
       }
     }
@@ -335,7 +339,7 @@ export function applyCommonFilters(
         streams: {
           some: {
             streamType: 2,
-            codec: { contains: streamAudioCodecs[0], mode: "insensitive" },
+            codec: { contains: escapeLike(streamAudioCodecs[0]), mode: "insensitive" },
           },
         },
       });
@@ -345,7 +349,7 @@ export function applyCommonFilters(
           streams: {
             some: {
               streamType: 2,
-              codec: { contains: c, mode: "insensitive" },
+              codec: { contains: escapeLike(c), mode: "insensitive" },
             },
           },
         })),
@@ -452,16 +456,18 @@ export function applyStartsWithFilter(
     });
     where.AND = andClauses;
   } else {
-    // Merge with existing field filter if present (e.g. parentTitle: { not: null })
+    // Merge with existing field filter if present (e.g. parentTitle: { not: null }).
+    // The value is a LIKE prefix: the UI only ever sends A-Z, but the public API
+    // can send `%` or `_`, which unescaped would match every title.
     const existing = where[field];
     if (existing && typeof existing === "object" && !Array.isArray(existing)) {
       (where as Record<string, unknown>)[field] = {
         ...existing,
-        startsWith,
+        startsWith: escapeLike(startsWith),
         mode: "insensitive",
       };
     } else {
-      (where as Record<string, unknown>)[field] = { startsWith, mode: "insensitive" };
+      (where as Record<string, unknown>)[field] = { startsWith: escapeLike(startsWith), mode: "insensitive" };
     }
   }
 }

@@ -749,6 +749,9 @@ describe("detectAndSaveMatches", () => {
           mediaItemId: "a",
           itemData: {
             id: "a",
+            title: "Movie",
+            parentTitle: null,
+            externalIds: [{ source: "TMDB", externalId: "111" }],
             servers: [{ serverId: "s2" }, { serverId: "s1" }],
             copies: [{ id: "b", libraryId: "lib-s2", ratingKey: "rk-b", title: "Movie", parentTitle: null }],
           },
@@ -758,6 +761,43 @@ describe("detectAndSaveMatches", () => {
       await detectAndSaveMatches(armed, ["s1", "s2"]);
 
       expect(mockPrisma.ruleMatch.updateMany).not.toHaveBeenCalled();
+    });
+
+    // The direct-execute identity check compares the item with this snapshot;
+    // a kept match that was never re-snapshotted after a re-title made every
+    // Execute of the rule set answer 409, and re-running detection did nothing.
+    it.each([
+      ["its title", { title: "Movie (Old Cut)" }],
+      ["its year", { title: "Movie", year: 1984 }],
+      ["its TMDB id", { title: "Movie", externalIds: [{ source: "TMDB", externalId: "999" }] }],
+    ])("rewrites a held match whose identity changed: %s", async (_label, stale) => {
+      mockEvaluateRules.mockResolvedValue([copy("a", "s1", { year: 2021 }), copy("b", "s2", { year: 2021 })]);
+      mockPrisma.ruleMatch.findMany.mockResolvedValue([
+        {
+          mediaItemId: "a",
+          itemData: {
+            id: "a",
+            parentTitle: null,
+            year: 2021,
+            externalIds: [{ source: "TMDB", externalId: "111" }],
+            servers: [{ serverId: "s2" }, { serverId: "s1" }],
+            copies: [{ id: "b", libraryId: "lib-s2", ratingKey: "rk-b", title: "Movie", parentTitle: null }],
+            ...stale,
+          },
+        },
+      ]);
+
+      await detectAndSaveMatches(armed, ["s1", "s2"]);
+
+      expect(mockPrisma.ruleMatch.updateMany).toHaveBeenCalledTimes(1);
+      const arg = mockPrisma.ruleMatch.updateMany.mock.calls[0][0];
+      expect(arg.where).toEqual({ ruleSetId: "rs1", mediaItemId: "a" });
+      expect(arg.data.itemData).toMatchObject({
+        title: "Movie",
+        year: 2021,
+        externalIds: [{ source: "TMDB", externalId: "111" }],
+      });
+      expect(mockPrisma.ruleMatch.createMany).not.toHaveBeenCalled();
     });
   });
 

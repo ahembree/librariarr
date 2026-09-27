@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { clampSkip } from "@/lib/api/pagination";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { escapeLike } from "@/lib/filters/escape-like";
 import type { Prisma } from "@/generated/prisma/client";
 
 export async function GET(request: NextRequest) {
@@ -38,14 +40,16 @@ export async function GET(request: NextRequest) {
   }
 
   if (search) {
-    where.message = { contains: search, mode: "insensitive" };
+    // A LIKE pattern: Prisma does not escape `%` / `_`, so unescaped a `%`
+    // search matched every log line (see escape-like.ts).
+    where.message = { contains: escapeLike(search), mode: "insensitive" };
   }
 
   const [logs, total] = await Promise.all([
     prisma.logEntry.findMany({
       where,
       orderBy: { createdAt: "desc" },
-      skip: (page - 1) * limit,
+      skip: clampSkip((page - 1) * limit),
       take: limit,
     }),
     prisma.logEntry.count({ where }),

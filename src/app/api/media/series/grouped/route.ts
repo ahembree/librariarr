@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { jsonResponse } from "@/lib/api/json-response";
+import { clampSkip, isFullListingLimit } from "@/lib/api/pagination";
 import { prisma } from "@/lib/db";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { getServerPresenceByGroup } from "@/lib/dedup/server-presence";
-import { escapeLike } from "@/lib/conditions/where-builder";
+import { escapeLike } from "@/lib/filters/escape-like";
 import { firstNonNullSql, qualityCountsSql, resolutionLabelSql } from "@/lib/media/series-sql";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
 
@@ -184,15 +185,17 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const page = Math.max(1, parseInt(searchParams.get("page") ?? "1") || 1);
-  const rawLimit = parseInt(searchParams.get("limit") ?? "50");
+  const rawLimitParam = searchParams.get("limit");
+  const rawLimit = parseInt(rawLimitParam ?? "50");
   // Clamped to [1, 200] with 0 reserved for "all", matching `parseListPagination`.
   // Without the lower bound a negative `limit` fell through the `limit > 0`
   // branch below and returned the WHOLE grouped list with `hasMore: false` — an
-  // unpaginated full-library response reachable from a query string.
-  const limit =
-    rawLimit === 0
-      ? 0
-      : Math.max(1, Math.min(Number.isNaN(rawLimit) ? 50 : rawLimit, 200));
+  // unpaginated full-library response reachable from a query string. "All" is
+  // decided by `isFullListingLimit` so the API-key guard, which charges a full
+  // listing twenty times an ordinary page, cannot drift from this route.
+  const limit = isFullListingLimit(rawLimitParam)
+    ? 0
+    : Math.max(1, Math.min(Number.isNaN(rawLimit) ? 50 : rawLimit, 200));
   const search = searchParams.get("search");
   const sortBy = searchParams.get("sortBy") || "parentTitle";
   const sortOrder = searchParams.get("sortOrder") || "asc";
@@ -385,7 +388,7 @@ export async function GET(request: NextRequest) {
 
   const sorted = sortSeriesList(seriesList, sortBy, sortOrder);
   if (limit > 0) {
-    const offset = (page - 1) * limit;
+    const offset = clampSkip((page - 1) * limit);
     const paged = sorted.slice(offset, offset + limit + 1);
     const hasMore = paged.length > limit;
     if (hasMore) paged.pop();

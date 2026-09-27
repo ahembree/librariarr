@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { executeAction, extractActionError } from "@/lib/lifecycle/actions";
+import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
 import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
 
 /**
@@ -202,7 +202,7 @@ export async function executeActionsForItems(
       const msg = extractActionError(error);
       errors.push(`${item.title}: ${msg}`);
       failures.push({ title: item.title, error: msg });
-      logger.error("Lifecycle", `Failed immediate ${actionType} for "${item.title}"`, { error: msg });
+      logger.error("Lifecycle", `Failed immediate ${actionType} for "${item.title}"`, { error: describeActionError(error) });
 
       await prisma.lifecycleAction.create({
         data: {

@@ -97,6 +97,35 @@ describe("GET /api/settings/sync-schedule", () => {
     const body = await expectJson<{ settings: { syncSchedule: string } }>(res);
     expect(body.settings.syncSchedule).toBe("DAILY");
   });
+
+  // The settings row also holds secrets the routes that own them never return.
+  it("returns only the schedule, never the secrets stored beside it", async () => {
+    const user = await createTestUser();
+    const { getTestPrisma } = await import("../../setup/test-db");
+    await getTestPrisma().appSettings.create({
+      data: {
+        userId: user.id,
+        syncSchedule: "WEEKLY",
+        backupEncryptionPassword: "backup-passphrase",
+        oidcClientSecret: "oidc-secret",
+        aiApiKey: "sk-ai-key",
+        discordWebhookUrl: "https://discord.com/api/webhooks/1/secret-token",
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    for (const res of [
+      await callRoute(getSyncSchedule),
+      await callRoute(putSyncSchedule, { method: "PUT", body: { syncSchedule: "DAILY" } }),
+    ]) {
+      const body = await expectJson<{ settings: Record<string, unknown> }>(res);
+      expect(Object.keys(body.settings).sort()).toEqual(["lastScheduledSync", "syncSchedule"]);
+      const text = JSON.stringify(body);
+      for (const secret of ["backup-passphrase", "oidc-secret", "sk-ai-key", "secret-token"]) {
+        expect(text).not.toContain(secret);
+      }
+    }
+  });
 });
 
 describe("PUT /api/settings/sync-schedule", () => {

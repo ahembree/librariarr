@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { executeAction, extractActionError } from "@/lib/lifecycle/actions";
+import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
+import { tryBeginExecute, endExecute } from "@/lib/lifecycle/execute-in-flight";
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
@@ -11,6 +12,7 @@ import {
 } from "@/lib/lifecycle/exception-guard";
 import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
+import type { Prisma } from "@/generated/prisma/client";
 
 export async function DELETE(
   _request: NextRequest,
@@ -77,6 +79,41 @@ export async function POST(
       { status: 400 }
     );
   }
+
+  // SINGLE-FLIGHT on the action's item within its rule set: this runs the Arr
+  // call inline exactly like the manual execute route, so two overlapping
+  // retries of the same FAILED action — or a retry landing while an Execute of
+  // the same rule set covers the item — each send the same delete and each
+  // record a COMPLETED row with its own `deletedBytes`. Claimed before any read
+  // the response is built from, released in the `finally` on every exit. See
+  // `execute-in-flight.ts` for the live-review finding behind this.
+  const ruleSetId = action.ruleSetId;
+  // An action whose item is gone claims the whole rule set; retryAction refuses it anyway.
+  const lockedItems = action.mediaItemId ? [action.mediaItemId] : undefined;
+  if (!tryBeginExecute(ruleSetId, lockedItems)) {
+    return NextResponse.json(
+      { error: "An execution covering this item is already running for this rule set" },
+      { status: 409 }
+    );
+  }
+  try {
+    return await retryAction(session, { ...action, ruleSetId }, skipTitleValidation);
+  } finally {
+    endExecute(ruleSetId, lockedItems);
+  }
+}
+
+type FailedAction = Prisma.LifecycleActionGetPayload<{
+  include: { mediaItem: { include: { externalIds: true } } };
+}> & { ruleSetId: string };
+
+/** The retry proper. Runs under the execute lock on its item (see `POST`). */
+async function retryAction(
+  session: Awaited<ReturnType<typeof getSession>>,
+  action: FailedAction,
+  skipTitleValidation: boolean,
+): Promise<NextResponse> {
+  const { id } = action;
 
   // A disabled rule set must not fire actions, even via force-retry. Detection
   // skips disabled sets, so their RuleMatch rows are frozen — the stale-match
@@ -203,7 +240,7 @@ export async function POST(
       data: { error: msg, executedAt: new Date() },
     });
 
-    logger.error("Lifecycle", `Force-retry failed for "${mediaItem.title}"`, { error: msg });
+    logger.error("Lifecycle", `Force-retry failed for "${mediaItem.title}"`, { error: describeActionError(error) });
 
     return NextResponse.json({ error: msg }, { status: 500 });
   }

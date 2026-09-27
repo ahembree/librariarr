@@ -53,6 +53,24 @@ describe("GET /api/settings/discord", () => {
     expect(body.webhookUsername).toBe("");
     expect(body.webhookAvatarUrl).toBe("");
     expect(body.notifyMaintenance).toBe(false);
+    // On by default: a key created by someone else is what this reveals.
+    expect((body as { notifyApiKeys?: boolean }).notifyApiKeys).toBe(true);
+  });
+
+  it("round-trips the API key notification toggle", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+
+    await expectJson(await callRoute(PUT, { method: "PUT", body: { notifyApiKeys: false } }), 200);
+    let body = await expectJson<{ notifyApiKeys: boolean; notifyMaintenance: boolean }>(await callRoute(GET));
+    expect(body.notifyApiKeys).toBe(false);
+    expect(body.notifyMaintenance).toBe(false);
+
+    await expectJson(await callRoute(PUT, { method: "PUT", body: { notifyApiKeys: true } }), 200);
+    body = await expectJson(await callRoute(GET));
+    expect(body.notifyApiKeys).toBe(true);
+
+    await expectJson(await callRoute(PUT, { method: "PUT", body: { notifyApiKeys: "yes" } }), 400);
   });
 
   it("returns saved discord settings after PUT", async () => {

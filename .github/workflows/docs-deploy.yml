@@ -6,6 +6,13 @@ on:
     paths:
       - "docs/**"
       - ".github/workflows/docs-deploy.yml"
+      # The API reference is generated from the app's OpenAPI source at docs
+      # build time, so a change to the API republishes the docs.
+      - "scripts/generate-openapi.ts"
+      - "src/lib/api-keys/openapi.ts"
+      - "src/lib/api-keys/scopes.ts"
+      - "src/lib/api-keys/limits.ts"
+      - "package.json"
   workflow_dispatch:
 
 permissions:
@@ -20,6 +27,11 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # swagger-ui-dist pulls in @scarf/scarf, whose install script reports the
+      # install to a third party. The app's pnpm config refuses to run it; npm
+      # (used for the docs) runs it unless told not to report.
+      SCARF_ANALYTICS: "false"
     steps:
       - name: Checkout
         uses: actions/checkout@v7

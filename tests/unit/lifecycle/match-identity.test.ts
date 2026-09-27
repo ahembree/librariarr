@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchIdentityChange, type IdentityRow } from "@/lib/lifecycle/match-identity";
+import { identityFingerprint, matchIdentityChange, type IdentityRow } from "@/lib/lifecycle/match-identity";
 
 function row(overrides: Partial<IdentityRow> = {}): IdentityRow {
   return { title: "The Matrix", parentTitle: null, year: 1999, externalIds: [], ...overrides };
@@ -81,5 +81,48 @@ describe("matchIdentityChange", () => {
     expect(matchIdentityChange({}, row(), "MOVIE")).toBeNull();
     expect(matchIdentityChange("junk", row(), "MOVIE")).toBeNull();
     expect(matchIdentityChange({ title: 42, externalIds: "nope" }, row(), "MOVIE")).toBeNull();
+  });
+});
+
+describe("identityFingerprint", () => {
+  const snapshot = {
+    title: "The Matrix",
+    parentTitle: null,
+    year: 1999,
+    externalIds: [
+      { source: "TMDB", externalId: "603" },
+      { source: "IMDB", externalId: "tt0133093" },
+    ],
+  };
+
+  it("is stable across the fields detection rewrites for other reasons", () => {
+    expect(identityFingerprint({ ...snapshot, servers: [{ serverId: "s1" }], memberIds: ["x"] })).toBe(
+      identityFingerprint(snapshot),
+    );
+  });
+
+  it("does not depend on external id order or extra id fields", () => {
+    expect(
+      identityFingerprint({
+        ...snapshot,
+        externalIds: [
+          { source: "IMDB", externalId: "tt0133093", id: "row-2" },
+          { source: "TMDB", externalId: "603", id: "row-1" },
+        ],
+      }),
+    ).toBe(identityFingerprint(snapshot));
+  });
+
+  it("changes with each field matchIdentityChange reads", () => {
+    const base = identityFingerprint(snapshot);
+    expect(identityFingerprint({ ...snapshot, title: "Hackers" })).not.toBe(base);
+    expect(identityFingerprint({ ...snapshot, parentTitle: "Collection" })).not.toBe(base);
+    expect(identityFingerprint({ ...snapshot, year: 2021 })).not.toBe(base);
+    expect(identityFingerprint({ ...snapshot, externalIds: [{ source: "TMDB", externalId: "604" }] })).not.toBe(base);
+  });
+
+  it("tolerates missing and malformed snapshots", () => {
+    expect(identityFingerprint(undefined)).toBe("");
+    expect(identityFingerprint({ title: 42, externalIds: "nope" })).toBe(identityFingerprint({}));
   });
 });

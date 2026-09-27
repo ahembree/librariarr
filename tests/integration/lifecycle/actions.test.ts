@@ -67,6 +67,16 @@ vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
   };
 });
 
+// Pass-through spy on the inline action runner so the single-flight tests can
+// hold one call open on a deferred promise while a second request arrives.
+vi.mock("@/lib/lifecycle/run-actions", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/lifecycle/run-actions")>();
+  return {
+    ...actual,
+    executeActionsForItems: vi.fn(actual.executeActionsForItems),
+  };
+});
+
 // Import AFTER mocks
 import { GET } from "@/app/api/lifecycle/actions/route";
 import { DELETE as actionDelete, POST as actionRetry } from "@/app/api/lifecycle/actions/[id]/route";
@@ -294,6 +304,18 @@ describe("Lifecycle Actions", () => {
       expect(body.groups).toHaveLength(1);
       expect(body.groups[0].items).toHaveLength(1);
       expect(body.groups[0].items[0].status).toBe("COMPLETED");
+    });
+
+    it("rejects an unknown status with 400 instead of failing the query", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      for (const status of ["CANCELLED", "pending"]) {
+        const body = await expectJson<{ error: string }>(
+          await callRoute(GET, { url: "/api/lifecycle/actions", searchParams: { status } }),
+          400,
+        );
+        expect(body.error).toMatch(/Invalid status/);
+      }
     });
 
     it("returns ALL statuses when status=ALL", async () => {
@@ -628,6 +650,7 @@ describe("Lifecycle Actions", () => {
     it("returns 400 when rule set has no action configured", async () => {
       const user = await createTestUser();
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "No Action",
         actionType: undefined as unknown as string,
       });
@@ -647,6 +670,7 @@ describe("Lifecycle Actions", () => {
     it("returns 400 when non-DO_NOTHING action has no arrInstanceId", async () => {
       const user = await createTestUser();
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Missing Arr",
         actionType: "DELETE_RADARR",
         arrInstanceId: undefined as unknown as string,
@@ -667,6 +691,7 @@ describe("Lifecycle Actions", () => {
     it("returns 400 fast-fail when CHANGE_QUALITY_PROFILE action lacks a target profile", async () => {
       const user = await createTestUser();
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Missing Target",
         actionType: "CHANGE_QUALITY_PROFILE_RADARR",
         arrInstanceId: "arr1",
@@ -694,6 +719,7 @@ describe("Lifecycle Actions", () => {
         type: "MOVIE",
       });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Do Nothing Rule",
         type: "MOVIE",
         actionType: "DO_NOTHING",
@@ -720,6 +746,60 @@ describe("Lifecycle Actions", () => {
       expect(body.errors).toHaveLength(0);
     });
 
+    it("refuses to execute a rule set whose actions are turned off", async () => {
+      // The editor keeps actionType when actions are switched off, and detection
+      // keeps filling matches — "off" must still mean nothing runs.
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { title: "Under Review", type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Paused Rule",
+        actionEnabled: false,
+        actionType: "DELETE_RADARR",
+        arrInstanceId: "radarr-1",
+      });
+      await createTestRuleMatch(ruleSet.id, item.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/Actions are turned off/);
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+      expect(await getTestPrisma().ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(1);
+    });
+
+    it("refuses an empty mediaItemIds list instead of executing every match", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { title: "Not Selected", type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Armed Rule",
+        actionEnabled: true,
+        actionType: "DO_NOTHING",
+      });
+      await createTestRuleMatch(ruleSet.id, item.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id, mediaItemIds: [] },
+      });
+
+      const body = await expectJson<{ error: string; details: string[] }>(response, 400);
+      expect(body.details.join(" ")).toMatch(/at least one media item id/);
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
     it("creates COMPLETED lifecycle action records after execution", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
@@ -729,6 +809,7 @@ describe("Lifecycle Actions", () => {
         type: "MOVIE",
       });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Record Rule",
         type: "MOVIE",
         actionType: "DO_NOTHING",
@@ -770,6 +851,7 @@ describe("Lifecycle Actions", () => {
         type: "SERIES",
       });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Series Rule",
         type: "SERIES",
         actionType: "DO_NOTHING",
@@ -807,6 +889,7 @@ describe("Lifecycle Actions", () => {
         type: "MOVIE",
       });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Failing Rule",
         type: "MOVIE",
         actionType: "DO_NOTHING",
@@ -1015,6 +1098,189 @@ describe("Lifecycle Actions", () => {
     });
   });
 
+  // ---- POST /api/lifecycle/actions/execute — single-flight ----
+
+  describe("POST /api/lifecycle/actions/execute — single-flight per rule set", () => {
+    // A live security review of the public API found that this route ran the
+    // Arr deletions inline with nothing serialising it, so N overlapping POSTs
+    // for one rule set each sent the same delete. The lock is per rule set,
+    // answered with 409, and released whatever the outcome.
+    async function seedExecutable() {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { title: "Locked Movie", type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
+        name: "Single-flight Rule",
+        type: "MOVIE",
+        actionType: "DO_NOTHING",
+      });
+      await createTestRuleMatch(ruleSet.id, item.id);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      return { user, item, ruleSet };
+    }
+
+    const execute = (ruleSetId: string, mediaItemIds: string[]) =>
+      callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId, mediaItemIds },
+      });
+
+    /** Hold the next `executeActionsForItems` call open until `release()`. */
+    async function holdNextRun() {
+      const { executeActionsForItems } = await import("@/lib/lifecycle/run-actions");
+      const runner = vi.mocked(executeActionsForItems);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      runner.mockImplementationOnce(async () => {
+        await gate;
+        return { executed: 1, failed: 0, errors: [], failures: [] };
+      });
+      return { runner, release };
+    }
+
+    it("answers 409 to an overlapping execute of the same rule set and 200 to the one that got there first", async () => {
+      const { item, ruleSet } = await seedExecutable();
+      const { runner, release } = await holdNextRun();
+
+      const first = execute(ruleSet.id, [item.id]);
+      // Wait until the first request is inside the (held) action run — i.e.
+      // past every validation and holding the lock — before racing it.
+      await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(1));
+
+      const second = await execute(ruleSet.id, [item.id]);
+      const collided = await expectJson<{ error: string }>(second, 409);
+      expect(collided.error).toMatch(/already running for this rule set/i);
+      // The second request never reached the runner: no duplicate Arr call.
+      expect(runner).toHaveBeenCalledTimes(1);
+
+      release();
+      const body = await expectJson<{ executed: number; failed: number }>(await first, 200);
+      expect(body.executed).toBe(1);
+    });
+
+    it("does not block a different rule set", async () => {
+      const { user, item, ruleSet } = await seedExecutable();
+      const other = await createTestRuleSet(user.id, {
+        actionEnabled: true,
+        name: "Other Rule",
+        type: "MOVIE",
+        actionType: "DO_NOTHING",
+      });
+      await createTestRuleMatch(other.id, item.id);
+      const { runner, release } = await holdNextRun();
+
+      const first = execute(ruleSet.id, [item.id]);
+      await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(1));
+
+      const otherResponse = await execute(other.id, [item.id]);
+      expect(otherResponse.status).toBe(200);
+
+      release();
+      expect((await first).status).toBe(200);
+    });
+
+    it("releases the lock once the run completes, so a later execute succeeds", async () => {
+      const { item, ruleSet } = await seedExecutable();
+      const { runner, release } = await holdNextRun();
+
+      const first = execute(ruleSet.id, [item.id]);
+      await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(1));
+      expect((await execute(ruleSet.id, [item.id])).status).toBe(409);
+
+      release();
+      expect((await first).status).toBe(200);
+
+      // The held (mocked) run skipped the real cleanup, so the match is still
+      // there for the real runner to act on.
+      const third = await execute(ruleSet.id, [item.id]);
+      const body = await expectJson<{ executed: number }>(third, 200);
+      expect(body.executed).toBe(1);
+      expect(runner).toHaveBeenCalledTimes(2);
+    });
+
+    it("releases the lock when the run throws", async () => {
+      const { item, ruleSet } = await seedExecutable();
+      const { executeActionsForItems } = await import("@/lib/lifecycle/run-actions");
+      vi.mocked(executeActionsForItems).mockRejectedValueOnce(new Error("Arr exploded"));
+
+      await expect(execute(ruleSet.id, [item.id])).rejects.toThrow("Arr exploded");
+
+      const again = await execute(ruleSet.id, [item.id]);
+      expect(again.status).toBe(200);
+    });
+
+    // The Pending page's per-item Execute buttons run side by side; a lock on
+    // the whole rule set made the second answer 409 though it named another
+    // match.
+    it("runs per-item executes of different items of one rule set side by side", async () => {
+      const { item, ruleSet } = await seedExecutable();
+      const second = await createTestMediaItem(item.libraryId, { title: "Second Movie", type: "MOVIE" });
+      await createTestRuleMatch(ruleSet.id, second.id);
+      const { runner, release } = await holdNextRun();
+
+      const first = execute(ruleSet.id, [item.id]);
+      await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(1));
+
+      const other = await execute(ruleSet.id, [second.id]);
+      expect(other.status).toBe(200);
+
+      release();
+      expect((await first).status).toBe(200);
+    });
+
+    it("refuses Execute All while one of the rule set's items is running, and an item while Execute All runs", async () => {
+      const { item, ruleSet } = await seedExecutable();
+      const second = await createTestMediaItem(item.libraryId, { title: "Second Movie", type: "MOVIE" });
+      await createTestRuleMatch(ruleSet.id, second.id);
+      const executeAll = () =>
+        callRoute(executePost, {
+          url: "/api/lifecycle/actions/execute",
+          method: "POST",
+          body: { ruleSetId: ruleSet.id },
+        });
+
+      const held = await holdNextRun();
+      const first = execute(ruleSet.id, [item.id]);
+      await vi.waitFor(() => expect(held.runner).toHaveBeenCalledTimes(1));
+      const all = await expectJson<{ error: string }>(await executeAll(), 409);
+      expect(all.error).toMatch(/already running for this rule set/i);
+      held.release();
+      expect((await first).status).toBe(200);
+
+      const heldAll = await holdNextRun();
+      const whole = executeAll();
+      await vi.waitFor(() => expect(heldAll.runner).toHaveBeenCalledTimes(2));
+      const one = await expectJson<{ error: string }>(await execute(ruleSet.id, [second.id]), 409);
+      expect(one.error).toMatch(/already running for this rule set/i);
+      heldAll.release();
+      expect((await whole).status).toBe(200);
+    });
+
+    it("refuses a force-retry of the same rule set while an execute holds the lock", async () => {
+      const { user, item, ruleSet } = await seedExecutable();
+      const failedAction = await createTestAction(user.id, item.id, ruleSet.id, { status: "FAILED" });
+      const { runner, release } = await holdNextRun();
+
+      const first = execute(ruleSet.id, [item.id]);
+      await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(1));
+
+      const retry = await callRouteWithParams(actionRetry, { id: failedAction.id }, {
+        url: `/api/lifecycle/actions/${failedAction.id}`,
+        method: "POST",
+      });
+      const body = await expectJson<{ error: string }>(retry, 409);
+      expect(body.error).toMatch(/already running for this rule set/i);
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+
+      release();
+      expect((await first).status).toBe(200);
+    });
+  });
+
   describe("POST /api/lifecycle/actions/execute — whole-record exception guard", () => {
     it("refuses a whole-record delete when a NON-matching sibling episode is excepted", async () => {
       const user = await createTestUser();
@@ -1027,6 +1293,7 @@ describe("Lifecycle Actions", () => {
         title: "Ep 2", type: "SERIES", parentTitle: "Guarded Show", seasonNumber: 1, episodeNumber: 2,
       });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Whole Record Rule",
         type: "SERIES",
         actionType: "DELETE_SONARR",
@@ -1063,6 +1330,7 @@ describe("Lifecycle Actions", () => {
       await prisma.mediaItem.updateMany({ where: { id: { in: [movie.id, copy.id] } }, data: { dedupKey: "movie:tmdb:42" } });
       await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: copy.id } });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Movie delete",
         type: "MOVIE",
         actionType: "DELETE_RADARR",
@@ -1091,6 +1359,7 @@ describe("Lifecycle Actions", () => {
         title: "Ep 1", type: "SERIES", parentTitle: "Free Show", seasonNumber: 1, episodeNumber: 1,
       });
       const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true,
         name: "Whole Record Rule 2",
         type: "SERIES",
         actionType: "DELETE_SONARR",

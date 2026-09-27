@@ -78,6 +78,7 @@ vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
     normalizeTitle: actual.normalizeTitle,
     executeAction: mockExecuteAction,
     extractActionError: mockExtractActionError,
+    describeActionError: actual.describeActionError,
   };
 });
 vi.mock("@/lib/lifecycle/collections", () => ({
@@ -1938,6 +1939,79 @@ describe("executeLifecycleActions", () => {
       await executeLifecycleActions();
 
       expect(mockExecuteAction).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // A run queued through `POST /api/v1/jobs/execution` is held to the same
+  // limits the execute endpoint enforces — 25 destructive items per request,
+  // 100 per hour across every key — or queueing a run would be the way round
+  // them. A scheduled run (no `viaApiKey`) is never affected.
+  describe("a run queued through an API key", () => {
+    function setupPendingDeletes(count: number, actionType = "DELETE_RADARR") {
+      const items = Array.from({ length: count }, (_, i) => ({
+        id: `item${i}`,
+        title: `Movie ${i}`,
+        parentTitle: null,
+        year: 2024,
+        library: { key: "1", mediaServerId: "s1" },
+        externalIds: [],
+      }));
+      mockPrisma.lifecycleAction.findMany.mockResolvedValue(
+        items.map((mediaItem, i) => ({
+          id: `a${i}`,
+          userId: "u1",
+          mediaItemId: mediaItem.id,
+          mediaItem,
+          ruleSetId: "rs1",
+          actionType,
+          ruleSet: { name: "Test", discordNotifyOnAction: false, userId: "u1" },
+        })),
+      );
+      mockPrisma.ruleMatch.findMany.mockResolvedValue(items.map((m) => ({ ruleSetId: "rs1", mediaItemId: m.id })));
+      mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+      mockPrisma.appSettings.findFirst.mockResolvedValue(null);
+      mockExecuteAction.mockResolvedValue(undefined);
+      mockPrisma.lifecycleAction.update.mockResolvedValue({});
+      mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
+    }
+
+    beforeEach(async () => {
+      const { resetApiDestructiveBudget } = await import("@/lib/api-keys/destructive-budget");
+      resetApiDestructiveBudget();
+    });
+
+    it("holds the whole run when it would delete more than 25 items", async () => {
+      setupPendingDeletes(26);
+      await executeLifecycleActions("u1", { viaApiKey: "n8n" });
+      expect(mockExecuteAction).not.toHaveBeenCalled();
+      // Left pending for the schedule or the Pending page — not cancelled.
+      expect(mockPrisma.lifecycleAction.update).not.toHaveBeenCalled();
+      expect(mockPrisma.lifecycleAction.delete).not.toHaveBeenCalled();
+    });
+
+    it("runs up to 25, charging them to the hourly budget, then holds once it is spent", async () => {
+      for (let i = 0; i < 4; i++) {
+        vi.clearAllMocks();
+        setupPendingDeletes(25);
+        await executeLifecycleActions("u1", { viaApiKey: "n8n" });
+        expect(mockExecuteAction).toHaveBeenCalledTimes(25);
+      }
+      vi.clearAllMocks();
+      setupPendingDeletes(1);
+      await executeLifecycleActions("u1", { viaApiKey: "n8n" });
+      expect(mockExecuteAction).not.toHaveBeenCalled();
+    });
+
+    it("still applies non-destructive actions a held run carries", async () => {
+      setupPendingDeletes(26, "UNMONITOR_RADARR");
+      await executeLifecycleActions("u1", { viaApiKey: "n8n" });
+      expect(mockExecuteAction).toHaveBeenCalledTimes(26);
+    });
+
+    it("never limits a scheduled run", async () => {
+      setupPendingDeletes(30);
+      await executeLifecycleActions("u1");
+      expect(mockExecuteAction).toHaveBeenCalledTimes(30);
     });
   });
 

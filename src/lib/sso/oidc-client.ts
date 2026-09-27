@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "crypto";
 import { appCache } from "@/lib/cache/memory-cache";
+import { getExternalBaseUrl } from "@/lib/url";
 
 /**
  * Minimal OIDC client for the Authorization Code + PKCE flow.
@@ -164,8 +165,13 @@ export async function discoverOidc(
   // OIDC Discovery §4.3 (and RFC 8414 §3.3) require the `issuer` value in the
   // response to match the URL the client used to fetch the document. Catches
   // misconfiguration (wrong path) and a class of host-header attacks where a
-  // misbehaving IdP advertises a different issuer than expected.
-  if (config.issuer && normalizeIssuer(config.issuer) !== base) {
+  // misbehaving IdP advertises a different issuer than expected. `issuer` is
+  // REQUIRED by §3, so a document without one fails the same check rather
+  // than skipping it.
+  if (!config.issuer) {
+    throw new Error(`OIDC discovery response from "${base}" has no issuer`);
+  }
+  if (normalizeIssuer(config.issuer) !== base) {
     throw new Error(
       `OIDC issuer mismatch: discovery advertises "${config.issuer}" but was fetched from "${base}"`
     );
@@ -291,17 +297,12 @@ export async function fetchUserInfo(
 }
 
 /**
- * Resolve the redirect URI used for OIDC callbacks. Honors X-Forwarded-* headers
- * when present (common behind reverse proxies); otherwise falls back to the
- * incoming request's origin. The path is always `/api/auth/sso/oidc/callback`.
+ * Resolve the redirect URI used for OIDC callbacks: the app's external origin
+ * (X-Forwarded-* aware, via the same `getExternalBaseUrl` every other redirect
+ * uses) plus `/api/auth/sso/oidc/callback`. It used to splice the forwarded
+ * headers in raw, so a chained proxy's `https, http` or a planted
+ * `evil.example/path` host went into the URI sent to the IdP unvalidated.
  */
 export function resolveRedirectUri(request: Request): string {
-  const headers = request.headers;
-  const forwardedProto = headers.get("x-forwarded-proto");
-  const forwardedHost = headers.get("x-forwarded-host") ?? headers.get("host");
-  if (forwardedProto && forwardedHost) {
-    return `${forwardedProto}://${forwardedHost}/api/auth/sso/oidc/callback`;
-  }
-  const url = new URL(request.url);
-  return `${url.protocol}//${url.host}/api/auth/sso/oidc/callback`;
+  return `${getExternalBaseUrl(request)}/api/auth/sso/oidc/callback`;
 }

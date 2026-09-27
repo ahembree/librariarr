@@ -202,17 +202,19 @@ Stale-match cancellation actually happens in two places, both as belt-and-braces
 
 Together these mean an item has to be a current match at both scheduling time and execution time for the action to actually run.
 
-### A check that the item is still the same title
+### The item must still be the one that matched
 
-A match remembers *which library item* it is for, and a library item can change what it is without changing its identity in Librariarr: a Plex **Fix Match** or a Jellyfin/Emby **Identify** rewrites the same item to different content. If that happens while an action is waiting out its delay, the action would resolve the *new* title in *arr — one your rule never matched.
+A match remembers an item, and your media server can change what that item *is*. A Plex **Fix Match** or a Jellyfin/Emby **Identify** rewrites the same library entry to a different title, with different TMDB/TVDB ids, and the next sync records that before the next detection run notices the match is stale. Acting on the match then would reach the *new* title in Radarr or Sonarr — one your rules never matched — and the title check below would pass, because it compares against the new title.
 
-So every scheduled action records what it was scheduled for: the title, the year, and the ID that *arr looks the title up by (TMDB for Radarr, TVDB for Sonarr, MusicBrainz for Lidarr). Just before it runs, Librariarr compares that record with the item as it is now, and cancels the action if:
+So before anything runs, Librariarr compares the item with what it looked like when the rule matched it, and refuses it if:
 
 - **the title changed.** For a series or artist action, that is the name of the show or artist — the action covers the whole show or artist, so renaming one episode or track doesn't count. For a track-by-track music rule, both the track and its artist must still match. Cosmetic differences ("The Matrix" / "Matrix, The") are ignored, as in title validation below.
 - **the TMDB, TVDB or MusicBrainz ID changed** — the item now points at a different record in *arr, even if the name is the same.
 - **a movie's year moved by more than one.** Titles can't tell remakes apart ("Dune" 1984 and "Dune" 2021), so a Fix Match to a remake is caught by its year even when no ID was recorded.
 
-The cancellation is logged in System Logs with the reason ("item identity changed since scheduling"), and the item's match is cleared along with the action, since it described the old title too. The next detection run then evaluates the item as it is now, even on a rule set with **Sticky matches** on: if the new title matches the rule, it is matched and scheduled afresh with a full delay, so you can review it on the Pending Actions page first; if it doesn't, it drops out.
+**Scheduled runs** compare with what each action recorded when it was scheduled, and cancel that one action. The cancellation is logged in System Logs with the reason ("item identity changed since scheduling"), and the item's match is cleared along with the action, since it described the old title too. The next detection run then evaluates the item as it is now, even on a rule set with **Sticky matches** on: if the new title matches the rule, it is matched and scheduled afresh with a full delay, so you can review it on the Pending Actions page first; if it doesn't, it drops out.
+
+The **Execute** button on the Pending page, and the public API, compare with the match as the last detection run stored it. They refuse the whole request and ask you to run detection again, which re-checks the item against your rules as it is now.
 
 ### Title validation against *arr
 
@@ -246,6 +248,16 @@ This is why the save-time acknowledgement matters and why we recommend treating 
 
 Each individual action runs independently. If one fails — because *arr is down, the network blipped, the title check failed, anything — that single failure is recorded with an error message in the **Pending Actions** page (the action moves to "Failed" status), logged to System Logs, optionally announced via Discord, and **does not affect the other actions in the same run**. There's no retry that could quietly turn a transient failure into a persistent one. Failed actions sit there until you decide what to do with them.
 
+## Through the API
+
+Applications you give an API key to (Settings → Authentication → API Keys) can only reach deletion through a key with the **Execute lifecycle actions** scope, and only in four ways: running a rule set's action on named matches, queueing an execution run, and removing a lifecycle exception (in bulk or by id). They cannot create or edit rules, run Query-page actions, purge the library, or restore a backup. Everything on this page applies to them, and they are held to stricter limits than you are:
+
+- **Every item is named.** There is no "execute every match" through the API; leaving the list out, or sending an empty one, is refused.
+- **At most 25 items per request, and 100 per hour across every key.** Removing an exception counts too, because it is what lets the rules match the item again. A request that would go over is refused whole: nothing in it runs.
+- **Queued runs are held, not trimmed.** An execution run queued through the API that would delete more than 25 items, or go over the hourly budget, deletes nothing. The actions stay pending for the rule set's own schedule or the Pending page, and Discord is told when a webhook is set (at most once every 15 minutes).
+
+Bulk deletion is something only Librariarr itself does: on your schedule, or when you press **Execute** on the Pending page. See [Deletion limits](/docs/advanced/api/#deletion-limits) for the details.
+
 ## What to do if something goes wrong
 
 If you've looked at the Pending Actions page and you don't like what you see, you have several options. They're listed least-destructive first.
@@ -276,6 +288,7 @@ Open the rule set, turn **Action enabled** off, click Save. This:
 
 - Cancels every pending action for that rule set immediately.
 - Stops new pending actions from being created on the next detection runs.
+- Refuses any manual execution of the rule set's action, including through the [public API](/docs/advanced/api/), until you turn it back on.
 - Also wipes the current match list as a side effect of saving (if you want a record of what matched, take a screenshot first).
 
 You can turn **Action enabled** back on later when you've fixed the rule. The next detection run will rebuild the match list from scratch.

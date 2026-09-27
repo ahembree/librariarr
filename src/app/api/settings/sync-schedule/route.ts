@@ -6,6 +6,12 @@ import cron from "node-cron";
 
 const PRESET_SCHEDULES = ["MANUAL", "EVERY_6H", "EVERY_12H", "DAILY", "WEEKLY"];
 
+// Only what the Scheduling tab reads. AppSettings also holds the backup
+// passphrase, the OIDC client secret, the AI key and the Discord webhook URL;
+// returning the whole row sent all four to the browser in plaintext, which the
+// routes that own them take care never to do.
+const SCHEDULE_SELECT = { syncSchedule: true, lastScheduledSync: true } as const;
+
 export async function GET() {
   const session = await getSession();
   if (!session.isLoggedIn) {
@@ -14,11 +20,13 @@ export async function GET() {
 
   let settings = await prisma.appSettings.findUnique({
     where: { userId: session.userId! },
+    select: SCHEDULE_SELECT,
   });
 
   if (!settings) {
     settings = await prisma.appSettings.create({
       data: { userId: session.userId! },
+      select: SCHEDULE_SELECT,
     });
   }
 
@@ -47,6 +55,7 @@ export async function PUT(request: NextRequest) {
     where: { userId: session.userId! },
     update: { syncSchedule },
     create: { userId: session.userId!, syncSchedule },
+    select: SCHEDULE_SELECT,
   });
 
   return NextResponse.json({ settings });

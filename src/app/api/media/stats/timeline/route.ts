@@ -8,6 +8,7 @@ import {
   ALLOWED_DATE_COLUMNS,
   VALID_BINS,
   VALID_MEASURES,
+  VALID_TYPES,
 } from "@/lib/media/timeline";
 
 // Re-exported for consumers that imported the type from the route (e.g. charts).
@@ -37,6 +38,9 @@ export async function GET(request: NextRequest) {
   }
   if (!VALID_MEASURES.has(measure)) {
     return NextResponse.json({ error: "Invalid measure" }, { status: 400 });
+  }
+  if (typeFilter && !VALID_TYPES.has(typeFilter)) {
+    return NextResponse.json({ error: "Invalid type" }, { status: 400 });
   }
 
   const scope = await resolveStatsScope(session.userId!, serverId);

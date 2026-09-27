@@ -4,7 +4,7 @@ import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
-import { escapeLike } from "@/lib/conditions/where-builder";
+import { escapeLike } from "@/lib/filters/escape-like";
 import { firstNonNullSql, qualityCountsSql, resolutionLabelSql } from "@/lib/media/series-sql";
 
 interface SeasonRow {
@@ -67,7 +67,8 @@ export async function GET(request: NextRequest) {
   if (!sf.isSingleServer) filters.push(`AND mi."dedupCanonical" = true`);
   if (search) {
     // A LIKE pattern: a literal `%`, `_` or `\` in the search must not act as
-    // a wildcard (Prisma's `contains` escaped them).
+    // a wildcard (Prisma's `contains` does not escape them either — the flat
+    // list routes escape explicitly too; see escape-like.ts).
     params.push(escapeLike(search));
     filters.push(`AND mi."parentTitle" ILIKE '%' || $${params.length} || '%'`);
   }

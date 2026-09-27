@@ -7,11 +7,26 @@ export class RateLimiter {
   private store = new Map<string, RateLimitEntry>();
 
   constructor(
-    private maxAttempts: number,
-    private windowMs: number
+    readonly maxAttempts: number,
+    private windowMs: number,
+    /**
+     * Most keys tracked at once; the oldest is dropped to admit a new one.
+     * For limiters keyed by attacker-chosen values (a presented credential),
+     * where a flood of distinct keys would otherwise grow the map without
+     * bound until the next cleanup. Dropping an entry only forgets a count.
+     */
+    private maxEntries = Number.POSITIVE_INFINITY
   ) {}
 
-  check(key: string): {
+  /**
+   * Count an attempt. `cost` charges it as that many attempts, for a request
+   * that is many times the work of an ordinary one (a whole-library listing
+   * against a per-request budget).
+   */
+  check(
+    key: string,
+    cost = 1,
+  ): {
     limited: boolean;
     remaining: number;
     retryAfterMs?: number;
@@ -20,11 +35,18 @@ export class RateLimiter {
     const entry = this.store.get(key);
 
     if (!entry || now >= entry.resetAt) {
-      this.store.set(key, { count: 1, resetAt: now + this.windowMs });
-      return { limited: false, remaining: this.maxAttempts - 1 };
+      if (!entry && this.store.size >= this.maxEntries) {
+        const oldest = this.store.keys().next().value;
+        if (oldest !== undefined) this.store.delete(oldest);
+      }
+      this.store.set(key, { count: cost, resetAt: now + this.windowMs });
+      if (cost > this.maxAttempts) {
+        return { limited: true, remaining: 0, retryAfterMs: this.windowMs };
+      }
+      return { limited: false, remaining: this.maxAttempts - cost };
     }
 
-    entry.count++;
+    entry.count += cost;
     if (entry.count > this.maxAttempts) {
       return {
         limited: true,
@@ -34,6 +56,22 @@ export class RateLimiter {
     }
 
     return { limited: false, remaining: this.maxAttempts - entry.count };
+  }
+
+  /**
+   * Whether the NEXT `check(key)` would be refused — without counting this
+   * call. For limiters that count only failures: the caller peeks before doing
+   * the expensive work and calls `check` only once the attempt has failed, so
+   * successful attempts are never charged against the budget.
+   */
+  peek(key: string): { limited: boolean; retryAfterMs?: number } {
+    const now = Date.now();
+    const entry = this.store.get(key);
+    if (!entry || now >= entry.resetAt) return { limited: false };
+    if (entry.count >= this.maxAttempts) {
+      return { limited: true, retryAfterMs: entry.resetAt - now };
+    }
+    return { limited: false };
   }
 
   cleanup() {
@@ -62,11 +100,60 @@ export const authGlobalRateLimiter = new RateLimiter(60, 15 * 60 * 1000);
 // session) can't hammer a paid LLM endpoint: 30 requests per 5-minute window.
 export const aiRateLimiter = new RateLimiter(30, 5 * 60 * 1000);
 
+// ─── Public API (/api/v1) ───
+//
+// A key is 256 bits of randomness, so no limiter here is what stops guessing —
+// nothing needs to. What they must never do is let one client's failures lock
+// OUT a valid key: every container on one Docker host usually shares an
+// address, and with TRUST_PROXY_HEADERS=false every client shares the single
+// "unknown" address, so any per-address bucket that blocks lets whoever sends
+// 500 junk requests shut every integration out, again and again. So:
+//
+// - failures are counted per PRESENTED CREDENTIAL, charged only on
+//   failure (see `peek`): a client stuck on a deleted or expired key gets 429s
+//   after 20 tries, and nothing else is affected — a valid key never fails, so
+//   no one can fill its bucket. Capped at 10,000 tracked credentials so a flood
+//   of distinct junk keys cannot grow memory;
+// - `apiKeyFailureLogLimiter` bounds only the LOGGING of failures (50 WARN rows
+//   per window across every client), so a flood cannot become a flood of log
+//   rows either — it limits what is written, never who is served.
+export const apiKeyCredentialFailureLimiter = new RateLimiter(20, 15 * 60 * 1000, 10_000);
+export const apiKeyFailureLogLimiter = new RateLimiter(50, 15 * 60 * 1000);
+
+// The one floor: how many well-formed keys that turn out NOT to exist may be
+// looked up per minute, across every client. Every such key costs a database
+// lookup, and without this nothing capped a flood of random ones. It refuses
+// only credentials that have not authenticated in the last 15 minutes (the
+// guard remembers those), so a key in active use is never shut out by it —
+// only a key idle for longer, and only while the flood lasts. Far above any
+// legitimate rate: an integration retrying a deleted key hits its own
+// 20-failure bucket long before.
+export const apiKeyUnknownLookupFloor = new RateLimiter(1000, 60 * 1000);
+
+// How many scrypt verifications of API keys may run per minute, across every
+// client. A key is stored as a salted scrypt hash and found by its 10-character
+// display prefix, so a key whose prefix exists costs one key derivation (tens
+// of milliseconds, 16 MiB) to reject. The prefix is not secret — it is shown in
+// Settings — so this bounds what someone presenting forged keys under a known
+// prefix can spend. Like the lookup floor it never touches a key verified in
+// the last 15 minutes (the guard remembers those), and a legitimate process
+// verifies each of its at most 50 keys once.
+export const apiKeyVerificationFloor = new RateLimiter(100, 60 * 1000);
+
+// Authenticated requests per API key: 600 a minute. Generous for dashboards and
+// scripts paging through a library; bounds a runaway client or a leaked key.
+export const apiKeyRequestLimiter = new RateLimiter(600, 60 * 1000);
+
 // Cleanup expired entries every 5 minutes
 setInterval(() => {
   authRateLimiter.cleanup();
   authGlobalRateLimiter.cleanup();
   aiRateLimiter.cleanup();
+  apiKeyCredentialFailureLimiter.cleanup();
+  apiKeyFailureLogLimiter.cleanup();
+  apiKeyUnknownLookupFloor.cleanup();
+  apiKeyVerificationFloor.cleanup();
+  apiKeyRequestLimiter.cleanup();
 }, 5 * 60 * 1000).unref();
 
 /**
@@ -110,6 +197,29 @@ function tooManyAttempts(retryAfterMs: number | undefined): Response {
  */
 export function checkAuthRateLimit(request: Request, bucket: string): Response | null {
   return checkRateLimit(request, authRateLimiter, bucket, authGlobalRateLimiter);
+}
+
+/**
+ * The same two auth limiters, charged only on FAILURE: `peekAuthRateLimit`
+ * before the check, `recordAuthFailure` when it fails. For a password
+ * confirmation on a route the user is already signed in to — creating an API
+ * key — where counting every attempt would lock a legitimate user out of a
+ * routine they may run ten times in a row, while a wrong password still costs
+ * exactly what a failed login does.
+ */
+export function peekAuthRateLimit(request: Request, bucket: string): Response | null {
+  const ip = getClientIp(request);
+  const perIp = authRateLimiter.peek(`${bucket}:${ip}`);
+  if (perIp.limited) return tooManyAttempts(perIp.retryAfterMs);
+  const global = authGlobalRateLimiter.peek(`${bucket}:*`);
+  if (global.limited) return tooManyAttempts(global.retryAfterMs);
+  return null;
+}
+
+export function recordAuthFailure(request: Request, bucket: string): void {
+  const ip = getClientIp(request);
+  authRateLimiter.check(`${bucket}:${ip}`);
+  authGlobalRateLimiter.check(`${bucket}:*`);
 }
 
 /**
