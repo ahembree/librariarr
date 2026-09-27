@@ -22,8 +22,10 @@ const gunzipAsync = promisify(gunzip);
  *
  * The rule, applied recursively to the parsed body:
  *
- * - `filePath` is removed from EVERY object. It names a file on a media
- *   server's disk wherever it appears in these responses.
+ * - `filePath` and `partFile` are removed from EVERY object. Each names a file
+ *   on a media server's disk wherever it appears in these responses: an item's
+ *   file, including the snapshot a rule match stores of the item it matched,
+ *   and the file a live stream is playing.
  * - `url`, `externalUrl`, `serverUrl`, `machineId`, `userId` and `accessToken`
  *   (always the masked placeholder by the time it reaches a response) are removed
  *   from an object that is, or describes, a media server: it has a `type` of
@@ -44,6 +46,7 @@ const gunzipAsync = promisify(gunzip);
  * still gets a compressed body; status and every other header are preserved.
  */
 
+const FILE_PATH_KEYS = new Set(["filePath", "partFile"]);
 const SERVER_TYPES = new Set(["PLEX", "JELLYFIN", "EMBY"]);
 const SERVER_INTERNAL_KEYS = new Set(["url", "externalUrl", "serverUrl", "machineId", "userId", "accessToken"]);
 const SERVER_CONTAINER_KEYS = new Set(["mediaServer", "playServers"]);
@@ -64,7 +67,7 @@ export function trimServerInternals(value: unknown, underServerKey = false): unk
   const isServer = underServerKey || looksLikeServer(value);
   const result: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
-    if (key === "filePath") continue;
+    if (FILE_PATH_KEYS.has(key)) continue;
     if (isServer && SERVER_INTERNAL_KEYS.has(key)) continue;
     if (key === "error" && typeof child === "string") {
       result[key] = sanitizeErrorDetail(child) ?? child;

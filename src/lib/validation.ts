@@ -5,6 +5,13 @@ import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { API_SCOPES } from "@/lib/api-keys/scopes";
 import { API_DESTRUCTIVE_PER_REQUEST } from "@/lib/api-keys/limits";
 import { apiKeyNameProblem } from "@/lib/api-keys/name-rules";
+import {
+  MAX_PASSWORD_BYTES,
+  MIN_PASSWORD_LENGTH,
+  PASSWORD_TOO_LONG_MESSAGE,
+  PASSWORD_TOO_SHORT_MESSAGE,
+  passwordByteLength,
+} from "@/lib/auth/password-rules";
 
 /**
  * Parse and validate request JSON against a Zod schema.
@@ -71,9 +78,16 @@ export const arrInstanceUpdateSchema = arrInstanceCreateSchema.partial().extend(
   enabled: z.boolean().optional(),
 });
 
+// A new login password: at least 8 characters, and at most the 72 bytes bcrypt
+// actually reads (see `src/lib/auth/password-rules.ts`).
+const newPasswordSchema = z
+  .string()
+  .min(MIN_PASSWORD_LENGTH, PASSWORD_TOO_SHORT_MESSAGE)
+  .refine((value) => passwordByteLength(value) <= MAX_PASSWORD_BYTES, PASSWORD_TOO_LONG_MESSAGE);
+
 export const authSetupSchema = z.object({
   username: z.string().min(3, "Username must be at least 3 characters"),
-  password: z.string().min(8, "Password must be at least 8 characters"),
+  password: newPasswordSchema,
 });
 
 export const authLoginSchema = z.object({
@@ -254,9 +268,15 @@ export const transcodeManagerSchema = z.object({
 
 // Bounded because the public API reaches this: the message is pushed to every
 // targeted player, and an unbounded list is an unbounded amount of work.
+// Session ids are opaque tokens (Plex: alphanumeric; Jellyfin/Emby: hex) that
+// end up in a media-server request path sent with the server's admin token, so
+// anything that could be read as more than one path segment is refused here.
+// The Jellyfin/Emby client encodes them as well (`sessionPath`).
+const sessionIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/, "Invalid session id");
+
 export const terminateSessionSchema = z.object({
   serverId: z.string().min(1, "Server ID is required"),
-  sessionIds: z.array(z.string()).max(200, "At most 200 sessions per request").optional(),
+  sessionIds: z.array(sessionIdSchema).max(200, "At most 200 sessions per request").optional(),
   message: z
     .string()
     .min(1, "Message is required")
@@ -516,7 +536,7 @@ export const exceptionBulkUpdateSchema = z.object({
 
 export const changePasswordSchema = z.object({
   currentPassword: z.string().optional(),
-  newPassword: z.string().min(8, "Password must be at least 8 characters").optional(),
+  newPassword: newPasswordSchema.optional(),
   newUsername: z.string().min(3, "Username must be at least 3 characters").optional(),
 });
 

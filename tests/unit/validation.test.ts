@@ -450,6 +450,33 @@ describe("terminateSessionSchema", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it("accepts the session ids each server type issues", () => {
+    const ids = [
+      "e3lqr5a10p6lsqyqtmzhjycv", // Plex Session.id
+      "42", // Plex sessionKey fallback
+      "2c94b1c2d9b14c33a5dfa18b0ae6d0d2", // Jellyfin / Emby
+      "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+    ];
+    const result = terminateSessionSchema.safeParse({ serverId: "s1", sessionIds: ids, message: "Bye" });
+    expect(result.success).toBe(true);
+  });
+
+  // The id lands in a media-server request path sent with the admin token.
+  it.each([
+    ["a parent-directory segment", "../System/Shutdown?x="],
+    ["a lone dot segment", ".."],
+    ["a slash", "a/b"],
+    ["a query", "abc?x=1"],
+    ["a fragment", "abc#x"],
+    ["a percent-encoding", "%2e%2e"],
+    ["whitespace", "a b"],
+    ["an empty id", ""],
+    ["an overlong id", "a".repeat(129)],
+  ])("rejects a session id with %s", (_label, id) => {
+    const result = terminateSessionSchema.safeParse({ serverId: "s1", sessionIds: [id], message: "Bye" });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("authSettingsSchema", () => {

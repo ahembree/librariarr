@@ -26,6 +26,8 @@ export async function GET(
         "Content-Type": isGz ? "application/gzip" : "application/json",
         "Content-Disposition": `attachment; filename="${filename}"`,
         "Content-Length": String(data.length),
+        // Holds the instance's credentials: never kept by a browser or proxy cache.
+        "Cache-Control": "no-store",
       },
     });
   } catch {

@@ -463,5 +463,25 @@ describe("/api/v1 endpoints", () => {
         excludedUsers: ["admin"],
       });
     });
+
+    // A session id becomes part of a request path sent with the media server's
+    // admin token; `../System/Shutdown?x=` would turn "stop a stream" into any
+    // admin POST on a Jellyfin or Emby server.
+    it("POST /tools/sessions/terminate refuses a session id that is more than one path segment", async () => {
+      const user = await setupUser();
+      const server = await createTestServer(user.id, { type: "JELLYFIN" });
+      const { key } = await createTestApiKey(user.id, { scopes: ["streams:write"] });
+      const route = ROUTES.find((r) => r.label === "POST /tools/sessions/terminate")!;
+
+      for (const id of ["../System/Shutdown?x=", "..", "a/b", "%2e%2e"]) {
+        const refused = await expectJson<{ details: string[] }>(
+          await call(route, { authorization: `Bearer ${key}` }, {
+            body: { serverId: server.id, sessionIds: [id], message: "Bye" },
+          }),
+          400,
+        );
+        expect(refused.details.join("\n")).toContain("Invalid session id");
+      }
+    });
   });
 });

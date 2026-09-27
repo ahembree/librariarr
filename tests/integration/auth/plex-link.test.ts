@@ -52,9 +52,29 @@ describe("POST /api/auth/plex/link", () => {
     expect(body.error).toBe("Unauthorized");
   });
 
+  // A linked Plex account is a way to sign in that outlives the session, and
+  // any Plex account can be linked, so a stolen cookie must not be enough.
+  it("refuses to link without a sign-in from the last 15 minutes", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() - 16 * 60 * 1000 });
+
+    const response = await callRoute(POST, {
+      url: "/api/auth/plex/link",
+      method: "POST",
+      body: { authToken: "attacker-token" },
+    });
+    const body = await expectJson<{ error: string; code: string }>(response, 403);
+    expect(body.code).toBe("reauth_required");
+    expect(mockGetPlexUser).not.toHaveBeenCalled();
+    const { getTestPrisma } = await import("../../setup/test-db");
+    const unchanged = await getTestPrisma().user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(unchanged.plexId).toBe(user.plexId);
+    expect(unchanged.plexToken).toBe(user.plexToken);
+  });
+
   it("returns 400 with invalid body (missing pinId)", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/plex/link",
@@ -67,7 +87,7 @@ describe("POST /api/auth/plex/link", () => {
 
   it("returns linked: false when pin check has no authToken", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     mockCheckPlexPin.mockResolvedValue({
       id: 12345,
@@ -90,7 +110,7 @@ describe("POST /api/auth/plex/link", () => {
 
   it("successfully links Plex account when pin is valid", async () => {
     const user = await createTestUser({ plexId: null as unknown as string });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     mockCheckPlexPin.mockResolvedValue({
       id: 12345,
@@ -129,7 +149,7 @@ describe("POST /api/auth/plex/link", () => {
     const user1 = await createTestUser({ plexId: "plex-user1" });
     await createTestUser({ plexId: "99999", username: "other" });
 
-    setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     mockCheckPlexPin.mockResolvedValue({
       id: 12345,
@@ -158,7 +178,7 @@ describe("POST /api/auth/plex/link", () => {
 
   it("returns 500 when checkPlexPin throws an error", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     mockCheckPlexPin.mockRejectedValue(new Error("Plex API unavailable"));
 
@@ -175,7 +195,7 @@ describe("POST /api/auth/plex/link", () => {
 
   it("successfully links Plex account when authToken is provided directly", async () => {
     const user = await createTestUser({ plexId: null as unknown as string });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     mockGetPlexUser.mockResolvedValue({
       id: 88888,
@@ -207,7 +227,7 @@ describe("POST /api/auth/plex/link", () => {
     const user1 = await createTestUser({ plexId: "plex-user1" });
     await createTestUser({ plexId: "88888", username: "other" });
 
-    setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     mockGetPlexUser.mockResolvedValue({
       id: 88888,

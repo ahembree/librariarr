@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
     return new NextResponse(new Uint8Array(image.data), {
       headers: {
         "Content-Type": image.contentType,
-        "Cache-Control": "public, max-age=86400",
+        "Cache-Control": "private, max-age=86400",
       },
     });
   } catch {

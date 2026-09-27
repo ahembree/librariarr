@@ -17,6 +17,8 @@ const scriptSrc =
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // No `X-Powered-By: Next.js` — it only tells a scanner what to try.
+  poweredByHeader: false,
   env: {
     NEXT_PUBLIC_APP_VERSION: packageJson.version,
   },
@@ -42,10 +44,31 @@ const nextConfig: NextConfig = {
               "font-src 'self'",
               "connect-src 'self' https://plex.tv https://app.plex.tv",
               "frame-ancestors 'none'",
+              // Not covered by default-src: without these an injected <base>
+              // could re-point every relative URL, an injected <form> could
+              // post to another origin, and <object>/<embed> would load
+              // same-origin plugin content. The app uses none of them (SSO
+              // starts from a link, Plex from a popup, every form submits via
+              // fetch).
+              "object-src 'none'",
+              "base-uri 'self'",
+              "form-action 'self'",
             ].join("; "),
           },
         ],
       },
+      // Artwork proxies return bytes a media server sent, content type and
+      // all: an image the cache could not decode, or a session thumbnail, is
+      // passed through as is. Served under the page policy, an HTML or SVG
+      // body from a hostile or compromised server would run with
+      // 'unsafe-inline' on the app's origin when opened directly. Nothing in
+      // an image response ever needs to run, so these get a policy that
+      // forbids everything; `<img>` loads are not affected by it. Listed after
+      // the catch-all so this header replaces its policy for these paths.
+      ...["/api/media/:id/image", "/api/v1/media/:id/image", "/api/tools/sessions/image"].map((source) => ({
+        source,
+        headers: [{ key: "Content-Security-Policy", value: "default-src 'none'; sandbox" }],
+      })),
     ];
   },
 };

@@ -31,7 +31,8 @@ import { GET, POST } from "@/app/api/settings/api-keys/route";
 import { DELETE } from "@/app/api/settings/api-keys/[id]/route";
 import { GET as meGET } from "@/app/api/v1/me/route";
 import { API_KEY_PATTERN, verifyApiKey } from "@/lib/api-keys/keys";
-import { API_KEY_CREATE_REAUTH_WINDOW_MS, MAX_API_KEYS } from "@/lib/api-keys/manage";
+import { MAX_API_KEYS } from "@/lib/api-keys/manage";
+import { RECENT_LOGIN_WINDOW_MS } from "@/lib/auth/recent-login";
 import { authGlobalRateLimiter, authRateLimiter } from "@/lib/rate-limit/rate-limiter";
 import { READ_ONLY_SCOPES } from "@/lib/api-keys/scopes";
 
@@ -337,7 +338,7 @@ describe("/api/settings/api-keys", () => {
     });
 
     async function loginWithPassword() {
-      const user = await login(Date.now() - 2 * API_KEY_CREATE_REAUTH_WINDOW_MS);
+      const user = await login(Date.now() - 2 * RECENT_LOGIN_WINDOW_MS);
       await prisma.user.update({
         where: { id: user.id },
         data: { passwordHash: bcrypt.hashSync(PASSWORD, 4) },
@@ -382,7 +383,7 @@ describe("/api/settings/api-keys", () => {
     });
 
     it("an account without a password needs a login from the last window", async () => {
-      await login(Date.now() - API_KEY_CREATE_REAUTH_WINDOW_MS - 1000);
+      await login(Date.now() - RECENT_LOGIN_WINDOW_MS - 1000);
       const stale = await expectJson<{ code: string; error: string }>(await create(body()), 403);
       expect(stale.code).toBe("reauth_required");
       expect(stale.error).toMatch(/sign out, sign back in/i);

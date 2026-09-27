@@ -6,12 +6,14 @@ import { apiLogger } from "@/lib/logger";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
 import { getExternalBaseUrl, isSameOriginRequest } from "@/lib/url";
 import { sanitizeEmail, sanitizeUsername } from "@/lib/sso/identity-claims";
+import { hasForwardAuthSecret, FORWARD_AUTH_SECRET_HEADER } from "@/lib/sso/forward-secret";
 
 /**
  * Forward-auth login: trusts identity headers injected by an upstream reverse
  * proxy (Authelia, Authentik, oauth2-proxy, etc.). The proxy must be the only
  * way to reach this app — if users can hit it directly they could spoof these
- * headers. The admin is responsible for that network topology.
+ * headers. The admin is responsible for that network topology, and can make
+ * it not matter by setting `FORWARD_AUTH_SECRET` (see forward-secret.ts).
  *
  * GET so it can be linked from the login page as a normal anchor.
  */
@@ -34,6 +36,16 @@ export async function GET(request: NextRequest) {
   const settings = await getSsoSettings();
   if (!isSsoUsable(settings) || settings?.ssoMode !== "FORWARD_AUTH") {
     return NextResponse.redirect(new URL("/login?sso_error=sso_not_configured", baseUrl));
+  }
+
+  // With FORWARD_AUTH_SECRET set, only a request that came through the proxy
+  // (which adds the secret) may use the identity header at all.
+  if (!hasForwardAuthSecret(request.headers)) {
+    apiLogger.warn(
+      "Auth",
+      `Forward-auth login rejected: the ${FORWARD_AUTH_SECRET_HEADER} header is missing or wrong — the request did not come through the configured proxy`
+    );
+    return NextResponse.redirect(new URL("/login?sso_error=proxy_secret", baseUrl));
   }
 
   const rawSubject = request.headers.get(settings.forwardAuthUserHeader);

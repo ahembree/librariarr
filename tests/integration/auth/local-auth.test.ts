@@ -208,9 +208,10 @@ describe("POST /api/auth/local/change-password", () => {
   it("allows setting password without currentPassword when user has no existing password", async () => {
     const prisma = getTestPrisma();
     const user = await createTestUser();
-    // User has no passwordHash set (null by default)
+    // User has no passwordHash set (null by default). Setting a first
+    // password needs a recent sign-in (see recent-login.ts).
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",

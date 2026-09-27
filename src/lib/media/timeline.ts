@@ -5,6 +5,8 @@ export const ALLOWED_DATE_COLUMNS = new Set(["addedAt", "lastPlayedAt", "origina
 export const VALID_BINS = new Set(["day", "week", "month", "quarter", "year"]);
 // What each bucket aggregates: item count, or total file size in bytes.
 export const VALID_MEASURES = new Set(["count", "size"]);
+// The library types a timeline can be narrowed to (`LibraryType`).
+export const VALID_TYPES = new Set(["MOVIE", "SERIES", "MUSIC"]);
 
 export interface TimelinePoint {
   date: string;
@@ -211,7 +213,11 @@ export async function computeTimeline(params: {
   const bucketExpr = dateBucketExpr(col, bin);
   const aggExpr = aggregateExpr(measure);
 
-  const typeWhere = typeFilter ? ` AND mi.type = '${escapeSqlLiteral(typeFilter)}'` : "";
+  // The type is a bound parameter, not a literal: it arrives from a query
+  // string, and quote-doubling is only an escape while the server keeps
+  // standard_conforming_strings on.
+  const typeWhere = typeFilter ? ` AND mi.type = $2::"LibraryType"` : "";
+  const queryParams: unknown[] = typeFilter ? [serverIds, typeFilter] : [serverIds];
   const dedupWhere = dedupEnabled ? ` AND mi."dedupCanonical" = true` : "";
 
   if (!breakdownMeta) {
@@ -224,7 +230,7 @@ export async function computeTimeline(params: {
          AND ${col} IS NOT NULL${typeWhere}${dedupWhere}
        GROUP BY "date"
        ORDER BY "date" ASC`,
-      serverIds,
+      ...queryParams,
     );
 
     const points = rows.map((r) => ({ date: r.date, total: r.total }));
@@ -243,7 +249,7 @@ export async function computeTimeline(params: {
          AND ${col} IS NOT NULL${typeWhere}${dedupWhere}
        GROUP BY "date"
        ORDER BY "date" ASC`,
-      serverIds,
+      ...queryParams,
     );
     const points = rows.map((r) => ({ date: r.date, total: r.total }));
     return { points: fillGaps(points, bin, []), series: [] };
@@ -258,7 +264,7 @@ export async function computeTimeline(params: {
        AND ${col} IS NOT NULL${typeWhere}${dedupWhere}
      GROUP BY "date", "bk"
      ORDER BY "date" ASC`,
-    serverIds,
+    ...queryParams,
   );
 
   // Apply value mapping if needed

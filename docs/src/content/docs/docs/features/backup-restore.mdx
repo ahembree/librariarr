@@ -159,6 +159,8 @@ The restore process:
 
 Backup files follow the naming pattern: `librariarr-backup-{timestamp}.json.gz[.enc]`
 
+Each backup file is written readable and writable by its owner only (mode `600`), the user the container runs as (`PUID`), because it holds your integrations' credentials. To copy backups off the host as another user, read them as root or as that user. Downloads from Settings are sent with `Cache-Control: no-store`, so no browser or proxy cache keeps a copy.
+
 ## Managing Backups
 
 From the **Available Backups** section:

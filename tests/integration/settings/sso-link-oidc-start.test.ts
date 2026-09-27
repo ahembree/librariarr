@@ -59,12 +59,26 @@ describe("POST /api/settings/sso/link/oidc/start — verify-and-link init", () =
     await expectJson(res, 401);
   });
 
+  it("refuses to start a link without a sign-in from the last 15 minutes", async () => {
+    const user = await createTestUser();
+    await prisma.appSettings.create({
+      data: { userId: user.id, ssoMode: "OIDC", oidcIssuer: "https://idp.example.com", oidcClientId: "client" },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
+
+    const res = await callRoute(POST, { method: "POST" });
+    const body = await expectJson<{ code: string }>(res, 403);
+    expect(body.code).toBe("reauth_required");
+    expect(mockDiscover).not.toHaveBeenCalled();
+    expect(getMockSession().oidcFlow).toBeUndefined();
+  });
+
   it("returns 400 when SSO mode is not OIDC", async () => {
     const user = await createTestUser();
     await prisma.appSettings.create({
       data: { userId: user.id, ssoMode: "FORWARD_AUTH" },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const res = await callRoute(POST, { method: "POST" });
     await expectJson(res, 400);
@@ -75,7 +89,7 @@ describe("POST /api/settings/sso/link/oidc/start — verify-and-link init", () =
     await prisma.appSettings.create({
       data: { userId: user.id, ssoMode: "OIDC", oidcIssuer: null },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const res = await callRoute(POST, { method: "POST" });
     const body = await expectJson<{ error: string }>(res, 400);
@@ -92,7 +106,7 @@ describe("POST /api/settings/sso/link/oidc/start — verify-and-link init", () =
         oidcClientId: "client",
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
     mockDiscover.mockResolvedValue({
       issuer: "https://idp.example.com",
       authorization_endpoint: "https://idp.example.com/auth",
@@ -121,7 +135,7 @@ describe("POST /api/settings/sso/link/oidc/start — verify-and-link init", () =
         oidcClientId: "client",
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
     mockDiscover.mockRejectedValue(new Error("ENOTFOUND"));
 
     const res = await callRoute(POST, { method: "POST" });

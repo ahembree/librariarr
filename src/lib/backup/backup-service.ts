@@ -206,7 +206,10 @@ export async function createBackup(passphrase?: string, configOnly = true): Prom
   const compressed = gzipSync(Buffer.from(json, "utf-8"));
 
   const output = encrypted ? encryptBuffer(compressed, passphrase!) : compressed;
-  await fs.writeFile(filepath, output);
+  // Owner-only: a backup holds every integration's API key and the Plex token
+  // (encrypted only when a passphrase is set), and the container's umask would
+  // otherwise leave it readable by every user on the host.
+  await fs.writeFile(filepath, output, { mode: 0o600 });
 
   // Write sidecar metadata file so listBackups() doesn't need to decompress
   const metaPath = filepath + ".meta.json";

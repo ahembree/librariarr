@@ -6,11 +6,8 @@ import { Prisma } from "@/generated/prisma/client";
 import { logger } from "@/lib/logger";
 import { validateRequest, apiKeyCreateSchema } from "@/lib/validation";
 import { generateApiKey } from "@/lib/api-keys/keys";
-import {
-  API_KEY_CREATE_REAUTH_WINDOW_MS,
-  API_KEY_PUBLIC_SELECT,
-  MAX_API_KEYS,
-} from "@/lib/api-keys/manage";
+import { API_KEY_PUBLIC_SELECT, MAX_API_KEYS } from "@/lib/api-keys/manage";
+import { hasRecentLogin, recentLoginRequired } from "@/lib/auth/recent-login";
 import { notifyApiKeyChange } from "@/lib/api-keys/notify";
 import { normalizeScopes } from "@/lib/api-keys/scopes";
 import { peekAuthRateLimit, recordAuthFailure } from "@/lib/rate-limit/rate-limiter";
@@ -24,8 +21,10 @@ import { peekAuthRateLimit, recordAuthFailure } from "@/lib/rate-limit/rate-limi
  * sessions, not keys — so a stolen cookie could otherwise turn a temporary
  * foothold into a permanent one in one request. The step-up is the account's
  * password where it has one, and otherwise (Plex or SSO only) a login made in
- * the last `API_KEY_CREATE_REAUTH_WINDOW_MS`; either way the creation is also
- * announced on Discord where a webhook is set.
+ * the last `RECENT_LOGIN_WINDOW_MS` (`src/lib/auth/recent-login.ts`, which
+ * also guards setting a first password and linking a Plex account or an SSO
+ * identity, the other ways a cookie could make itself last); either way the
+ * creation is also announced on Discord where a webhook is set.
  */
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -83,18 +82,8 @@ export async function POST(request: NextRequest) {
         { status: 403 },
       );
     }
-  } else if (
-    typeof session.authenticatedAt !== "number" ||
-    Date.now() - session.authenticatedAt > API_KEY_CREATE_REAUTH_WINDOW_MS
-  ) {
-    const minutes = Math.round(API_KEY_CREATE_REAUTH_WINDOW_MS / 60_000);
-    return NextResponse.json(
-      {
-        error: `Creating an API key needs a sign-in from the last ${minutes} minutes. Sign out, sign back in, then create the key.`,
-        code: "reauth_required",
-      },
-      { status: 403 },
-    );
+  } else if (!hasRecentLogin(session)) {
+    return recentLoginRequired("Creating an API key", "create the key");
   }
 
   const expiresAt = data.expiresAt ? new Date(data.expiresAt) : null;

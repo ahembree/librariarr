@@ -43,8 +43,9 @@ services:
       POSTGRES_DB: librariarr
     volumes:
       - librariarr-dev-db:/var/lib/postgresql
+    # Loopback only: the dev database uses default credentials.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U librariarr"]
       interval: 5s

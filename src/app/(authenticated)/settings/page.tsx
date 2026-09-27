@@ -57,6 +57,7 @@ import type {
   ReleaseNote,
 } from "./types";
 import { PRESET_VALUES } from "./types";
+import { newPasswordProblem } from "@/lib/auth/password-rules";
 
 /** Stable empty reference — see `visibleTracearrImportStatus`. */
 const NO_TRACEARR_IMPORT_STATUS: TracearrImportStatus[] = [];
@@ -2684,6 +2685,11 @@ export default function SettingsPage() {
       setCredentialsError("Passwords do not match");
       return;
     }
+    const newPasswordIssue = credentialsForm.newPassword ? newPasswordProblem(credentialsForm.newPassword) : null;
+    if (newPasswordIssue) {
+      setCredentialsError(newPasswordIssue);
+      return;
+    }
 
     setCredentialsSaving(true);
     try {
@@ -2724,8 +2730,9 @@ export default function SettingsPage() {
       setPromptError("Username must be at least 3 characters");
       return;
     }
-    if (promptForm.password.length < 8) {
-      setPromptError("Password must be at least 8 characters");
+    const passwordProblem = newPasswordProblem(promptForm.password);
+    if (passwordProblem) {
+      setPromptError(passwordProblem);
       return;
     }
     if (promptForm.password !== promptForm.confirmPassword) {

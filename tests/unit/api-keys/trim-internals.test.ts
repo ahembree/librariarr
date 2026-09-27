@@ -59,6 +59,38 @@ describe("trimServerInternals", () => {
     });
   });
 
+  it("drops a stream's partFile and a stored match snapshot's filePath at any depth", () => {
+    const body = {
+      sessions: [
+        {
+          sessionId: "s1",
+          userId: "u1",
+          username: "alice",
+          type: "movie",
+          partFile: "/data/movies/Arrival (2016)/Arrival.mkv",
+          partSize: 4_000_000_000,
+          player: { product: "Plex Web", address: "192.168.1.20" },
+        },
+      ],
+      ruleMatches: [
+        { ruleSet: { id: "r1", type: "MOVIE" }, items: [{ id: "i1", title: "Arrival", filePath: "/data/movies/Arrival.mkv" }] },
+      ],
+    };
+    expect(trimServerInternals(body)).toEqual({
+      sessions: [
+        {
+          sessionId: "s1",
+          userId: "u1",
+          username: "alice",
+          type: "movie",
+          partSize: 4_000_000_000,
+          player: { product: "Plex Web", address: "192.168.1.20" },
+        },
+      ],
+      ruleMatches: [{ ruleSet: { id: "r1", type: "MOVIE" }, items: [{ id: "i1", title: "Arrival" }] }],
+    });
+  });
+
   it("keeps url and userId on objects that are not servers", () => {
     const body = { rule: { id: "r1", userId: "u1", url: "https://example.com", type: "MOVIE" }, items: [{ url: "keep" }] };
     expect(trimServerInternals(body)).toEqual(body);

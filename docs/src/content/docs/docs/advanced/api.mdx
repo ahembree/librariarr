@@ -128,7 +128,7 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
 | `GET` | `/api/v1/lifecycle/rules` | `lifecycle:read` | Rule sets |
-| `GET` | `/api/v1/lifecycle/rules/matches` | `lifecycle:read` | Current matches per rule set |
+| `GET` | `/api/v1/lifecycle/rules/matches` | `lifecycle:read` | Current matches per rule set. Each match carries the item as detection stored it, without its file path |
 | `GET` | `/api/v1/lifecycle/actions` | `lifecycle:read` | Actions by `status`: `PENDING` (default), `COMPLETED`, `FAILED` or `ALL` |
 | `GET` | `/api/v1/lifecycle/exceptions` | `lifecycle:read` | Exceptions; `type` = `MOVIE`, `SERIES`, `MUSIC` or `ALL` |
 | `GET` | `/api/v1/lifecycle/stats` | `lifecycle:read` | Deletion statistics |
@@ -143,9 +143,9 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
-| `GET` | `/api/v1/tools/sessions` | `streams:read` | Active playback sessions on every enabled server |
+| `GET` | `/api/v1/tools/sessions` | `streams:read` | Active playback sessions on every enabled server, without the path of the file being played |
 | `GET` | `/api/v1/tools/maintenance` | `streams:read` | Maintenance mode status |
-| `POST` | `/api/v1/tools/sessions/terminate` | `streams:write` | Stop playback: `{ "serverId": "…" or "all", "sessionIds": ["…"], "message": "…" }` (omit `sessionIds` to stop every stream on the server) |
+| `POST` | `/api/v1/tools/sessions/terminate` | `streams:write` | Stop playback: `{ "serverId": "…" or "all", "sessionIds": ["…"], "message": "…" }` (omit `sessionIds` to stop every stream on the server). Session ids are the `sessionId` values `/api/v1/tools/sessions` returns; anything but letters, digits, `-` and `_` is refused with `400` |
 | `PUT` | `/api/v1/tools/maintenance` | `streams:write` | Turn maintenance mode on or off: `{ "enabled": true, "message": "Back soon", "delay": 30 }`. `message` (up to 500 characters) and `delay` (0–3600 seconds) are optional and keep their current values when left out. Who is exempt from maintenance mode and whether Discord is notified can only be changed in Librariarr; sending those fields is a `400` |
 
 ### System

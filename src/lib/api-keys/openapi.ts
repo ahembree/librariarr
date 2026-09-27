@@ -217,7 +217,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     query: [{ name: "type", description: "Which artwork; poster by default.", schema: { type: "string", enum: ["art", "parent", "season"] } }, { name: "w", description: "Width.", schema: { type: "integer", enum: [400, 640, 800] } }],
   },
   { method: "get", path: "/lifecycle/rules", scope: "lifecycle:read", tag: "Lifecycle", summary: "Rule sets" },
-  { method: "get", path: "/lifecycle/rules/matches", scope: "lifecycle:read", tag: "Lifecycle", summary: "Current matches per rule set" },
+  { method: "get", path: "/lifecycle/rules/matches", scope: "lifecycle:read", tag: "Lifecycle", summary: "Current matches per rule set", description: "Each match carries the item snapshot detection stored, without its file path." },
   {
     method: "get",
     path: "/lifecycle/actions",
@@ -323,7 +323,7 @@ export const API_OPERATIONS: readonly Operation[] = [
       `when it would delete more than ${PER_REQUEST} items or exceed the ${PER_HOUR}-an-hour deletion budget.`,
     responses: { "202": "Queued: `{ queued: true, jobs: 1 }`" },
   },
-  { method: "get", path: "/tools/sessions", scope: "streams:read", tag: "Streams", summary: "Active playback sessions on every enabled server" },
+  { method: "get", path: "/tools/sessions", scope: "streams:read", tag: "Streams", summary: "Active playback sessions on every enabled server", description: "Who is watching what, on which player and from which address. The path of the file being played is omitted." },
   { method: "get", path: "/tools/maintenance", scope: "streams:read", tag: "Streams", summary: "Maintenance mode status" },
   {
     method: "post",
@@ -331,14 +331,14 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "streams:write",
     tag: "Streams",
     summary: "Stop playback",
-    description: "Omit `sessionIds` to stop every stream on the server; `serverId` may be `all`.",
+    description: "Omit `sessionIds` to stop every stream on the server; `serverId` may be `all`. Session ids are the `sessionId` values `/tools/sessions` returns (letters, digits, `-` and `_`).",
     body: {
       description: "",
       required: true,
       schema: {
         type: "object",
         required: ["serverId", "message"],
-        properties: { serverId: { type: "string" }, sessionIds: { type: "array", items: { type: "string" }, maxItems: 200 }, message: { type: "string", minLength: 1, maxLength: 500 } },
+        properties: { serverId: { type: "string" }, sessionIds: { type: "array", items: { type: "string", pattern: "^[A-Za-z0-9_-]{1,128}$" }, maxItems: 200 }, message: { type: "string", minLength: 1, maxLength: 500 } },
       },
     },
   },

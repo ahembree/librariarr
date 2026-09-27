@@ -111,6 +111,24 @@ function mapStreamType(type: string): number {
 }
 
 /**
+ * The path of a session endpoint, with the session id as exactly one segment.
+ *
+ * Session ids reach here from a request body (the terminate route, which a
+ * `streams:write` API key can call), and the request goes out with the
+ * server's admin token. Interpolated raw, an id of `../System/Shutdown?x=`
+ * turned "stop this stream" into any admin POST on the server: the URL parser
+ * resolves `..` before the request is sent and `?` pushes the rest of the path
+ * into the query string. Encoding keeps `/`, `?`, `#` and `%` inside the
+ * segment; `.` and `..` are refused because encoding leaves them dot segments.
+ */
+export function sessionPath(sessionId: string, endpoint: "Message" | "Playing/Stop"): string {
+  if (sessionId === "" || sessionId === "." || sessionId === "..") {
+    throw new Error(`Invalid session id "${sessionId}"`);
+  }
+  return `/Sessions/${encodeURIComponent(sessionId)}/${endpoint}`;
+}
+
+/**
  * Shared base class for Jellyfin and Emby clients.
  * Both APIs are nearly identical (Jellyfin forked from Emby).
  * Subclasses override auth header format and log prefix.
@@ -593,7 +611,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     text: string,
     timeoutMs: number,
   ): Promise<void> {
-    await this.client.post(`/Sessions/${sessionId}/Message`, {
+    await this.client.post(sessionPath(sessionId, "Message"), {
       Header: header,
       Text: text,
       TimeoutMs: timeoutMs,
@@ -635,7 +653,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       }
     }
 
-    await this.client.post(`/Sessions/${sessionId}/Playing/Stop`);
+    await this.client.post(sessionPath(sessionId, "Playing/Stop"));
   }
 
   getImageUrl(path: string): string {

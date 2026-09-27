@@ -32,3 +32,11 @@ allowBuilds:
   prisma: true
   sharp: true
   unrs-resolver: true
+
+# Security floors for transitive copies the direct ranges do not reach.
+# sharp: 0.35.3 bundles a libheif with GHSA-rgj7-g3m4-5g8c, and next pins its
+#   own copy; it decodes artwork fetched from the media servers.
+# js-yaml: GHSA-2883-xcg3-v3hh, via graphile-worker > cosmiconfig.
+overrides:
+  sharp: ^0.35.4
+  js-yaml: ^4.3.2
