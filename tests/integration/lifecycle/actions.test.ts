@@ -535,6 +535,32 @@ describe("Lifecycle Actions", () => {
       expect(byType.UNMONITOR_SONARR).toMatchObject({ title: "El Camino", parentTitle: null });
     });
 
+    it("names a finished file delete by its snapshot while the episode it is stored against remains", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const pilot = await createTestMediaItem(library.id, {
+        title: "Pilot", type: "SERIES", parentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 1,
+      });
+      const ruleSet = await createTestRuleSet(user.id, { name: "Shows", type: "SERIES" });
+      // It deleted S03E10, whose row the next sync purged; the episode it is
+      // stored against is still there.
+      await getTestPrisma().lifecycleAction.create({
+        data: {
+          userId: user.id, mediaItemId: pilot.id, ruleSetId: ruleSet.id, actionType: "DELETE_FILES_SONARR",
+          status: "COMPLETED", scheduledFor: new Date(), executedAt: new Date(), matchedMediaItemIds: ["purged-episode"],
+          mediaItemTitle: "Breaking Bad", mediaItemParentTitle: null, mediaItemSeasonNumber: 3, mediaItemEpisodeNumber: 10,
+        },
+      });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const body = await expectJson<{
+        groups: { items: { mediaItem: { title: string; parentTitle: string | null } }[] }[];
+      }>(await callRoute(GET, { url: "/api/lifecycle/actions", searchParams: { status: "COMPLETED" } }), 200);
+
+      expect(body.groups[0].items[0].mediaItem).toMatchObject({ title: "Breaking Bad S03E10", parentTitle: null });
+    });
+
     it("includes mediaItem and ruleSet relations", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
@@ -1236,7 +1262,7 @@ describe("Lifecycle Actions", () => {
       expect(retried).toMatchObject({ status: "COMPLETED", mediaItemTitle: "Breaking Bad", mediaItemParentTitle: null });
     });
 
-    it("records the episode a retried file delete acted on, not the one it is stored against", async () => {
+    it("names a retried file delete after the episode it acts on and keeps its snapshot", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
       const library = await createTestLibrary(server.id, { type: "SERIES" });
@@ -1253,6 +1279,7 @@ describe("Lifecycle Actions", () => {
           userId: user.id, mediaItemId: pilot.id, ruleSetId: ruleSet.id, actionType: "DELETE_FILES_SONARR",
           status: "FAILED", scheduledFor: new Date(), matchedMediaItemIds: [fly.id],
           mediaItemTitle: "Breaking Bad", mediaItemParentTitle: null, mediaItemExternalId: "81189",
+          mediaItemSeasonNumber: 3, mediaItemEpisodeNumber: 10,
         },
       });
       await createTestRuleMatch(ruleSet.id, pilot.id, {
@@ -1269,9 +1296,7 @@ describe("Lifecycle Actions", () => {
       );
 
       const { executeAction } = await import("@/lib/lifecycle/actions");
-      expect(executeAction).toHaveBeenCalledWith(
-        expect.objectContaining({ memberEpisode: { title: "Fly", seasonNumber: 3, episodeNumber: 10 } }),
-      );
+      expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({ targetTitle: "Breaking Bad S03E10" }));
       const retried = await getTestPrisma().lifecycleAction.findUniqueOrThrow({ where: { id: action.id } });
       expect(retried).toMatchObject({
         status: "COMPLETED",

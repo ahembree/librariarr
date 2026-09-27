@@ -369,8 +369,7 @@ async function findCandidates(
       -- Newest first: when there are more candidates than the cap allows, the
       -- most recent arrivals are the ones a user is waiting on, and the rest
       -- stay candidates for the next run.
-      GROUP BY mi."id", mi."ratingKey", mi."title", mi."type", mi."parentTitle",
-               mi."seasonNumber", mi."episodeNumber", mi."createdAt"
+      GROUP BY mi."id"
       ORDER BY mi."createdAt" DESC
       LIMIT $3`,
     serverId,

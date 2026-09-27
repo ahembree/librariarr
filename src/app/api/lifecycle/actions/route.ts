@@ -7,11 +7,9 @@ import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
 import {
   actionTargetTitle,
   actionTitleSnapshot,
-  loneMemberId,
   snapshotTargetTitle,
   type MemberEpisode,
 } from "@/lib/lifecycle/action-target";
-import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
 import { loadGroupMemberStats, aggregateGroupMembers, memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 import { heldScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped-action-hold";
 
@@ -123,8 +121,8 @@ function serializeMediaItem(mi: SelectedMediaItem): ActionItemMediaItem {
 function buildActionMediaItem(
   action: {
     actionType: string;
+    status: string;
     matchedMediaItemIds: string[];
-    mediaItemId: string | null;
     mediaItemTitle: string | null;
     mediaItemParentTitle: string | null;
     mediaItemSeasonNumber?: number | null;
@@ -133,23 +131,20 @@ function buildActionMediaItem(
     mediaItem: SelectedMediaItem | null;
   },
   ruleSetType: string,
-  /** Episodes named by an action on one other episode, keyed by `loneMemberId`. */
-  memberEpisodes: Map<string, MemberEpisode>,
+  /** The members' rows, which name an action on one episode (see actionTargetTitle). */
+  memberEpisodes: ReadonlyMap<string, MemberEpisode>,
 ): ActionItemMediaItem {
   // A series action is named by what it acts on: the show, or "<Show> SxxExx"
   // when it acts on one episode — never by the representative episode's own
-  // title (see actionTargetTitle).
+  // title (see actionTargetTitle). Once it has run, by the snapshot it recorded
+  // then, as the episode it acted on may be gone since.
   if (action.mediaItem) {
     const mi = serializeMediaItem(action.mediaItem);
-    if (ruleSetType === "SERIES") {
-      const title = actionTargetTitle({
-        ...action,
-        mediaItem: { ...action.mediaItem, type: "SERIES" },
-        memberEpisode: memberEpisodes.get(loneMemberId(action) ?? ""),
-      });
-      return { ...mi, title, parentTitle: null };
-    }
-    return mi;
+    if (ruleSetType !== "SERIES") return mi;
+    const title = action.status === "PENDING" || !action.mediaItemTitle
+      ? actionTargetTitle({ ...action, mediaItem: action.mediaItem, memberEpisodes })
+      : snapshotTargetTitle(action);
+    return { ...mi, title, parentTitle: null };
   }
   // MediaItem deleted — use denormalized fields
   const title = action.mediaItemTitle ?? "Unknown";
@@ -164,6 +159,32 @@ function buildActionMediaItem(
     return { id: null, title: snapshotTargetTitle(action), parentTitle: null, type: ruleSetType, ...nullFields };
   }
   return { id: null, title, parentTitle, type: action.ruleSetType ?? ruleSetType, ...nullFields };
+}
+
+/**
+ * Lazy backfill: snapshot the title of actions that have a live mediaItem but
+ * no denormalized title yet (pre-migration records), so they don't read
+ * "Unknown" once the item is deleted.
+ */
+async function backfillTitleSnapshots(
+  actions: Array<{
+    id: string;
+    actionType: string;
+    matchedMediaItemIds: string[];
+    mediaItemTitle: string | null;
+    mediaItem: SelectedMediaItem | null;
+  }>,
+): Promise<void> {
+  await Promise.all(
+    actions
+      .filter((a) => a.mediaItem && !a.mediaItemTitle)
+      .map((a) =>
+        prisma.lifecycleAction.update({
+          where: { id: a.id },
+          data: actionTitleSnapshot({ ...a, mediaItem: a.mediaItem! }),
+        }),
+      ),
+  );
 }
 
 export async function GET(request: NextRequest) {
@@ -211,18 +232,7 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
     orderBy: { scheduledFor: "asc" },
   });
 
-  // Lazy backfill denormalized titles for pre-migration PENDING actions
-  const pendingBackfill = pendingActions.filter((a) => a.mediaItem && !a.mediaItemTitle);
-  if (pendingBackfill.length > 0) {
-    await Promise.all(
-      pendingBackfill.map((a) =>
-        prisma.lifecycleAction.update({
-          where: { id: a.id },
-          data: actionTitleSnapshot({ ...a, mediaItem: a.mediaItem! }),
-        })
-      )
-    );
-  }
+  await backfillTitleSnapshots(pendingActions);
 
   // Fetch every action that could suppress an estimated row:
   // - PENDING actions (already scheduled), and
@@ -335,18 +345,6 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
     };
   }
 
-  // A series action on exactly one other episode is named after that episode.
-  const memberEpisodes = await loadMemberEpisodes([
-    ...pendingActions.map(loneMemberId),
-    ...filteredUpcoming.map((m) =>
-      loneMemberId({
-        actionType: m.ruleSet.actionType!,
-        matchedMediaItemIds: memberIdsFromItemData(m.itemData),
-        mediaItemId: m.mediaItemId,
-      }),
-    ),
-  ]);
-
   // 3. Group by rule set
   const groupMap = new Map<string, RuleSetGroup>();
 
@@ -356,7 +354,7 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       groupMap.set(a.ruleSetId!, { ruleSet: a.ruleSet!, items: [], count: 0 });
     }
     const group = groupMap.get(a.ruleSetId!)!;
-    const mi = buildActionMediaItem(a, a.ruleSet!.type, memberEpisodes);
+    const mi = buildActionMediaItem(a, a.ruleSet!.type, memberDataMap);
     group.items.push({
       id: a.id,
       actionType: a.actionType,
@@ -394,13 +392,13 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
     const memberIds = memberIdsFromItemData(m.itemData);
     const mi = buildActionMediaItem({
       actionType: m.ruleSet.actionType!,
+      status: "PENDING",
       matchedMediaItemIds: memberIds,
-      mediaItemId: m.mediaItemId,
       mediaItemTitle: m.mediaItem.title,
       mediaItemParentTitle: m.mediaItem.parentTitle,
       ruleSetType: m.ruleSet.type,
       mediaItem: m.mediaItem,
-    }, m.ruleSet.type, memberEpisodes);
+    }, m.ruleSet.type, memberDataMap);
 
     group.items.push({
       id: `rm_${m.id}`,
@@ -463,24 +461,7 @@ async function handleStatusGrouped(request: NextRequest, userId: string, status:
     orderBy: { scheduledFor: "desc" },
   });
 
-  // Lazy backfill: snapshot title for actions that have a live mediaItem but no
-  // denormalized title yet (pre-migration records). Prevents "Unknown" after deletion.
-  const backfill: { id: string; data: ReturnType<typeof actionTitleSnapshot> }[] = [];
-  for (const a of actions) {
-    if (a.mediaItem && !a.mediaItemTitle) {
-      backfill.push({ id: a.id, data: actionTitleSnapshot({ ...a, mediaItem: a.mediaItem }) });
-    }
-  }
-  if (backfill.length > 0) {
-    await Promise.all(
-      backfill.map((b) =>
-        prisma.lifecycleAction.update({
-          where: { id: b.id },
-          data: b.data,
-        })
-      )
-    );
-  }
+  await backfillTitleSnapshots(actions);
 
   // Dedup: keep only the most recent record per (ruleSetId, mediaItemId).
   // Actions are ordered by scheduledFor desc, so the first seen per pair is the latest.
@@ -495,18 +476,7 @@ async function handleStatusGrouped(request: NextRequest, userId: string, status:
   });
 
   // Pre-aggregate series/music member data for actions with matchedMediaItemIds
-  const statusMemberIds = deduped.flatMap((a) => a.matchedMediaItemIds);
-  let statusMemberMap = new Map<string, { fileSize: bigint; playCount: number; lastPlayedAt: Date | null }>();
-  if (statusMemberIds.length > 0) {
-    const members = await prisma.mediaItem.findMany({
-      where: { id: { in: statusMemberIds } },
-      select: { id: true, fileSize: true, playCount: true, lastPlayedAt: true },
-    });
-    statusMemberMap = new Map(members.map((m) => [m.id, { fileSize: m.fileSize ?? BigInt(0), playCount: m.playCount, lastPlayedAt: m.lastPlayedAt }]));
-  }
-
-  // A series action on exactly one other episode is named after that episode.
-  const memberEpisodes = await loadMemberEpisodes(deduped.map(loneMemberId));
+  const memberStats = await loadGroupMemberStats(deduped.flatMap((a) => a.matchedMediaItemIds));
 
   const groupMap = new Map<string, RuleSetGroup>();
 
@@ -533,30 +503,21 @@ async function handleStatusGrouped(request: NextRequest, userId: string, status:
       groupMap.set(groupKey, { ruleSet: ruleSetData, items: [], count: 0 });
     }
     const group = groupMap.get(groupKey)!;
-    let mi = buildActionMediaItem(a, ruleSetData.type, memberEpisodes);
+    let mi = buildActionMediaItem(a, ruleSetData.type, memberStats);
 
     // Apply series/music aggregation from member items
-    if (a.matchedMediaItemIds.length > 0) {
-      let totalSize = BigInt(0);
-      let totalPlays = 0;
-      let latest: Date | null = null;
-      for (const id of a.matchedMediaItemIds) {
-        const d = statusMemberMap.get(id);
-        if (!d) continue;
-        totalSize += d.fileSize;
-        totalPlays += d.playCount;
-        if (d.lastPlayedAt && (!latest || d.lastPlayedAt > latest)) latest = d.lastPlayedAt;
-      }
+    const totals = aggregateGroupMembers(a.matchedMediaItemIds, memberStats);
+    if (totals) {
       // For completed delete actions, prefer deletedBytes (items may no longer exist in DB)
       const useDeletedBytes = a.status === "COMPLETED" && a.deletedBytes;
       mi = {
         ...mi,
         fileSize: useDeletedBytes
           ? a.deletedBytes!.toString()
-          : totalSize > BigInt(0) ? totalSize.toString() : mi.fileSize,
-        playCount: totalPlays > 0 ? totalPlays : mi.playCount,
-        lastPlayedAt: latest?.toISOString() ?? mi.lastPlayedAt,
-        matchedEpisodes: a.matchedMediaItemIds.length,
+          : totals.fileSize > BigInt(0) ? totals.fileSize.toString() : mi.fileSize,
+        playCount: totals.playCount > 0 ? totals.playCount : mi.playCount,
+        lastPlayedAt: totals.lastPlayedAt?.toISOString() ?? mi.lastPlayedAt,
+        matchedEpisodes: totals.matchedEpisodes,
       };
     }
 

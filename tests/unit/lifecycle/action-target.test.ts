@@ -41,22 +41,15 @@ describe("actionTargetTitle", () => {
     // Series scope forced by an aggregate field: stored against the show's
     // lowest-id episode, acting only on the one episode that matched.
     const action = { actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: ["ep-10"], mediaItem: episode };
-    expect(actionTargetTitle({ ...action, memberEpisode: { title: "Fly", seasonNumber: 3, episodeNumber: 10 } })).toBe(
-      "Breaking Bad S03E10",
-    );
+    const memberEpisodes = new Map([["ep-10", { title: "Fly", seasonNumber: 3, episodeNumber: 10 }]]);
+    expect(actionTargetTitle({ ...action, memberEpisodes })).toBe("Breaking Bad S03E10");
     // Unresolved, it falls back to the show — never the stored episode's SxxExx.
     expect(actionTargetTitle(action)).toBe("Breaking Bad");
+    expect(actionTargetTitle({ ...action, memberEpisodes: new Map() })).toBe("Breaking Bad");
   });
 
   it("names a whole-series action by the show even when it matched one episode", () => {
     expect(actionTargetTitle({ actionType: "DELETE_SONARR", matchedMediaItemIds: ["ep-1"], mediaItem: episode })).toBe(
-      "Breaking Bad",
-    );
-  });
-
-  it("recognises a Sonarr action on a row that carries no type", () => {
-    const untyped = { ...episode, type: undefined };
-    expect(actionTargetTitle({ actionType: "DELETE_SONARR", matchedMediaItemIds: [], mediaItem: untyped })).toBe(
       "Breaking Bad",
     );
   });
@@ -96,7 +89,7 @@ describe("actionTitleSnapshot", () => {
         actionType: "DELETE_FILES_SONARR",
         matchedMediaItemIds: ["ep-10"],
         mediaItem: episode,
-        memberEpisode: { title: "Fly", seasonNumber: 3, episodeNumber: 10 },
+        memberEpisodes: new Map([["ep-10", { title: "Fly", seasonNumber: 3, episodeNumber: 10 }]]),
       }),
     ).toMatchObject({ mediaItemTitle: "Breaking Bad", mediaItemSeasonNumber: 3, mediaItemEpisodeNumber: 10 });
   });
@@ -130,17 +123,21 @@ describe("actionTitleSnapshot", () => {
 });
 
 describe("loneMemberId", () => {
+  const mediaItem = { id: "ep-1", type: "SERIES" };
+
   it("names the one episode a file delete acts on when it is not the action's own", () => {
-    expect(loneMemberId({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: ["ep-10"], mediaItemId: "ep-1" })).toBe(
-      "ep-10",
-    );
+    expect(loneMemberId({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: ["ep-10"], mediaItem })).toBe("ep-10");
   });
 
-  it("needs nothing looked up for its own episode, several episodes or a whole-series action", () => {
-    expect(loneMemberId({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: ["ep-1"], mediaItemId: "ep-1" })).toBeNull();
-    expect(loneMemberId({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: ["a", "b"], mediaItemId: "ep-1" })).toBeNull();
-    expect(loneMemberId({ actionType: "DELETE_SONARR", matchedMediaItemIds: ["ep-10"], mediaItemId: "ep-1" })).toBeNull();
-    expect(loneMemberId({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: null, mediaItemId: "ep-1" })).toBeNull();
+  it("needs nothing looked up for its own episode, several episodes, a whole-series action or a track", () => {
+    expect(loneMemberId({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: ["ep-1"], mediaItem })).toBeNull();
+    expect(loneMemberId({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: ["a", "b"], mediaItem })).toBeNull();
+    expect(loneMemberId({ actionType: "DELETE_SONARR", matchedMediaItemIds: ["ep-10"], mediaItem })).toBeNull();
+    expect(loneMemberId({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: null, mediaItem })).toBeNull();
+    expect(loneMemberId({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: ["ep-10"], mediaItem: null })).toBeNull();
+    expect(
+      loneMemberId({ actionType: "DELETE_FILES_LIDARR", matchedMediaItemIds: ["t-2"], mediaItem: { id: "t-1", type: "MUSIC" } }),
+    ).toBeNull();
   });
 });
 

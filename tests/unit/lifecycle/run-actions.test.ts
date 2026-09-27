@@ -35,8 +35,11 @@ const HISTORY = { ruleSetId: null, ruleSetName: "Query", ruleSetType: "MOVIE" };
 
 const item = (n: number) => ({
   id: `m${n}`,
+  type: "MOVIE",
   title: `Movie ${n}`,
   parentTitle: null,
+  seasonNumber: null,
+  episodeNumber: null,
   year: 2020,
   fileSize: null,
   libraryId: "lib",
@@ -154,7 +157,7 @@ describe("executeActionsForItems", () => {
 
       expect(result.errors).toEqual(["Breaking Bad S03E10: No episode file"]);
       expect(m.executeAction).toHaveBeenCalledWith(
-        expect.objectContaining({ memberEpisode: { title: "Fly", seasonNumber: 3, episodeNumber: 10 } }),
+        expect.objectContaining({ targetTitle: "Breaking Bad S03E10" }),
         undefined,
       );
       expect(m.prisma.lifecycleAction.create).toHaveBeenCalledWith({

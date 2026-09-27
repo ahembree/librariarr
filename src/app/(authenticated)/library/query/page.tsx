@@ -75,7 +75,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { useServers } from "@/hooks/use-servers";
 import { formatFileSize, formatDuration, formatBytesNum } from "@/lib/format";
 import { normalizeResolutionLabel } from "@/lib/resolution";
-import { formatEpisodeTitle } from "@/lib/media/display-title";
+import { formatEpisodeTitle, formatMediaItemTitle } from "@/lib/media/display-title";
 import { generateId } from "@/lib/utils";
 import { MEDIA_TYPE_BADGE_COLORS, mediaTypeLabel } from "@/lib/theme/media-type-colors";
 import { EmptyState } from "@/components/empty-state";
@@ -146,7 +146,7 @@ const FALLBACK_ICONS: Record<string, "movie" | "series" | "music"> = {
  * SxxExx, never its own title, which names no show.
  */
 function resultTitle(item: QueryResultItem): string {
-  return item.type === "SERIES" && item.matchedEpisodes == null ? formatEpisodeTitle(item) : item.title;
+  return item.matchedEpisodes != null ? item.title : formatMediaItemTitle(item);
 }
 
 function makeDefaultGroup(): QueryGroup {
@@ -559,15 +559,7 @@ export default function QueryPage() {
             </span>
           ) : item.parentTitle ? (
             <span className="text-xs text-muted-foreground truncate">
-              {item.type === "SERIES" ? (
-                formatEpisodeTitle({ ...item, title: null })
-              ) : (
-                <>
-                  {item.parentTitle}
-                  {item.seasonNumber != null && ` S${String(item.seasonNumber).padStart(2, "0")}`}
-                  {item.episodeNumber != null && `E${String(item.episodeNumber).padStart(2, "0")}`}
-                </>
-              )}
+              {formatEpisodeTitle({ ...item, title: null })}
             </span>
           ) : null}
         </div>

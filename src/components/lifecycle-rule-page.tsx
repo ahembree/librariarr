@@ -89,7 +89,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import type { ChipColorCategory } from "@/lib/theme/chip-colors";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatFileSize, formatDuration } from "@/lib/format";
-import { formatMediaItemTitle, seriesTitleOf } from "@/lib/media/display-title";
+import { formatMediaItemTitle } from "@/lib/media/display-title";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn, generateId } from "@/lib/utils";
 import { QueryProgress, useStreamProgress } from "@/components/query-progress";
@@ -305,16 +305,6 @@ export interface LifecycleRulePageProps {
   embedded?: boolean;
 }
 
-/**
- * A preview row's name. Detection groups a series in either scope, so every
- * SERIES row is a show — named by the show, never by the representative
- * episode it is stored against.
- */
-function previewTitle(item: { title: string; parentTitle: string | null }, mediaType: string): string {
-  if (mediaType === "SERIES") return seriesTitleOf(item);
-  return item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title;
-}
-
 function formatResolution(resolution: string | null): string {
   if (!resolution) return "";
   const label = normalizeResolutionLabel(resolution);
@@ -518,7 +508,9 @@ function PreviewCardGrid({
                       )}
                       <MediaCard
                         imageUrl={`/api/media/${item.id}/image${mediaType !== "MOVIE" ? "?type=parent" : ""}`}
-                        title={previewTitle(item, mediaType)}
+                        title={item.parentTitle
+                          ? `${item.parentTitle} - ${item.title}`
+                          : item.title}
                         fallbackIcon={fallbackIcon}
                         aspectRatio={aspectRatio}
                         onClick={() => onItemClick(item)}
@@ -526,7 +518,7 @@ function PreviewCardGrid({
                           <MediaHoverPopover
                             imageAspect={aspectRatio}
                             data={{
-                              title: previewTitle(item, mediaType),
+                              title: item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title,
                               year: item.year,
                               summary: item.summary,
                               contentRating: item.contentRating,
@@ -3105,7 +3097,7 @@ export function LifecycleRulePage({
                   imageUrl={`/api/media/${item.id}/image${mediaType !== "MOVIE" ? "?type=parent" : ""}`}
                   imageAspect={mediaType === "MUSIC" ? "square" : "poster"}
                   data={{
-                    title: previewTitle(item, mediaType),
+                    title: item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title,
                     year: item.year,
                     summary: item.summary,
                     contentRating: item.contentRating,

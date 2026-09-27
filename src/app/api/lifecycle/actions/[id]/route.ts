@@ -3,7 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
-import { actionTargetTitle, actionTitleSnapshot, loneMemberId } from "@/lib/lifecycle/action-target";
+import { actionTargetTitle } from "@/lib/lifecycle/action-target";
 import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
 import { tryBeginExecute, endExecute } from "@/lib/lifecycle/execute-in-flight";
 import {
@@ -223,12 +223,7 @@ async function retryAction(
   }
 
   // A file delete on exactly one other episode is named after it.
-  const loneId = loneMemberId(action);
-  const target = {
-    ...action,
-    mediaItem,
-    memberEpisode: loneId ? (await loadMemberEpisodes([loneId])).get(loneId) : undefined,
-  };
+  const targetTitle = actionTargetTitle({ ...action, mediaItem, memberEpisodes: await loadMemberEpisodes([action]) });
 
   try {
     await executeAction({
@@ -242,7 +237,7 @@ async function retryAction(
       addArrTags: action.addArrTags,
       removeArrTags: action.removeArrTags,
       skipTitleValidation,
-      memberEpisode: target.memberEpisode,
+      targetTitle,
       mediaItem,
     });
 
@@ -252,7 +247,6 @@ async function retryAction(
         status: "COMPLETED",
         executedAt: new Date(),
         error: null,
-        ...actionTitleSnapshot(target),
       },
     });
 
@@ -269,7 +263,7 @@ async function retryAction(
       },
     });
 
-    logger.info("Lifecycle", `Force-retried action ${id} for "${actionTargetTitle(target)}" — succeeded`);
+    logger.info("Lifecycle", `Force-retried action ${id} for "${targetTitle}" — succeeded`);
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -279,7 +273,7 @@ async function retryAction(
       data: { error: msg, executedAt: new Date() },
     });
 
-    logger.error("Lifecycle", `Force-retry failed for "${actionTargetTitle(target)}"`, { error: describeActionError(error) });
+    logger.error("Lifecycle", `Force-retry failed for "${targetTitle}"`, { error: describeActionError(error) });
 
     return NextResponse.json({ error: msg }, { status: 500 });
   }

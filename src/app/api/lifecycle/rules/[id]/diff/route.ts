@@ -58,10 +58,7 @@ async function applyGroupShape(
       // A series match is its show even when it records no members (one stored
       // before they were) — never the representative episode's own title.
       if (row.type !== "SERIES") return row;
-      const title = seriesTitleOf({
-        title: (itemData?.title as string | undefined) ?? (row.title as string),
-        parentTitle: (itemData?.parentTitle as string | null | undefined) ?? (row.parentTitle as string | null),
-      });
+      const title = seriesTitleOf({ title: row.title as string, parentTitle: row.parentTitle as string | null });
       return { ...row, title, parentTitle: null, seasonNumber: null, episodeNumber: null };
     }
     return {

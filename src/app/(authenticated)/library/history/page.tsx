@@ -42,7 +42,7 @@ import { useServers } from "@/hooks/use-servers";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useChipColors } from "@/components/chip-color-provider";
 import { formatFileSize, formatDuration } from "@/lib/format";
-import { formatEpisodeTitle } from "@/lib/media/display-title";
+import { formatEpisodeCode } from "@/lib/media/display-title";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MEDIA_TYPE_BADGE_COLORS, MEDIA_TYPE_LABELS } from "@/lib/theme/media-type-colors";
 import { EmptyState } from "@/components/empty-state";
@@ -236,10 +236,8 @@ function formatWatchedAt(dateStr: string | null): string {
 function getItemTitle(item: WatchHistoryItem): string {
   const mi = item.mediaItem;
   if (mi.type === "SERIES" && mi.parentTitle) {
-    const ep = mi.seasonNumber != null && mi.episodeNumber != null
-      ? ` - S${String(mi.seasonNumber).padStart(2, "0")}E${String(mi.episodeNumber).padStart(2, "0")}`
-      : "";
-    return `${mi.parentTitle}${ep} - ${mi.title}`;
+    const code = formatEpisodeCode(mi.seasonNumber, mi.episodeNumber);
+    return `${mi.parentTitle}${code ? ` - ${code}` : ""} - ${mi.title}`;
   }
   if (mi.type === "MUSIC" && mi.parentTitle) {
     return `${mi.parentTitle} - ${mi.title}`;
@@ -1247,11 +1245,7 @@ export default function HistoryPage() {
                   <MediaHoverPopover
                     imageUrl={`/api/media/${item.mediaItem.id}/image${item.mediaItem.parentTitle ? "?type=parent" : ""}`}
                     data={{
-                      title: item.mediaItem.type === "SERIES"
-                        ? formatEpisodeTitle(item.mediaItem)
-                        : item.mediaItem.parentTitle
-                          ? `${item.mediaItem.parentTitle} — ${item.mediaItem.title}`
-                          : item.mediaItem.title,
+                      title: getItemTitle(item),
                       year: item.mediaItem.year,
                       summary: item.mediaItem.summary,
                       contentRating: item.mediaItem.contentRating,

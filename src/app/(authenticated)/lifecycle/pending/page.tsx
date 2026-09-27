@@ -653,9 +653,11 @@ export default function PendingActionsPage() {
   const [confirmExecuteRuleSetId, setConfirmExecuteRuleSetId] = useState<string | null>(null);
 
   // Media detail panel state
-  const [selectedItem, setSelectedItem] = useState<MediaItemWithRelations | null>(null);
-  const [selectedItemType, setSelectedItemType] = useState<"MOVIE" | "SERIES" | "MUSIC">("MOVIE");
-  const [selectedTitle, setSelectedTitle] = useState<string | undefined>(undefined);
+  const [selected, setSelected] = useState<{
+    item: MediaItemWithRelations;
+    type: "MOVIE" | "SERIES" | "MUSIC";
+    title?: string;
+  } | null>(null);
   const [, setLoadingDetail] = useState(false);
   const { width: panelWidth, resizeHandleProps } = usePanelResize({
     storageKey: "lifecycle-pending-panel-width",
@@ -998,13 +1000,10 @@ export default function PendingActionsPage() {
             item.parentTitle = null;
           }
         }
-        // Set with the item, never ahead of it, so the open panel cannot show
-        // one item under another's type or title. A series action is named as
-        // its row names it — the show, or "<Show> SxxExx" for an action on one
-        // episode — not by the episode it is stored against.
-        setSelectedItemType(mediaType);
-        setSelectedTitle(mediaType === "SERIES" ? action.mediaItem.title : undefined);
-        setSelectedItem(item);
+        // A series action is named as its row names it — the show, or
+        // "<Show> SxxExx" for an action on one episode — not by the episode it
+        // is stored against.
+        setSelected({ item, type: mediaType, title: mediaType === "SERIES" ? action.mediaItem.title : undefined });
       }
     } catch (error) {
       console.error("Failed to fetch media item:", error);
@@ -1409,12 +1408,12 @@ export default function PendingActionsPage() {
         </AlertDialog>
       </div>
 
-      {selectedItem && (
+      {selected && (
         <MediaDetailSidePanel
-          item={selectedItem}
-          mediaType={selectedItemType}
-          title={selectedTitle}
-          onClose={() => setSelectedItem(null)}
+          item={selected.item}
+          mediaType={selected.type}
+          title={selected.title}
+          onClose={() => setSelected(null)}
           width={panelWidth}
           resizeHandleProps={resizeHandleProps}
         />

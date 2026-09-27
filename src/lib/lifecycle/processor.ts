@@ -4,7 +4,7 @@ import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifec
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
-import { actionTargetTitle, actionTitleSnapshot, loneMemberId, type ActionTargetParts } from "@/lib/lifecycle/action-target";
+import { actionTargetTitle, actionTitleSnapshot, type ActionTargetParts } from "@/lib/lifecycle/action-target";
 import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
 import { formatMediaItemTitle, seriesTitleOf } from "@/lib/media/display-title";
 import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
@@ -405,9 +405,7 @@ export async function processLifecycleRules(userId?: string) {
                   // A series match is its show in either scope, stored against
                   // one representative episode — never name it by that episode.
                   removedTitles = removedItems.map((item) =>
-                    ruleSet.type === "SERIES"
-                      ? seriesTitleOf(item)
-                      : ruleSet.seriesScope && item.parentTitle ? item.parentTitle : item.title
+                    ruleSet.type === "SERIES" || ruleSet.seriesScope ? seriesTitleOf(item) : item.title
                   );
                 }
 
@@ -626,9 +624,8 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
 
   // A series action on exactly one episode other than the one it is stored
   // against is named after that episode ("<Show> SxxExx"), so look those up —
-  // once for the run as scheduled, and again below for any that pass 1 narrows
-  // down to one.
-  const memberEpisodes = await loadMemberEpisodes(pendingActions.map(loneMemberId));
+  // once for the run as scheduled, and again below for what pass 1 leaves.
+  const memberEpisodes = await loadMemberEpisodes(pendingActions);
 
   // PASS 1 — cancel or narrow. Every check here runs BEFORE the ceiling is
   // counted, so the count is what the run would actually destroy: counting the
@@ -651,11 +648,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     }
 
     const mediaItem = action.mediaItem;
-    const target = actionTargetTitle({
-      ...action,
-      mediaItem,
-      memberEpisode: memberEpisodes.get(loneMemberId(action) ?? ""),
-    });
+    const target = actionTargetTitle({ ...action, mediaItem, memberEpisodes });
 
     // Permanent-invalidity backstop: a MUSIC rule set with Seerr criteria can
     // never evaluate (Seerr has no music requests), so its matches are the
@@ -873,14 +866,10 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   );
 
   // Pass 1 can narrow a member-scoped action down to one episode it was not
-  // stored against; name those too.
-  for (const [id, episode] of await loadMemberEpisodes(
-    executable
-      .map(({ action, filteredMatchedIds }) => loneMemberId({ ...action, matchedMediaItemIds: filteredMatchedIds }))
-      .filter((id) => id && !memberEpisodes.has(id)),
-  )) {
-    memberEpisodes.set(id, episode);
-  }
+  // stored against, which then names it.
+  const runningEpisodes = await loadMemberEpisodes(
+    executable.map(({ action, mediaItem, filteredMatchedIds }) => ({ ...action, mediaItem, matchedMediaItemIds: filteredMatchedIds })),
+  );
 
   // PASS 2 — execute what survived.
   // Arr instances that failed at the host level this run: their remaining
@@ -902,16 +891,9 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
 
     // The action as it runs — with the members pass 1 left it — which is also
     // what its log line, notifications and history name (see `executedTitle`).
-    const running = {
-      ...action,
-      matchedMediaItemIds: filteredMatchedIds,
-      mediaItem,
-      memberEpisode: memberEpisodes.get(
-        loneMemberId({ ...action, matchedMediaItemIds: filteredMatchedIds }) ?? "",
-      ),
-    };
+    const running = { ...action, matchedMediaItemIds: filteredMatchedIds, mediaItem, memberEpisodes: runningEpisodes };
     try {
-      await executeAction(running);
+      await executeAction({ ...running, targetTitle: actionTargetTitle(running) });
 
       // Compute deleted bytes for stats tracking (only for delete actions)
       let deletedBytes: bigint | null = null;

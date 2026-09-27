@@ -1,53 +1,57 @@
 // Client-safe (no server imports).
 import { actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
-import { formatEpisodeTitle, seriesTitleOf, type MediaTitleParts } from "@/lib/media/display-title";
+import {
+  formatEpisodeTitle,
+  seriesTitleOf,
+  type EpisodeTitleParts,
+  type MediaTitleParts,
+} from "@/lib/media/display-title";
 
 /** An episode as far as naming it goes: its own title and its SxxExx. */
-export interface MemberEpisode {
-  title?: string | null;
-  seasonNumber?: number | null;
-  episodeNumber?: number | null;
-}
+export type MemberEpisode = Omit<EpisodeTitleParts, "parentTitle">;
 
 export interface ActionTargetParts {
   actionType: string;
   /** The episodes a member-scoped action acts on. */
   matchedMediaItemIds?: readonly string[] | null;
-  mediaItem: MediaTitleParts & { id: string; title: string; parentTitle: string | null };
+  mediaItem: MediaTitleParts & { id: string; title: string; parentTitle: string | null; type: string };
   /**
-   * The one episode a member-scoped action acts on when that episode is NOT
-   * the item the action is stored against (see `loneMemberId`). A series match
-   * is stored against the show's lowest-id episode, which need not be one of
-   * the episodes it matched, so the caller has to look this one up; without it
-   * the action is named by its show.
+   * Episodes by id, for naming an action on exactly one episode that is NOT
+   * the item it is stored against (`loneMemberId`): a series match is stored
+   * against the show's lowest-id episode, which need not be one it matched.
+   * Without that episode here the action is named by its show.
    */
-  memberEpisode?: MemberEpisode | null;
+  memberEpisodes?: ReadonlyMap<string, MemberEpisode>;
 }
 
-function isSeriesAction(action: ActionTargetParts): boolean {
-  return action.mediaItem.type === "SERIES" || action.actionType.endsWith("_SONARR");
+/** What decides which episode, if any, an action acts on alone. */
+export type MemberScope = Pick<ActionTargetParts, "actionType" | "matchedMediaItemIds"> & {
+  mediaItem: { id: string; type: string } | null;
+};
+
+/** The one episode a series file delete acts on, when it acts on exactly one. */
+function soleEpisodeId(action: MemberScope): string | null {
+  const members = action.matchedMediaItemIds ?? [];
+  if (action.mediaItem?.type !== "SERIES" || !actionHonorsMemberIds(action.actionType) || members.length !== 1) {
+    return null;
+  }
+  return members[0];
 }
 
 /**
- * The id of the one episode a member-scoped action acts on when it is not the
- * action's own item — the episode whose numbers the caller must supply as
- * `memberEpisode` — else null.
+ * The episode an action must find in `memberEpisodes` to be named after it —
+ * the one it acts on alone, when that is not its own item — else null.
  */
-export function loneMemberId(action: {
-  actionType: string;
-  matchedMediaItemIds?: readonly string[] | null;
-  mediaItemId?: string | null;
-}): string | null {
-  const members = action.matchedMediaItemIds ?? [];
-  if (!actionHonorsMemberIds(action.actionType) || members.length !== 1) return null;
-  return members[0] !== action.mediaItemId ? members[0] : null;
+export function loneMemberId(action: MemberScope): string | null {
+  const id = soleEpisodeId(action);
+  return id !== action.mediaItem?.id ? id : null;
 }
 
-/** The one episode a series action acts on, when it acts on exactly one. */
+/** The one episode a series action acts on, when it acts on exactly one we know. */
 function targetEpisode(action: ActionTargetParts): MemberEpisode | null {
-  const members = action.matchedMediaItemIds ?? [];
-  if (!actionHonorsMemberIds(action.actionType) || members.length !== 1) return null;
-  return members[0] === action.mediaItem.id ? action.mediaItem : (action.memberEpisode ?? null);
+  const id = soleEpisodeId(action);
+  if (!id) return null;
+  return id === action.mediaItem.id ? action.mediaItem : (action.memberEpisodes?.get(id) ?? null);
 }
 
 /**
@@ -63,7 +67,7 @@ function targetEpisode(action: ActionTargetParts): MemberEpisode | null {
  */
 export function actionTargetTitle(action: ActionTargetParts): string {
   const item = action.mediaItem;
-  if (!isSeriesAction(action)) return item.title;
+  if (item.type !== "SERIES") return item.title;
   const episode = targetEpisode(action);
   if (!episode) return seriesTitleOf(item);
   return formatEpisodeTitle({
@@ -72,13 +76,6 @@ export function actionTargetTitle(action: ActionTargetParts): string {
     seasonNumber: episode.seasonNumber,
     episodeNumber: episode.episodeNumber,
   });
-}
-
-export interface ActionTitleSnapshot {
-  mediaItemTitle: string;
-  mediaItemParentTitle: string | null;
-  mediaItemSeasonNumber?: number | null;
-  mediaItemEpisodeNumber?: number | null;
 }
 
 /**
@@ -93,9 +90,14 @@ export interface ActionTitleSnapshot {
  * so `snapshotTargetTitle` can still name it "<Show> SxxExx" once the episode's
  * row is purged.
  */
-export function actionTitleSnapshot(action: ActionTargetParts): ActionTitleSnapshot {
+export function actionTitleSnapshot(action: ActionTargetParts): {
+  mediaItemTitle: string;
+  mediaItemParentTitle: string | null;
+  mediaItemSeasonNumber?: number | null;
+  mediaItemEpisodeNumber?: number | null;
+} {
   const item = action.mediaItem;
-  if (!isSeriesAction(action)) return { mediaItemTitle: item.title, mediaItemParentTitle: item.parentTitle };
+  if (item.type !== "SERIES") return { mediaItemTitle: item.title, mediaItemParentTitle: item.parentTitle };
   const episode = targetEpisode(action);
   return {
     mediaItemTitle: seriesTitleOf(item),
@@ -106,10 +108,10 @@ export function actionTitleSnapshot(action: ActionTargetParts): ActionTitleSnaps
 }
 
 /**
- * `actionTargetTitle` for a series action whose item is gone, from the snapshot
- * `actionTitleSnapshot` recorded: "<Show> SxxExx" when it acted on one episode,
- * else the show. A snapshot from before series actions recorded their show
- * (title = the episode, parent = the show) still yields the show.
+ * A series action named from the snapshot `actionTitleSnapshot` recorded:
+ * "<Show> SxxExx" when it acted on one episode, else the show. A snapshot from
+ * before series actions recorded their show (title = the episode, parent = the
+ * show) still yields the show.
  */
 export function snapshotTargetTitle(snapshot: {
   mediaItemTitle: string | null;
@@ -117,10 +119,8 @@ export function snapshotTargetTitle(snapshot: {
   mediaItemSeasonNumber?: number | null;
   mediaItemEpisodeNumber?: number | null;
 }): string {
-  const show = seriesTitleOf({ title: snapshot.mediaItemTitle, parentTitle: snapshot.mediaItemParentTitle });
-  if (snapshot.mediaItemSeasonNumber == null && snapshot.mediaItemEpisodeNumber == null) return show;
   return formatEpisodeTitle({
-    parentTitle: show,
+    parentTitle: seriesTitleOf({ title: snapshot.mediaItemTitle, parentTitle: snapshot.mediaItemParentTitle }),
     seasonNumber: snapshot.mediaItemSeasonNumber,
     episodeNumber: snapshot.mediaItemEpisodeNumber,
   });

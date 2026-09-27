@@ -6,7 +6,6 @@ import { LidarrClient } from "@/lib/arr/lidarr-client";
 import { logger } from "@/lib/logger";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { actionHonorsMemberIds, formatActionLabel, supportsSearchAfter } from "@/lib/lifecycle/action-types";
-import { actionTargetTitle, type MemberEpisode } from "@/lib/lifecycle/action-target";
 import { seriesTitleOf } from "@/lib/media/display-title";
 
 // Re-export constants so server-side consumers can import from here too
@@ -66,18 +65,17 @@ export interface ActionRecord {
   addArrTags: string[];
   removeArrTags: string[];
   skipTitleValidation?: boolean;
-  /** The one other episode a member-scoped action acts on, for naming it (see `actionTargetTitle`). */
-  memberEpisode?: MemberEpisode | null;
+  /**
+   * What the log lines call the item: `actionTargetTitle` of this action — a
+   * series action by its show, or "<Show> SxxExx" on one episode, never by the
+   * episode it is stored against.
+   */
+  targetTitle: string;
   mediaItem: {
     id: string;
     title: string;
     parentTitle: string | null;
     year: number | null;
-    // What names the item in a log line (see `actionTargetTitle`): a SERIES
-    // row is an episode, named by its show and SxxExx, never its own title.
-    type?: string | null;
-    seasonNumber?: number | null;
-    episodeNumber?: number | null;
     externalIds: { source: string; externalId: string }[];
   };
 }
@@ -881,8 +879,7 @@ export async function executeAction(
    */
   onStep?: (label: string) => void,
 ): Promise<void> {
-  const target = actionTargetTitle(action);
-  logger.info("Lifecycle", `Starting ${action.actionType} for "${target}" (item: ${action.mediaItem.id}, arr: ${action.arrInstanceId ?? "none"}${action.matchedMediaItemIds.length > 0 ? `, ${action.matchedMediaItemIds.length} matched episodes` : ""})`);
+  logger.info("Lifecycle", `Starting ${action.actionType} for "${action.targetTitle}" (item: ${action.mediaItem.id}, arr: ${action.arrInstanceId ?? "none"}${action.matchedMediaItemIds.length > 0 ? `, ${action.matchedMediaItemIds.length} matched episodes` : ""})`);
 
   // Execute tag operations before the main action
   if (action.addArrTags.length > 0 || action.removeArrTags.length > 0) {
@@ -891,7 +888,7 @@ export async function executeAction(
     const tagOps: string[] = [];
     if (action.addArrTags.length > 0) tagOps.push(`+tags: ${action.addArrTags.join(", ")}`);
     if (action.removeArrTags.length > 0) tagOps.push(`-tags: ${action.removeArrTags.join(", ")}`);
-    logger.info("Lifecycle", `Tag operations for "${target}": ${tagOps.join("; ")}`);
+    logger.info("Lifecycle", `Tag operations for "${action.targetTitle}": ${tagOps.join("; ")}`);
   }
 
   // Report the main step. DELETE_FILES / quality-profile actions also trigger a
@@ -975,6 +972,6 @@ export async function executeAction(
 
   logger.info(
     "Lifecycle",
-    `Executed ${action.actionType} for "${target}"${action.addImportExclusion ? " (with import exclusion)" : ""}`
+    `Executed ${action.actionType} for "${action.targetTitle}"${action.addImportExclusion ? " (with import exclusion)" : ""}`
   );
 }

@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
 import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
-import { actionTargetTitle, actionTitleSnapshot, loneMemberId } from "@/lib/lifecycle/action-target";
+import { actionTargetTitle, actionTitleSnapshot } from "@/lib/lifecycle/action-target";
 import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
 
 /**
@@ -47,9 +47,9 @@ export interface ActionItem {
   seriesKey?: string | null;
   // What names the item in progress, errors and logs (see `actionTargetTitle`):
   // a SERIES row is an episode, named by its show and SxxExx, never its own title.
-  type?: string | null;
-  seasonNumber?: number | null;
-  episodeNumber?: number | null;
+  type: string;
+  seasonNumber: number | null;
+  episodeNumber: number | null;
   externalIds: { source: string; externalId: string }[];
 }
 
@@ -117,14 +117,13 @@ export async function executeActionsForItems(
   // with that same error instead of each paying the retry budget again.
   const unreachable = new UnreachableInstances();
   // An item acted on through exactly one OTHER episode is named after it.
-  const loneMember = (item: ActionItem) =>
-    loneMemberId({ actionType, matchedMediaItemIds: episodeIdMap.get(item.id), mediaItemId: item.id });
-  const memberEpisodes = await loadMemberEpisodes(items.map(loneMember));
+  const memberEpisodes = await loadMemberEpisodes(
+    items.map((item) => ({ actionType, matchedMediaItemIds: episodeIdMap.get(item.id), mediaItem: item })),
+  );
 
   for (const item of items) {
     const matchedMediaItemIds = episodeIdMap.get(item.id) ?? [];
-    const memberEpisode = memberEpisodes.get(loneMember(item) ?? "");
-    const target = { actionType, matchedMediaItemIds, mediaItem: item, memberEpisode };
+    const target = { actionType, matchedMediaItemIds, mediaItem: item, memberEpisodes };
     const title = actionTargetTitle(target);
     // Surface the live sub-step for this item (tags → main action) to the bar.
     const reportStep = onProgress
@@ -144,7 +143,7 @@ export async function executeActionsForItems(
         matchedMediaItemIds,
         addArrTags: config.addArrTags,
         removeArrTags: config.removeArrTags,
-        memberEpisode,
+        targetTitle: title,
         mediaItem: item,
       }, reportStep);
 
