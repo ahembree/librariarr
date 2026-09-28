@@ -10,7 +10,8 @@ import {
 } from "@/lib/sso/oidc-client";
 import { apiLogger } from "@/lib/logger";
 import { isSameOriginRequest } from "@/lib/url";
-import { hasRecentLogin, recentLoginRequired } from "@/lib/auth/recent-login";
+import { hasRecentLogin } from "@/lib/auth/recent-login";
+import { reauthRequired } from "@/lib/auth/reauth";
 
 /**
  * Initiates an OIDC flow for the authenticated admin to LINK their identity,
@@ -38,7 +39,7 @@ export async function POST(request: NextRequest) {
   // Same rule as the manual link: a linked identity outlives this session, so
   // a stolen cookie must not be enough (see recent-login.ts).
   if (!hasRecentLogin(session)) {
-    return recentLoginRequired("Linking an SSO identity", "link it");
+    return reauthRequired(session.userId, "Linking an SSO identity");
   }
 
   const settings = await getSsoSettings();

@@ -65,6 +65,7 @@ describe("POST /api/auth/plex/link", () => {
     });
     const body = await expectJson<{ error: string; code: string }>(response, 403);
     expect(body.code).toBe("reauth_required");
+    expect((body as unknown as { methods: string[] }).methods).toEqual(["plex"]);
     expect(mockGetPlexUser).not.toHaveBeenCalled();
     const { getTestPrisma } = await import("../../setup/test-db");
     const unchanged = await getTestPrisma().user.findUniqueOrThrow({ where: { id: user.id } });

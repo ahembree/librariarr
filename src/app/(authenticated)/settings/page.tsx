@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
+import { fetchWithReauth } from "@/lib/auth/reauth-client";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
   DEFAULT_CHIP_COLORS,
@@ -196,7 +197,7 @@ export default function SettingsPage() {
   // Plex OAuth for auth tab (link account, stay on settings)
   const plexOAuth = usePlexOAuth({
     onSuccess: async (authToken) => {
-      const linkRes = await fetch("/api/auth/plex/link", {
+      const linkRes = await fetchWithReauth("/api/auth/plex/link", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ authToken }),
@@ -213,7 +214,7 @@ export default function SettingsPage() {
   // Plex OAuth for servers tab (link account, then redirect to onboarding)
   const plexOAuthForOnboarding = usePlexOAuth({
     onSuccess: async (authToken) => {
-      const linkRes = await fetch("/api/auth/plex/link", {
+      const linkRes = await fetchWithReauth("/api/auth/plex/link", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ authToken }),
@@ -2699,7 +2700,7 @@ export default function SettingsPage() {
       if (credentialsForm.newPassword) body.newPassword = credentialsForm.newPassword;
       if (credentialsForm.newUsername) body.newUsername = credentialsForm.newUsername;
 
-      const res = await fetch("/api/auth/local/change-password", {
+      const res = await fetchWithReauth("/api/auth/local/change-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -2742,7 +2743,7 @@ export default function SettingsPage() {
     setPromptSaving(true);
     try {
       // Create credentials
-      const credRes = await fetch("/api/auth/local/change-password", {
+      const credRes = await fetchWithReauth("/api/auth/local/change-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

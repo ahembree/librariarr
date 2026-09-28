@@ -8,18 +8,20 @@ import { RECENT_LOGIN_WINDOW_MS } from "@/lib/auth/recent-login";
  * `hasRecentLogin` (recent-login.ts) used to leave such an account one option:
  * sign out, sign back in, and redo the action inside the window. These
  * methods confirm the identity in place instead and stamp
- * `session.authenticatedAt`, exactly as a fresh login would.
+ * `session.authenticatedAt`, exactly as a fresh login would. The browser side
+ * is reauth-client.ts (`fetchWithReauth`).
  *
  * - `plex`: a Plex OAuth round-trip whose Plex account is the one linked to
  *   this user (`POST /api/auth/reauth/plex`).
- * - `oidc`: an OIDC round-trip (with `prompt=login`) whose subject is the one
- *   linked to this user (`POST /api/auth/reauth/oidc`, finished by the OIDC
- *   callback).
+ * - `oidc`: an OIDC round-trip (with `prompt=login`, in a popup) whose subject
+ *   is the one linked to this user (`POST /api/auth/reauth/oidc`, finished by
+ *   the OIDC callback, which returns the popup to `/login/reauth`).
  * - `forward`: the forward-auth proxy's identity header naming the linked
  *   subject — the same proof a forward-auth login accepts
  *   (`POST /api/auth/reauth/forward`).
  */
-export type ReauthMethod = "plex" | "oidc" | "forward";
+export type { ReauthMethod } from "@/lib/auth/reauth-client";
+import type { ReauthMethod } from "@/lib/auth/reauth-client";
 
 /** The linked SSO subject matches the currently configured issuer. */
 export function ssoIdentityMatches(

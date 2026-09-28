@@ -18,7 +18,8 @@ import { getReauthMethods } from "@/lib/auth/reauth";
  * instead of answering from its own session. The callback
  * (`/api/auth/sso/oidc/callback`) reads `session.oidcFlow === "reauth"`,
  * checks the subject is the one linked to this user, stamps
- * `session.authenticatedAt` and returns to `/settings?reauth=ok`.
+ * `session.authenticatedAt` and returns the popup to `/login/reauth`, which
+ * reports back to the page that opened it.
  *
  * Returns `{ authorizationUrl }` for the client to navigate to.
  */

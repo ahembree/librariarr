@@ -40,10 +40,12 @@ function redirectToSsoSettings(request: NextRequest, params: Record<string, stri
   return NextResponse.redirect(url);
 }
 
-/** Back to the settings page after an in-place identity confirmation. */
-function redirectAfterReauth(request: NextRequest, params: Record<string, string>) {
-  const url = new URL("/settings", getExternalBaseUrl(request));
-  url.hash = "authentication";
+/**
+ * An in-place identity confirmation runs in a popup; /login/reauth tells the
+ * page that opened it how it went and closes itself.
+ */
+function redirectAfterReauth(request: NextRequest, params: { status: "ok" } | { error: string }) {
+  const url = new URL("/login/reauth", getExternalBaseUrl(request));
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   return NextResponse.redirect(url);
 }
@@ -70,7 +72,7 @@ export async function GET(request: NextRequest) {
     isLinkFlow
       ? redirectToSsoSettings(request, { ssoLinkError: error })
       : isReauthFlow
-        ? redirectAfterReauth(request, { reauthError: error })
+        ? redirectAfterReauth(request, { error })
         : redirectToLogin(request, error);
 
   if (!settings || settings.ssoMode !== "OIDC") {
@@ -149,12 +151,12 @@ export async function GET(request: NextRequest) {
         "Auth",
         `OIDC re-authentication refused: sub=${subject} is not the identity linked to this account`
       );
-      return redirectAfterReauth(request, { reauthError: "not_linked" });
+      return redirectAfterReauth(request, { error: "not_linked" });
     }
     session.authenticatedAt = Date.now();
     await session.save();
     apiLogger.info("Auth", "Identity confirmed with SSO (OIDC)");
-    return redirectAfterReauth(request, { reauth: "ok" });
+    return redirectAfterReauth(request, { status: "ok" });
   }
 
   if (isLinkFlow) {

@@ -62,8 +62,8 @@ import {
   normalizeScopes,
   type ApiScope,
 } from "@/lib/api-keys/scopes";
-import { usePlexOAuth } from "@/hooks/use-plex-oauth";
-import type { ReauthMethod } from "@/lib/auth/reauth";
+import { ReauthPanel } from "@/components/reauth-panel";
+import { reauthMethodsOf, type ReauthMethod } from "@/lib/auth/reauth-client";
 import { SettingsSection } from "../components";
 
 interface ApiKeyRow {
@@ -138,52 +138,6 @@ function isExpired(key: ApiKeyRow): boolean {
   return !!key.expiresAt && new Date(key.expiresAt).getTime() <= Date.now();
 }
 
-/**
- * The create form, kept across the page load an SSO sign-in costs: the OIDC
- * round-trip leaves the page, and the callback returns to
- * `/settings?reauth=ok` (or `?reauthError=…`), where the dialog reopens with
- * it. Session storage, so it never outlives the tab.
- */
-interface ApiKeyDraft {
-  name: string;
-  access: AccessChoice;
-  selected: ApiScope[];
-  expiry: ExpiryChoice;
-  customDate: string;
-}
-
-const DRAFT_STORAGE_KEY = "librariarr:api-key-draft";
-
-function saveDraft(draft: ApiKeyDraft): void {
-  try {
-    sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
-  } catch {
-    // Storage unavailable — the form simply starts empty on return.
-  }
-}
-
-function takeDraft(): ApiKeyDraft | null {
-  try {
-    const raw = sessionStorage.getItem(DRAFT_STORAGE_KEY);
-    sessionStorage.removeItem(DRAFT_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<ApiKeyDraft>;
-    return {
-      name: typeof parsed.name === "string" ? parsed.name : "",
-      access: parsed.access === "custom" ? "custom" : "read",
-      selected: Array.isArray(parsed.selected) ? parsed.selected.filter(isApiScope) : [],
-      expiry: EXPIRY_OPTIONS.some((o) => o.value === parsed.expiry) ? (parsed.expiry as ExpiryChoice) : "90",
-      customDate: typeof parsed.customDate === "string" ? parsed.customDate : "",
-    };
-  } catch {
-    return null;
-  }
-}
-
-const REAUTH_ERROR_MESSAGES: Record<string, string> = {
-  not_linked: "That SSO account is not the one linked to Librariarr.",
-  state_mismatch: "The SSO sign-in expired. Try again.",
-};
 
 export function ApiKeysSection({ hasPassword }: { hasPassword: boolean }) {
   const [keys, setKeys] = useState<ApiKeyRow[] | null>(null);
@@ -193,8 +147,6 @@ export function ApiKeysSection({ hasPassword }: { hasPassword: boolean }) {
   // Bumped on every open, so each create starts from a fresh dialog — even one
   // reopened before the previous close animation finished.
   const [createSession, setCreateSession] = useState(0);
-  // A form restored after an SSO confirmation (see ApiKeyDraft).
-  const [draft, setDraft] = useState<ApiKeyDraft | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   // Kept once the dialog closes, so its title doesn't empty while it fades.
   const [deleteTarget, setDeleteTarget] = useState<ApiKeyRow | null>(null);
@@ -237,46 +189,6 @@ export function ApiKeysSection({ hasPassword }: { hasPassword: boolean }) {
     };
   }, []);
 
-  // Back from an SSO confirmation started in the create dialog: reopen it with
-  // what was entered, then strip the params so a refresh does not repeat it.
-  // (Async IIFE so the setState calls sit in a callback, as the
-  // react-hooks/set-state-in-effect lint wants.)
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const params = new URLSearchParams(window.location.search);
-      const ok = params.get("reauth") === "ok";
-      const reauthError = params.get("reauthError");
-      if (!ok && !reauthError) return;
-      params.delete("reauth");
-      params.delete("reauthError");
-      window.history.replaceState(
-        null,
-        "",
-        window.location.pathname + (params.toString() ? `?${params}` : "") + window.location.hash,
-      );
-      const restored = takeDraft();
-      if (cancelled) return;
-      if (ok) {
-        toast.success("Identity confirmed", {
-          description: restored ? "Select Create Key to finish." : "You can create the key now.",
-        });
-      } else {
-        toast.error("Couldn't confirm it's you", {
-          description: REAUTH_ERROR_MESSAGES[reauthError!] ?? "SSO sign-in failed. Try again.",
-        });
-      }
-      if (restored) {
-        setDraft(restored);
-        setCreateSession((n) => n + 1);
-        setCreateOpen(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const retry = async () => {
     setRetrying(true);
     try {
@@ -287,7 +199,6 @@ export function ApiKeysSection({ hasPassword }: { hasPassword: boolean }) {
   };
 
   const openCreate = () => {
-    setDraft(null);
     setCreateSession((n) => n + 1);
     setCreateOpen(true);
   };
@@ -407,7 +318,6 @@ export function ApiKeysSection({ hasPassword }: { hasPassword: boolean }) {
         onOpenChange={setCreateOpen}
         existingNames={keys?.map((k) => k.name) ?? []}
         hasPassword={hasPassword}
-        initialDraft={draft}
         returnFocusTo={createButtonRef}
         onCreated={(created) => {
           // Shown at once; the refresh then fills in anything this list was
@@ -564,7 +474,6 @@ function CreateApiKeyDialog({
   onOpenChange,
   existingNames,
   hasPassword,
-  initialDraft,
   returnFocusTo,
   onCreated,
   onListStale,
@@ -574,19 +483,17 @@ function CreateApiKeyDialog({
   existingNames: string[];
   /** The account has a local password, which creating a key must confirm. */
   hasPassword: boolean;
-  /** Values to start from, restored after an SSO confirmation. */
-  initialDraft: ApiKeyDraft | null;
   /** Focused once the dialog has closed. */
   returnFocusTo: RefObject<HTMLButtonElement | null>;
   onCreated: (apiKey: ApiKeyRow) => void;
   /** The list may be missing a key the server has — re-read it. */
   onListStale: () => void;
 }) {
-  const [name, setName] = useState(initialDraft?.name ?? "");
-  const [access, setAccess] = useState<AccessChoice>(initialDraft?.access ?? "read");
-  const [selected, setSelected] = useState<Set<ApiScope>>(() => new Set(initialDraft?.selected ?? []));
-  const [expiry, setExpiry] = useState<ExpiryChoice>(initialDraft?.expiry ?? "90");
-  const [customDate, setCustomDate] = useState(initialDraft?.customDate ?? "");
+  const [name, setName] = useState("");
+  const [access, setAccess] = useState<AccessChoice>("read");
+  const [selected, setSelected] = useState<Set<ApiScope>>(new Set());
+  const [expiry, setExpiry] = useState<ExpiryChoice>("90");
+  const [customDate, setCustomDate] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -594,8 +501,6 @@ function CreateApiKeyDialog({
   // Set when the server wants a recent sign-in (no local password): the ways
   // this account can confirm it in place, instead of signing out and back in.
   const [reauthMethods, setReauthMethods] = useState<ReauthMethod[] | null>(null);
-  const [reauthBusy, setReauthBusy] = useState(false);
-  const [reauthError, setReauthError] = useState<string | null>(null);
   // The plaintext key, held only while the reveal step is on screen.
   const [revealedKey, setRevealedKey] = useState<{ key: string; name: string } | null>(null);
   const [copied, setCopied] = useState(false);
@@ -626,8 +531,6 @@ function CreateApiKeyDialog({
     setSaving(false);
     setError(null);
     setReauthMethods(null);
-    setReauthBusy(false);
-    setReauthError(null);
     setRevealedKey(null);
     revealedKeyRef.current = null;
     setCopied(false);
@@ -635,7 +538,6 @@ function CreateApiKeyDialog({
 
   const handleOpenChange = (next: boolean) => {
     if (saving) return;
-    if (!next) plexReauth.cancel();
     // The form is reset once the close animation has finished (see
     // onCloseAutoFocus) — resetting here swapped the content mid-fade.
     onOpenChange(next);
@@ -671,8 +573,7 @@ function CreateApiKeyDialog({
     scopes.length > 0 &&
     expiresAt !== undefined &&
     (!hasPassword || currentPassword.length > 0) &&
-    !saving &&
-    !reauthBusy;
+    !saving;
 
   const toggleScope = (scope: ApiScope, checked: boolean) => {
     setError(null);
@@ -745,13 +646,10 @@ function CreateApiKeyDialog({
         setPasswordError("That password is not correct.");
         return;
       }
-      if (data?.code === "reauth_required") {
-        setReauthMethods(
-          Array.isArray(data.methods)
-            ? data.methods.filter((m: unknown): m is ReauthMethod => m === "plex" || m === "oidc" || m === "forward")
-            : [],
-        );
-        setReauthError(null);
+      const methods = reauthMethodsOf(data);
+      if (methods) {
+        // Confirmed in place below, then the key is created.
+        setReauthMethods(methods);
         return;
       }
       if (data?.code === "password_required") {
@@ -769,74 +667,6 @@ function CreateApiKeyDialog({
       setSaving(false);
     }
   };
-
-  // After a confirmation in place, create the key the user already asked for.
-  const confirmed = async () => {
-    setReauthMethods(null);
-    setReauthError(null);
-    await handleCreate();
-  };
-
-  const plexReauth = usePlexOAuth({
-    onSuccess: async (authToken) => {
-      const res = await fetch("/api/auth/reauth/plex", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ authToken }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error || "Plex sign-in failed");
-      await confirmed();
-    },
-  });
-
-  const reauthWithOidc = async () => {
-    setReauthBusy(true);
-    setReauthError(null);
-    try {
-      const res = await fetch("/api/auth/reauth/oidc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-      const data = await res.json().catch(() => null);
-      if (res.ok && typeof data?.authorizationUrl === "string") {
-        // The sign-in leaves the page; the form comes back with it.
-        saveDraft({ name, access, selected: [...selected], expiry, customDate });
-        window.location.assign(data.authorizationUrl);
-        return;
-      }
-      setReauthError(data?.error || "Couldn't start the SSO sign-in");
-    } catch {
-      setReauthError("Network error — try again.");
-    }
-    setReauthBusy(false);
-  };
-
-  const reauthWithProxy = async () => {
-    setReauthBusy(true);
-    setReauthError(null);
-    try {
-      const res = await fetch("/api/auth/reauth/forward", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        setReauthError(data?.error || "Couldn't confirm it's you");
-        return;
-      }
-    } catch {
-      setReauthError("Network error — try again.");
-      return;
-    } finally {
-      setReauthBusy(false);
-    }
-    await confirmed();
-  };
-
-  const reauthInProgress = reauthBusy || plexReauth.isLoading;
 
   const handleCopy = async () => {
     if (!revealedKey) return;
@@ -1155,46 +985,14 @@ function CreateApiKeyDialog({
                       {reauthMethods.length > 0 && " The key is created as soon as you confirm."}
                     </span>
                   </p>
-                  {reauthMethods.length === 0 ? (
-                    <p className="text-muted-foreground">Sign out and back in, then create the key.</p>
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      {reauthMethods.includes("plex") && (
-                        <Button size="sm" onClick={() => void plexReauth.startAuth()} disabled={reauthInProgress || saving}>
-                          {plexReauth.isLoading && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
-                          Sign in with Plex
-                        </Button>
-                      )}
-                      {reauthMethods.includes("oidc") && (
-                        <Button size="sm" onClick={() => void reauthWithOidc()} disabled={reauthInProgress || saving}>
-                          {reauthBusy && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
-                          Sign in with SSO
-                        </Button>
-                      )}
-                      {reauthMethods.includes("forward") && (
-                        <Button size="sm" onClick={() => void reauthWithProxy()} disabled={reauthInProgress || saving}>
-                          {reauthBusy && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
-                          Confirm with SSO
-                        </Button>
-                      )}
-                      {plexReauth.isLoading && (
-                        <Button size="sm" variant="ghost" onClick={plexReauth.cancel}>
-                          Cancel
-                        </Button>
-                      )}
-                    </div>
-                  )}
-                  {plexReauth.isLoading && plexReauth.authUrl && (
-                    <p className="text-xs text-muted-foreground">
-                      No sign-in window?{" "}
-                      <a href={plexReauth.authUrl} target="_blank" rel="noopener noreferrer" className="underline">
-                        Open Plex sign-in
-                      </a>
-                    </p>
-                  )}
-                  {(reauthError ?? plexReauth.error) && (
-                    <p className="text-xs text-destructive">{reauthError ?? plexReauth.error}</p>
-                  )}
+                  <ReauthPanel
+                    methods={reauthMethods}
+                    disabled={saving}
+                    onConfirmed={async () => {
+                      setReauthMethods(null);
+                      await handleCreate();
+                    }}
+                  />
                 </div>
               )}
 

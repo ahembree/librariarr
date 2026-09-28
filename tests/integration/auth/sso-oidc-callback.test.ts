@@ -679,8 +679,8 @@ describe("GET /api/auth/sso/oidc/callback", () => {
 
       const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "s" } });
       const loc = new URL(res.headers.get("location")!);
-      expect(loc.pathname).toBe("/settings");
-      expect(loc.searchParams.get("reauth")).toBe("ok");
+      expect(loc.pathname).toBe("/login/reauth");
+      expect(loc.searchParams.get("status")).toBe("ok");
 
       const session = getMockSession();
       expect(session.userId).toBe(user.id);
@@ -697,17 +697,17 @@ describe("GET /api/auth/sso/oidc/callback", () => {
 
       const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "s" } });
       const loc = new URL(res.headers.get("location")!);
-      expect(loc.pathname).toBe("/settings");
-      expect(loc.searchParams.get("reauthError")).toBe("not_linked");
+      expect(loc.pathname).toBe("/login/reauth");
+      expect(loc.searchParams.get("error")).toBe("not_linked");
       expect(getMockSession().authenticatedAt).toBe(1);
     });
 
-    it("returns failures to settings, not the login page", async () => {
+    it("returns failures to the popup page, not the login page", async () => {
       await seedLinked();
       const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "wrong" } });
       const loc = new URL(res.headers.get("location")!);
-      expect(loc.pathname).toBe("/settings");
-      expect(loc.searchParams.get("reauthError")).toBe("state_mismatch");
+      expect(loc.pathname).toBe("/login/reauth");
+      expect(loc.searchParams.get("error")).toBe("state_mismatch");
       expect(getMockSession().authenticatedAt).toBe(1);
     });
   });
