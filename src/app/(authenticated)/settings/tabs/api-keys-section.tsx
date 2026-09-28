@@ -990,7 +990,8 @@ function CreateApiKeyDialog({
                     disabled={saving}
                     onConfirmed={async () => {
                       setReauthMethods(null);
-                      await handleCreate();
+                      // Closed while the sign-in was under way: create nothing.
+                      if (open) await handleCreate();
                     }}
                   />
                 </div>

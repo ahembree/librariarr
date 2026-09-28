@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
+  REAUTH_CHANNEL,
+  REAUTH_MESSAGE_TYPE,
   confirmIdentity,
   fetchWithReauth,
   getReauthRequest,
   reauthMethodsOf,
+  reauthWithOidcPopup,
   registerReauthHost,
   subscribeReauth,
 } from "@/lib/auth/reauth-client";
@@ -26,12 +29,16 @@ function answerNextPrompt(answer: boolean, seen: string[][] = []) {
   return seen;
 }
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
 describe("reauthMethodsOf", () => {
   it("reads the methods of a reauth_required body, dropping unknown ones", () => {
-    expect(reauthMethodsOf({ code: "reauth_required", methods: ["plex", "bogus", "oidc"] })).toEqual([
-      "plex",
-      "oidc",
-    ]);
+    expect(
+      reauthMethodsOf({ code: "reauth_required", methods: ["plex", "bogus", "oidc", "password"] }),
+    ).toEqual(["plex", "oidc", "password"]);
     expect(reauthMethodsOf({ code: "reauth_required" })).toEqual([]);
   });
 
@@ -47,7 +54,6 @@ describe("fetchWithReauth", () => {
   afterEach(() => {
     unregister?.();
     unregister = null;
-    vi.unstubAllGlobals();
   });
 
   it("asks for confirmation and repeats the request once confirmed", async () => {
@@ -99,15 +105,126 @@ describe("fetchWithReauth", () => {
 });
 
 describe("confirmIdentity", () => {
-  it("a second request replaces the open one, which resolves false", async () => {
+  it("a request made while a prompt is open joins it: one answer settles both", async () => {
     const unregister = registerReauthHost();
     const first = confirmIdentity(["plex"]);
-    const second = confirmIdentity(["oidc"]);
-    expect(await first).toBe(false);
-    expect(getReauthRequest()?.methods).toEqual(["oidc"]);
-    getReauthRequest()!.resolve(true);
+    const open = getReauthRequest();
+    const second = confirmIdentity(["plex"]);
+    expect(getReauthRequest()).toBe(open);
+
+    open!.resolve(true);
+    expect(await first).toBe(true);
     expect(await second).toBe(true);
     expect(getReauthRequest()).toBeNull();
+
+    // The next prompt is a new one, so the dialog starts it fresh.
+    const third = confirmIdentity(["plex"]);
+    expect(getReauthRequest()!.id).not.toBe(open!.id);
+    getReauthRequest()!.resolve(false);
+    expect(await third).toBe(false);
     unregister();
+  });
+
+  it("an open prompt answers false when its host goes away", async () => {
+    const unregister = registerReauthHost();
+    const pending = confirmIdentity(["oidc"]);
+    unregister();
+    expect(await pending).toBe(false);
+    expect(getReauthRequest()).toBeNull();
+  });
+});
+
+describe("reauthWithOidcPopup", () => {
+  const ORIGIN = "http://app.test";
+
+  function fakeWindow() {
+    const handlers = new Set<(e: MessageEvent) => void>();
+    const popup = {
+      closed: false,
+      close: vi.fn(() => {
+        popup.closed = true;
+      }),
+      location: { href: "/login/reauth?pending=1" },
+    };
+    const win = {
+      open: vi.fn(() => popup),
+      location: { origin: ORIGIN },
+      addEventListener: (_type: string, fn: (e: MessageEvent) => void) => handlers.add(fn),
+      removeEventListener: (_type: string, fn: (e: MessageEvent) => void) => handlers.delete(fn),
+      dispatch: (data: unknown, origin = ORIGIN) => {
+        for (const fn of [...handlers]) fn({ data, origin } as MessageEvent);
+      },
+      handlers,
+    };
+    vi.stubGlobal("window", win);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ authorizationUrl: "https://idp.test/auth" }), { status: 200 }),
+      ),
+    );
+    return { win, popup };
+  }
+
+  /** Lets the fetch and popup navigation run. */
+  const started = async (popup: { location: { href: string } }) => {
+    await vi.waitFor(() => expect(popup.location.href).toBe("https://idp.test/auth"));
+  };
+
+  // An IdP login page that sends Cross-Origin-Opener-Policy severs the popup:
+  // it reads as closed here and has no `window.opener` when it comes back, so
+  // only the channel carries the report.
+  it("takes the report from the BroadcastChannel even though the popup reads as closed", async () => {
+    const { popup, win } = fakeWindow();
+    const result = reauthWithOidcPopup();
+    await started(popup);
+    popup.closed = true;
+    await new Promise((r) => setTimeout(r, 50));
+
+    const sender = new BroadcastChannel(REAUTH_CHANNEL);
+    sender.postMessage({ type: REAUTH_MESSAGE_TYPE, ok: true });
+    expect(await result).toEqual({ ok: true });
+    sender.close();
+    expect(win.handlers.size).toBe(0);
+  });
+
+  it("takes a same-origin postMessage and ignores other origins", async () => {
+    const { popup, win } = fakeWindow();
+    const result = reauthWithOidcPopup();
+    await started(popup);
+
+    win.dispatch({ type: REAUTH_MESSAGE_TYPE, ok: true }, "https://evil.test");
+    win.dispatch({ type: REAUTH_MESSAGE_TYPE, ok: false, error: "not_linked" });
+    expect(await result).toEqual({
+      ok: false,
+      error: "That SSO account is not the one linked to Librariarr.",
+    });
+  });
+
+  it("ends quietly and closes the popup when cancelled", async () => {
+    const { popup } = fakeWindow();
+    const controller = new AbortController();
+    const result = reauthWithOidcPopup(controller.signal);
+    await started(popup);
+
+    controller.abort();
+    expect(await result).toEqual({ ok: false });
+    expect(popup.close).toHaveBeenCalled();
+  });
+
+  it("reports a blocked popup and a failed start", async () => {
+    const { win, popup } = fakeWindow();
+    win.open.mockReturnValueOnce(null as unknown as typeof popup);
+    expect(await reauthWithOidcPopup()).toEqual({
+      ok: false,
+      error: "Allow pop-ups for this site, then try again.",
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "SSO sign-in is not available" }), { status: 400 })),
+    );
+    expect(await reauthWithOidcPopup()).toEqual({ ok: false, error: "SSO sign-in is not available" });
+    expect(popup.close).toHaveBeenCalled();
   });
 });

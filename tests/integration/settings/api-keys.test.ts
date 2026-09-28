@@ -420,6 +420,11 @@ describe("/api/settings/api-keys", () => {
       const both = await expectJson<{ methods: string[] }>(await create(body()), 403);
       expect(both.methods).toEqual(["plex", "oidc"]);
 
+      // Plex sign-in turned off: a Plex round-trip is no longer offered.
+      await prisma.appSettings.update({ where: { userId: user.id }, data: { plexLoginEnabled: false } });
+      const noPlex = await expectJson<{ methods: string[] }>(await create(body()), 403);
+      expect(noPlex.methods).toEqual(["oidc"]);
+
       await prisma.user.update({ where: { id: user.id }, data: { plexId: null } });
       await prisma.appSettings.update({ where: { userId: user.id }, data: { ssoMode: "FORWARD_AUTH" } });
       await prisma.user.update({ where: { id: user.id }, data: { ssoIssuer: "forward-auth" } });

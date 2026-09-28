@@ -702,6 +702,24 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       expect(getMockSession().authenticatedAt).toBe(1);
     });
 
+    it("reports a vanished account to the popup page, not the login page", async () => {
+      const user = await createTestUser();
+      await seedOidcSettings(user.id);
+      setMockSession({
+        isLoggedIn: true,
+        userId: "no-such-user",
+        oidcState: "s",
+        oidcVerifier: "v",
+        oidcFlow: "reauth",
+      });
+      setupSuccessfulExchange({ sub: "linked-sub" });
+
+      const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "s" } });
+      const loc = new URL(res.headers.get("location")!);
+      expect(loc.pathname).toBe("/login/reauth");
+      expect(loc.searchParams.get("error")).toBe("session_lost");
+    });
+
     it("returns failures to the popup page, not the login page", async () => {
       await seedLinked();
       const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "wrong" } });

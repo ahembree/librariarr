@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
-import { getSsoSettings, isSsoUsable } from "@/lib/sso/config";
 import {
   buildAuthorizationUrl,
   discoverOidc,
@@ -10,7 +9,7 @@ import {
 } from "@/lib/sso/oidc-client";
 import { apiLogger } from "@/lib/logger";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
-import { getReauthMethods } from "@/lib/auth/reauth";
+import { loadReauthContext } from "@/lib/auth/reauth";
 
 /**
  * Starts an OIDC round-trip that confirms the signed-in admin's identity
@@ -32,13 +31,11 @@ export async function POST(request: NextRequest) {
   const rateLimited = checkAuthRateLimit(request, "sso-oidc-reauth");
   if (rateLimited) return rateLimited;
 
-  const settings = await getSsoSettings();
-  if (!isSsoUsable(settings) || settings?.ssoMode !== "OIDC") {
-    return NextResponse.json({ error: "OIDC SSO is not configured" }, { status: 400 });
-  }
-  if (!(await getReauthMethods(session.userId)).includes("oidc")) {
+  // OIDC configured and usable, and an identity linked under its issuer.
+  const { methods, sso: settings } = await loadReauthContext(session.userId);
+  if (!settings || !methods.includes("oidc")) {
     return NextResponse.json(
-      { error: "No SSO identity is linked to this user" },
+      { error: "SSO sign-in is not available for this account" },
       { status: 400 },
     );
   }

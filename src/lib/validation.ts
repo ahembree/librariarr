@@ -552,6 +552,15 @@ export const plexTokenSchema = z.object({
   authToken: z.string().min(1),
 });
 
+/**
+ * `POST /api/auth/reauth/password` — the account's current password, to renew
+ * a recent sign-in in place. Bounded like the API-key confirmation; never
+ * trimmed.
+ */
+export const reauthPasswordSchema = z.object({
+  password: z.string().min(1).max(200),
+});
+
 export const plexLinkSchema = z.object({
   pinId: z.coerce.number().optional(),
   authToken: z.string().min(1).optional(),

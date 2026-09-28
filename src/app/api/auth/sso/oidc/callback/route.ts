@@ -145,7 +145,7 @@ export async function GET(request: NextRequest) {
       where: { id: reauthUserId },
       select: { ssoEnabled: true, ssoSubject: true, ssoIssuer: true },
     });
-    if (!user) return redirectToLogin(request, "session_lost");
+    if (!user) return redirectAfterReauth(request, { error: "session_lost" });
     if (!ssoIdentityMatches(user, subject, currentIssuer)) {
       apiLogger.warn(
         "Auth",

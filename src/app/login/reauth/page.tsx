@@ -1,12 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { REAUTH_MESSAGE_TYPE } from "@/lib/auth/reauth-client";
+import { REAUTH_CHANNEL, REAUTH_MESSAGE_TYPE } from "@/lib/auth/reauth-client";
 
 /**
  * Where the identity-confirmation popup lands: first while the SSO sign-in is
  * being started (`?pending=1`), then from the OIDC callback with `?status=ok`
- * or `?error=<code>`. It tells the page that opened it and closes itself.
+ * or `?error=<code>`. It reports to the page that opened it and closes
+ * itself. The report goes out twice — to `window.opener`, and on a
+ * BroadcastChannel for when an IdP's Cross-Origin-Opener-Policy has severed
+ * the popup from its opener (`window.opener` is then null); the opener takes
+ * whichever arrives first.
  */
 export default function ReauthPage() {
   const [message, setMessage] = useState("Connecting to your sign-in provider…");
@@ -15,12 +19,20 @@ export default function ReauthPage() {
     const params = new URLSearchParams(window.location.search);
     if (params.has("pending")) return;
     const ok = params.get("status") === "ok";
-    const error = params.get("error") ?? undefined;
-    if (window.opener && !window.opener.closed) {
-      window.opener.postMessage({ type: REAUTH_MESSAGE_TYPE, ok, error }, window.location.origin);
-      window.close();
+    const report = { type: REAUTH_MESSAGE_TYPE, ok, error: params.get("error") ?? undefined };
+    try {
+      window.opener?.postMessage(report, window.location.origin);
+    } catch {
+      // No opener to tell; the channel below still reaches it.
     }
-    // Still open: no opener to tell, or the browser refused to close it.
+    if (typeof BroadcastChannel !== "undefined") {
+      const channel = new BroadcastChannel(REAUTH_CHANNEL);
+      channel.postMessage(report);
+      channel.close();
+    }
+    window.close();
+    // Still open: the browser refused to close a window it may not consider
+    // script-opened any more.
     const timer = setTimeout(() => {
       setMessage(
         ok

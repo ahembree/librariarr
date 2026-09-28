@@ -45,7 +45,7 @@ export function ReauthDialogHost() {
         </DialogHeader>
         {request && (
           <ReauthPanel
-            key={request.methods.join(",")}
+            key={request.id}
             methods={request.methods}
             onConfirmed={() => request.resolve(true)}
           />

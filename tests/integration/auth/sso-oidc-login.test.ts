@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
-import { clearMockSession, getMockSession } from "../../setup/mock-session";
+import { clearMockSession, getMockSession, setMockSession } from "../../setup/mock-session";
 import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
 
 const {
@@ -110,6 +110,30 @@ describe("GET /api/auth/sso/oidc/login", () => {
     const session = getMockSession();
     expect(session.oidcState).toBe("test-state");
     expect(session.oidcVerifier).toBe("test-verifier");
+  });
+
+  // An abandoned link or re-authentication handshake leaves its flow in the
+  // cookie; a login must not be finished as that flow by the callback.
+  it("clears a flow left over from an abandoned handshake", async () => {
+    const user = await createTestUser();
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id,
+        ssoMode: "OIDC",
+        ssoEnabled: true,
+        oidcIssuer: "https://idp.example.com",
+        oidcClientId: "client",
+      },
+    });
+    mockDiscover.mockResolvedValue({
+      issuer: "https://idp.example.com",
+      authorization_endpoint: "https://idp.example.com/auth",
+      token_endpoint: "https://idp.example.com/token",
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, oidcFlow: "reauth" });
+
+    expect((await callRoute(GET, { method: "GET" })).status).toBe(307);
+    expect(getMockSession().oidcFlow).toBeUndefined();
   });
 
   it("returns 500 when discovery fails", async () => {

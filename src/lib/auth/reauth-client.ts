@@ -8,9 +8,9 @@
  * flow ever asks the user to sign out and back in.
  */
 
-export type ReauthMethod = "plex" | "oidc" | "forward";
+export type ReauthMethod = "plex" | "oidc" | "forward" | "password";
 
-const METHODS: readonly ReauthMethod[] = ["plex", "oidc", "forward"];
+const METHODS: readonly ReauthMethod[] = ["plex", "oidc", "forward", "password"];
 
 /** The confirmation methods a `reauth_required` body names, or null. */
 export function reauthMethodsOf(data: unknown): ReauthMethod[] | null {
@@ -24,109 +24,168 @@ export function reauthMethodsOf(data: unknown): ReauthMethod[] | null {
 
 export interface ReauthResult {
   ok: boolean;
-  /** Shown to the user; absent when they closed the window themselves. */
+  /** Shown to the user; absent when they cancelled. */
   error?: string;
 }
 
-/** Message from /login/reauth, the page the OIDC callback returns the popup to. */
+/**
+ * How /login/reauth — where the OIDC callback returns the popup — reports the
+ * outcome: `postMessage` to the opener, and the same message on a
+ * BroadcastChannel of this name. The channel is what arrives when the IdP's
+ * login page sends Cross-Origin-Opener-Policy, which severs the popup from
+ * this window for good (`window.opener` is null on its return).
+ */
 export const REAUTH_MESSAGE_TYPE = "librariarr:reauth";
+export const REAUTH_CHANNEL = "librariarr-reauth";
+
+/** Long enough to sign in with a password manager and a second factor. */
+const OIDC_TIMEOUT_MS = 10 * 60 * 1000;
 
 const OIDC_ERRORS: Record<string, string> = {
   not_linked: "That SSO account is not the one linked to Librariarr.",
   state_mismatch: "The SSO sign-in expired. Try again.",
+  session_lost: "Your session ended. Sign in again.",
 };
+
+const NETWORK_ERROR = "Network error — try again.";
 
 /**
  * Confirms the identity with the IdP in a popup, so the page — and whatever
  * the user was in the middle of — stays put. Must be called from a click: the
  * popup is opened before the first await or the browser blocks it.
+ *
+ * It ends on the popup's report, on `signal` (the prompt's Cancel, or the
+ * prompt going away), or after `OIDC_TIMEOUT_MS` — never on `popup.closed`:
+ * an IdP page that sends Cross-Origin-Opener-Policy makes the popup read as
+ * closed here while the user is still signing in on it.
  */
-export async function reauthWithOidcPopup(): Promise<ReauthResult> {
+export async function reauthWithOidcPopup(signal?: AbortSignal): Promise<ReauthResult> {
+  if (signal?.aborted) return { ok: false };
   const popup = window.open("/login/reauth?pending=1", "librariarr-reauth", "width=600,height=700");
   if (!popup) return { ok: false, error: "Allow pop-ups for this site, then try again." };
+  const closePopup = () => {
+    try {
+      popup.close();
+    } catch {
+      // Severed from this window; the user closes it.
+    }
+  };
 
   try {
     const res = await fetch("/api/auth/reauth/oidc", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{}",
+      signal,
     });
     const data = await res.json().catch(() => null);
+    if (signal?.aborted) {
+      closePopup();
+      return { ok: false };
+    }
     if (!res.ok || typeof data?.authorizationUrl !== "string") {
-      popup.close();
+      closePopup();
       return { ok: false, error: data?.error || "Couldn't start the SSO sign-in" };
     }
     popup.location.href = data.authorizationUrl;
   } catch {
-    popup.close();
-    return { ok: false, error: "Network error — try again." };
+    closePopup();
+    return signal?.aborted ? { ok: false } : { ok: false, error: NETWORK_ERROR };
   }
 
   return new Promise((resolve) => {
     let settled = false;
+    const timeout = setTimeout(() => {
+      closePopup();
+      finish({ ok: false, error: "The SSO sign-in timed out. Try again." });
+    }, OIDC_TIMEOUT_MS);
+    const channel = typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(REAUTH_CHANNEL);
+
     const finish = (result: ReauthResult) => {
       if (settled) return;
       settled = true;
-      window.removeEventListener("message", onMessage);
-      clearInterval(closedCheck);
+      window.removeEventListener("message", onWindowMessage);
+      signal?.removeEventListener("abort", onAbort);
+      channel?.close();
+      clearTimeout(timeout);
       resolve(result);
     };
-    const onMessage = (e: MessageEvent) => {
-      if (e.origin !== window.location.origin || e.data?.type !== REAUTH_MESSAGE_TYPE) return;
+    const onReport = (data: unknown) => {
+      const report = data as { type?: unknown; ok?: unknown; error?: unknown } | null;
+      if (report?.type !== REAUTH_MESSAGE_TYPE) return;
       finish(
-        e.data.ok
+        report.ok === true
           ? { ok: true }
-          : { ok: false, error: OIDC_ERRORS[e.data.error] ?? "SSO sign-in failed. Try again." },
+          : { ok: false, error: OIDC_ERRORS[String(report.error)] ?? "SSO sign-in failed. Try again." },
       );
     };
-    window.addEventListener("message", onMessage);
-    // Closed without a message: cancelled. The grace period lets a message
-    // posted just before the window closed arrive first.
-    const closedCheck = setInterval(() => {
-      if (popup.closed) setTimeout(() => finish({ ok: false }), 500);
-    }, 500);
+    const onWindowMessage = (e: MessageEvent) => {
+      if (e.origin === window.location.origin) onReport(e.data);
+    };
+    const onAbort = () => {
+      closePopup();
+      finish({ ok: false });
+    };
+
+    window.addEventListener("message", onWindowMessage);
+    if (channel) channel.onmessage = (e) => onReport(e.data);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
-/** Confirms the identity from the forward-auth proxy's identity header. */
-export async function reauthWithProxy(): Promise<ReauthResult> {
+async function postConfirmation(
+  url: string,
+  body: unknown,
+  fallback: string,
+  signal?: AbortSignal,
+): Promise<ReauthResult> {
   try {
-    const res = await fetch("/api/auth/reauth/forward", {
+    const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: "{}",
+      body: JSON.stringify(body),
+      signal,
     });
     if (res.ok) return { ok: true };
     const data = await res.json().catch(() => null);
-    return { ok: false, error: data?.error || "Couldn't confirm it's you" };
+    return { ok: false, error: data?.error || fallback };
   } catch {
-    return { ok: false, error: "Network error — try again." };
+    return signal?.aborted ? { ok: false } : { ok: false, error: NETWORK_ERROR };
   }
 }
 
+/** Confirms the identity from the forward-auth proxy's identity header. */
+export function reauthWithProxy(signal?: AbortSignal): Promise<ReauthResult> {
+  return postConfirmation("/api/auth/reauth/forward", {}, "Couldn't confirm it's you", signal);
+}
+
 /** Confirms the identity with a Plex OAuth token from `usePlexOAuth`. */
-export async function reauthWithPlexToken(authToken: string): Promise<ReauthResult> {
-  const res = await fetch("/api/auth/reauth/plex", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ authToken }),
-  });
-  if (res.ok) return { ok: true };
-  const data = await res.json().catch(() => null);
-  return { ok: false, error: data?.error || "Plex sign-in failed" };
+export function reauthWithPlexToken(authToken: string): Promise<ReauthResult> {
+  return postConfirmation("/api/auth/reauth/plex", { authToken }, "Plex sign-in failed");
+}
+
+/** Confirms the identity with the account's current password. */
+export function reauthWithPassword(password: string, signal?: AbortSignal): Promise<ReauthResult> {
+  return postConfirmation("/api/auth/reauth/password", { password }, "Couldn't confirm it's you", signal);
 }
 
 // ─── The shared prompt ───────────────────────────────────────────────────
-// One pending request at a time, shown by <ReauthDialogHost /> in the
-// authenticated shell. Without a host mounted, `confirmIdentity` answers
-// false at once and the caller shows the server's refusal as before.
+// One prompt at a time, shown by <ReauthDialogHost />. A request made while
+// one is open joins it: one confirmation answers both. Without a host
+// mounted, `confirmIdentity` answers false at once and the caller shows the
+// server's refusal as before.
 
 export interface ReauthRequest {
+  /** Distinct per prompt, so the dialog starts each one fresh. */
+  id: number;
   methods: ReauthMethod[];
   resolve: (confirmed: boolean) => void;
 }
 
 let current: ReauthRequest | null = null;
+/** Everyone waiting on the open prompt: its opener and any request that joined. */
+let waiters: Array<(confirmed: boolean) => void> = [];
+let nextRequestId = 0;
 let hosts = 0;
 const listeners = new Set<() => void>();
 
@@ -134,9 +193,20 @@ function emit() {
   for (const listener of listeners) listener();
 }
 
+function settle(id: number, confirmed: boolean) {
+  if (current?.id !== id) return;
+  const answered = waiters;
+  current = null;
+  waiters = [];
+  emit();
+  for (const answer of answered) answer(confirmed);
+}
+
 export function subscribeReauth(listener: () => void): () => void {
   listeners.add(listener);
-  return () => listeners.delete(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 export function getReauthRequest(): ReauthRequest | null {
@@ -148,26 +218,19 @@ export function registerReauthHost(): () => void {
   hosts += 1;
   return () => {
     hosts -= 1;
+    // Nothing is left to show the open prompt; its callers must not hang.
+    if (hosts === 0) current?.resolve(false);
   };
 }
 
 /** Asks the user to confirm their identity. Resolves true once confirmed. */
 export function confirmIdentity(methods: ReauthMethod[]): Promise<boolean> {
   if (hosts === 0 || methods.length === 0) return Promise.resolve(false);
-  // A second request while one is open joins it rather than stacking dialogs.
-  current?.resolve(false);
   return new Promise((resolve) => {
-    current = {
-      methods,
-      resolve: (confirmed) => {
-        if (current?.resolve === request.resolve) {
-          current = null;
-          emit();
-        }
-        resolve(confirmed);
-      },
-    };
-    const request = current;
+    waiters.push(resolve);
+    if (current) return; // Joins the open prompt.
+    const id = ++nextRequestId;
+    current = { id, methods, resolve: (confirmed) => settle(id, confirmed) };
     emit();
   });
 }
