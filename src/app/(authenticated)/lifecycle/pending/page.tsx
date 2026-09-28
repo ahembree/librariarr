@@ -653,8 +653,11 @@ export default function PendingActionsPage() {
   const [confirmExecuteRuleSetId, setConfirmExecuteRuleSetId] = useState<string | null>(null);
 
   // Media detail panel state
-  const [selectedItem, setSelectedItem] = useState<MediaItemWithRelations | null>(null);
-  const [selectedItemType, setSelectedItemType] = useState<"MOVIE" | "SERIES" | "MUSIC">("MOVIE");
+  const [selected, setSelected] = useState<{
+    item: MediaItemWithRelations;
+    type: "MOVIE" | "SERIES" | "MUSIC";
+    title?: string;
+  } | null>(null);
   const [, setLoadingDetail] = useState(false);
   const { width: panelWidth, resizeHandleProps } = usePanelResize({
     storageKey: "lifecycle-pending-panel-width",
@@ -977,7 +980,6 @@ export default function PendingActionsPage() {
 
   const openDetailPanel = async (action: ActionItem) => {
     const mediaType = action.mediaItem.type as "MOVIE" | "SERIES" | "MUSIC";
-    setSelectedItemType(mediaType);
     if (!action.mediaItem.id) return;
     setLoadingDetail(true);
     try {
@@ -998,7 +1000,10 @@ export default function PendingActionsPage() {
             item.parentTitle = null;
           }
         }
-        setSelectedItem(item);
+        // A series action is named as its row names it — the show, or
+        // "<Show> SxxExx" for an action on one episode — not by the episode it
+        // is stored against.
+        setSelected({ item, type: mediaType, title: mediaType === "SERIES" ? action.mediaItem.title : undefined });
       }
     } catch (error) {
       console.error("Failed to fetch media item:", error);
@@ -1403,11 +1408,12 @@ export default function PendingActionsPage() {
         </AlertDialog>
       </div>
 
-      {selectedItem && (
+      {selected && (
         <MediaDetailSidePanel
-          item={selectedItem}
-          mediaType={selectedItemType}
-          onClose={() => setSelectedItem(null)}
+          item={selected.item}
+          mediaType={selected.type}
+          title={selected.title}
+          onClose={() => setSelected(null)}
           width={panelWidth}
           resizeHandleProps={resizeHandleProps}
         />

@@ -138,6 +138,22 @@ describe("Lifecycle Exceptions API", () => {
       expect(allBody.exceptions).toHaveLength(2);
     });
 
+    it("returns an excepted episode's season and episode numbers, so it can be named by show and SxxExx", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const episode = await createTestMediaItem(library.id, {
+        type: "SERIES", title: "Pilot", parentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 7,
+      });
+      await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: episode.id } });
+
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      const body = await expectJson<{
+        exceptions: Array<{ mediaItem: { parentTitle: string | null; seasonNumber: number | null; episodeNumber: number | null } }>;
+      }>(await callRoute(GET, { url: "/api/lifecycle/exceptions?type=SERIES" }), 200);
+      expect(body.exceptions[0].mediaItem).toMatchObject({ parentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 7 });
+    });
+
     it("rejects an unknown type with 400 instead of failing the query", async () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });

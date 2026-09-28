@@ -25,6 +25,10 @@ export interface GroupMemberStats {
   fileSize: bigint;
   playCount: number;
   lastPlayedAt: Date | null;
+  // What names the member when an action acts on it alone (see actionTargetTitle).
+  title: string;
+  seasonNumber: number | null;
+  episodeNumber: number | null;
 }
 
 export interface GroupTotals {
@@ -47,14 +51,12 @@ export async function loadGroupMemberStats(
   if (unique.length === 0) return new Map();
   const members = await prisma.mediaItem.findMany({
     where: { id: { in: unique } },
-    select: { id: true, fileSize: true, playCount: true, lastPlayedAt: true },
+    select: {
+      id: true, fileSize: true, playCount: true, lastPlayedAt: true,
+      title: true, seasonNumber: true, episodeNumber: true,
+    },
   });
-  return new Map(
-    members.map((m) => [
-      m.id,
-      { fileSize: m.fileSize ?? BigInt(0), playCount: m.playCount, lastPlayedAt: m.lastPlayedAt },
-    ]),
-  );
+  return new Map(members.map(({ id, fileSize, ...member }) => [id, { ...member, fileSize: fileSize ?? BigInt(0) }]));
 }
 
 /**

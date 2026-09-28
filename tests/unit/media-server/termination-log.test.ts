@@ -36,18 +36,25 @@ describe("termination logging", () => {
     logTermination({
       ...base,
       trigger: "maintenance mode",
-      session: { type: "episode", title: "Pilot", grandparentTitle: "Breaking Bad", username: "bob" },
+      session: {
+        type: "episode",
+        title: "Pilot",
+        grandparentTitle: "Breaking Bad",
+        seasonNumber: 1,
+        episodeNumber: 1,
+        username: "bob",
+      },
     });
 
     expect(vi.mocked(logger.info).mock.calls[0][1]).toBe(
-      'Terminated session for "bob" on "My Plex" — Breaking Bad · Pilot (session s1) ' +
+      'Terminated session for "bob" on "My Plex" — Breaking Bad S01E01 (session s1) ' +
         "(trigger: maintenance mode, reason: Going down for maintenance)"
     );
     expect(vi.mocked(logger.info).mock.calls[0][2]).toEqual({
       sessionId: "s1",
       serverId: "srv1",
       username: "bob",
-      mediaTitle: "Breaking Bad · Pilot",
+      mediaTitle: "Breaking Bad S01E01",
       trigger: "maintenance mode",
       reason: "Going down for maintenance",
     });

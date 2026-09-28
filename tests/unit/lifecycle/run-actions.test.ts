@@ -35,8 +35,11 @@ const HISTORY = { ruleSetId: null, ruleSetName: "Query", ruleSetType: "MOVIE" };
 
 const item = (n: number) => ({
   id: `m${n}`,
+  type: "MOVIE",
   title: `Movie ${n}`,
   parentTitle: null,
+  seasonNumber: null,
+  episodeNumber: null,
   year: 2020,
   fileSize: null,
   libraryId: "lib",
@@ -98,5 +101,89 @@ describe("executeActionsForItems", () => {
 
     expect(m.executeAction).toHaveBeenCalledTimes(3);
     expect(result).toMatchObject({ executed: 2, failed: 1 });
+  });
+
+  describe("naming a series item", () => {
+    // Episodes are stored against their show; `title` is the episode's own.
+    const episode = (n: number) => ({
+      id: `ep${n}`,
+      type: "SERIES",
+      title: `Episode Title ${n}`,
+      parentTitle: "Breaking Bad",
+      seasonNumber: 2,
+      episodeNumber: n,
+      year: 2009,
+      fileSize: null,
+      libraryId: "lib",
+      externalIds: [],
+    });
+    const SERIES_HISTORY = { ruleSetId: null, ruleSetName: "Query", ruleSetType: "SERIES" };
+
+    it("names a whole-series action by the show in its progress, errors and failures", async () => {
+      m.executeAction.mockRejectedValue(new Error("Series not found in Sonarr"));
+      const steps: string[] = [];
+
+      const result = await executeActionsForItems(
+        "u1",
+        [episode(1)],
+        { ...CONFIG, actionType: "DELETE_SONARR", arrInstanceId: "sonarr-1" },
+        new Map([["ep1", ["ep1", "ep2"]]]),
+        SERIES_HISTORY,
+        ({ current }) => { if (current) steps.push(current.title); },
+      );
+
+      expect(steps).toEqual(["Breaking Bad"]);
+      expect(result.errors).toEqual(["Breaking Bad: Series not found in Sonarr"]);
+      expect(result.failures).toEqual([{ title: "Breaking Bad", error: "Series not found in Sonarr" }]);
+      // The history row records the show, not the episode it is stored against.
+      expect(m.prisma.lifecycleAction.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ mediaItemTitle: "Breaking Bad", mediaItemParentTitle: null }),
+      });
+    });
+
+    it("names a file delete on one episode it is not stored against after that episode", async () => {
+      m.executeAction.mockRejectedValue(new Error("No episode file"));
+      m.prisma.mediaItem.findMany.mockResolvedValueOnce([
+        { id: "ep10", title: "Fly", seasonNumber: 3, episodeNumber: 10 },
+      ]);
+
+      const result = await executeActionsForItems(
+        "u1",
+        [episode(1)],
+        { ...CONFIG, actionType: "DELETE_FILES_SONARR", arrInstanceId: "sonarr-1" },
+        new Map([["ep1", ["ep10"]]]),
+        SERIES_HISTORY,
+      );
+
+      expect(result.errors).toEqual(["Breaking Bad S03E10: No episode file"]);
+      expect(m.executeAction).toHaveBeenCalledWith(
+        expect.objectContaining({ targetTitle: "Breaking Bad S03E10" }),
+        undefined,
+      );
+      expect(m.prisma.lifecycleAction.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ mediaItemSeasonNumber: 3, mediaItemEpisodeNumber: 10 }),
+      });
+    });
+
+    it("names a file delete on one episode by show and SxxExx", async () => {
+      m.executeAction.mockRejectedValue(new Error("No episode file"));
+
+      const result = await executeActionsForItems(
+        "u1",
+        [episode(5)],
+        { ...CONFIG, actionType: "DELETE_FILES_SONARR", arrInstanceId: "sonarr-1" },
+        new Map([["ep5", ["ep5"]]]),
+        SERIES_HISTORY,
+      );
+
+      expect(result.errors).toEqual(["Breaking Bad S02E05: No episode file"]);
+      expect(m.prisma.lifecycleAction.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          mediaItemTitle: "Breaking Bad",
+          mediaItemSeasonNumber: 2,
+          mediaItemEpisodeNumber: 5,
+        }),
+      });
+    });
   });
 });

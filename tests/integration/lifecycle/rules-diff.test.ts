@@ -568,6 +568,34 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
     expect(String(body.removedItems[0].fileSize)).toBe("3000000000");
   });
 
+  it("names a removed SERIES match that records no members by its show, not its episode", async () => {
+    // A match stored before matches recorded their members: nothing to
+    // aggregate, but it is still the show, not the representative episode.
+    const { user, server, library, ruleSet } = await seedSeriesFixture();
+    const ep = await createTestMediaItem(library.id, {
+      ratingKey: "l1e1", type: "SERIES", title: "Pilot",
+      parentTitle: "Legacy Show", seasonNumber: 1, episodeNumber: 1,
+    });
+    await createTestRuleMatch(ruleSet.id, ep.id, { id: ep.id, title: "Pilot", parentTitle: "Legacy Show" });
+
+    mockEvaluateSeriesScope.mockResolvedValueOnce([]);
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const response = await callRouteWithParams(POST, { id: ruleSet.id }, {
+      method: "POST",
+      body: { rules: activeGroup, type: "SERIES", seriesScope: true, serverIds: [server.id] },
+    });
+    const body = await expectJson<{ removedItems: Array<Record<string, unknown>> }>(response, 200);
+
+    expect(body.removedItems).toHaveLength(1);
+    expect(body.removedItems[0]).toMatchObject({
+      title: "Legacy Show",
+      parentTitle: null,
+      seasonNumber: null,
+      episodeNumber: null,
+    });
+  });
+
   it("leaves MOVIE rows untouched — they have no group to aggregate", async () => {
     const { user, server, library, ruleSet } = await seedSeriesFixture("MOVIE");
     const movie = await createTestMediaItem(library.id, {

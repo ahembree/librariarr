@@ -224,7 +224,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "lifecycle:read",
     tag: "Lifecycle",
     summary: "Actions by status",
-    description: `Each action's \`error\` is redacted of internal addresses and paths. Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.`,
+    description: `A series action's \`mediaItem.title\` is the show, or \`<Show> SxxExx\` when it acts on a single episode, and its \`parentTitle\` is null. Each action's \`error\` is redacted of internal addresses and paths. Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.`,
     query: [{ name: "status", description: "Which actions.", schema: { type: "string", enum: ["PENDING", "COMPLETED", "FAILED", "ALL"], default: "PENDING" } }],
   },
   {

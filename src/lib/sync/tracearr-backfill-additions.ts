@@ -10,6 +10,7 @@ import {
 import { TracearrClient } from "@/lib/tracearr/tracearr-client";
 import { IntegrationError } from "@/lib/integration-error";
 import { isHostLevelFailure } from "@/lib/lifecycle/unreachable-instances";
+import { formatMediaItemTitle } from "@/lib/media/display-title";
 
 /**
  * Recover the watch history of an item that left the library and came back.
@@ -100,7 +101,12 @@ interface CandidateItem {
   tvdbId: string | null;
   tmdbId: string | null;
   imdbId: string | null;
+  // What names it in a log line: an episode by its show and SxxExx.
   title: string;
+  type: string;
+  parentTitle: string | null;
+  seasonNumber: number | null;
+  episodeNumber: number | null;
 }
 
 export async function recoverHistoryForNewItems(
@@ -285,7 +291,7 @@ export async function recoverHistoryForNewItems(
       }
       logger.warn(
         "WatchHistory",
-        `Could not recover Tracearr history for "${candidate.title}" on ` +
+        `Could not recover Tracearr history for "${formatMediaItemTitle(candidate)}" on ` +
           `"${server.name}" — continuing with the remaining candidates`,
         { error: String(error) },
       );
@@ -344,7 +350,8 @@ async function findCandidates(
   const cap = Math.max(1, Math.min(Math.floor(limit), MAX_CANDIDATE_LIMIT));
 
   return prisma.$queryRawUnsafe<CandidateItem[]>(
-    `SELECT mi."id", mi."ratingKey", mi."title",
+    `SELECT mi."id", mi."ratingKey", mi."title", mi."type"::text AS "type", mi."parentTitle",
+            mi."seasonNumber", mi."episodeNumber",
             MAX(CASE WHEN UPPER(e."source") = 'TVDB' THEN e."externalId" END) AS "tvdbId",
             MAX(CASE WHEN UPPER(e."source") = 'TMDB' THEN e."externalId" END) AS "tmdbId",
             MAX(CASE WHEN UPPER(e."source") = 'IMDB' THEN e."externalId" END) AS "imdbId"
@@ -362,7 +369,7 @@ async function findCandidates(
       -- Newest first: when there are more candidates than the cap allows, the
       -- most recent arrivals are the ones a user is waiting on, and the rest
       -- stay candidates for the next run.
-      GROUP BY mi."id", mi."ratingKey", mi."title", mi."createdAt"
+      GROUP BY mi."id"
       ORDER BY mi."createdAt" DESC
       LIMIT $3`,
     serverId,

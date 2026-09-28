@@ -210,6 +210,34 @@ describe("Series endpoints", () => {
       expect(body.items[0].fileSize).toBe("2147483648");
       expect(typeof body.items[0].fileSize).toBe("string");
     });
+
+    it("sorted by show, lists each show's episodes in SxxExx order", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id, { type: "SERIES" });
+      // Created out of order, so neither id nor title gives the SxxExx order.
+      for (const [parentTitle, title, seasonNumber, episodeNumber] of [
+        ["Better Call Saul", "Uno", 1, 1],
+        ["Breaking Bad", "Ozymandias", 5, 14],
+        ["Breaking Bad", "Pilot", 1, 1],
+        ["Breaking Bad", "Fly", 3, 10],
+      ] as const) {
+        await createTestMediaItem(lib.id, { type: "SERIES", parentTitle, title, seasonNumber, episodeNumber });
+      }
+
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      const body = await expectJson<{ items: { parentTitle: string; title: string }[] }>(
+        await callRoute(GET, { url: "/api/media/series", searchParams: { sortBy: "parentTitle", sortOrder: "asc" } }),
+        200,
+      );
+
+      expect(body.items.map((i) => `${i.parentTitle}/${i.title}`)).toEqual([
+        "Better Call Saul/Uno",
+        "Breaking Bad/Pilot",
+        "Breaking Bad/Fly",
+        "Breaking Bad/Ozymandias",
+      ]);
+    });
   });
 
   // ----- GET /api/media/series/grouped -----

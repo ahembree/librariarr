@@ -627,6 +627,11 @@ model LifecycleAction {
   /// that keeps the title ("Dune" 1984 → 2021) changes only these.
   mediaItemYear          Int?
   mediaItemExternalId    String?
+  /// An episode's season and episode numbers (SERIES only), so the history of
+  /// an action on ONE episode still names it "<Show> SxxExx" once the
+  /// episode's MediaItem row is gone.
+  mediaItemSeasonNumber  Int?
+  mediaItemEpisodeNumber Int?
   ruleSetId              String?
   ruleSet                RuleSet?              @relation(fields: [ruleSetId], references: [id], onDelete: SetNull)
   ruleSetName            String?

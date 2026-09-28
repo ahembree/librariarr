@@ -971,6 +971,10 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       grandparentTitle: item.SeriesName ?? item.AlbumArtist,
       type: mapItemType(item.Type),
       year: item.ProductionYear,
+      ...(item.Type === "Episode" && {
+        seasonNumber: item.ParentIndexNumber,
+        episodeNumber: item.IndexNumber,
+      }),
       thumb: item.ImageTags?.Primary
         ? `/Items/${item.Id}/Images/Primary`
         : undefined,

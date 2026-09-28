@@ -1,3 +1,4 @@
+import { formatEpisodeTitle } from "@/lib/media/display-title";
 import type { MediaSession } from "./types";
 
 /**
@@ -5,7 +6,9 @@ import type { MediaSession } from "./types";
  * shape (the sessions API response) can format the same string.
  */
 export type SessionTitleParts = Pick<MediaSession, "title" | "type"> &
-  Partial<Pick<MediaSession, "parentTitle" | "grandparentTitle" | "year">>;
+  Partial<
+    Pick<MediaSession, "parentTitle" | "grandparentTitle" | "year" | "seasonNumber" | "episodeNumber">
+  >;
 
 const SEPARATOR = " · ";
 
@@ -13,14 +16,20 @@ const SEPARATOR = " · ";
  * A single human-readable media title for a playing session.
  *
  * An episode's `title` is the episode name and a track's is the track name, so
- * either alone is meaningless ("Pilot" — of which show?).
+ * either alone is meaningless ("Pilot" — of which show?). An episode is named by
+ * its show and SxxExx ("Breaking Bad S01E01"); the show is `grandparentTitle`
+ * alone, since an episode's `parentTitle` is its SEASON ("Season 1").
  */
 export function formatSessionMediaTitle(session: SessionTitleParts): string {
   const title = session.title || "Unknown";
 
   if (session.type === "episode") {
-    const show = session.grandparentTitle || session.parentTitle;
-    return show ? `${show}${SEPARATOR}${title}` : title;
+    return formatEpisodeTitle({
+      title: session.title,
+      parentTitle: session.grandparentTitle,
+      seasonNumber: session.seasonNumber,
+      episodeNumber: session.episodeNumber,
+    });
   }
 
   if (session.type === "track") {

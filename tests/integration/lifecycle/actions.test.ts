@@ -438,6 +438,129 @@ describe("Lifecycle Actions", () => {
       expect(body.groups).toHaveLength(0);
     });
 
+    it("names a series action by its show, and an action on one episode by show and SxxExx", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const pilot = await createTestMediaItem(library.id, {
+        title: "Pilot", type: "SERIES", parentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 1,
+      });
+      const finale = await createTestMediaItem(library.id, {
+        title: "Ozymandias", type: "SERIES", parentTitle: "Breaking Bad", seasonNumber: 5, episodeNumber: 14,
+      });
+      const ruleSet = await createTestRuleSet(user.id, { name: "Shows", type: "SERIES" });
+      const prisma = getTestPrisma();
+      // A whole-series delete, stored against a representative episode.
+      await prisma.lifecycleAction.create({
+        data: {
+          userId: user.id, mediaItemId: pilot.id, ruleSetId: ruleSet.id, actionType: "DELETE_SONARR",
+          status: "PENDING", scheduledFor: new Date(), matchedMediaItemIds: [pilot.id, finale.id],
+        },
+      });
+      // A file delete on exactly the one episode it is stored against.
+      await prisma.lifecycleAction.create({
+        data: {
+          userId: user.id, mediaItemId: finale.id, ruleSetId: ruleSet.id, actionType: "DELETE_FILES_SONARR",
+          status: "PENDING", scheduledFor: new Date(Date.now() + 1000), matchedMediaItemIds: [finale.id],
+        },
+      });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(GET, { url: "/api/lifecycle/actions" });
+      const body = await expectJson<{
+        groups: { items: { actionType: string; mediaItem: { title: string; parentTitle: string | null } }[] }[];
+      }>(response, 200);
+
+      const byType = Object.fromEntries(body.groups[0].items.map((i) => [i.actionType, i.mediaItem]));
+      expect(byType.DELETE_SONARR).toMatchObject({ title: "Breaking Bad", parentTitle: null });
+      expect(byType.DELETE_FILES_SONARR).toMatchObject({ title: "Breaking Bad S05E14", parentTitle: null });
+    });
+
+    it("names a file delete on one episode it is not stored against after that episode", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const pilot = await createTestMediaItem(library.id, {
+        title: "Pilot", type: "SERIES", parentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 1,
+      });
+      const fly = await createTestMediaItem(library.id, {
+        title: "Fly", type: "SERIES", parentTitle: "Breaking Bad", seasonNumber: 3, episodeNumber: 10,
+      });
+      const ruleSet = await createTestRuleSet(user.id, { name: "Shows", type: "SERIES" });
+      // Stored against the show's lowest-id episode, acting only on the one that matched.
+      await getTestPrisma().lifecycleAction.create({
+        data: {
+          userId: user.id, mediaItemId: pilot.id, ruleSetId: ruleSet.id, actionType: "DELETE_FILES_SONARR",
+          status: "PENDING", scheduledFor: new Date(), matchedMediaItemIds: [fly.id],
+        },
+      });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const body = await expectJson<{
+        groups: { items: { mediaItem: { title: string; parentTitle: string | null } }[] }[];
+      }>(await callRoute(GET, { url: "/api/lifecycle/actions" }), 200);
+
+      expect(body.groups[0].items[0].mediaItem).toMatchObject({ title: "Breaking Bad S03E10", parentTitle: null });
+    });
+
+    it("keeps naming a finished series action by what it acted on once the episode is gone", async () => {
+      const user = await createTestUser();
+      const ruleSet = await createTestRuleSet(user.id, { name: "Shows", type: "SERIES" });
+      const prisma = getTestPrisma();
+      const done = { userId: user.id, ruleSetId: ruleSet.id, status: "COMPLETED" as const, scheduledFor: new Date(), executedAt: new Date() };
+      // mediaItemId null: the episode's row was purged after the delete.
+      await prisma.lifecycleAction.create({
+        data: {
+          ...done, actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: ["purged-episode"],
+          mediaItemTitle: "Breaking Bad", mediaItemParentTitle: null, mediaItemSeasonNumber: 2, mediaItemEpisodeNumber: 5,
+        },
+      });
+      await prisma.lifecycleAction.create({
+        data: { ...done, actionType: "DELETE_SONARR", mediaItemTitle: "Better Call Saul", mediaItemParentTitle: null },
+      });
+      // Recorded before series actions snapshotted their show: the episode's own titles.
+      await prisma.lifecycleAction.create({
+        data: { ...done, actionType: "UNMONITOR_SONARR", mediaItemTitle: "Pilot", mediaItemParentTitle: "El Camino" },
+      });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(GET, { url: "/api/lifecycle/actions", searchParams: { status: "COMPLETED" } });
+      const body = await expectJson<{
+        groups: { items: { actionType: string; mediaItem: { title: string; parentTitle: string | null } }[] }[];
+      }>(response, 200);
+
+      const byType = Object.fromEntries(body.groups[0].items.map((i) => [i.actionType, i.mediaItem]));
+      expect(byType.DELETE_FILES_SONARR).toMatchObject({ title: "Breaking Bad S02E05", parentTitle: null });
+      expect(byType.DELETE_SONARR).toMatchObject({ title: "Better Call Saul", parentTitle: null });
+      expect(byType.UNMONITOR_SONARR).toMatchObject({ title: "El Camino", parentTitle: null });
+    });
+
+    it("names a finished file delete by its snapshot while the episode it is stored against remains", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const pilot = await createTestMediaItem(library.id, {
+        title: "Pilot", type: "SERIES", parentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 1,
+      });
+      const ruleSet = await createTestRuleSet(user.id, { name: "Shows", type: "SERIES" });
+      // It deleted S03E10, whose row the next sync purged; the episode it is
+      // stored against is still there.
+      await getTestPrisma().lifecycleAction.create({
+        data: {
+          userId: user.id, mediaItemId: pilot.id, ruleSetId: ruleSet.id, actionType: "DELETE_FILES_SONARR",
+          status: "COMPLETED", scheduledFor: new Date(), executedAt: new Date(), matchedMediaItemIds: ["purged-episode"],
+          mediaItemTitle: "Breaking Bad", mediaItemParentTitle: null, mediaItemSeasonNumber: 3, mediaItemEpisodeNumber: 10,
+        },
+      });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const body = await expectJson<{
+        groups: { items: { mediaItem: { title: string; parentTitle: string | null } }[] }[];
+      }>(await callRoute(GET, { url: "/api/lifecycle/actions", searchParams: { status: "COMPLETED" } }), 200);
+
+      expect(body.groups[0].items[0].mediaItem).toMatchObject({ title: "Breaking Bad S03E10", parentTitle: null });
+    });
+
     it("includes mediaItem and ruleSet relations", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
@@ -875,7 +998,7 @@ describe("Lifecycle Actions", () => {
       expect(actions[0].mediaItemTitle).toBe("Record Movie");
     });
 
-    it("snapshots parentTitle on COMPLETED actions so series/episode titles survive MediaItem deletion", async () => {
+    it("snapshots a series action as its show so the history still names it after MediaItem deletion", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
       const library = await createTestLibrary(server.id, { type: "SERIES" });
@@ -905,8 +1028,70 @@ describe("Lifecycle Actions", () => {
         where: { userId: user.id },
       });
       expect(actions).toHaveLength(1);
-      expect(actions[0].mediaItemTitle).toBe("Pilot");
-      expect(actions[0].mediaItemParentTitle).toBe("Some Show");
+      // A series action is its show: the title, with no parent — never the
+      // representative episode's own title.
+      expect(actions[0].mediaItemTitle).toBe("Some Show");
+      expect(actions[0].mediaItemParentTitle).toBeNull();
+    });
+
+    it("records the one episode a file delete acted on, so its history can name it once the episode is gone", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const episode = await createTestMediaItem(library.id, {
+        title: "Fly", type: "SERIES", parentTitle: "Breaking Bad", seasonNumber: 3, episodeNumber: 10,
+      });
+      const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true, name: "Episodes", type: "SERIES", seriesScope: false,
+        actionType: "DELETE_FILES_SONARR", arrInstanceId: "arr-1",
+      });
+      // Episode scope, one matching episode: the show, stored against that episode.
+      await createTestRuleMatch(ruleSet.id, episode.id, {
+        id: episode.id, title: "Breaking Bad", parentTitle: null, memberIds: [episode.id],
+      });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id, mediaItemIds: [episode.id] },
+      });
+
+      const [record] = await getTestPrisma().lifecycleAction.findMany({ where: { userId: user.id } });
+      expect(record).toMatchObject({
+        status: "COMPLETED",
+        mediaItemTitle: "Breaking Bad",
+        mediaItemParentTitle: null,
+        mediaItemSeasonNumber: 3,
+        mediaItemEpisodeNumber: 10,
+      });
+    });
+
+    it("names a failed series action by its show, not the episode it is stored against", async () => {
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      (executeAction as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("Sonarr API down"));
+
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const item = await createTestMediaItem(library.id, {
+        title: "Pilot", parentTitle: "Some Show", type: "SERIES", seasonNumber: 1, episodeNumber: 1,
+      });
+      const ruleSet = await createTestRuleSet(user.id, {
+        actionEnabled: true, name: "Series Rule", type: "SERIES", actionType: "DO_NOTHING",
+      });
+      await createTestRuleMatch(ruleSet.id, item.id);
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(executePost, {
+        url: "/api/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id, mediaItemIds: [item.id] },
+      });
+
+      const body = await expectJson<{ failed: number; errors: string[] }>(response, 200);
+      expect(body.failed).toBe(1);
+      expect(body.errors).toEqual(["Some Show: Sonarr API down"]);
     });
 
     it("records FAILED status when executeAction throws", async () => {
@@ -1072,6 +1257,54 @@ describe("Lifecycle Actions", () => {
       await expectJson(response, 200);
       const { executeAction } = await import("@/lib/lifecycle/actions");
       expect(executeAction).toHaveBeenCalledTimes(1);
+      // Still recorded as its show, not rewritten to the episode's own title.
+      const retried = await getTestPrisma().lifecycleAction.findUniqueOrThrow({ where: { id: action.id } });
+      expect(retried).toMatchObject({ status: "COMPLETED", mediaItemTitle: "Breaking Bad", mediaItemParentTitle: null });
+    });
+
+    it("names a retried file delete after the episode it acts on and keeps its snapshot", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const pilot = await createTestMediaItem(library.id, {
+        title: "Pilot", type: "SERIES", parentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 1,
+      });
+      const fly = await createTestMediaItem(library.id, {
+        title: "Fly", type: "SERIES", parentTitle: "Breaking Bad", seasonNumber: 3, episodeNumber: 10,
+      });
+      await createTestExternalId(pilot.id, "TVDB", "81189");
+      const ruleSet = await createTestRuleSet(user.id, { name: "Episodes", type: "SERIES", seriesScope: false });
+      const action = await getTestPrisma().lifecycleAction.create({
+        data: {
+          userId: user.id, mediaItemId: pilot.id, ruleSetId: ruleSet.id, actionType: "DELETE_FILES_SONARR",
+          status: "FAILED", scheduledFor: new Date(), matchedMediaItemIds: [fly.id],
+          mediaItemTitle: "Breaking Bad", mediaItemParentTitle: null, mediaItemExternalId: "81189",
+          mediaItemSeasonNumber: 3, mediaItemEpisodeNumber: 10,
+        },
+      });
+      await createTestRuleMatch(ruleSet.id, pilot.id, {
+        id: pilot.id, title: "Breaking Bad", parentTitle: null, memberIds: [fly.id],
+      });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      await expectJson(
+        await callRouteWithParams(actionRetry, { id: action.id }, {
+          url: `/api/lifecycle/actions/${action.id}`,
+          method: "POST",
+        }),
+        200,
+      );
+
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({ targetTitle: "Breaking Bad S03E10" }));
+      const retried = await getTestPrisma().lifecycleAction.findUniqueOrThrow({ where: { id: action.id } });
+      expect(retried).toMatchObject({
+        status: "COMPLETED",
+        mediaItemTitle: "Breaking Bad",
+        mediaItemParentTitle: null,
+        mediaItemSeasonNumber: 3,
+        mediaItemEpisodeNumber: 10,
+      });
     });
 
     it("retries a FAILED action when no exception exists", async () => {

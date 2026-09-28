@@ -2,6 +2,8 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
 import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
+import { actionTargetTitle, actionTitleSnapshot } from "@/lib/lifecycle/action-target";
+import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
 
 /**
  * Action configuration shared by rule-based and ad-hoc (query page) execution.
@@ -43,6 +45,11 @@ export interface ActionItem {
   fileSize: bigint | null;
   libraryId: string;
   seriesKey?: string | null;
+  // What names the item in progress, errors and logs (see `actionTargetTitle`):
+  // a SERIES row is an episode, named by its show and SxxExx, never its own title.
+  type: string;
+  seasonNumber: number | null;
+  episodeNumber: number | null;
   externalIds: { source: string; externalId: string }[];
 }
 
@@ -109,12 +116,18 @@ export async function executeActionsForItems(
   // Once the Arr instance fails at the host level, the remaining items fail
   // with that same error instead of each paying the retry budget again.
   const unreachable = new UnreachableInstances();
+  // An item acted on through exactly one OTHER episode is named after it.
+  const memberEpisodes = await loadMemberEpisodes(
+    items.map((item) => ({ actionType, matchedMediaItemIds: episodeIdMap.get(item.id), mediaItem: item })),
+  );
 
   for (const item of items) {
     const matchedMediaItemIds = episodeIdMap.get(item.id) ?? [];
+    const target = { actionType, matchedMediaItemIds, mediaItem: item, memberEpisodes };
+    const title = actionTargetTitle(target);
     // Surface the live sub-step for this item (tags → main action) to the bar.
     const reportStep = onProgress
-      ? (step: string) => onProgress({ done: processed, total, current: { title: item.title, step } })
+      ? (step: string) => onProgress({ done: processed, total, current: { title, step } })
       : undefined;
     reportStep?.("Starting");
     try {
@@ -130,6 +143,7 @@ export async function executeActionsForItems(
         matchedMediaItemIds,
         addArrTags: config.addArrTags,
         removeArrTags: config.removeArrTags,
+        targetTitle: title,
         mediaItem: item,
       }, reportStep);
 
@@ -180,8 +194,7 @@ export async function executeActionsForItems(
           data: {
             userId,
             mediaItemId: item.id,
-            mediaItemTitle: item.title,
-            mediaItemParentTitle: item.parentTitle,
+            ...actionTitleSnapshot(target),
             ruleSetId: history.ruleSetId,
             ruleSetName: history.ruleSetName,
             ruleSetType: history.ruleSetType,
@@ -206,16 +219,15 @@ export async function executeActionsForItems(
     } catch (error) {
       unreachable.record(config.arrInstanceId, error);
       const msg = extractActionError(error);
-      errors.push(`${item.title}: ${msg}`);
-      failures.push({ title: item.title, error: msg });
-      logger.error("Lifecycle", `Failed immediate ${actionType} for "${item.title}"`, { error: describeActionError(error) });
+      errors.push(`${title}: ${msg}`);
+      failures.push({ title, error: msg });
+      logger.error("Lifecycle", `Failed immediate ${actionType} for "${title}"`, { error: describeActionError(error) });
 
       await prisma.lifecycleAction.create({
         data: {
           userId,
           mediaItemId: item.id,
-          mediaItemTitle: item.title,
-          mediaItemParentTitle: item.parentTitle,
+          ...actionTitleSnapshot(target),
           ruleSetId: history.ruleSetId,
           ruleSetName: history.ruleSetName,
           ruleSetType: history.ruleSetType,

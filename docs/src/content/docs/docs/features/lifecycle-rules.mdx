@@ -499,6 +499,10 @@ Some fields are **series-aggregate** fields — `availableEpisodeCount`, `watche
 
 When Series Scope is **off** and your rule mixes an aggregate field with a per-episode field (for example, *available episode count ≥ 20 **and** resolution = 4K*), the show first has to qualify on the aggregate, and then a member-scoped file delete acts only on the episodes that individually satisfy the per-episode conditions (here, just the 4K episodes) — not every episode of the series. With Series Scope **on**, the same rule deletes the whole series.
 
+### How series actions are named
+
+A series match and its action are always named by the **show**. This holds on the Matches and Pending pages, in the action history, in System Logs and in Discord notifications. It is never named by the episode Librariarr stores the match against. An action that acts on **exactly one episode** is named by the show plus that episode's season and episode number, for example *Breaking Bad S03E10*. That happens with a file delete whose rule matched a single episode, or a Query-page action on one episode. The history keeps that name after the episode has been deleted from your server.
+
 ## Scheduling
 
 Lifecycle processing runs on two independent schedules (configured in **Settings → Scheduling**):

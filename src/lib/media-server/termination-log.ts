@@ -30,7 +30,7 @@ function label(t: Termination) {
   };
 }
 
-/** `"alice" on "My Plex" — Breaking Bad · Pilot (session abc123)` */
+/** `"alice" on "My Plex" — Breaking Bad S01E01 (session abc123)` */
 function describe(t: Termination, username: string, mediaTitle: string): string {
   return `"${username}" on "${t.serverName}" — ${mediaTitle} (session ${t.sessionId})`;
 }

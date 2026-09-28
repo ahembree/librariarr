@@ -14,6 +14,7 @@ import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatFileSize, formatDuration } from "@/lib/format";
+import { formatEpisodeTitle, seriesTitleOf } from "@/lib/media/display-title";
 import { PseudocodePanel } from "@/components/builder/pseudocode-panel";
 import type { BaseRule, BaseGroup, BuilderConfig } from "@/components/builder/types";
 import type { MediaItemWithRelations } from "@/lib/types";
@@ -42,6 +43,11 @@ interface MediaDetailSidePanelProps {
   resizeHandleProps: ResizeHandleProps;
   /** Override the default detail page URL (e.g. for grouped series/music items) */
   detailUrl?: string;
+  /**
+   * Override the header title — e.g. a lifecycle action's target, the show or
+   * "<Show> SxxExx", which the representative episode row alone cannot tell.
+   */
+  title?: string;
   /** Matched criteria from lifecycle rules (displayed above cast) */
   matchedCriteria?: MatchedCriterion[];
   /** LifecycleRule groups for Logic Preview with highlighting */
@@ -77,6 +83,7 @@ export function MediaDetailSidePanel({
   width,
   resizeHandleProps,
   detailUrl: detailUrlOverride,
+  title: titleOverride,
   matchedCriteria,
   ruleGroups,
   builderConfig,
@@ -120,9 +127,16 @@ export function MediaDetailSidePanel({
         : getDetailPageUrl(mediaType, item.id));
   // Aggregated items (series/artist scope) use parentTitle=null but still need the parent image
   const imageUrl = `/api/media/${item.id}/image${item.parentTitle || isAggregate ? "?type=parent" : ""}`;
-  const displayTitle = item.parentTitle
-    ? `${item.parentTitle} - ${item.title}`
-    : item.title;
+  // A series group is its show; one episode is its show and SxxExx — never
+  // the episode's own title, which names no show.
+  const displayTitle = titleOverride ?? (
+    mediaType === "SERIES"
+      ? isAggregate
+        ? seriesTitleOf(item)
+        : formatEpisodeTitle(item)
+      : item.parentTitle
+        ? `${item.parentTitle} - ${item.title}`
+        : item.title);
   const resolutionLabel = formatResolution(item.resolution);
 
   const header = (
