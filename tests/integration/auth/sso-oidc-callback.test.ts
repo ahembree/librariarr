@@ -651,4 +651,64 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     // Login flow → root, not /settings.
     expect(new URL(res.headers.get("location")!).pathname).toBe("/");
   });
+  // ── Re-authentication flow (signed-in admin confirming identity) ──────
+
+  describe("reauth flow", () => {
+    async function seedLinked() {
+      const user = await createTestUser();
+      await seedOidcSettings(user.id);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { ssoEnabled: true, ssoSubject: "linked-sub", ssoIssuer: ISSUER },
+      });
+      setMockSession({
+        isLoggedIn: true,
+        userId: user.id,
+        authenticatedAt: 1,
+        oidcState: "s",
+        oidcVerifier: "v",
+        oidcFlow: "reauth",
+      });
+      return user;
+    }
+
+    it("stamps the sign-in time and returns to settings for the linked subject", async () => {
+      const user = await seedLinked();
+      setupSuccessfulExchange({ sub: "linked-sub" });
+      const before = Date.now();
+
+      const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "s" } });
+      const loc = new URL(res.headers.get("location")!);
+      expect(loc.pathname).toBe("/settings");
+      expect(loc.searchParams.get("reauth")).toBe("ok");
+
+      const session = getMockSession();
+      expect(session.userId).toBe(user.id);
+      expect(session.authenticatedAt).toBeGreaterThanOrEqual(before);
+      expect(session.oidcFlow).toBeUndefined();
+      // Nothing about the account changes.
+      const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
+      expect(refreshed?.sessionVersion).toBe(user.sessionVersion);
+    });
+
+    it("refuses a different subject and leaves the sign-in time alone", async () => {
+      await seedLinked();
+      setupSuccessfulExchange({ sub: "someone-else" });
+
+      const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "s" } });
+      const loc = new URL(res.headers.get("location")!);
+      expect(loc.pathname).toBe("/settings");
+      expect(loc.searchParams.get("reauthError")).toBe("not_linked");
+      expect(getMockSession().authenticatedAt).toBe(1);
+    });
+
+    it("returns failures to settings, not the login page", async () => {
+      await seedLinked();
+      const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "wrong" } });
+      const loc = new URL(res.headers.get("location")!);
+      expect(loc.pathname).toBe("/settings");
+      expect(loc.searchParams.get("reauthError")).toBe("state_mismatch");
+      expect(getMockSession().authenticatedAt).toBe(1);
+    });
+  });
 });

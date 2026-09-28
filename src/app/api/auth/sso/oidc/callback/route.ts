@@ -15,6 +15,7 @@ import { sanitizeEmail, sanitizeUsername } from "@/lib/sso/identity-claims";
 import { apiLogger } from "@/lib/logger";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
 import { getExternalBaseUrl } from "@/lib/url";
+import { ssoIdentityMatches } from "@/lib/auth/reauth";
 
 /** Constant-time comparison for the OIDC state value. Lengths differ → false. */
 function statesEqual(a: string, b: string): boolean {
@@ -39,6 +40,14 @@ function redirectToSsoSettings(request: NextRequest, params: Record<string, stri
   return NextResponse.redirect(url);
 }
 
+/** Back to the settings page after an in-place identity confirmation. */
+function redirectAfterReauth(request: NextRequest, params: Record<string, string>) {
+  const url = new URL("/settings", getExternalBaseUrl(request));
+  url.hash = "authentication";
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  return NextResponse.redirect(url);
+}
+
 export async function GET(request: NextRequest) {
   // Rate-limit the callback too, not just /login init. Each callback hits the
   // IdP for token exchange + userinfo (and discovery if not cached), so an
@@ -54,14 +63,21 @@ export async function GET(request: NextRequest) {
   const session = await getSession();
   const isLinkFlow =
     session.oidcFlow === "link" && session.isLoggedIn && !!session.userId;
+  const isReauthFlow =
+    session.oidcFlow === "reauth" && session.isLoggedIn && !!session.userId;
+  // Where a failure returns to, by flow.
+  const fail = (error: string) =>
+    isLinkFlow
+      ? redirectToSsoSettings(request, { ssoLinkError: error })
+      : isReauthFlow
+        ? redirectAfterReauth(request, { reauthError: error })
+        : redirectToLogin(request, error);
 
   if (!settings || settings.ssoMode !== "OIDC") {
-    return isLinkFlow
-      ? redirectToSsoSettings(request, { ssoLinkError: "sso_not_configured" })
-      : redirectToLogin(request, "sso_not_configured");
+    return fail("sso_not_configured");
   }
   if (!isLinkFlow && !isSsoUsable(settings)) {
-    return redirectToLogin(request, "sso_not_configured");
+    return fail("sso_not_configured");
   }
   if (isLinkFlow && (!settings.oidcIssuer || !settings.oidcClientId)) {
     return redirectToSsoSettings(request, { ssoLinkError: "sso_not_configured" });
@@ -74,19 +90,16 @@ export async function GET(request: NextRequest) {
 
   if (providerError) {
     apiLogger.warn("Auth", `OIDC provider returned error: ${providerError}`);
-    return isLinkFlow
-      ? redirectToSsoSettings(request, { ssoLinkError: providerError })
-      : redirectToLogin(request, providerError);
+    return fail(providerError);
   }
   if (!code || !state) {
-    return isLinkFlow
-      ? redirectToSsoSettings(request, { ssoLinkError: "missing_params" })
-      : redirectToLogin(request, "missing_params");
+    return fail("missing_params");
   }
 
   const expectedState = session.oidcState;
   const verifier = session.oidcVerifier;
   const linkFlowUserId = isLinkFlow ? session.userId! : null;
+  const reauthUserId = isReauthFlow ? session.userId! : null;
 
   // Always wipe the transient handshake fields, even if the exchange fails —
   // they're single-use and shouldn't outlive the redirect they were issued for.
@@ -97,9 +110,7 @@ export async function GET(request: NextRequest) {
 
   if (!expectedState || !verifier || !statesEqual(state, expectedState)) {
     apiLogger.warn("Auth", "OIDC state mismatch on callback");
-    return isLinkFlow
-      ? redirectToSsoSettings(request, { ssoLinkError: "state_mismatch" })
-      : redirectToLogin(request, "state_mismatch");
+    return fail("state_mismatch");
   }
 
   let userInfo: OidcUserInfo;
@@ -118,13 +129,33 @@ export async function GET(request: NextRequest) {
     apiLogger.error("Auth", "OIDC code exchange failed", {
       error: String(error),
     });
-    return isLinkFlow
-      ? redirectToSsoSettings(request, { ssoLinkError: "token_exchange_failed" })
-      : redirectToLogin(request, "token_exchange_failed");
+    return fail("token_exchange_failed");
   }
 
   const subject = userInfo.sub;
   const currentIssuer = currentSsoIssuer(settings)!;
+
+  if (reauthUserId) {
+    // Signed-in admin confirming their identity in place. Only the subject
+    // already linked to this user counts; nothing about the account changes
+    // beyond the sign-in time.
+    const user = await prisma.user.findUnique({
+      where: { id: reauthUserId },
+      select: { ssoEnabled: true, ssoSubject: true, ssoIssuer: true },
+    });
+    if (!user) return redirectToLogin(request, "session_lost");
+    if (!ssoIdentityMatches(user, subject, currentIssuer)) {
+      apiLogger.warn(
+        "Auth",
+        `OIDC re-authentication refused: sub=${subject} is not the identity linked to this account`
+      );
+      return redirectAfterReauth(request, { reauthError: "not_linked" });
+    }
+    session.authenticatedAt = Date.now();
+    await session.save();
+    apiLogger.info("Auth", "Identity confirmed with SSO (OIDC)");
+    return redirectAfterReauth(request, { reauth: "ok" });
+  }
 
   if (isLinkFlow) {
     // Authenticated admin completing a "verify + capture sub" round-trip.

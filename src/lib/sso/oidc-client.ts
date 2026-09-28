@@ -211,6 +211,8 @@ export function buildAuthorizationUrl(opts: {
   scope: string;
   state: string;
   codeChallenge: string;
+  /** OIDC `prompt` — `"login"` asks the IdP to authenticate again. */
+  prompt?: string;
 }): string {
   const url = new URL(opts.discovery.authorization_endpoint);
   url.searchParams.set("response_type", "code");
@@ -220,6 +222,7 @@ export function buildAuthorizationUrl(opts: {
   url.searchParams.set("state", opts.state);
   url.searchParams.set("code_challenge", opts.codeChallenge);
   url.searchParams.set("code_challenge_method", "S256");
+  if (opts.prompt) url.searchParams.set("prompt", opts.prompt);
   return url.toString();
 }
 
