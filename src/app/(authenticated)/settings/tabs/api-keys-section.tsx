@@ -650,11 +650,13 @@ function CreateApiKeyDialog({
         return;
       }
       const methods = reauthMethodsOf(data);
-      if (methods) {
+      if (methods && methods.length > 0) {
         // Confirmed in place below, then the key is created.
         setReauthMethods(methods);
         return;
       }
+      // With nothing to confirm in place, the server's refusal (below) says
+      // what to do instead.
       if (data?.code === "password_required") {
         // A password was set since this page loaded.
         setError("Creating a key now needs this account's password. Reload the page, then enter it here.");

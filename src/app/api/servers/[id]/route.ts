@@ -50,12 +50,19 @@ export async function PUT(
   // the connection test below, then every sync and the realtime socket. A
   // Plex server's token can be the Plex account's own token, which signs in
   // to Librariarr, so a stolen cookie must not be able to point it somewhere
-  // of its choosing (see recent-login.ts). Sending a replacement token, or
-  // re-saving the same URL (the edit form always sends it), needs nothing.
+  // of its choosing (see recent-login.ts). Turning certificate checks off is
+  // the same thing by another route: the token then goes to whoever answers
+  // at the URL, and the default one onboarding picks is the remote
+  // plex.direct address. Sending a replacement token, or re-saving the same
+  // settings (the edit form always sends the URL), needs nothing.
   const urlChanged = url !== undefined && withoutTrailingSlash(url) !== withoutTrailingSlash(server.url);
+  const turnsTlsChecksOff = tlsSkipVerify === true && !server.tlsSkipVerify;
   const keepsStoredToken = accessToken === undefined || accessToken === "";
-  if (server.type === "PLEX" && urlChanged && keepsStoredToken && !hasRecentLogin(session)) {
-    return reauthRequired(session.userId!, "Changing a Plex server's URL");
+  if (server.type === "PLEX" && (urlChanged || turnsTlsChecksOff) && keepsStoredToken && !hasRecentLogin(session)) {
+    return reauthRequired(
+      session.userId!,
+      urlChanged ? "Changing a Plex server's URL" : "Turning off certificate checks for a Plex server",
+    );
   }
 
   // Test connection if URL or access token changed (skip if just toggling enabled)

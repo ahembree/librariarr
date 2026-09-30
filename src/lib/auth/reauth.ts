@@ -112,21 +112,23 @@ export async function loadReauthContext(userId: string): Promise<ReauthContext> 
   return { methods, sso };
 }
 
-export async function getReauthMethods(userId: string): Promise<ReauthMethod[]> {
-  return (await loadReauthContext(userId)).methods;
-}
-
 /**
  * The 403 for an action whose sign-in is older than the window, naming the
  * methods the client can offer to renew it in place. With none available the
- * only way left is signing in again.
+ * only way left is signing in again — unless SSO is what the login page
+ * offers, since then no method at all means SSO does not recognise this
+ * account's link (password sign-in is off while SSO is usable, and Plex
+ * sign-in is off or unlinked): signing out would lock the admin out.
  */
 export async function reauthRequired(userId: string, what: string): Promise<NextResponse> {
   const minutes = Math.round(RECENT_LOGIN_WINDOW_MS / 60_000);
-  const methods = await getReauthMethods(userId);
+  const { methods, sso } = await loadReauthContext(userId);
+  const needs = `${what} needs a sign-in from the last ${minutes} minutes.`;
   const error =
     methods.length > 0
-      ? `${what} needs a sign-in from the last ${minutes} minutes. Confirm it's you to continue.`
-      : `${what} needs a sign-in from the last ${minutes} minutes. Sign out, sign back in, then try again.`;
+      ? `${needs} Confirm it's you to continue.`
+      : isSsoUsable(sso)
+        ? `${needs} Don't sign out: SSO does not recognise this account's linked identity, so you could not sign back in. See SSO_DISABLE_OVERRIDE in the SSO documentation to sign in another way first.`
+        : `${needs} Sign out, sign back in, then try again.`;
   return NextResponse.json({ error, code: "reauth_required", methods }, { status: 403 });
 }

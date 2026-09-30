@@ -8,7 +8,6 @@ import { loadReauthContext } from "@/lib/auth/reauth";
 import {
   PASSWORD_CONFIRM_BUCKET,
   peekAuthRateLimit,
-  refundAuthAttempt,
   reserveAuthAttempt,
 } from "@/lib/rate-limit/rate-limiter";
 
@@ -54,8 +53,8 @@ export async function POST(request: NextRequest) {
 
   // Charged before the compare, refunded on a match: concurrent guesses each
   // count from the moment they start (see `reserveAuthAttempt`).
-  const reserved = reserveAuthAttempt(request, PASSWORD_CONFIRM_BUCKET);
-  if (reserved) return reserved;
+  const attempt = reserveAuthAttempt(request, PASSWORD_CONFIRM_BUCKET);
+  if (attempt.refused) return attempt.refused;
   if (!(await bcrypt.compare(data.password, user.passwordHash))) {
     apiLogger.warn("Auth", "Password re-authentication refused — the password was incorrect");
     return NextResponse.json(
@@ -64,7 +63,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  refundAuthAttempt(request, PASSWORD_CONFIRM_BUCKET);
+  attempt.refund();
 
   session.authenticatedAt = Date.now();
   await session.save();

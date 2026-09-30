@@ -19,7 +19,9 @@ vi.mock("@/lib/sso/config", async (importOriginal) => ({
 import {
   isPasswordSignInEnabled,
   passwordSignInEnabled,
+  plexSignInEnabled,
   turnsPasswordSignInOn,
+  turnsPlexSignInOn,
 } from "@/lib/auth/password-sign-in";
 import type { SsoSettings } from "@/lib/sso/config";
 
@@ -96,5 +98,27 @@ describe("turnsPasswordSignInOn", () => {
     expect(turnsPasswordSignInOn(on, off, true)).toBe(false);
     // Local login on while SSO still replaces it: the password stays off.
     expect(turnsPasswordSignInOn(off, hiddenBySso, true)).toBe(false);
+  });
+});
+
+describe("plexSignInEnabled / turnsPlexSignInOn", () => {
+  it("accepts a Plex login unless the toggle is explicitly off", () => {
+    expect(plexSignInEnabled(true)).toBe(true);
+    // No settings row, or a row from before the column: on, as at login.
+    expect(plexSignInEnabled(undefined)).toBe(true);
+    expect(plexSignInEnabled(null)).toBe(true);
+    expect(plexSignInEnabled(false)).toBe(false);
+    mockOverride.mockReturnValue(true);
+    expect(plexSignInEnabled(false)).toBe(true);
+  });
+
+  it("is true only for off → on with a Plex account linked", () => {
+    expect(turnsPlexSignInOn(false, true, true)).toBe(true);
+    expect(turnsPlexSignInOn(false, true, false)).toBe(false);
+    expect(turnsPlexSignInOn(true, true, true)).toBe(false);
+    expect(turnsPlexSignInOn(true, false, true)).toBe(false);
+    // Under SSO_DISABLE_OVERRIDE a Plex login is accepted anyway.
+    mockOverride.mockReturnValue(true);
+    expect(turnsPlexSignInOn(false, true, true)).toBe(false);
   });
 });

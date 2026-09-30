@@ -8,7 +8,6 @@ import {
   authRateLimiter,
   peekAuthRateLimit,
   reserveAuthAttempt,
-  refundAuthAttempt,
 } from "@/lib/rate-limit/rate-limiter";
 
 describe("RateLimiter", () => {
@@ -362,8 +361,8 @@ describe("checkAuthRateLimit — global floor", () => {
 describe("RateLimiter.check with a cost", () => {
   it("charges one call as several attempts", () => {
     const limiter = new RateLimiter(10, 60_000);
-    expect(limiter.check("k", 4)).toEqual({ limited: false, remaining: 6 });
-    expect(limiter.check("k", 4)).toEqual({ limited: false, remaining: 2 });
+    expect(limiter.check("k", 4)).toMatchObject({ limited: false, remaining: 6 });
+    expect(limiter.check("k", 4)).toMatchObject({ limited: false, remaining: 2 });
     expect(limiter.check("k", 4).limited).toBe(true);
     expect(limiter.check("k").limited).toBe(true);
   });
@@ -386,32 +385,58 @@ describe("RateLimiter.refund", () => {
   it("gives back attempts charged in the current window", () => {
     const limiter = new RateLimiter(2, 60_000);
     limiter.check("k");
-    limiter.check("k");
+    const { window } = limiter.check("k");
     expect(limiter.peek("k").limited).toBe(true);
-    limiter.refund("k");
+    limiter.refund("k", window);
     expect(limiter.peek("k").limited).toBe(false);
   });
 
-  it("never goes below zero and ignores an unknown or expired key", () => {
+  it("never goes below zero, and ignores an unknown key", () => {
+    const limiter = new RateLimiter(2, 60_000);
+    limiter.refund("unknown", Date.now() + 60_000);
+    const { window } = limiter.check("k");
+    limiter.refund("k", window);
+    limiter.refund("k", window);
+    // Back to zero, not below: exactly the budget, then refused. A count left
+    // at -1 would let a third attempt through.
+    expect(limiter.check("k").limited).toBe(false);
+    expect(limiter.check("k").limited).toBe(false);
+    expect(limiter.check("k").limited).toBe(true);
+  });
+
+  // A charge ends with its window; a newer window counts other attempts, so a
+  // late refund must not cancel one of those.
+  it("does not refund into a newer window", () => {
     vi.useFakeTimers();
     try {
-      const limiter = new RateLimiter(1, 1000);
-      limiter.refund("unknown");
-      limiter.check("k");
-      limiter.refund("k");
-      limiter.refund("k");
-      expect(limiter.check("k").limited).toBe(false);
+      const limiter = new RateLimiter(2, 1000);
+      const { window } = limiter.check("k");
       vi.advanceTimersByTime(1500);
-      limiter.refund("k");
-      expect(limiter.check("k").limited).toBe(false);
+      limiter.check("k");
+      limiter.check("k");
+      limiter.refund("k", window);
       expect(limiter.check("k").limited).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not refund into a window created after the charge's was evicted", () => {
+    const limiter = new RateLimiter(1, 60_000, 1);
+    const { window } = limiter.check("a");
+    limiter.check("b"); // evicts "a"
+    vi.useFakeTimers({ now: Date.now() + 5 });
+    try {
+      limiter.check("a"); // a new window for "a", full
+      limiter.refund("a", window);
+      expect(limiter.peek("a").limited).toBe(true);
     } finally {
       vi.useRealTimers();
     }
   });
 });
 
-describe("peekAuthRateLimit / reserveAuthAttempt / refundAuthAttempt", () => {
+describe("peekAuthRateLimit / reserveAuthAttempt", () => {
   const stores = () =>
     [authRateLimiter, authGlobalRateLimiter].map(
       (l) => (l as unknown as { store: Map<string, unknown> }).store,
@@ -435,15 +460,16 @@ describe("peekAuthRateLimit / reserveAuthAttempt / refundAuthAttempt", () => {
     // Fifty correct passwords in a row: each reservation is refunded.
     for (let i = 0; i < 50; i++) {
       expect(peekAuthRateLimit(from("10.9.0.1"), "peek-test")).toBeNull();
-      expect(reserveAuthAttempt(from("10.9.0.1"), "peek-test")).toBeNull();
-      refundAuthAttempt(from("10.9.0.1"), "peek-test");
+      const attempt = reserveAuthAttempt(from("10.9.0.1"), "peek-test");
+      expect(attempt.refused).toBeNull();
+      if (!attempt.refused) attempt.refund();
     }
     // Ten wrong ones: reserved and kept.
-    for (let i = 0; i < 10; i++) expect(reserveAuthAttempt(from("10.9.0.1"), "peek-test")).toBeNull();
+    for (let i = 0; i < 10; i++) expect(reserveAuthAttempt(from("10.9.0.1"), "peek-test").refused).toBeNull();
     const res = peekAuthRateLimit(from("10.9.0.1"), "peek-test");
     expect(res?.status).toBe(429);
     expect(res?.headers.get("Retry-After")).toBeTruthy();
-    expect(reserveAuthAttempt(from("10.9.0.1"), "peek-test")?.status).toBe(429);
+    expect(reserveAuthAttempt(from("10.9.0.1"), "peek-test").refused?.status).toBe(429);
     // Another address is unaffected.
     expect(peekAuthRateLimit(from("10.9.0.2"), "peek-test")).toBeNull();
   });
@@ -454,25 +480,39 @@ describe("peekAuthRateLimit / reserveAuthAttempt / refundAuthAttempt", () => {
     delete process.env.TRUST_PROXY_HEADERS;
     // Fifty guesses in flight at once, none finished yet.
     const outcomes = Array.from({ length: 50 }, () => reserveAuthAttempt(from("10.9.1.1"), "burst"));
-    expect(outcomes.filter((r) => r === null)).toHaveLength(10);
-    expect(outcomes.filter((r) => r?.status === 429)).toHaveLength(40);
-    // A refused reservation charged nothing, so one success frees one slot.
-    refundAuthAttempt(from("10.9.1.1"), "burst");
-    expect(reserveAuthAttempt(from("10.9.1.1"), "burst")).toBeNull();
-    expect(reserveAuthAttempt(from("10.9.1.1"), "burst")?.status).toBe(429);
+    const held = outcomes.filter((r) => r.refused === null);
+    expect(held).toHaveLength(10);
+    expect(outcomes.filter((r) => r.refused?.status === 429)).toHaveLength(40);
+    // A refused reservation charged nothing, so one success frees one slot —
+    // and only one, however often it is refunded.
+    const success = held[0];
+    if (!success.refused) {
+      success.refund();
+      success.refund();
+    }
+    expect(reserveAuthAttempt(from("10.9.1.1"), "burst").refused).toBeNull();
+    expect(reserveAuthAttempt(from("10.9.1.1"), "burst").refused?.status).toBe(429);
   });
 
   it("applies the global floor no address can escape", () => {
     delete process.env.TRUST_PROXY_HEADERS;
     for (let i = 0; i < 60; i++) {
-      expect(reserveAuthAttempt(from(`10.10.${Math.floor(i / 250)}.${i % 250}`), "peek-global")).toBeNull();
+      expect(reserveAuthAttempt(from(`10.10.${Math.floor(i / 250)}.${i % 250}`), "peek-global").refused).toBeNull();
     }
     expect(peekAuthRateLimit(from("10.11.0.1"), "peek-global")?.status).toBe(429);
     // Refused by the floor: the fresh address's own bucket is not charged.
-    expect(reserveAuthAttempt(from("10.11.0.1"), "peek-global")?.status).toBe(429);
+    expect(reserveAuthAttempt(from("10.11.0.1"), "peek-global").refused?.status).toBe(429);
     const perIp = (authRateLimiter as unknown as { store: Map<string, { count: number }> }).store;
     expect(perIp.get("peek-global:10.11.0.1")?.count ?? 0).toBe(0);
     // Other buckets keep their own floor.
     expect(peekAuthRateLimit(from("10.11.0.1"), "peek-other")).toBeNull();
+  });
+
+  // The per-address key is whatever X-Forwarded-For says on a directly
+  // exposed install, so a client rotating it adds an entry per request.
+  it("tracks at most 10,000 addresses", () => {
+    for (let i = 0; i < 10_050; i++) authRateLimiter.check(`flood:10.${i >> 16}.${(i >> 8) & 255}.${i & 255}`);
+    const perIp = (authRateLimiter as unknown as { store: Map<string, unknown> }).store;
+    expect(perIp.size).toBe(10_000);
   });
 });

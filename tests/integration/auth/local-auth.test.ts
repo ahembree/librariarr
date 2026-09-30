@@ -13,11 +13,14 @@ vi.mock("bcryptjs", () => ({
   default: mockBcrypt,
 }));
 
-// Mock rate limiter — change-password is now rate-limited and the limiter's
-// in-memory state would persist across tests.
+// Mock rate limiter — login and change-password are rate-limited and the
+// limiter's in-memory state would persist across tests.
 const mockCheckAuthRateLimit = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
+  PASSWORD_CONFIRM_BUCKET: "password-confirm",
   checkAuthRateLimit: mockCheckAuthRateLimit,
+  peekAuthRateLimit: () => null,
+  reserveAuthAttempt: () => ({ refused: null, refund: () => {} }),
   authRateLimiter: { check: vi.fn().mockReturnValue({ limited: false }) },
   getClientIp: vi.fn().mockReturnValue("127.0.0.1"),
 }));

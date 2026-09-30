@@ -16,17 +16,21 @@ vi.mock("@/lib/sso/oidc-client", async (importOriginal) => ({
   resolveRedirectUri: () => "http://localhost:3000/api/auth/sso/oidc/callback",
 }));
 
-const { mockPeek, mockReserve, mockRefund } = vi.hoisted(() => ({
-  mockPeek: vi.fn((): Response | null => null),
-  mockReserve: vi.fn((): Response | null => null),
-  mockRefund: vi.fn(),
-}));
+const { mockPeek, mockReserve, mockRefund } = vi.hoisted(() => {
+  const mockRefund = vi.fn();
+  return {
+    mockPeek: vi.fn((): Response | null => null),
+    mockReserve: vi.fn(
+      (): { refused: Response } | { refused: null; refund: () => void } => ({ refused: null, refund: mockRefund }),
+    ),
+    mockRefund,
+  };
+});
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
   PASSWORD_CONFIRM_BUCKET: "password-confirm",
   checkAuthRateLimit: () => null,
   peekAuthRateLimit: mockPeek,
   reserveAuthAttempt: mockReserve,
-  refundAuthAttempt: mockRefund,
 }));
 
 vi.mock("@/lib/db", async () => {
@@ -61,7 +65,7 @@ describe("/api/auth/reauth/*", () => {
     clearMockSession();
     vi.clearAllMocks();
     mockPeek.mockReturnValue(null);
-    mockReserve.mockReturnValue(null);
+    mockReserve.mockReturnValue({ refused: null, refund: mockRefund });
   });
 
   afterAll(async () => {
@@ -317,10 +321,15 @@ describe("/api/auth/reauth/*", () => {
     // Reserved before the compare, so concurrent guesses count as they start.
     it("stops before comparing when the attempt cannot be reserved", async () => {
       await signInWithPassword();
-      mockReserve.mockReturnValue(new Response(JSON.stringify({ error: "Too many attempts" }), { status: 429 }));
+      const compare = vi.spyOn(bcrypt, "compare");
+      mockReserve.mockReturnValue({
+        refused: new Response(JSON.stringify({ error: "Too many attempts" }), { status: 429 }),
+      });
       expect((await call({ password: PASSWORD })).status).toBe(429);
+      expect(compare).not.toHaveBeenCalled();
       expect(getMockSession().authenticatedAt).toBe(STALE);
       expect(mockRefund).not.toHaveBeenCalled();
+      compare.mockRestore();
     });
 
     it("stops before checking once the limiter says so", async () => {

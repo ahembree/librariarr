@@ -350,6 +350,42 @@ describe("Server CRUD endpoints", () => {
       expect(plexClientTargets()).toEqual([]);
     });
 
+    // Checked before the recent sign-in: confirming who you are cannot supply
+    // a Plex account, so asking for it first would only lead to this refusal.
+    it("asks a session with no Plex account to sign in with Plex, not to confirm it's them", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: STALE });
+
+      const response = await callRoute(POST, {
+        url: "/api/servers",
+        method: "POST",
+        body: { name: "Home", url: "http://10.0.0.5:32400", machineId: "machine-1" },
+      });
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/Sign in with Plex/);
+      expect(mockGetPlexResources).not.toHaveBeenCalled();
+    });
+
+    it("reports plex.tv failing, or returning no token, as an upstream error", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, plexToken: "account-token", isLoggedIn: true, authenticatedAt: Date.now() });
+      const add = () =>
+        callRoute(POST, {
+          url: "/api/servers",
+          method: "POST",
+          body: { name: "Home", url: "http://10.0.0.5:32400", machineId: "machine-1" },
+        });
+
+      mockGetPlexResources.mockRejectedValueOnce(new Error("plex.tv down"));
+      await expectJson(await add(), 502);
+
+      mockGetPlexResources.mockResolvedValueOnce([{ ...ownedServer, accessToken: undefined }]);
+      const noToken = await expectJson<{ error: string }>(await add(), 502);
+      expect(noToken.error).toMatch(/did not return an access token/);
+      expect(plexClientTargets()).toEqual([]);
+      expect(await getTestPrisma().mediaServer.count()).toBe(0);
+    });
+
     it("still requires a token for a Jellyfin or Emby server", async () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, plexToken: "account-token", isLoggedIn: true, authenticatedAt: Date.now() });
@@ -488,7 +524,7 @@ describe("Server CRUD endpoints", () => {
       const server = await createTestServer(user.id, {
         url: "http://keep:32400",
       });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
@@ -531,6 +567,47 @@ describe("Server CRUD endpoints", () => {
       expect(stored.url).toBe("http://keep:32400");
     });
 
+    // With certificate checks off the stored token goes to whoever answers at
+    // the URL, verified or not — the same as pointing it at a new one.
+    it("asks a session with no recent sign-in to confirm it's them before turning certificate checks off", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { url: "https://keep.plex.direct:32400", accessToken: "stored-token" });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: STALE });
+      const put = (body: Record<string, unknown>) =>
+        callRouteWithParams(PUT, { id: server.id }, { url: `/api/servers/${server.id}`, method: "PUT", body });
+
+      for (const body of [{ tlsSkipVerify: true }, { url: "https://keep.plex.direct:32400", tlsSkipVerify: true }, { url: "https://keep.plex.direct:32400", tlsSkipVerify: true, accessToken: "" }]) {
+        const refusal = await expectJson<{ code: string; error: string }>(await put(body), 403);
+        expect(refusal.code).toBe("reauth_required");
+        expect(refusal.error).toMatch(/^Turning off certificate checks/);
+      }
+      expect((await getTestPrisma().mediaServer.findUniqueOrThrow({ where: { id: server.id } })).tlsSkipVerify).toBe(false);
+      expect(plexClientTargets()).toEqual([]);
+
+      // With a token of the caller's own, or a recent sign-in, it goes ahead.
+      await expectJson(await put({ tlsSkipVerify: true, url: "https://keep.plex.direct:32400", accessToken: "new-token" }), 200);
+      await getTestPrisma().mediaServer.update({ where: { id: server.id }, data: { tlsSkipVerify: false } });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+      await expectJson(await put({ tlsSkipVerify: true }), 200);
+    });
+
+    it("lets a stale session turn certificate checks back on, and leave a Jellyfin server's alone", async () => {
+      const user = await createTestUser();
+      const plex = await createTestServer(user.id, { url: "https://keep:32400", accessToken: "stored-token" });
+      await getTestPrisma().mediaServer.update({ where: { id: plex.id }, data: { tlsSkipVerify: true } });
+      const jelly = await createTestServer(user.id, { url: "https://jelly:8096", type: "JELLYFIN" });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: STALE });
+
+      await expectJson(
+        await callRouteWithParams(PUT, { id: plex.id }, { url: `/api/servers/${plex.id}`, method: "PUT", body: { tlsSkipVerify: false } }),
+        200
+      );
+      await expectJson(
+        await callRouteWithParams(PUT, { id: jelly.id }, { url: `/api/servers/${jelly.id}`, method: "PUT", body: { tlsSkipVerify: true } }),
+        200
+      );
+    });
+
     it("lets a stale session re-save the same URL, or change it along with the token", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id, { url: "http://keep:32400", accessToken: "stored-token" });
@@ -541,10 +618,20 @@ describe("Server CRUD endpoints", () => {
         await callRouteWithParams(
           PUT,
           { id: server.id },
-          { url: `/api/servers/${server.id}`, method: "PUT", body: { url: "http://keep:32400/", tlsSkipVerify: true } }
+          { url: `/api/servers/${server.id}`, method: "PUT", body: { url: "http://keep:32400/", tlsSkipVerify: false } }
         ),
         200
       );
+      // An empty token field keeps the stored token — and is tested with it.
+      await expectJson(
+        await callRouteWithParams(
+          PUT,
+          { id: server.id },
+          { url: `/api/servers/${server.id}`, method: "PUT", body: { url: "http://keep:32400", accessToken: "" } }
+        ),
+        200
+      );
+      expect(plexClientTargets()).toContainEqual({ url: "http://keep:32400", token: "stored-token" });
 
       // A replacement token is the caller's own, not the stored one.
       await expectJson(
@@ -559,6 +646,7 @@ describe("Server CRUD endpoints", () => {
       // The stored token only ever went back to the address it already had.
       expect(plexClientTargets().filter((t) => t.token === "stored-token").map((t) => t.url)).toEqual([
         "http://keep:32400/",
+        "http://keep:32400",
       ]);
     });
   });

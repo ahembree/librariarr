@@ -118,6 +118,30 @@ describe("POST /api/settings/sso/revert", () => {
     expect((await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } })).ssoEnabled).toBe(false);
   });
 
+  // With local login off the password stays powerless after the revert too:
+  // nothing is being turned on, so nothing to confirm.
+  it("lets a stale session revert while local login is off, password or not", async () => {
+    const user = await createTestUser();
+    await prisma.user.update({ where: { id: user.id }, data: { passwordHash: "h", localUsername: "alice" } });
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id,
+        localAuthEnabled: false,
+        ssoMode: "OIDC",
+        ssoEnabled: true,
+        oidcIssuer: "https://broken.example.com",
+        oidcClientId: "broken-client",
+        previousSsoConfig: { ssoMode: "OIDC", oidcIssuer: "https://working.example.com", oidcClientId: "c" },
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
+
+    await expectJson(await callRoute(POST, { method: "POST" }), 200);
+    const row = await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } });
+    expect(row.ssoEnabled).toBe(false);
+    expect(row.oidcIssuer).toBe("https://working.example.com");
+  });
+
   it("clears the admin's user-level SSO link so the admin must re-link", async () => {
     // If we restored an SSO config with a different issuer but left the
     // user's ssoSubject/Issuer pinned to the abandoned config, login would

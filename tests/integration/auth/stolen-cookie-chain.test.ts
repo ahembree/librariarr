@@ -271,6 +271,18 @@ describe("a stolen session cookie cannot mint a lasting credential", () => {
       ),
       403,
     );
+    // Nor sent unverified to whoever answers at the stored address.
+    await expectJson(
+      await read(
+        await callRouteWithParams(
+          editServerRoute,
+          { id: serverId },
+          { url: `/api/servers/${serverId}`, method: "PUT", body: { tlsSkipVerify: true } },
+        ),
+      ),
+      403,
+    );
+    expect((await prisma.mediaServer.findUniqueOrThrow({ where: { id: serverId } })).tlsSkipVerify).toBe(false);
     const readded = await expectJson<{ code: string }>(
       await read(
         await callRoute(addServerRoute, {

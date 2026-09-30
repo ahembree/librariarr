@@ -174,6 +174,24 @@ describe("reauthRequired", () => {
     expect(body.methods).toEqual([]);
     expect(body.error).toMatch(/sign out, sign back in/i);
   });
+
+  // Under SSO, nothing to confirm with means SSO does not recognise the link
+  // (linked under another issuer, with password and Plex sign-in off):
+  // signing out would lock the admin out, so never advise it there.
+  it("warns against signing out when SSO is what the login page offers", async () => {
+    mockGetSso.mockResolvedValue(oidc({ oidcIssuer: "https://other.example.com" }));
+    mockFindSettings.mockResolvedValue({ plexLoginEnabled: false, localAuthEnabled: true });
+    mockFindUser.mockResolvedValue(
+      user({ plexId: "42", passwordHash: "h", ssoEnabled: true, ssoSubject: "s", ssoIssuer: ISSUER }),
+    );
+    const body = (await (await reauthRequired("u", "Turning off SSO")).json()) as {
+      error: string;
+      methods: string[];
+    };
+    expect(body.methods).toEqual([]);
+    expect(body.error).toMatch(/don't sign out/i);
+    expect(body.error).toMatch(/SSO_DISABLE_OVERRIDE/);
+  });
 });
 
 describe("reauthNonceFromState", () => {

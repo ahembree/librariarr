@@ -104,7 +104,8 @@ export interface GeneralTabProps {
   backupSaving: boolean;
   creatingBackup: boolean;
   restoringBackup: string | null;
-  downloadingBackup: string | null;
+  /** Backups being downloaded right now (each button shows its own). */
+  downloadingBackups: readonly string[];
   restoreProgress: string | null;
   hasBackupPassword: boolean;
   savingBackupPassword: boolean;
@@ -159,7 +160,7 @@ export function GeneralTab({
   backupSaving,
   creatingBackup,
   restoringBackup,
-  downloadingBackup,
+  downloadingBackups,
   restoreProgress,
   hasBackupPassword,
   savingBackupPassword,
@@ -630,10 +631,10 @@ export function GeneralTab({
                           size="icon"
                           className="h-8 w-8"
                           aria-label={`Download backup ${b.filename}`}
-                          disabled={downloadingBackup === b.filename}
+                          disabled={downloadingBackups.includes(b.filename)}
                           onClick={() => onDownloadBackup(b.filename)}
                         >
-                          {downloadingBackup === b.filename ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                          {downloadingBackups.includes(b.filename) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
                         </Button>
                         <Button
                           variant="ghost"

@@ -413,6 +413,30 @@ describe("/api/settings/api-keys", () => {
       expect(await prisma.apiKey.count()).toBe(1);
     });
 
+    // SSO replacing the local form turns password sign-in off just as local
+    // login off does.
+    it("with SSO replacing the local form, the password is not the step-up", async () => {
+      const user = await loginWithPassword({
+        localAuthEnabled: true,
+        ssoEnabled: true,
+        ssoMode: "OIDC",
+        oidcIssuer: "https://idp.example.com",
+        oidcClientId: "client",
+      });
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { ssoEnabled: true, ssoSubject: "sub", ssoIssuer: "https://idp.example.com" },
+      });
+      const refused = await expectJson<{ code: string; methods: string[] }>(
+        await create(body({ currentPassword: PASSWORD })),
+        403,
+      );
+      expect(refused.code).toBe("reauth_required");
+      expect(refused.methods).toContain("oidc");
+      expect(refused.methods).not.toContain("password");
+      expect(await prisma.apiKey.count()).toBe(0);
+    });
+
     it("correct passwords are never counted against the budget", async () => {
       await loginWithPassword();
       for (let i = 0; i < 12; i++) {

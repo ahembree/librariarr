@@ -30,6 +30,8 @@ export class RateLimiter {
     limited: boolean;
     remaining: number;
     retryAfterMs?: number;
+    /** The window this attempt was counted in, for `refund`. */
+    window: number;
   } {
     const now = Date.now();
     const entry = this.store.get(key);
@@ -39,11 +41,12 @@ export class RateLimiter {
         const oldest = this.store.keys().next().value;
         if (oldest !== undefined) this.store.delete(oldest);
       }
-      this.store.set(key, { count: cost, resetAt: now + this.windowMs });
+      const resetAt = now + this.windowMs;
+      this.store.set(key, { count: cost, resetAt });
       if (cost > this.maxAttempts) {
-        return { limited: true, remaining: 0, retryAfterMs: this.windowMs };
+        return { limited: true, remaining: 0, retryAfterMs: this.windowMs, window: resetAt };
       }
-      return { limited: false, remaining: this.maxAttempts - cost };
+      return { limited: false, remaining: this.maxAttempts - cost, window: resetAt };
     }
 
     entry.count += cost;
@@ -52,10 +55,11 @@ export class RateLimiter {
         limited: true,
         remaining: 0,
         retryAfterMs: entry.resetAt - now,
+        window: entry.resetAt,
       };
     }
 
-    return { limited: false, remaining: this.maxAttempts - entry.count };
+    return { limited: false, remaining: this.maxAttempts - entry.count, window: entry.resetAt };
   }
 
   /**
@@ -75,13 +79,16 @@ export class RateLimiter {
   }
 
   /**
-   * Take back `cost` attempts `check` charged in the current window — for an
-   * attempt charged up front that turned out not to count (see
-   * `reserveAuthAttempt`).
+   * Take back `cost` attempts `check` charged — for an attempt charged up
+   * front that turned out not to count (see `reserveAuthAttempt`). `window` is
+   * the one `check` returned: once that window has ended the charge is gone
+   * with it, and a newer window's count belongs to other attempts.
    */
-  refund(key: string, cost = 1): void {
+  refund(key: string, window: number, cost = 1): void {
     const entry = this.store.get(key);
-    if (entry && Date.now() < entry.resetAt) entry.count = Math.max(0, entry.count - cost);
+    if (entry && entry.resetAt === window && Date.now() < entry.resetAt) {
+      entry.count = Math.max(0, entry.count - cost);
+    }
   }
 
   cleanup() {
@@ -92,8 +99,11 @@ export class RateLimiter {
   }
 }
 
-// 10 attempts per 15-minute window, per client IP
-export const authRateLimiter = new RateLimiter(10, 15 * 60 * 1000);
+// 10 attempts per 15-minute window, per client IP. Keyed by an address that a
+// client rotating `X-Forwarded-For` chooses, so capped like the credential
+// limiter below: dropping an entry only forgets a count, and the global floor
+// under it still holds.
+export const authRateLimiter = new RateLimiter(10, 15 * 60 * 1000, 10_000);
 
 // The tamper-proof floor under the per-IP auth limit: total attempts per
 // bucket across ALL clients. The per-IP key is only as trustworthy as the IP,
@@ -211,25 +221,27 @@ export function checkAuthRateLimit(request: Request, bucket: string): Response |
 
 /**
  * The one bucket every current-password confirmation on a signed-in route is
- * charged to (the API-key step-up and `/api/auth/reauth/password`). Each
- * bucket carries its own per-address and global budget, so giving each route
- * its own would add a fresh budget of guesses per route.
+ * charged to (the API-key step-up, `/api/auth/reauth/password` and a
+ * credential change). Each bucket carries its own per-address and global
+ * budget, so giving each route its own would add a fresh budget of guesses
+ * per route.
  */
 export const PASSWORD_CONFIRM_BUCKET = "password-confirm";
 
 /**
  * The same two auth limiters, charged only on FAILURE. For a password
  * confirmation on a route the user is already signed in to — creating an API
- * key, `/api/auth/reauth/password` — where counting every attempt would lock
- * a legitimate user out of a routine they may run ten times in a row, while a
- * wrong password still costs exactly what a failed login does.
+ * key, `/api/auth/reauth/password`, changing the credentials — where counting
+ * every attempt would lock a legitimate user out of a routine they may run
+ * ten times in a row, while a wrong password still costs exactly what a
+ * failed login does.
  *
  * `peekAuthRateLimit` refuses early without counting; `reserveAuthAttempt`
- * charges the attempt immediately before the password is compared, and
- * `refundAuthAttempt` gives it back when the password matched. Charging only
- * after a failed compare let a burst of concurrent wrong passwords all pass
- * the check while their ~250 ms bcrypt compares ran — N guesses instead of 10
- * — whereas a reservation counts each one the moment it starts.
+ * charges the attempt immediately before the password is compared, and its
+ * `refund` gives it back when the password matched. Charging only after a
+ * failed compare let a burst of concurrent wrong passwords all pass the check
+ * while their ~250 ms bcrypt compares ran — N guesses instead of 10 — whereas
+ * a reservation counts each one the moment it starts.
  */
 export function peekAuthRateLimit(request: Request, bucket: string): Response | null {
   const ip = getClientIp(request);
@@ -240,27 +252,36 @@ export function peekAuthRateLimit(request: Request, bucket: string): Response | 
   return null;
 }
 
-export function reserveAuthAttempt(request: Request, bucket: string): Response | null {
+/** A reserved attempt: refused with a 429, or held until `refund` gives it back. */
+export type AuthAttempt = { refused: Response } | { refused: null; refund: () => void };
+
+export function reserveAuthAttempt(request: Request, bucket: string): AuthAttempt {
   const perIpKey = `${bucket}:${getClientIp(request)}`;
   const globalKey = `${bucket}:*`;
   const perIp = authRateLimiter.check(perIpKey);
   if (perIp.limited) {
     // Refused, so nothing was attempted: only failures count.
-    authRateLimiter.refund(perIpKey);
-    return tooManyAttempts(perIp.retryAfterMs);
+    authRateLimiter.refund(perIpKey, perIp.window);
+    return { refused: tooManyAttempts(perIp.retryAfterMs) };
   }
   const global = authGlobalRateLimiter.check(globalKey);
   if (global.limited) {
-    authRateLimiter.refund(perIpKey);
-    authGlobalRateLimiter.refund(globalKey);
-    return tooManyAttempts(global.retryAfterMs);
+    authRateLimiter.refund(perIpKey, perIp.window);
+    authGlobalRateLimiter.refund(globalKey, global.window);
+    return { refused: tooManyAttempts(global.retryAfterMs) };
   }
-  return null;
-}
-
-export function refundAuthAttempt(request: Request, bucket: string): void {
-  authRateLimiter.refund(`${bucket}:${getClientIp(request)}`);
-  authGlobalRateLimiter.refund(`${bucket}:*`);
+  // Refunded against the windows it was charged in, once: a window that has
+  // since rolled over counts other attempts, not this one.
+  let refunded = false;
+  return {
+    refused: null,
+    refund: () => {
+      if (refunded) return;
+      refunded = true;
+      authRateLimiter.refund(perIpKey, perIp.window);
+      authGlobalRateLimiter.refund(globalKey, global.window);
+    },
+  };
 }
 
 /**

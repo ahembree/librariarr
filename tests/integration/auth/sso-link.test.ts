@@ -380,6 +380,38 @@ describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
     expect(body.globalSsoDisabled).toBe(true);
   });
 
+  // With local login off the password stays powerless once SSO is off too:
+  // nothing is being turned on, so a stale session unlinks without confirming.
+  it("lets a stale session with a password unlink while local login is off", async () => {
+    const user = await createTestUser();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        localUsername: "alice",
+        passwordHash: "h",
+        ssoSubject: "abc",
+        ssoIssuer: "https://idp.example.com",
+        ssoEnabled: true,
+      },
+    });
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id,
+        localAuthEnabled: false,
+        plexLoginEnabled: true,
+        ssoEnabled: true,
+        ssoMode: "OIDC",
+        oidcIssuer: "https://idp.example.com",
+        oidcClientId: "client",
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
+
+    const body = await expectJson<{ globalSsoDisabled: boolean }>(await callRoute(DELETE, { method: "DELETE" }));
+    expect(body.globalSsoDisabled).toBe(true);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).ssoSubject).toBeNull();
+  });
+
   it("rejects when local credentials exist but localAuthEnabled is false", async () => {
     // passwordHash is set but the toggle is off → not actually usable.
     const user = await createTestUser();

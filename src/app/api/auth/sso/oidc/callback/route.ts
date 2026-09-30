@@ -75,16 +75,29 @@ export async function GET(request: NextRequest) {
     session.oidcFlow === "link" && session.isLoggedIn && !!session.userId;
   const isReauthFlow =
     session.oidcFlow === "reauth" && session.isLoggedIn && !!session.userId;
-  // A confirmation whose session was revoked while the popup was out (signed
-  // out elsewhere, password changed): `getSession()` reads it as signed out,
-  // so it would fall through to the login branch — the popup would sign in
-  // or land on /login, and the page waiting on it would never hear back.
-  if (session.oidcFlow === "reauth" && !isReauthFlow) {
-    session.oidcState = undefined;
-    session.oidcVerifier = undefined;
-    session.oidcFlow = undefined;
-    await session.save();
-    return redirectAfterReauth(request, { error: "session_lost" });
+  // A confirmation that can no longer finish: its session was revoked while
+  // the popup was out (signed out elsewhere, password changed), or its cookie
+  // was cleared since (a sign-out in another tab of this browser), or another
+  // handshake replaced it. Handled as a login or a link, the popup would sign
+  // in, land on /login or the settings page, and the page waiting on it would
+  // never hear back. Recognised by the session's flow while the cookie lasts,
+  // and otherwise by its `state`: only a confirmation's carries a nonce
+  // (`<random>.<nonce>`), which a login's or a link's never does.
+  const returnedState = new URL(request.url).searchParams.get("state");
+  const isReauthAttempt =
+    session.oidcFlow === "reauth" || reauthNonceFromState(returnedState) !== undefined;
+  if (isReauthAttempt && !isReauthFlow) {
+    // Clears only a confirmation's own handshake — another flow's belongs to
+    // that flow's callback.
+    if (session.oidcFlow === "reauth") {
+      session.oidcState = undefined;
+      session.oidcVerifier = undefined;
+      session.oidcFlow = undefined;
+      await session.save();
+    }
+    return redirectAfterReauth(request, {
+      error: session.isLoggedIn ? "state_mismatch" : "session_lost",
+    });
   }
   // Where a failure returns to, by flow.
   const fail = (error: string) =>

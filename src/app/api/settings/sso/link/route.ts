@@ -7,7 +7,11 @@ import { currentSsoIssuer, getSsoSettings } from "@/lib/sso/config";
 import { isSameOriginRequest } from "@/lib/url";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
-import { loadPasswordSignInState, turnsPasswordSignInOn } from "@/lib/auth/password-sign-in";
+import {
+  loadPasswordSignInState,
+  lockSignInSettings,
+  turnsPasswordSignInOn,
+} from "@/lib/auth/password-sign-in";
 
 /**
  * Link an SSO subject identifier to the currently signed-in admin account.
@@ -168,24 +172,26 @@ export async function DELETE(request: NextRequest) {
 
   // Unlinking with SSO on also turns SSO off (below), which gives an existing
   // password its power back when local login is on — a recent sign-in first,
-  // as for turning SSO off in the settings (password-sign-in.ts).
-  if (globalSsoEnabled) {
-    const before = await loadPasswordSignInState();
-    if (
-      turnsPasswordSignInOn(
-        before,
-        { localAuthEnabled: before.localAuthEnabled, sso: null },
-        !!me.passwordHash,
-      ) &&
-      !hasRecentLogin(session)
-    ) {
-      return reauthRequired(session.userId, "Unlinking SSO");
-    }
-  }
-
+  // as for turning SSO off in the settings (password-sign-in.ts). Checked and
+  // written under the sign-in settings lock, against the state as it is then.
+  const userId = session.userId;
   const user = await prisma.$transaction(async (tx) => {
+    if (globalSsoEnabled) {
+      await lockSignInSettings(tx);
+      const before = await loadPasswordSignInState(tx);
+      if (
+        turnsPasswordSignInOn(
+          before,
+          { localAuthEnabled: before.localAuthEnabled, sso: null },
+          !!me.passwordHash,
+        ) &&
+        !hasRecentLogin(session)
+      ) {
+        return null;
+      }
+    }
     const u = await tx.user.update({
-      where: { id: session.userId },
+      where: { id: userId },
       data: {
         ssoSubject: null,
         ssoIssuer: null,
@@ -197,12 +203,13 @@ export async function DELETE(request: NextRequest) {
     });
     if (globalSsoEnabled) {
       await tx.appSettings.update({
-        where: { userId: session.userId! },
+        where: { userId },
         data: { ssoEnabled: false },
       });
     }
     return u;
   });
+  if (!user) return reauthRequired(userId, "Unlinking SSO");
 
   session.sessionVersion = user.sessionVersion;
   await session.save();

@@ -4,17 +4,16 @@ import { getSession } from "@/lib/auth/session";
 import bcrypt from "bcryptjs";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, changePasswordSchema } from "@/lib/validation";
-import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
+import {
+  PASSWORD_CONFIRM_BUCKET,
+  peekAuthRateLimit,
+  reserveAuthAttempt,
+} from "@/lib/rate-limit/rate-limiter";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
 import { isPasswordSignInEnabled } from "@/lib/auth/password-sign-in";
 
 export async function POST(request: NextRequest) {
-  // Rate-limit even though the route is authenticated. bcrypt.compare runs on
-  // each call and the route is otherwise an oracle for testing currentPassword.
-  const rateLimited = checkAuthRateLimit(request, "change-password");
-  if (rateLimited) return rateLimited;
-
   const session = await getSession();
   if (!session.isLoggedIn || !session.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -59,6 +58,15 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
+      // The route is otherwise an oracle for testing currentPassword. Charged
+      // in the one bucket every password confirmation on a signed-in route
+      // shares (a bucket of its own would add a second budget of guesses), and
+      // like those only on a wrong password: reserved before the compare,
+      // refunded on a match (see `reserveAuthAttempt`).
+      const limited = peekAuthRateLimit(request, PASSWORD_CONFIRM_BUCKET);
+      if (limited) return limited;
+      const attempt = reserveAuthAttempt(request, PASSWORD_CONFIRM_BUCKET);
+      if (attempt.refused) return attempt.refused;
       const valid = await bcrypt.compare(currentPassword, acceptedHash);
       if (!valid) {
         return NextResponse.json(
@@ -66,6 +74,7 @@ export async function POST(request: NextRequest) {
           { status: 401 }
         );
       }
+      attempt.refund();
     } else if (user.passwordHash && !hasRecentLogin(session)) {
       // Password sign-in is off, so the current password proves nothing. Any
       // credential change still needs proof, as it does with the password on:

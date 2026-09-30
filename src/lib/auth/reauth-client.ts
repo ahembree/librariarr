@@ -264,7 +264,8 @@ export async function fetchWithReauth(input: RequestInfo | URL, init?: RequestIn
   if (res.status !== 403) return res;
   const methods = reauthMethodsOf(await res.clone().json().catch(() => null));
   if (!methods || methods.length === 0) return res;
-  // No prompt to show it on: the server's refusal says what to do instead.
+  // No prompt to show it on: the server's refusal as it came (naming what was
+  // refused and why), not a "Cancelled" for a prompt the user never saw.
   if (hosts === 0) return res;
   if (!(await confirmIdentity(methods))) return reauthCancelled();
   return fetch(input, init);

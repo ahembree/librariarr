@@ -464,7 +464,7 @@ describe("/api/v1 authentication guard", () => {
       const { key } = await createTestApiKey(user.id, { name: "Busy" });
       const spy = vi
         .spyOn(apiKeyRequestLimiter, "check")
-        .mockReturnValue({ limited: true, remaining: 0, retryAfterMs: 12_000 });
+        .mockReturnValue({ limited: true, remaining: 0, retryAfterMs: 12_000, window: Date.now() + 12_000 });
       try {
         const res = await callRoute(meGET, { headers: withKey(key) });
         expect(res.headers.get("retry-after")).toBe("12");

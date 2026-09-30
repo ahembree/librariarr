@@ -369,7 +369,7 @@ export default function SettingsPage() {
   const [backupSaving, setBackupSaving] = useState(false);
   const [creatingBackup, setCreatingBackup] = useState(false);
   const [restoringBackup, setRestoringBackup] = useState<string | null>(null);
-  const [downloadingBackup, setDownloadingBackup] = useState<string | null>(null);
+  const [downloadingBackups, setDownloadingBackups] = useState<string[]>([]);
   const [restoreProgress, setRestoreProgress] = useState<string | null>(null);
   const [hasBackupPassword, setHasBackupPassword] = useState(false);
   const [savingBackupPassword, setSavingBackupPassword] = useState(false);
@@ -1921,7 +1921,9 @@ export default function SettingsPage() {
   // Fetched rather than opened in a tab: a plain navigation cannot show the
   // "Confirm it's you" prompt, so a refused download would open the 403 JSON.
   const handleDownloadBackup = async (filename: string) => {
-    setDownloadingBackup(filename);
+    // One at a time per file: its button stays disabled until this one ends.
+    if (downloadingBackups.includes(filename)) return;
+    setDownloadingBackups((current) => [...current, filename]);
     try {
       const res = await fetchWithReauth(`/api/backup/${encodeURIComponent(filename)}`);
       if (!res.ok) {
@@ -1942,8 +1944,8 @@ export default function SettingsPage() {
     } catch {
       toast.error("Failed to download backup");
     } finally {
-      // Only this download's spinner: another may have started meanwhile.
-      setDownloadingBackup((current) => (current === filename ? null : current));
+      // Only this download's spinner: others may still be running.
+      setDownloadingBackups((current) => current.filter((f) => f !== filename));
     }
   };
 
@@ -2712,7 +2714,9 @@ export default function SettingsPage() {
     setPlexLoginError("");
     setAuthLoading(true);
     try {
-      const res = await fetch("/api/settings/auth", {
+      // Turning Plex login on lets whoever holds the Plex account sign in,
+      // which needs a recent sign-in by another method.
+      const res = await fetchWithReauth("/api/settings/auth", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ plexLoginEnabled: checked }),
@@ -2937,7 +2941,7 @@ export default function SettingsPage() {
             backupSaving={backupSaving}
             creatingBackup={creatingBackup}
             restoringBackup={restoringBackup}
-            downloadingBackup={downloadingBackup}
+            downloadingBackups={downloadingBackups}
             restoreProgress={restoreProgress}
             hasBackupPassword={hasBackupPassword}
             savingBackupPassword={savingBackupPassword}

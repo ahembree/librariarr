@@ -15,7 +15,6 @@ import { isPasswordSignInEnabled } from "@/lib/auth/password-sign-in";
 import {
   PASSWORD_CONFIRM_BUCKET,
   peekAuthRateLimit,
-  refundAuthAttempt,
   reserveAuthAttempt,
 } from "@/lib/rate-limit/rate-limiter";
 
@@ -88,8 +87,8 @@ export async function POST(request: NextRequest) {
     }
     // Charged before the compare, refunded on a match: concurrent guesses
     // each count from the moment they start (see `reserveAuthAttempt`).
-    const reserved = reserveAuthAttempt(request, PASSWORD_CONFIRM_BUCKET);
-    if (reserved) return reserved;
+    const attempt = reserveAuthAttempt(request, PASSWORD_CONFIRM_BUCKET);
+    if (attempt.refused) return attempt.refused;
     const valid = await bcrypt.compare(data.currentPassword, user.passwordHash);
     if (!valid) {
       logger.warn("Auth", "API key creation refused — the current password was incorrect");
@@ -98,7 +97,7 @@ export async function POST(request: NextRequest) {
         { status: 403 },
       );
     }
-    refundAuthAttempt(request, PASSWORD_CONFIRM_BUCKET);
+    attempt.refund();
   } else if (!hasRecentLogin(session)) {
     // Names the ways to confirm the identity in place (Plex, SSO — never the
     // password while password sign-in is off), which the settings dialog

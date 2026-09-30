@@ -74,10 +74,16 @@ export async function POST(request: NextRequest) {
     const resource = resources.find(
       (r) => r.clientIdentifier === machineId && r.owned && r.provides.includes("server")
     );
-    if (!resource?.accessToken) {
+    if (!resource) {
       return NextResponse.json(
         { error: "That server is not one of the Plex servers this account owns" },
         { status: 404 }
+      );
+    }
+    if (!resource.accessToken) {
+      return NextResponse.json(
+        { error: "Plex did not return an access token for that server. Try again." },
+        { status: 502 }
       );
     }
     accessToken = resource.accessToken;
