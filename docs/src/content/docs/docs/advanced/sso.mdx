@@ -635,6 +635,20 @@ Toggle **Enable SSO Login** off and save. The local username/password form
 returns on the login page (provided local auth is enabled in
 **Settings → Authentication → Local Authentication**).
 
+While SSO is on, your local password is accepted for nothing — not to sign in,
+confirm it's you, create an API key or change your credentials. Turning SSO
+off (the toggle, **Unlink SSO** or **Revert**) while local login is on gives
+the password its power back, so it needs a sign-in from the last 15 minutes;
+if it has been longer, Librariarr asks you to confirm it's you with SSO or
+Plex first. If SSO itself is what's broken, use the
+[SSO_DISABLE_OVERRIDE recovery flow](#recovery--locked-out-of-sso) instead.
+
+While SSO login is on, saving a different issuer, or switching between OIDC
+and forward-auth, is refused: your linked identity belongs to the current
+one, so SSO would stop recognising you while the password stays off. Turn
+SSO login off first, save the new settings, link your identity again, then
+turn SSO login back on.
+
 To remove the link entirely, click **Unlink SSO**. Unlinking also
 automatically turns off the global SSO toggle — keeping it on after removing
 your identity would silently hide the local form without giving you a way to
@@ -717,10 +731,11 @@ in step 1 next to *Save Configuration*. Clicking it:
   prior state)
 
 The snapshot lives in the `previousSsoConfig` column of `AppSettings` and
-is unaffected by backup rotation. The revert only requires that you can
-sign in to the settings page in some way — see the [SSO_DISABLE_OVERRIDE
-recovery flow](#recovery--locked-out-of-sso) for getting back in via Plex
-or local credentials when SSO is broken.
+is unaffected by backup rotation. The revert needs you signed in to the
+settings page, and — when local login is on, so the revert gives your
+password its power back — a sign-in from the last 15 minutes. See the
+[SSO_DISABLE_OVERRIDE recovery flow](#recovery--locked-out-of-sso) for
+getting back in via Plex or local credentials when SSO is broken.
 
 ## Recovery when fully locked out
 

@@ -44,7 +44,10 @@ export default function LoginPage() {
   const [ssoError] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
     const code = new URLSearchParams(window.location.search).get("sso_error");
-    return code ? (SSO_ERROR_MESSAGES[code] ?? "SSO login failed.") : null;
+    if (!code) return null;
+    // Own keys only: `__proto__` or `constructor` in a crafted link would read
+    // an object off the prototype, which React cannot render.
+    return Object.hasOwn(SSO_ERROR_MESSAGES, code) ? SSO_ERROR_MESSAGES[code] : "SSO login failed.";
   });
   const [localUsername, setLocalUsername] = useState("");
   const [localPassword, setLocalPassword] = useState("");

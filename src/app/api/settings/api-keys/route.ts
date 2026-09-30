@@ -11,7 +11,12 @@ import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
 import { notifyApiKeyChange } from "@/lib/api-keys/notify";
 import { normalizeScopes } from "@/lib/api-keys/scopes";
-import { PASSWORD_CONFIRM_BUCKET, peekAuthRateLimit, recordAuthFailure } from "@/lib/rate-limit/rate-limiter";
+import { isPasswordSignInEnabled } from "@/lib/auth/password-sign-in";
+import {
+  PASSWORD_CONFIRM_BUCKET,
+  peekAuthRateLimit,
+  reserveAuthAttempt,
+} from "@/lib/rate-limit/rate-limiter";
 
 /**
  * API key management for the settings page — cookie session only. These routes
@@ -21,7 +26,8 @@ import { PASSWORD_CONFIRM_BUCKET, peekAuthRateLimit, recordAuthFailure } from "@
  * session that mints it — logging out or changing the password revokes
  * sessions, not keys — so a stolen cookie could otherwise turn a temporary
  * foothold into a permanent one in one request. The step-up is the account's
- * password where it has one, and otherwise (Plex or SSO only) a login made in
+ * password where it has one and password sign-in is on, and otherwise (Plex
+ * or SSO only, or password sign-in turned off) a login made in
  * the last `RECENT_LOGIN_WINDOW_MS` (`src/lib/auth/recent-login.ts`, which
  * also guards setting a first password and linking a Plex account or an SSO
  * identity, the other ways a cookie could make itself last) — which the
@@ -63,7 +69,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (user.passwordHash) {
+  // The password is the step-up only while password sign-in is on. With it
+  // off the password is accepted for nothing (password-sign-in.ts), so the
+  // account is treated as having none: a recent sign-in by another method,
+  // and a `currentPassword` in the body is never compared.
+  if (user.passwordHash && (await isPasswordSignInEnabled())) {
     // Charged only on a wrong password (a routine that creates ten keys in a
     // row must not lock itself out), but a wrong one costs what a failed
     // login does, so this route is not a cheaper password oracle than login.
@@ -75,18 +85,23 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
+    // Charged before the compare, refunded on a match: concurrent guesses
+    // each count from the moment they start (see `reserveAuthAttempt`).
+    const attempt = reserveAuthAttempt(request, PASSWORD_CONFIRM_BUCKET);
+    if (attempt.refused) return attempt.refused;
     const valid = await bcrypt.compare(data.currentPassword, user.passwordHash);
     if (!valid) {
-      recordAuthFailure(request, PASSWORD_CONFIRM_BUCKET);
       logger.warn("Auth", "API key creation refused — the current password was incorrect");
       return NextResponse.json(
         { error: "Current password is incorrect", code: "password_incorrect" },
         { status: 403 },
       );
     }
+    attempt.refund();
   } else if (!hasRecentLogin(session)) {
-    // Names the ways to confirm the identity in place (Plex, SSO), which the
-    // settings dialog offers instead of making the user sign out and back in.
+    // Names the ways to confirm the identity in place (Plex, SSO — never the
+    // password while password sign-in is off), which the settings dialog
+    // offers instead of making the user sign out and back in.
     return reauthRequired(session.userId!, "Creating an API key");
   }
 

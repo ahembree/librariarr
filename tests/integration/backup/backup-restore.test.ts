@@ -61,7 +61,7 @@ describe("POST /api/backup/restore", () => {
 
   it("returns 400 when filename is missing", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/backup/restore",
@@ -74,7 +74,7 @@ describe("POST /api/backup/restore", () => {
 
   it("returns 400 when filename is empty string", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/backup/restore",
@@ -87,7 +87,7 @@ describe("POST /api/backup/restore", () => {
 
   it("streams progress and complete events on successful restore", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     mockRestoreBackup.mockImplementation(
       async (
@@ -132,7 +132,7 @@ describe("POST /api/backup/restore", () => {
 
   it("passes passphrase to restoreBackup when provided", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     mockRestoreBackup.mockResolvedValue(undefined);
 
@@ -154,7 +154,7 @@ describe("POST /api/backup/restore", () => {
 
   it("calls restoreBackup without passphrase when not provided", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     mockRestoreBackup.mockResolvedValue(undefined);
 
@@ -176,7 +176,7 @@ describe("POST /api/backup/restore", () => {
 
   it("streams error event when restore fails with Error", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     mockRestoreBackup.mockRejectedValue(
       new Error("Invalid backup file format")
@@ -202,7 +202,7 @@ describe("POST /api/backup/restore", () => {
 
   it("streams generic error when non-Error is thrown", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     mockRestoreBackup.mockRejectedValue("unexpected failure");
 
@@ -226,7 +226,7 @@ describe("POST /api/backup/restore", () => {
 
   it("streams progress events before error when restore partially succeeds", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     mockRestoreBackup.mockImplementation(
       async (

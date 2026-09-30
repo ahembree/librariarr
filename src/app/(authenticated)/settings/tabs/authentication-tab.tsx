@@ -63,6 +63,8 @@ export interface AuthenticationTabProps {
   onChangeCredentials: () => void;
   onPlexLink: () => void;
   onCreateCredentialsAndEnable: () => void;
+  /** Re-reads the auth info after an SSO change (see SsoSection). */
+  onAuthSettingsChanged: () => void;
 }
 
 export function AuthenticationTab({
@@ -87,6 +89,7 @@ export function AuthenticationTab({
   onChangeCredentials,
   onPlexLink,
   onCreateCredentialsAndEnable,
+  onAuthSettingsChanged,
 }: AuthenticationTabProps) {
   return (
     <div className="space-y-6">
@@ -248,17 +251,22 @@ export function AuthenticationTab({
                       onChange={(e) => onSetCredentialsForm((f) => ({ ...f, newUsername: e.target.value }))}
                     />
                   </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="cred-current-pw">Current Password</Label>
-                    <Input
-                      id="cred-current-pw"
-                      type="password"
-                      autoComplete="current-password"
-                      placeholder="Required to make changes"
-                      value={credentialsForm.currentPassword}
-                      onChange={(e) => onSetCredentialsForm((f) => ({ ...f, currentPassword: e.target.value }))}
-                    />
-                  </div>
+                  {/* Only while password sign-in is on: otherwise the
+                      password is accepted for nothing, and a change asks
+                      for a recent sign-in by another method instead. */}
+                  {authInfo.passwordSignInEnabled && (
+                    <div className="space-y-1">
+                      <Label htmlFor="cred-current-pw">Current Password</Label>
+                      <Input
+                        id="cred-current-pw"
+                        type="password"
+                        autoComplete="current-password"
+                        placeholder="Required to make changes"
+                        value={credentialsForm.currentPassword}
+                        onChange={(e) => onSetCredentialsForm((f) => ({ ...f, currentPassword: e.target.value }))}
+                      />
+                    </div>
+                  )}
                   <div className="space-y-1">
                     <Label htmlFor="cred-new-pw">New Password</Label>
                     <Input
@@ -296,7 +304,11 @@ export function AuthenticationTab({
                 )}
                 <Button
                   size="sm"
-                  disabled={credentialsSaving || !credentialsForm.currentPassword || (!credentialsForm.newUsername && !credentialsForm.newPassword)}
+                  disabled={
+                    credentialsSaving ||
+                    (authInfo.passwordSignInEnabled && !credentialsForm.currentPassword) ||
+                    (!credentialsForm.newUsername && !credentialsForm.newPassword)
+                  }
                   onClick={onChangeCredentials}
                 >
                   {credentialsSaving ? (
@@ -312,10 +324,12 @@ export function AuthenticationTab({
       </SettingsSection>
 
       {/* SSO (OIDC + Forward Auth) */}
-      <SsoSection />
+      <SsoSection onChanged={onAuthSettingsChanged} />
 
       {/* API keys for the public /api/v1 API */}
-      <ApiKeysSection hasPassword={authInfo?.hasPassword ?? false} />
+      <ApiKeysSection
+        confirmsWithPassword={!!authInfo?.hasPassword && !!authInfo?.passwordSignInEnabled}
+      />
 
       {/* Create Credentials Dialog -- shown when enabling local auth without existing credentials */}
       <Dialog open={showCredentialPrompt} onOpenChange={(open) => { if (!open) onSetShowCredentialPrompt(false); }}>

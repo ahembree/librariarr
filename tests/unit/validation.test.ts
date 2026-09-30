@@ -239,6 +239,28 @@ describe("serverAddSchema", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  // A Plex server picked from discovery: the route looks its token up by
+  // machine id, so the browser never holds it.
+  it("accepts a Plex server by machine id with no accessToken", () => {
+    expect(serverAddSchema.safeParse({ url: "http://plex.local:32400", machineId: "m-1" }).success).toBe(true);
+    expect(
+      serverAddSchema.safeParse({ url: "http://plex.local:32400", machineId: "m-1", type: "PLEX" }).success
+    ).toBe(true);
+  });
+
+  it("still requires an accessToken for a Jellyfin or Emby server, or without a machine id", () => {
+    for (const body of [
+      { url: "http://jf.local:8096", machineId: "m-1", type: "JELLYFIN" },
+      { url: "http://emby.local:8096", machineId: "m-1", type: "EMBY" },
+      { url: "http://plex.local:32400", machineId: "" },
+      { url: "http://plex.local:32400", type: "PLEX" },
+    ]) {
+      const result = serverAddSchema.safeParse(body);
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.path).toEqual(["accessToken"]);
+    }
+  });
 });
 
 describe("arrInstanceCreateSchema", () => {

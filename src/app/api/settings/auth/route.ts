@@ -3,6 +3,14 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { validateRequest, authSettingsSchema } from "@/lib/validation";
 import { getSsoSettings, isSsoUsable } from "@/lib/sso/config";
+import {
+  lockSignInSettings,
+  passwordSignInEnabled,
+  turnsPasswordSignInOn,
+  turnsPlexSignInOn,
+} from "@/lib/auth/password-sign-in";
+import { hasRecentLogin } from "@/lib/auth/recent-login";
+import { reauthRequired } from "@/lib/auth/reauth";
 
 export async function GET() {
   const session = await getSession();
@@ -32,7 +40,8 @@ export async function GET() {
   // localAuthEnabled is true in the DB — so the Authentication tab should
   // surface that to avoid the confusion of "Local Login is ON but the form
   // doesn't appear on the login page".
-  const ssoUsableNow = isSsoUsable(await getSsoSettings());
+  const sso = await getSsoSettings();
+  const ssoUsableNow = isSsoUsable(sso);
 
   return NextResponse.json({
     plexConnected: !!user.plexId,
@@ -41,6 +50,12 @@ export async function GET() {
     localAuthEnabled: user.appSettings?.localAuthEnabled ?? false,
     plexLoginEnabled: user.appSettings?.plexLoginEnabled ?? true,
     localAuthHiddenBySso: ssoUsableNow,
+    // Whether the password is accepted at all (password-sign-in.ts). The
+    // settings page asks for the current password only while it is.
+    passwordSignInEnabled: passwordSignInEnabled({
+      localAuthEnabled: user.appSettings?.localAuthEnabled,
+      sso,
+    }),
     displayName: user.username,
   });
 }
@@ -115,21 +130,53 @@ export async function PUT(request: NextRequest) {
     );
   }
 
-  await prisma.appSettings.upsert({
-    where: { userId: session.userId },
-    update: {
-      ...(data.localAuthEnabled !== undefined && { localAuthEnabled: data.localAuthEnabled }),
-      ...(data.plexLoginEnabled !== undefined && { plexLoginEnabled: data.plexLoginEnabled }),
-    },
-    create: {
-      userId: session.userId,
-      localAuthEnabled: nextLocal,
-      plexLoginEnabled: nextPlex,
-    },
+  // Turning local login on gives an existing password its power back, and
+  // while it was off the password counted for nothing — so a stolen cookie
+  // that knows an old password must not be able to switch it on and then use
+  // it. Turning Plex login on is the same for whoever holds a Plex account the
+  // household shares. Either needs a recent sign-in, by another method
+  // (password-sign-in.ts). Checked and written under the sign-in settings
+  // lock, against the state as it is then: checked against the snapshot
+  // above, a concurrent change (SSO turned off) could pass on this one's old
+  // state while this one passed on its.
+  const userId = session.userId;
+  const outcome = await prisma.$transaction(async (tx) => {
+    await lockSignInSettings(tx);
+    const current = await tx.appSettings.findUnique({
+      where: { userId },
+      select: { localAuthEnabled: true, plexLoginEnabled: true },
+    });
+    const sso = await getSsoSettings(tx);
+    const local = data.localAuthEnabled ?? current?.localAuthEnabled ?? false;
+    const plex = data.plexLoginEnabled ?? current?.plexLoginEnabled ?? true;
+    if (!hasRecentLogin(session)) {
+      if (
+        turnsPasswordSignInOn(
+          { localAuthEnabled: current?.localAuthEnabled, sso },
+          { localAuthEnabled: local, sso },
+          !!user.passwordHash,
+        )
+      ) {
+        return { refused: "Turning on local login" } as const;
+      }
+      if (turnsPlexSignInOn(current?.plexLoginEnabled, plex, !!user.plexId)) {
+        return { refused: "Turning on Plex login" } as const;
+      }
+    }
+    await tx.appSettings.upsert({
+      where: { userId },
+      update: {
+        ...(data.localAuthEnabled !== undefined && { localAuthEnabled: data.localAuthEnabled }),
+        ...(data.plexLoginEnabled !== undefined && { plexLoginEnabled: data.plexLoginEnabled }),
+      },
+      create: { userId, localAuthEnabled: local, plexLoginEnabled: plex },
+    });
+    return { refused: null, local, plex } as const;
   });
+  if (outcome.refused) return reauthRequired(userId, outcome.refused);
 
   return NextResponse.json({
-    localAuthEnabled: nextLocal,
-    plexLoginEnabled: nextPlex,
+    localAuthEnabled: outcome.local,
+    plexLoginEnabled: outcome.plex,
   });
 }

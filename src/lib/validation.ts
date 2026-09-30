@@ -772,17 +772,26 @@ export const arrTestConnectionSchema = z.object({
 
 // ─── Server schemas ───
 
+/**
+ * `POST /api/servers`. A Plex server picked from discovery sends its
+ * `machineId` and no `accessToken`: the route looks the token up on plex.tv
+ * itself (behind a recent sign-in), so an owned server's token — which can be
+ * the Plex account's own token — never reaches the browser.
+ */
 export const serverAddSchema = z.object({
   name: z.string().optional(),
   url: z.string().min(1, "URL is required").refine(
     (val) => /^https?:\/\//i.test(val),
     "URL must start with http:// or https://"
   ),
-  accessToken: z.string().min(1, "Access token is required"),
+  accessToken: z.string().min(1, "Access token is required").optional(),
   machineId: z.string().optional(),
   tlsSkipVerify: z.boolean().optional(),
   type: z.string().optional(),
-});
+}).refine(
+  (data) => data.accessToken !== undefined || (!!data.machineId && (data.type ?? "PLEX") === "PLEX"),
+  { message: "Access token is required", path: ["accessToken"] }
+);
 
 export const serverEditSchema = z.object({
   url: z.string().refine(

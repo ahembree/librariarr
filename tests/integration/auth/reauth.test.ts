@@ -16,15 +16,21 @@ vi.mock("@/lib/sso/oidc-client", async (importOriginal) => ({
   resolveRedirectUri: () => "http://localhost:3000/api/auth/sso/oidc/callback",
 }));
 
-const { mockPeek, mockRecordFailure } = vi.hoisted(() => ({
-  mockPeek: vi.fn((): Response | null => null),
-  mockRecordFailure: vi.fn(),
-}));
+const { mockPeek, mockReserve, mockRefund } = vi.hoisted(() => {
+  const mockRefund = vi.fn();
+  return {
+    mockPeek: vi.fn((): Response | null => null),
+    mockReserve: vi.fn(
+      (): { refused: Response } | { refused: null; refund: () => void } => ({ refused: null, refund: mockRefund }),
+    ),
+    mockRefund,
+  };
+});
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
   PASSWORD_CONFIRM_BUCKET: "password-confirm",
   checkAuthRateLimit: () => null,
   peekAuthRateLimit: mockPeek,
-  recordAuthFailure: mockRecordFailure,
+  reserveAuthAttempt: mockReserve,
 }));
 
 vi.mock("@/lib/db", async () => {
@@ -59,6 +65,7 @@ describe("/api/auth/reauth/*", () => {
     clearMockSession();
     vi.clearAllMocks();
     mockPeek.mockReturnValue(null);
+    mockReserve.mockReturnValue({ refused: null, refund: mockRefund });
   });
 
   afterAll(async () => {
@@ -259,14 +266,32 @@ describe("/api/auth/reauth/*", () => {
     const call = (body: unknown) =>
       callRoute(passwordPOST, { url: "/api/auth/reauth/password", method: "POST", body });
 
-    async function signInWithPassword() {
+    /** A password and password sign-in on, unless `settings` say otherwise. */
+    async function signInWithPassword(settings: Record<string, unknown> = { localAuthEnabled: true }) {
       const user = await signIn();
       await prisma.user.update({
         where: { id: user.id },
         data: { passwordHash: await bcrypt.hash(PASSWORD, 4) },
       });
+      await prisma.appSettings.create({ data: { userId: user.id, ...settings } });
       return user;
     }
+
+    // With password sign-in off the password is accepted for nothing — here
+    // included — so it is never even compared.
+    it.each([
+      ["local login is off", { localAuthEnabled: false }],
+      [
+        "SSO replaces the local form",
+        { localAuthEnabled: true, ssoEnabled: true, ssoMode: "OIDC", oidcIssuer: ISSUER, oidcClientId: "c" },
+      ],
+    ])("refuses the right password while %s", async (_label, settings) => {
+      await signInWithPassword(settings);
+      const body = await expectJson<{ error: string }>(await call({ password: PASSWORD }), 400);
+      expect(body.error).toBe("Password sign-in is turned off");
+      expect(getMockSession().authenticatedAt).toBe(STALE);
+      expect(mockReserve).not.toHaveBeenCalled();
+    });
 
     it("returns 401 when not signed in", async () => {
       await expectJson(await call({ password: PASSWORD }), 401);
@@ -277,7 +302,9 @@ describe("/api/auth/reauth/*", () => {
       const before = Date.now();
       await expectJson(await call({ password: PASSWORD }), 200);
       expect(getMockSession().authenticatedAt).toBeGreaterThanOrEqual(before);
-      expect(mockRecordFailure).not.toHaveBeenCalled();
+      // Charged up front and given back: a right password costs nothing.
+      expect(mockReserve).toHaveBeenCalledTimes(1);
+      expect(mockRefund).toHaveBeenCalledTimes(1);
     });
 
     it("refuses a wrong password and charges it like a failed login", async () => {
@@ -286,8 +313,23 @@ describe("/api/auth/reauth/*", () => {
       expect(body.code).toBe("password_incorrect");
       expect(getMockSession().authenticatedAt).toBe(STALE);
       // The API-key step-up's bucket: one guess budget for both, not two.
-      expect(mockRecordFailure).toHaveBeenCalledTimes(1);
-      expect(mockRecordFailure.mock.calls[0][1]).toBe("password-confirm");
+      expect(mockReserve).toHaveBeenCalledTimes(1);
+      expect(mockReserve).toHaveBeenCalledWith(expect.anything(), "password-confirm");
+      expect(mockRefund).not.toHaveBeenCalled();
+    });
+
+    // Reserved before the compare, so concurrent guesses count as they start.
+    it("stops before comparing when the attempt cannot be reserved", async () => {
+      await signInWithPassword();
+      const compare = vi.spyOn(bcrypt, "compare");
+      mockReserve.mockReturnValue({
+        refused: new Response(JSON.stringify({ error: "Too many attempts" }), { status: 429 }),
+      });
+      expect((await call({ password: PASSWORD })).status).toBe(429);
+      expect(compare).not.toHaveBeenCalled();
+      expect(getMockSession().authenticatedAt).toBe(STALE);
+      expect(mockRefund).not.toHaveBeenCalled();
+      compare.mockRestore();
     });
 
     it("stops before checking once the limiter says so", async () => {

@@ -129,9 +129,26 @@ describe("Backup endpoints", () => {
       expect(body.error).toBe("Unauthorized");
     });
 
+    // A backup holds the Plex token, and a Plex token is a sign-in that
+    // passes every recent-login check — so making one needs a recent sign-in.
+    it("asks a session signed in more than 15 minutes ago to confirm it's them", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() - 16 * 60 * 1000 });
+
+      const response = await callRoute(createBackup, {
+        url: "/api/backup",
+        method: "POST",
+        body: { passphrase: "chosen-by-the-caller" },
+      });
+      const body = await expectJson<{ code: string; methods: string[] }>(response, 403);
+      expect(body.code).toBe("reauth_required");
+      expect(body.methods).toEqual(["plex"]);
+      expect(mockCreateBackup).not.toHaveBeenCalled();
+    });
+
     it("returns 400 on invalid body (passphrase too short)", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRoute(createBackup, {
         url: "/api/backup",
@@ -144,7 +161,7 @@ describe("Backup endpoints", () => {
 
     it("creates backup successfully", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       mockCreateBackup.mockResolvedValue("backup-2024-01-01.json.gz");
 
@@ -160,7 +177,7 @@ describe("Backup endpoints", () => {
 
     it("uses saved passphrase as fallback when none provided", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       mockGetBackupPassphrase.mockResolvedValue("saved-secret-passphrase");
       mockCreateBackup.mockResolvedValue("backup-encrypted.json.gz.enc");
@@ -177,7 +194,7 @@ describe("Backup endpoints", () => {
 
     it("uses explicit passphrase over saved one", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       mockGetBackupPassphrase.mockResolvedValue("saved-passphrase-value");
       mockCreateBackup.mockResolvedValue("backup-encrypted.json.gz.enc");
@@ -204,9 +221,45 @@ describe("Backup endpoints", () => {
       expect(body.error).toBe("Unauthorized");
     });
 
-    it("returns 404 for non-existent file", async () => {
+    // Scheduled backups sit in the same directory, so downloading needs the
+    // recent sign-in too, not just creating.
+    it("asks a session with no recent sign-in to confirm it's them", async () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true });
+
+      mockGetBackupFilePath.mockReturnValue("/backups/backup.json.gz");
+      mockReadFile.mockResolvedValue(Buffer.from("backup bytes"));
+
+      const response = await callRouteWithParams(
+        downloadBackup,
+        { filename: "backup.json.gz" },
+        { url: "/api/backup/backup.json.gz" }
+      );
+      const body = await expectJson<{ code: string }>(response, 403);
+      expect(body.code).toBe("reauth_required");
+      expect(mockReadFile).not.toHaveBeenCalled();
+    });
+
+    it("sends the file to a session signed in recently", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
+
+      mockGetBackupFilePath.mockReturnValue("/backups/backup.json.gz");
+      mockReadFile.mockResolvedValue(Buffer.from("backup bytes"));
+
+      const response = await callRouteWithParams(
+        downloadBackup,
+        { filename: "backup.json.gz" },
+        { url: "/api/backup/backup.json.gz" }
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+      expect(Buffer.from(await response.arrayBuffer()).toString()).toBe("backup bytes");
+    });
+
+    it("returns 404 for non-existent file", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       mockGetBackupFilePath.mockReturnValue("/backups/missing.json.gz");
       mockReadFile.mockRejectedValue(new Error("ENOENT: no such file or directory"));
@@ -222,7 +275,7 @@ describe("Backup endpoints", () => {
 
     it("returns 400 for invalid filename", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       mockGetBackupFilePath.mockReturnValue(null);
 
@@ -291,9 +344,25 @@ describe("Backup endpoints", () => {
       expect(body.error).toBe("Unauthorized");
     });
 
-    it("returns 400 on invalid body (missing filename)", async () => {
+    // A restore replaces the account's password hash, Plex link and SSO
+    // identity with the file's.
+    it("asks a session with no recent sign-in to confirm it's them", async () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const response = await callRoute(restoreBackup, {
+        url: "/api/backup/restore",
+        method: "POST",
+        body: { filename: "backup.json.gz" },
+      });
+      const body = await expectJson<{ code: string }>(response, 403);
+      expect(body.code).toBe("reauth_required");
+      expect(mockRestoreBackup).not.toHaveBeenCalled();
+    });
+
+    it("returns 400 on invalid body (missing filename)", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRoute(restoreBackup, {
         url: "/api/backup/restore",

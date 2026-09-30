@@ -369,6 +369,7 @@ export default function SettingsPage() {
   const [backupSaving, setBackupSaving] = useState(false);
   const [creatingBackup, setCreatingBackup] = useState(false);
   const [restoringBackup, setRestoringBackup] = useState<string | null>(null);
+  const [downloadingBackups, setDownloadingBackups] = useState<string[]>([]);
   const [restoreProgress, setRestoreProgress] = useState<string | null>(null);
   const [hasBackupPassword, setHasBackupPassword] = useState(false);
   const [savingBackupPassword, setSavingBackupPassword] = useState(false);
@@ -1255,7 +1256,9 @@ export default function SettingsPage() {
     setEditServerSaving(true);
     setEditServerError("");
     try {
-      const response = await fetch(`/api/servers/${serverId}`, {
+      // A new URL for a Plex server that keeps its stored token needs a recent
+      // sign-in (the token would go to the new URL).
+      const response = await fetchWithReauth(`/api/servers/${serverId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1868,10 +1871,13 @@ export default function SettingsPage() {
     }
   };
 
+  // Creating, downloading and restoring a backup need a sign-in from the last
+  // 15 minutes (a backup holds the Plex token); `fetchWithReauth` asks the user
+  // to confirm it's them and repeats the request.
   const handleCreateBackup = async (includeMediaData = false) => {
     setCreatingBackup(true);
     try {
-      const res = await fetch("/api/backup", {
+      const res = await fetchWithReauth("/api/backup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ includeMediaData }),
@@ -1912,8 +1918,35 @@ export default function SettingsPage() {
     }
   };
 
-  const handleDownloadBackup = (filename: string) => {
-    window.open(`/api/backup/${encodeURIComponent(filename)}`, "_blank");
+  // Fetched rather than opened in a tab: a plain navigation cannot show the
+  // "Confirm it's you" prompt, so a refused download would open the 403 JSON.
+  const handleDownloadBackup = async (filename: string) => {
+    // One at a time per file: its button stays disabled until this one ends.
+    if (downloadingBackups.includes(filename)) return;
+    setDownloadingBackups((current) => [...current, filename]);
+    try {
+      const res = await fetchWithReauth(`/api/backup/${encodeURIComponent(filename)}`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        toast.error("Failed to download backup", { description: data?.error });
+        return;
+      }
+      const url = URL.createObjectURL(await res.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      // Revoking at once can cancel the download before the browser has read
+      // the blob; FileSaver.js waits 40 seconds for the same reason.
+      setTimeout(() => URL.revokeObjectURL(url), 40_000);
+    } catch {
+      toast.error("Failed to download backup");
+    } finally {
+      // Only this download's spinner: others may still be running.
+      setDownloadingBackups((current) => current.filter((f) => f !== filename));
+    }
   };
 
   // Confirmation happens in the GeneralTab restore dialog before this is called.
@@ -1921,11 +1954,17 @@ export default function SettingsPage() {
     setRestoringBackup(filename);
     setRestoreProgress(null);
     try {
-      const res = await fetch("/api/backup/restore", {
+      const res = await fetchWithReauth("/api/backup/restore", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename, ...(passphrase ? { passphrase } : {}) }),
       });
+      if (!res.ok) {
+        // Refused before the stream started: a JSON error, not progress lines.
+        const data = await res.json().catch(() => null);
+        toast.error("Restore failed", { description: data?.error });
+        return;
+      }
       if (!res.body) {
         toast.error("Restore failed", { description: "The server returned an empty response." });
         return;
@@ -2620,6 +2659,18 @@ export default function SettingsPage() {
 
   const handlePlexLink = () => plexOAuth.startAuth();
 
+  // After an SSO change: whether SSO is usable decides whether the password is
+  // accepted at all (passwordSignInEnabled), and with it whether the forms
+  // here ask for the current password.
+  const refreshAuthInfo = useCallback(() => {
+    fetch("/api/settings/auth")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((info) => {
+        if (info) setAuthInfo(info);
+      })
+      .catch(() => {});
+  }, []);
+
   const handleToggleLocalAuth = async (checked: boolean) => {
     setLocalAuthError("");
     // If enabling and no credentials exist, prompt to create them first
@@ -2631,13 +2682,18 @@ export default function SettingsPage() {
     }
     setAuthLoading(true);
     try {
-      const res = await fetch("/api/settings/auth", {
+      // Turning local login on gives the password its power back, which needs
+      // a recent sign-in by another method.
+      const res = await fetchWithReauth("/api/settings/auth", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ localAuthEnabled: checked }),
       });
       if (res.ok) {
         setAuthInfo((prev) => prev ? { ...prev, localAuthEnabled: checked } : prev);
+        // Whether the password is now accepted also depends on SSO: re-read it.
+        const infoRes = await fetch("/api/settings/auth");
+        if (infoRes.ok) setAuthInfo(await infoRes.json());
         toast.success(checked ? "Local login enabled" : "Local login disabled");
       } else {
         // Surface the lockout-guard error inline. The UI also gates the
@@ -2658,7 +2714,9 @@ export default function SettingsPage() {
     setPlexLoginError("");
     setAuthLoading(true);
     try {
-      const res = await fetch("/api/settings/auth", {
+      // Turning Plex login on lets whoever holds the Plex account sign in,
+      // which needs a recent sign-in by another method.
+      const res = await fetchWithReauth("/api/settings/auth", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ plexLoginEnabled: checked }),
@@ -2694,9 +2752,10 @@ export default function SettingsPage() {
 
     setCredentialsSaving(true);
     try {
-      const body: Record<string, string> = {
-        currentPassword: credentialsForm.currentPassword,
-      };
+      // Sent only when the form asked for it (password sign-in on); otherwise
+      // the server wants a recent sign-in, which fetchWithReauth prompts for.
+      const body: Record<string, string> = {};
+      if (credentialsForm.currentPassword) body.currentPassword = credentialsForm.currentPassword;
       if (credentialsForm.newPassword) body.newPassword = credentialsForm.newPassword;
       if (credentialsForm.newUsername) body.newUsername = credentialsForm.newUsername;
 
@@ -2756,8 +2815,8 @@ export default function SettingsPage() {
         setPromptError(data.error || "Failed to create credentials");
         return;
       }
-      // Enable local auth
-      const authRes = await fetch("/api/settings/auth", {
+      // Enable local auth (needs a recent sign-in, like the first password)
+      const authRes = await fetchWithReauth("/api/settings/auth", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ localAuthEnabled: true }),
@@ -2882,6 +2941,7 @@ export default function SettingsPage() {
             backupSaving={backupSaving}
             creatingBackup={creatingBackup}
             restoringBackup={restoringBackup}
+            downloadingBackups={downloadingBackups}
             restoreProgress={restoreProgress}
             hasBackupPassword={hasBackupPassword}
             savingBackupPassword={savingBackupPassword}
@@ -3245,6 +3305,7 @@ export default function SettingsPage() {
             onChangeCredentials={handleChangeCredentials}
             onPlexLink={handlePlexLink}
             onCreateCredentialsAndEnable={handleCreateCredentialsAndEnable}
+            onAuthSettingsChanged={refreshAuthInfo}
           />
         </TabsContent>
 

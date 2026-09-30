@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import bcrypt from "bcryptjs";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
-import { setMockSession, clearMockSession } from "../../setup/mock-session";
+import { setMockSession, clearMockSession, getMockSession } from "../../setup/mock-session";
 import {
   callRoute,
   callRouteWithParams,
@@ -337,11 +337,17 @@ describe("/api/settings/api-keys", () => {
       for (const store of stores()) store.clear();
     });
 
-    async function loginWithPassword() {
+    /** A password and password sign-in on, unless `settings` say otherwise. */
+    async function loginWithPassword(settings: Record<string, unknown> = { localAuthEnabled: true }) {
       const user = await login(Date.now() - 2 * RECENT_LOGIN_WINDOW_MS);
       await prisma.user.update({
         where: { id: user.id },
         data: { passwordHash: bcrypt.hashSync(PASSWORD, 4) },
+      });
+      await prisma.appSettings.upsert({
+        where: { userId: user.id },
+        update: settings,
+        create: { userId: user.id, ...settings },
       });
       return user;
     }
@@ -372,6 +378,62 @@ describe("/api/settings/api-keys", () => {
       const limited = await create(body({ currentPassword: PASSWORD }));
       expect(limited.status).toBe(429);
       expect(limited.headers.get("retry-after")).toBeTruthy();
+      expect(await prisma.apiKey.count()).toBe(0);
+    });
+
+    // Charged only after a failed compare, every request of a concurrent
+    // burst passed the check while the bcrypt compares ran.
+    it("a burst of concurrent wrong passwords gets ten guesses, not one per request", async () => {
+      await loginWithPassword();
+      const responses = await Promise.all(
+        Array.from({ length: 25 }, () => create(body({ currentPassword: "nope" }))),
+      );
+      const statuses = responses.map((r) => r.status);
+      expect(statuses.filter((s) => s === 403)).toHaveLength(10);
+      expect(statuses.filter((s) => s === 429)).toHaveLength(15);
+      expect((await create(body({ currentPassword: PASSWORD }))).status).toBe(429);
+      expect(await prisma.apiKey.count()).toBe(0);
+    });
+
+    // With password sign-in off the password is accepted for nothing: the
+    // right one does not create a key on an old sign-in, and a recent sign-in
+    // by another method is what the step-up asks for instead.
+    it("with password sign-in off, the password is not the step-up", async () => {
+      await loginWithPassword({ localAuthEnabled: false });
+      const refused = await expectJson<{ code: string; methods: string[] }>(
+        await create(body({ currentPassword: PASSWORD })),
+        403,
+      );
+      expect(refused.code).toBe("reauth_required");
+      expect(refused.methods).not.toContain("password");
+      expect(await prisma.apiKey.count()).toBe(0);
+
+      setMockSession({ ...getMockSession(), authenticatedAt: Date.now() });
+      await expectJson(await create(body()), 201);
+      expect(await prisma.apiKey.count()).toBe(1);
+    });
+
+    // SSO replacing the local form turns password sign-in off just as local
+    // login off does.
+    it("with SSO replacing the local form, the password is not the step-up", async () => {
+      const user = await loginWithPassword({
+        localAuthEnabled: true,
+        ssoEnabled: true,
+        ssoMode: "OIDC",
+        oidcIssuer: "https://idp.example.com",
+        oidcClientId: "client",
+      });
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { ssoEnabled: true, ssoSubject: "sub", ssoIssuer: "https://idp.example.com" },
+      });
+      const refused = await expectJson<{ code: string; methods: string[] }>(
+        await create(body({ currentPassword: PASSWORD })),
+        403,
+      );
+      expect(refused.code).toBe("reauth_required");
+      expect(refused.methods).toContain("oidc");
+      expect(refused.methods).not.toContain("password");
       expect(await prisma.apiKey.count()).toBe(0);
     });
 

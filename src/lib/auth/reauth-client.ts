@@ -126,10 +126,16 @@ export async function reauthWithOidcPopup(signal?: AbortSignal): Promise<ReauthR
       // Only this attempt's report: an older popup finishing late, another
       // tab's prompt, or /login/reauth opened by hand must not settle it.
       if (report?.type !== REAUTH_MESSAGE_TYPE || report.nonce !== nonce) return;
+      const code = String(report.error);
       finish(
         report.ok === true
           ? { ok: true }
-          : { ok: false, error: OIDC_ERRORS[String(report.error)] ?? "SSO sign-in failed. Try again." },
+          : {
+              ok: false,
+              // Own keys only: `__proto__` or `constructor` would hand back
+              // an object, which cannot be rendered as a message.
+              error: Object.hasOwn(OIDC_ERRORS, code) ? OIDC_ERRORS[code] : "SSO sign-in failed. Try again.",
+            },
       );
     };
     const onWindowMessage = (e: MessageEvent) => {
@@ -258,6 +264,9 @@ export async function fetchWithReauth(input: RequestInfo | URL, init?: RequestIn
   if (res.status !== 403) return res;
   const methods = reauthMethodsOf(await res.clone().json().catch(() => null));
   if (!methods || methods.length === 0) return res;
+  // No prompt to show it on: the server's refusal as it came (naming what was
+  // refused and why), not a "Cancelled" for a prompt the user never saw.
+  if (hosts === 0) return res;
   if (!(await confirmIdentity(methods))) return reauthCancelled();
   return fetch(input, init);
 }

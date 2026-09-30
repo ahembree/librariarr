@@ -5,11 +5,21 @@ import { validateRequest, backupRestoreSchema } from "@/lib/validation";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { appCache } from "@/lib/cache/memory-cache";
 import { clearImageCache } from "@/lib/image-cache/image-cache";
+import { hasRecentLogin } from "@/lib/auth/recent-login";
+import { reauthRequired } from "@/lib/auth/reauth";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
   if (!session.isLoggedIn) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // A restore replaces the account itself — its password hash, linked Plex
+  // account and SSO identity — with whatever the file holds, so it needs a
+  // recent sign-in like the other actions that change how the account can be
+  // signed into (see recent-login.ts).
+  if (!hasRecentLogin(session)) {
+    return reauthRequired(session.userId!, "Restoring a backup");
   }
 
   const { data, error } = await validateRequest(request, backupRestoreSchema);

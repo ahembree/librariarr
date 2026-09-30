@@ -335,6 +335,83 @@ describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
     expect(body.globalSsoDisabled).toBe(true);
   });
 
+  // Unlinking with SSO on turns SSO off, and with local login on that gives
+  // the password its power back — while SSO replaced the local form the
+  // password counted for nothing, so a stale cookie that knows it must not
+  // be able to unlink and then use it.
+  it("asks a stale session to confirm when unlinking would turn password sign-in back on", async () => {
+    const user = await createTestUser();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        plexId: null,
+        plexToken: null,
+        localUsername: "alice",
+        passwordHash: "h",
+        ssoSubject: "abc",
+        ssoIssuer: "https://idp.example.com",
+        ssoEnabled: true,
+      },
+    });
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id,
+        localAuthEnabled: true,
+        ssoEnabled: true,
+        ssoMode: "OIDC",
+        oidcIssuer: "https://idp.example.com",
+        oidcClientId: "client",
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
+
+    const refused = await expectJson<{ code: string; methods: string[] }>(
+      await callRoute(DELETE, { method: "DELETE" }),
+      403,
+    );
+    expect(refused.code).toBe("reauth_required");
+    // SSO is how to confirm; the password counts for nothing yet.
+    expect(refused.methods).toEqual(["oidc"]);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).ssoSubject).toBe("abc");
+    expect((await prisma.appSettings.findFirstOrThrow()).ssoEnabled).toBe(true);
+
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+    const body = await expectJson<{ globalSsoDisabled: boolean }>(await callRoute(DELETE, { method: "DELETE" }));
+    expect(body.globalSsoDisabled).toBe(true);
+  });
+
+  // With local login off the password stays powerless once SSO is off too:
+  // nothing is being turned on, so a stale session unlinks without confirming.
+  it("lets a stale session with a password unlink while local login is off", async () => {
+    const user = await createTestUser();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        localUsername: "alice",
+        passwordHash: "h",
+        ssoSubject: "abc",
+        ssoIssuer: "https://idp.example.com",
+        ssoEnabled: true,
+      },
+    });
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id,
+        localAuthEnabled: false,
+        plexLoginEnabled: true,
+        ssoEnabled: true,
+        ssoMode: "OIDC",
+        oidcIssuer: "https://idp.example.com",
+        oidcClientId: "client",
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
+
+    const body = await expectJson<{ globalSsoDisabled: boolean }>(await callRoute(DELETE, { method: "DELETE" }));
+    expect(body.globalSsoDisabled).toBe(true);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).ssoSubject).toBeNull();
+  });
+
   it("rejects when local credentials exist but localAuthEnabled is false", async () => {
     // passwordHash is set but the toggle is off → not actually usable.
     const user = await createTestUser();

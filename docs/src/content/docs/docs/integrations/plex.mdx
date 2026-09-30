@@ -42,6 +42,8 @@ When signed in via Plex OAuth, Librariarr can automatically discover all Plex se
 - Platform (Linux, Windows, macOS, etc.)
 - Available connections (local and remote URLs)
 
+A discovered server's access token is never sent to your browser: when you add the server, Librariarr looks the token up from your Plex account itself. That lookup, and later changing a Plex server's URL or turning on **Skip TLS Verification** without entering a new token, needs a sign-in from the last 15 minutes, because the token then goes to the address you entered, or to whoever answers there unverified — and a Plex token is enough to sign in to Librariarr. If it has been longer, Librariarr asks you to confirm it's you and then carries on.
+
 ### Manual Setup
 
 You can also manually add a Plex server in **Settings → Servers**:

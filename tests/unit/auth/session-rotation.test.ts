@@ -86,6 +86,32 @@ describe("rotateSession (real iron-session)", () => {
     expect(readBack.userId).toBeUndefined();
   });
 
+  // The OIDC callback tells a confirmation popup its session was revoked by
+  // reading the handshake off the downgraded session (see its `session_lost`
+  // branch): the downgrade must drop the sign-in, never the handshake.
+  it("keeps the OIDC handshake on a session it downgrades as revoked", async () => {
+    const { rotateSession, getSession } = await load();
+
+    const session = await rotateSession();
+    session.userId = "user-1";
+    session.isLoggedIn = true;
+    session.sessionVersion = 4;
+    session.plexToken = "plex-token";
+    session.oidcState = "handshake-state";
+    session.oidcVerifier = "handshake-verifier";
+    session.oidcFlow = "reauth";
+    await session.save();
+
+    mockFindUnique.mockResolvedValue({ sessionVersion: 5 });
+    const readBack = await getSession();
+    expect(readBack.isLoggedIn).toBe(false);
+    expect(readBack.userId).toBeUndefined();
+    expect(readBack.plexToken).toBeUndefined();
+    expect(readBack.oidcFlow).toBe("reauth");
+    expect(readBack.oidcState).toBe("handshake-state");
+    expect(readBack.oidcVerifier).toBe("handshake-verifier");
+  });
+
   it("stamps when the login happened, and the stamp survives the round trip", async () => {
     const { rotateSession, getSession } = await load();
     const before = Date.now();

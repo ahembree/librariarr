@@ -129,12 +129,27 @@ describe("loadReauthContext", () => {
     expect((await loadReauthContext("u")).methods).toEqual([]);
   });
 
-  it("offers the password wherever one is set, listed last", async () => {
+  // The password is accepted for nothing while password sign-in is off —
+  // local login off, or SSO replacing the local form — the login's own rule.
+  it("offers the password only while password sign-in is on, listed last", async () => {
     mockFindUser.mockResolvedValue(
       user({ plexId: "42", passwordHash: "hash", ssoEnabled: true, ssoSubject: "sub-1", ssoIssuer: ISSUER }),
     );
+    mockFindSettings.mockResolvedValue({ plexLoginEnabled: true, localAuthEnabled: true });
+    expect((await loadReauthContext("u")).methods).toEqual(["plex", "password"]);
+
+    // SSO usable: it replaces the local form, so no password.
     mockGetSso.mockResolvedValue(oidc());
-    expect((await loadReauthContext("u")).methods).toEqual(["plex", "oidc", "password"]);
+    expect((await loadReauthContext("u")).methods).toEqual(["plex", "oidc"]);
+
+    // Local login off.
+    mockGetSso.mockResolvedValue(null);
+    mockFindSettings.mockResolvedValue({ plexLoginEnabled: true, localAuthEnabled: false });
+    expect((await loadReauthContext("u")).methods).toEqual(["plex"]);
+
+    // SSO_DISABLE_OVERRIDE re-opens password sign-in, as it does at login.
+    mockOverride.mockReturnValue(true);
+    expect((await loadReauthContext("u")).methods).toEqual(["plex", "password"]);
   });
 });
 
@@ -158,6 +173,24 @@ describe("reauthRequired", () => {
     };
     expect(body.methods).toEqual([]);
     expect(body.error).toMatch(/sign out, sign back in/i);
+  });
+
+  // Under SSO, nothing to confirm with means SSO does not recognise the link
+  // (linked under another issuer, with password and Plex sign-in off):
+  // signing out would lock the admin out, so never advise it there.
+  it("warns against signing out when SSO is what the login page offers", async () => {
+    mockGetSso.mockResolvedValue(oidc({ oidcIssuer: "https://other.example.com" }));
+    mockFindSettings.mockResolvedValue({ plexLoginEnabled: false, localAuthEnabled: true });
+    mockFindUser.mockResolvedValue(
+      user({ plexId: "42", passwordHash: "h", ssoEnabled: true, ssoSubject: "s", ssoIssuer: ISSUER }),
+    );
+    const body = (await (await reauthRequired("u", "Turning off SSO")).json()) as {
+      error: string;
+      methods: string[];
+    };
+    expect(body.methods).toEqual([]);
+    expect(body.error).toMatch(/don't sign out/i);
+    expect(body.error).toMatch(/SSO_DISABLE_OVERRIDE/);
   });
 });
 

@@ -64,7 +64,10 @@ controls whether the *Sign in with Plex* button appears on the login page.
 Turning it off keeps your Plex token attached for server discovery and
 library sync — it just won't appear as a login option. Useful if you
 prefer SSO or local auth for sign-in but still need Plex linked for
-media-server features.
+media-server features. Turning it back on needs a sign-in from the last 15
+minutes, by another method: with it off, whoever holds the Plex account (say,
+a household that shares it) cannot sign in, and a stolen browser session must
+not be able to change that.
 
 ### Local Authentication
 
@@ -84,6 +87,14 @@ Username/password authentication. Configured in **Settings → Authentication
   you (signing in again with Plex or SSO in a pop-up) and then sets it
 - Hidden on the login page when SSO is active (SSO is intended to replace
   local credentials)
+- **While local login is off, or SSO is active, the password is accepted for
+  nothing** — not to sign in, not to confirm it's you, not to create an API
+  key, not to change your credentials. Those ask for a sign-in from the last
+  15 minutes with Plex or SSO instead. Turning password sign-in back on (this
+  toggle, or turning SSO off while local login is on) needs the same recent
+  sign-in, so a stolen browser session cannot switch it on and then use an old
+  password. `SSO_DISABLE_OVERRIDE` turns password sign-in on regardless, as
+  the recovery path when SSO is down
 
 The toggle is disabled and shows a warning when disabling local auth would
 leave you with no working sign-in method.
