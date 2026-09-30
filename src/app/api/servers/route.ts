@@ -54,14 +54,15 @@ export async function POST(request: NextRequest) {
     // and for a server the account owns it can be the account's own Plex
     // token, which signs in to Librariarr. A stolen cookie must not be able to
     // send it somewhere of its choosing (see recent-login.ts).
-    if (!hasRecentLogin(session)) {
-      return reauthRequired(session.userId!, "Adding a Plex server");
-    }
+    // Checked first: confirming who you are cannot supply a Plex account.
     if (!session.plexToken) {
       return NextResponse.json(
         { error: "Sign in with Plex to add a server from your Plex account" },
         { status: 400 }
       );
+    }
+    if (!hasRecentLogin(session)) {
+      return reauthRequired(session.userId!, "Adding a Plex server");
     }
     let resources;
     try {

@@ -207,7 +207,10 @@ function OnboardingContent() {
       if (!response.ok) {
         const message = data.detail ? `${data.error} — ${data.detail}` : data.error;
         setErrors((prev) => ({ ...prev, [server.clientIdentifier]: message }));
-        setEditingServer(server.clientIdentifier);
+        // A 400 is the URL (unreachable or malformed); a cancelled "Confirm
+        // it's you" prompt, a server Plex no longer lists or a plex.tv error
+        // is not something editing the URL would fix.
+        if (response.status === 400) setEditingServer(server.clientIdentifier);
         return;
       }
 

@@ -1942,7 +1942,8 @@ export default function SettingsPage() {
     } catch {
       toast.error("Failed to download backup");
     } finally {
-      setDownloadingBackup(null);
+      // Only this download's spinner: another may have started meanwhile.
+      setDownloadingBackup((current) => (current === filename ? null : current));
     }
   };
 

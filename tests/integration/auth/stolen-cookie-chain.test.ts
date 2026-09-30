@@ -12,9 +12,11 @@
  *   3. `POST /api/auth/plex/token` with it — a fresh sign-in,
  *   4. `POST /api/settings/api-keys` — a key that outlives the cookie.
  *
- * Two other routes handed a stale cookie the same token: discovery returned
+ * Three other routes handed a stale cookie the same token: discovery returned
  * each owned server's `accessToken` (which plex.tv can set to the account's
- * own token), and a server edit sent the stored token to any new URL.
+ * own token), a server edit sent the stored token to any new URL, and the
+ * session artwork proxy fetched any path from the Plex server with its token —
+ * `/myplex/account` answers with the owner's plex.tv token.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import fs from "fs/promises";
@@ -63,9 +65,10 @@ vi.mock("@/lib/plex/auth", () => ({
 
 // Every media-server request is made through this factory: its calls record
 // which URL each token was sent to.
-const { mockCreateClient, mockTestConnection } = vi.hoisted(() => ({
+const { mockCreateClient, mockTestConnection, mockFetchImage } = vi.hoisted(() => ({
   mockCreateClient: vi.fn(),
   mockTestConnection: vi.fn(),
+  mockFetchImage: vi.fn(),
 }));
 vi.mock("@/lib/media-server/factory", () => ({ createMediaServerClient: mockCreateClient }));
 
@@ -76,6 +79,7 @@ const { GET: plexServersRoute } = await import("@/app/api/auth/plex/servers/rout
 const { POST: plexTokenRoute } = await import("@/app/api/auth/plex/token/route");
 const { POST: addServerRoute } = await import("@/app/api/servers/route");
 const { PUT: editServerRoute } = await import("@/app/api/servers/[id]/route");
+const { GET: sessionImageRoute } = await import("@/app/api/tools/sessions/image/route");
 const { POST: createApiKeyRoute } = await import("@/app/api/settings/api-keys/route");
 const { createBackup, listBackups } = await import("@/lib/backup/backup-service");
 const { RECENT_LOGIN_WINDOW_MS } = await import("@/lib/auth/recent-login");
@@ -115,7 +119,16 @@ describe("a stolen session cookie cannot mint a lasting credential", () => {
     }
 
     mockTestConnection.mockResolvedValue({ ok: true, serverName: "Home" });
-    mockCreateClient.mockImplementation(() => ({ testConnection: mockTestConnection }));
+    // Plex's `/myplex/account` answers with the owner's plex.tv token.
+    mockFetchImage.mockImplementation(async (path: string) =>
+      path === "/myplex/account"
+        ? { data: Buffer.from(`<MyPlex authToken="${ACCOUNT_TOKEN}"/>`), contentType: "text/xml" }
+        : { data: Buffer.from([0x89, 0x50]), contentType: "image/png" },
+    );
+    mockCreateClient.mockImplementation(() => ({
+      testConnection: mockTestConnection,
+      fetchImage: mockFetchImage,
+    }));
     mockGetPlexUser.mockImplementation(async (token: string) => {
       if (token !== ACCOUNT_TOKEN) throw new Error("401 Unauthorized");
       return { id: PLEX_ID, username: "admin", email: "admin@example.com" };
@@ -159,14 +172,22 @@ describe("a stolen session cookie cannot mint a lasting credential", () => {
   it("from a stale session, no route yields the Plex token, a fresh sign-in or a key", async () => {
     const stale = Date.now() - RECENT_LOGIN_WINDOW_MS - 60_000;
     setMockSession({ isLoggedIn: true, userId, plexToken: ACCOUNT_TOKEN, authenticatedAt: stale });
+    // Every body the stale session is sent, checked for the token at the end.
+    const bodies: string[] = [];
+    const read = async (response: Response) => {
+      bodies.push(await response.clone().text());
+      return response;
+    };
 
     // 1. A backup under a passphrase the cookie holder picks.
     const created = await expectJson<{ code: string; methods: string[] }>(
-      await callRoute(createBackupRoute, {
-        url: "/api/backup",
-        method: "POST",
-        body: { passphrase: PASSPHRASE },
-      }),
+      await read(
+        await callRoute(createBackupRoute, {
+          url: "/api/backup",
+          method: "POST",
+          body: { passphrase: PASSPHRASE },
+        }),
+      ),
       403,
     );
     expect(created.code).toBe("reauth_required");
@@ -175,61 +196,89 @@ describe("a stolen session cookie cannot mint a lasting credential", () => {
     expect((await listBackups()).map((b) => b.filename)).toEqual([scheduledBackup]);
 
     // 2. Nor a backup already on disk.
-    const downloaded = await callRouteWithParams(
-      downloadBackupRoute,
-      { filename: scheduledBackup },
-      { url: `/api/backup/${scheduledBackup}` },
+    const downloaded = await read(
+      await callRouteWithParams(
+        downloadBackupRoute,
+        { filename: scheduledBackup },
+        { url: `/api/backup/${scheduledBackup}` },
+      ),
     );
     expect(downloaded.status).toBe(403);
-    const refusal = await downloaded.text();
-    expect(JSON.parse(refusal).code).toBe("reauth_required");
-    expect(refusal).not.toContain(ACCOUNT_TOKEN);
+    expect((await downloaded.json()).code).toBe("reauth_required");
 
     // A restore rewrites the account's credentials from a file.
     const restored = await expectJson<{ code: string }>(
-      await callRoute(restoreBackupRoute, {
-        url: "/api/backup/restore",
-        method: "POST",
-        body: { filename: scheduledBackup },
-      }),
+      await read(
+        await callRoute(restoreBackupRoute, {
+          url: "/api/backup/restore",
+          method: "POST",
+          body: { filename: scheduledBackup },
+        }),
+      ),
       403,
     );
     expect(restored.code).toBe("reauth_required");
     expect(await prisma.user.count()).toBe(1);
 
     // 3. Discovery still lists the servers, without their tokens.
-    const discoveryResponse = await callRoute(plexServersRoute, { url: "/api/auth/plex/servers" });
-    expect(discoveryResponse.status).toBe(200);
-    const discovery = await discoveryResponse.text();
-    expect(JSON.parse(discovery).servers).toHaveLength(1);
-    expect(discovery).not.toContain(ACCOUNT_TOKEN);
+    const discovery = await expectJson<{ servers: unknown[] }>(
+      await read(await callRoute(plexServersRoute, { url: "/api/auth/plex/servers" })),
+      200,
+    );
+    expect(discovery.servers).toHaveLength(1);
 
-    // 4. The stored token is not sent to a URL of the cookie holder's choosing,
+    // 4. The artwork proxy serves session artwork, not the server's API.
+    const artwork = await read(
+      await callRoute(sessionImageRoute, {
+        url: "/api/tools/sessions/image",
+        searchParams: { serverId, path: "/library/metadata/1234/thumb/1" },
+      }),
+    );
+    expect(artwork.status).toBe(200);
+    const account = await expectJson<{ error: string }>(
+      await read(
+        await callRoute(sessionImageRoute, {
+          url: "/api/tools/sessions/image",
+          searchParams: { serverId, path: "/myplex/account" },
+        }),
+      ),
+      400,
+    );
+    expect(account.error).toBe("Invalid path");
+    expect(mockFetchImage).not.toHaveBeenCalledWith("/myplex/account");
+
+    // 5. The stored token is not sent to a URL of the cookie holder's choosing,
     //    by editing the server or by adding it again under a new address.
     const edited = await expectJson<{ code: string }>(
-      await callRouteWithParams(
-        editServerRoute,
-        { id: serverId },
-        { url: `/api/servers/${serverId}`, method: "PUT", body: { url: ATTACKER_URL } },
+      await read(
+        await callRouteWithParams(
+          editServerRoute,
+          { id: serverId },
+          { url: `/api/servers/${serverId}`, method: "PUT", body: { url: ATTACKER_URL } },
+        ),
       ),
       403,
     );
     expect(edited.code).toBe("reauth_required");
     // Disabled first, re-enabled later: no connection test, same destination.
     await expectJson(
-      await callRouteWithParams(
-        editServerRoute,
-        { id: serverId },
-        { url: `/api/servers/${serverId}`, method: "PUT", body: { url: ATTACKER_URL, enabled: false } },
+      await read(
+        await callRouteWithParams(
+          editServerRoute,
+          { id: serverId },
+          { url: `/api/servers/${serverId}`, method: "PUT", body: { url: ATTACKER_URL, enabled: false } },
+        ),
       ),
       403,
     );
     const readded = await expectJson<{ code: string }>(
-      await callRoute(addServerRoute, {
-        url: "/api/servers",
-        method: "POST",
-        body: { name: "Home", url: ATTACKER_URL, machineId: "machine-1" },
-      }),
+      await read(
+        await callRoute(addServerRoute, {
+          url: "/api/servers",
+          method: "POST",
+          body: { name: "Home", url: ATTACKER_URL, machineId: "machine-1" },
+        }),
+      ),
       403,
     );
     expect(readded.code).toBe("reauth_required");
@@ -238,21 +287,24 @@ describe("a stolen session cookie cannot mint a lasting credential", () => {
       "http://10.0.0.5:32400",
     );
 
-    // With no token in hand the cookie never signs in again...
-    expect(mockGetPlexUser).not.toHaveBeenCalled();
-    expect(getMockSession().authenticatedAt).toBe(stale);
+    // Nothing the stale session was sent carries the token it would need to
+    // sign in again...
+    expect(bodies.filter((body) => body.includes(ACCOUNT_TOKEN))).toEqual([]);
 
-    // 5. ...so it cannot create the key.
+    // 6. ...so it cannot create the key.
     const key = await expectJson<{ code: string }>(
-      await callRoute(createApiKeyRoute, {
-        url: "/api/settings/api-keys",
-        method: "POST",
-        body: { name: "persistence", scopes: ["media:read"], expiresAt: null },
-      }),
+      await read(
+        await callRoute(createApiKeyRoute, {
+          url: "/api/settings/api-keys",
+          method: "POST",
+          body: { name: "persistence", scopes: ["media:read"], expiresAt: null },
+        }),
+      ),
       403,
     );
     expect(key.code).toBe("reauth_required");
     expect(await prisma.apiKey.count()).toBe(0);
+    expect(getMockSession().authenticatedAt).toBe(stale);
   });
 
   // The same requests from a session signed in moments ago: every step

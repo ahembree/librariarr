@@ -61,7 +61,8 @@ export async function PUT(
   // Test connection if URL or access token changed (skip if just toggling enabled)
   if ((url || accessToken) && enabled !== false) {
     const testUrl = url ?? server.url;
-    const testToken = accessToken ?? server.accessToken;
+    // `""` keeps the stored token (the write below skips it), so test with that.
+    const testToken = accessToken || server.accessToken;
     const client = createMediaServerClient(server.type, testUrl, testToken, {
       skipTlsVerify: tlsSkipVerify ?? server.tlsSkipVerify,
     });
