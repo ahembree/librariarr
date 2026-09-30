@@ -672,7 +672,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       return user;
     }
 
-    it("stamps the sign-in time and returns to settings for the linked subject", async () => {
+    it("stamps the sign-in time and reports success to the popup page for the linked subject", async () => {
       const user = await seedLinked();
       setupSuccessfulExchange({ sub: "linked-sub" });
       const before = Date.now();
@@ -741,6 +741,26 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       const loc = new URL(res.headers.get("location")!);
       expect(loc.pathname).toBe("/login/reauth");
       expect(loc.searchParams.get("error")).toBe("session_lost");
+    });
+
+    // `getSession()` reads a revoked session (signed out elsewhere, password
+    // changed) as signed out but keeps the handshake fields: without its own
+    // branch the confirmation fell through to the login flow, and the page
+    // waiting on the popup never heard back.
+    it("reports a confirmation whose session was revoked meanwhile, and never signs in", async () => {
+      await seedLinked();
+      setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v", oidcFlow: "reauth" });
+      setupSuccessfulExchange({ sub: "linked-sub" });
+
+      const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "s" } });
+      const loc = new URL(res.headers.get("location")!);
+      expect(loc.pathname).toBe("/login/reauth");
+      expect(loc.searchParams.get("error")).toBe("session_lost");
+      expect(mockExchange).not.toHaveBeenCalled();
+      const session = getMockSession();
+      expect(session.isLoggedIn).toBe(false);
+      expect(session.oidcFlow).toBeUndefined();
+      expect(session.oidcState).toBeUndefined();
     });
 
     it("returns failures to the popup page, not the login page", async () => {

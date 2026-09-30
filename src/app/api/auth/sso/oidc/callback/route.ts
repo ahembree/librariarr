@@ -75,6 +75,17 @@ export async function GET(request: NextRequest) {
     session.oidcFlow === "link" && session.isLoggedIn && !!session.userId;
   const isReauthFlow =
     session.oidcFlow === "reauth" && session.isLoggedIn && !!session.userId;
+  // A confirmation whose session was revoked while the popup was out (signed
+  // out elsewhere, password changed): `getSession()` reads it as signed out,
+  // so it would fall through to the login branch — the popup would sign in
+  // or land on /login, and the page waiting on it would never hear back.
+  if (session.oidcFlow === "reauth" && !isReauthFlow) {
+    session.oidcState = undefined;
+    session.oidcVerifier = undefined;
+    session.oidcFlow = undefined;
+    await session.save();
+    return redirectAfterReauth(request, { error: "session_lost" });
+  }
   // Where a failure returns to, by flow.
   const fail = (error: string) =>
     isLinkFlow

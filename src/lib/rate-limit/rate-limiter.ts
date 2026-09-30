@@ -74,6 +74,16 @@ export class RateLimiter {
     return { limited: false };
   }
 
+  /**
+   * Take back `cost` attempts `check` charged in the current window — for an
+   * attempt charged up front that turned out not to count (see
+   * `reserveAuthAttempt`).
+   */
+  refund(key: string, cost = 1): void {
+    const entry = this.store.get(key);
+    if (entry && Date.now() < entry.resetAt) entry.count = Math.max(0, entry.count - cost);
+  }
+
   cleanup() {
     const now = Date.now();
     for (const [key, entry] of this.store) {
@@ -200,14 +210,6 @@ export function checkAuthRateLimit(request: Request, bucket: string): Response |
 }
 
 /**
- * The same two auth limiters, charged only on FAILURE: `peekAuthRateLimit`
- * before the check, `recordAuthFailure` when it fails. For a password
- * confirmation on a route the user is already signed in to — creating an API
- * key — where counting every attempt would lock a legitimate user out of a
- * routine they may run ten times in a row, while a wrong password still costs
- * exactly what a failed login does.
- */
-/**
  * The one bucket every current-password confirmation on a signed-in route is
  * charged to (the API-key step-up and `/api/auth/reauth/password`). Each
  * bucket carries its own per-address and global budget, so giving each route
@@ -215,6 +217,20 @@ export function checkAuthRateLimit(request: Request, bucket: string): Response |
  */
 export const PASSWORD_CONFIRM_BUCKET = "password-confirm";
 
+/**
+ * The same two auth limiters, charged only on FAILURE. For a password
+ * confirmation on a route the user is already signed in to — creating an API
+ * key, `/api/auth/reauth/password` — where counting every attempt would lock
+ * a legitimate user out of a routine they may run ten times in a row, while a
+ * wrong password still costs exactly what a failed login does.
+ *
+ * `peekAuthRateLimit` refuses early without counting; `reserveAuthAttempt`
+ * charges the attempt immediately before the password is compared, and
+ * `refundAuthAttempt` gives it back when the password matched. Charging only
+ * after a failed compare let a burst of concurrent wrong passwords all pass
+ * the check while their ~250 ms bcrypt compares ran — N guesses instead of 10
+ * — whereas a reservation counts each one the moment it starts.
+ */
 export function peekAuthRateLimit(request: Request, bucket: string): Response | null {
   const ip = getClientIp(request);
   const perIp = authRateLimiter.peek(`${bucket}:${ip}`);
@@ -224,10 +240,27 @@ export function peekAuthRateLimit(request: Request, bucket: string): Response | 
   return null;
 }
 
-export function recordAuthFailure(request: Request, bucket: string): void {
-  const ip = getClientIp(request);
-  authRateLimiter.check(`${bucket}:${ip}`);
-  authGlobalRateLimiter.check(`${bucket}:*`);
+export function reserveAuthAttempt(request: Request, bucket: string): Response | null {
+  const perIpKey = `${bucket}:${getClientIp(request)}`;
+  const globalKey = `${bucket}:*`;
+  const perIp = authRateLimiter.check(perIpKey);
+  if (perIp.limited) {
+    // Refused, so nothing was attempted: only failures count.
+    authRateLimiter.refund(perIpKey);
+    return tooManyAttempts(perIp.retryAfterMs);
+  }
+  const global = authGlobalRateLimiter.check(globalKey);
+  if (global.limited) {
+    authRateLimiter.refund(perIpKey);
+    authGlobalRateLimiter.refund(globalKey);
+    return tooManyAttempts(global.retryAfterMs);
+  }
+  return null;
+}
+
+export function refundAuthAttempt(request: Request, bucket: string): void {
+  authRateLimiter.refund(`${bucket}:${getClientIp(request)}`);
+  authGlobalRateLimiter.refund(`${bucket}:*`);
 }
 
 /**

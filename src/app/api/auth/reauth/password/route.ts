@@ -4,7 +4,12 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, reauthPasswordSchema } from "@/lib/validation";
-import { PASSWORD_CONFIRM_BUCKET, peekAuthRateLimit, recordAuthFailure } from "@/lib/rate-limit/rate-limiter";
+import {
+  PASSWORD_CONFIRM_BUCKET,
+  peekAuthRateLimit,
+  refundAuthAttempt,
+  reserveAuthAttempt,
+} from "@/lib/rate-limit/rate-limiter";
 
 /**
  * Confirms the signed-in admin's identity with the account's current password
@@ -40,14 +45,19 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "This account has no password" }, { status: 400 });
   }
 
+  // Charged before the compare, refunded on a match: concurrent guesses each
+  // count from the moment they start (see `reserveAuthAttempt`).
+  const reserved = reserveAuthAttempt(request, PASSWORD_CONFIRM_BUCKET);
+  if (reserved) return reserved;
   if (!(await bcrypt.compare(data.password, user.passwordHash))) {
-    recordAuthFailure(request, PASSWORD_CONFIRM_BUCKET);
     apiLogger.warn("Auth", "Password re-authentication refused — the password was incorrect");
     return NextResponse.json(
       { error: "That password is not correct", code: "password_incorrect" },
       { status: 403 },
     );
   }
+
+  refundAuthAttempt(request, PASSWORD_CONFIRM_BUCKET);
 
   session.authenticatedAt = Date.now();
   await session.save();

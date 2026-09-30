@@ -375,6 +375,20 @@ describe("/api/settings/api-keys", () => {
       expect(await prisma.apiKey.count()).toBe(0);
     });
 
+    // Charged only after a failed compare, every request of a concurrent
+    // burst passed the check while the bcrypt compares ran.
+    it("a burst of concurrent wrong passwords gets ten guesses, not one per request", async () => {
+      await loginWithPassword();
+      const responses = await Promise.all(
+        Array.from({ length: 25 }, () => create(body({ currentPassword: "nope" }))),
+      );
+      const statuses = responses.map((r) => r.status);
+      expect(statuses.filter((s) => s === 403)).toHaveLength(10);
+      expect(statuses.filter((s) => s === 429)).toHaveLength(15);
+      expect((await create(body({ currentPassword: PASSWORD }))).status).toBe(429);
+      expect(await prisma.apiKey.count()).toBe(0);
+    });
+
     it("correct passwords are never counted against the budget", async () => {
       await loginWithPassword();
       for (let i = 0; i < 12; i++) {

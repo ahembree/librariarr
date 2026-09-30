@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         error:
-          "Plex signed you in as a different account than the one linked to Librariarr. Sign out of plex.tv in the pop-up, then sign in with the linked account.",
+          "Plex signed you in as a different account than the one linked to Librariarr. Sign out of plex.tv, then try again with the linked account.",
       },
       { status: 403 },
     );

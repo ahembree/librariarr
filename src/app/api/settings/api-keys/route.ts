@@ -11,7 +11,12 @@ import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
 import { notifyApiKeyChange } from "@/lib/api-keys/notify";
 import { normalizeScopes } from "@/lib/api-keys/scopes";
-import { PASSWORD_CONFIRM_BUCKET, peekAuthRateLimit, recordAuthFailure } from "@/lib/rate-limit/rate-limiter";
+import {
+  PASSWORD_CONFIRM_BUCKET,
+  peekAuthRateLimit,
+  refundAuthAttempt,
+  reserveAuthAttempt,
+} from "@/lib/rate-limit/rate-limiter";
 
 /**
  * API key management for the settings page — cookie session only. These routes
@@ -75,15 +80,19 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
+    // Charged before the compare, refunded on a match: concurrent guesses
+    // each count from the moment they start (see `reserveAuthAttempt`).
+    const reserved = reserveAuthAttempt(request, PASSWORD_CONFIRM_BUCKET);
+    if (reserved) return reserved;
     const valid = await bcrypt.compare(data.currentPassword, user.passwordHash);
     if (!valid) {
-      recordAuthFailure(request, PASSWORD_CONFIRM_BUCKET);
       logger.warn("Auth", "API key creation refused — the current password was incorrect");
       return NextResponse.json(
         { error: "Current password is incorrect", code: "password_incorrect" },
         { status: 403 },
       );
     }
+    refundAuthAttempt(request, PASSWORD_CONFIRM_BUCKET);
   } else if (!hasRecentLogin(session)) {
     // Names the ways to confirm the identity in place (Plex, SSO), which the
     // settings dialog offers instead of making the user sign out and back in.

@@ -7,7 +7,8 @@ import {
   authGlobalRateLimiter,
   authRateLimiter,
   peekAuthRateLimit,
-  recordAuthFailure,
+  reserveAuthAttempt,
+  refundAuthAttempt,
 } from "@/lib/rate-limit/rate-limiter";
 
 describe("RateLimiter", () => {
@@ -381,7 +382,36 @@ describe("RateLimiter.check with a cost", () => {
   });
 });
 
-describe("peekAuthRateLimit / recordAuthFailure", () => {
+describe("RateLimiter.refund", () => {
+  it("gives back attempts charged in the current window", () => {
+    const limiter = new RateLimiter(2, 60_000);
+    limiter.check("k");
+    limiter.check("k");
+    expect(limiter.peek("k").limited).toBe(true);
+    limiter.refund("k");
+    expect(limiter.peek("k").limited).toBe(false);
+  });
+
+  it("never goes below zero and ignores an unknown or expired key", () => {
+    vi.useFakeTimers();
+    try {
+      const limiter = new RateLimiter(1, 1000);
+      limiter.refund("unknown");
+      limiter.check("k");
+      limiter.refund("k");
+      limiter.refund("k");
+      expect(limiter.check("k").limited).toBe(false);
+      vi.advanceTimersByTime(1500);
+      limiter.refund("k");
+      expect(limiter.check("k").limited).toBe(false);
+      expect(limiter.check("k").limited).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("peekAuthRateLimit / reserveAuthAttempt / refundAuthAttempt", () => {
   const stores = () =>
     [authRateLimiter, authGlobalRateLimiter].map(
       (l) => (l as unknown as { store: Map<string, unknown> }).store,
@@ -400,21 +430,48 @@ describe("peekAuthRateLimit / recordAuthFailure", () => {
       headers: { "x-forwarded-for": ip },
     });
 
-  it("charges nothing until a failure is recorded, then refuses that address like a failed login", () => {
+  it("charges nothing for attempts that succeed, and refuses an address after ten failures", () => {
     delete process.env.TRUST_PROXY_HEADERS;
-    for (let i = 0; i < 50; i++) expect(peekAuthRateLimit(from("10.9.0.1"), "peek-test")).toBeNull();
-    for (let i = 0; i < 10; i++) recordAuthFailure(from("10.9.0.1"), "peek-test");
+    // Fifty correct passwords in a row: each reservation is refunded.
+    for (let i = 0; i < 50; i++) {
+      expect(peekAuthRateLimit(from("10.9.0.1"), "peek-test")).toBeNull();
+      expect(reserveAuthAttempt(from("10.9.0.1"), "peek-test")).toBeNull();
+      refundAuthAttempt(from("10.9.0.1"), "peek-test");
+    }
+    // Ten wrong ones: reserved and kept.
+    for (let i = 0; i < 10; i++) expect(reserveAuthAttempt(from("10.9.0.1"), "peek-test")).toBeNull();
     const res = peekAuthRateLimit(from("10.9.0.1"), "peek-test");
     expect(res?.status).toBe(429);
     expect(res?.headers.get("Retry-After")).toBeTruthy();
+    expect(reserveAuthAttempt(from("10.9.0.1"), "peek-test")?.status).toBe(429);
     // Another address is unaffected.
     expect(peekAuthRateLimit(from("10.9.0.2"), "peek-test")).toBeNull();
   });
 
+  // Charging only after a failed compare let every request of a concurrent
+  // burst pass the check before the first compare finished.
+  it("counts concurrent attempts from the moment they start", () => {
+    delete process.env.TRUST_PROXY_HEADERS;
+    // Fifty guesses in flight at once, none finished yet.
+    const outcomes = Array.from({ length: 50 }, () => reserveAuthAttempt(from("10.9.1.1"), "burst"));
+    expect(outcomes.filter((r) => r === null)).toHaveLength(10);
+    expect(outcomes.filter((r) => r?.status === 429)).toHaveLength(40);
+    // A refused reservation charged nothing, so one success frees one slot.
+    refundAuthAttempt(from("10.9.1.1"), "burst");
+    expect(reserveAuthAttempt(from("10.9.1.1"), "burst")).toBeNull();
+    expect(reserveAuthAttempt(from("10.9.1.1"), "burst")?.status).toBe(429);
+  });
+
   it("applies the global floor no address can escape", () => {
     delete process.env.TRUST_PROXY_HEADERS;
-    for (let i = 0; i < 60; i++) recordAuthFailure(from(`10.10.${Math.floor(i / 250)}.${i % 250}`), "peek-global");
+    for (let i = 0; i < 60; i++) {
+      expect(reserveAuthAttempt(from(`10.10.${Math.floor(i / 250)}.${i % 250}`), "peek-global")).toBeNull();
+    }
     expect(peekAuthRateLimit(from("10.11.0.1"), "peek-global")?.status).toBe(429);
+    // Refused by the floor: the fresh address's own bucket is not charged.
+    expect(reserveAuthAttempt(from("10.11.0.1"), "peek-global")?.status).toBe(429);
+    const perIp = (authRateLimiter as unknown as { store: Map<string, { count: number }> }).store;
+    expect(perIp.get("peek-global:10.11.0.1")?.count ?? 0).toBe(0);
     // Other buckets keep their own floor.
     expect(peekAuthRateLimit(from("10.11.0.1"), "peek-other")).toBeNull();
   });

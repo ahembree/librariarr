@@ -35,8 +35,9 @@
  * Every login path goes through `rotateSession()`, which stamps
  * `authenticatedAt` (epoch ms). A session from before that stamp existed has
  * none and reads as not recent. A refusal goes out through `reauthRequired`
- * (reauth.ts), which names the ways to renew it in place — Plex, OIDC or the
- * forward-auth proxy — so nobody has to sign out and back in.
+ * (reauth.ts), which names the ways to renew it in place — the password,
+ * Plex, OIDC or the forward-auth proxy — so nobody has to sign out and back
+ * in.
  */
 export const RECENT_LOGIN_WINDOW_MS = 15 * 60 * 1000;
 

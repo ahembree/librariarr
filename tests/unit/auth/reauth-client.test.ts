@@ -72,7 +72,7 @@ describe("fetchWithReauth", () => {
     expect(getReauthRequest()).toBeNull();
   });
 
-  it("returns the refusal when the prompt is dismissed", async () => {
+  it("returns a cancellation, not the refusal, when the prompt is dismissed", async () => {
     unregister = registerReauthHost();
     const fetchMock = vi.fn().mockResolvedValueOnce(refusal(["oidc"]));
     vi.stubGlobal("fetch", fetchMock);
@@ -90,12 +90,17 @@ describe("fetchWithReauth", () => {
   it("does not prompt when no method is available or no host is mounted", async () => {
     const fetchMock = vi.fn().mockImplementation(async () => refusal(["plex"]));
     vi.stubGlobal("fetch", fetchMock);
-    // No host mounted.
-    expect((await fetchWithReauth("/x")).status).toBe(403);
+    // No host mounted: nothing was dismissed, so the caller gets the server's
+    // refusal rather than "Cancelled".
+    const unhosted = await fetchWithReauth("/x");
+    expect(unhosted.status).toBe(403);
+    expect(((await unhosted.json()) as { code: string }).code).toBe("reauth_required");
 
     unregister = registerReauthHost();
     fetchMock.mockImplementation(async () => refusal([]));
-    expect((await fetchWithReauth("/x")).status).toBe(403);
+    const noMethods = await fetchWithReauth("/x");
+    expect(noMethods.status).toBe(403);
+    expect(((await noMethods.json()) as { code: string }).code).toBe("reauth_required");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(getReauthRequest()).toBeNull();
   });
@@ -206,6 +211,18 @@ describe("reauthWithOidcPopup", () => {
       ok: false,
       error: "That SSO account is not the one linked to Librariarr.",
     });
+  });
+
+  // An error code naming a built-in object key must not come back as an
+  // object: it is rendered as the prompt's message.
+  it("maps an unknown or prototype error code to the generic message", async () => {
+    for (const error of ["__proto__", "constructor", "toString", "no_such_code"]) {
+      const { popup, win, nonce } = fakeWindow();
+      const result = reauthWithOidcPopup();
+      await started(popup);
+      win.dispatch({ type: REAUTH_MESSAGE_TYPE, ok: false, error, nonce: nonce() });
+      expect(await result).toEqual({ ok: false, error: "SSO sign-in failed. Try again." });
+    }
   });
 
   // An older popup finishing late, another tab's prompt, or /login/reauth

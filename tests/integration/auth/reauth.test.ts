@@ -16,15 +16,17 @@ vi.mock("@/lib/sso/oidc-client", async (importOriginal) => ({
   resolveRedirectUri: () => "http://localhost:3000/api/auth/sso/oidc/callback",
 }));
 
-const { mockPeek, mockRecordFailure } = vi.hoisted(() => ({
+const { mockPeek, mockReserve, mockRefund } = vi.hoisted(() => ({
   mockPeek: vi.fn((): Response | null => null),
-  mockRecordFailure: vi.fn(),
+  mockReserve: vi.fn((): Response | null => null),
+  mockRefund: vi.fn(),
 }));
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
   PASSWORD_CONFIRM_BUCKET: "password-confirm",
   checkAuthRateLimit: () => null,
   peekAuthRateLimit: mockPeek,
-  recordAuthFailure: mockRecordFailure,
+  reserveAuthAttempt: mockReserve,
+  refundAuthAttempt: mockRefund,
 }));
 
 vi.mock("@/lib/db", async () => {
@@ -59,6 +61,7 @@ describe("/api/auth/reauth/*", () => {
     clearMockSession();
     vi.clearAllMocks();
     mockPeek.mockReturnValue(null);
+    mockReserve.mockReturnValue(null);
   });
 
   afterAll(async () => {
@@ -277,7 +280,9 @@ describe("/api/auth/reauth/*", () => {
       const before = Date.now();
       await expectJson(await call({ password: PASSWORD }), 200);
       expect(getMockSession().authenticatedAt).toBeGreaterThanOrEqual(before);
-      expect(mockRecordFailure).not.toHaveBeenCalled();
+      // Charged up front and given back: a right password costs nothing.
+      expect(mockReserve).toHaveBeenCalledTimes(1);
+      expect(mockRefund).toHaveBeenCalledTimes(1);
     });
 
     it("refuses a wrong password and charges it like a failed login", async () => {
@@ -286,8 +291,18 @@ describe("/api/auth/reauth/*", () => {
       expect(body.code).toBe("password_incorrect");
       expect(getMockSession().authenticatedAt).toBe(STALE);
       // The API-key step-up's bucket: one guess budget for both, not two.
-      expect(mockRecordFailure).toHaveBeenCalledTimes(1);
-      expect(mockRecordFailure.mock.calls[0][1]).toBe("password-confirm");
+      expect(mockReserve).toHaveBeenCalledTimes(1);
+      expect(mockReserve).toHaveBeenCalledWith(expect.anything(), "password-confirm");
+      expect(mockRefund).not.toHaveBeenCalled();
+    });
+
+    // Reserved before the compare, so concurrent guesses count as they start.
+    it("stops before comparing when the attempt cannot be reserved", async () => {
+      await signInWithPassword();
+      mockReserve.mockReturnValue(new Response(JSON.stringify({ error: "Too many attempts" }), { status: 429 }));
+      expect((await call({ password: PASSWORD })).status).toBe(429);
+      expect(getMockSession().authenticatedAt).toBe(STALE);
+      expect(mockRefund).not.toHaveBeenCalled();
     });
 
     it("stops before checking once the limiter says so", async () => {
