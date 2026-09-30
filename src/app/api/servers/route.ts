@@ -7,6 +7,10 @@ import { validateRequest, serverAddSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { eventBus } from "@/lib/events/event-bus";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
+import { getPlexResources } from "@/lib/plex/auth";
+import { hasRecentLogin } from "@/lib/auth/recent-login";
+import { reauthRequired } from "@/lib/auth/reauth";
+import { apiLogger } from "@/lib/logger";
 
 export async function GET() {
   const session = await getSession();
@@ -39,10 +43,46 @@ export async function POST(request: NextRequest) {
   const { data, error } = await validateRequest(request, serverAddSchema);
   if (error) return error;
 
-  const { name, url, accessToken, machineId, tlsSkipVerify, type } = data;
+  const { name, url, machineId, tlsSkipVerify, type } = data;
+  const serverType = (type as MediaServerType) ?? "PLEX";
+
+  let accessToken = data.accessToken;
+  if (accessToken === undefined) {
+    // A Plex server picked from discovery: the browser never sees its token
+    // (`GET /api/auth/plex/servers`), so look it up here. The token goes to
+    // the URL in this request — the connection test below, then every sync —
+    // and for a server the account owns it can be the account's own Plex
+    // token, which signs in to Librariarr. A stolen cookie must not be able to
+    // send it somewhere of its choosing (see recent-login.ts).
+    if (!hasRecentLogin(session)) {
+      return reauthRequired(session.userId!, "Adding a Plex server");
+    }
+    if (!session.plexToken) {
+      return NextResponse.json(
+        { error: "Sign in with Plex to add a server from your Plex account" },
+        { status: 400 }
+      );
+    }
+    let resources;
+    try {
+      resources = await getPlexResources(session.plexToken);
+    } catch (err) {
+      apiLogger.error("Auth", "Failed to fetch Plex servers", { error: String(err) });
+      return NextResponse.json({ error: "Failed to fetch servers from Plex" }, { status: 502 });
+    }
+    const resource = resources.find(
+      (r) => r.clientIdentifier === machineId && r.owned && r.provides.includes("server")
+    );
+    if (!resource?.accessToken) {
+      return NextResponse.json(
+        { error: "That server is not one of the Plex servers this account owns" },
+        { status: 404 }
+      );
+    }
+    accessToken = resource.accessToken;
+  }
 
   // Test connection before saving
-  const serverType = (type as MediaServerType) ?? "PLEX";
   const client = createMediaServerClient(serverType, url, accessToken, {
     skipTlsVerify: !!tlsSkipVerify,
   });

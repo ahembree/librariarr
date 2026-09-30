@@ -369,6 +369,7 @@ export default function SettingsPage() {
   const [backupSaving, setBackupSaving] = useState(false);
   const [creatingBackup, setCreatingBackup] = useState(false);
   const [restoringBackup, setRestoringBackup] = useState<string | null>(null);
+  const [downloadingBackup, setDownloadingBackup] = useState<string | null>(null);
   const [restoreProgress, setRestoreProgress] = useState<string | null>(null);
   const [hasBackupPassword, setHasBackupPassword] = useState(false);
   const [savingBackupPassword, setSavingBackupPassword] = useState(false);
@@ -1255,7 +1256,9 @@ export default function SettingsPage() {
     setEditServerSaving(true);
     setEditServerError("");
     try {
-      const response = await fetch(`/api/servers/${serverId}`, {
+      // A new URL for a Plex server that keeps its stored token needs a recent
+      // sign-in (the token would go to the new URL).
+      const response = await fetchWithReauth(`/api/servers/${serverId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1868,10 +1871,13 @@ export default function SettingsPage() {
     }
   };
 
+  // Creating, downloading and restoring a backup need a sign-in from the last
+  // 15 minutes (a backup holds the Plex token); `fetchWithReauth` asks the user
+  // to confirm it's them and repeats the request.
   const handleCreateBackup = async (includeMediaData = false) => {
     setCreatingBackup(true);
     try {
-      const res = await fetch("/api/backup", {
+      const res = await fetchWithReauth("/api/backup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ includeMediaData }),
@@ -1912,8 +1918,32 @@ export default function SettingsPage() {
     }
   };
 
-  const handleDownloadBackup = (filename: string) => {
-    window.open(`/api/backup/${encodeURIComponent(filename)}`, "_blank");
+  // Fetched rather than opened in a tab: a plain navigation cannot show the
+  // "Confirm it's you" prompt, so a refused download would open the 403 JSON.
+  const handleDownloadBackup = async (filename: string) => {
+    setDownloadingBackup(filename);
+    try {
+      const res = await fetchWithReauth(`/api/backup/${encodeURIComponent(filename)}`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        toast.error("Failed to download backup", { description: data?.error });
+        return;
+      }
+      const url = URL.createObjectURL(await res.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      // Revoking at once can cancel the download before the browser has read
+      // the blob; FileSaver.js waits 40 seconds for the same reason.
+      setTimeout(() => URL.revokeObjectURL(url), 40_000);
+    } catch {
+      toast.error("Failed to download backup");
+    } finally {
+      setDownloadingBackup(null);
+    }
   };
 
   // Confirmation happens in the GeneralTab restore dialog before this is called.
@@ -1921,11 +1951,17 @@ export default function SettingsPage() {
     setRestoringBackup(filename);
     setRestoreProgress(null);
     try {
-      const res = await fetch("/api/backup/restore", {
+      const res = await fetchWithReauth("/api/backup/restore", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename, ...(passphrase ? { passphrase } : {}) }),
       });
+      if (!res.ok) {
+        // Refused before the stream started: a JSON error, not progress lines.
+        const data = await res.json().catch(() => null);
+        toast.error("Restore failed", { description: data?.error });
+        return;
+      }
       if (!res.body) {
         toast.error("Restore failed", { description: "The server returned an empty response." });
         return;
@@ -2882,6 +2918,7 @@ export default function SettingsPage() {
             backupSaving={backupSaving}
             creatingBackup={creatingBackup}
             restoringBackup={restoringBackup}
+            downloadingBackup={downloadingBackup}
             restoreProgress={restoreProgress}
             hasBackupPassword={hasBackupPassword}
             savingBackupPassword={savingBackupPassword}

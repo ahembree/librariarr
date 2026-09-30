@@ -9,6 +9,10 @@ import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { eventBus } from "@/lib/events/event-bus";
 import { invalidateWatchHistoryEvidence } from "@/lib/media/watch-evidence";
+import { hasRecentLogin } from "@/lib/auth/recent-login";
+import { reauthRequired } from "@/lib/auth/reauth";
+
+const withoutTrailingSlash = (value: string) => value.replace(/\/+$/, "");
 
 export async function PUT(
   request: NextRequest,
@@ -41,6 +45,18 @@ export async function PUT(
   // same mapping must not trigger the wipe below.
   const tracearrMappingChanged =
     tracearrServerId !== undefined && tracearrServerId !== server.tracearrServerId;
+
+  // A new URL with the stored token kept sends that token to the new URL —
+  // the connection test below, then every sync and the realtime socket. A
+  // Plex server's token can be the Plex account's own token, which signs in
+  // to Librariarr, so a stolen cookie must not be able to point it somewhere
+  // of its choosing (see recent-login.ts). Sending a replacement token, or
+  // re-saving the same URL (the edit form always sends it), needs nothing.
+  const urlChanged = url !== undefined && withoutTrailingSlash(url) !== withoutTrailingSlash(server.url);
+  const keepsStoredToken = accessToken === undefined || accessToken === "";
+  if (server.type === "PLEX" && urlChanged && keepsStoredToken && !hasRecentLogin(session)) {
+    return reauthRequired(session.userId!, "Changing a Plex server's URL");
+  }
 
   // Test connection if URL or access token changed (skip if just toggling enabled)
   if ((url || accessToken) && enabled !== false) {

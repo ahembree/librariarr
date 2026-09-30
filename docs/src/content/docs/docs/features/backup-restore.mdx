@@ -95,6 +95,10 @@ Scheduled backups are always **config-only** and use the saved encryption passwo
 
 ## Creating a Manual Backup
 
+<Aside>
+  Creating, downloading and restoring a backup need a sign-in from the last 15 minutes. If it has been longer, Librariarr asks you to confirm it's you — with your password, or by signing in again with Plex or SSO in a pop-up — and then carries on, without signing you out. A backup holds your Plex token, and a Plex token is enough to sign in to Librariarr on its own, so a browser session alone must not be able to take a copy. Scheduled backups are not affected.
+</Aside>
+
 <Steps>
 
 1. Go to **Settings → General → Backup & Restore**
@@ -165,8 +169,8 @@ Each backup file is written readable and writable by its owner only (mode `600`)
 
 From the **Available Backups** section:
 
-- **Download** — Save a backup file locally
-- **Restore** — Restore this backup (replaces all data)
+- **Download** — Save a backup file locally (needs a recent sign-in)
+- **Restore** — Restore this backup (replaces all data; needs a recent sign-in)
 - **Delete** — Remove a backup file
 
 ## Limitations

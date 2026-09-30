@@ -204,7 +204,8 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
       data: { tracearrServerId: TRACEARR_SERVER_A },
     });
     await seedWatchHistory(server.id, 2);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    // A new URL for a Plex server keeping its token needs a recent sign-in.
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await putMapping(server.id, { url: "http://plex.test:32401" });
     await expectJson(response, 200);

@@ -152,7 +152,6 @@ describe("GET /api/auth/plex/servers", () => {
         product: string;
         productVersion: string;
         platform: string;
-        accessToken: string;
         connections: Array<{
           protocol: string;
           address: string;
@@ -167,7 +166,11 @@ describe("GET /api/auth/plex/servers", () => {
     expect(body.servers).toHaveLength(1);
     expect(body.servers[0].name).toBe("Home Server");
     expect(body.servers[0].clientIdentifier).toBe("server-001");
-    expect(body.servers[0].accessToken).toBe("token-001");
+    // Never the token: for an owned server plex.tv can answer with the Plex
+    // account's own token, which signs in to Librariarr. Adding the server
+    // sends its machine id and the server looks the token up itself.
+    expect(body.servers[0]).not.toHaveProperty("accessToken");
+    expect(JSON.stringify(body)).not.toContain("token-001");
     expect(body.servers[0].connections).toHaveLength(1);
     expect(body.servers[0].connections[0].uri).toBe("https://10.0.0.5:32400");
   });
@@ -311,10 +314,10 @@ describe("GET /api/auth/plex/servers", () => {
     expect(returnedServer).toHaveProperty("product", "Plex Media Server");
     expect(returnedServer).toHaveProperty("productVersion", "1.41.0");
     expect(returnedServer).toHaveProperty("platform", "Windows");
-    expect(returnedServer).toHaveProperty("accessToken", "field-access-token");
     expect(returnedServer).toHaveProperty("connections");
 
     // These fields from the raw resource should NOT be present
+    expect(returnedServer).not.toHaveProperty("accessToken");
     expect(returnedServer).not.toHaveProperty("device");
     expect(returnedServer).not.toHaveProperty("provides");
     expect(returnedServer).not.toHaveProperty("owned");

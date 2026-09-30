@@ -37,7 +37,6 @@ interface PlexServer {
   product: string;
   productVersion: string;
   platform: string;
-  accessToken: string;
   connections: PlexConnection[];
 }
 
@@ -190,13 +189,14 @@ function OnboardingContent() {
     const url = customUrls[server.clientIdentifier] || getDefaultUrl(server.connections);
 
     try {
-      const response = await fetch("/api/servers", {
+      // No token: discovery never hands it to the browser, and the server looks
+      // it up by machine id — behind a recent sign-in, since it goes to `url`.
+      const response = await fetchWithReauth("/api/servers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: server.name,
           url,
-          accessToken: server.accessToken,
           machineId: server.clientIdentifier,
           tlsSkipVerify: !!tlsSkipVerify[server.clientIdentifier],
         }),

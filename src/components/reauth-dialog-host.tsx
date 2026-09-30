@@ -39,8 +39,8 @@ export function ReauthDialogHost() {
             Confirm it&rsquo;s you
           </DialogTitle>
           <DialogDescription>
-            This change adds a lasting way into your account, so it needs a sign-in from the last
-            15 minutes. Sign in again here and it goes ahead — you stay signed in.
+            This can give lasting access to your account, so it needs a sign-in from the last 15
+            minutes. Sign in again here and it goes ahead — you stay signed in.
           </DialogDescription>
         </DialogHeader>
         {request && (
