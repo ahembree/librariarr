@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, reauthPasswordSchema } from "@/lib/validation";
-import { peekAuthRateLimit, recordAuthFailure } from "@/lib/rate-limit/rate-limiter";
+import { PASSWORD_CONFIRM_BUCKET, peekAuthRateLimit, recordAuthFailure } from "@/lib/rate-limit/rate-limiter";
 
 /**
  * Confirms the signed-in admin's identity with the account's current password
@@ -12,9 +12,10 @@ import { peekAuthRateLimit, recordAuthFailure } from "@/lib/rate-limit/rate-limi
  * sign-in (linking Plex or an SSO identity) goes ahead without signing out
  * and back in.
  *
- * Charged against the auth limiters only on a wrong password, exactly like
- * the API-key step-up: a wrong one costs what a failed login does, so this is
- * not a cheaper password oracle than the login form.
+ * Charged against the auth limiters only on a wrong password, and in the SAME
+ * bucket as the API-key step-up (`PASSWORD_CONFIRM_BUCKET`): each bucket has
+ * its own per-address and global budget, so a bucket of its own would have
+ * added a second budget of guesses beside that one.
  */
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -22,7 +23,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const limited = peekAuthRateLimit(request, "password-reauth");
+  const limited = peekAuthRateLimit(request, PASSWORD_CONFIRM_BUCKET);
   if (limited) return limited;
 
   const { data, error } = await validateRequest(request, reauthPasswordSchema);
@@ -40,7 +41,7 @@ export async function POST(request: NextRequest) {
   }
 
   if (!(await bcrypt.compare(data.password, user.passwordHash))) {
-    recordAuthFailure(request, "password-reauth");
+    recordAuthFailure(request, PASSWORD_CONFIRM_BUCKET);
     apiLogger.warn("Auth", "Password re-authentication refused — the password was incorrect");
     return NextResponse.json(
       { error: "That password is not correct", code: "password_incorrect" },

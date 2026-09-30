@@ -80,6 +80,10 @@ describe("fetchWithReauth", () => {
 
     const res = await fetchWithReauth("/x", { method: "POST" });
     expect(res.status).toBe(403);
+    // Not the server's "confirm it's you" — the prompt that offered that is gone.
+    const body = (await res.json()) as { code: string; error: string };
+    expect(body.code).toBe("reauth_cancelled");
+    expect(body.error).toMatch(/cancelled/i);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -157,13 +161,16 @@ describe("reauthWithOidcPopup", () => {
       handlers,
     };
     vi.stubGlobal("window", win);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ authorizationUrl: "https://idp.test/auth" }), { status: 200 }),
-      ),
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ authorizationUrl: "https://idp.test/auth" }), { status: 200 }),
     );
-    return { win, popup };
+    vi.stubGlobal("fetch", fetchMock);
+    /** The attempt nonce the start request sent. */
+    const nonce = () => {
+      const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      return (JSON.parse(String(init.body)) as { nonce: string }).nonce;
+    };
+    return { win, popup, nonce };
   }
 
   /** Lets the fetch and popup navigation run. */
@@ -175,30 +182,55 @@ describe("reauthWithOidcPopup", () => {
   // it reads as closed here and has no `window.opener` when it comes back, so
   // only the channel carries the report.
   it("takes the report from the BroadcastChannel even though the popup reads as closed", async () => {
-    const { popup, win } = fakeWindow();
+    const { popup, win, nonce } = fakeWindow();
     const result = reauthWithOidcPopup();
     await started(popup);
     popup.closed = true;
     await new Promise((r) => setTimeout(r, 50));
 
     const sender = new BroadcastChannel(REAUTH_CHANNEL);
-    sender.postMessage({ type: REAUTH_MESSAGE_TYPE, ok: true });
+    sender.postMessage({ type: REAUTH_MESSAGE_TYPE, ok: true, nonce: nonce() });
     expect(await result).toEqual({ ok: true });
     sender.close();
     expect(win.handlers.size).toBe(0);
   });
 
   it("takes a same-origin postMessage and ignores other origins", async () => {
-    const { popup, win } = fakeWindow();
+    const { popup, win, nonce } = fakeWindow();
     const result = reauthWithOidcPopup();
     await started(popup);
 
-    win.dispatch({ type: REAUTH_MESSAGE_TYPE, ok: true }, "https://evil.test");
-    win.dispatch({ type: REAUTH_MESSAGE_TYPE, ok: false, error: "not_linked" });
+    win.dispatch({ type: REAUTH_MESSAGE_TYPE, ok: true, nonce: nonce() }, "https://evil.test");
+    win.dispatch({ type: REAUTH_MESSAGE_TYPE, ok: false, error: "not_linked", nonce: nonce() });
     expect(await result).toEqual({
       ok: false,
       error: "That SSO account is not the one linked to Librariarr.",
     });
+  });
+
+  // An older popup finishing late, another tab's prompt, or /login/reauth
+  // opened by hand must not settle this attempt.
+  it("ignores a report for any other attempt", async () => {
+    const { popup, win, nonce } = fakeWindow();
+    const result = reauthWithOidcPopup();
+    await started(popup);
+    expect(nonce()).toMatch(/^[A-Za-z0-9_-]{16,64}$/);
+
+    const sender = new BroadcastChannel(REAUTH_CHANNEL);
+    sender.postMessage({ type: REAUTH_MESSAGE_TYPE, ok: false, error: "state_mismatch", nonce: "someone-elses-attempt" });
+    win.dispatch({ type: REAUTH_MESSAGE_TYPE, ok: false, error: "state_mismatch" });
+    await new Promise((r) => setTimeout(r, 50));
+    win.dispatch({ type: REAUTH_MESSAGE_TYPE, ok: true, nonce: nonce() });
+    expect(await result).toEqual({ ok: true });
+    sender.close();
+  });
+
+  it("ends at once when the popup was closed before the sign-in started", async () => {
+    const { popup, win } = fakeWindow();
+    popup.closed = true;
+    expect(await reauthWithOidcPopup()).toEqual({ ok: false });
+    expect(popup.location.href).toBe("/login/reauth?pending=1");
+    expect(win.handlers.size).toBe(0);
   });
 
   it("ends quietly and closes the popup when cancelled", async () => {

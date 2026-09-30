@@ -21,6 +21,7 @@ const { mockPeek, mockRecordFailure } = vi.hoisted(() => ({
   mockRecordFailure: vi.fn(),
 }));
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
+  PASSWORD_CONFIRM_BUCKET: "password-confirm",
   checkAuthRateLimit: () => null,
   peekAuthRateLimit: mockPeek,
   recordAuthFailure: mockRecordFailure,
@@ -131,7 +132,9 @@ describe("/api/auth/reauth/*", () => {
   });
 
   describe("POST /api/auth/reauth/oidc", () => {
-    const call = () => callRoute(oidcPOST, { url: "/api/auth/reauth/oidc", method: "POST", body: {} });
+    const NONCE = "attempt-nonce-0123456789";
+    const call = (body: unknown = { nonce: NONCE }) =>
+      callRoute(oidcPOST, { url: "/api/auth/reauth/oidc", method: "POST", body });
 
     async function seedOidc(userId: string) {
       await prisma.appSettings.create({
@@ -164,6 +167,9 @@ describe("/api/auth/reauth/*", () => {
       const session = getMockSession();
       expect(session.oidcFlow).toBe("reauth");
       expect(url.searchParams.get("state")).toBe(session.oidcState);
+      // The attempt's nonce rides in the state, so the popup's report reaches
+      // that attempt only.
+      expect(session.oidcState).toMatch(new RegExp(`\\.${NONCE}$`));
       // Only the callback stamps the sign-in time.
       expect(session.authenticatedAt).toBe(STALE);
     });
@@ -173,6 +179,15 @@ describe("/api/auth/reauth/*", () => {
       await seedOidc(user.id);
       await prisma.user.update({ where: { id: user.id }, data: { ssoSubject: null } });
       await expectJson(await call(), 400);
+      expect(getMockSession().oidcFlow).toBeUndefined();
+    });
+
+    it("requires a well-formed attempt nonce", async () => {
+      const user = await signIn();
+      await seedOidc(user.id);
+      await expectJson(await call({}), 400);
+      await expectJson(await call({ nonce: "short" }), 400);
+      await expectJson(await call({ nonce: "has.a.dot.in.it.0123" }), 400);
       expect(getMockSession().oidcFlow).toBeUndefined();
     });
 
@@ -270,7 +285,9 @@ describe("/api/auth/reauth/*", () => {
       const body = await expectJson<{ code: string }>(await call({ password: "nope" }), 403);
       expect(body.code).toBe("password_incorrect");
       expect(getMockSession().authenticatedAt).toBe(STALE);
+      // The API-key step-up's bucket: one guess budget for both, not two.
       expect(mockRecordFailure).toHaveBeenCalledTimes(1);
+      expect(mockRecordFailure.mock.calls[0][1]).toBe("password-confirm");
     });
 
     it("stops before checking once the limiter says so", async () => {

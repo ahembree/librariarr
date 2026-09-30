@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
-import { currentSsoIssuer, getSsoSettings, isSsoUsable } from "@/lib/sso/config";
+import { currentSsoIssuer } from "@/lib/sso/config";
 import { hasForwardAuthSecret, FORWARD_AUTH_PROXY_HEADER } from "@/lib/sso/forward-secret";
 import { apiLogger } from "@/lib/logger";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
-import { ssoIdentityMatches } from "@/lib/auth/reauth";
+import { loadReauthContext, ssoIdentityMatches } from "@/lib/auth/reauth";
 
 /**
  * Confirms the signed-in admin's identity from the forward-auth proxy's
@@ -23,9 +23,13 @@ export async function POST(request: NextRequest) {
   const rateLimited = checkAuthRateLimit(request, "sso-forward-reauth");
   if (rateLimited) return rateLimited;
 
-  const settings = await getSsoSettings();
-  if (!isSsoUsable(settings) || settings?.ssoMode !== "FORWARD_AUTH") {
-    return NextResponse.json({ error: "Forward-auth SSO is not configured" }, { status: 400 });
+  // Forward-auth configured and usable, and an identity linked under it.
+  const { methods, sso: settings } = await loadReauthContext(session.userId);
+  if (!settings || !methods.includes("forward")) {
+    return NextResponse.json(
+      { error: "SSO sign-in is not available for this account" },
+      { status: 400 },
+    );
   }
 
   if (!hasForwardAuthSecret(request.headers)) {

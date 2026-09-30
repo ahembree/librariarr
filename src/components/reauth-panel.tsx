@@ -159,6 +159,11 @@ export function ReauthPanel({
           </Button>
         </div>
       )}
+      {methods.includes("plex") && !plex.isLoading && (
+        <p className="text-xs text-muted-foreground">
+          Sign in to Plex with the account linked to Librariarr.
+        </p>
+      )}
       {busy === "oidc" && (
         <p className="text-xs text-muted-foreground">Finish signing in in the pop-up window.</p>
       )}

@@ -19,7 +19,13 @@ export default function ReauthPage() {
     const params = new URLSearchParams(window.location.search);
     if (params.has("pending")) return;
     const ok = params.get("status") === "ok";
-    const report = { type: REAUTH_MESSAGE_TYPE, ok, error: params.get("error") ?? undefined };
+    const report = {
+      type: REAUTH_MESSAGE_TYPE,
+      ok,
+      error: params.get("error") ?? undefined,
+      // Which attempt this answers; the waiting page ignores any other.
+      nonce: params.get("nonce") ?? undefined,
+    };
     try {
       window.opener?.postMessage(report, window.location.origin);
     } catch {

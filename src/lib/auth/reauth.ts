@@ -13,6 +13,20 @@ import type { ReauthMethod } from "@/lib/auth/reauth-client";
 export type { ReauthMethod } from "@/lib/auth/reauth-client";
 
 /**
+ * A re-authentication handshake's `state` is `<random>.<nonce>`: the random
+ * part is what the callback verifies, the nonce what its report to the popup
+ * page carries. `generateState()` is base64url, so it never contains a dot.
+ */
+export const REAUTH_STATE_SEPARATOR = ".";
+
+/** The attempt nonce carried in a re-authentication `state`, if any. */
+export function reauthNonceFromState(state: string | null): string | undefined {
+  if (!state) return undefined;
+  const nonce = state.slice(state.lastIndexOf(REAUTH_STATE_SEPARATOR) + 1);
+  return state.includes(REAUTH_STATE_SEPARATOR) && /^[A-Za-z0-9_-]{16,64}$/.test(nonce) ? nonce : undefined;
+}
+
+/**
  * Re-authentication in place. Actions guarded by `hasRecentLogin`
  * (recent-login.ts) used to leave an account one option: sign out, sign back
  * in, and redo the action inside the window. These methods confirm the

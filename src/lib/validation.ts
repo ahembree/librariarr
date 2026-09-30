@@ -561,6 +561,15 @@ export const reauthPasswordSchema = z.object({
   password: z.string().min(1).max(200),
 });
 
+/**
+ * `POST /api/auth/reauth/oidc` — a per-attempt nonce from the browser. It
+ * rides in the OIDC `state` and comes back on the popup's report, so the page
+ * waiting on an attempt ignores a report from any other popup or tab.
+ */
+export const reauthOidcStartSchema = z.object({
+  nonce: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/),
+});
+
 export const plexLinkSchema = z.object({
   pinId: z.coerce.number().optional(),
   authToken: z.string().min(1).optional(),

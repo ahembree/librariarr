@@ -691,6 +691,29 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       expect(refreshed?.sessionVersion).toBe(user.sessionVersion);
     });
 
+    // The popup page addresses its report to the attempt named in the state
+    // the IdP handed back — never to whatever attempt the session holds now.
+    it("hands the attempt nonce from the state to the popup page", async () => {
+      const NONCE = "attempt-nonce-0123456789";
+      await seedLinked();
+      setMockSession({ ...getMockSession(), oidcState: `abc.${NONCE}` });
+      setupSuccessfulExchange({ sub: "linked-sub" });
+
+      const ok = new URL(
+        (await callRoute(GET, { method: "GET", searchParams: { code: "c", state: `abc.${NONCE}` } })).headers.get("location")!,
+      );
+      expect(ok.searchParams.get("status")).toBe("ok");
+      expect(ok.searchParams.get("nonce")).toBe(NONCE);
+
+      // A stale popup's state names ITS attempt, even though the check fails.
+      setMockSession({ ...getMockSession(), oidcState: `new.${NONCE}`, oidcVerifier: "v", oidcFlow: "reauth" });
+      const stale = new URL(
+        (await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "old.other-attempt-nonce-99" } })).headers.get("location")!,
+      );
+      expect(stale.searchParams.get("error")).toBe("state_mismatch");
+      expect(stale.searchParams.get("nonce")).toBe("other-attempt-nonce-99");
+    });
+
     it("refuses a different subject and leaves the sign-in time alone", async () => {
       await seedLinked();
       setupSuccessfulExchange({ sub: "someone-else" });

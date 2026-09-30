@@ -9,7 +9,8 @@ import {
 } from "@/lib/sso/oidc-client";
 import { apiLogger } from "@/lib/logger";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
-import { loadReauthContext } from "@/lib/auth/reauth";
+import { loadReauthContext, REAUTH_STATE_SEPARATOR } from "@/lib/auth/reauth";
+import { validateRequest, reauthOidcStartSchema } from "@/lib/validation";
 
 /**
  * Starts an OIDC round-trip that confirms the signed-in admin's identity
@@ -20,7 +21,8 @@ import { loadReauthContext } from "@/lib/auth/reauth";
  * `session.authenticatedAt` and returns the popup to `/login/reauth`, which
  * reports back to the page that opened it.
  *
- * Returns `{ authorizationUrl }` for the client to navigate to.
+ * Takes `{ nonce }` and returns `{ authorizationUrl }` for the client to
+ * navigate to.
  */
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -30,6 +32,9 @@ export async function POST(request: NextRequest) {
 
   const rateLimited = checkAuthRateLimit(request, "sso-oidc-reauth");
   if (rateLimited) return rateLimited;
+
+  const { data, error } = await validateRequest(request, reauthOidcStartSchema);
+  if (error) return error;
 
   // OIDC configured and usable, and an identity linked under its issuer.
   const { methods, sso: settings } = await loadReauthContext(session.userId);
@@ -43,7 +48,9 @@ export async function POST(request: NextRequest) {
   try {
     const discovery = await discoverOidc(settings.oidcIssuer!);
     const { verifier, challenge } = generatePkce();
-    const state = generateState();
+    // The attempt's nonce rides in `state` (the only value the IdP hands
+    // back), so the callback can address its report to this attempt alone.
+    const state = `${generateState()}${REAUTH_STATE_SEPARATOR}${data.nonce}`;
 
     session.oidcState = state;
     session.oidcVerifier = verifier;

@@ -49,6 +49,12 @@ const OIDC_ERRORS: Record<string, string> = {
 
 const NETWORK_ERROR = "Network error — try again.";
 
+/** A per-attempt id for the OIDC popup's report (see `reauthOidcStartSchema`). */
+function newAttemptNonce(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /**
  * Confirms the identity with the IdP in a popup, so the page — and whatever
  * the user was in the middle of — stays put. Must be called from a click: the
@@ -71,11 +77,12 @@ export async function reauthWithOidcPopup(signal?: AbortSignal): Promise<ReauthR
     }
   };
 
+  const nonce = newAttemptNonce();
   try {
     const res = await fetch("/api/auth/reauth/oidc", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: "{}",
+      body: JSON.stringify({ nonce }),
       signal,
     });
     const data = await res.json().catch(() => null);
@@ -87,6 +94,10 @@ export async function reauthWithOidcPopup(signal?: AbortSignal): Promise<ReauthR
       closePopup();
       return { ok: false, error: data?.error || "Couldn't start the SSO sign-in" };
     }
+    // Still our own page here, so `closed` is reliable: a window closed while
+    // the start was in flight would otherwise leave the prompt waiting for
+    // the full timeout on a sign-in nobody can finish.
+    if (popup.closed) return { ok: false };
     popup.location.href = data.authorizationUrl;
   } catch {
     closePopup();
@@ -111,8 +122,10 @@ export async function reauthWithOidcPopup(signal?: AbortSignal): Promise<ReauthR
       resolve(result);
     };
     const onReport = (data: unknown) => {
-      const report = data as { type?: unknown; ok?: unknown; error?: unknown } | null;
-      if (report?.type !== REAUTH_MESSAGE_TYPE) return;
+      const report = data as { type?: unknown; ok?: unknown; error?: unknown; nonce?: unknown } | null;
+      // Only this attempt's report: an older popup finishing late, another
+      // tab's prompt, or /login/reauth opened by hand must not settle it.
+      if (report?.type !== REAUTH_MESSAGE_TYPE || report.nonce !== nonce) return;
       finish(
         report.ok === true
           ? { ok: true }
@@ -245,6 +258,21 @@ export async function fetchWithReauth(input: RequestInfo | URL, init?: RequestIn
   if (res.status !== 403) return res;
   const methods = reauthMethodsOf(await res.clone().json().catch(() => null));
   if (!methods || methods.length === 0) return res;
-  if (!(await confirmIdentity(methods))) return res;
+  if (!(await confirmIdentity(methods))) return reauthCancelled();
   return fetch(input, init);
+}
+
+/**
+ * What a caller gets when the prompt was dismissed: the server's refusal asks
+ * the user to "confirm it's you", which reads as a dead end once the prompt
+ * that would have let them do so has gone.
+ */
+function reauthCancelled(): Response {
+  return new Response(
+    JSON.stringify({
+      error: "Cancelled — confirm it's you to continue. Try again when you're ready.",
+      code: "reauth_cancelled",
+    }),
+    { status: 403, headers: { "Content-Type": "application/json" } },
+  );
 }

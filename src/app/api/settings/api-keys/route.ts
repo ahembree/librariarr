@@ -11,7 +11,7 @@ import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
 import { notifyApiKeyChange } from "@/lib/api-keys/notify";
 import { normalizeScopes } from "@/lib/api-keys/scopes";
-import { peekAuthRateLimit, recordAuthFailure } from "@/lib/rate-limit/rate-limiter";
+import { PASSWORD_CONFIRM_BUCKET, peekAuthRateLimit, recordAuthFailure } from "@/lib/rate-limit/rate-limiter";
 
 /**
  * API key management for the settings page — cookie session only. These routes
@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
     // Charged only on a wrong password (a routine that creates ten keys in a
     // row must not lock itself out), but a wrong one costs what a failed
     // login does, so this route is not a cheaper password oracle than login.
-    const limited = peekAuthRateLimit(request, "api-key-create");
+    const limited = peekAuthRateLimit(request, PASSWORD_CONFIRM_BUCKET);
     if (limited) return limited;
     if (!data.currentPassword) {
       return NextResponse.json(
@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
     }
     const valid = await bcrypt.compare(data.currentPassword, user.passwordHash);
     if (!valid) {
-      recordAuthFailure(request, "api-key-create");
+      recordAuthFailure(request, PASSWORD_CONFIRM_BUCKET);
       logger.warn("Auth", "API key creation refused — the current password was incorrect");
       return NextResponse.json(
         { error: "Current password is incorrect", code: "password_incorrect" },

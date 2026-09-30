@@ -56,7 +56,10 @@ export async function POST(request: NextRequest) {
   if (plexUser.id.toString() !== user.plexId) {
     apiLogger.warn("Auth", "Plex re-authentication refused — a different Plex account signed in");
     return NextResponse.json(
-      { error: "That Plex account is not the one linked to Librariarr. Sign in with the linked account." },
+      {
+        error:
+          "Plex signed you in as a different account than the one linked to Librariarr. Sign out of plex.tv in the pop-up, then sign in with the linked account.",
+      },
       { status: 403 },
     );
   }

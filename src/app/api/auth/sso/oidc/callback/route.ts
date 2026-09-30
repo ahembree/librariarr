@@ -15,7 +15,7 @@ import { sanitizeEmail, sanitizeUsername } from "@/lib/sso/identity-claims";
 import { apiLogger } from "@/lib/logger";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
 import { getExternalBaseUrl } from "@/lib/url";
-import { ssoIdentityMatches } from "@/lib/auth/reauth";
+import { reauthNonceFromState, ssoIdentityMatches } from "@/lib/auth/reauth";
 
 /** Constant-time comparison for the OIDC state value. Lengths differ → false. */
 function statesEqual(a: string, b: string): boolean {
@@ -44,9 +44,17 @@ function redirectToSsoSettings(request: NextRequest, params: Record<string, stri
  * An in-place identity confirmation runs in a popup; /login/reauth tells the
  * page that opened it how it went and closes itself.
  */
-function redirectAfterReauth(request: NextRequest, params: { status: "ok" } | { error: string }) {
+function redirectAfterReauth(
+  request: NextRequest,
+  params: { status: "ok" } | { error: string },
+) {
   const url = new URL("/login/reauth", getExternalBaseUrl(request));
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  // Addressed to the attempt that started this popup: the nonce comes from
+  // the `state` the IdP handed back, never from the session, which a newer
+  // attempt may since have overwritten.
+  const nonce = reauthNonceFromState(new URL(request.url).searchParams.get("state"));
+  if (nonce) url.searchParams.set("nonce", nonce);
   return NextResponse.redirect(url);
 }
 
