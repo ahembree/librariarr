@@ -63,6 +63,8 @@ export interface AuthenticationTabProps {
   onChangeCredentials: () => void;
   onPlexLink: () => void;
   onCreateCredentialsAndEnable: () => void;
+  /** Re-reads the auth info after an SSO change (see SsoSection). */
+  onAuthSettingsChanged: () => void;
 }
 
 export function AuthenticationTab({
@@ -87,6 +89,7 @@ export function AuthenticationTab({
   onChangeCredentials,
   onPlexLink,
   onCreateCredentialsAndEnable,
+  onAuthSettingsChanged,
 }: AuthenticationTabProps) {
   return (
     <div className="space-y-6">
@@ -321,7 +324,7 @@ export function AuthenticationTab({
       </SettingsSection>
 
       {/* SSO (OIDC + Forward Auth) */}
-      <SsoSection />
+      <SsoSection onChanged={onAuthSettingsChanged} />
 
       {/* API keys for the public /api/v1 API */}
       <ApiKeysSection

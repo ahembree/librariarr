@@ -74,7 +74,13 @@ function isConfigComplete(c: SsoConfig): boolean {
 
 const codeClass = "font-mono text-[0.85em] rounded bg-muted/60 px-1 py-0.5";
 
-export function SsoSection() {
+/**
+ * `onChanged` runs after anything here that can change whether SSO is usable
+ * (save, enable toggle, unlink, revert): that decides whether the password is
+ * accepted at all, which the rest of the Authentication tab reads from
+ * `/api/settings/auth` — whether it asks for the current password.
+ */
+export function SsoSection({ onChanged }: { onChanged?: () => void } = {}) {
   const [config, setConfig] = useState<SsoConfig | null>(null);
   // The last-saved snapshot of config (sans ssoEnabled, which is its own
   // toggle). Used to detect unsaved changes in step 1.
@@ -232,6 +238,7 @@ export function SsoSection() {
       setConfig(data);
       setSavedConfigSnapshot(snapshotOf(data));
       setSavedAt(Date.now());
+      onChanged?.();
       toast.success("SSO configuration saved");
     } catch {
       setError("Network error");
@@ -319,6 +326,7 @@ export function SsoSection() {
       toast.success("SSO identity unlinked");
       if (data.globalSsoDisabled) {
         setConfig((prev) => (prev ? { ...prev, ssoEnabled: false } : prev));
+        onChanged?.();
         setLinkNotice(
           "SSO login has been turned off automatically since no identity is linked. Link an identity above and toggle Enable SSO Login below to use SSO again."
         );
@@ -351,6 +359,7 @@ export function SsoSection() {
         setSavedConfigSnapshot(snapshotOf(data));
       }
       setSavedAt(Date.now());
+      onChanged?.();
       toast.success("SSO configuration reverted");
     } catch {
       setError("Network error");
@@ -401,6 +410,7 @@ export function SsoSection() {
         return;
       }
       setConfig(data);
+      onChanged?.();
       toast.success(enabled ? "SSO login enabled" : "SSO login disabled");
     } catch {
       setEnableError("Network error");

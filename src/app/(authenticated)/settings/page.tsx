@@ -2657,6 +2657,18 @@ export default function SettingsPage() {
 
   const handlePlexLink = () => plexOAuth.startAuth();
 
+  // After an SSO change: whether SSO is usable decides whether the password is
+  // accepted at all (passwordSignInEnabled), and with it whether the forms
+  // here ask for the current password.
+  const refreshAuthInfo = useCallback(() => {
+    fetch("/api/settings/auth")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((info) => {
+        if (info) setAuthInfo(info);
+      })
+      .catch(() => {});
+  }, []);
+
   const handleToggleLocalAuth = async (checked: boolean) => {
     setLocalAuthError("");
     // If enabling and no credentials exist, prompt to create them first
@@ -3289,6 +3301,7 @@ export default function SettingsPage() {
             onChangeCredentials={handleChangeCredentials}
             onPlexLink={handlePlexLink}
             onCreateCredentialsAndEnable={handleCreateCredentialsAndEnable}
+            onAuthSettingsChanged={refreshAuthInfo}
           />
         </TabsContent>
 
